@@ -1,0 +1,21 @@
+{
+  "name": "Company Hub",
+  "short_name": "Company Hub",
+  "description": "Internal business management platform for Company",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0D0E10",
+  "theme_color": "#FF4C29",
+  "icons": [
+    {
+      "src": "/favicon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
