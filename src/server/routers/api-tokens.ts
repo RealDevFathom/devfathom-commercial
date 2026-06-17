@@ -1,0 +1,82 @@
+import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
+import { router, adminProcedure } from '../trpc';
+import { generateApiToken } from '@/lib/api-auth';
+
+export const apiTokensRouter = router({
+  list: adminProcedure.query(async ({ ctx }) => {
+    return ctx.db.apiToken.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { id: true, name: true, email: true, avatar: true, role: true } },
+      },
+    });
+  }),
+
+  create: adminProcedure
+    .input(z.object({
+      name: z.string().min(1),
+      scopes: z.array(z.string()).min(1),
+      expiresInDays: z.number().int().positive().optional(),
+      // When set, the token acts on behalf of THIS user. All REST calls made
+      // with this token will be attributed to them in activity logs / stats.
+      // When omitted, defaults to the caller — preserves the old behavior.
+      userId: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Determine the user the token will act as
+      const targetUserId = input.userId ?? ctx.session.user.id;
+
+      // If binding to a different user, verify they exist and are active
+      if (input.userId && input.userId !== ctx.session.user.id) {
+        const targetUser = await ctx.db.user.findUnique({
+          where: { id: input.userId },
+          select: { id: true, status: true },
+        });
+        if (!targetUser) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Target user not found.' });
+        }
+        if (targetUser.status !== 'ACTIVE') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot issue a token for an inactive user.',
+          });
+        }
+      }
+
+      const { token, prefix, hash } = await generateApiToken();
+
+      const expiresAt = input.expiresInDays
+        ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
+        : null;
+
+      const created = await ctx.db.apiToken.create({
+        data: {
+          name: input.name,
+          prefix,
+          tokenHash: hash,
+          scopes: input.scopes,
+          userId: targetUserId,
+          expiresAt,
+        },
+        include: { user: { select: { id: true, name: true } } },
+      });
+
+      // Return the full token ONLY once — user must save it
+      return {
+        id: created.id,
+        token,
+        name: created.name,
+        prefix: created.prefix,
+        scopes: created.scopes,
+        expiresAt: created.expiresAt,
+        boundUser: created.user,
+      };
+    }),
+
+  revoke: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.apiToken.delete({ where: { id: input.id } });
+    }),
+});
