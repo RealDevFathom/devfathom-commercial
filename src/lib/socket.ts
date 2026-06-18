@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
@@ -122,22 +122,35 @@ const TYPING_IDLE_MS = 1000;
 
 export function useSocket(userId: string | undefined) {
   const socketRef = useRef<Socket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
   // Per-channel idle timers + a flag for whether we've already emitted a
   // `chat:typing` start, so emitTyping debounces keystrokes into one start +
   // one trailing stop instead of one event per keypress.
   const typingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const typingActiveRef = useRef<Set<string>>(new Set());
+  // Last `chat:typing` emit time per channel — used to heartbeat so the
+  // receiver's auto-clear timer keeps resetting during sustained typing.
+  const typingLastEmitRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (!userId) return;
 
-    socketRef.current = getSocket();
+    const s = getSocket();
+    socketRef.current = s;
+    // Starts false; the 'connect' listener flips it true once the socket
+    // establishes (avoids a synchronous setState in the effect body).
+    const onConnect = () => setIsConnected(true);
+    const onDisconnect = () => setIsConnected(false);
+    s.on('connect', onConnect);
+    s.on('disconnect', onDisconnect);
 
     const timers = typingTimersRef.current;
     const active = typingActiveRef.current;
     return () => {
-      // Don't disconnect on unmount — keep alive for app lifetime.
-      // Do clear any pending typing timers so they don't fire after unmount.
+      // Don't disconnect on unmount — keep the socket alive for the app's life.
+      // Detach this hook instance's listeners + pending typing timers.
+      s.off('connect', onConnect);
+      s.off('disconnect', onDisconnect);
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
       active.clear();
@@ -170,11 +183,15 @@ export function useSocket(userId: string | undefined) {
       // Emit a single `chat:typing` start on the first keystroke, then debounce:
       // each subsequent keystroke just resets the idle timer. After
       // TYPING_IDLE_MS of silence we emit one `chat:stop-typing`.
-      if (!typingActiveRef.current.has(channelId)) {
+      const now = Date.now();
+      const lastEmit = typingLastEmitRef.current.get(channelId) ?? 0;
+      // Emit on the first keystroke of a burst, then heartbeat every ~2.5s so a
+      // continuous typist doesn't trip the receiver's auto-clear.
+      if (!typingActiveRef.current.has(channelId) || now - lastEmit > 2500) {
         typingActiveRef.current.add(channelId);
-        // NOTE: the server authoritatively stamps the typist from the verified
-        // ticket; any userId we send here is ignored. Kept in the payload only
-        // to preserve the existing event shape.
+        typingLastEmitRef.current.set(channelId, now);
+        // The server authoritatively stamps the typist from the verified ticket;
+        // any userId here is ignored — kept only to preserve the event shape.
         socketRef.current?.emit('chat:typing', { channelId, userId, userName });
       }
 
@@ -186,6 +203,7 @@ export function useSocket(userId: string | undefined) {
         setTimeout(() => {
           timers.delete(channelId);
           typingActiveRef.current.delete(channelId);
+          typingLastEmitRef.current.delete(channelId);
           socketRef.current?.emit('chat:stop-typing', { channelId });
         }, TYPING_IDLE_MS)
       );
@@ -207,8 +225,18 @@ export function useSocket(userId: string | undefined) {
     };
   }, []);
 
+  // Generic subscription used by the RealtimeProvider: attach a handler to any
+  // server event and get an unsubscribe back. Reads the live singleton socket.
+  const on = useCallback((event: string, handler: (payload: unknown) => void) => {
+    const s = socketRef.current;
+    if (!s) return () => {};
+    s.on(event, handler as (...args: unknown[]) => void);
+    return () => {
+      s.off(event, handler as (...args: unknown[]) => void);
+    };
+  }, []);
+
   return {
-    socket: socketRef.current,
     joinChannel,
     leaveChannel,
     sendMessage,
@@ -216,6 +244,7 @@ export function useSocket(userId: string | undefined) {
     emitTyping,
     onTyping,
     onNotification,
-    isConnected: socketRef.current?.connected ?? false,
+    on,
+    isConnected,
   };
 }

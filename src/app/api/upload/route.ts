@@ -1,0 +1,72 @@
+// DEV STORAGE ONLY — local FS.
+// PROD: swap for Vercel Blob (`import { put } from '@vercel/blob'`, needs BLOB_READ_WRITE_TOKEN);
+// Vercel serverless FS is read-only so local FS won't work in prod.
+
+import { writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import crypto from 'node:crypto';
+import { auth } from '@/lib/auth';
+import { NextResponse } from 'next/server';
+import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
+
+export async function POST(request: Request) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    const formData = await request.formData();
+    const file = formData.get('file') as File | null;
+
+    if (!file) {
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    }
+
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      return NextResponse.json(
+        { error: `File exceeds maximum allowed size of ${MAX_ATTACHMENT_BYTES} bytes` },
+        { status: 413 }
+      );
+    }
+
+    // Allowlist safe, non-executable types by BOTH declared MIME and extension.
+    // The extension governs how /uploads/* is served same-origin, so this is what
+    // blocks stored-XSS via .html / .svg (which would otherwise run inline scripts).
+    const ALLOWED_TYPES = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+      'application/pdf',
+      'text/plain',
+    ]);
+    const ALLOWED_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf', 'txt']);
+    const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+    if (!ALLOWED_TYPES.has(file.type) || !ALLOWED_EXT.has(ext)) {
+      return NextResponse.json(
+        { error: 'Unsupported file type (images, PDF, or text only)' },
+        { status: 415 }
+      );
+    }
+
+    const id = crypto.randomUUID();
+    // Strip path separators and reduce to safe ASCII chars only
+    const safeName = file.name.replace(/[/\\]/g, '').replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const filename = `${id}-${safeName}`;
+
+    const uploadsDir = join(process.cwd(), 'public', 'uploads');
+    await mkdir(uploadsDir, { recursive: true });
+    await writeFile(join(uploadsDir, filename), Buffer.from(await file.arrayBuffer()));
+
+    return NextResponse.json({
+      url: '/uploads/' + filename,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+    });
+  } catch (error) {
+    console.error('[upload] error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}

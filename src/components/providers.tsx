@@ -6,6 +6,7 @@ import { ThemeProvider } from 'next-themes';
 import { TRPCProvider } from '@/lib/trpc-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
+import { RealtimeProvider } from '@/components/chat/realtime-provider';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -18,7 +19,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       >
         <TRPCProvider>
           <TooltipProvider delay={200}>
-            <LazyMotion features={domMax}>{children}</LazyMotion>
+            <LazyMotion features={domMax}>
+              <RealtimeProvider>{children}</RealtimeProvider>
+            </LazyMotion>
             <Toaster position="top-right" richColors closeButton />
           </TooltipProvider>
         </TRPCProvider>

@@ -79,13 +79,6 @@ const onlineUsers = new Map<string, string>();
 // ---------------------------------------------------------------------------
 const channelIdSchema = z.string().min(1).max(255);
 
-const messageSchema = z.object({
-  channelId: z.string().min(1).max(255),
-  // The live message blob is broadcast as-is (persistence is handled by tRPC in
-  // the Next app); we only re-stamp the sender below.
-  message: z.unknown(),
-});
-
 const typingSchema = z.object({
   channelId: z.string().min(1).max(255),
   userName: z.string().min(1).max(255),
@@ -207,11 +200,13 @@ io.on('connection', (socket: Socket) => {
   const joinedChannels = new Set<string>();
 
   // Per-socket rate limiters (GC'd with the connection on disconnect).
-  const messageBucket = new TokenBucket(10, 5); // burst 10, ~5/s sustained
   const typingBucket = new TokenBucket(20, 10); // burst 20, ~10/s sustained
 
   // Presence uses the verified userId only.
   onlineUsers.set(userId, socket.id);
+  // Join the user's personal room so trusted server code can target this user
+  // across devices (mention / notification events via POST /emit → user:{id}).
+  socket.join(`user:${userId}`);
   // Send the full current roster ONCE, only to the joining socket. Avoids
   // fanning the whole roster to every connected socket on each connect.
   socket.emit('presence:init', { onlineUsers: Array.from(onlineUsers.keys()) });
@@ -243,29 +238,15 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  socket.on('chat:message', async (data: unknown) => {
-    try {
-      if (!messageBucket.tryConsume()) return; // rate limit
-      const parsed = messageSchema.safeParse(data);
-      if (!parsed.success) return; // drop malformed
-      const { channelId, message } = parsed.data;
-
-      // Authorize freshly against the DB — do not rely on join state alone.
-      if (!(await isChannelMember(channelId, userId))) return;
-
-      // Stamp the server-known sender; NEVER trust a client-supplied sender id.
-      // This prevents a member from broadcasting a live message attributed to
-      // someone else.
-      const safeMessage =
-        message && typeof message === 'object'
-          ? { ...(message as Record<string, unknown>), senderId: userId }
-          : message;
-
-      io.to(`channel:${channelId}`).emit('chat:message', safeMessage);
-    } catch (err) {
-      console.error('[socket] chat:message error', err);
-    }
-  });
+  // Inbound client→client `chat:message` relay REMOVED (security).
+  //
+  // It let any authenticated socket rebroadcast an attacker-shaped message blob
+  // into a channel room. The only re-stamp touched a top-level `senderId` the
+  // client never reads — the nested `message.sender` (and even a differing inner
+  // channelId) stayed attacker-controlled, enabling message/sender spoofing and
+  // cross-channel injection. Live delivery is now authoritative: tRPC persists,
+  // then the secret-gated POST /emit bridge broadcasts the server-built payload.
+  // Mirrors the earlier removal of the `notification:send` relay.
 
   socket.on('chat:typing', (data: unknown) => {
     try {
@@ -319,6 +300,33 @@ io.on('connection', (socket: Socket) => {
       io.emit('user:offline', { userId, online: false });
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// Server→server broadcast bridge. The Next app (which owns persistence + authz)
+// POSTs here AFTER a write to fan a live event out to a room. Authenticated with
+// the shared secret only — this endpoint is NEVER exposed to browsers, and the
+// CORS policy above does not whitelist it for cross-origin browser use.
+// ---------------------------------------------------------------------------
+const emitBodySchema = z.object({
+  room: z.string().min(1).max(255),
+  event: z.string().min(1).max(64),
+  payload: z.unknown(),
+});
+
+app.post('/emit', (req, res) => {
+  // Timing-safe shared-secret check (length-guard first; timingSafeEqual throws
+  // on length mismatch, and the guard also blunts truncation probing).
+  const provided = Buffer.from(String(req.header('x-emit-secret') ?? ''));
+  const expected = Buffer.from(TICKET_SECRET);
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  const parsed = emitBodySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'bad request' });
+  const { room, event, payload } = parsed.data;
+  io.to(room).emit(event, payload);
+  return res.json({ ok: true });
 });
 
 // Health check

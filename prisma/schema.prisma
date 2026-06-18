@@ -151,6 +151,10 @@ model User {
   createdTasks      Task[]             @relation("TaskCreator")
   sentMessages      Message[]
   channelMembers    ChannelMember[]
+  createdChannels   Channel[]
+  messageMentions   MessageMention[]
+  pinnedMessages    PinnedMessage[]
+  savedMessages     SavedMessage[]
   leaveRequests     LeaveRequest[]     @relation("LeaveRequester")
   approvedLeaves    LeaveRequest[]     @relation("LeaveApprover")
   performanceNotes  PerformanceNote[]  @relation("NoteSubject")
@@ -535,13 +539,20 @@ model Channel {
   id          String      @id @default(cuid())
   name        String?
   description String?
+  topic       String?
   type        ChannelType
+  isPrivate   Boolean     @default(true)
+  isArchived  Boolean     @default(false)
+  createdById String?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
-  members  ChannelMember[]
-  messages Message[]
+  createdBy User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  members   ChannelMember[]
+  messages  Message[]
+  pins      PinnedMessage[]
 
+  @@index([type])
   @@map("channels")
 }
 
@@ -550,6 +561,8 @@ model ChannelMember {
   channelId  String
   userId     String
   lastReadAt DateTime?
+  muted      Boolean   @default(false)
+  role       String    @default("MEMBER") // OWNER, ADMIN, MEMBER
   joinedAt   DateTime  @default(now())
 
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -561,14 +574,17 @@ model ChannelMember {
 }
 
 model Message {
-  id        String   @id @default(cuid())
-  content   String
-  channelId String
-  senderId  String
-  parentId  String?
-  isEdited  Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String    @id @default(cuid())
+  content     String
+  contentJson Json?
+  channelId   String
+  senderId    String
+  parentId    String?
+  isEdited    Boolean   @default(false)
+  editedAt    DateTime?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   channel     Channel             @relation(fields: [channelId], references: [id], onDelete: Cascade)
   sender      User                @relation(fields: [senderId], references: [id])
@@ -576,8 +592,12 @@ model Message {
   replies     Message[]           @relation("MessageThread")
   attachments MessageAttachment[]
   reactions   MessageReaction[]
+  mentions    MessageMention[]
+  pins        PinnedMessage[]
+  savedBy     SavedMessage[]
 
   @@index([channelId, createdAt])
+  @@index([parentId])
   @@map("messages")
 }
 
@@ -604,7 +624,52 @@ model MessageReaction {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId, emoji])
+  @@index([messageId])
   @@map("message_reactions")
+}
+
+model MessageMention {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("message_mentions")
+}
+
+model PinnedMessage {
+  id         String   @id @default(cuid())
+  messageId  String
+  channelId  String
+  pinnedById String
+  createdAt  DateTime @default(now())
+
+  message  Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  channel  Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  pinnedBy User    @relation(fields: [pinnedById], references: [id], onDelete: Cascade)
+
+  @@unique([messageId])
+  @@index([channelId])
+  @@map("pinned_messages")
+}
+
+model SavedMessage {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId, createdAt])
+  @@map("saved_messages")
 }
 
 // ============================================
