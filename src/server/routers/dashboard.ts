@@ -121,7 +121,7 @@ export const dashboardRouter = router({
     const isAdmin = ctx.session.user.role === 'ADMIN';
     const userId = ctx.session.user.id;
 
-    return ctx.db.project.findMany({
+    const projects = await ctx.db.project.findMany({
       where: {
         status: { in: ['ACTIVE', 'IN_DEVELOPMENT'] },
         ...(isAdmin ? {} : { members: { some: { userId } } }),
@@ -141,6 +141,10 @@ export const dashboardRouter = router({
       },
       orderBy: { updatedAt: 'desc' },
     });
+
+    // Prisma Decimal is not serializable across the RSC boundary (SSR prefetch →
+    // HydrationBoundary). Convert budget to a plain number, like getStats does.
+    return projects.map((p) => ({ ...p, budget: p.budget == null ? null : Number(p.budget) }));
   }),
 
   getMyTasks: protectedProcedure.query(async ({ ctx }) => {
