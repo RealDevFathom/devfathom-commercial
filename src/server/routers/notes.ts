@@ -61,8 +61,12 @@ function visibilityWhere(userId: string): Prisma.NoteWhereInput {
 }
 
 function canEdit(
-  note: { authorId: string; visibility: string; shares: Array<{ userId: string; permission: string }> },
-  userId: string,
+  note: {
+    authorId: string;
+    visibility: string;
+    shares: Array<{ userId: string; permission: string }>;
+  },
+  userId: string
 ): boolean {
   if (note.authorId === userId) return true;
   if (note.visibility === 'TEAM') return true; // team notes are collaboratively editable
@@ -82,12 +86,14 @@ export const notesRouter = router({
    */
   list: protectedProcedure
     .input(
-      z.object({
-        scope: z.enum(['mine', 'shared', 'all']).default('all'),
-        projectId: z.string().optional(),
-        clientId: z.string().optional(),
-        search: z.string().optional(),
-      }).optional(),
+      z
+        .object({
+          scope: z.enum(['mine', 'shared', 'all']).default('all'),
+          projectId: z.string().optional(),
+          clientId: z.string().optional(),
+          search: z.string().optional(),
+        })
+        .optional()
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
@@ -101,12 +107,14 @@ export const notesRouter = router({
           ...(input?.projectId ? [{ projectId: input.projectId }] : []),
           ...(input?.clientId ? [{ clientId: input.clientId }] : []),
           ...(input?.search
-            ? [{
-                OR: [
-                  { title: { contains: input.search, mode: 'insensitive' as const } },
-                  { contentText: { contains: input.search, mode: 'insensitive' as const } },
-                ],
-              }]
+            ? [
+                {
+                  OR: [
+                    { title: { contains: input.search, mode: 'insensitive' as const } },
+                    { contentText: { contains: input.search, mode: 'insensitive' as const } },
+                  ],
+                },
+              ]
             : []),
         ],
       };
@@ -134,52 +142,63 @@ export const notesRouter = router({
    * Get a single note by id with full content + backlinks.
    * Throws FORBIDDEN if the user can't see it.
    */
-  getById: protectedProcedure
-    .input(z.object({ id: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const userId = ctx.session.user.id;
+  getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    const userId = ctx.session.user.id;
 
-      const note = await ctx.db.note.findUnique({
-        where: { id: input.id },
-        include: {
-          author: { select: { id: true, name: true, avatar: true } },
-          project: { select: { id: true, name: true } },
-          client: { select: { id: true, name: true } },
-          shares: {
-            include: { user: { select: { id: true, name: true, avatar: true } } },
-          },
-          // Outgoing forward-links and incoming backlinks
-          linksFrom: {
-            include: { toNote: { select: { id: true, title: true } } },
-          },
-          linksTo: {
-            include: { fromNote: { select: { id: true, title: true, authorId: true, visibility: true } } },
+    const note = await ctx.db.note.findUnique({
+      where: { id: input.id },
+      include: {
+        author: { select: { id: true, name: true, avatar: true } },
+        project: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
+        shares: {
+          include: { user: { select: { id: true, name: true, avatar: true } } },
+        },
+        // Outgoing forward-links and incoming backlinks
+        linksFrom: {
+          include: {
+            toNote: { select: { id: true, title: true, authorId: true, visibility: true } },
           },
         },
-      });
+        linksTo: {
+          include: {
+            fromNote: { select: { id: true, title: true, authorId: true, visibility: true } },
+          },
+        },
+      },
+    });
 
-      if (!note) throw new TRPCError({ code: 'NOT_FOUND' });
+    if (!note) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      // Visibility check
-      const isAuthor = note.authorId === userId;
-      const isTeam = note.visibility === 'TEAM';
-      const isSharedWithMe = note.visibility === 'SHARED' && note.shares.some((s) => s.userId === userId);
-      if (!isAuthor && !isTeam && !isSharedWithMe) {
-        throw new TRPCError({ code: 'FORBIDDEN' });
-      }
+    // Visibility check
+    const isAuthor = note.authorId === userId;
+    const isTeam = note.visibility === 'TEAM';
+    const isSharedWithMe =
+      note.visibility === 'SHARED' && note.shares.some((s) => s.userId === userId);
+    if (!isAuthor && !isTeam && !isSharedWithMe) {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    }
 
-      const editable = canEdit(note, userId);
-      // Filter backlinks the user isn't allowed to see
-      const visibleBacklinks = note.linksTo.filter((l) => {
-        const f = l.fromNote;
-        if (f.authorId === userId) return true;
-        if (f.visibility === 'TEAM') return true;
-        // Skip SHARED backlinks we can't independently verify here
-        return false;
-      });
+    const editable = canEdit(note, userId);
+    // Filter backlinks the user isn't allowed to see
+    const visibleBacklinks = note.linksTo.filter((l) => {
+      const f = l.fromNote;
+      if (f.authorId === userId) return true;
+      if (f.visibility === 'TEAM') return true;
+      // Skip SHARED backlinks we can't independently verify here
+      return false;
+    });
+    // Same visibility filter for OUTGOING links: a user can craft a noteLink to
+    // any note id, so the forward-link must not leak a private note's title.
+    const visibleForwardLinks = note.linksFrom.filter((l) => {
+      const t = l.toNote;
+      if (t.authorId === userId) return true;
+      if (t.visibility === 'TEAM') return true;
+      return false;
+    });
 
-      return { ...note, editable, linksTo: visibleBacklinks };
-    }),
+    return { ...note, editable, linksTo: visibleBacklinks, linksFrom: visibleForwardLinks };
+  }),
 
   /**
    * Search notes by title for the [[ autocomplete in the editor.
@@ -194,10 +213,7 @@ export const notesRouter = router({
 
       return ctx.db.note.findMany({
         where: {
-          AND: [
-            visibilityWhere(userId),
-            { title: { contains: q, mode: 'insensitive' } },
-          ],
+          AND: [visibilityWhere(userId), { title: { contains: q, mode: 'insensitive' } }],
         },
         orderBy: { updatedAt: 'desc' },
         take: 10,
@@ -217,7 +233,7 @@ export const notesRouter = router({
         visibility: NoteVisibilityEnum.default('PRIVATE'),
         projectId: z.string().optional(),
         clientId: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
@@ -260,7 +276,7 @@ export const notesRouter = router({
         visibility: NoteVisibilityEnum.optional(),
         projectId: z.string().nullable().optional(),
         clientId: z.string().nullable().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
@@ -276,7 +292,9 @@ export const notesRouter = router({
       if (input.title !== undefined) data.title = input.title;
       if (input.visibility !== undefined) data.visibility = input.visibility;
       if (input.projectId !== undefined) {
-        data.project = input.projectId ? { connect: { id: input.projectId } } : { disconnect: true };
+        data.project = input.projectId
+          ? { connect: { id: input.projectId } }
+          : { disconnect: true };
       }
       if (input.clientId !== undefined) {
         data.client = input.clientId ? { connect: { id: input.clientId } } : { disconnect: true };
@@ -336,7 +354,7 @@ export const notesRouter = router({
       z.object({
         id: z.string(),
         shares: z.array(z.object({ userId: z.string(), permission: NotePermissionEnum })),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
@@ -349,10 +367,12 @@ export const notesRouter = router({
       await ctx.db.$transaction([
         ctx.db.noteShare.deleteMany({ where: { noteId: input.id } }),
         ...(input.shares.length > 0
-          ? [ctx.db.noteShare.createMany({
-              data: input.shares.map((s) => ({ noteId: input.id, ...s })),
-              skipDuplicates: true,
-            })]
+          ? [
+              ctx.db.noteShare.createMany({
+                data: input.shares.map((s) => ({ noteId: input.id, ...s })),
+                skipDuplicates: true,
+              }),
+            ]
           : []),
       ]);
 

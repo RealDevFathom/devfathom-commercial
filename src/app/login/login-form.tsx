@@ -15,10 +15,19 @@ const loginSchema = z.object({
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
+// Prevent open redirect: accept only same-origin relative paths (a single
+// leading slash, not '//' or '/\'), rejecting absolute and javascript: URLs.
+function safeCallbackUrl(raw: string | null): string {
+  return raw && /^\/(?![/\\])/.test(raw) ? raw : '/dashboard';
+}
+
+const inputClass =
+  'flex h-11 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm text-white placeholder:text-[#5A6670] transition-colors focus:border-[#BC8850] focus:outline-none focus:ring-2 focus:ring-[#BC8850]/30';
+
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
+  const callbackUrl = safeCallbackUrl(searchParams.get('callbackUrl'));
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
 
@@ -57,7 +66,7 @@ export function LoginForm() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         <div className="space-y-2">
-          <label htmlFor="email" className="block text-sm font-medium text-[#EEECE8]">
+          <label htmlFor="email" className="block text-sm font-medium text-[#C2CBD1]">
             Email
           </label>
           <input
@@ -67,15 +76,13 @@ export function LoginForm() {
             autoComplete="email"
             autoFocus
             {...register('email')}
-            className="flex h-11 w-full rounded-xl border border-[#2E2C2A] bg-[#252422] px-4 text-sm text-[#EEECE8] placeholder:text-[#78756F] transition-colors focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+            className={inputClass}
           />
-          {errors.email && (
-            <p className="text-sm text-red-400">{errors.email.message}</p>
-          )}
+          {errors.email && <p className="text-sm text-red-400">{errors.email.message}</p>}
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="password" className="block text-sm font-medium text-[#EEECE8]">
+          <label htmlFor="password" className="block text-sm font-medium text-[#C2CBD1]">
             Password
           </label>
           <div className="relative">
@@ -85,26 +92,24 @@ export function LoginForm() {
               placeholder="Enter your password"
               autoComplete="current-password"
               {...register('password')}
-              className="flex h-11 w-full rounded-xl border border-[#2E2C2A] bg-[#252422] px-4 pr-10 text-sm text-[#EEECE8] placeholder:text-[#78756F] transition-colors focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+              className={`${inputClass} pr-10`}
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#78756F] hover:text-[#EEECE8] transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#5A6670] transition-colors hover:text-white"
               tabIndex={-1}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
           </div>
-          {errors.password && (
-            <p className="text-sm text-red-400">{errors.password.message}</p>
-          )}
+          {errors.password && <p className="text-sm text-red-400">{errors.password.message}</p>}
         </div>
 
         <button
           type="submit"
           disabled={isSubmitting}
-          className="flex h-11 w-full items-center justify-center rounded-xl bg-[#FF4C29] text-sm font-semibold text-white transition-all hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
+          className="group flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
         >
           {isSubmitting ? (
             <>

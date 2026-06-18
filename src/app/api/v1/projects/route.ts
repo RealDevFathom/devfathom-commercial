@@ -4,8 +4,11 @@ import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 
-export const GET = withApiAuth('projects:read', async () => {
+export const GET = withApiAuth('projects:read', async (ctx) => {
+  // Object-level scoping: non-admins only see projects they are a member of.
+  const where = ctx.userRole === 'ADMIN' ? {} : { members: { some: { userId: ctx.userId } } };
   const projects = await db.project.findMany({
+    where,
     include: {
       client: { select: { id: true, name: true } },
       members: { include: { user: { select: { id: true, name: true, email: true } } } },
@@ -32,7 +35,10 @@ export const POST = withApiAuth('projects:write', async (ctx, request) => {
   const body = await request.json();
   const parsed = createProjectSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid input', details: parsed.error.issues }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Invalid input', details: parsed.error.issues },
+      { status: 400 }
+    );
   }
   const { memberIds, startDate, endDate, ...data } = parsed.data;
   const allMembers = [...new Set([ctx.userId, ...memberIds])];
@@ -42,11 +48,18 @@ export const POST = withApiAuth('projects:write', async (ctx, request) => {
       ...data,
       startDate: startDate ? new Date(startDate) : null,
       endDate: endDate ? new Date(endDate) : null,
-      members: { create: allMembers.map((userId, i) => ({ userId, role: i === 0 ? 'LEAD' : 'MEMBER' })) },
+      members: {
+        create: allMembers.map((userId, i) => ({ userId, role: i === 0 ? 'LEAD' : 'MEMBER' })),
+      },
       boards: {
         create: {
           name: `${data.name} Board`,
-          columns: { create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map((name, order) => ({ name, order })) },
+          columns: {
+            create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map((name, order) => ({
+              name,
+              order,
+            })),
+          },
         },
       },
     },

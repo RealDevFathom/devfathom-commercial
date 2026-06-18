@@ -52,15 +52,19 @@ export const trelloMemberSchema = z.object({
 export const trelloActionSchema = z.object({
   type: z.string(),
   date: z.string(),
-  data: z.object({
-    text: z.string().optional(),
-    card: z.object({ id: z.string() }).optional(),
-  }).passthrough(),
-  memberCreator: z.object({
-    id: z.string(),
-    fullName: z.string(),
-    username: z.string(),
-  }).optional(),
+  data: z
+    .object({
+      text: z.string().optional(),
+      card: z.object({ id: z.string() }).optional(),
+    })
+    .passthrough(),
+  memberCreator: z
+    .object({
+      id: z.string(),
+      fullName: z.string(),
+      username: z.string(),
+    })
+    .optional(),
 });
 
 export const trelloBoardSchema = z.object({
@@ -83,12 +87,12 @@ export type TrelloMember = z.infer<typeof trelloMemberSchema>;
 export const trelloColorMap: Record<string, string> = {
   green: '#16A34A',
   yellow: '#D97706',
-  orange: '#FF4C29',
+  orange: '#BC8850',
   red: '#DC2626',
   purple: '#7C3AED',
   blue: '#2563EB',
   sky: '#0EA5E9',
   lime: '#65A30D',
   pink: '#DB2777',
-  black: '#1C1917',
+  black: '#11121A',
 };

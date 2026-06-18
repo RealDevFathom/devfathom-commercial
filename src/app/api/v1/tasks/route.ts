@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { canAccessProject } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 
 // GET /api/v1/tasks?columnId=&assigneeId=&priority=
-export const GET = withApiAuth('tasks:read', async (_ctx, request) => {
+export const GET = withApiAuth('tasks:read', async (ctx, request) => {
   const url = new URL(request.url);
   const columnId = url.searchParams.get('columnId');
   const assigneeId = url.searchParams.get('assigneeId');
@@ -16,13 +17,19 @@ export const GET = withApiAuth('tasks:read', async (_ctx, request) => {
   if (columnId) where.columnId = columnId;
   if (assigneeId) where.assignees = { some: { userId: assigneeId } };
   if (priority) where.priority = priority;
+  // Object-level scoping: non-admins only see tasks in projects they belong to.
+  if (ctx.userRole !== 'ADMIN') {
+    where.column = { board: { project: { members: { some: { userId: ctx.userId } } } } };
+  }
 
   const tasks = await db.task.findMany({
     where,
     take: Math.min(limit, 100),
     orderBy: { createdAt: 'desc' },
     include: {
-      column: { select: { id: true, name: true, board: { select: { id: true, projectId: true } } } },
+      column: {
+        select: { id: true, name: true, board: { select: { id: true, projectId: true } } },
+      },
       assignees: { include: { user: { select: { id: true, name: true, email: true } } } },
       labels: { include: { label: true } },
     },
@@ -46,7 +53,10 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
   const body = await request.json();
   const parsed = createTaskSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid input', details: parsed.error.issues }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Invalid input', details: parsed.error.issues },
+      { status: 400 }
+    );
   }
 
   const input = parsed.data;
@@ -61,14 +71,19 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
   });
   if (!column) return NextResponse.json({ error: 'Column not found' }, { status: 404 });
 
-  const maxOrder = await db.task.aggregate({ _max: { order: true }, where: { columnId: input.columnId } });
+  // Object-level authz: the acting user must be able to access the column's project.
+  if (!(await canAccessProject(db, ctx.userId, ctx.userRole, column.board.project.id))) {
+    return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
+  }
+
+  const maxOrder = await db.task.aggregate({
+    _max: { order: true },
+    where: { columnId: input.columnId },
+  });
 
   // Merge explicit assignees with the column's default owners (deduped)
   const mergedAssignees = [
-    ...new Set([
-      ...input.assigneeIds,
-      ...column.defaultAssignees.map((d) => d.userId),
-    ]),
+    ...new Set([...input.assigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
   ];
 
   const task = await db.task.create({
@@ -80,12 +95,14 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
       priority: input.priority,
       dueDate: input.dueDate ? new Date(input.dueDate) : null,
       createdById: ctx.userId,
-      assignees: mergedAssignees.length > 0
-        ? { create: mergedAssignees.map((id) => ({ userId: id })) }
-        : undefined,
-      labels: input.labelIds.length > 0
-        ? { create: input.labelIds.map((id) => ({ labelId: id })) }
-        : undefined,
+      assignees:
+        mergedAssignees.length > 0
+          ? { create: mergedAssignees.map((id) => ({ userId: id })) }
+          : undefined,
+      labels:
+        input.labelIds.length > 0
+          ? { create: input.labelIds.map((id) => ({ labelId: id })) }
+          : undefined,
     },
     include: {
       assignees: { include: { user: { select: { id: true, name: true, email: true } } } },

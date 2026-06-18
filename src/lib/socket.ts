@@ -7,10 +7,43 @@ const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001'
 
 let socket: Socket | null = null;
 
-function getSocket(userId: string): Socket {
+/**
+ * Fetch a short-lived, HMAC-signed realtime ticket from the Next app.
+ *
+ * Identity is NO LONGER sent via `query.userId` (which was client-controlled
+ * and trivially spoofable). The ticket is minted server-side from the NextAuth
+ * session and verified by the socket server.
+ *
+ * Returns null on any failure so the caller can degrade gracefully instead of
+ * throwing (e.g. logged-out user, network blip, socket server unreachable).
+ */
+async function fetchTicket(): Promise<string | null> {
+  try {
+    const res = await fetch('/api/realtime-token', {
+      // Always hit the network; tickets are short-lived and must not be cached.
+      cache: 'no-store',
+      credentials: 'include',
+    });
+    if (!res.ok) return null;
+    const data: unknown = await res.json();
+    const ticket = (data as { ticket?: unknown })?.ticket;
+    return typeof ticket === 'string' ? ticket : null;
+  } catch {
+    return null;
+  }
+}
+
+function getSocket(): Socket {
   if (!socket) {
     socket = io(SOCKET_URL, {
-      query: { userId },
+      // `auth` as a FUNCTION is invoked by Socket.IO on every (re)connection
+      // attempt, so we always present a FRESH ticket. With a static object the
+      // ticket would expire (~60s) and reconnects would silently fail.
+      // On fetch failure we send an empty payload; the server rejects it and
+      // the client surfaces a `connect_error` instead of crashing.
+      auth: (cb: (data: { ticket?: string }) => void) => {
+        void fetchTicket().then((ticket) => cb(ticket ? { ticket } : {}));
+      },
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
@@ -26,7 +59,7 @@ export function useSocket(userId: string | undefined) {
   useEffect(() => {
     if (!userId) return;
 
-    socketRef.current = getSocket(userId);
+    socketRef.current = getSocket();
 
     return () => {
       // Don't disconnect on unmount — keep alive for app lifetime
@@ -52,10 +85,16 @@ export function useSocket(userId: string | undefined) {
     };
   }, []);
 
-  const emitTyping = useCallback((channelId: string, userName: string) => {
-    if (!userId) return;
-    socketRef.current?.emit('chat:typing', { channelId, userId, userName });
-  }, [userId]);
+  const emitTyping = useCallback(
+    (channelId: string, userName: string) => {
+      if (!userId) return;
+      // NOTE: the server authoritatively stamps the typist from the verified
+      // ticket; any userId we send here is ignored. Kept in the payload only to
+      // preserve the existing event shape.
+      socketRef.current?.emit('chat:typing', { channelId, userId, userName });
+    },
+    [userId]
+  );
 
   const onTyping = useCallback((callback: (data: { userId: string; userName: string }) => void) => {
     socketRef.current?.on('chat:typing', callback);

@@ -81,10 +81,7 @@ export const searchRouter = router({
           where: {
             AND: [
               {
-                OR: [
-                  { title: insensitive },
-                  { contentText: insensitive },
-                ],
+                OR: [{ title: insensitive }, { contentText: insensitive }],
               },
               {
                 OR: [
@@ -108,11 +105,7 @@ export const searchRouter = router({
         // TEAM — everyone can see the directory
         ctx.db.user.findMany({
           where: {
-            OR: [
-              { name: insensitive },
-              { email: insensitive },
-              { title: insensitive },
-            ],
+            OR: [{ name: insensitive }, { email: insensitive }, { title: insensitive }],
             status: 'ACTIVE',
           },
           select: { id: true, name: true, title: true, avatar: true },

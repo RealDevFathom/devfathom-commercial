@@ -5,7 +5,9 @@ export const metadata: Metadata = {
   title: 'Board',
 };
 
-export default async function BoardPage(props: { params: Promise<{ id: string; boardId: string }> }) {
+export default async function BoardPage(props: {
+  params: Promise<{ id: string; boardId: string }>;
+}) {
   const { id, boardId } = await props.params;
   return <KanbanBoardContent projectId={id} boardId={boardId} />;
 }

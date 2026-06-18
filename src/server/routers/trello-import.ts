@@ -1,23 +1,43 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc';
+import { assertProjectAccess } from '../authz';
 import { TRPCError } from '@trpc/server';
 import { trelloBoardSchema, trelloColorMap } from '@/types/trello';
 
 export const trelloImportRouter = router({
   importBoard: protectedProcedure
-    .input(z.object({
-      trelloJson: z.unknown(),
-      projectId: z.string(),
-      memberMapping: z.record(z.string(), z.string()), // trelloMemberId -> hubUserId
-      includeArchived: z.boolean().default(false),
-    }))
+    .input(
+      z.object({
+        trelloJson: z.unknown(),
+        projectId: z.string(),
+        memberMapping: z.record(z.string(), z.string()), // trelloMemberId -> hubUserId
+        includeArchived: z.boolean().default(false),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
+      // AuthZ: only a member (or admin) of the target project may import into it.
+      // Without this, any employee could import a board into ANY project by id.
+      await assertProjectAccess(ctx, input.projectId);
+
+      // Whitelist of real project members. Imported attribution (task assignees,
+      // comment authorship) is constrained to this set so a caller-supplied
+      // memberMapping cannot forge authorship or assign tasks to arbitrary users.
+      const projectMemberIds = new Set(
+        (
+          await ctx.db.projectMember.findMany({
+            where: { projectId: input.projectId },
+            select: { userId: true },
+          })
+        ).map((m) => m.userId)
+      );
+
       // Validate the Trello JSON
       const parsed = trelloBoardSchema.safeParse(input.trelloJson);
       if (!parsed.success) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: "This doesn't look like a valid Trello export. Please export your board from Trello > Menu > Print and Export > Export as JSON.",
+          message:
+            "This doesn't look like a valid Trello export. Please export your board from Trello > Menu > Print and Export > Export as JSON.",
         });
       }
 
@@ -65,7 +85,7 @@ export const trelloImportRouter = router({
         // 2. Create labels
         const uniqueLabels = trello.labels.filter((l) => l.name || l.color);
         for (const label of uniqueLabels) {
-          const color = label.color ? (trelloColorMap[label.color] || '#6E7280') : '#6E7280';
+          const color = label.color ? trelloColorMap[label.color] || '#6E7280' : '#6E7280';
           const created = await tx.label.create({
             data: {
               name: label.name || label.color || 'Label',
@@ -114,7 +134,9 @@ export const trelloImportRouter = router({
         }
 
         // Build comment map: cardId -> comments
-        const commentActions = trello.actions.filter((a) => a.type === 'commentCard' && a.data.card);
+        const commentActions = trello.actions.filter(
+          (a) => a.type === 'commentCard' && a.data.card
+        );
         const commentMap = new Map<string, typeof commentActions>();
         for (const action of commentActions) {
           const cardId = action.data.card!.id;
@@ -126,9 +148,7 @@ export const trelloImportRouter = router({
         // 4. Create tasks from cards
         let tasksCreated = 0;
         for (const card of cards) {
-          const columnId = card.closed
-            ? archivedColumnId
-            : listIdMap.get(card.idList);
+          const columnId = card.closed ? archivedColumnId : listIdMap.get(card.idList);
 
           if (!columnId) continue;
 
@@ -147,7 +167,7 @@ export const trelloImportRouter = router({
           // Map assignees
           const assigneeIds = card.idMembers
             .map((mid) => input.memberMapping[mid])
-            .filter(Boolean);
+            .filter((uid) => uid && projectMemberIds.has(uid));
 
           if (assigneeIds.length > 0) {
             await tx.taskAssignee.createMany({
@@ -204,9 +224,15 @@ export const trelloImportRouter = router({
           // Create comments
           const cardComments = commentMap.get(card.id) || [];
           for (const comment of cardComments) {
-            const userId = comment.memberCreator
-              ? input.memberMapping[comment.memberCreator.id] || ctx.session.user.id
-              : ctx.session.user.id;
+            // Only attribute a comment to a real member of the target project;
+            // otherwise fall back to the importer. Prevents audit-trail forgery.
+            const mappedUserId = comment.memberCreator
+              ? input.memberMapping[comment.memberCreator.id]
+              : undefined;
+            const userId =
+              mappedUserId && projectMemberIds.has(mappedUserId)
+                ? mappedUserId
+                : ctx.session.user.id;
 
             await tx.taskComment.create({
               data: {

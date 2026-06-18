@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n web,socket -c blue,magenta \"npm:dev:web\" \"npm:dev:socket\"",
+    "dev": "concurrently -n web,socket -c blue,magenta \"bun:dev:web\" \"bun:dev:socket\"",
     "dev:web": "next dev",
     "dev:socket": "tsx watch socket-server/index.ts",
     "build": "prisma generate && next build",
@@ -13,19 +13,25 @@
     "lint": "eslint src/",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
-    "db:generate": "npx prisma generate",
-    "db:push": "npx prisma db push",
-    "db:migrate": "npx prisma migrate dev",
-    "db:seed": "npx prisma db seed",
-    "db:studio": "npx prisma studio",
-    "db:reset": "npx prisma migrate reset"
+    "db:generate": "bunx prisma generate",
+    "db:push": "bunx prisma db push",
+    "db:migrate": "bunx prisma migrate dev",
+    "db:seed": "bunx prisma db seed",
+    "db:studio": "bunx prisma studio",
+    "db:reset": "bunx prisma migrate reset",
+    "assistant:eval": "tsx scripts/assistant-eval.ts",
+    "assistant:diag": "tsx scripts/assistant-diag.ts",
+    "email:smoke": "tsx scripts/email-smoke.ts"
   },
   "prisma": {
-    "seed": "npx tsx prisma/seed.ts"
+    "seed": "bunx tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@ai-sdk/groq": "^3.0.42",
+    "@ai-sdk/react": "^3.0.209",
     "@auth/prisma-adapter": "^2.11.1",
     "@base-ui/react": "^1.3.0",
+    "@gsap/react": "^2.1.2",
     "@hello-pangea/dnd": "^18.0.1",
     "@hookform/resolvers": "^5.2.2",
     "@prisma/adapter-pg": "^7.7.0",
@@ -45,6 +51,7 @@
     "@trpc/next": "^11.16.0",
     "@trpc/react-query": "^11.16.0",
     "@trpc/server": "^11.16.0",
+    "ai": "^6.0.207",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -53,7 +60,9 @@
     "date-fns": "^4.1.0",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
+    "gsap": "^3.15.0",
     "lucide-react": "^1.8.0",
+    "motion": "^12.40.0",
     "next": "16.2.3",
     "next-auth": "^5.0.0-beta.30",
     "next-themes": "^0.4.6",
@@ -92,5 +101,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"
-  }
+  },
+  "trustedDependencies": [
+    "unrs-resolver"
+  ]
 }

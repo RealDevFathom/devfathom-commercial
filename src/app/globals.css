@@ -1,51 +1,26 @@
-@import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
 
 @custom-variant dark (&:is(.dark *));
 
 /* ============================================
-   BROME STREET — Company Display Typeface
+   DEVFATHOM — Theme tokens
+   Brand: Abyss deep teal #0C2E2C · warm Paper #F7F5EF
+          single Brass accent #BC8850 · Ink #161A19
+   Type:  Oxanium (display/logo) · IBM Plex Sans (UI)
+   Tone:  understated, serious, quietly confident.
+          Whitespace over decoration; no gradients/glow;
+          hairline borders; brass earns its place (used rarely).
    ============================================ */
-@font-face {
-  font-family: 'Brome Street';
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-  src: url('/fonts/BromeStreet-Regular.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Brome Street';
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-  src: url('/fonts/BromeStreet-Medium.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Brome Street';
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-  src: url('/fonts/BromeStreet-SemiBold.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Brome Street';
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-  src: url('/fonts/BromeStreet-Bold.woff2') format('woff2');
-}
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
-  --font-display: 'Brome Street', ui-sans-serif, system-ui, sans-serif;
-  --font-heading: 'Brome Street', ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display);
+  --font-heading: var(--font-display);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -79,141 +54,152 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
-  --color-brand: #FF4C29;
-  --color-brand-dark: #E63E1C;
-  --color-brand-light: #FF6B4A;
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  /* DevFathom brand ramp — Abyss teal primary (the helm) +
+     a single sparing Brass accent. */
+  --color-brand: #123a38; /* abyss-700 */
+  --color-brand-dark: #0c2e2c; /* abyss-800 */
+  --color-brand-light: #245c57; /* abyss-500 */
+  --color-brass: #bc8850; /* the one warm accent */
+  --color-seafoam: #bc8850; /* legacy alias → brass */
+  /* Radii — small & architectural (2–18px). Brand is not pill-shaped. */
+  --radius-sm: calc(var(--radius) * 0.4);
+  --radius-md: calc(var(--radius) * 0.6);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-xl: calc(var(--radius) * 1.2);
+  --radius-2xl: calc(var(--radius) * 1.4);
+  --radius-3xl: calc(var(--radius) * 1.6);
+  --radius-4xl: calc(var(--radius) * 1.8);
 }
 
 /* ============================================
-   COMPANY HUB — LIGHT THEME
-   Warm, comfortable, easy on the eyes
+   DEVFATHOM — LIGHT THEME (default)
+   Warm Paper canvas, white cards, deep Abyss helm
    ============================================ */
 :root {
-  /* Core — warm off-white, not clinical */
-  --background: #F5F4F1;
-  --foreground: #1C1917;
+  /* Core — warm Paper, editorial and never clinical */
+  --background: #f7f5ef; /* paper-50 */
+  --foreground: #161a19; /* ink-900 */
 
-  /* Cards — warm white with subtle warmth */
-  --card: #FEFDFB;
-  --card-foreground: #1C1917;
-  --popover: #FEFDFB;
-  --popover-foreground: #1C1917;
+  /* Cards — warm white lifted off the paper */
+  --card: #fdfcf8; /* paper-white */
+  --card-foreground: #161a19;
+  --popover: #fdfcf8;
+  --popover-foreground: #161a19;
 
-  /* Primary — Company Brand Orange */
-  --primary: #FF4C29;
-  --primary-foreground: #FFFFFF;
+  /* Primary — deep Abyss teal (the helm) */
+  --primary: #123a38; /* abyss-700 */
+  --primary-foreground: #f7f5ef;
 
   /* Secondary */
-  --secondary: #EDECEA;
-  --secondary-foreground: #1C1917;
+  --secondary: #efebe1; /* paper-100 */
+  --secondary-foreground: #3b423f; /* slate-700 */
 
   /* Muted */
-  --muted: #F0EFED;
-  --muted-foreground: #78756F;
+  --muted: #efebe1; /* paper-100 */
+  --muted-foreground: #6e7570; /* slate-500 */
 
-  /* Accent */
-  --accent: #F0EFED;
-  --accent-foreground: #1C1917;
+  /* Accent — subtle paper wash for hovers (UI semantic, not the brand accent) */
+  --accent: #efebe1; /* paper-100 */
+  --accent-foreground: #161a19;
 
-  /* Semantic */
-  --destructive: #DC2626;
-  --success: #16A34A;
-  --success-foreground: #FFFFFF;
-  --warning: #D97706;
-  --warning-foreground: #FFFFFF;
+  /* Semantic — desaturated, restrained (never consumer-app loud) */
+  --destructive: #9a4a40; /* red-600 */
+  --success: #3e6b52; /* green-600 */
+  --success-foreground: #fdfcf8;
+  --warning: #9c7a3a; /* amber-600 */
+  --warning-foreground: #fdfcf8;
 
-  /* Borders & inputs — visible but soft */
-  --border: #E5E3DF;
-  --input: #E5E3DF;
-  --ring: #FF4C29;
+  /* Borders & inputs — warm hairlines */
+  --border: #e3ddd0; /* paper-200 / border-subtle */
+  --input: #e3ddd0;
+  --ring: #bc8850; /* brass focus ring */
 
-  /* Radius */
-  --radius: 0.75rem;
+  /* Radius — 10px is the largest common value */
+  --radius: 0.625rem;
 
-  /* Charts — warm and vibrant */
-  --chart-1: #FF4C29;
-  --chart-2: #1C1917;
-  --chart-3: #16A34A;
-  --chart-4: #D97706;
-  --chart-5: #7C3AED;
+  /* Charts — abyss · slate · brass · green · abyss-mid */
+  --chart-1: #123a38;
+  --chart-2: #6e7570;
+  --chart-3: #bc8850;
+  --chart-4: #3e6b52;
+  --chart-5: #245c57;
 
-  /* Sidebar — always dark Company surface */
-  --sidebar: #17191C;
-  --sidebar-foreground: #B3B5BC;
-  --sidebar-primary: #FF4C29;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #1E2023;
-  --sidebar-accent-foreground: #F7F7F8;
+  /* Grid line (login / decorative surfaces) */
+  --grid-line: rgba(22, 26, 25, 0.04);
+
+  /* Sidebar — fixed dark Abyss command surface (both themes) */
+  --sidebar: #0c2e2c; /* abyss-800 */
+  --sidebar-foreground: #a8cbc6; /* abyss-200 */
+  --sidebar-primary: #bc8850; /* brass — active accent */
+  --sidebar-primary-foreground: #08221f;
+  --sidebar-accent: #123a38; /* abyss-700 — hover/active bg */
+  --sidebar-accent-foreground: #f7f5ef;
   --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #FF4C29;
+  --sidebar-ring: #bc8850;
 }
 
 /* ============================================
-   COMPANY HUB — DARK THEME
-   Rich, warm dark — not cold/blue-tinted
+   DEVFATHOM — DARK THEME (available via toggle)
+   Deep Abyss canvas, lifted teal, brass accent
    ============================================ */
 .dark {
-  /* Core — warm near-black */
-  --background: #111110;
-  --foreground: #EEECE8;
+  /* Core — deep Abyss near-black */
+  --background: #08221f; /* abyss-900 */
+  --foreground: #eef1ea;
 
-  /* Cards — elevated warm surface */
-  --card: #1A1918;
-  --card-foreground: #EEECE8;
-  --popover: #1A1918;
-  --popover-foreground: #EEECE8;
+  /* Cards — lifted Abyss surface */
+  --card: #0c2e2c; /* abyss-800 */
+  --card-foreground: #eef1ea;
+  --popover: #0c2e2c;
+  --popover-foreground: #eef1ea;
 
-  /* Primary — Brand orange stays identical */
-  --primary: #FF4C29;
-  --primary-foreground: #FFFFFF;
+  /* Primary — lifted teal reads on abyss */
+  --primary: #3c7a74; /* abyss-400 */
+  --primary-foreground: #f7f5ef;
 
   /* Secondary */
-  --secondary: #252422;
-  --secondary-foreground: #EEECE8;
+  --secondary: #123a38; /* abyss-700 */
+  --secondary-foreground: #eef1ea;
 
   /* Muted */
-  --muted: #252422;
-  --muted-foreground: #A8A49D;
+  --muted: #123a38;
+  --muted-foreground: #a8cbc6; /* abyss-200 */
 
-  /* Accent */
-  --accent: #252422;
-  --accent-foreground: #EEECE8;
+  /* Accent — abyss-tinted hover */
+  --accent: #123a38;
+  --accent-foreground: #d6e6e3; /* abyss-100 */
 
-  /* Semantic */
-  --destructive: #F87171;
-  --success: #4ADE80;
-  --success-foreground: #052E16;
-  --warning: #FBBF24;
-  --warning-foreground: #422006;
+  /* Semantic — desaturated, lifted for dark */
+  --destructive: #c98b82;
+  --success: #7faf93;
+  --success-foreground: #08221f;
+  --warning: #cdab6e;
+  --warning-foreground: #1e1604;
 
-  /* Borders & inputs — warm, visible */
-  --border: #2E2C2A;
-  --input: #2E2C2A;
-  --ring: #FF4C29;
+  /* Borders & inputs */
+  --border: #16403d;
+  --input: #16403d;
+  --ring: #bc8850;
 
   /* Charts */
-  --chart-1: #FF4C29;
-  --chart-2: #EEECE8;
-  --chart-3: #4ADE80;
-  --chart-4: #FBBF24;
-  --chart-5: #A78BFA;
+  --chart-1: #6aa39c;
+  --chart-2: #a8cbc6;
+  --chart-3: #cfa372; /* brass-400 */
+  --chart-4: #7faf93;
+  --chart-5: #3c7a74;
 
-  /* Sidebar — deepest dark */
-  --sidebar: #0C0C0B;
-  --sidebar-foreground: #A8A49D;
-  --sidebar-primary: #FF4C29;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #1A1918;
-  --sidebar-accent-foreground: #EEECE8;
-  --sidebar-border: #2E2C2A;
-  --sidebar-ring: #FF4C29;
+  /* Grid line */
+  --grid-line: rgba(214, 230, 227, 0.05);
+
+  /* Sidebar — deepest abyss */
+  --sidebar: #08221f;
+  --sidebar-foreground: #a8cbc6;
+  --sidebar-primary: #bc8850;
+  --sidebar-primary-foreground: #08221f;
+  --sidebar-accent: #123a38;
+  --sidebar-accent-foreground: #f1ece1;
+  --sidebar-border: #16403d;
+  --sidebar-ring: #bc8850;
 }
 
 /* ============================================
@@ -238,26 +224,32 @@
   }
 
   ::selection {
-    background: rgba(255, 76, 41, 0.2);
+    background: #e2c49e; /* brass-300 */
+    color: #08221f; /* abyss-900 */
   }
 
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     @apply font-display tracking-tight;
   }
 
   h1 {
     @apply text-3xl font-bold;
-    letter-spacing: -0.025em;
+    letter-spacing: -0.03em;
   }
 
   h2 {
     @apply text-2xl font-semibold;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.022em;
   }
 
   h3 {
     @apply text-xl font-semibold;
-    letter-spacing: -0.015em;
+    letter-spacing: -0.018em;
   }
 
   h4 {
@@ -293,34 +285,76 @@
 }
 
 /* ============================================
-   ANIMATIONS — smooth expo ease
+   MOTION — calm expo ease (pairs with GSAP / Motion)
    ============================================ */
 @layer utilities {
   .animate-fade-in {
-    animation: fade-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: fade-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .animate-slide-up {
-    animation: slide-up 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: slide-up 340ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .glow-orange {
-    box-shadow: 0 0 20px -5px rgba(255, 76, 41, 0.4);
+  /* Brand accent on display text — solid Brass (no gradients per brand).
+     This is the single warm "accent moment" on a view. */
+  .text-gradient {
+    color: var(--color-brass);
   }
 
-  .glow-orange-lg {
-    box-shadow: 0 0 40px -10px rgba(255, 76, 41, 0.5);
+  /* No glow in the brand — these resolve to soft, low, cool-toned shadows
+     (kept as classes so existing call sites stay valid). */
+  .glow-brand {
+    box-shadow:
+      0 1px 2px rgba(8, 34, 31, 0.05),
+      0 8px 20px rgba(8, 34, 31, 0.08);
+  }
+
+  .glow-brand-lg {
+    box-shadow:
+      0 4px 8px rgba(8, 34, 31, 0.06),
+      0 18px 40px rgba(8, 34, 31, 0.12);
+  }
+
+  /* Decorative grid (login, brand surfaces) */
+  .bg-grid {
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 56px 56px;
   }
 }
 
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes slide-up {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Respect reduced-motion globally (Motion/GSAP also guard in JS) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ============================================
@@ -370,7 +404,9 @@
   padding-left: 1.5rem;
   margin: 0.5rem 0;
 }
-.note-prose li > p { margin: 0.15rem 0; }
+.note-prose li > p {
+  margin: 0.15rem 0;
+}
 .note-prose blockquote {
   border-left: 3px solid var(--border);
   padding-left: 1rem;
@@ -413,7 +449,7 @@
   margin: 1.25rem 0;
 }
 .note-prose a:not(.note-link) {
-  color: #FF4C29;
+  color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -421,8 +457,8 @@
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  background: rgba(255, 76, 41, 0.1);
-  color: #FF4C29;
+  background: rgba(188, 136, 80, 0.14);
+  color: #a6743f; /* brass-600 */
   border-radius: 6px;
   padding: 0.05rem 0.4rem;
   font-weight: 500;
@@ -431,7 +467,7 @@
   transition: background 150ms;
 }
 .note-prose a.note-link:hover {
-  background: rgba(255, 76, 41, 0.2);
+  background: rgba(188, 136, 80, 0.24);
 }
 .note-prose table {
   border-collapse: collapse;
@@ -457,10 +493,13 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: rgba(255, 76, 41, 0.08);
+  background: rgba(188, 136, 80, 0.12);
   pointer-events: none;
 }
 .note-prose ::selection {
-  background: rgba(255, 76, 41, 0.2);
+  background: #e2c49e; /* brass-300 */
+  color: #08221f;
 }
-.note-prose:focus { outline: none; }
+.note-prose:focus {
+  outline: none;
+}

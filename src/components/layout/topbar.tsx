@@ -19,9 +19,11 @@ import {
   StickyNote,
   Users as UsersIcon,
   Loader2,
+  Sparkles,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { cn } from '@/lib/utils';
+import { useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -63,6 +65,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const router = useRouter();
   const { data: session } = useSession();
   const { theme, setTheme } = useTheme();
+  const openAssistant = useAssistant((s) => s.setOpen);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -85,7 +88,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
 
   const searchQuery = trpc.search.global.useQuery(
     { query: debouncedSearch },
-    { enabled: debouncedSearch.length > 0, staleTime: 30_000 },
+    { enabled: debouncedSearch.length > 0, staleTime: 30_000 }
   );
 
   const goTo = (href: string) => {
@@ -147,15 +150,11 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
         <nav className="flex items-center gap-1 text-sm">
           {breadcrumbs.map((crumb, i) => (
             <div key={crumb.href} className="flex items-center gap-1">
-              {i > 0 && (
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
-              )}
+              {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />}
               <span
                 className={cn(
                   'font-medium',
-                  i === breadcrumbs.length - 1
-                    ? 'text-foreground'
-                    : 'text-muted-foreground'
+                  i === breadcrumbs.length - 1 ? 'text-foreground' : 'text-muted-foreground'
                 )}
               >
                 {crumb.label}
@@ -175,6 +174,16 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
             <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
               <span className="text-xs">⌘</span>K
             </kbd>
+          </button>
+
+          {/* AI assistant */}
+          <button
+            onClick={() => openAssistant(true)}
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 text-primary transition-colors hover:bg-primary/15"
+            aria-label="Open AI assistant"
+          >
+            <Sparkles className="h-[18px] w-[18px]" />
+            <span className="hidden text-xs font-medium sm:inline">Ask AI</span>
           </button>
 
           {/* Dark mode toggle */}
@@ -254,7 +263,8 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
             <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Searching…
             </div>
-          ) : (() => {
+          ) : (
+            (() => {
               const r = searchQuery.data;
               const empty =
                 !r ||
@@ -263,7 +273,8 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
                   r.clients.length === 0 &&
                   r.notes.length === 0 &&
                   r.team.length === 0);
-              if (empty) return <CommandEmpty>No results for &ldquo;{debouncedSearch}&rdquo;.</CommandEmpty>;
+              if (empty)
+                return <CommandEmpty>No results for &ldquo;{debouncedSearch}&rdquo;.</CommandEmpty>;
               return (
                 <>
                   {r!.projects.length > 0 && (
@@ -361,7 +372,8 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
                   )}
                 </>
               );
-            })()}
+            })()
+          )}
         </CommandList>
       </CommandDialog>
     </>
@@ -389,7 +401,7 @@ function NotificationBell() {
       >
         <Bell className="h-[18px] w-[18px]" />
         {unreadCount > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#FF4C29] px-1 text-[10px] font-bold text-white">
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
             {unreadCount}
           </span>
         )}
@@ -404,7 +416,7 @@ function NotificationBell() {
               {unreadCount > 0 && (
                 <button
                   onClick={() => markAllRead.mutate()}
-                  className="flex items-center gap-1 text-[11px] font-medium text-[#FF4C29] hover:underline"
+                  className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
                 >
                   <CheckCheck className="h-3 w-3" />
                   Mark all read
@@ -421,16 +433,29 @@ function NotificationBell() {
                 notifications.slice(0, 10).map((n) => (
                   <button
                     key={n.id}
-                    onClick={() => { if (!n.isRead) markRead.mutate({ id: n.id }); }}
+                    onClick={() => {
+                      if (!n.isRead) markRead.mutate({ id: n.id });
+                    }}
                     className={cn(
                       'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50 border-b border-border/40 last:border-0',
-                      !n.isRead && 'bg-[#FF4C29]/[0.03]'
+                      !n.isRead && 'bg-primary/[0.05]'
                     )}
                   >
-                    {!n.isRead && <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#FF4C29]" />}
+                    {!n.isRead && (
+                      <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
+                    )}
                     <div className={cn('flex-1 min-w-0', n.isRead && 'ml-5')}>
-                      <p className={cn('text-xs', n.isRead ? 'text-muted-foreground' : 'text-foreground font-medium')}>{n.title}</p>
-                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{n.message}</p>
+                      <p
+                        className={cn(
+                          'text-xs',
+                          n.isRead ? 'text-muted-foreground' : 'text-foreground font-medium'
+                        )}
+                      >
+                        {n.title}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                        {n.message}
+                      </p>
                       <p className="text-[10px] text-muted-foreground/50 mt-1">
                         {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
                       </p>

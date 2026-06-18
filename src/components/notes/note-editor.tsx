@@ -93,7 +93,7 @@ export function NoteEditor({
             const handlePick = async (
               item: NoteLinkItem,
               editor: import('@tiptap/core').Editor,
-              range: { from: number; to: number },
+              range: { from: number; to: number }
             ) => {
               let id = item.id;
               let title = item.title;
@@ -120,17 +120,17 @@ export function NoteEditor({
                 popup.style.position = 'fixed';
                 popup.style.zIndex = '9999';
                 document.body.appendChild(popup);
-                component = new ReactRenderer<NoteLinkListHandle, React.ComponentProps<typeof NoteLinkList>>(
-                  NoteLinkList,
-                  {
-                    props: {
-                      items: props.items as NoteLinkItem[],
-                      query: props.query,
-                      command: (item: NoteLinkItem) => handlePick(item, props.editor, props.range),
-                    },
-                    editor: props.editor,
+                component = new ReactRenderer<
+                  NoteLinkListHandle,
+                  React.ComponentProps<typeof NoteLinkList>
+                >(NoteLinkList, {
+                  props: {
+                    items: props.items as NoteLinkItem[],
+                    query: props.query,
+                    command: (item: NoteLinkItem) => handlePick(item, props.editor, props.range),
                   },
-                );
+                  editor: props.editor,
+                });
                 popup.appendChild(component.element);
                 positionPopup(props.clientRect?.() ?? null);
               },
@@ -163,7 +163,7 @@ export function NoteEditor({
         },
       }),
     ],
-    [utils],
+    [utils]
   );
 
   const editor = useEditor({
@@ -223,8 +223,8 @@ function EditorToolbar({
     cn(
       'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
       active
-        ? 'bg-[#FF4C29]/10 text-[#FF4C29]'
-        : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+        ? 'bg-primary/10 text-primary'
+        : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
     );
 
   const insertLink = () => {
@@ -395,12 +395,12 @@ function EditorToolbar({
               }
             }}
             placeholder="https://…"
-            className="flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+            className="flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
           <button
             type="button"
             onClick={insertLink}
-            className="rounded-lg bg-[#FF4C29] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#E63E1C]"
+            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C]"
           >
             Add
           </button>

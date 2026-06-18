@@ -23,7 +23,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 
 const priorities = [
   { value: 'URGENT', label: 'Urgent', color: 'text-red-500', bg: 'bg-red-500' },
-  { value: 'HIGH', label: 'High', color: 'text-[#FF4C29]', bg: 'bg-[#FF4C29]' },
+  { value: 'HIGH', label: 'High', color: 'text-primary', bg: 'bg-primary' },
   { value: 'MEDIUM', label: 'Medium', color: 'text-amber-500', bg: 'bg-amber-500' },
   { value: 'LOW', label: 'Low', color: 'text-muted-foreground', bg: 'bg-muted-foreground/40' },
 ] as const;
@@ -60,7 +60,9 @@ export function TaskDetailSheet({
   });
   const toggleItem = trpc.projects.toggleChecklistItem.useMutation({ onSuccess: invalidateAll });
   const addLabelToTask = trpc.projects.addLabelToTask.useMutation({ onSuccess: invalidateAll });
-  const removeLabelFromTask = trpc.projects.removeLabelFromTask.useMutation({ onSuccess: invalidateAll });
+  const removeLabelFromTask = trpc.projects.removeLabelFromTask.useMutation({
+    onSuccess: invalidateAll,
+  });
   const createLabel = trpc.projects.createLabel.useMutation({
     onSuccess: () => {
       invalidateAll();
@@ -70,7 +72,9 @@ export function TaskDetailSheet({
     },
   });
 
-  const updateAssignees = trpc.projects.updateTaskAssignees.useMutation({ onSuccess: invalidateAll });
+  const updateAssignees = trpc.projects.updateTaskAssignees.useMutation({
+    onSuccess: invalidateAll,
+  });
 
   // Fetch board labels and team members when task is loaded
   const boardId = task?.column?.board?.id;
@@ -91,7 +95,7 @@ export function TaskDetailSheet({
   const [showLabelPicker, setShowLabelPicker] = useState(false);
   const [showNewLabelForm, setShowNewLabelForm] = useState(false);
   const [newLabelName, setNewLabelName] = useState('');
-  const [newLabelColor, setNewLabelColor] = useState('#FF4C29');
+  const [newLabelColor, setNewLabelColor] = useState('#123A38');
 
   const handleTitleSave = () => {
     if (editTitle.trim() && editTitle.trim() !== task?.title) {
@@ -125,7 +129,10 @@ export function TaskDetailSheet({
       <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
       {/* Sheet */}
-      <div className="fixed right-0 top-0 z-50 h-full w-full max-w-xl border-l border-border bg-background overflow-y-auto shadow-2xl" style={{ animation: 'slide-in-from-right 200ms cubic-bezier(0.16, 1, 0.3, 1)' }}>
+      <div
+        className="fixed right-0 top-0 z-50 h-full w-full max-w-xl border-l border-border bg-background overflow-y-auto shadow-2xl"
+        style={{ animation: 'slide-in-from-right 200ms cubic-bezier(0.16, 1, 0.3, 1)' }}
+      >
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-background/90 backdrop-blur-xl px-6 py-4">
           <div className="flex items-center gap-2 min-w-0">
@@ -162,7 +169,10 @@ export function TaskDetailSheet({
                 </button>
               </div>
             )}
-            <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
+            <button
+              onClick={onClose}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            >
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -183,13 +193,19 @@ export function TaskDetailSheet({
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
                 onBlur={handleTitleSave}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleTitleSave(); if (e.key === 'Escape') setIsEditingTitle(false); }}
-                className="w-full font-display text-xl font-bold tracking-tight text-foreground bg-transparent border-b-2 border-[#FF4C29] pb-1 focus:outline-none"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleTitleSave();
+                  if (e.key === 'Escape') setIsEditingTitle(false);
+                }}
+                className="w-full font-display text-xl font-bold tracking-tight text-foreground bg-transparent border-b-2 border-primary pb-1 focus:outline-none"
               />
             ) : (
               <h2
-                onClick={() => { setEditTitle(task.title); setIsEditingTitle(true); }}
-                className="font-display text-xl font-bold tracking-tight text-foreground leading-snug cursor-text hover:text-[#FF4C29] transition-colors"
+                onClick={() => {
+                  setEditTitle(task.title);
+                  setIsEditingTitle(true);
+                }}
+                className="font-display text-xl font-bold tracking-tight text-foreground leading-snug cursor-text hover:text-primary transition-colors"
                 title="Click to edit"
               >
                 {task.title}
@@ -200,10 +216,12 @@ export function TaskDetailSheet({
             <div className="grid grid-cols-2 gap-3">
               {/* Priority picker */}
               <div className="relative">
-                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Priority</label>
+                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Priority
+                </label>
                 <button
                   onClick={() => setShowPriorityMenu(!showPriorityMenu)}
-                  className="flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm transition-colors hover:border-[#FF4C29]/30"
+                  className="flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm transition-colors hover:border-primary/30"
                 >
                   <div className="flex items-center gap-2">
                     <Circle className={cn('h-3 w-3', currentPriority.color)} fill="currentColor" />
@@ -213,7 +231,10 @@ export function TaskDetailSheet({
                 </button>
                 {showPriorityMenu && (
                   <>
-                    <div className="fixed inset-0 z-10" onClick={() => setShowPriorityMenu(false)} />
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setShowPriorityMenu(false)}
+                    />
                     <div className="absolute top-full left-0 z-20 mt-1 w-full rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10">
                       {priorities.map((p) => (
                         <button
@@ -235,7 +256,9 @@ export function TaskDetailSheet({
 
               {/* Due date picker */}
               <div>
-                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Due Date</label>
+                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Due Date
+                </label>
                 <div className="relative">
                   <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
                   <input
@@ -243,8 +266,10 @@ export function TaskDetailSheet({
                     value={task.dueDate ? format(new Date(task.dueDate), 'yyyy-MM-dd') : ''}
                     onChange={(e) => handleDueDateChange(e.target.value)}
                     className={cn(
-                      'w-full rounded-xl border border-border bg-card pl-9 pr-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-[#FF4C29]/30 focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20',
-                      task.dueDate && new Date(task.dueDate) < new Date() && 'text-red-500 border-red-500/30'
+                      'w-full rounded-xl border border-border bg-card pl-9 pr-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary/30 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+                      task.dueDate &&
+                        new Date(task.dueDate) < new Date() &&
+                        'text-red-500 border-red-500/30'
                     )}
                   />
                 </div>
@@ -275,8 +300,13 @@ export function TaskDetailSheet({
                       className="group/label flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-colors"
                       style={{ backgroundColor: `${tl.label.color}15` }}
                     >
-                      <div className="h-2 w-2 rounded-full" style={{ backgroundColor: tl.label.color }} />
-                      <span className="text-xs font-medium" style={{ color: tl.label.color }}>{tl.label.name}</span>
+                      <div
+                        className="h-2 w-2 rounded-full"
+                        style={{ backgroundColor: tl.label.color }}
+                      />
+                      <span className="text-xs font-medium" style={{ color: tl.label.color }}>
+                        {tl.label.name}
+                      </span>
                       <button
                         onClick={() => removeLabelFromTask.mutate({ taskId, labelId: tl.label.id })}
                         className="ml-0.5 opacity-0 group-hover/label:opacity-100 transition-opacity"
@@ -308,9 +338,14 @@ export function TaskDetailSheet({
                             }}
                             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-secondary"
                           >
-                            <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: label.color }} />
-                            <span className="flex-1 text-left text-foreground font-medium">{label.name}</span>
-                            {isApplied && <Check className="h-4 w-4 text-[#FF4C29] shrink-0" />}
+                            <div
+                              className="h-3 w-3 rounded-full shrink-0"
+                              style={{ backgroundColor: label.color }}
+                            />
+                            <span className="flex-1 text-left text-foreground font-medium">
+                              {label.name}
+                            </span>
+                            {isApplied && <Check className="h-4 w-4 text-primary shrink-0" />}
                           </button>
                         );
                       })}
@@ -318,7 +353,9 @@ export function TaskDetailSheet({
                   )}
 
                   {/* Divider */}
-                  {boardLabels && boardLabels.length > 0 && <div className="border-t border-border/60" />}
+                  {boardLabels && boardLabels.length > 0 && (
+                    <div className="border-t border-border/60" />
+                  )}
 
                   {/* Create new label */}
                   {showNewLabelForm ? (
@@ -329,21 +366,40 @@ export function TaskDetailSheet({
                         onChange={(e) => setNewLabelName(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && newLabelName.trim() && boardId) {
-                            createLabel.mutate({ boardId, name: newLabelName.trim(), color: newLabelColor });
+                            createLabel.mutate({
+                              boardId,
+                              name: newLabelName.trim(),
+                              color: newLabelColor,
+                            });
                           }
-                          if (e.key === 'Escape') { setShowNewLabelForm(false); setNewLabelName(''); }
+                          if (e.key === 'Escape') {
+                            setShowNewLabelForm(false);
+                            setNewLabelName('');
+                          }
                         }}
                         placeholder="Label name..."
-                        className="w-full rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none"
+                        className="w-full rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
                       />
                       <div className="flex flex-wrap gap-1.5">
-                        {['#EF4444', '#FF4C29', '#F59E0B', '#16A34A', '#2563EB', '#7C3AED', '#DB2777', '#0EA5E9', '#6E7280'].map((c) => (
+                        {[
+                          '#EF4444',
+                          '#123A38',
+                          '#F59E0B',
+                          '#16A34A',
+                          '#2563EB',
+                          '#7C3AED',
+                          '#DB2777',
+                          '#0EA5E9',
+                          '#6E7280',
+                        ].map((c) => (
                           <button
                             key={c}
                             onClick={() => setNewLabelColor(c)}
                             className={cn(
                               'h-6 w-6 rounded-full transition-all',
-                              newLabelColor === c ? 'ring-2 ring-foreground ring-offset-2 ring-offset-card scale-110' : 'hover:scale-110'
+                              newLabelColor === c
+                                ? 'ring-2 ring-foreground ring-offset-2 ring-offset-card scale-110'
+                                : 'hover:scale-110'
                             )}
                             style={{ backgroundColor: c }}
                           />
@@ -353,16 +409,23 @@ export function TaskDetailSheet({
                         <button
                           onClick={() => {
                             if (newLabelName.trim() && boardId) {
-                              createLabel.mutate({ boardId, name: newLabelName.trim(), color: newLabelColor });
+                              createLabel.mutate({
+                                boardId,
+                                name: newLabelName.trim(),
+                                color: newLabelColor,
+                              });
                             }
                           }}
                           disabled={!newLabelName.trim() || createLabel.isPending}
-                          className="rounded-lg bg-[#FF4C29] px-3 py-1 text-xs font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-40 transition-colors"
+                          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
                         >
                           Create
                         </button>
                         <button
-                          onClick={() => { setShowNewLabelForm(false); setNewLabelName(''); }}
+                          onClick={() => {
+                            setShowNewLabelForm(false);
+                            setNewLabelName('');
+                          }}
                           className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                         >
                           Cancel
@@ -384,24 +447,33 @@ export function TaskDetailSheet({
 
             {/* Description — click to edit */}
             <div>
-              <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">Description</h4>
+              <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                Description
+              </h4>
               {isEditingDesc ? (
                 <textarea
                   autoFocus
                   value={editDesc}
                   onChange={(e) => setEditDesc(e.target.value)}
                   onBlur={handleDescSave}
-                  onKeyDown={(e) => { if (e.key === 'Escape') setIsEditingDesc(false); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setIsEditingDesc(false);
+                  }}
                   rows={4}
-                  className="w-full rounded-xl border border-[#FF4C29]/30 bg-card px-4 py-3 text-sm text-foreground leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20 resize-none"
+                  className="w-full rounded-xl border border-primary/30 bg-card px-4 py-3 text-sm text-foreground leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
                   placeholder="Add a description..."
                 />
               ) : (
                 <div
-                  onClick={() => { setEditDesc(task.description ?? ''); setIsEditingDesc(true); }}
+                  onClick={() => {
+                    setEditDesc(task.description ?? '');
+                    setIsEditingDesc(true);
+                  }}
                   className={cn(
                     'rounded-xl border border-transparent px-4 py-3 text-sm leading-relaxed cursor-text transition-colors hover:border-border hover:bg-secondary/30',
-                    task.description ? 'text-muted-foreground whitespace-pre-wrap' : 'text-muted-foreground/50 italic'
+                    task.description
+                      ? 'text-muted-foreground whitespace-pre-wrap'
+                      : 'text-muted-foreground/50 italic'
                   )}
                 >
                   {task.description || 'Click to add a description...'}
@@ -428,15 +500,22 @@ export function TaskDetailSheet({
               {task.assignees.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-3">
                   {task.assignees.map((a) => (
-                    <div key={a.user.id} className="group/assignee flex items-center gap-2 rounded-lg bg-secondary px-3 py-2">
+                    <div
+                      key={a.user.id}
+                      className="group/assignee flex items-center gap-2 rounded-lg bg-secondary px-3 py-2"
+                    >
                       <Avatar className="h-6 w-6">
                         <AvatarImage src={a.user.avatar ?? undefined} />
-                        <AvatarFallback className="text-[9px] bg-muted font-medium">{a.user.name[0]}</AvatarFallback>
+                        <AvatarFallback className="text-[9px] bg-muted font-medium">
+                          {a.user.name[0]}
+                        </AvatarFallback>
                       </Avatar>
                       <span className="text-xs font-medium text-foreground">{a.user.name}</span>
                       <button
                         onClick={() => {
-                          const newIds = task.assignees.filter((t) => t.user.id !== a.user.id).map((t) => t.user.id);
+                          const newIds = task.assignees
+                            .filter((t) => t.user.id !== a.user.id)
+                            .map((t) => t.user.id);
                           updateAssignees.mutate({ taskId, assigneeIds: newIds });
                         }}
                         className="ml-0.5 opacity-0 group-hover/assignee:opacity-100 transition-opacity text-muted-foreground hover:text-red-500"
@@ -476,13 +555,17 @@ export function TaskDetailSheet({
                       >
                         <Avatar className="h-6 w-6">
                           <AvatarImage src={member.avatar ?? undefined} />
-                          <AvatarFallback className="text-[9px] bg-muted font-medium">{member.name[0]}</AvatarFallback>
+                          <AvatarFallback className="text-[9px] bg-muted font-medium">
+                            {member.name[0]}
+                          </AvatarFallback>
                         </Avatar>
                         <div className="flex-1 text-left">
                           <span className="text-xs font-medium text-foreground">{member.name}</span>
-                          <span className="text-[10px] text-muted-foreground ml-1.5">{member.title}</span>
+                          <span className="text-[10px] text-muted-foreground ml-1.5">
+                            {member.title}
+                          </span>
                         </div>
-                        {isAssigned && <Check className="h-4 w-4 text-[#FF4C29] shrink-0" />}
+                        {isAssigned && <Check className="h-4 w-4 text-primary shrink-0" />}
                       </button>
                     );
                   })}
@@ -505,21 +588,43 @@ export function TaskDetailSheet({
                       <div key={cl.id}>
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-sm font-medium text-foreground">{cl.name}</span>
-                          <span className="text-xs text-muted-foreground">{done}/{total}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {done}/{total}
+                          </span>
                         </div>
                         <div className="h-1.5 rounded-full bg-secondary mb-3">
-                          <div className={cn('h-full rounded-full transition-all', pct === 100 ? 'bg-emerald-500' : 'bg-[#FF4C29]')} style={{ width: `${pct}%` }} />
+                          <div
+                            className={cn(
+                              'h-full rounded-full transition-all',
+                              pct === 100 ? 'bg-emerald-500' : 'bg-primary'
+                            )}
+                            style={{ width: `${pct}%` }}
+                          />
                         </div>
                         <div className="space-y-1">
                           {cl.items.map((item) => (
-                            <label key={item.id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-secondary/50 cursor-pointer transition-colors">
+                            <label
+                              key={item.id}
+                              className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-secondary/50 cursor-pointer transition-colors"
+                            >
                               <input
                                 type="checkbox"
                                 checked={item.completed}
-                                onChange={() => toggleItem.mutate({ id: item.id, completed: !item.completed })}
-                                className="h-4 w-4 rounded border-border accent-[#FF4C29]"
+                                onChange={() =>
+                                  toggleItem.mutate({ id: item.id, completed: !item.completed })
+                                }
+                                className="h-4 w-4 rounded border-border accent-primary"
                               />
-                              <span className={cn('text-sm', item.completed ? 'text-muted-foreground line-through' : 'text-foreground')}>{item.text}</span>
+                              <span
+                                className={cn(
+                                  'text-sm',
+                                  item.completed
+                                    ? 'text-muted-foreground line-through'
+                                    : 'text-foreground'
+                                )}
+                              >
+                                {item.text}
+                              </span>
                             </label>
                           ))}
                         </div>
@@ -541,16 +646,22 @@ export function TaskDetailSheet({
                   <div key={comment.id} className="flex gap-3">
                     <Avatar className="h-7 w-7 shrink-0 mt-0.5">
                       <AvatarImage src={comment.user.avatar ?? undefined} />
-                      <AvatarFallback className="text-[9px] bg-secondary font-medium">{comment.user.name[0]}</AvatarFallback>
+                      <AvatarFallback className="text-[9px] bg-secondary font-medium">
+                        {comment.user.name[0]}
+                      </AvatarFallback>
                     </Avatar>
                     <div className="flex-1">
                       <div className="flex items-baseline gap-2">
-                        <span className="text-sm font-semibold text-foreground">{comment.user.name}</span>
+                        <span className="text-sm font-semibold text-foreground">
+                          {comment.user.name}
+                        </span>
                         <span className="text-[11px] text-muted-foreground/50">
                           {formatDistanceToNow(new Date(comment.createdAt), { addSuffix: true })}
                         </span>
                       </div>
-                      <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">{comment.content}</p>
+                      <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">
+                        {comment.content}
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -567,12 +678,15 @@ export function TaskDetailSheet({
                         }
                       }}
                       placeholder="Write a comment..."
-                      className="w-full rounded-xl border border-border bg-secondary/50 px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+                      className="w-full rounded-xl border border-border bg-secondary/50 px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
                     <button
-                      onClick={() => { if (commentText.trim()) addComment.mutate({ taskId, content: commentText.trim() }); }}
+                      onClick={() => {
+                        if (commentText.trim())
+                          addComment.mutate({ taskId, content: commentText.trim() });
+                      }}
                       disabled={!commentText.trim() || addComment.isPending}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-[#FF4C29] transition-colors disabled:opacity-30"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-primary transition-colors disabled:opacity-30"
                     >
                       <Send className="h-4 w-4" />
                     </button>
@@ -584,7 +698,8 @@ export function TaskDetailSheet({
             {/* Created by */}
             <div className="pt-4 border-t border-border/60">
               <p className="text-[11px] text-muted-foreground/50">
-                Created by {task.createdBy.name} &middot; {format(new Date(task.createdAt), 'MMM d, yyyy')}
+                Created by {task.createdBy.name} &middot;{' '}
+                {format(new Date(task.createdAt), 'MMM d, yyyy')}
               </p>
             </div>
           </div>

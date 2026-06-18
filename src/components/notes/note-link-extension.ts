@@ -56,7 +56,8 @@ export const NoteLink = Node.create<NoteLinkOptions>({
       },
       title: {
         default: null,
-        parseHTML: (el) => (el as HTMLElement).getAttribute('data-title') ?? (el as HTMLElement).innerText,
+        parseHTML: (el) =>
+          (el as HTMLElement).getAttribute('data-title') ?? (el as HTMLElement).innerText,
         renderHTML: (attrs) => (attrs.title ? { 'data-title': attrs.title } : {}),
       },
     };
@@ -78,7 +79,7 @@ export const NoteLink = Node.create<NoteLinkOptions>({
           class: 'note-link',
         },
         this.options.HTMLAttributes,
-        HTMLAttributes,
+        HTMLAttributes
       ),
       `[[${title}]]`,
     ];

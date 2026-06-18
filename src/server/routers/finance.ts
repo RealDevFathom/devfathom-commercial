@@ -38,16 +38,31 @@ export const financeRouter = router({
     }),
 
   createTransaction: adminProcedure
-    .input(z.object({
-      type: z.enum(['INCOME', 'EXPENSE']),
-      amount: z.number().positive(),
-      currency: z.enum(['USD', 'PKR']).default('USD'),
-      category: z.enum(['SALARIES', 'SUBSCRIPTIONS', 'OFFICE', 'MARKETING', 'HOSTING', 'SOFTWARE', 'HARDWARE', 'TRAVEL', 'UTILITIES', 'MISCELLANEOUS']).optional(),
-      description: z.string().min(1),
-      projectId: z.string().optional(),
-      clientId: z.string().optional(),
-      date: z.date(),
-    }))
+    .input(
+      z.object({
+        type: z.enum(['INCOME', 'EXPENSE']),
+        amount: z.number().positive(),
+        currency: z.enum(['USD', 'PKR']).default('USD'),
+        category: z
+          .enum([
+            'SALARIES',
+            'SUBSCRIPTIONS',
+            'OFFICE',
+            'MARKETING',
+            'HOSTING',
+            'SOFTWARE',
+            'HARDWARE',
+            'TRAVEL',
+            'UTILITIES',
+            'MISCELLANEOUS',
+          ])
+          .optional(),
+        description: z.string().min(1),
+        projectId: z.string().optional(),
+        clientId: z.string().optional(),
+        date: z.date(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.transaction.create({
         data: {
@@ -60,16 +75,32 @@ export const financeRouter = router({
     }),
 
   updateTransaction: adminProcedure
-    .input(z.object({
-      id: z.string(),
-      type: z.enum(['INCOME', 'EXPENSE']).optional(),
-      amount: z.number().positive().optional(),
-      description: z.string().min(1).optional(),
-      category: z.enum(['SALARIES', 'SUBSCRIPTIONS', 'OFFICE', 'MARKETING', 'HOSTING', 'SOFTWARE', 'HARDWARE', 'TRAVEL', 'UTILITIES', 'MISCELLANEOUS']).nullable().optional(),
-      projectId: z.string().nullable().optional(),
-      clientId: z.string().nullable().optional(),
-      date: z.date().optional(),
-    }))
+    .input(
+      z.object({
+        id: z.string(),
+        type: z.enum(['INCOME', 'EXPENSE']).optional(),
+        amount: z.number().positive().optional(),
+        description: z.string().min(1).optional(),
+        category: z
+          .enum([
+            'SALARIES',
+            'SUBSCRIPTIONS',
+            'OFFICE',
+            'MARKETING',
+            'HOSTING',
+            'SOFTWARE',
+            'HARDWARE',
+            'TRAVEL',
+            'UTILITIES',
+            'MISCELLANEOUS',
+          ])
+          .nullable()
+          .optional(),
+        projectId: z.string().nullable().optional(),
+        clientId: z.string().nullable().optional(),
+        date: z.date().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       return ctx.db.transaction.update({ where: { id }, data });
@@ -104,22 +135,26 @@ export const financeRouter = router({
     }),
 
   createInvoice: adminProcedure
-    .input(z.object({
-      clientId: z.string(),
-      projectId: z.string().optional(),
-      items: z.array(z.object({
-        description: z.string(),
-        quantity: z.number().positive(),
-        rate: z.number().positive(),
-        amount: z.number(),
-      })),
-      subtotal: z.number(),
-      tax: z.number().default(0),
-      total: z.number(),
-      currency: z.enum(['USD', 'PKR']).default('USD'),
-      dueDate: z.date(),
-      notes: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        clientId: z.string(),
+        projectId: z.string().optional(),
+        items: z.array(
+          z.object({
+            description: z.string(),
+            quantity: z.number().positive(),
+            rate: z.number().positive(),
+            amount: z.number(),
+          })
+        ),
+        subtotal: z.number(),
+        tax: z.number().default(0),
+        total: z.number(),
+        currency: z.enum(['USD', 'PKR']).default('USD'),
+        dueDate: z.date(),
+        notes: z.string().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Generate invoice number
       const count = await ctx.db.invoice.count();
@@ -154,10 +189,12 @@ export const financeRouter = router({
     }),
 
   updateInvoiceStatus: adminProcedure
-    .input(z.object({
-      id: z.string(),
-      status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']),
-    }))
+    .input(
+      z.object({
+        id: z.string(),
+        status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const data: Record<string, unknown> = { status: input.status };
       if (input.status === 'PAID') data.paidAt = new Date();
@@ -196,15 +233,28 @@ export const financeRouter = router({
   }),
 
   createRecurringExpense: adminProcedure
-    .input(z.object({
-      name: z.string().min(1),
-      amount: z.number().positive(),
-      currency: z.enum(['USD', 'PKR']).default('USD'),
-      category: z.enum(['SALARIES', 'SUBSCRIPTIONS', 'OFFICE', 'MARKETING', 'HOSTING', 'SOFTWARE', 'HARDWARE', 'TRAVEL', 'UTILITIES', 'MISCELLANEOUS']),
-      interval: z.string().min(1),
-      nextDueDate: z.date(),
-      vendorName: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        name: z.string().min(1),
+        amount: z.number().positive(),
+        currency: z.enum(['USD', 'PKR']).default('USD'),
+        category: z.enum([
+          'SALARIES',
+          'SUBSCRIPTIONS',
+          'OFFICE',
+          'MARKETING',
+          'HOSTING',
+          'SOFTWARE',
+          'HARDWARE',
+          'TRAVEL',
+          'UTILITIES',
+          'MISCELLANEOUS',
+        ]),
+        interval: z.string().min(1),
+        nextDueDate: z.date(),
+        vendorName: z.string().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.recurringExpense.create({ data: input });
     }),
@@ -223,20 +273,43 @@ export const financeRouter = router({
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfYear = new Date(now.getFullYear(), 0, 1);
 
-    const [monthlyIncome, monthlyExpense, yearlyIncome, yearlyExpense, paidInvoices, outstandingInvoices] =
-      await Promise.all([
-        ctx.db.transaction.aggregate({ _sum: { amount: true }, where: { type: 'INCOME', date: { gte: startOfMonth } } }),
-        ctx.db.transaction.aggregate({ _sum: { amount: true }, where: { type: 'EXPENSE', date: { gte: startOfMonth } } }),
-        ctx.db.transaction.aggregate({ _sum: { amount: true }, where: { type: 'INCOME', date: { gte: startOfYear } } }),
-        ctx.db.transaction.aggregate({ _sum: { amount: true }, where: { type: 'EXPENSE', date: { gte: startOfYear } } }),
-        ctx.db.invoice.aggregate({ _sum: { total: true }, _count: true, where: { status: 'PAID' } }),
-        ctx.db.invoice.aggregate({ _sum: { total: true }, _count: true, where: { status: { in: ['SENT', 'OVERDUE'] } } }),
-      ]);
+    const [
+      monthlyIncome,
+      monthlyExpense,
+      yearlyIncome,
+      yearlyExpense,
+      paidInvoices,
+      outstandingInvoices,
+    ] = await Promise.all([
+      ctx.db.transaction.aggregate({
+        _sum: { amount: true },
+        where: { type: 'INCOME', date: { gte: startOfMonth } },
+      }),
+      ctx.db.transaction.aggregate({
+        _sum: { amount: true },
+        where: { type: 'EXPENSE', date: { gte: startOfMonth } },
+      }),
+      ctx.db.transaction.aggregate({
+        _sum: { amount: true },
+        where: { type: 'INCOME', date: { gte: startOfYear } },
+      }),
+      ctx.db.transaction.aggregate({
+        _sum: { amount: true },
+        where: { type: 'EXPENSE', date: { gte: startOfYear } },
+      }),
+      ctx.db.invoice.aggregate({ _sum: { total: true }, _count: true, where: { status: 'PAID' } }),
+      ctx.db.invoice.aggregate({
+        _sum: { total: true },
+        _count: true,
+        where: { status: { in: ['SENT', 'OVERDUE'] } },
+      }),
+    ]);
 
     return {
       monthlyIncome: Number(monthlyIncome._sum.amount || 0),
       monthlyExpense: Number(monthlyExpense._sum.amount || 0),
-      monthlyProfit: Number(monthlyIncome._sum.amount || 0) - Number(monthlyExpense._sum.amount || 0),
+      monthlyProfit:
+        Number(monthlyIncome._sum.amount || 0) - Number(monthlyExpense._sum.amount || 0),
       yearlyIncome: Number(yearlyIncome._sum.amount || 0),
       yearlyExpense: Number(yearlyExpense._sum.amount || 0),
       yearlyProfit: Number(yearlyIncome._sum.amount || 0) - Number(yearlyExpense._sum.amount || 0),
@@ -248,10 +321,12 @@ export const financeRouter = router({
   }),
 
   getPnlReport: adminProcedure
-    .input(z.object({
-      period: z.enum(['monthly', 'quarterly', 'yearly']).default('monthly'),
-      months: z.number().min(1).max(24).default(12),
-    }))
+    .input(
+      z.object({
+        period: z.enum(['monthly', 'quarterly', 'yearly']).default('monthly'),
+        months: z.number().min(1).max(24).default(12),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const data = [];
       const now = new Date();
@@ -261,8 +336,14 @@ export const financeRouter = router({
         const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
 
         const [income, expense] = await Promise.all([
-          ctx.db.transaction.aggregate({ _sum: { amount: true }, where: { type: 'INCOME', date: { gte: date, lte: endOfMonth } } }),
-          ctx.db.transaction.aggregate({ _sum: { amount: true }, where: { type: 'EXPENSE', date: { gte: date, lte: endOfMonth } } }),
+          ctx.db.transaction.aggregate({
+            _sum: { amount: true },
+            where: { type: 'INCOME', date: { gte: date, lte: endOfMonth } },
+          }),
+          ctx.db.transaction.aggregate({
+            _sum: { amount: true },
+            where: { type: 'EXPENSE', date: { gte: date, lte: endOfMonth } },
+          }),
         ]);
 
         const incomeAmt = Number(income._sum.amount || 0);

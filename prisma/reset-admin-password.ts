@@ -1,5 +1,5 @@
 // Reset password for the admin account.
-// Run with: ADMIN_PASSWORD="..." DATABASE_URL="..." npx tsx prisma/reset-admin-password.ts
+// Run with: ADMIN_PASSWORD="..." DATABASE_URL="..." bunx tsx prisma/reset-admin-password.ts
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';

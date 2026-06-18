@@ -51,7 +51,9 @@ export function TeamStatsContent() {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
         <AlertCircle className="h-12 w-12 text-muted-foreground/30" />
-        <h3 className="mt-4 font-display text-lg font-semibold text-foreground">Unable to load team stats</h3>
+        <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
+          Unable to load team stats
+        </h3>
         <p className="mt-1 text-sm text-muted-foreground">{stats.error.message}</p>
       </div>
     );
@@ -61,15 +63,18 @@ export function TeamStatsContent() {
   const { members, alerts, velocity, leaderboards, totals } = data;
 
   const weekDelta = totals.teamCompletedThisWeek - totals.teamCompletedLastWeek;
-  const weekDeltaPct = totals.teamCompletedLastWeek > 0
-    ? Math.round((weekDelta / totals.teamCompletedLastWeek) * 100)
-    : null;
+  const weekDeltaPct =
+    totals.teamCompletedLastWeek > 0
+      ? Math.round((weekDelta / totals.teamCompletedLastWeek) * 100)
+      : null;
 
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">Team Insights</h1>
+        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
+          Team Insights
+        </h1>
         <p className="text-muted-foreground mt-1.5 text-[15px]">
           How the team is performing this week. Workload, velocity, and pulse in one place.
         </p>
@@ -102,7 +107,11 @@ export function TeamStatsContent() {
           label="Team size"
           value={totals.teamMembers}
           tone="violet"
-          subtitle={totals.membersWithNoTasks > 0 ? `${totals.membersWithNoTasks} idle` : 'everyone has work'}
+          subtitle={
+            totals.membersWithNoTasks > 0
+              ? `${totals.membersWithNoTasks} idle`
+              : 'everyone has work'
+          }
         />
       </div>
 
@@ -112,7 +121,8 @@ export function TeamStatsContent() {
           <CardHeader className="pb-3">
             <CardTitle className="text-[13px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-500 flex items-center gap-2">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Heads-up · {alerts.length} {alerts.length === 1 ? 'thing needs attention' : 'things need attention'}
+              Heads-up · {alerts.length}{' '}
+              {alerts.length === 1 ? 'thing needs attention' : 'things need attention'}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
@@ -150,7 +160,13 @@ export function TeamStatsContent() {
                 fontSize={11}
                 strokeOpacity={0.5}
               />
-              <YAxis allowDecimals={false} stroke="currentColor" fontSize={11} strokeOpacity={0.5} width={24} />
+              <YAxis
+                allowDecimals={false}
+                stroke="currentColor"
+                fontSize={11}
+                strokeOpacity={0.5}
+                width={24}
+              />
               <Tooltip
                 cursor={{ stroke: 'var(--border)', strokeWidth: 1, strokeDasharray: '3 3' }}
                 contentStyle={{
@@ -199,8 +215,19 @@ export function TeamStatsContent() {
                 layout="vertical"
                 margin={{ left: 8, right: 30, top: 4, bottom: 4 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.08} horizontal={false} />
-                <XAxis type="number" stroke="currentColor" fontSize={11} strokeOpacity={0.5} allowDecimals={false} />
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="currentColor"
+                  strokeOpacity={0.08}
+                  horizontal={false}
+                />
+                <XAxis
+                  type="number"
+                  stroke="currentColor"
+                  fontSize={11}
+                  strokeOpacity={0.5}
+                  allowDecimals={false}
+                />
                 <YAxis
                   type="category"
                   dataKey="name"
@@ -212,7 +239,7 @@ export function TeamStatsContent() {
                   tickFormatter={(name: string) => name.split(' ')[0]}
                 />
                 <Tooltip
-                  cursor={{ fill: 'rgba(255, 76, 41, 0.08)' }}
+                  cursor={{ fill: 'rgba(188,136,80,0.1)' }}
                   contentStyle={{
                     background: 'var(--popover)',
                     border: '1px solid var(--border)',
@@ -230,7 +257,9 @@ export function TeamStatsContent() {
                     .map((m) => (
                       <Cell
                         key={m.userId}
-                        fill={m.openTasks === 0 ? '#64748b' : m.openTasks > 10 ? '#f59e0b' : '#3b82f6'}
+                        fill={
+                          m.openTasks === 0 ? '#64748b' : m.openTasks > 10 ? '#f59e0b' : '#3b82f6'
+                        }
                       />
                     ))}
                 </Bar>
@@ -357,7 +386,12 @@ function KpiCard({
               <p className="mt-1 text-[11px] text-muted-foreground">{subtitle}</p>
             )}
           </div>
-          <div className={cn('flex h-10 w-10 items-center justify-center rounded-xl shrink-0', tones[tone])}>
+          <div
+            className={cn(
+              'flex h-10 w-10 items-center justify-center rounded-xl shrink-0',
+              tones[tone]
+            )}
+          >
             <Icon className="h-5 w-5" />
           </div>
         </div>
@@ -372,14 +406,20 @@ function KpiCard({
 function AlertRow({
   alert,
 }: {
-  alert: { userId: string; name: string; severity: 'high' | 'medium' | 'low'; kind: string; message: string };
+  alert: {
+    userId: string;
+    name: string;
+    severity: 'high' | 'medium' | 'low';
+    kind: string;
+    message: string;
+  };
 }) {
   const toneClass =
     alert.severity === 'high'
       ? 'bg-red-500'
       : alert.severity === 'medium'
-      ? 'bg-amber-500'
-      : 'bg-muted-foreground/40';
+        ? 'bg-amber-500'
+        : 'bg-muted-foreground/40';
   const Icon =
     alert.severity === 'high' ? AlertCircle : alert.severity === 'medium' ? AlertTriangle : Info;
 
@@ -395,8 +435,8 @@ function AlertRow({
           alert.severity === 'high'
             ? 'text-red-500'
             : alert.severity === 'medium'
-            ? 'text-amber-500'
-            : 'text-muted-foreground',
+              ? 'text-amber-500'
+              : 'text-muted-foreground'
         )}
       />
       <span className="font-semibold text-foreground">{alert.name}</span>
@@ -473,7 +513,7 @@ function LeaderboardCard({
                       'flex h-5 w-5 items-center justify-center rounded text-[10px] font-bold shrink-0',
                       i === 0
                         ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                        : 'bg-secondary text-muted-foreground',
+                        : 'bg-secondary text-muted-foreground'
                     )}
                   >
                     {i === 0 ? <Crown className="h-3 w-3" /> : i + 1}
@@ -482,7 +522,9 @@ function LeaderboardCard({
                     <AvatarImage src={m.avatar ?? undefined} />
                     <AvatarFallback className="text-[8px] bg-secondary">{m.name[0]}</AvatarFallback>
                   </Avatar>
-                  <span className="flex-1 truncate text-xs text-foreground">{m.name.split(' ')[0]}</span>
+                  <span className="flex-1 truncate text-xs text-foreground">
+                    {m.name.split(' ')[0]}
+                  </span>
                   <span className="text-xs font-semibold text-foreground tabular-nums">
                     {value ?? '—'}
                     {value !== null && value !== undefined && valueLabel}
@@ -493,7 +535,9 @@ function LeaderboardCard({
           </div>
         )}
         {lowerIsBetter && members.length > 0 && (
-          <p className="mt-2 text-[9px] text-muted-foreground/60 uppercase tracking-wider">lower is better</p>
+          <p className="mt-2 text-[9px] text-muted-foreground/60 uppercase tracking-wider">
+            lower is better
+          </p>
         )}
       </CardContent>
     </Card>
@@ -535,10 +579,20 @@ function MemberStatsCard({
     stats.openTasks === 0
       ? { label: 'idle', bg: 'bg-red-500/10', dot: 'bg-red-500', text: 'text-red-500' }
       : stats.completedThisWeek === 0
-      ? { label: 'stalled', bg: 'bg-amber-500/10', dot: 'bg-amber-500', text: 'text-amber-500' }
-      : stats.completedThisWeek >= 5
-      ? { label: 'on fire', bg: 'bg-orange-500/10', dot: 'bg-orange-500', text: 'text-orange-500' }
-      : { label: 'active', bg: 'bg-emerald-500/10', dot: 'bg-emerald-500', text: 'text-emerald-500' };
+        ? { label: 'stalled', bg: 'bg-amber-500/10', dot: 'bg-amber-500', text: 'text-amber-500' }
+        : stats.completedThisWeek >= 5
+          ? {
+              label: 'on fire',
+              bg: 'bg-orange-500/10',
+              dot: 'bg-orange-500',
+              text: 'text-orange-500',
+            }
+          : {
+              label: 'active',
+              bg: 'bg-emerald-500/10',
+              dot: 'bg-emerald-500',
+              text: 'text-emerald-500',
+            };
 
   return (
     <Link href={`/team/${stats.userId}`}>
@@ -557,12 +611,20 @@ function MemberStatsCard({
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-foreground truncate group-hover:text-[#FF4C29] transition-colors">
+              <p className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
                 {stats.name}
               </p>
-              {stats.title && <p className="text-[11px] text-muted-foreground truncate">{stats.title}</p>}
+              {stats.title && (
+                <p className="text-[11px] text-muted-foreground truncate">{stats.title}</p>
+              )}
             </div>
-            <div className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium', health.bg, health.text)}>
+            <div
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                health.bg,
+                health.text
+              )}
+            >
               {health.label === 'on fire' && <Flame className="h-2.5 w-2.5" />}
               {health.label === 'active' && <Sparkles className="h-2.5 w-2.5" />}
               <div className={cn('h-1 w-1 rounded-full', health.dot)} />
@@ -602,14 +664,16 @@ function MemberStatsCard({
                 key={i}
                 className={cn(
                   'flex-1 rounded-sm transition-all',
-                  count === 0 ? 'bg-secondary' : 'bg-emerald-500/60',
+                  count === 0 ? 'bg-secondary' : 'bg-emerald-500/60'
                 )}
                 style={{ height: `${Math.max(8, (count / maxSpark) * 100)}%` }}
                 title={`${count} task${count === 1 ? '' : 's'} done`}
               />
             ))}
           </div>
-          <p className="mt-1 text-[9px] text-muted-foreground/60 uppercase tracking-wider">7-day activity</p>
+          <p className="mt-1 text-[9px] text-muted-foreground/60 uppercase tracking-wider">
+            7-day activity
+          </p>
 
           {/* Meta row: meetings + collaboration + last active */}
           <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between text-[11px] text-muted-foreground">
@@ -658,16 +722,21 @@ function Stat({
   };
   return (
     <div className="rounded-lg bg-background/50 border border-border/40 px-2.5 py-2">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">{label}</p>
-      <p className={cn('mt-0.5 font-display text-xl font-bold tabular-nums', tones[tone])}>{value}</p>
+      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+        {label}
+      </p>
+      <p className={cn('mt-0.5 font-display text-xl font-bold tabular-nums', tones[tone])}>
+        {value}
+      </p>
       {delta !== undefined && delta !== 0 && (
         <p
           className={cn(
             'text-[9px] font-medium tabular-nums',
-            delta > 0 ? 'text-emerald-500' : 'text-amber-500',
+            delta > 0 ? 'text-emerald-500' : 'text-amber-500'
           )}
         >
-          {delta > 0 ? '+' : ''}{delta} vs last week
+          {delta > 0 ? '+' : ''}
+          {delta} vs last week
         </p>
       )}
     </div>

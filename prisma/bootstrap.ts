@@ -1,5 +1,5 @@
 // Production bootstrap — creates ONE admin account, no demo data.
-// Run with: DATABASE_URL="..." npx tsx prisma/bootstrap.ts
+// Run with: DATABASE_URL="..." bunx tsx prisma/bootstrap.ts
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
@@ -13,7 +13,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 if (!ADMIN_PASSWORD) {
   console.error('❌ ADMIN_PASSWORD env var is required');
-  console.error('   Run with: ADMIN_PASSWORD="..." DATABASE_URL="..." npx tsx prisma/bootstrap.ts');
+  console.error('   Run with: ADMIN_PASSWORD="..." DATABASE_URL="..." bunx tsx prisma/bootstrap.ts');
   process.exit(1);
 }
 

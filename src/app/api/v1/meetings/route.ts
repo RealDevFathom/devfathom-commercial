@@ -26,7 +26,10 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   const body = await request.json();
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid input', details: parsed.error.issues }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Invalid input', details: parsed.error.issues },
+      { status: 400 }
+    );
   }
 
   const { attendeeIds, startTime, endTime, ...rest } = parsed.data;

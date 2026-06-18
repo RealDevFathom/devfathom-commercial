@@ -57,7 +57,12 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
   const [scope, setScope] = useState<Scope>('all');
   const [search, setSearch] = useState('');
 
-  const list = trpc.notes.list.useQuery({ scope, projectId, clientId, search: search || undefined });
+  const list = trpc.notes.list.useQuery({
+    scope,
+    projectId,
+    clientId,
+    search: search || undefined,
+  });
 
   const createNote = trpc.notes.create.useMutation({
     onSuccess: (note) => {
@@ -80,7 +85,9 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
       {!embedded && (
         <div className="flex items-end justify-between">
           <div>
-            <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">Notes</h1>
+            <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
+              Notes
+            </h1>
             <p className="text-muted-foreground mt-1.5 text-[15px]">
               Capture ideas, link them together, share them with the team.
             </p>
@@ -88,9 +95,13 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
           <button
             onClick={handleCreate}
             disabled={createNote.isPending}
-            className="flex items-center gap-2 rounded-xl bg-[#FF4C29] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)] active:scale-[0.98] disabled:opacity-50"
+            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
           >
-            {createNote.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {createNote.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
             New Note
           </button>
         </div>
@@ -99,7 +110,12 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
       {/* minmax(0,1fr) instead of 1fr so the content column can shrink below
           its intrinsic content width — otherwise a long token or URL in a
           note stretches the grid and pushes the Edit button past the viewport. */}
-      <div className={cn('grid gap-5', embedded ? 'lg:grid-cols-[280px_minmax(0,1fr)]' : 'lg:grid-cols-[320px_minmax(0,1fr)]')}>
+      <div
+        className={cn(
+          'grid gap-5',
+          embedded ? 'lg:grid-cols-[280px_minmax(0,1fr)]' : 'lg:grid-cols-[320px_minmax(0,1fr)]'
+        )}
+      >
         {/* LEFT — note list */}
         <div className="space-y-3">
           {/* Filter chips */}
@@ -111,8 +127,8 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                 className={cn(
                   'rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
                   scope === s
-                    ? 'bg-[#FF4C29]/10 text-[#FF4C29]'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                 )}
               >
                 {s === 'all' ? 'All' : s === 'mine' ? 'My notes' : 'Shared'}
@@ -122,9 +138,13 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
               <button
                 onClick={handleCreate}
                 disabled={createNote.isPending}
-                className="ml-auto flex items-center gap-1 rounded-lg bg-[#FF4C29] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-50"
+                className="ml-auto flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
               >
-                {createNote.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                {createNote.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Plus className="h-3 w-3" />
+                )}
                 New
               </button>
             )}
@@ -138,7 +158,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
               placeholder="Search notes…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="flex h-9 w-full rounded-xl border border-border bg-card pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground transition-colors focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+              className="flex h-9 w-full rounded-xl border border-border bg-card pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
 
@@ -160,7 +180,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                 <button
                   onClick={handleCreate}
                   disabled={createNote.isPending}
-                  className="mt-3 inline-flex items-center gap-1 rounded-lg bg-[#FF4C29] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-50"
+                  className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
                 >
                   <Plus className="h-3 w-3" /> New note
                 </button>
@@ -177,15 +197,20 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                     className={cn(
                       'block rounded-xl border px-3 py-2.5 transition-all',
                       isSelected
-                        ? 'border-[#FF4C29]/40 bg-[#FF4C29]/5'
-                        : 'border-border/60 bg-card hover:border-border hover:shadow-sm',
+                        ? 'border-primary/40 bg-primary/5'
+                        : 'border-border/60 bg-card hover:border-border hover:shadow-sm'
                     )}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-sm font-medium text-foreground truncate">
                         {n.title || 'Untitled'}
                       </p>
-                      <span className={cn('inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium', vc.bg)}>
+                      <span
+                        className={cn(
+                          'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium',
+                          vc.bg
+                        )}
+                      >
                         <Icon className="h-2.5 w-2.5" />
                         {vc.label}
                       </span>
@@ -225,7 +250,8 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                   Pick one from the list or create a new note to get started.
                 </p>
                 <p className="mt-3 max-w-sm text-xs text-muted-foreground/80">
-                  Tip: type <span className="rounded bg-muted px-1.5 py-0.5 font-mono">[[</span> inside any note to link to another note.
+                  Tip: type <span className="rounded bg-muted px-1.5 py-0.5 font-mono">[[</span>{' '}
+                  inside any note to link to another note.
                 </p>
               </CardContent>
             </Card>
@@ -270,7 +296,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
   // the user's in-progress draft. View mode keeps the default (refetch).
   const noteQuery = trpc.notes.getById.useQuery(
     { id: noteId },
-    { refetchOnWindowFocus: mode === 'view' },
+    { refetchOnWindowFocus: mode === 'view' }
   );
   const note = noteQuery.data;
 
@@ -350,7 +376,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
       utils.notes.search.invalidate();
       return { id: created.id, title: created.title };
     },
-    [utils],
+    [utils]
   );
 
   if (noteQuery.isLoading) {
@@ -406,7 +432,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
             className={cn(
               // min-w-0 so a long title in a flex row doesn't push the buttons away
               'flex-1 min-w-0 bg-transparent font-display text-2xl font-bold tracking-tight text-foreground placeholder:text-muted-foreground focus:outline-none truncate',
-              !isEditing && 'cursor-default',
+              !isEditing && 'cursor-default'
             )}
           />
 
@@ -423,7 +449,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
               <button
                 onClick={handleSave}
                 disabled={updateNote.isPending}
-                className="flex items-center gap-1.5 rounded-lg bg-[#FF4C29] px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)] active:scale-[0.98] disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
                 title="Save (⌘S)"
               >
                 {updateNote.isPending ? (
@@ -451,8 +477,10 @@ function NoteDetail({ noteId }: { noteId: string }) {
             <>
               <select
                 value={note.visibility}
-                onChange={(e) => updateNote.mutate({ id: noteId, visibility: e.target.value as Visibility })}
-                className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground focus:border-[#FF4C29] focus:outline-none"
+                onChange={(e) =>
+                  updateNote.mutate({ id: noteId, visibility: e.target.value as Visibility })
+                }
+                className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground focus:border-primary focus:outline-none"
               >
                 <option value="PRIVATE">Private</option>
                 <option value="SHARED">Shared</option>
@@ -463,22 +491,27 @@ function NoteDetail({ noteId }: { noteId: string }) {
                 className={cn(
                   'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors',
                   showSharePanel || note.shares.length > 0
-                    ? 'border-[#FF4C29]/30 bg-[#FF4C29]/10 text-[#FF4C29]'
-                    : 'border-border bg-card text-muted-foreground hover:text-foreground',
+                    ? 'border-primary/30 bg-primary/10 text-primary'
+                    : 'border-border bg-card text-muted-foreground hover:text-foreground'
                 )}
                 title="Share with team members"
               >
                 <Share2 className="h-3.5 w-3.5" />
                 Share
                 {note.shares.length > 0 && (
-                  <span className="rounded-full bg-[#FF4C29]/20 px-1.5 text-[10px] font-bold">
+                  <span className="rounded-full bg-primary/20 px-1.5 text-[10px] font-bold">
                     {note.shares.length}
                   </span>
                 )}
               </button>
             </>
           ) : (
-            <span className={cn('inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium', vc.bg)}>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium',
+                vc.bg
+              )}
+            >
               <VIcon className="h-3 w-3" /> {vc.label}
             </span>
           )}
@@ -513,7 +546,9 @@ function NoteDetail({ noteId }: { noteId: string }) {
           <div className="flex items-center gap-1.5">
             <Avatar className="h-4 w-4">
               <AvatarImage src={note.author.avatar ?? undefined} />
-              <AvatarFallback className="bg-secondary text-[8px]">{note.author.name[0]}</AvatarFallback>
+              <AvatarFallback className="bg-secondary text-[8px]">
+                {note.author.name[0]}
+              </AvatarFallback>
             </Avatar>
             <span>{isAuthor ? 'You' : note.author.name}</span>
           </div>
@@ -522,7 +557,10 @@ function NoteDetail({ noteId }: { noteId: string }) {
           {note.project && (
             <>
               <span>·</span>
-              <Link href={`/projects/${note.project.id}`} className="flex items-center gap-1 hover:text-[#FF4C29]">
+              <Link
+                href={`/projects/${note.project.id}`}
+                className="flex items-center gap-1 hover:text-primary"
+              >
                 <ArrowUpRight className="h-3 w-3" />
                 {note.project.name}
               </Link>
@@ -531,7 +569,10 @@ function NoteDetail({ noteId }: { noteId: string }) {
           {note.client && (
             <>
               <span>·</span>
-              <Link href={`/clients/${note.client.id}`} className="flex items-center gap-1 hover:text-[#FF4C29]">
+              <Link
+                href={`/clients/${note.client.id}`}
+                className="flex items-center gap-1 hover:text-primary"
+              >
                 <ArrowUpRight className="h-3 w-3" />
                 {note.client.name}
               </Link>
@@ -580,7 +621,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
                 <Link
                   key={l.id}
                   href={`/notes/${l.fromNote.id}`}
-                  className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-[#FF4C29]/10 hover:text-[#FF4C29]"
+                  className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-primary/10 hover:text-primary"
                 >
                   <FileText className="h-3 w-3" />
                   {l.fromNote.title}
@@ -631,7 +672,7 @@ function SharePanel({
     (u) =>
       u.id !== authorId &&
       !sharedIds.has(u.id) &&
-      (picker.trim().length === 0 || u.name.toLowerCase().includes(picker.toLowerCase())),
+      (picker.trim().length === 0 || u.name.toLowerCase().includes(picker.toLowerCase()))
   );
 
   // Sends the full new share list to the server (setShares replaces).
@@ -661,7 +702,7 @@ function SharePanel({
   };
 
   return (
-    <div className="rounded-xl border border-[#FF4C29]/20 bg-[#FF4C29]/[0.02] p-4 space-y-3">
+    <div className="rounded-xl border border-primary/20 bg-primary/[0.02] p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-semibold text-foreground">Share this note</p>
@@ -669,8 +710,8 @@ function SharePanel({
             {visibility === 'TEAM'
               ? 'This note is visible to the entire team — individual shares are not needed.'
               : visibility === 'PRIVATE'
-              ? 'Adding a member will switch this note to Shared visibility.'
-              : 'Pick team members and choose their permission.'}
+                ? 'Adding a member will switch this note to Shared visibility.'
+                : 'Pick team members and choose their permission.'}
           </p>
         </div>
         <button
@@ -702,7 +743,7 @@ function SharePanel({
               <select
                 value={s.permission}
                 onChange={(e) => setPerm(s.user.id, e.target.value as 'VIEW' | 'EDIT')}
-                className="rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground focus:border-[#FF4C29] focus:outline-none"
+                className="rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground focus:border-primary focus:outline-none"
               >
                 <option value="VIEW">Can view</option>
                 <option value="EDIT">Can edit</option>
@@ -729,7 +770,7 @@ function SharePanel({
               value={picker}
               onChange={(e) => setPicker(e.target.value)}
               placeholder="Search team members…"
-              className="flex h-9 w-full rounded-lg border border-border bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+              className="flex h-9 w-full rounded-lg border border-border bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
           {team.isLoading ? (
@@ -753,9 +794,7 @@ function SharePanel({
                 >
                   <Avatar className="h-6 w-6">
                     <AvatarImage src={u.avatar ?? undefined} />
-                    <AvatarFallback className="bg-secondary text-[9px]">
-                      {u.name[0]}
-                    </AvatarFallback>
+                    <AvatarFallback className="bg-secondary text-[9px]">{u.name[0]}</AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium text-foreground truncate">{u.name}</p>

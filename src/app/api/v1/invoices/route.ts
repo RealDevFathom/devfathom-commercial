@@ -47,7 +47,10 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
   const body = await request.json();
   const parsed = createInvoiceSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid input', details: parsed.error.issues }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Invalid input', details: parsed.error.issues },
+      { status: 400 }
+    );
   }
 
   const count = await db.invoice.count();

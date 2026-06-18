@@ -28,7 +28,7 @@ export const ON_TIME_THRESHOLD_MINUTES = 10;
 export function computeOccurrenceStart(
   originalStart: Date,
   recurrence: string | null,
-  joinedAt: Date,
+  joinedAt: Date
 ): Date {
   if (!recurrence) return originalStart;
   if (joinedAt.getTime() <= originalStart.getTime()) return originalStart;
@@ -76,7 +76,7 @@ export function findRelevantOccurrence(
   originalStart: Date,
   originalEnd: Date,
   recurrence: string | null,
-  now: Date,
+  now: Date
 ): { start: Date; end: Date } {
   if (!recurrence) {
     return { start: new Date(originalStart), end: new Date(originalEnd) };
@@ -136,7 +136,7 @@ export function countPastOccurrences(
   originalStart: Date,
   originalEnd: Date,
   recurrence: string | null,
-  now: Date,
+  now: Date
 ): number {
   if (!recurrence) {
     return originalEnd.getTime() <= now.getTime() ? 1 : 0;
@@ -178,7 +178,7 @@ export function countPastOccurrences(
  */
 export function computePunctuality(
   meeting: { startTime: Date; recurrence: string | null },
-  joinedAt: Date | null,
+  joinedAt: Date | null
 ): {
   diffMinutes: number; // negative = early, positive = late
   isOnTime: boolean;
@@ -189,10 +189,10 @@ export function computePunctuality(
   const occurrenceStart = computeOccurrenceStart(
     new Date(meeting.startTime),
     meeting.recurrence,
-    new Date(joinedAt),
+    new Date(joinedAt)
   );
   const diffMinutes = Math.round(
-    (new Date(joinedAt).getTime() - occurrenceStart.getTime()) / 60_000,
+    (new Date(joinedAt).getTime() - occurrenceStart.getTime()) / 60_000
   );
 
   // On time = joined within ON_TIME_THRESHOLD_MINUTES after the start.
@@ -203,8 +203,8 @@ export function computePunctuality(
     diffMinutes < -1
       ? `${Math.abs(diffMinutes)} min early`
       : isOnTime
-      ? 'on time'
-      : `${diffMinutes} min late`;
+        ? 'on time'
+        : `${diffMinutes} min late`;
 
   return { diffMinutes, isOnTime, label };
 }

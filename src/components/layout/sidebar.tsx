@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import { motion } from 'motion/react';
 import {
   LayoutDashboard,
   FolderKanban,
@@ -20,9 +21,10 @@ import {
   BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { easeOutExpo } from '@/lib/motion';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { LogoIcon } from '@/components/brand/logo';
+import { FathomMark } from '@/components/brand/logo';
 
 interface NavItem {
   label: string;
@@ -78,14 +80,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
           collapsed ? 'justify-center' : 'gap-3'
         )}
       >
-        <LogoIcon className="h-8 w-8 shrink-0" variant="orange" />
+        <FathomMark className="h-8 w-8 shrink-0" variant="white" />
         {!collapsed && (
           <div className="flex flex-col overflow-hidden animate-fade-in">
-            <span className="font-display text-sm font-bold text-sidebar-accent-foreground tracking-tight">
-              Company Hub
+            <span className="font-display text-sm font-semibold text-sidebar-accent-foreground tracking-tight">
+              DevFathom
             </span>
-            <span className="text-[10px] text-sidebar-foreground/50 uppercase tracking-widest">
-              Internal Platform
+            <span className="text-[10px] text-sidebar-foreground/50 uppercase tracking-[0.18em]">
+              Company hub
             </span>
           </div>
         )}
@@ -93,7 +95,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
 
       {/* Navigation */}
       <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-4">
-        {filteredNav.map((item) => {
+        {filteredNav.map((item, i) => {
           // Pick the longest-matching nav href so that on /team/stats only
           // Insights highlights (not also Team, whose href /team is a prefix).
           const matchingHrefs = filteredNav
@@ -101,52 +103,65 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
             .filter((href) => pathname === href || pathname.startsWith(href + '/'));
           const bestMatch = matchingHrefs.reduce(
             (best, href) => (href.length > best.length ? href : best),
-            '',
+            ''
           );
           const isActive = item.href === bestMatch;
           const Icon = item.icon;
 
           const link = (
             <Link
-              key={item.href}
               href={item.href}
               onClick={onNavigate}
               className={cn(
-                'group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150',
+                'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-150',
                 isActive
-                  ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground'
+                  ? 'text-sidebar-accent-foreground'
+                  : 'text-sidebar-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-accent-foreground'
               )}
             >
+              {isActive && (
+                <motion.span
+                  layoutId="sidebar-active"
+                  className="absolute inset-0 rounded-lg bg-sidebar-accent shadow-sm"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                />
+              )}
               <Icon
                 className={cn(
-                  'h-[18px] w-[18px] shrink-0 transition-colors',
+                  'relative z-10 h-[18px] w-[18px] shrink-0 transition-colors',
                   isActive
                     ? 'text-sidebar-primary'
                     : 'text-sidebar-foreground/60 group-hover:text-sidebar-foreground'
                 )}
               />
-              {!collapsed && (
-                <span className="truncate">{item.label}</span>
-              )}
+              {!collapsed && <span className="relative z-10 truncate">{item.label}</span>}
               {isActive && !collapsed && (
-                <div className="ml-auto h-1.5 w-1.5 rounded-full bg-sidebar-primary" />
+                <span className="relative z-10 ml-auto h-1.5 w-1.5 rounded-full bg-sidebar-primary" />
               )}
             </Link>
           );
 
-          if (collapsed) {
-            return (
-              <Tooltip key={item.href}>
-                <TooltipTrigger render={link} />
-                <TooltipContent side="right" className="font-medium">
-                  {item.label}
-                </TooltipContent>
-              </Tooltip>
-            );
-          }
+          const entry = collapsed ? (
+            <Tooltip>
+              <TooltipTrigger render={link} />
+              <TooltipContent side="right" className="font-medium">
+                {item.label}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            link
+          );
 
-          return link;
+          return (
+            <motion.div
+              key={item.href}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.04 * i + 0.05, duration: 0.4, ease: easeOutExpo }}
+            >
+              {entry}
+            </motion.div>
+          );
         })}
       </nav>
 
@@ -156,27 +171,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         className="mx-2 mb-2 flex items-center justify-center rounded-lg p-2 text-sidebar-foreground/50 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
         aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
-        {collapsed ? (
-          <ChevronRight className="h-4 w-4" />
-        ) : (
-          <ChevronLeft className="h-4 w-4" />
-        )}
+        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
       </button>
 
       {/* User section */}
       <div
-        className={cn(
-          'border-t border-sidebar-border p-3',
-          collapsed ? 'flex justify-center' : ''
-        )}
+        className={cn('border-t border-sidebar-border p-3', collapsed ? 'flex justify-center' : '')}
       >
         {session?.user && (
-          <div
-            className={cn(
-              'flex items-center gap-3',
-              collapsed ? 'justify-center' : ''
-            )}
-          >
+          <div className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}>
             <Avatar className="h-8 w-8 shrink-0">
               <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
               <AvatarFallback className="bg-sidebar-primary/20 text-sidebar-primary text-xs font-medium">

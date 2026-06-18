@@ -81,12 +81,12 @@ export const NoteLinkList = forwardRef<NoteLinkListHandle, NoteLinkListProps>(
                 className={cn(
                   'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors',
                   i === selected
-                    ? 'bg-[#FF4C29]/10 text-foreground'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                    ? 'bg-primary/10 text-foreground'
+                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                 )}
               >
                 {item.isCreate ? (
-                  <Plus className="h-3.5 w-3.5 shrink-0 text-[#FF4C29]" />
+                  <Plus className="h-3.5 w-3.5 shrink-0 text-primary" />
                 ) : (
                   <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 )}
@@ -99,7 +99,7 @@ export const NoteLinkList = forwardRef<NoteLinkListHandle, NoteLinkListProps>(
         </ul>
       </div>
     );
-  },
+  }
 );
 
 NoteLinkList.displayName = 'NoteLinkList';

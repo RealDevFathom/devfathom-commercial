@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import { safeHref } from '@/lib/validators';
 import {
   ArrowLeft,
   FolderKanban,
@@ -33,10 +34,26 @@ import { format } from 'date-fns';
 import { NotesContent } from '@/app/(app)/notes/notes-content';
 
 const statusConfig: Record<string, { bg: string; dot: string; label: string }> = {
-  ACTIVE: { bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400', dot: 'bg-emerald-500', label: 'Active' },
-  IN_DEVELOPMENT: { bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', dot: 'bg-blue-500', label: 'In Development' },
-  ON_HOLD: { bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', dot: 'bg-amber-500', label: 'On Hold' },
-  COMPLETED: { bg: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground', label: 'Completed' },
+  ACTIVE: {
+    bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    dot: 'bg-emerald-500',
+    label: 'Active',
+  },
+  IN_DEVELOPMENT: {
+    bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+    dot: 'bg-blue-500',
+    label: 'In Development',
+  },
+  ON_HOLD: {
+    bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+    dot: 'bg-amber-500',
+    label: 'On Hold',
+  },
+  COMPLETED: {
+    bg: 'bg-muted text-muted-foreground',
+    dot: 'bg-muted-foreground',
+    label: 'Completed',
+  },
 };
 
 export function ProjectDetailContent({ projectId }: { projectId: string }) {
@@ -51,7 +68,10 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const updateProject = trpc.projects.update.useMutation({
-    onSuccess: () => { utils.projects.getById.invalidate({ id: projectId }); setIsEditing(false); },
+    onSuccess: () => {
+      utils.projects.getById.invalidate({ id: projectId });
+      setIsEditing(false);
+    },
   });
   const deleteProject = trpc.projects.delete.useMutation({
     onSuccess: () => router.push('/projects'),
@@ -66,7 +86,10 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
     <div className="space-y-6 animate-fade-in">
       {/* Back + Header */}
       <div>
-        <Link href="/projects" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4">
+        <Link
+          href="/projects"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
+        >
           <ArrowLeft className="h-4 w-4" />
           Back to Projects
         </Link>
@@ -77,7 +100,12 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
               <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
                 {project.name}
               </h1>
-              <div className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium', config.bg)}>
+              <div
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium',
+                  config.bg
+                )}
+              >
                 <div className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
                 {config.label}
               </div>
@@ -86,7 +114,12 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
               <p className="text-muted-foreground mt-1.5 text-[15px]">
                 {project.client.name}
                 {project.client.website && (
-                  <a href={project.client.website} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 ml-2 text-[#FF4C29] hover:underline">
+                  <a
+                    href={safeHref(project.client.website)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 ml-2 text-primary hover:underline"
+                  >
                     <ExternalLink className="h-3 w-3" />
                   </a>
                 )}
@@ -100,7 +133,12 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
           {/* Actions */}
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => { setIsEditing(!isEditing); setEditName(project.name); setEditDesc(project.description || ''); setEditStatus(project.status); }}
+              onClick={() => {
+                setIsEditing(!isEditing);
+                setEditName(project.name);
+                setEditDesc(project.description || '');
+                setEditStatus(project.status);
+              }}
               className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
             >
               <Pencil className="h-3.5 w-3.5" />
@@ -115,11 +153,19 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
               </button>
             ) : (
               <div className="flex items-center gap-1.5">
-                <button onClick={() => deleteProject.mutate({ id: projectId })} disabled={deleteProject.isPending}
-                  className="rounded-xl bg-red-500 px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors">
+                <button
+                  onClick={() => deleteProject.mutate({ id: projectId })}
+                  disabled={deleteProject.isPending}
+                  className="rounded-xl bg-red-500 px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+                >
                   {deleteProject.isPending ? 'Deleting...' : 'Confirm Delete'}
                 </button>
-                <button onClick={() => setShowDeleteConfirm(false)} className="rounded-xl px-2 py-2 text-xs text-muted-foreground hover:text-foreground">Cancel</button>
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="rounded-xl px-2 py-2 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Cancel
+                </button>
               </div>
             )}
           </div>
@@ -128,19 +174,25 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
 
       {/* Edit form */}
       {isEditing && (
-        <Card className="border-[#FF4C29]/20">
+        <Card className="border-primary/20">
           <CardContent className="p-5 space-y-4">
             <h3 className="text-sm font-semibold text-foreground">Edit Project</h3>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Name</label>
-                <input value={editName} onChange={(e) => setEditName(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Status</label>
-                <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none">
+                <select
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                >
                   <option value="ACTIVE">Active</option>
                   <option value="IN_DEVELOPMENT">In Development</option>
                   <option value="ON_HOLD">On Hold</option>
@@ -151,22 +203,42 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
             </div>
             <div>
               <label className="block text-xs font-medium text-foreground mb-1">Description</label>
-              <textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} rows={3}
-                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground resize-none focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+              <textarea
+                value={editDesc}
+                onChange={(e) => setEditDesc(e.target.value)}
+                rows={3}
+                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
             </div>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setIsEditing(false)} className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">Cancel</button>
               <button
-                onClick={() => updateProject.mutate({
-                  id: projectId,
-                  name: editName.trim() || undefined,
-                  description: editDesc || null,
-                  status: editStatus as 'ACTIVE' | 'IN_DEVELOPMENT' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED',
-                })}
-                disabled={updateProject.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-[#FF4C29] px-4 py-2 text-xs font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-40 transition-colors"
+                onClick={() => setIsEditing(false)}
+                className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
               >
-                {updateProject.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                Cancel
+              </button>
+              <button
+                onClick={() =>
+                  updateProject.mutate({
+                    id: projectId,
+                    name: editName.trim() || undefined,
+                    description: editDesc || null,
+                    status: editStatus as
+                      | 'ACTIVE'
+                      | 'IN_DEVELOPMENT'
+                      | 'ON_HOLD'
+                      | 'COMPLETED'
+                      | 'CANCELLED',
+                  })
+                }
+                disabled={updateProject.isPending}
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              >
+                {updateProject.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
                 Save Changes
               </button>
             </div>
@@ -191,42 +263,67 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
             {/* Details */}
             <Card className="lg:col-span-2 border-border/60">
               <CardHeader className="pb-3">
-                <CardTitle className="text-[15px] font-semibold text-foreground">Project Details</CardTitle>
+                <CardTitle className="text-[15px] font-semibold text-foreground">
+                  Project Details
+                </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {project.description && (
-                  <p className="text-sm text-muted-foreground leading-relaxed">{project.description}</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    {project.description}
+                  </p>
                 )}
 
                 <div className="grid grid-cols-2 gap-4 pt-2">
                   <div>
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Type</p>
-                    <p className="text-sm font-medium text-foreground">{project.type === 'CLIENT' ? 'Client Project' : 'Internal Product'}</p>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                      Type
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {project.type === 'CLIENT' ? 'Client Project' : 'Internal Product'}
+                    </p>
                   </div>
                   {project.startDate && (
                     <div>
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Started</p>
-                      <p className="text-sm font-medium text-foreground">{format(new Date(project.startDate), 'MMM d, yyyy')}</p>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                        Started
+                      </p>
+                      <p className="text-sm font-medium text-foreground">
+                        {format(new Date(project.startDate), 'MMM d, yyyy')}
+                      </p>
                     </div>
                   )}
                   {project.endDate && (
                     <div>
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Deadline</p>
-                      <p className="text-sm font-medium text-foreground">{format(new Date(project.endDate), 'MMM d, yyyy')}</p>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                        Deadline
+                      </p>
+                      <p className="text-sm font-medium text-foreground">
+                        {format(new Date(project.endDate), 'MMM d, yyyy')}
+                      </p>
                     </div>
                   )}
                   <div>
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Team</p>
-                    <p className="text-sm font-medium text-foreground">{project.members.length} members</p>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                      Team
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {project.members.length} members
+                    </p>
                   </div>
                 </div>
 
                 {project.techStack.length > 0 && (
                   <div className="pt-2">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Tech Stack</p>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                      Tech Stack
+                    </p>
                     <div className="flex flex-wrap gap-1.5">
                       {project.techStack.map((tech) => (
-                        <span key={tech} className="inline-flex items-center rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground">
+                        <span
+                          key={tech}
+                          className="inline-flex items-center rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
+                        >
                           {tech}
                         </span>
                       ))}
@@ -241,11 +338,13 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
               <Card className="border-border/60">
                 <CardContent className="p-5">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FF4C29]/10">
-                      <FolderKanban className="h-5 w-5 text-[#FF4C29]" />
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+                      <FolderKanban className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <p className="font-display text-2xl font-bold text-foreground">{project.boards.length}</p>
+                      <p className="font-display text-2xl font-bold text-foreground">
+                        {project.boards.length}
+                      </p>
                       <p className="text-xs text-muted-foreground">Boards</p>
                     </div>
                   </div>
@@ -258,7 +357,9 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                       <Calendar className="h-5 w-5 text-amber-500" />
                     </div>
                     <div>
-                      <p className="font-display text-2xl font-bold text-foreground">{project.milestones.length}</p>
+                      <p className="font-display text-2xl font-bold text-foreground">
+                        {project.milestones.length}
+                      </p>
                       <p className="text-xs text-muted-foreground">Milestones</p>
                     </div>
                   </div>
@@ -271,7 +372,9 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                       <Users className="h-5 w-5 text-blue-500" />
                     </div>
                     <div>
-                      <p className="font-display text-2xl font-bold text-foreground">{project.members.length}</p>
+                      <p className="font-display text-2xl font-bold text-foreground">
+                        {project.members.length}
+                      </p>
                       <p className="text-xs text-muted-foreground">Team Members</p>
                     </div>
                   </div>
@@ -304,17 +407,27 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
         {/* FILES */}
         <TabsContent value="files">
           {project.files.length === 0 ? (
-            <EmptyState icon={FileText} title="No files yet" description="Upload project files, designs, and documents" />
+            <EmptyState
+              icon={FileText}
+              title="No files yet"
+              description="Upload project files, designs, and documents"
+            />
           ) : (
             <div className="space-y-2">
               {project.files.map((f) => (
-                <div key={f.id} className="flex items-center gap-3 rounded-xl border border-border/60 bg-card p-4">
+                <div
+                  key={f.id}
+                  className="flex items-center gap-3 rounded-xl border border-border/60 bg-card p-4"
+                >
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
                     <FileText className="h-5 w-5 text-blue-500" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">{f.name}</p>
-                    <p className="text-xs text-muted-foreground">Uploaded by {f.uploadedBy.name} &middot; {format(new Date(f.createdAt), 'MMM d, yyyy')}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Uploaded by {f.uploadedBy.name} &middot;{' '}
+                      {format(new Date(f.createdAt), 'MMM d, yyyy')}
+                    </p>
                   </div>
                 </div>
               ))}
@@ -326,7 +439,10 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
   );
 }
 
-function BoardsTab({ projectId, boards }: {
+function BoardsTab({
+  projectId,
+  boards,
+}: {
   projectId: string;
   boards: Array<{
     id: string;
@@ -347,17 +463,22 @@ function BoardsTab({ projectId, boards }: {
     },
   });
   const deleteBoard = trpc.projects.deleteBoard.useMutation({
-    onSuccess: () => { utils.projects.getById.invalidate({ id: projectId }); setDeletingBoardId(null); },
+    onSuccess: () => {
+      utils.projects.getById.invalidate({ id: projectId });
+      setDeletingBoardId(null);
+    },
   });
 
   return (
     <>
       {/* Header with create button */}
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{boards.length} board{boards.length !== 1 ? 's' : ''}</p>
+        <p className="text-sm text-muted-foreground">
+          {boards.length} board{boards.length !== 1 ? 's' : ''}
+        </p>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-[#FF4C29] px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)] active:scale-[0.98]"
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
         >
           <Plus className="h-3.5 w-3.5" />
           New Board
@@ -366,7 +487,7 @@ function BoardsTab({ projectId, boards }: {
 
       {/* Create board inline form */}
       {showCreate && (
-        <div className="rounded-xl border border-[#FF4C29]/30 bg-card p-4">
+        <div className="rounded-xl border border-primary/30 bg-card p-4">
           <label className="block text-sm font-medium text-foreground mb-1.5">Board Name</label>
           <input
             autoFocus
@@ -376,24 +497,38 @@ function BoardsTab({ projectId, boards }: {
               if (e.key === 'Enter' && boardName.trim()) {
                 createBoard.mutate({ projectId, name: boardName.trim() });
               }
-              if (e.key === 'Escape') { setShowCreate(false); setBoardName(''); }
+              if (e.key === 'Escape') {
+                setShowCreate(false);
+                setBoardName('');
+              }
             }}
             placeholder="e.g. Sprint Board, Feature Roadmap..."
-            className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+            className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
           <p className="text-xs text-muted-foreground mt-1.5 mb-3">
             Creates with default columns (Backlog, To Do, In Progress, Review, Done) and labels.
           </p>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { if (boardName.trim()) createBoard.mutate({ projectId, name: boardName.trim() }); }}
+              onClick={() => {
+                if (boardName.trim()) createBoard.mutate({ projectId, name: boardName.trim() });
+              }}
               disabled={!boardName.trim() || createBoard.isPending}
-              className="flex items-center gap-1.5 rounded-xl bg-[#FF4C29] px-4 py-2 text-xs font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-40 transition-colors"
+              className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
             >
-              {createBoard.isPending ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Creating...</> : 'Create Board'}
+              {createBoard.isPending ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Creating...
+                </>
+              ) : (
+                'Create Board'
+              )}
             </button>
             <button
-              onClick={() => { setShowCreate(false); setBoardName(''); }}
+              onClick={() => {
+                setShowCreate(false);
+                setBoardName('');
+              }}
               className="rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               Cancel
@@ -404,29 +539,54 @@ function BoardsTab({ projectId, boards }: {
 
       {/* Board cards */}
       {boards.length === 0 && !showCreate ? (
-        <EmptyState icon={FolderKanban} title="No boards yet" description="Create a board to start managing tasks" />
+        <EmptyState
+          icon={FolderKanban}
+          title="No boards yet"
+          description="Create a board to start managing tasks"
+        />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {boards.map((board) => {
             const totalTasks = board.columns.reduce((sum, c) => sum + c._count.tasks, 0);
             return (
-              <Card key={board.id} className="group border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg">
+              <Card
+                key={board.id}
+                className="group border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg"
+              >
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between gap-2">
-                    <Link href={`/projects/${projectId}/board/${board.id}`} className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground group-hover:text-[#FF4C29] transition-colors">{board.name}</h3>
-                      <p className="text-xs text-muted-foreground mt-1">{board.columns.length} columns &middot; {totalTasks} tasks</p>
+                    <Link
+                      href={`/projects/${projectId}/board/${board.id}`}
+                      className="flex-1 min-w-0"
+                    >
+                      <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">
+                        {board.name}
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {board.columns.length} columns &middot; {totalTasks} tasks
+                      </p>
                     </Link>
                     {deletingBoardId === board.id ? (
                       <div className="flex items-center gap-1 shrink-0">
-                        <button onClick={() => deleteBoard.mutate({ id: board.id })}
-                          className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600">Delete</button>
-                        <button onClick={() => setDeletingBoardId(null)}
-                          className="text-[10px] text-muted-foreground hover:text-foreground px-1">No</button>
+                        <button
+                          onClick={() => deleteBoard.mutate({ id: board.id })}
+                          className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          onClick={() => setDeletingBoardId(null)}
+                          className="text-[10px] text-muted-foreground hover:text-foreground px-1"
+                        >
+                          No
+                        </button>
                       </div>
                     ) : (
                       <button
-                        onClick={(e) => { e.preventDefault(); setDeletingBoardId(board.id); }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setDeletingBoardId(board.id);
+                        }}
                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-red-500/10 hover:!text-red-500 transition-all shrink-0"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -436,9 +596,18 @@ function BoardsTab({ projectId, boards }: {
                   <Link href={`/projects/${projectId}/board/${board.id}`}>
                     <div className="flex items-center gap-2 mt-4">
                       {board.columns.map((col) => (
-                        <div key={col.id} className="flex-1 h-1.5 rounded-full bg-secondary overflow-hidden" title={`${col.name}: ${col._count.tasks}`}>
-                          <div className="h-full rounded-full bg-[#FF4C29]/60"
-                            style={{ width: totalTasks > 0 ? `${(col._count.tasks / totalTasks) * 100}%` : '0%' }} />
+                        <div
+                          key={col.id}
+                          className="flex-1 h-1.5 rounded-full bg-secondary overflow-hidden"
+                          title={`${col.name}: ${col._count.tasks}`}
+                        >
+                          <div
+                            className="h-full rounded-full bg-primary/60"
+                            style={{
+                              width:
+                                totalTasks > 0 ? `${(col._count.tasks / totalTasks) * 100}%` : '0%',
+                            }}
+                          />
                         </div>
                       ))}
                     </div>
@@ -453,9 +622,18 @@ function BoardsTab({ projectId, boards }: {
   );
 }
 
-function MilestonesTab({ projectId, milestones }: {
+function MilestonesTab({
+  projectId,
+  milestones,
+}: {
   projectId: string;
-  milestones: Array<{ id: string; name: string; description: string | null; dueDate: Date; completedAt: Date | null }>;
+  milestones: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    dueDate: Date;
+    completedAt: Date | null;
+  }>;
 }) {
   const utils = trpc.useUtils();
   const [showAdd, setShowAdd] = useState(false);
@@ -468,7 +646,13 @@ function MilestonesTab({ projectId, milestones }: {
   const [editDue, setEditDue] = useState('');
 
   const createMilestone = trpc.projects.createMilestone.useMutation({
-    onSuccess: () => { utils.projects.getById.invalidate({ id: projectId }); setShowAdd(false); setMsName(''); setMsDesc(''); setMsDue(''); },
+    onSuccess: () => {
+      utils.projects.getById.invalidate({ id: projectId });
+      setShowAdd(false);
+      setMsName('');
+      setMsDesc('');
+      setMsDue('');
+    },
   });
   const updateMilestone = trpc.projects.updateMilestone.useMutation({
     onSuccess: () => utils.projects.getById.invalidate({ id: projectId }),
@@ -480,41 +664,81 @@ function MilestonesTab({ projectId, milestones }: {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{milestones.length} milestone{milestones.length !== 1 ? 's' : ''}</p>
-        <button onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-[#FF4C29] px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#E63E1C] active:scale-[0.98]">
+        <p className="text-sm text-muted-foreground">
+          {milestones.length} milestone{milestones.length !== 1 ? 's' : ''}
+        </p>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+        >
           <Plus className="h-3.5 w-3.5" /> Add Milestone
         </button>
       </div>
 
       {showAdd && (
-        <Card className="border-[#FF4C29]/20">
+        <Card className="border-primary/20">
           <CardContent className="p-5 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Name *</label>
-                <input autoFocus value={msName} onChange={(e) => setMsName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && msName.trim() && msDue) createMilestone.mutate({ projectId, name: msName.trim(), description: msDesc || undefined, dueDate: new Date(msDue) }); }}
+                <input
+                  autoFocus
+                  value={msName}
+                  onChange={(e) => setMsName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && msName.trim() && msDue)
+                      createMilestone.mutate({
+                        projectId,
+                        name: msName.trim(),
+                        description: msDesc || undefined,
+                        dueDate: new Date(msDue),
+                      });
+                  }}
                   placeholder="e.g. MVP Launch"
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Due Date *</label>
-                <input type="date" value={msDue} onChange={(e) => setMsDue(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none" />
+                <input
+                  type="date"
+                  value={msDue}
+                  onChange={(e) => setMsDue(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                />
               </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-foreground mb-1">Description</label>
-              <input value={msDesc} onChange={(e) => setMsDesc(e.target.value)} placeholder="Optional details..."
-                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none" />
+              <input
+                value={msDesc}
+                onChange={(e) => setMsDesc(e.target.value)}
+                placeholder="Optional details..."
+                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+              />
             </div>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setShowAdd(false)} className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">Cancel</button>
-              <button onClick={() => { if (msName.trim() && msDue) createMilestone.mutate({ projectId, name: msName.trim(), description: msDesc || undefined, dueDate: new Date(msDue) }); }}
+              <button
+                onClick={() => setShowAdd(false)}
+                className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (msName.trim() && msDue)
+                    createMilestone.mutate({
+                      projectId,
+                      name: msName.trim(),
+                      description: msDesc || undefined,
+                      dueDate: new Date(msDue),
+                    });
+                }}
                 disabled={!msName.trim() || !msDue || createMilestone.isPending}
-                className="flex items-center gap-1 rounded-xl bg-[#FF4C29] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-40 transition-colors">
-                {createMilestone.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Add
+                className="flex items-center gap-1 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              >
+                {createMilestone.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{' '}
+                Add
               </button>
             </div>
           </CardContent>
@@ -522,7 +746,11 @@ function MilestonesTab({ projectId, milestones }: {
       )}
 
       {milestones.length === 0 && !showAdd ? (
-        <EmptyState icon={Calendar} title="No milestones" description="Add milestones to track project progress" />
+        <EmptyState
+          icon={Calendar}
+          title="No milestones"
+          description="Add milestones to track project progress"
+        />
       ) : (
         <div className="space-y-3">
           {milestones.map((ms) => {
@@ -532,35 +760,66 @@ function MilestonesTab({ projectId, milestones }: {
 
             if (isEditingThis) {
               return (
-                <div key={ms.id} className="rounded-xl border border-[#FF4C29]/20 bg-card p-4 space-y-3">
+                <div
+                  key={ms.id}
+                  className="rounded-xl border border-primary/20 bg-card p-4 space-y-3"
+                >
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[10px] font-medium text-foreground mb-1">Name</label>
-                      <input value={editName} onChange={(e) => setEditName(e.target.value)}
-                        className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none" />
+                      <label className="block text-[10px] font-medium text-foreground mb-1">
+                        Name
+                      </label>
+                      <input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                      />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-medium text-foreground mb-1">Due Date</label>
-                      <input type="date" value={editDue} onChange={(e) => setEditDue(e.target.value)}
-                        className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none" />
+                      <label className="block text-[10px] font-medium text-foreground mb-1">
+                        Due Date
+                      </label>
+                      <input
+                        type="date"
+                        value={editDue}
+                        onChange={(e) => setEditDue(e.target.value)}
+                        className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                      />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-medium text-foreground mb-1">Description</label>
-                    <input value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="Optional..."
-                      className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none" />
+                    <label className="block text-[10px] font-medium text-foreground mb-1">
+                      Description
+                    </label>
+                    <input
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      placeholder="Optional..."
+                      className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                    />
                   </div>
                   <div className="flex justify-end gap-2">
-                    <button onClick={() => setEditingId(null)} className="rounded-lg px-3 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground">Cancel</button>
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="rounded-lg px-3 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      Cancel
+                    </button>
                     <button
                       onClick={() => {
                         if (editName.trim() && editDue) {
-                          updateMilestone.mutate({ id: ms.id, name: editName.trim(), description: editDesc.trim() || null, dueDate: new Date(editDue) });
+                          updateMilestone.mutate({
+                            id: ms.id,
+                            name: editName.trim(),
+                            description: editDesc.trim() || null,
+                            dueDate: new Date(editDue),
+                          });
                           setEditingId(null);
                         }
                       }}
                       disabled={!editName.trim() || !editDue}
-                      className="rounded-lg bg-[#FF4C29] px-3 py-1 text-[11px] font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-40 transition-colors">
+                      className="rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                    >
                       Save
                     </button>
                   </div>
@@ -569,13 +828,25 @@ function MilestonesTab({ projectId, milestones }: {
             }
 
             return (
-              <div key={ms.id} className="flex items-center gap-4 rounded-xl border border-border/60 bg-card p-4 group">
+              <div
+                key={ms.id}
+                className="flex items-center gap-4 rounded-xl border border-border/60 bg-card p-4 group"
+              >
                 {/* Toggle complete */}
                 <button
-                  onClick={() => updateMilestone.mutate({ id: ms.id, completedAt: isCompleted ? null : new Date() })}
+                  onClick={() =>
+                    updateMilestone.mutate({
+                      id: ms.id,
+                      completedAt: isCompleted ? null : new Date(),
+                    })
+                  }
                   className={cn(
                     'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors',
-                    isCompleted ? 'bg-emerald-500/10 hover:bg-emerald-500/20' : isPast ? 'bg-red-500/10 hover:bg-red-500/20' : 'bg-amber-500/10 hover:bg-amber-500/20'
+                    isCompleted
+                      ? 'bg-emerald-500/10 hover:bg-emerald-500/20'
+                      : isPast
+                        ? 'bg-red-500/10 hover:bg-red-500/20'
+                        : 'bg-amber-500/10 hover:bg-amber-500/20'
                   )}
                   title={isCompleted ? 'Mark incomplete' : 'Mark complete'}
                 >
@@ -586,24 +857,46 @@ function MilestonesTab({ projectId, milestones }: {
                   )}
                 </button>
                 <div className="flex-1 min-w-0">
-                  <p className={cn('text-sm font-medium', isCompleted ? 'text-muted-foreground line-through' : 'text-foreground')}>{ms.name}</p>
-                  {ms.description && <p className="text-xs text-muted-foreground mt-0.5 truncate">{ms.description}</p>}
+                  <p
+                    className={cn(
+                      'text-sm font-medium',
+                      isCompleted ? 'text-muted-foreground line-through' : 'text-foreground'
+                    )}
+                  >
+                    {ms.name}
+                  </p>
+                  {ms.description && (
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                      {ms.description}
+                    </p>
+                  )}
                 </div>
                 <div className="text-right shrink-0">
-                  <p className="text-xs font-medium text-foreground">{format(new Date(ms.dueDate), 'MMM d, yyyy')}</p>
+                  <p className="text-xs font-medium text-foreground">
+                    {format(new Date(ms.dueDate), 'MMM d, yyyy')}
+                  </p>
                   {isCompleted && ms.completedAt && (
-                    <p className="text-[11px] text-emerald-500 mt-0.5">Completed {format(new Date(ms.completedAt), 'MMM d')}</p>
+                    <p className="text-[11px] text-emerald-500 mt-0.5">
+                      Completed {format(new Date(ms.completedAt), 'MMM d')}
+                    </p>
                   )}
                 </div>
                 <button
-                  onClick={() => { setEditingId(ms.id); setEditName(ms.name); setEditDesc(ms.description || ''); setEditDue(format(new Date(ms.dueDate), 'yyyy-MM-dd')); }}
+                  onClick={() => {
+                    setEditingId(ms.id);
+                    setEditName(ms.name);
+                    setEditDesc(ms.description || '');
+                    setEditDue(format(new Date(ms.dueDate), 'yyyy-MM-dd'));
+                  }}
                   className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-secondary hover:!text-foreground transition-all shrink-0"
-                  title="Edit">
+                  title="Edit"
+                >
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
-                <button onClick={() => deleteMilestone.mutate({ id: ms.id })}
-                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0">
-                </button>
+                <button
+                  onClick={() => deleteMilestone.mutate({ id: ms.id })}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
+                ></button>
               </div>
             );
           })}
@@ -617,7 +910,14 @@ function MilestonesTab({ projectId, milestones }: {
    Project Team Tab — list / add / remove / role
    ============================================ */
 type ProjectMemberShape = {
-  user: { id: string; name: string; email?: string | null; avatar: string | null; title: string | null; department?: string };
+  user: {
+    id: string;
+    name: string;
+    email?: string | null;
+    avatar: string | null;
+    title: string | null;
+    department?: string;
+  };
   role: string;
 };
 
@@ -665,7 +965,7 @@ function ProjectTeamTab({
       !memberIds.has(u.id) &&
       (picker.trim().length === 0 ||
         u.name.toLowerCase().includes(picker.toLowerCase()) ||
-        u.title?.toLowerCase().includes(picker.toLowerCase())),
+        u.title?.toLowerCase().includes(picker.toLowerCase()))
   );
 
   const leadCount = members.filter((m) => m.role === 'LEAD').length;
@@ -675,12 +975,13 @@ function ProjectTeamTab({
       {/* Header */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          {members.length} member{members.length !== 1 ? 's' : ''} &middot; {leadCount} lead{leadCount !== 1 ? 's' : ''}
+          {members.length} member{members.length !== 1 ? 's' : ''} &middot; {leadCount} lead
+          {leadCount !== 1 ? 's' : ''}
         </p>
         {canManage && (
           <button
             onClick={() => setShowAdd((v) => !v)}
-            className="flex items-center gap-1.5 rounded-xl bg-[#FF4C29] px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)] active:scale-[0.98]"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
           >
             <UserPlus className="h-3.5 w-3.5" />
             Add Member
@@ -690,11 +991,14 @@ function ProjectTeamTab({
 
       {/* Add picker */}
       {showAdd && canManage && (
-        <Card className="border-[#FF4C29]/20">
+        <Card className="border-primary/20">
           <CardContent className="p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-foreground">Add team member</h3>
-              <button onClick={() => setShowAdd(false)} className="text-muted-foreground hover:text-foreground">
+              <button
+                onClick={() => setShowAdd(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -706,7 +1010,7 @@ function ProjectTeamTab({
                 value={picker}
                 onChange={(e) => setPicker(e.target.value)}
                 placeholder="Search team members…"
-                className="flex h-9 w-full rounded-lg border border-border bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20"
+                className="flex h-9 w-full rounded-lg border border-border bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
             {team.isLoading ? (
@@ -730,11 +1034,15 @@ function ProjectTeamTab({
                   >
                     <Avatar className="h-7 w-7">
                       <AvatarImage src={u.avatar ?? undefined} />
-                      <AvatarFallback className="bg-secondary text-[10px]">{u.name[0]}</AvatarFallback>
+                      <AvatarFallback className="bg-secondary text-[10px]">
+                        {u.name[0]}
+                      </AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-foreground truncate">{u.name}</p>
-                      {u.title && <p className="text-[10px] text-muted-foreground truncate">{u.title}</p>}
+                      {u.title && (
+                        <p className="text-[10px] text-muted-foreground truncate">{u.title}</p>
+                      )}
                     </div>
                     <Plus className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
@@ -760,21 +1068,25 @@ function ProjectTeamTab({
                 <Avatar className="h-11 w-11">
                   <AvatarImage src={m.user.avatar ?? undefined} />
                   <AvatarFallback className="bg-secondary text-foreground font-medium">
-                    {m.user.name.split(' ').map((n) => n[0]).join('')}
+                    {m.user.name
+                      .split(' ')
+                      .map((n) => n[0])
+                      .join('')}
                   </AvatarFallback>
                 </Avatar>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-foreground truncate">
-                    {m.user.name} {isSelf && <span className="text-[10px] font-normal text-muted-foreground">(you)</span>}
+                    {m.user.name}{' '}
+                    {isSelf && (
+                      <span className="text-[10px] font-normal text-muted-foreground">(you)</span>
+                    )}
                   </p>
                   <p className="text-xs text-muted-foreground truncate">{m.user.title}</p>
                   <div className="mt-1 flex items-center gap-1.5">
                     <span
                       className={cn(
                         'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium',
-                        isLead
-                          ? 'bg-[#FF4C29]/10 text-[#FF4C29]'
-                          : 'bg-secondary text-muted-foreground',
+                        isLead ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'
                       )}
                     >
                       {isLead && <Crown className="h-2.5 w-2.5" />}
@@ -790,7 +1102,7 @@ function ProjectTeamTab({
                           })
                         }
                         disabled={setRole.isPending}
-                        className="text-[10px] text-muted-foreground hover:text-[#FF4C29] disabled:opacity-50"
+                        className="text-[10px] text-muted-foreground hover:text-primary disabled:opacity-50"
                         title={isLead ? 'Demote to member' : 'Promote to lead'}
                       >
                         {isLead ? '· demote' : '· make lead'}
@@ -800,8 +1112,9 @@ function ProjectTeamTab({
                 </div>
 
                 {/* Remove button — only for managers, or self-leave */}
-                {canEditThis && !isLastLead && (
-                  isConfirmingRemove ? (
+                {canEditThis &&
+                  !isLastLead &&
+                  (isConfirmingRemove ? (
                     <div className="flex flex-col items-end gap-1 shrink-0">
                       <button
                         onClick={() => removeMember.mutate({ projectId, userId: m.user.id })}
@@ -825,8 +1138,7 @@ function ProjectTeamTab({
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
-                  )
-                )}
+                  ))}
               </CardContent>
             </Card>
           );
@@ -842,7 +1154,15 @@ function ProjectTeamTab({
   );
 }
 
-function EmptyState({ icon: Icon, title, description }: { icon: React.ComponentType<{ className?: string }>; title: string; description: string }) {
+function EmptyState({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  description: string;
+}) {
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-20">
       <Icon className="h-12 w-12 text-muted-foreground/20" />
@@ -862,8 +1182,26 @@ function ProjectDetailSkeleton() {
       </div>
       <Skeleton className="h-10 w-96" />
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <Card className="lg:col-span-2 border-border/60"><CardContent className="p-6"><Skeleton className="h-4 w-32 mb-4" /><Skeleton className="h-20 w-full mb-4" /><div className="grid grid-cols-2 gap-4">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div></CardContent></Card>
-        <div className="space-y-4">{Array.from({ length: 3 }).map((_, i) => <Card key={i} className="border-border/60"><CardContent className="p-5"><Skeleton className="h-12 w-full" /></CardContent></Card>)}</div>
+        <Card className="lg:col-span-2 border-border/60">
+          <CardContent className="p-6">
+            <Skeleton className="h-4 w-32 mb-4" />
+            <Skeleton className="h-20 w-full mb-4" />
+            <div className="grid grid-cols-2 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        <div className="space-y-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i} className="border-border/60">
+              <CardContent className="p-5">
+                <Skeleton className="h-12 w-full" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -874,8 +1212,12 @@ function ProjectNotFound() {
     <div className="flex flex-col items-center justify-center py-32">
       <FolderKanban className="h-16 w-16 text-muted-foreground/20" />
       <h2 className="mt-4 font-display text-xl font-semibold text-foreground">Project not found</h2>
-      <p className="mt-2 text-sm text-muted-foreground">This project may have been deleted or you don&apos;t have access.</p>
-      <Link href="/projects" className="mt-6 text-sm font-medium text-[#FF4C29] hover:underline">Back to Projects</Link>
+      <p className="mt-2 text-sm text-muted-foreground">
+        This project may have been deleted or you don&apos;t have access.
+      </p>
+      <Link href="/projects" className="mt-6 text-sm font-medium text-primary hover:underline">
+        Back to Projects
+      </Link>
     </div>
   );
 }

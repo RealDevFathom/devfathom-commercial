@@ -2,11 +2,9 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
+import { assertMeetingManage, assertMeetingAccess } from '../authz';
 import { logActivity } from '../activity';
-import {
-  computePunctuality,
-  findRelevantOccurrence,
-} from '@/lib/meeting-occurrence';
+import { computePunctuality, findRelevantOccurrence } from '@/lib/meeting-occurrence';
 
 export const meetingsRouter = router({
   getUpcoming: protectedProcedure.query(async ({ ctx }) => {
@@ -42,7 +40,12 @@ export const meetingsRouter = router({
     // Compute next occurrences for recurring meetings
     const computed = recurringMeetings
       .map((m) => {
-        const next = getNextOccurrence(new Date(m.startTime), new Date(m.endTime), m.recurrence!, now);
+        const next = getNextOccurrence(
+          new Date(m.startTime),
+          new Date(m.endTime),
+          m.recurrence!,
+          now
+        );
         if (!next) return null;
         return { ...m, startTime: next.start, endTime: next.end };
       })
@@ -57,8 +60,9 @@ export const meetingsRouter = router({
       }
     }
 
-    const merged = Array.from(allMap.values())
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+    const merged = Array.from(allMap.values()).sort(
+      (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+    );
 
     return attachPerOccurrenceJoinedAt(ctx.db, merged);
   }),
@@ -87,15 +91,17 @@ export const meetingsRouter = router({
   }),
 
   create: protectedProcedure
-    .input(z.object({
-      title: z.string().min(1),
-      description: z.string().optional(),
-      startTime: z.date(),
-      endTime: z.date(),
-      location: z.string().optional(),
-      recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().default(null),
-      attendeeIds: z.array(z.string()),
-    }))
+    .input(
+      z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        startTime: z.date(),
+        endTime: z.date(),
+        location: z.string().optional(),
+        recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().default(null),
+        attendeeIds: z.array(z.string()),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Guard against stale sessions: if the session JWT references a user that
       // no longer exists (e.g. after a DB reset), fail fast with a useful message
@@ -124,17 +130,20 @@ export const meetingsRouter = router({
     }),
 
   update: protectedProcedure
-    .input(z.object({
-      id: z.string(),
-      title: z.string().min(1).optional(),
-      description: z.string().nullable().optional(),
-      startTime: z.date().optional(),
-      endTime: z.date().optional(),
-      location: z.string().nullable().optional(),
-      recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().optional(),
-      attendeeIds: z.array(z.string()).optional(),
-    }))
+    .input(
+      z.object({
+        id: z.string(),
+        title: z.string().min(1).optional(),
+        description: z.string().nullable().optional(),
+        startTime: z.date().optional(),
+        endTime: z.date().optional(),
+        location: z.string().nullable().optional(),
+        recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().optional(),
+        attendeeIds: z.array(z.string()).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
+      await assertMeetingManage(ctx, input.id);
       const { id, attendeeIds, ...data } = input;
 
       if (attendeeIds) {
@@ -151,6 +160,7 @@ export const meetingsRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      await assertMeetingManage(ctx, input.id);
       return ctx.db.meeting.delete({ where: { id: input.id } });
     }),
 
@@ -158,32 +168,32 @@ export const meetingsRouter = router({
    * Meeting detail with all attendees + their join status.
    * Returns null if the user is not an attendee and not an admin.
    */
-  getById: protectedProcedure
-    .input(z.object({ id: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const userId = ctx.session.user.id;
-      const isAdmin = ctx.session.user.role === 'ADMIN';
+  getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    const userId = ctx.session.user.id;
+    const isAdmin = ctx.session.user.role === 'ADMIN';
 
-      const meeting = await ctx.db.meeting.findUnique({
-        where: { id: input.id },
-        include: {
-          attendees: {
-            include: {
-              user: { select: { id: true, name: true, avatar: true, title: true } },
-            },
+    const meeting = await ctx.db.meeting.findUnique({
+      where: { id: input.id },
+      include: {
+        attendees: {
+          include: {
+            user: { select: { id: true, name: true, avatar: true, title: true } },
           },
         },
-      });
+      },
+    });
 
-      if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
+    if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      const isAttendee = meeting.attendees.some((a) => a.userId === userId);
-      if (!isAdmin && !isAttendee) {
-        throw new TRPCError({ code: 'FORBIDDEN' });
-      }
+    await assertMeetingAccess(ctx, input.id);
 
-      return meeting;
-    }),
+    const isAttendee = meeting.attendees.some((a) => a.userId === userId);
+    if (!isAdmin && !isAttendee) {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    }
+
+    return meeting;
+  }),
 
   /**
    * Mark the current user as having joined a meeting.
@@ -231,7 +241,7 @@ export const meetingsRouter = router({
         attendee.meeting.startTime,
         attendee.meeting.endTime,
         attendee.meeting.recurrence,
-        now,
+        now
       );
 
       // Attendance window: attendance counts only if you clicked Join while
@@ -285,7 +295,7 @@ export const meetingsRouter = router({
 
       const punctuality = computePunctuality(
         { startTime: occurrence.start, recurrence: null }, // pass fixed start — punctuality already points at the right occurrence
-        now,
+        now
       );
 
       logActivity(ctx.db, userId, {
@@ -324,7 +334,7 @@ type MeetingWithAttendees = {
 
 async function attachPerOccurrenceJoinedAt<M extends MeetingWithAttendees>(
   db: PrismaClient,
-  meetings: M[],
+  meetings: M[]
 ): Promise<M[]> {
   if (meetings.length === 0) return meetings;
 

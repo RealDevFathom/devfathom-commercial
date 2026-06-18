@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 
 const departmentColors: Record<string, string> = {
-  LEADERSHIP: 'bg-[#FF4C29]/10 text-[#FF4C29]',
+  LEADERSHIP: 'bg-primary/10 text-primary',
   ENGINEERING: 'bg-blue-500/10 text-blue-500',
   PRODUCT: 'bg-violet-500/10 text-violet-500',
   QUALITY: 'bg-amber-500/10 text-amber-500',
@@ -52,7 +52,12 @@ export function TeamContent() {
   const filtered = useMemo(() => {
     if (!team) return [];
     return team.filter((m) => {
-      if (search && !m.name.toLowerCase().includes(search.toLowerCase()) && !m.title.toLowerCase().includes(search.toLowerCase())) return false;
+      if (
+        search &&
+        !m.name.toLowerCase().includes(search.toLowerCase()) &&
+        !m.title.toLowerCase().includes(search.toLowerCase())
+      )
+        return false;
       if (deptFilter !== 'ALL' && m.department !== deptFilter) return false;
       return true;
     });
@@ -68,8 +73,10 @@ export function TeamContent() {
           </p>
         </div>
         {isAdmin && (
-          <button onClick={() => setShowAddMember(true)}
-            className="flex items-center gap-2 rounded-xl bg-[#FF4C29] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)] active:scale-[0.98]">
+          <button
+            onClick={() => setShowAddMember(true)}
+            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          >
             <Plus className="h-4 w-4" /> Add Member
           </button>
         )}
@@ -79,13 +86,37 @@ export function TeamContent() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
         <div className="relative flex-1 w-full sm:max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input type="text" placeholder="Search by name or role..." value={search} onChange={(e) => setSearch(e.target.value)}
-            className="flex h-10 w-full rounded-xl border border-border bg-card pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+          <input
+            type="text"
+            placeholder="Search by name or role..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex h-10 w-full rounded-xl border border-border bg-card pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
-          <button onClick={() => setDeptFilter('ALL')} className={cn('rounded-lg px-3 py-1.5 text-xs font-medium transition-colors', deptFilter === 'ALL' ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-secondary hover:text-foreground')}>All</button>
+          <button
+            onClick={() => setDeptFilter('ALL')}
+            className={cn(
+              'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+              deptFilter === 'ALL'
+                ? 'bg-foreground text-background'
+                : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+            )}
+          >
+            All
+          </button>
           {departments.map((d) => (
-            <button key={d} onClick={() => setDeptFilter(d)} className={cn('rounded-lg px-3 py-1.5 text-xs font-medium transition-colors', deptFilter === d ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-secondary hover:text-foreground')}>
+            <button
+              key={d}
+              onClick={() => setDeptFilter(d)}
+              className={cn(
+                'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+                deptFilter === d
+                  ? 'bg-foreground text-background'
+                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+              )}
+            >
               {d.charAt(0) + d.slice(1).toLowerCase()}
             </button>
           ))}
@@ -96,13 +127,25 @@ export function TeamContent() {
       {isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Card key={i} className="border-border/60"><CardContent className="p-6"><div className="flex items-center gap-4"><Skeleton className="h-14 w-14 rounded-full" /><div className="flex-1"><Skeleton className="h-5 w-32 mb-2" /><Skeleton className="h-3 w-24" /></div></div></CardContent></Card>
+            <Card key={i} className="border-border/60">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-4">
+                  <Skeleton className="h-14 w-14 rounded-full" />
+                  <div className="flex-1">
+                    <Skeleton className="h-5 w-32 mb-2" />
+                    <Skeleton className="h-3 w-24" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-20">
           <Users className="h-12 w-12 text-muted-foreground/20" />
-          <h3 className="mt-4 font-display text-lg font-semibold text-foreground">No team members found</h3>
+          <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
+            No team members found
+          </h3>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -114,19 +157,40 @@ export function TeamContent() {
                     <div className="relative">
                       <Avatar className="h-14 w-14">
                         <AvatarImage src={member.avatar ?? undefined} />
-                        <AvatarFallback className="bg-secondary text-foreground font-semibold text-lg">{member.name.split(' ').map((n) => n[0]).join('')}</AvatarFallback>
+                        <AvatarFallback className="bg-secondary text-foreground font-semibold text-lg">
+                          {member.name
+                            .split(' ')
+                            .map((n) => n[0])
+                            .join('')}
+                        </AvatarFallback>
                       </Avatar>
-                      <div className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card', statusDot[member.status])} />
+                      <div
+                        className={cn(
+                          'absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card',
+                          statusDot[member.status]
+                        )}
+                      />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground truncate group-hover:text-[#FF4C29] transition-colors">{member.name}</h3>
-                      <p className="text-xs text-muted-foreground mt-0.5 truncate">{member.title}</p>
+                      <h3 className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
+                        {member.name}
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                        {member.title}
+                      </p>
                       <div className="flex items-center gap-2 mt-2">
-                        <span className={cn('rounded-md px-2 py-0.5 text-[10px] font-medium', departmentColors[member.department])}>
+                        <span
+                          className={cn(
+                            'rounded-md px-2 py-0.5 text-[10px] font-medium',
+                            departmentColors[member.department]
+                          )}
+                        >
                           {member.department.charAt(0) + member.department.slice(1).toLowerCase()}
                         </span>
                         {member.role === 'ADMIN' && (
-                          <span className="rounded-md bg-[#FF4C29]/10 px-2 py-0.5 text-[10px] font-medium text-[#FF4C29]">Admin</span>
+                          <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                            Admin
+                          </span>
                         )}
                       </div>
                     </div>
@@ -134,11 +198,19 @@ export function TeamContent() {
 
                   <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/60 text-xs text-muted-foreground">
                     <div className="flex items-center gap-3">
-                      <span className="flex items-center gap-1"><FolderKanban className="h-3 w-3" />{member._count.projectMembers}</span>
-                      <span className="flex items-center gap-1"><CheckSquare className="h-3 w-3" />{member._count.assignedTasks}</span>
+                      <span className="flex items-center gap-1">
+                        <FolderKanban className="h-3 w-3" />
+                        {member._count.projectMembers}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <CheckSquare className="h-3 w-3" />
+                        {member._count.assignedTasks}
+                      </span>
                     </div>
                     {member.lastActiveAt && (
-                      <span>{formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })}</span>
+                      <span>
+                        {formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })}
+                      </span>
                     )}
                   </div>
                 </CardContent>
@@ -153,12 +225,22 @@ export function TeamContent() {
   );
 }
 
-const departmentOptions = ['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN'] as const;
+const departmentOptions = [
+  'LEADERSHIP',
+  'ENGINEERING',
+  'PRODUCT',
+  'QUALITY',
+  'MARKETING',
+  'DESIGN',
+] as const;
 
 function AddMemberModal({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
   const createMember = trpc.team.createMember.useMutation({
-    onSuccess: () => { utils.team.getAll.invalidate(); onClose(); },
+    onSuccess: () => {
+      utils.team.getAll.invalidate();
+      onClose();
+    },
   });
 
   const [name, setName] = useState('');
@@ -166,7 +248,7 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<'ADMIN' | 'EMPLOYEE'>('EMPLOYEE');
-  const [department, setDepartment] = useState<typeof departmentOptions[number]>('ENGINEERING');
+  const [department, setDepartment] = useState<(typeof departmentOptions)[number]>('ENGINEERING');
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
   const [bio, setBio] = useState('');
@@ -177,59 +259,96 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
   const handleSubmit = () => {
     setError('');
     if (!name.trim() || !email.trim() || !password || !title.trim()) return;
-    if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
-    createMember.mutate({
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      password,
-      role,
-      department,
-      title: title.trim(),
-      phone: phone || undefined,
-      bio: bio || undefined,
-      skills,
-    }, {
-      onError: (err) => setError(err.message),
-    });
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    createMember.mutate(
+      {
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        password,
+        role,
+        department,
+        title: title.trim(),
+        phone: phone || undefined,
+        bio: bio || undefined,
+        skills,
+      },
+      {
+        onError: (err) => setError(err.message),
+      }
+    );
   };
 
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-border bg-background shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-border bg-background shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-background/90 backdrop-blur-xl px-6 py-4">
-            <h2 className="font-display text-lg font-bold tracking-tight text-foreground">Add Team Member</h2>
-            <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
+            <h2 className="font-display text-lg font-bold tracking-tight text-foreground">
+              Add Team Member
+            </h2>
+            <button
+              onClick={onClose}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            >
               <X className="h-4 w-4" />
             </button>
           </div>
 
           <div className="p-6 space-y-5">
             {error && (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</div>
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                {error}
+              </div>
             )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Full Name *</label>
-                <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+                <label className="block text-sm font-medium text-foreground mb-1.5">
+                  Full Name *
+                </label>
+                <input
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="John Doe"
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Email *</label>
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="john@company.com"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="john@company.com"
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
               </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-foreground mb-1.5">Password *</label>
               <div className="relative">
-                <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
-                <button type="button" onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors" tabIndex={-1}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Minimum 8 characters"
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  tabIndex={-1}
+                >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
@@ -237,24 +356,41 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Job Title *</label>
-                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Full Stack Developer"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+                <label className="block text-sm font-medium text-foreground mb-1.5">
+                  Job Title *
+                </label>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Full Stack Developer"
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Phone</label>
-                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+1 (786) 555-0100"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+                <input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+1 (786) 555-0100"
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Department</label>
-                <select value={department} onChange={(e) => setDepartment(e.target.value as typeof department)}
-                  className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20">
+                <label className="block text-sm font-medium text-foreground mb-1.5">
+                  Department
+                </label>
+                <select
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value as typeof department)}
+                  className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                >
                   {departmentOptions.map((d) => (
-                    <option key={d} value={d}>{d.charAt(0) + d.slice(1).toLowerCase()}</option>
+                    <option key={d} value={d}>
+                      {d.charAt(0) + d.slice(1).toLowerCase()}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -262,9 +398,16 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
                 <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
                 <div className="flex rounded-xl border border-border overflow-hidden">
                   {(['EMPLOYEE', 'ADMIN'] as const).map((r) => (
-                    <button key={r} onClick={() => setRole(r)}
-                      className={cn('flex-1 py-2.5 text-xs font-medium transition-colors',
-                        role === r ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:text-foreground')}>
+                    <button
+                      key={r}
+                      onClick={() => setRole(r)}
+                      className={cn(
+                        'flex-1 py-2.5 text-xs font-medium transition-colors',
+                        role === r
+                          ? 'bg-foreground text-background'
+                          : 'bg-card text-muted-foreground hover:text-foreground'
+                      )}
+                    >
                       {r === 'EMPLOYEE' ? 'Employee' : 'Admin'}
                     </button>
                   ))}
@@ -274,24 +417,49 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
 
             <div>
               <label className="block text-sm font-medium text-foreground mb-1.5">Bio</label>
-              <textarea value={bio} onChange={(e) => setBio(e.target.value)} rows={2} placeholder="Brief bio..."
-                className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+              <textarea
+                value={bio}
+                onChange={(e) => setBio(e.target.value)}
+                rows={2}
+                placeholder="Brief bio..."
+                className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
             </div>
 
             <div>
               <label className="block text-sm font-medium text-foreground mb-1.5">Skills</label>
               <div className="flex gap-2">
-                <input value={skillInput} onChange={(e) => setSkillInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = skillInput.trim(); if (v && !skills.includes(v)) { setSkills([...skills, v]); setSkillInput(''); } } }}
+                <input
+                  value={skillInput}
+                  onChange={(e) => setSkillInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const v = skillInput.trim();
+                      if (v && !skills.includes(v)) {
+                        setSkills([...skills, v]);
+                        setSkillInput('');
+                      }
+                    }
+                  }}
                   placeholder="Add skill, press Enter..."
-                  className="flex-1 rounded-xl border border-border bg-card px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none" />
+                  className="flex-1 rounded-xl border border-border bg-card px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                />
               </div>
               {skills.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {skills.map((s) => (
-                    <span key={s} className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground">
+                    <span
+                      key={s}
+                      className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
+                    >
                       {s}
-                      <button onClick={() => setSkills(skills.filter((sk) => sk !== s))} className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
+                      <button
+                        onClick={() => setSkills(skills.filter((sk) => sk !== s))}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
                     </span>
                   ))}
                 </div>
@@ -300,11 +468,31 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
           </div>
 
           <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border/60 bg-background px-6 py-4">
-            <button onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Cancel</button>
-            <button onClick={handleSubmit}
-              disabled={!name.trim() || !email.trim() || !password || !title.trim() || createMember.isPending}
-              className="flex items-center gap-2 rounded-xl bg-[#FF4C29] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none">
-              {createMember.isPending ? <><Loader2 className="h-4 w-4 animate-spin" />Creating...</> : 'Add Member'}
+            <button
+              onClick={onClose}
+              className="rounded-xl px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={
+                !name.trim() ||
+                !email.trim() ||
+                !password ||
+                !title.trim() ||
+                createMember.isPending
+              }
+              className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
+            >
+              {createMember.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                'Add Member'
+              )}
             </button>
           </div>
         </div>

@@ -4,10 +4,10 @@
  * it's idempotent via the unique (meetingId, userId, occurrenceStart) index.
  *
  * Run locally:
- *   npx tsx prisma/backfill-attendance-log.ts
+ *   bunx tsx prisma/backfill-attendance-log.ts
  *
  * Run against prod Neon:
- *   DATABASE_URL='postgres://…' npx tsx prisma/backfill-attendance-log.ts
+ *   DATABASE_URL='postgres://…' bunx tsx prisma/backfill-attendance-log.ts
  */
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc';
+import { assertChannelMember } from '../authz';
 
 export const chatRouter = router({
   getChannels: protectedProcedure.query(async ({ ctx }) => {
@@ -23,12 +24,15 @@ export const chatRouter = router({
   }),
 
   getMessages: protectedProcedure
-    .input(z.object({
-      channelId: z.string(),
-      limit: z.number().min(1).max(50).default(30),
-      cursor: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        channelId: z.string(),
+        limit: z.number().min(1).max(50).default(30),
+        cursor: z.string().optional(),
+      })
+    )
     .query(async ({ ctx, input }) => {
+      await assertChannelMember(ctx, input.channelId);
       const messages = await ctx.db.message.findMany({
         where: { channelId: input.channelId, parentId: null },
         include: {
@@ -45,12 +49,15 @@ export const chatRouter = router({
     }),
 
   sendMessage: protectedProcedure
-    .input(z.object({
-      channelId: z.string(),
-      content: z.string().min(1),
-      parentId: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        channelId: z.string(),
+        content: z.string().min(1),
+        parentId: z.string().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
+      await assertChannelMember(ctx, input.channelId);
       const message = await ctx.db.message.create({
         data: {
           content: input.content,
@@ -73,12 +80,14 @@ export const chatRouter = router({
     }),
 
   createChannel: protectedProcedure
-    .input(z.object({
-      name: z.string().min(1),
-      description: z.string().optional(),
-      type: z.enum(['GROUP', 'PROJECT']).default('GROUP'),
-      memberIds: z.array(z.string()),
-    }))
+    .input(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().optional(),
+        type: z.enum(['GROUP', 'PROJECT']).default('GROUP'),
+        memberIds: z.array(z.string()),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const allMembers = [...new Set([ctx.session.user.id, ...input.memberIds])];
       return ctx.db.channel.create({
@@ -92,12 +101,15 @@ export const chatRouter = router({
     }),
 
   updateChannel: protectedProcedure
-    .input(z.object({
-      id: z.string(),
-      name: z.string().min(1).optional(),
-      description: z.string().nullable().optional(),
-    }))
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).optional(),
+        description: z.string().nullable().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
+      await assertChannelMember(ctx, input.id);
       const { id, ...data } = input;
       return ctx.db.channel.update({ where: { id }, data });
     }),
@@ -105,6 +117,7 @@ export const chatRouter = router({
   deleteChannel: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      await assertChannelMember(ctx, input.id);
       return ctx.db.channel.delete({ where: { id: input.id } });
     }),
 });

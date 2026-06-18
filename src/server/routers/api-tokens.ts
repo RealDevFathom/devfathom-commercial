@@ -14,15 +14,17 @@ export const apiTokensRouter = router({
   }),
 
   create: adminProcedure
-    .input(z.object({
-      name: z.string().min(1),
-      scopes: z.array(z.string()).min(1),
-      expiresInDays: z.number().int().positive().optional(),
-      // When set, the token acts on behalf of THIS user. All REST calls made
-      // with this token will be attributed to them in activity logs / stats.
-      // When omitted, defaults to the caller — preserves the old behavior.
-      userId: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        name: z.string().min(1),
+        scopes: z.array(z.string()).min(1),
+        expiresInDays: z.number().int().positive().optional(),
+        // When set, the token acts on behalf of THIS user. All REST calls made
+        // with this token will be attributed to them in activity logs / stats.
+        // When omitted, defaults to the caller — preserves the old behavior.
+        userId: z.string().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Determine the user the token will act as
       const targetUserId = input.userId ?? ctx.session.user.id;
@@ -74,9 +76,7 @@ export const apiTokensRouter = router({
       };
     }),
 
-  revoke: adminProcedure
-    .input(z.object({ id: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      return ctx.db.apiToken.delete({ where: { id: input.id } });
-    }),
+  revoke: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    return ctx.db.apiToken.delete({ where: { id: input.id } });
+  }),
 });

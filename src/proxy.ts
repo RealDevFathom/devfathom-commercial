@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const publicPaths = ['/login', '/api/auth'];
+const publicPaths = ['/login', '/api/auth', '/brand'];
 
 export function proxy(request: Request) {
   const url = new URL(request.url);
@@ -24,8 +24,7 @@ export function proxy(request: Request) {
   // Check for session token
   const cookies = request.headers.get('cookie') || '';
   const hasSession =
-    cookies.includes('authjs.session-token') ||
-    cookies.includes('__Secure-authjs.session-token');
+    cookies.includes('authjs.session-token') || cookies.includes('__Secure-authjs.session-token');
 
   if (!hasSession) {
     const loginUrl = new URL('/login', request.url);

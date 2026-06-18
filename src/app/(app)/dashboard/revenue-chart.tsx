@@ -69,29 +69,33 @@ export function RevenueChart() {
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-[#FF4C29]/10">
-              <TrendingUp className="h-3.5 w-3.5 text-[#FF4C29]" />
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
+              <TrendingUp className="h-3.5 w-3.5 text-primary" />
             </div>
             Revenue Overview
           </CardTitle>
           <div className="flex items-center gap-5">
             <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-full bg-[#FF4C29]" />
+              <div className="h-2 w-2 rounded-full bg-primary" />
               <span className="text-xs text-muted-foreground">Income</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-full bg-[#2E2C2A] dark:bg-[#A8A49D]" />
+              <div className="h-2 w-2 rounded-full bg-border dark:bg-muted-foreground" />
               <span className="text-xs text-muted-foreground">Expenses</span>
             </div>
           </div>
         </div>
         <div className="flex items-baseline gap-4 mt-2">
           <div>
-            <span className="font-display text-2xl font-bold text-foreground">${totalIncome.toLocaleString()}</span>
+            <span className="font-display text-2xl font-bold text-foreground">
+              ${totalIncome.toLocaleString()}
+            </span>
             <span className="text-xs text-muted-foreground ml-1.5">total income</span>
           </div>
           <div>
-            <span className="text-sm font-semibold text-emerald-500">${totalProfit.toLocaleString()}</span>
+            <span className="text-sm font-semibold text-emerald-500">
+              ${totalProfit.toLocaleString()}
+            </span>
             <span className="text-xs text-muted-foreground ml-1">net profit</span>
           </div>
         </div>
@@ -102,12 +106,12 @@ export function RevenueChart() {
             <AreaChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
               <defs>
                 <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#FF4C29" stopOpacity={0.2} />
-                  <stop offset="100%" stopColor="#FF4C29" stopOpacity={0} />
+                  <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.22} />
+                  <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="expenseGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#8E919B" stopOpacity={0.1} />
-                  <stop offset="100%" stopColor="#8E919B" stopOpacity={0} />
+                  <stop offset="0%" stopColor="var(--muted-foreground)" stopOpacity={0.12} />
+                  <stop offset="100%" stopColor="var(--muted-foreground)" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid
@@ -133,20 +137,25 @@ export function RevenueChart() {
               <Area
                 type="monotone"
                 dataKey="income"
-                stroke="#FF4C29"
+                stroke="var(--primary)"
                 strokeWidth={2.5}
                 fill="url(#incomeGradient)"
                 dot={false}
-                activeDot={{ r: 5, fill: '#FF4C29', strokeWidth: 2, stroke: 'var(--card)' }}
+                activeDot={{ r: 5, fill: 'var(--primary)', strokeWidth: 2, stroke: 'var(--card)' }}
               />
               <Area
                 type="monotone"
                 dataKey="expense"
-                stroke="#8E919B"
+                stroke="var(--muted-foreground)"
                 strokeWidth={1.5}
                 fill="url(#expenseGradient)"
                 dot={false}
-                activeDot={{ r: 4, fill: '#8E919B', strokeWidth: 2, stroke: 'var(--card)' }}
+                activeDot={{
+                  r: 4,
+                  fill: 'var(--muted-foreground)',
+                  strokeWidth: 2,
+                  stroke: 'var(--card)',
+                }}
               />
             </AreaChart>
           </ResponsiveContainer>

@@ -12,12 +12,12 @@ export type ApiContext = {
 
 /**
  * Generate a new API token.
- * Format: c19_<32 random hex chars>
+ * Format: df_<32 random hex chars>
  * Returns the plain token (shown to user once) and the hash to store.
  */
 export async function generateApiToken(): Promise<{ token: string; prefix: string; hash: string }> {
   const random = randomBytes(24).toString('base64url');
-  const token = `c19_${random}`;
+  const token = `df_${random}`;
   const prefix = token.slice(0, 12);
   const tokenHash = await hash(token, 10);
   return { token, prefix, hash: tokenHash };
@@ -27,9 +27,7 @@ export async function generateApiToken(): Promise<{ token: string; prefix: strin
  * Authenticate a request via Authorization: Bearer header.
  * Returns ApiContext on success, or NextResponse error on failure.
  */
-export async function authenticateApiRequest(
-  request: Request
-): Promise<ApiContext | NextResponse> {
+export async function authenticateApiRequest(request: Request): Promise<ApiContext | NextResponse> {
   const authHeader = request.headers.get('authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return NextResponse.json(
@@ -39,7 +37,7 @@ export async function authenticateApiRequest(
   }
 
   const token = authHeader.slice(7).trim();
-  if (!token.startsWith('c19_')) {
+  if (!token.startsWith('df_')) {
     return NextResponse.json({ error: 'Invalid token format' }, { status: 401 });
   }
 
@@ -65,10 +63,12 @@ export async function authenticateApiRequest(
     }
 
     // Update lastUsedAt (fire and forget)
-    db.apiToken.update({
-      where: { id: candidate.id },
-      data: { lastUsedAt: new Date() },
-    }).catch(() => {});
+    db.apiToken
+      .update({
+        where: { id: candidate.id },
+        data: { lastUsedAt: new Date() },
+      })
+      .catch(() => {});
 
     return {
       userId: candidate.userId,
@@ -116,12 +116,23 @@ export function withApiAuth<T extends unknown[]>(
       );
     }
 
+    // Finance is an admin-only domain. Enforce the bound user's ROLE here (not
+    // just the token scope) so that even a wildcard "*" token issued to a
+    // non-admin user cannot read or mutate finance data.
+    if (requiredScope.startsWith('finance') && auth.userRole !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Forbidden: finance endpoints require an admin-bound token' },
+        { status: 403 }
+      );
+    }
+
     try {
       return await handler(auth, request, ...args);
     } catch (err) {
+      // Log the full error server-side, but never leak DB/Prisma internals or
+      // stack details to the client — respond with a generic 500.
       console.error(`API error in ${requiredScope}:`, err);
-      const message = err instanceof Error ? err.message : 'Internal server error';
-      return NextResponse.json({ error: message }, { status: 500 });
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
   };
 }
@@ -139,7 +150,11 @@ export const AVAILABLE_SCOPES = [
   { value: 'clients:write', label: 'Clients (write)', description: 'Create, update clients' },
   { value: 'team:read', label: 'Team (read)', description: 'Read team directory' },
   { value: 'finance:read', label: 'Finance (read)', description: 'Read transactions and invoices' },
-  { value: 'finance:write', label: 'Finance (write)', description: 'Create, update transactions and invoices' },
+  {
+    value: 'finance:write',
+    label: 'Finance (write)',
+    description: 'Create, update transactions and invoices',
+  },
   { value: 'meetings:read', label: 'Meetings (read)', description: 'Read meetings' },
   { value: 'meetings:write', label: 'Meetings (write)', description: 'Create, update meetings' },
 ] as const;

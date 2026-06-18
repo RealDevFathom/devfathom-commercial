@@ -2,13 +2,18 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { canAccessProject, projectIdOfTask } from '@/lib/authz';
 
 export const GET = withApiAuth(
   'tasks:read',
-  async (_authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
+  async (authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
-    const task = await db.task.findUnique({ where: { id }, select: { id: true } });
-    if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    // Object-level authz: resolve the task's project and require access.
+    const projectId = await projectIdOfTask(db, id);
+    if (!projectId) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    if (!(await canAccessProject(db, authCtx.userId, authCtx.userRole, projectId))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
 
     const comments = await db.taskComment.findMany({
       where: { taskId: id, parentId: null },
@@ -23,7 +28,7 @@ export const GET = withApiAuth(
     });
 
     return NextResponse.json({ data: comments });
-  },
+  }
 );
 
 const createCommentSchema = z.object({
@@ -41,13 +46,16 @@ export const POST = withApiAuth(
     if (!parsed.success) {
       return NextResponse.json(
         { error: 'Invalid input', details: parsed.error.issues },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
-    // Ensure the task exists before inserting so we return a clear 404
-    const task = await db.task.findUnique({ where: { id }, select: { id: true } });
-    if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    // Object-level authz: resolve the task's project and require access.
+    const projectId = await projectIdOfTask(db, id);
+    if (!projectId) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    if (!(await canAccessProject(db, authCtx.userId, authCtx.userRole, projectId))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
 
     const comment = await db.taskComment.create({
       data: {
@@ -62,5 +70,5 @@ export const POST = withApiAuth(
     });
 
     return NextResponse.json({ data: comment }, { status: 201 });
-  },
+  }
 );

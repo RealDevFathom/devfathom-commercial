@@ -2,14 +2,40 @@ import { z } from 'zod';
 import { hash, compare } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
+import { assertNotificationOwner } from '../authz';
+import { appUrl, templates } from '@/lib/email';
+import { notify } from '@/lib/notifications';
+
+// "LEADERSHIP" → "Leadership", "ADMIN" → "Admin".
+const titleCase = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
+
+// Strong password policy shared by every mutation that sets a password
+// (createMember, changePassword, adminResetPassword): at least 12 characters
+// with lowercase, uppercase, and a digit.
+const passwordSchema = z
+  .string()
+  .min(12, 'Password must be at least 12 characters long')
+  .regex(/[a-z]/, 'Password must include a lowercase letter')
+  .regex(/[A-Z]/, 'Password must include an uppercase letter')
+  .regex(/[0-9]/, 'Password must include a number');
 
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     return ctx.db.user.findMany({
       select: {
-        id: true, name: true, email: true, role: true, department: true,
-        title: true, avatar: true, phone: true, bio: true, skills: true,
-        startDate: true, status: true, lastActiveAt: true,
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        department: true,
+        title: true,
+        avatar: true,
+        phone: true,
+        bio: true,
+        skills: true,
+        startDate: true,
+        status: true,
+        lastActiveAt: true,
         _count: { select: { assignedTasks: true, projectMembers: true } },
       },
       orderBy: { name: 'asc' },
@@ -17,53 +43,103 @@ export const teamRouter = router({
   }),
 
   createMember: adminProcedure
-    .input(z.object({
-      name: z.string().min(1),
-      email: z.string().email(),
-      password: z.string().min(8),
-      role: z.enum(['ADMIN', 'EMPLOYEE']).default('EMPLOYEE'),
-      department: z.enum(['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN']),
-      title: z.string().min(1),
-      phone: z.string().optional(),
-      bio: z.string().optional(),
-      skills: z.array(z.string()).default([]),
-    }))
+    .input(
+      z.object({
+        name: z.string().min(1),
+        email: z.string().email(),
+        password: passwordSchema,
+        role: z.enum(['ADMIN', 'EMPLOYEE']).default('EMPLOYEE'),
+        department: z.enum([
+          'LEADERSHIP',
+          'ENGINEERING',
+          'PRODUCT',
+          'QUALITY',
+          'MARKETING',
+          'DESIGN',
+        ]),
+        title: z.string().min(1),
+        phone: z.string().optional(),
+        bio: z.string().optional(),
+        skills: z.array(z.string()).default([]),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.db.user.findUnique({ where: { email: input.email } });
-      if (existing) throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
+      if (existing)
+        throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
 
       const hashed = await hash(input.password, 12);
-      return ctx.db.user.create({
+      const created = await ctx.db.user.create({
         data: {
           ...input,
           password: hashed,
         },
       });
-    }),
 
-  getById: protectedProcedure
-    .input(z.object({ id: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const isAdmin = ctx.session.user.role === 'ADMIN';
-      const isSelf = ctx.session.user.id === input.id;
-
-      return ctx.db.user.findUnique({
-        where: { id: input.id },
-        select: {
-          id: true, name: true, email: true, role: true, department: true,
-          title: true, avatar: true, phone: true, bio: true, skills: true,
-          startDate: true, status: true, lastActiveAt: true,
-          projectMembers: {
-            include: { project: { select: { id: true, name: true, status: true, type: true } } },
-          },
-          assignedTasks: {
-            include: { task: { select: { id: true, title: true, priority: true, dueDate: true, column: { select: { name: true } } } } },
-            take: 10,
-          },
-          leaveRequests: isSelf || isAdmin ? { orderBy: { createdAt: 'desc' as const }, take: 10 } : false,
-        },
+      // Welcome the new member with their sign-in details.
+      notify(ctx.db, [created.id], {
+        type: 'user_welcome',
+        title: 'Welcome to DevFathom',
+        message: 'Your DevFathom account has been created.',
+        entityType: 'User',
+        entityId: created.id,
+        email: (r) =>
+          templates.welcome({
+            name: r.name,
+            workspace: 'DevFathom',
+            role: `${titleCase(input.role)} · ${titleCase(input.department)}`,
+            email: r.email,
+            tempPassword: input.password,
+            loginUrl: `${appUrl()}/login`,
+            inviterName: ctx.session.user.name,
+          }),
       });
+
+      return created;
     }),
+
+  getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    const isAdmin = ctx.session.user.role === 'ADMIN';
+    const isSelf = ctx.session.user.id === input.id;
+
+    return ctx.db.user.findUnique({
+      where: { id: input.id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        department: true,
+        title: true,
+        avatar: true,
+        phone: true,
+        bio: true,
+        skills: true,
+        startDate: true,
+        status: true,
+        lastActiveAt: true,
+        projectMembers: {
+          include: { project: { select: { id: true, name: true, status: true, type: true } } },
+        },
+        assignedTasks: {
+          include: {
+            task: {
+              select: {
+                id: true,
+                title: true,
+                priority: true,
+                dueDate: true,
+                column: { select: { name: true } },
+              },
+            },
+          },
+          take: 10,
+        },
+        leaveRequests:
+          isSelf || isAdmin ? { orderBy: { createdAt: 'desc' as const }, take: 10 } : false,
+      },
+    });
+  }),
 
   getLeaveRequests: adminProcedure.query(async ({ ctx }) => {
     return ctx.db.leaveRequest.findMany({
@@ -76,12 +152,14 @@ export const teamRouter = router({
   }),
 
   createLeaveRequest: protectedProcedure
-    .input(z.object({
-      type: z.enum(['VACATION', 'SICK', 'REMOTE']),
-      startDate: z.date(),
-      endDate: z.date(),
-      reason: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        type: z.enum(['VACATION', 'SICK', 'REMOTE']),
+        startDate: z.date(),
+        endDate: z.date(),
+        reason: z.string().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.leaveRequest.create({
         data: { ...input, userId: ctx.session.user.id },
@@ -89,15 +167,46 @@ export const teamRouter = router({
     }),
 
   updateLeaveStatus: adminProcedure
-    .input(z.object({
-      id: z.string(),
-      status: z.enum(['APPROVED', 'REJECTED']),
-    }))
+    .input(
+      z.object({
+        id: z.string(),
+        status: z.enum(['APPROVED', 'REJECTED']),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.leaveRequest.update({
+      const leave = await ctx.db.leaveRequest.update({
         where: { id: input.id },
         data: { status: input.status, approvedById: ctx.session.user.id },
       });
+
+      // Let the requester know the decision.
+      const displayStatus = input.status === 'REJECTED' ? 'DECLINED' : 'APPROVED';
+      const range = `${leave.startDate.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      })} – ${leave.endDate.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })}`;
+      notify(ctx.db, [leave.userId], {
+        type: 'leave_status',
+        title: `Time off ${displayStatus.toLowerCase()}`,
+        message: `Your ${titleCase(leave.type)} request was ${displayStatus.toLowerCase()}.`,
+        entityType: 'LeaveRequest',
+        entityId: leave.id,
+        email: (r) =>
+          templates.leaveRequest({
+            recipientName: r.name,
+            employeeName: r.name,
+            leaveType: titleCase(leave.type),
+            rangeLabel: range,
+            status: displayStatus,
+            url: `${appUrl()}/hr`,
+          }),
+      });
+
+      return leave;
     }),
 
   getNotifications: protectedProcedure.query(async ({ ctx }) => {
@@ -111,6 +220,7 @@ export const teamRouter = router({
   markNotificationRead: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      await assertNotificationOwner(ctx, input.id);
       return ctx.db.notification.update({
         where: { id: input.id },
         data: { isRead: true },
@@ -126,12 +236,14 @@ export const teamRouter = router({
   }),
 
   updateProfile: protectedProcedure
-    .input(z.object({
-      name: z.string().min(1).optional(),
-      phone: z.string().nullable().optional(),
-      bio: z.string().nullable().optional(),
-      skills: z.array(z.string()).optional(),
-    }))
+    .input(
+      z.object({
+        name: z.string().min(1).optional(),
+        phone: z.string().nullable().optional(),
+        bio: z.string().nullable().optional(),
+        skills: z.array(z.string()).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.user.update({
         where: { id: ctx.session.user.id },
@@ -140,10 +252,12 @@ export const teamRouter = router({
     }),
 
   changePassword: protectedProcedure
-    .input(z.object({
-      currentPassword: z.string().min(1),
-      newPassword: z.string().min(8, 'Password must be at least 8 characters'),
-    }))
+    .input(
+      z.object({
+        currentPassword: z.string().min(1),
+        newPassword: passwordSchema,
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const user = await ctx.db.user.findUnique({
         where: { id: ctx.session.user.id },
@@ -152,7 +266,8 @@ export const teamRouter = router({
       if (!user) throw new TRPCError({ code: 'NOT_FOUND' });
 
       const valid = await compare(input.currentPassword, user.password);
-      if (!valid) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Current password is incorrect' });
+      if (!valid)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Current password is incorrect' });
 
       const hashed = await hash(input.newPassword, 12);
       await ctx.db.user.update({
@@ -163,28 +278,34 @@ export const teamRouter = router({
     }),
 
   adminUpdateMember: adminProcedure
-    .input(z.object({
-      id: z.string(),
-      name: z.string().min(1).optional(),
-      email: z.string().email().optional(),
-      role: z.enum(['ADMIN', 'EMPLOYEE']).optional(),
-      department: z.enum(['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN']).optional(),
-      title: z.string().min(1).optional(),
-      phone: z.string().nullable().optional(),
-      bio: z.string().nullable().optional(),
-      skills: z.array(z.string()).optional(),
-      status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE']).optional(),
-    }))
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).optional(),
+        email: z.string().email().optional(),
+        role: z.enum(['ADMIN', 'EMPLOYEE']).optional(),
+        department: z
+          .enum(['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN'])
+          .optional(),
+        title: z.string().min(1).optional(),
+        phone: z.string().nullable().optional(),
+        bio: z.string().nullable().optional(),
+        skills: z.array(z.string()).optional(),
+        status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE']).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       return ctx.db.user.update({ where: { id }, data });
     }),
 
   adminResetPassword: adminProcedure
-    .input(z.object({
-      id: z.string(),
-      newPassword: z.string().min(8),
-    }))
+    .input(
+      z.object({
+        id: z.string(),
+        newPassword: passwordSchema,
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const hashed = await hash(input.newPassword, 12);
       await ctx.db.user.update({
@@ -224,10 +345,12 @@ export const teamRouter = router({
     }),
 
   addPerformanceNote: adminProcedure
-    .input(z.object({
-      userId: z.string(),
-      content: z.string().min(1).max(4000),
-    }))
+    .input(
+      z.object({
+        userId: z.string(),
+        content: z.string().min(1).max(4000),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.performanceNote.create({
         data: {
@@ -276,7 +399,14 @@ export const teamRouter = router({
       ctx.db.leaveRequest.count({ where: { status: 'PENDING' } }),
       ctx.db.user.findMany({
         where: { startDate: { gte: thirtyDaysAgo }, status: { not: 'INACTIVE' } },
-        select: { id: true, name: true, avatar: true, title: true, department: true, startDate: true },
+        select: {
+          id: true,
+          name: true,
+          avatar: true,
+          title: true,
+          department: true,
+          startDate: true,
+        },
         orderBy: { startDate: 'desc' },
       }),
       ctx.db.user.findMany({
@@ -290,7 +420,10 @@ export const teamRouter = router({
       .map((u) => {
         const start = new Date(u.startDate);
         const thisYear = new Date(now.getFullYear(), start.getMonth(), start.getDate());
-        const nextOccurrence = thisYear >= todayStart ? thisYear : new Date(now.getFullYear() + 1, start.getMonth(), start.getDate());
+        const nextOccurrence =
+          thisYear >= todayStart
+            ? thisYear
+            : new Date(now.getFullYear() + 1, start.getMonth(), start.getDate());
         const years = nextOccurrence.getFullYear() - start.getFullYear();
         return { ...u, anniversaryDate: nextOccurrence, years };
       })

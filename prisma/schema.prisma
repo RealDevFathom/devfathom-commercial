@@ -1,5 +1,5 @@
 // ============================================
-// COMPANY HUB — Complete Database Schema
+// DevFathom — Complete Database Schema
 // All models for all modules
 // ============================================
 
@@ -794,7 +794,7 @@ model MeetingAttendanceLog {
 model ApiToken {
   id          String    @id @default(cuid())
   name        String
-  prefix      String    // First 12 chars for display, e.g. "c19_a1b2c3d4"
+  prefix      String    // First 12 chars for display, e.g. "df_a1b2c3d4"
   tokenHash   String    @unique // bcrypt hash of the full token
   scopes      String[]  @default([]) // ["tasks:read", "finance:write", etc.]
   userId      String    // The user this token acts on behalf of

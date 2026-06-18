@@ -3,12 +3,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
-import {
-  DragDropContext,
-  Droppable,
-  Draggable,
-  type DropResult,
-} from '@hello-pangea/dnd';
+import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
 import {
   ArrowLeft,
   Plus,
@@ -32,7 +27,7 @@ import { TaskDetailSheet } from './task-detail-sheet';
 
 const priorityColors: Record<string, string> = {
   URGENT: 'bg-red-500',
-  HIGH: 'bg-[#FF4C29]',
+  HIGH: 'bg-primary',
   MEDIUM: 'bg-amber-500',
   LOW: 'bg-muted-foreground/40',
 };
@@ -78,13 +73,23 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     onSuccess: () => utils.projects.getBoardWithTasks.invalidate({ boardId }),
   });
   const createColumn = trpc.projects.createColumn.useMutation({
-    onSuccess: () => { utils.projects.getBoardWithTasks.invalidate({ boardId }); setAddingColumn(false); setNewColumnName(''); },
+    onSuccess: () => {
+      utils.projects.getBoardWithTasks.invalidate({ boardId });
+      setAddingColumn(false);
+      setNewColumnName('');
+    },
   });
   const updateColumn = trpc.projects.updateColumn.useMutation({
-    onSuccess: () => { utils.projects.getBoardWithTasks.invalidate({ boardId }); setEditingColumnId(null); },
+    onSuccess: () => {
+      utils.projects.getBoardWithTasks.invalidate({ boardId });
+      setEditingColumnId(null);
+    },
   });
   const deleteColumn = trpc.projects.deleteColumn.useMutation({
-    onSuccess: () => { utils.projects.getBoardWithTasks.invalidate({ boardId }); setDeletingColumnId(null); },
+    onSuccess: () => {
+      utils.projects.getBoardWithTasks.invalidate({ boardId });
+      setDeletingColumnId(null);
+    },
   });
 
   const { data: teamMembers } = trpc.team.getAll.useQuery();
@@ -103,14 +108,16 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   const [filterPriority, setFilterPriority] = useState<string>('ALL');
   const [filterAssignee, setFilterAssignee] = useState<string>('ALL');
   const [filterLabel, setFilterLabel] = useState<string>('ALL');
-  const hasFilters = searchQuery || filterPriority !== 'ALL' || filterAssignee !== 'ALL' || filterLabel !== 'ALL';
+  const hasFilters =
+    searchQuery || filterPriority !== 'ALL' || filterAssignee !== 'ALL' || filterLabel !== 'ALL';
 
   const handleDragEnd = useCallback(
     (result: DropResult) => {
       if (!result.destination || !board) return;
 
       const { source, destination, draggableId, type } = result;
-      if (source.droppableId === destination.droppableId && source.index === destination.index) return;
+      if (source.droppableId === destination.droppableId && source.index === destination.index)
+        return;
 
       // --- Column reorder ---
       if (type === 'COLUMN') {
@@ -118,10 +125,13 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         const [moved] = newColumns.splice(source.index, 1);
         newColumns.splice(destination.index, 0, moved);
 
-        utils.projects.getBoardWithTasks.setData({ boardId }, {
-          ...board,
-          columns: newColumns,
-        });
+        utils.projects.getBoardWithTasks.setData(
+          { boardId },
+          {
+            ...board,
+            columns: newColumns,
+          }
+        );
 
         reorderColumns.mutate({
           boardId,
@@ -144,10 +154,13 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
       const [movedTask] = sourceCol.tasks.splice(source.index, 1);
       destCol.tasks.splice(destination.index, 0, movedTask);
 
-      utils.projects.getBoardWithTasks.setData({ boardId }, {
-        ...board,
-        columns: newColumns,
-      });
+      utils.projects.getBoardWithTasks.setData(
+        { boardId },
+        {
+          ...board,
+          columns: newColumns,
+        }
+      );
 
       moveTask.mutate({
         taskId: draggableId,
@@ -192,10 +205,13 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     return board.columns.map((col) => ({
       ...col,
       tasks: col.tasks.filter((task) => {
-        if (searchQuery && !task.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+        if (searchQuery && !task.title.toLowerCase().includes(searchQuery.toLowerCase()))
+          return false;
         if (filterPriority !== 'ALL' && task.priority !== filterPriority) return false;
-        if (filterAssignee !== 'ALL' && !task.assignees.some((a) => a.user.id === filterAssignee)) return false;
-        if (filterLabel !== 'ALL' && !task.labels.some((l) => l.label.id === filterLabel)) return false;
+        if (filterAssignee !== 'ALL' && !task.assignees.some((a) => a.user.id === filterAssignee))
+          return false;
+        if (filterLabel !== 'ALL' && !task.labels.some((l) => l.label.id === filterLabel))
+          return false;
         return true;
       }),
     }));
@@ -210,11 +226,16 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         {/* Header */}
         <div className="flex items-center justify-between mb-3 shrink-0">
           <div>
-            <Link href={`/projects/${projectId}`} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-2">
+            <Link
+              href={`/projects/${projectId}`}
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-2"
+            >
               <ArrowLeft className="h-4 w-4" />
               {board.project.name}
             </Link>
-            <h1 className="font-display text-xl font-bold tracking-tight text-foreground">{board.name}</h1>
+            <h1 className="font-display text-xl font-bold tracking-tight text-foreground">
+              {board.name}
+            </h1>
           </div>
         </div>
 
@@ -227,7 +248,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search tasks..."
-              className="h-8 w-44 rounded-lg border border-border bg-card pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-1 focus:ring-[#FF4C29]/20"
+              className="h-8 w-44 rounded-lg border border-border bg-card pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
             />
           </div>
 
@@ -235,8 +256,12 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
           <select
             value={filterPriority}
             onChange={(e) => setFilterPriority(e.target.value)}
-            className={cn('h-8 rounded-lg border bg-card px-2.5 text-xs font-medium focus:border-[#FF4C29] focus:outline-none',
-              filterPriority !== 'ALL' ? 'border-[#FF4C29]/30 text-[#FF4C29]' : 'border-border text-muted-foreground')}
+            className={cn(
+              'h-8 rounded-lg border bg-card px-2.5 text-xs font-medium focus:border-primary focus:outline-none',
+              filterPriority !== 'ALL'
+                ? 'border-primary/30 text-primary'
+                : 'border-border text-muted-foreground'
+            )}
           >
             <option value="ALL">All Priorities</option>
             <option value="URGENT">Urgent</option>
@@ -249,12 +274,18 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
           <select
             value={filterAssignee}
             onChange={(e) => setFilterAssignee(e.target.value)}
-            className={cn('h-8 rounded-lg border bg-card px-2.5 text-xs font-medium focus:border-[#FF4C29] focus:outline-none',
-              filterAssignee !== 'ALL' ? 'border-[#FF4C29]/30 text-[#FF4C29]' : 'border-border text-muted-foreground')}
+            className={cn(
+              'h-8 rounded-lg border bg-card px-2.5 text-xs font-medium focus:border-primary focus:outline-none',
+              filterAssignee !== 'ALL'
+                ? 'border-primary/30 text-primary'
+                : 'border-border text-muted-foreground'
+            )}
           >
             <option value="ALL">All Assignees</option>
             {allAssignees.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
             ))}
           </select>
 
@@ -263,12 +294,18 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
             <select
               value={filterLabel}
               onChange={(e) => setFilterLabel(e.target.value)}
-              className={cn('h-8 rounded-lg border bg-card px-2.5 text-xs font-medium focus:border-[#FF4C29] focus:outline-none',
-                filterLabel !== 'ALL' ? 'border-[#FF4C29]/30 text-[#FF4C29]' : 'border-border text-muted-foreground')}
+              className={cn(
+                'h-8 rounded-lg border bg-card px-2.5 text-xs font-medium focus:border-primary focus:outline-none',
+                filterLabel !== 'ALL'
+                  ? 'border-primary/30 text-primary'
+                  : 'border-border text-muted-foreground'
+              )}
             >
               <option value="ALL">All Labels</option>
               {allLabels.map((l) => (
-                <option key={l.id} value={l.id}>{l.name}</option>
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
               ))}
             </select>
           )}
@@ -276,8 +313,13 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
           {/* Clear filters */}
           {hasFilters && (
             <button
-              onClick={() => { setSearchQuery(''); setFilterPriority('ALL'); setFilterAssignee('ALL'); setFilterLabel('ALL'); }}
-              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-[#FF4C29] hover:bg-[#FF4C29]/10 transition-colors"
+              onClick={() => {
+                setSearchQuery('');
+                setFilterPriority('ALL');
+                setFilterAssignee('ALL');
+                setFilterLabel('ALL');
+              }}
+              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/10 transition-colors"
             >
               <X className="h-3 w-3" />
               Clear
@@ -302,7 +344,8 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                         {...colProvided.draggableProps}
                         className={cn(
                           'flex flex-col w-72 shrink-0 max-h-full rounded-xl transition-shadow',
-                          colSnapshot.isDragging && 'shadow-2xl shadow-black/20 ring-1 ring-[#FF4C29]/20'
+                          colSnapshot.isDragging &&
+                            'shadow-2xl shadow-black/20 ring-1 ring-primary/20'
                         )}
                       >
                         {/* Column header */}
@@ -323,21 +366,34 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                 value={editColumnName}
                                 onChange={(e) => setEditColumnName(e.target.value)}
                                 onBlur={() => {
-                                  if (editColumnName.trim() && editColumnName.trim() !== column.name) {
-                                    updateColumn.mutate({ id: column.id, name: editColumnName.trim() });
+                                  if (
+                                    editColumnName.trim() &&
+                                    editColumnName.trim() !== column.name
+                                  ) {
+                                    updateColumn.mutate({
+                                      id: column.id,
+                                      name: editColumnName.trim(),
+                                    });
                                   } else {
                                     setEditingColumnId(null);
                                   }
                                 }}
                                 onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && editColumnName.trim()) updateColumn.mutate({ id: column.id, name: editColumnName.trim() });
+                                  if (e.key === 'Enter' && editColumnName.trim())
+                                    updateColumn.mutate({
+                                      id: column.id,
+                                      name: editColumnName.trim(),
+                                    });
                                   if (e.key === 'Escape') setEditingColumnId(null);
                                 }}
-                                className="text-sm font-semibold text-foreground bg-transparent border-b border-[#FF4C29] pb-0.5 focus:outline-none w-full"
+                                className="text-sm font-semibold text-foreground bg-transparent border-b border-primary pb-0.5 focus:outline-none w-full"
                               />
                             ) : (
                               <h3
-                                onDoubleClick={() => { setEditingColumnId(column.id); setEditColumnName(column.name); }}
+                                onDoubleClick={() => {
+                                  setEditingColumnId(column.id);
+                                  setEditColumnName(column.name);
+                                }}
                                 className="text-sm font-semibold text-foreground cursor-default truncate"
                                 title="Double-click to rename"
                               >
@@ -352,8 +408,18 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                           <div className="flex items-center gap-0.5">
                             {deletingColumnId === column.id ? (
                               <div className="flex items-center gap-1">
-                                <button onClick={() => deleteColumn.mutate({ id: column.id })} className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600">Delete</button>
-                                <button onClick={() => setDeletingColumnId(null)} className="text-[10px] text-muted-foreground hover:text-foreground px-1">No</button>
+                                <button
+                                  onClick={() => deleteColumn.mutate({ id: column.id })}
+                                  className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600"
+                                >
+                                  Delete
+                                </button>
+                                <button
+                                  onClick={() => setDeletingColumnId(null)}
+                                  className="text-[10px] text-muted-foreground hover:text-foreground px-1"
+                                >
+                                  No
+                                </button>
                               </div>
                             ) : (
                               <>
@@ -365,7 +431,10 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
                                 <button
-                                  onClick={() => { setAddingToColumn(column.id); setNewTaskTitle(''); }}
+                                  onClick={() => {
+                                    setAddingToColumn(column.id);
+                                    setNewTaskTitle('');
+                                  }}
                                   className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                                 >
                                   <Plus className="h-4 w-4" />
@@ -383,7 +452,9 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                           isAdmin={session?.user?.role === 'ADMIN'}
                           pickerOpen={ownerPickerColumnId === column.id}
                           onTogglePicker={() =>
-                            setOwnerPickerColumnId((prev) => (prev === column.id ? null : column.id))
+                            setOwnerPickerColumnId((prev) =>
+                              prev === column.id ? null : column.id
+                            )
                           }
                           onSave={(userIds) =>
                             setColumnOwners.mutate({ columnId: column.id, userIds })
@@ -399,7 +470,9 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                               {...provided.droppableProps}
                               className={cn(
                                 'flex-1 space-y-2 rounded-xl p-2 min-h-[100px] overflow-y-auto transition-colors',
-                                snapshot.isDraggingOver ? 'bg-[#FF4C29]/5 ring-1 ring-[#FF4C29]/20' : 'bg-secondary/30'
+                                snapshot.isDraggingOver
+                                  ? 'bg-primary/5 ring-1 ring-primary/20'
+                                  : 'bg-secondary/30'
                               )}
                             >
                               {column.tasks.map((task, index) => (
@@ -413,7 +486,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                       className={cn(
                                         'rounded-xl border border-border/60 bg-card p-3.5 cursor-pointer transition-all',
                                         taskSnapshot.isDragging
-                                          ? 'shadow-xl shadow-black/10 rotate-[2deg] border-[#FF4C29]/30'
+                                          ? 'shadow-xl shadow-black/10 rotate-[2deg] border-primary/30'
                                           : 'hover:border-border hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/20'
                                       )}
                                     >
@@ -426,14 +499,17 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
 
                               {/* Inline add task */}
                               {addingToColumn === column.id && (
-                                <div className="rounded-xl border border-[#FF4C29]/30 bg-card p-3 space-y-2">
+                                <div className="rounded-xl border border-primary/30 bg-card p-3 space-y-2">
                                   <input
                                     autoFocus
                                     value={newTaskTitle}
                                     onChange={(e) => setNewTaskTitle(e.target.value)}
                                     onKeyDown={(e) => {
                                       if (e.key === 'Enter') handleAddTask(column.id);
-                                      if (e.key === 'Escape') { setAddingToColumn(null); setNewTaskAssignees([]); }
+                                      if (e.key === 'Escape') {
+                                        setAddingToColumn(null);
+                                        setNewTaskAssignees([]);
+                                      }
                                     }}
                                     placeholder="Task title..."
                                     className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
@@ -441,13 +517,27 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                   {/* Assignee picker */}
                                   <div className="flex flex-wrap gap-1">
                                     {teamMembers?.slice(0, 6).map((m) => (
-                                      <button key={m.id}
-                                        onClick={() => setNewTaskAssignees((prev) => prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev, m.id])}
-                                        className={cn('flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
-                                          newTaskAssignees.includes(m.id) ? 'bg-[#FF4C29]/10 text-[#FF4C29]' : 'text-muted-foreground hover:text-foreground hover:bg-secondary')}>
+                                      <button
+                                        key={m.id}
+                                        onClick={() =>
+                                          setNewTaskAssignees((prev) =>
+                                            prev.includes(m.id)
+                                              ? prev.filter((id) => id !== m.id)
+                                              : [...prev, m.id]
+                                          )
+                                        }
+                                        className={cn(
+                                          'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                                          newTaskAssignees.includes(m.id)
+                                            ? 'bg-primary/10 text-primary'
+                                            : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                                        )}
+                                      >
                                         <Avatar className="h-3.5 w-3.5">
                                           <AvatarImage src={m.avatar ?? undefined} />
-                                          <AvatarFallback className="text-[6px] bg-muted">{m.name[0]}</AvatarFallback>
+                                          <AvatarFallback className="text-[6px] bg-muted">
+                                            {m.name[0]}
+                                          </AvatarFallback>
                                         </Avatar>
                                         {m.name.split(' ')[0]}
                                       </button>
@@ -457,11 +547,17 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                     <button
                                       onClick={() => handleAddTask(column.id)}
                                       disabled={!newTaskTitle.trim()}
-                                      className="rounded-lg bg-[#FF4C29] px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#E63E1C] disabled:opacity-40"
+                                      className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
                                     >
                                       Add
                                     </button>
-                                    <button onClick={() => { setAddingToColumn(null); setNewTaskAssignees([]); }} className="text-muted-foreground hover:text-foreground">
+                                    <button
+                                      onClick={() => {
+                                        setAddingToColumn(null);
+                                        setNewTaskAssignees([]);
+                                      }}
+                                      className="text-muted-foreground hover:text-foreground"
+                                    >
                                       <X className="h-4 w-4" />
                                     </button>
                                   </div>
@@ -479,27 +575,40 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                 {/* Add column */}
                 <div className="w-72 shrink-0">
                   {addingColumn ? (
-                    <div className="rounded-xl border border-[#FF4C29]/30 bg-card p-3">
+                    <div className="rounded-xl border border-primary/30 bg-card p-3">
                       <input
                         autoFocus
                         value={newColumnName}
                         onChange={(e) => setNewColumnName(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' && newColumnName.trim()) createColumn.mutate({ boardId, name: newColumnName.trim() });
-                          if (e.key === 'Escape') { setAddingColumn(false); setNewColumnName(''); }
+                          if (e.key === 'Enter' && newColumnName.trim())
+                            createColumn.mutate({ boardId, name: newColumnName.trim() });
+                          if (e.key === 'Escape') {
+                            setAddingColumn(false);
+                            setNewColumnName('');
+                          }
                         }}
                         placeholder="Column name..."
                         className="w-full bg-transparent text-sm font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
                       />
                       <div className="flex items-center justify-between mt-2">
                         <button
-                          onClick={() => { if (newColumnName.trim()) createColumn.mutate({ boardId, name: newColumnName.trim() }); }}
+                          onClick={() => {
+                            if (newColumnName.trim())
+                              createColumn.mutate({ boardId, name: newColumnName.trim() });
+                          }}
                           disabled={!newColumnName.trim() || createColumn.isPending}
-                          className="rounded-lg bg-[#FF4C29] px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#E63E1C] disabled:opacity-40"
+                          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
                         >
                           {createColumn.isPending ? 'Adding...' : 'Add Column'}
                         </button>
-                        <button onClick={() => { setAddingColumn(false); setNewColumnName(''); }} className="text-muted-foreground hover:text-foreground">
+                        <button
+                          onClick={() => {
+                            setAddingColumn(false);
+                            setNewColumnName('');
+                          }}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
                           <X className="h-4 w-4" />
                         </button>
                       </div>
@@ -507,7 +616,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                   ) : (
                     <button
                       onClick={() => setAddingColumn(true)}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-secondary/20 py-3 text-sm font-medium text-muted-foreground transition-colors hover:border-[#FF4C29]/30 hover:text-foreground hover:bg-secondary/40"
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-secondary/20 py-3 text-sm font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground hover:bg-secondary/40"
                     >
                       <Plus className="h-4 w-4" />
                       Add Column
@@ -534,8 +643,16 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
 
 function TaskCard({ task }: { task: TaskData }) {
   const hasChecklist = task.checklists && task.checklists.length > 0;
-  const totalItems = hasChecklist ? task.checklists.reduce((sum: number, cl: TaskChecklist) => sum + cl.items.length, 0) : 0;
-  const completedItems = hasChecklist ? task.checklists.reduce((sum: number, cl: TaskChecklist) => sum + cl.items.filter((i: ChecklistItem) => i.completed).length, 0) : 0;
+  const totalItems = hasChecklist
+    ? task.checklists.reduce((sum: number, cl: TaskChecklist) => sum + cl.items.length, 0)
+    : 0;
+  const completedItems = hasChecklist
+    ? task.checklists.reduce(
+        (sum: number, cl: TaskChecklist) =>
+          sum + cl.items.filter((i: ChecklistItem) => i.completed).length,
+        0
+      )
+    : 0;
 
   return (
     <>
@@ -556,23 +673,32 @@ function TaskCard({ task }: { task: TaskData }) {
 
       <div className="flex items-center justify-between mt-3">
         <div className="flex items-center gap-2">
-          <div className={cn('h-2 w-2 rounded-full', priorityColors[task.priority])} title={task.priority} />
+          <div
+            className={cn('h-2 w-2 rounded-full', priorityColors[task.priority])}
+            title={task.priority}
+          />
 
           {task.dueDate && (
-            <span className={cn(
-              'flex items-center gap-1 text-[11px]',
-              new Date(task.dueDate) < new Date() ? 'text-red-500 font-medium' : 'text-muted-foreground'
-            )}>
+            <span
+              className={cn(
+                'flex items-center gap-1 text-[11px]',
+                new Date(task.dueDate) < new Date()
+                  ? 'text-red-500 font-medium'
+                  : 'text-muted-foreground'
+              )}
+            >
               <Calendar className="h-3 w-3" />
               {format(new Date(task.dueDate), 'MMM d')}
             </span>
           )}
 
           {hasChecklist && totalItems > 0 && (
-            <span className={cn(
-              'flex items-center gap-1 text-[11px]',
-              completedItems === totalItems ? 'text-emerald-500' : 'text-muted-foreground'
-            )}>
+            <span
+              className={cn(
+                'flex items-center gap-1 text-[11px]',
+                completedItems === totalItems ? 'text-emerald-500' : 'text-muted-foreground'
+              )}
+            >
               <CheckSquare className="h-3 w-3" />
               {completedItems}/{totalItems}
             </span>
@@ -598,7 +724,9 @@ function TaskCard({ task }: { task: TaskData }) {
             {task.assignees.slice(0, 3).map((a: TaskAssignee) => (
               <Avatar key={a.user.id} className="h-5 w-5 border border-card">
                 <AvatarImage src={a.user.avatar ?? undefined} />
-                <AvatarFallback className="text-[8px] bg-secondary font-medium">{a.user.name[0]}</AvatarFallback>
+                <AvatarFallback className="text-[8px] bg-secondary font-medium">
+                  {a.user.name[0]}
+                </AvatarFallback>
               </Avatar>
             ))}
           </div>
@@ -652,7 +780,10 @@ function ColumnOwners({
   const [draft, setDraft] = useState<Set<string>>(new Set(owners.map((o) => o.user.id)));
 
   // Reset draft whenever the picker opens (in case owners were updated externally)
-  const ownerIdsKey = owners.map((o) => o.user.id).sort().join(',');
+  const ownerIdsKey = owners
+    .map((o) => o.user.id)
+    .sort()
+    .join(',');
   const lastSyncKey = useMemo(() => ownerIdsKey, [ownerIdsKey]);
   // Sync draft when picker opens or owners change
   useMemo(() => {
@@ -670,8 +801,7 @@ function ColumnOwners({
   };
 
   const handleSave = () => onSave(Array.from(draft));
-  const isDirty =
-    draft.size !== owners.length || owners.some((o) => !draft.has(o.user.id));
+  const isDirty = draft.size !== owners.length || owners.some((o) => !draft.has(o.user.id));
 
   // Empty + can't manage → render nothing (don't take up space)
   if (!hasOwners && !canManage) return null;
@@ -686,13 +816,13 @@ function ColumnOwners({
         className={cn(
           'flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-[11px] transition-colors',
           canManage && 'hover:bg-secondary/50',
-          !canManage && 'cursor-default',
+          !canManage && 'cursor-default'
         )}
         title={canManage ? 'Set column owners' : undefined}
       >
         {hasOwners ? (
           <>
-            <Crown className="h-3 w-3 text-[#FF4C29] shrink-0" />
+            <Crown className="h-3 w-3 text-primary shrink-0" />
             <div className="flex -space-x-1.5">
               {owners.slice(0, 4).map((o) => (
                 <Avatar key={o.user.id} className="h-5 w-5 border-[1.5px] border-card">
@@ -724,7 +854,7 @@ function ColumnOwners({
 
       {/* Picker panel */}
       {pickerOpen && canManage && (
-        <div className="mt-1.5 rounded-lg border border-[#FF4C29]/20 bg-card p-2 shadow-lg">
+        <div className="mt-1.5 rounded-lg border border-primary/20 bg-card p-2 shadow-lg">
           <div className="flex items-center justify-between mb-2 px-1">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Column owners
@@ -738,7 +868,8 @@ function ColumnOwners({
             </button>
           </div>
           <p className="px-1 mb-2 text-[10px] text-muted-foreground leading-snug">
-            Tasks moved into this column will be auto-assigned to these members. Existing assignees are kept.
+            Tasks moved into this column will be auto-assigned to these members. Existing assignees
+            are kept.
           </p>
           <div className="max-h-56 overflow-y-auto space-y-0.5">
             {projectMembers.length === 0 ? (
@@ -755,18 +886,18 @@ function ColumnOwners({
                     onClick={() => toggle(m.user.id)}
                     className={cn(
                       'flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors',
-                      checked ? 'bg-[#FF4C29]/10' : 'hover:bg-secondary',
+                      checked ? 'bg-primary/10' : 'hover:bg-secondary'
                     )}
                   >
                     <div
                       className={cn(
                         'flex h-3.5 w-3.5 items-center justify-center rounded border transition-colors shrink-0',
-                        checked
-                          ? 'bg-[#FF4C29] border-[#FF4C29]'
-                          : 'border-border bg-background',
+                        checked ? 'bg-primary border-primary' : 'border-border bg-background'
                       )}
                     >
-                      {checked && <CheckSquare className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                      {checked && (
+                        <CheckSquare className="h-2.5 w-2.5 text-white" strokeWidth={3} />
+                      )}
                     </div>
                     <Avatar className="h-5 w-5">
                       <AvatarImage src={m.user.avatar ?? undefined} />
@@ -777,9 +908,7 @@ function ColumnOwners({
                     <span className="flex-1 truncate text-[11px] text-foreground">
                       {m.user.name}
                     </span>
-                    {m.role === 'LEAD' && (
-                      <Crown className="h-2.5 w-2.5 text-[#FF4C29] shrink-0" />
-                    )}
+                    {m.role === 'LEAD' && <Crown className="h-2.5 w-2.5 text-primary shrink-0" />}
                   </button>
                 );
               })
@@ -795,7 +924,7 @@ function ColumnOwners({
             <button
               onClick={handleSave}
               disabled={!isDirty || isSaving}
-              className="flex items-center gap-1 rounded-md bg-[#FF4C29] px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-40 transition-colors"
+              className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
             >
               {isSaving ? 'Saving…' : 'Save'}
             </button>
@@ -818,7 +947,7 @@ function BoardSkeleton() {
           <div key={i} className="w-72 shrink-0 space-y-3">
             <Skeleton className="h-6 w-24" />
             <div className="rounded-xl bg-secondary/30 p-2 space-y-2">
-              {Array.from({ length: 3 - i % 2 }).map((_, j) => (
+              {Array.from({ length: 3 - (i % 2) }).map((_, j) => (
                 <Skeleton key={j} className="h-24 w-full rounded-xl" />
               ))}
             </div>

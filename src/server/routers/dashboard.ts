@@ -5,22 +5,21 @@ export const dashboardRouter = router({
     const isAdmin = ctx.session.user.role === 'ADMIN';
     const userId = ctx.session.user.id;
 
-    const [
-      activeProjects,
-      totalTasks,
-      completedTasksThisWeek,
-      pendingLeaves,
-    ] = await Promise.all([
+    const [activeProjects, totalTasks, completedTasksThisWeek, pendingLeaves] = await Promise.all([
       ctx.db.project.count({
-        where: isAdmin ? { status: 'ACTIVE' } : {
-          members: { some: { userId } },
-          status: 'ACTIVE',
-        },
+        where: isAdmin
+          ? { status: 'ACTIVE' }
+          : {
+              members: { some: { userId } },
+              status: 'ACTIVE',
+            },
       }),
       ctx.db.task.count({
-        where: isAdmin ? {} : {
-          assignees: { some: { userId } },
-        },
+        where: isAdmin
+          ? {}
+          : {
+              assignees: { some: { userId } },
+            },
       }),
       ctx.db.task.count({
         where: {
@@ -102,9 +101,11 @@ export const dashboardRouter = router({
       where: {
         completedAt: null,
         dueDate: { gte: new Date() },
-        ...(isAdmin ? {} : {
-          project: { members: { some: { userId } } },
-        }),
+        ...(isAdmin
+          ? {}
+          : {
+              project: { members: { some: { userId } } },
+            }),
       },
       take: 10,
       orderBy: { dueDate: 'asc' },
@@ -165,10 +166,7 @@ export const dashboardRouter = router({
         },
         _count: { select: { comments: true, checklists: true } },
       },
-      orderBy: [
-        { priority: 'desc' },
-        { dueDate: 'asc' },
-      ],
+      orderBy: [{ priority: 'desc' }, { dueDate: 'asc' }],
       take: 8,
     });
   }),

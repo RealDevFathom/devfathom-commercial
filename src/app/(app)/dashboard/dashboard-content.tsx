@@ -47,14 +47,22 @@ function NextMeetingBanner() {
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
   const [location, setLocation] = useState('');
-  const [recurrence, setRecurrence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly' | ''>('');
+  const [recurrence, setRecurrence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly' | ''>(
+    ''
+  );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
 
   const createMeeting = trpc.meetings.create.useMutation({
     onSuccess: () => {
       utils.meetings.getUpcoming.invalidate();
       setShowCreate(false);
-      setTitle(''); setDate(''); setStartTime(''); setEndTime(''); setLocation(''); setRecurrence(''); setAttendeeIds([]);
+      setTitle('');
+      setDate('');
+      setStartTime('');
+      setEndTime('');
+      setLocation('');
+      setRecurrence('');
+      setAttendeeIds([]);
     },
   });
 
@@ -126,16 +134,18 @@ function NextMeetingBanner() {
     return (
       <div className="flex items-center justify-between rounded-2xl border border-dashed border-border bg-card/50 p-4 sm:p-5">
         <div className="flex items-center gap-4">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#FF4C29]/10">
-            <Video className="h-5 w-5 text-[#FF4C29]" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+            <Video className="h-5 w-5 text-primary" />
           </div>
           <div>
             <p className="text-[15px] font-semibold text-foreground">No upcoming meetings</p>
             <p className="text-[13px] text-muted-foreground">Schedule one to get started</p>
           </div>
         </div>
-        <button onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-[#FF4C29] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#E63E1C] active:scale-[0.98]">
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+        >
           <Plus className="h-4 w-4" /> Schedule
         </button>
       </div>
@@ -145,54 +155,89 @@ function NextMeetingBanner() {
   // Create meeting form
   if (showCreate) {
     return (
-      <div className="rounded-2xl border border-[#FF4C29]/20 bg-card p-5 space-y-4">
+      <div className="rounded-2xl border border-primary/20 bg-card p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-            <Video className="h-4 w-4 text-[#FF4C29]" /> Schedule Meeting
+            <Video className="h-4 w-4 text-primary" /> Schedule Meeting
           </h3>
-          <button onClick={() => setShowCreate(false)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+          <button
+            onClick={() => setShowCreate(false)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="col-span-2">
             <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
-            <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Sprint Planning"
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none focus:ring-2 focus:ring-[#FF4C29]/20" />
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Sprint Planning"
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none" />
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Location</label>
-            <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Google Meet, Zoom..."
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-[#FF4C29] focus:outline-none" />
+            <input
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Google Meet, Zoom..."
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Start *</label>
-            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none" />
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">End *</label>
-            <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[#FF4C29] focus:outline-none" />
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
           </div>
         </div>
         {/* Recurrence */}
         <div>
           <label className="block text-xs font-medium text-foreground mb-1.5">Repeat</label>
           <div className="flex gap-1.5">
-            {([
-              { value: '', label: 'One-time' },
-              { value: 'daily', label: 'Daily' },
-              { value: 'weekly', label: 'Weekly' },
-              { value: 'biweekly', label: 'Bi-weekly' },
-              { value: 'monthly', label: 'Monthly' },
-            ] as const).map((opt) => (
-              <button key={opt.value} onClick={() => setRecurrence(opt.value)}
-                className={cn('rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors',
-                  recurrence === opt.value ? 'bg-foreground text-background' : 'bg-secondary text-muted-foreground hover:text-foreground')}>
+            {(
+              [
+                { value: '', label: 'One-time' },
+                { value: 'daily', label: 'Daily' },
+                { value: 'weekly', label: 'Weekly' },
+                { value: 'biweekly', label: 'Bi-weekly' },
+                { value: 'monthly', label: 'Monthly' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setRecurrence(opt.value)}
+                className={cn(
+                  'rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors',
+                  recurrence === opt.value
+                    ? 'bg-foreground text-background'
+                    : 'bg-secondary text-muted-foreground hover:text-foreground'
+                )}
+              >
                 {opt.label}
               </button>
             ))}
@@ -203,9 +248,20 @@ function NextMeetingBanner() {
             <label className="block text-xs font-medium text-foreground mb-1.5">Attendees</label>
             <div className="flex flex-wrap gap-1.5">
               {teamMembers.map((m) => (
-                <button key={m.id} onClick={() => setAttendeeIds((prev) => prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev, m.id])}
-                  className={cn('rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors',
-                    attendeeIds.includes(m.id) ? 'bg-[#FF4C29]/10 text-[#FF4C29] ring-1 ring-[#FF4C29]/20' : 'bg-secondary text-muted-foreground hover:text-foreground')}>
+                <button
+                  key={m.id}
+                  onClick={() =>
+                    setAttendeeIds((prev) =>
+                      prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev, m.id]
+                    )
+                  }
+                  className={cn(
+                    'rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors',
+                    attendeeIds.includes(m.id)
+                      ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
+                      : 'bg-secondary text-muted-foreground hover:text-foreground'
+                  )}
+                >
                   {m.name.split(' ')[0]}
                 </button>
               ))}
@@ -213,36 +269,46 @@ function NextMeetingBanner() {
           </div>
         )}
         <div className="flex justify-end gap-2">
-          <button onClick={() => setShowCreate(false)} className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">Cancel</button>
-          <button onClick={handleCreate} disabled={!title.trim() || !date || !startTime || !endTime || createMeeting.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-[#FF4C29] px-4 py-2 text-xs font-semibold text-white hover:bg-[#E63E1C] disabled:opacity-40 transition-colors">
-            {createMeeting.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Schedule
+          <button
+            onClick={() => setShowCreate(false)}
+            className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={!title.trim() || !date || !startTime || !endTime || createMeeting.isPending}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            {createMeeting.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{' '}
+            Schedule
           </button>
         </div>
       </div>
     );
   }
 
-  const attendeeNames = meeting!.attendees.slice(0, 3).map((a) => a.user.name.split(' ')[0]).join(', ');
+  const attendeeNames = meeting!.attendees
+    .slice(0, 3)
+    .map((a) => a.user.name.split(' ')[0])
+    .join(', ');
   const extra = meeting!.attendees.length > 3 ? ` +${meeting!.attendees.length - 3}` : '';
 
   return (
     <div
       className={cn(
         'flex items-center justify-between rounded-2xl border p-4 sm:p-5 transition-colors',
-        isLive
-          ? 'border-emerald-500/30 bg-emerald-500/5'
-          : 'border-border/60 bg-card',
+        isLive ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-border/60 bg-card'
       )}
     >
       <div className="flex items-center gap-4">
         <div
           className={cn(
             'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl',
-            isLive ? 'bg-emerald-500/15' : 'bg-[#FF4C29]/10',
+            isLive ? 'bg-emerald-500/15' : 'bg-primary/10'
           )}
         >
-          <Video className={cn('h-5 w-5', isLive ? 'text-emerald-500' : 'text-[#FF4C29]')} />
+          <Video className={cn('h-5 w-5', isLive ? 'text-emerald-500' : 'text-primary')} />
         </div>
         <div>
           <p className="text-[13px] text-muted-foreground flex items-center gap-1.5">
@@ -252,17 +318,24 @@ function NextMeetingBanner() {
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
                   <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                 </span>
-                <span className="font-semibold uppercase tracking-wider text-emerald-500">Live now</span>
+                <span className="font-semibold uppercase tracking-wider text-emerald-500">
+                  Live now
+                </span>
               </>
             ) : (
               <>Next meeting</>
             )}
-            {meeting!.recurrence && <span className="ml-1 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-500">{meeting!.recurrence}</span>}
+            {meeting!.recurrence && (
+              <span className="ml-1 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-500">
+                {meeting!.recurrence}
+              </span>
+            )}
           </p>
           <p className="text-[15px] font-semibold text-foreground mt-0.5">
             {meeting!.title}
             <span className="font-normal text-muted-foreground"> with </span>
-            {attendeeNames}{extra}
+            {attendeeNames}
+            {extra}
           </p>
         </div>
       </div>
@@ -288,7 +361,7 @@ function NextMeetingBanner() {
               'rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all active:scale-[0.98]',
               isLive
                 ? 'bg-emerald-500 hover:bg-emerald-600 hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.5)]'
-                : 'bg-[#FF4C29] hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)]',
+                : 'bg-primary hover:bg-[#0C2E2C]'
             )}
           >
             {isLive ? 'Join now' : 'Join'}
@@ -300,7 +373,7 @@ function NextMeetingBanner() {
               'rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all active:scale-[0.98]',
               isLive
                 ? 'bg-emerald-500 hover:bg-emerald-600 hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.5)]'
-                : 'bg-[#FF4C29] hover:bg-[#E63E1C] hover:shadow-[0_0_20px_-5px_rgba(255,76,41,0.4)]',
+                : 'bg-primary hover:bg-[#0C2E2C]'
             )}
           >
             View
@@ -309,28 +382,59 @@ function NextMeetingBanner() {
       </div>
 
       <div className="flex sm:hidden items-baseline gap-0.5 shrink-0">
-        <span className={cn('font-display text-lg font-bold', isLive ? 'text-emerald-500' : 'text-foreground')}>{pad(timeLeft.hours)}</span>
+        <span
+          className={cn(
+            'font-display text-lg font-bold',
+            isLive ? 'text-emerald-500' : 'text-foreground'
+          )}
+        >
+          {pad(timeLeft.hours)}
+        </span>
         <span className="text-muted-foreground/50 text-sm">:</span>
-        <span className={cn('font-display text-lg font-bold', isLive ? 'text-emerald-500' : 'text-foreground')}>{pad(timeLeft.minutes)}</span>
+        <span
+          className={cn(
+            'font-display text-lg font-bold',
+            isLive ? 'text-emerald-500' : 'text-foreground'
+          )}
+        >
+          {pad(timeLeft.minutes)}
+        </span>
         <span className="text-muted-foreground/50 text-sm">:</span>
-        <span className={cn('font-display text-lg font-bold', isLive ? 'text-emerald-500/70' : 'text-muted-foreground')}>{pad(timeLeft.seconds)}</span>
+        <span
+          className={cn(
+            'font-display text-lg font-bold',
+            isLive ? 'text-emerald-500/70' : 'text-muted-foreground'
+          )}
+        >
+          {pad(timeLeft.seconds)}
+        </span>
       </div>
     </div>
   );
 }
 
-function TimeUnit({ value, label, live = false }: { value: number; label: string; live?: boolean }) {
+function TimeUnit({
+  value,
+  label,
+  live = false,
+}: {
+  value: number;
+  label: string;
+  live?: boolean;
+}) {
   return (
     <div className="flex flex-col items-center">
       <span
         className={cn(
           'font-display text-2xl font-bold tracking-tight leading-none tabular-nums',
-          live ? 'text-emerald-500' : 'text-foreground',
+          live ? 'text-emerald-500' : 'text-foreground'
         )}
       >
         {pad(value)}
       </span>
-      <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mt-1">{label}</span>
+      <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mt-1">
+        {label}
+      </span>
     </div>
   );
 }
@@ -362,7 +466,7 @@ function KPICard({
   accentColor?: 'orange' | 'emerald' | 'amber' | 'blue';
 }) {
   const iconBg: Record<string, string> = {
-    orange: 'bg-[#FF4C29]/10 text-[#FF4C29]',
+    orange: 'bg-primary/10 text-primary',
     emerald: 'bg-emerald-500/10 text-emerald-500',
     amber: 'bg-amber-500/10 text-amber-500',
     blue: 'bg-blue-500/10 text-blue-500',
@@ -433,16 +537,16 @@ function TaskItem({
 }) {
   const priorityConfig: Record<string, { color: string; label: string }> = {
     URGENT: { color: 'text-red-500', label: 'Urgent' },
-    HIGH: { color: 'text-[#FF4C29]', label: 'High' },
+    HIGH: { color: 'text-primary', label: 'High' },
     MEDIUM: { color: 'text-amber-500', label: 'Medium' },
     LOW: { color: 'text-muted-foreground', label: 'Low' },
   };
 
   const columnConfig: Record<string, string> = {
-    'Backlog': 'bg-muted text-muted-foreground',
+    Backlog: 'bg-muted text-muted-foreground',
     'To Do': 'bg-blue-500/10 text-blue-500',
-    'In Progress': 'bg-[#FF4C29]/10 text-[#FF4C29]',
-    'Review': 'bg-violet-500/10 text-violet-500',
+    'In Progress': 'bg-primary/10 text-primary',
+    Review: 'bg-violet-500/10 text-violet-500',
   };
 
   const prio = priorityConfig[task.priority] || priorityConfig.MEDIUM;
@@ -453,11 +557,16 @@ function TaskItem({
     <Link href={boardUrl} className="group flex items-center gap-3 py-3 cursor-pointer">
       <Circle className={cn('h-4 w-4 shrink-0', prio.color)} strokeWidth={2.5} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate group-hover:text-[#FF4C29] transition-colors">
+        <p className="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
           {task.title}
         </p>
         <div className="flex items-center gap-2 mt-1">
-          <span className={cn('inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium', colClass)}>
+          <span
+            className={cn(
+              'inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium',
+              colClass
+            )}
+          >
             {task.column.name}
           </span>
           {task.dueDate && (
@@ -499,10 +608,16 @@ function ActivityItem({
 }) {
   const getActivityColor = (type: string) => {
     switch (type) {
-      case 'task_completed': return 'bg-emerald-500';
-      case 'invoice_sent': case 'invoice_paid': return 'bg-blue-500';
-      case 'project_created': case 'project_updated': return 'bg-[#FF4C29]';
-      default: return 'bg-muted-foreground/40';
+      case 'task_completed':
+        return 'bg-emerald-500';
+      case 'invoice_sent':
+      case 'invoice_paid':
+        return 'bg-blue-500';
+      case 'project_created':
+      case 'project_updated':
+        return 'bg-primary';
+      default:
+        return 'bg-muted-foreground/40';
     }
   };
 
@@ -512,15 +627,23 @@ function ActivityItem({
         <Avatar className="h-8 w-8 shrink-0">
           <AvatarImage src={activity.user.avatar ?? undefined} />
           <AvatarFallback className="text-[10px] bg-secondary text-foreground font-medium">
-            {activity.user.name.split(' ').map((n) => n[0]).join('')}
+            {activity.user.name
+              .split(' ')
+              .map((n) => n[0])
+              .join('')}
           </AvatarFallback>
         </Avatar>
-        <div className={cn('absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card', getActivityColor(activity.type))} />
+        <div
+          className={cn(
+            'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card',
+            getActivityColor(activity.type)
+          )}
+        />
       </div>
       <div className="flex-1 min-w-0 space-y-0.5">
         <p className="text-sm text-muted-foreground leading-relaxed">
-          <span className="font-semibold text-foreground">{activity.user.name}</span>
-          {' '}{activity.message.toLowerCase()}
+          <span className="font-semibold text-foreground">{activity.user.name}</span>{' '}
+          {activity.message.toLowerCase()}
         </p>
         <p className="text-[11px] text-muted-foreground/50">
           {formatDistanceToNow(new Date(activity.createdAt), { addSuffix: true })}
@@ -546,7 +669,10 @@ function ProjectCard({
   };
 }) {
   const statusConfig: Record<string, { bg: string; dot: string }> = {
-    ACTIVE: { bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400', dot: 'bg-emerald-500' },
+    ACTIVE: {
+      bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+      dot: 'bg-emerald-500',
+    },
     IN_DEVELOPMENT: { bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', dot: 'bg-blue-500' },
     ON_HOLD: { bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', dot: 'bg-amber-500' },
     COMPLETED: { bg: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground' },
@@ -559,14 +685,23 @@ function ProjectCard({
         <CardContent className="p-5">
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1 min-w-0">
-              <h3 className="text-sm font-semibold text-foreground truncate group-hover:text-[#FF4C29] transition-colors">
+              <h3 className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
                 {project.name}
               </h3>
               <p className="text-xs text-muted-foreground truncate">
-                {project.client ? project.client.name : project.type === 'INTERNAL' ? 'Internal Product' : ''}
+                {project.client
+                  ? project.client.name
+                  : project.type === 'INTERNAL'
+                    ? 'Internal Product'
+                    : ''}
               </p>
             </div>
-            <div className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0', config.bg)}>
+            <div
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0',
+                config.bg
+              )}
+            >
               <div className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
               {project.status.replace('_', ' ')}
             </div>
@@ -576,7 +711,9 @@ function ProjectCard({
               {project.members.slice(0, 4).map((member) => (
                 <Avatar key={member.user.id} className="h-7 w-7 border-2 border-card">
                   <AvatarImage src={member.user.avatar ?? undefined} />
-                  <AvatarFallback className="text-[10px] bg-secondary font-medium">{member.user.name[0]}</AvatarFallback>
+                  <AvatarFallback className="text-[10px] bg-secondary font-medium">
+                    {member.user.name[0]}
+                  </AvatarFallback>
                 </Avatar>
               ))}
               {project.members.length > 4 && (
@@ -585,7 +722,7 @@ function ProjectCard({
                 </div>
               )}
             </div>
-            <ArrowUpRight className="h-4 w-4 text-muted-foreground/40 opacity-0 transition-all group-hover:opacity-100 group-hover:text-[#FF4C29]" />
+            <ArrowUpRight className="h-4 w-4 text-muted-foreground/40 opacity-0 transition-all group-hover:opacity-100 group-hover:text-primary" />
           </div>
         </CardContent>
       </Card>
@@ -617,13 +754,23 @@ function DeadlineItem({
         : { bg: 'bg-emerald-500/10 text-emerald-500' };
 
   return (
-    <Link href={`/projects/${milestone.project.id}`} className="flex items-center gap-3 py-3 group cursor-pointer">
-      <div className={cn('flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-xl font-display', urgencyConfig.bg)}>
+    <Link
+      href={`/projects/${milestone.project.id}`}
+      className="flex items-center gap-3 py-3 group cursor-pointer"
+    >
+      <div
+        className={cn(
+          'flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-xl font-display',
+          urgencyConfig.bg
+        )}
+      >
         <span className="text-sm font-bold leading-none">{daysUntil}</span>
         <span className="text-[9px] font-medium mt-0.5">days</span>
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate group-hover:text-[#FF4C29] transition-colors">{milestone.name}</p>
+        <p className="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
+          {milestone.name}
+        </p>
         <p className="text-xs text-muted-foreground truncate">{milestone.project.name}</p>
       </div>
       <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
@@ -647,12 +794,42 @@ function DashboardSkeleton() {
       <Skeleton className="h-[76px] w-full rounded-2xl" />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i} className="border-border/60"><CardContent className="p-6"><Skeleton className="h-4 w-28 mb-3" /><Skeleton className="h-9 w-20 mb-2" /><Skeleton className="h-3 w-36" /></CardContent></Card>
+          <Card key={i} className="border-border/60">
+            <CardContent className="p-6">
+              <Skeleton className="h-4 w-28 mb-3" />
+              <Skeleton className="h-9 w-20 mb-2" />
+              <Skeleton className="h-3 w-36" />
+            </CardContent>
+          </Card>
         ))}
       </div>
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
-        <Card className="lg:col-span-3 border-border/60"><CardContent className="p-6">{Array.from({ length: 5 }).map((_, i) => (<div key={i} className="flex items-center gap-3 py-3"><Skeleton className="h-4 w-4 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-32" /></div></div>))}</CardContent></Card>
-        <Card className="lg:col-span-2 border-border/60"><CardContent className="p-6">{Array.from({ length: 4 }).map((_, i) => (<div key={i} className="flex items-start gap-3 py-3"><Skeleton className="h-8 w-8 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-56" /></div></div>))}</CardContent></Card>
+        <Card className="lg:col-span-3 border-border/60">
+          <CardContent className="p-6">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 py-3">
+                <Skeleton className="h-4 w-4 rounded-full" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-3 w-32" />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <Card className="lg:col-span-2 border-border/60">
+          <CardContent className="p-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex items-start gap-3 py-3">
+                <Skeleton className="h-8 w-8 rounded-full" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-3 w-56" />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -683,12 +860,12 @@ export function DashboardContent() {
             {greeting}, {session?.user?.name?.split(' ')[0]}
           </h1>
           <p className="text-muted-foreground mt-1.5 text-[15px]">
-            Here&apos;s what&apos;s happening at Company today.
+            Here&apos;s what&apos;s happening across your workspace today.
           </p>
         </div>
 
         <div className="hidden sm:flex items-baseline gap-2 shrink-0">
-          <span className="font-display text-[2rem] font-bold tracking-tight text-[#FF4C29] leading-none">
+          <span className="font-display text-[2rem] font-bold tracking-tight text-primary leading-none">
             {format(new Date(), 'EEE')}
           </span>
           <span className="font-display text-[2rem] font-bold tracking-tight text-foreground leading-none">
@@ -706,14 +883,49 @@ export function DashboardContent() {
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {isAdmin && (
-          <KPICard title="Revenue This Month" value={`$${(stats.data?.revenue ?? 0).toLocaleString()}`} change="+12%" changeLabel="vs last month" icon={DollarSign} trend="up" accentColor="orange" />
+          <KPICard
+            title="Revenue This Month"
+            value={`$${(stats.data?.revenue ?? 0).toLocaleString()}`}
+            change="+12%"
+            changeLabel="vs last month"
+            icon={DollarSign}
+            trend="up"
+            accentColor="orange"
+          />
         )}
-        <KPICard title="Active Projects" value={String(stats.data?.activeProjects ?? 0)} change="2 new this quarter" icon={FolderKanban} trend="up" accentColor="blue" />
-        <KPICard title="Tasks Completed" value={String(stats.data?.completedTasksThisWeek ?? 0)} changeLabel="this week" icon={CheckCircle2} trend="neutral" accentColor="emerald" />
+        <KPICard
+          title="Active Projects"
+          value={String(stats.data?.activeProjects ?? 0)}
+          change="2 new this quarter"
+          icon={FolderKanban}
+          trend="up"
+          accentColor="blue"
+        />
+        <KPICard
+          title="Tasks Completed"
+          value={String(stats.data?.completedTasksThisWeek ?? 0)}
+          changeLabel="this week"
+          icon={CheckCircle2}
+          trend="neutral"
+          accentColor="emerald"
+        />
         {isAdmin ? (
-          <KPICard title="Outstanding Invoices" value={String(stats.data?.outstandingInvoices ?? 0)} change={`$${((stats.data?.revenue ?? 0) - (stats.data?.expenses ?? 0)).toLocaleString()} net`} changeLabel="this month" icon={FileText} trend={(stats.data?.revenue ?? 0) > (stats.data?.expenses ?? 0) ? 'up' : 'down'} accentColor="amber" />
+          <KPICard
+            title="Outstanding Invoices"
+            value={String(stats.data?.outstandingInvoices ?? 0)}
+            change={`$${((stats.data?.revenue ?? 0) - (stats.data?.expenses ?? 0)).toLocaleString()} net`}
+            changeLabel="this month"
+            icon={FileText}
+            trend={(stats.data?.revenue ?? 0) > (stats.data?.expenses ?? 0) ? 'up' : 'down'}
+            accentColor="amber"
+          />
         ) : (
-          <KPICard title="Pending Leaves" value={String(stats.data?.pendingLeaves ?? 0)} icon={Clock} accentColor="amber" />
+          <KPICard
+            title="Pending Leaves"
+            value={String(stats.data?.pendingLeaves ?? 0)}
+            icon={Clock}
+            accentColor="amber"
+          />
         )}
       </div>
 
@@ -727,15 +939,13 @@ export function DashboardContent() {
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-[#FF4C29]/10">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-[#FF4C29]" />
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
                 </div>
                 My Tasks
               </CardTitle>
               {myTasks.data && myTasks.data.length > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  {myTasks.data.length} open
-                </span>
+                <span className="text-xs text-muted-foreground">{myTasks.data.length} open</span>
               )}
             </div>
           </CardHeader>
@@ -752,23 +962,25 @@ export function DashboardContent() {
                   </div>
                 ))
               ) : myTasks.data?.length ? (
-                myTasks.data.map((task: {
-                  id: string;
-                  title: string;
-                  priority: string;
-                  dueDate: Date | null;
-                  column: { name: string; board: { id: string; projectId: string } };
-                  labels: Array<{ label: { id: string; name: string; color: string } }>;
-                  assignees: Array<{ user: { id: string; name: string; avatar: string | null } }>;
-                  _count: { comments: number; checklists: number };
-                }) => (
-                  <TaskItem key={task.id} task={task} />
-                ))
+                myTasks.data.map(
+                  (task: {
+                    id: string;
+                    title: string;
+                    priority: string;
+                    dueDate: Date | null;
+                    column: { name: string; board: { id: string; projectId: string } };
+                    labels: Array<{ label: { id: string; name: string; color: string } }>;
+                    assignees: Array<{ user: { id: string; name: string; avatar: string | null } }>;
+                    _count: { comments: number; checklists: number };
+                  }) => <TaskItem key={task.id} task={task} />
+                )
               ) : (
                 <div className="py-12 text-center">
                   <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-500/20" />
                   <p className="mt-3 text-sm font-medium text-foreground">All caught up</p>
-                  <p className="mt-1 text-xs text-muted-foreground">No tasks assigned to you right now</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    No tasks assigned to you right now
+                  </p>
                 </div>
               )}
             </div>
@@ -791,13 +1003,21 @@ export function DashboardContent() {
                 Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="flex items-center gap-3 py-3">
                     <Skeleton className="h-10 w-10 rounded-xl" />
-                    <div className="flex-1 space-y-1.5"><Skeleton className="h-4 w-36" /><Skeleton className="h-3 w-24" /></div>
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-36" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
                   </div>
                 ))
               ) : deadlines.data?.length ? (
-                deadlines.data.map((milestone: { id: string; name: string; dueDate: Date; project: { id: string; name: string; status: string } }) => (
-                  <DeadlineItem key={milestone.id} milestone={milestone} />
-                ))
+                deadlines.data.map(
+                  (milestone: {
+                    id: string;
+                    name: string;
+                    dueDate: Date;
+                    project: { id: string; name: string; status: string };
+                  }) => <DeadlineItem key={milestone.id} milestone={milestone} />
+                )
               ) : (
                 <div className="py-12 text-center">
                   <Clock className="mx-auto h-10 w-10 text-muted-foreground/20" />
@@ -834,9 +1054,17 @@ export function DashboardContent() {
                   </div>
                 ))
               ) : activity.data?.length ? (
-                activity.data.slice(0, 6).map((item: { id: string; type: string; message: string; createdAt: Date; user: { id: string; name: string; avatar: string | null; title: string } }) => (
-                  <ActivityItem key={item.id} activity={item} />
-                ))
+                activity.data
+                  .slice(0, 6)
+                  .map(
+                    (item: {
+                      id: string;
+                      type: string;
+                      message: string;
+                      createdAt: Date;
+                      user: { id: string; name: string; avatar: string | null; title: string };
+                    }) => <ActivityItem key={item.id} activity={item} />
+                  )
               ) : (
                 <div className="py-12 text-center">
                   <Activity className="mx-auto h-10 w-10 text-muted-foreground/20" />
@@ -858,12 +1086,31 @@ export function DashboardContent() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {projects.isLoading ? (
               Array.from({ length: 4 }).map((_, i) => (
-                <Card key={i} className="border-border/60"><CardContent className="p-5"><Skeleton className="h-5 w-36 mb-2" /><Skeleton className="h-3 w-24 mb-5" /><div className="flex -space-x-2">{Array.from({ length: 3 }).map((_, j) => (<Skeleton key={j} className="h-7 w-7 rounded-full" />))}</div></CardContent></Card>
+                <Card key={i} className="border-border/60">
+                  <CardContent className="p-5">
+                    <Skeleton className="h-5 w-36 mb-2" />
+                    <Skeleton className="h-3 w-24 mb-5" />
+                    <div className="flex -space-x-2">
+                      {Array.from({ length: 3 }).map((_, j) => (
+                        <Skeleton key={j} className="h-7 w-7 rounded-full" />
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
               ))
             ) : projects.data?.length ? (
-              projects.data.slice(0, 4).map((project: { id: string; name: string; status: string; type: string; client: { id: string; name: string } | null; members: Array<{ user: { id: string; name: string; avatar: string | null } }> }) => (
-                <ProjectCard key={project.id} project={project} />
-              ))
+              projects.data
+                .slice(0, 4)
+                .map(
+                  (project: {
+                    id: string;
+                    name: string;
+                    status: string;
+                    type: string;
+                    client: { id: string; name: string } | null;
+                    members: Array<{ user: { id: string; name: string; avatar: string | null } }>;
+                  }) => <ProjectCard key={project.id} project={project} />
+                )
             ) : (
               <Card className="col-span-full border-border/60">
                 <CardContent className="py-12 text-center">

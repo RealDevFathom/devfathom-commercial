@@ -313,7 +313,7 @@ export const teamStatsRouter = router({
         row.meeting.startTime,
         row.meeting.endTime,
         row.meeting.recurrence,
-        now,
+        now
       );
     }
 
@@ -443,8 +443,7 @@ export const teamStatsRouter = router({
       mostCollaborative: [...members]
         .filter((m) => m.commentsThisWeek + m.notesAuthored > 0)
         .sort(
-          (a, b) =>
-            b.commentsThisWeek + b.notesAuthored - (a.commentsThisWeek + a.notesAuthored),
+          (a, b) => b.commentsThisWeek + b.notesAuthored - (a.commentsThisWeek + a.notesAuthored)
         )
         .slice(0, 3),
       fastestCycle: [...members]
@@ -589,7 +588,7 @@ export const teamStatsRouter = router({
       if (cycleTasks.length > 0) {
         const total = cycleTasks.reduce(
           (sum, t) => sum + (t.updatedAt.getTime() - t.createdAt.getTime()) / DAY_MS,
-          0,
+          0
         );
         avgCycleTimeDays = Math.round((total / cycleTasks.length) * 10) / 10;
       }
@@ -601,7 +600,7 @@ export const teamStatsRouter = router({
           a.meeting.startTime,
           a.meeting.endTime,
           a.meeting.recurrence,
-          now,
+          now
         );
       }
 
@@ -610,12 +609,12 @@ export const teamStatsRouter = router({
       let onTimePercent: number | null = null;
       if (attendanceLog.length > 0) {
         const diffs = attendanceLog.map(
-          (l) => (l.joinedAt.getTime() - l.occurrenceStart.getTime()) / 60000,
+          (l) => (l.joinedAt.getTime() - l.occurrenceStart.getTime()) / 60000
         );
         const lates = diffs.map((d) => Math.max(0, d));
         avgMinutesLate = Math.round((lates.reduce((a, b) => a + b, 0) / lates.length) * 10) / 10;
         onTimePercent = Math.round(
-          (diffs.filter((d) => d <= ON_TIME_THRESHOLD_MINUTES).length / attendanceLog.length) * 100,
+          (diffs.filter((d) => d <= ON_TIME_THRESHOLD_MINUTES).length / attendanceLog.length) * 100
         );
       }
 

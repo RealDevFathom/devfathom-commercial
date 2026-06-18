@@ -4,7 +4,7 @@ import { authenticateApiRequest } from '@/lib/api-auth';
 /**
  * GET /api/v1/spec
  *
- * Returns the full Company Hub REST API reference as a markdown document
+ * Returns the full DevFathom REST API reference as a markdown document
  * optimized for LLM agents (Claude Code, Cursor, etc.). Token-gated — any
  * valid Bearer token grants access regardless of scope, since reading the
  * spec doesn't expose any data.
@@ -33,10 +33,10 @@ export async function GET(request: Request) {
 }
 
 function buildSpec(baseUrl: string): string {
-  return `# Company Hub API — Full Reference
+  return `# DevFathom API — Full Reference
 
 > Auto-generated machine-readable API spec. This document contains everything
-> you need to operate Company Hub via REST. If you are an AI coding agent (Claude
+> you need to operate DevFathom via REST. If you are an AI coding agent (Claude
 > Code, Cursor, etc.), use this as your single source of truth.
 
 **Base URL:** \`${baseUrl}/api/v1\`

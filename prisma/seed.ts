@@ -9,13 +9,19 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
-  console.log('🌱 Seeding Company Hub database...\n');
+  console.log('🌱 Seeding DevFathom database...\n');
 
   // ============================================
   // USERS — All 8 team members
   // ============================================
   console.log('👥 Creating team members...');
-  const password = await hash('CompanyHub!2026', 12);
+  const seedPassword = process.env.SEED_PASSWORD ?? process.env.ADMIN_PASSWORD;
+  if (!seedPassword) {
+    throw new Error(
+      'Refusing to seed hardcoded credentials. Set SEED_PASSWORD (or ADMIN_PASSWORD) to the password to assign to seeded users.'
+    );
+  }
+  const password = await hash(seedPassword, 12);
 
   const alex = await prisma.user.upsert({
     where: { email: 'alex@company.com' },
@@ -706,7 +712,7 @@ async function main() {
 
   // Sample messages in general channel
   const welcomeMessages = [
-    { content: 'Welcome to Company Hub! 🚀 This is our new internal platform. Let\'s make it great.', senderId: alex.id },
+    { content: 'Welcome to DevFathom! 🚀 This is our new internal platform. Let\'s make it great.', senderId: alex.id },
     { content: 'Looks amazing! Much better than juggling between different tools.', senderId: sam.id },
     { content: 'The dashboard is really clean. Great work on the design! 🎨', senderId: morgan.id },
     { content: 'Can\'t wait to migrate our Trello boards over. When is that feature ready?', senderId: casey.id },
@@ -859,10 +865,8 @@ async function main() {
 
   console.log('  ✓ Created meetings\n');
 
-  console.log('✅ Seeding complete! Company Hub is ready.\n');
-  console.log('Login credentials for all users:');
-  console.log('  Email: [firstname]@company.com');
-  console.log('  Password: CompanyHub!2026');
+  console.log('✅ Seeding complete! DevFathom is ready.\n');
+  console.log('Login: [firstname]@company.com — password is the SEED_PASSWORD you provided.');
   console.log('\nAdmin accounts: alex@company.com, jordan@company.com');
 }
 
