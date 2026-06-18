@@ -26,6 +26,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
+import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
@@ -210,12 +211,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
               </div>
             ) : (
               list.data!.map((n) => (
-                <NoteListRow
-                  key={n.id}
-                  note={n}
-                  isSelected={selectedId === n.id}
-                  userId={userId}
-                />
+                <NoteListRow key={n.id} note={n} isSelected={selectedId === n.id} userId={userId} />
               ))
             )}
           </div>
@@ -339,6 +335,9 @@ function NoteDetail({ noteId }: { noteId: string }) {
     { refetchOnWindowFocus: mode === 'view' }
   );
   const note = noteQuery.data;
+
+  // Show the note title in the topbar breadcrumb instead of the raw id.
+  useBreadcrumbLabel(noteId, note ? note.title || 'Untitled' : undefined);
 
   const updateNote = trpc.notes.update.useMutation({
     onSuccess: () => {

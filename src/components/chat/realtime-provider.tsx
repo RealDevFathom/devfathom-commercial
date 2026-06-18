@@ -230,7 +230,6 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       for (const t of timers.values()) clearTimeout(t);
       timers.clear();
     };
-     
   }, [userId, myId, on, joinChannel, utils]);
 
   return <>{children}</>;

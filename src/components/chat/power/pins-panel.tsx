@@ -51,15 +51,10 @@ export function PinsPanel({
 
   return (
     <Sheet open={open} onOpenChange={(o) => onOpenChange(o)}>
-      <SheetContent
-        side="right"
-        className="flex w-[360px] flex-col gap-0 p-0 sm:max-w-[360px]"
-      >
+      <SheetContent side="right" className="flex w-[360px] flex-col gap-0 p-0 sm:max-w-[360px]">
         <SheetHeader className="border-b border-border/60 px-4 pb-3 pt-4">
           <SheetTitle>Pinned messages</SheetTitle>
-          <SheetDescription>
-            {pinCount > 0 ? `${pinCount} pinned` : 'No pins yet'}
-          </SheetDescription>
+          <SheetDescription>{pinCount > 0 ? `${pinCount} pinned` : 'No pins yet'}</SheetDescription>
         </SheetHeader>
 
         <ScrollArea className="flex-1">
@@ -99,9 +94,7 @@ export function PinsPanel({
                       {msg.sender.avatar && (
                         <AvatarImage src={msg.sender.avatar} alt={msg.sender.name} />
                       )}
-                      <AvatarFallback>
-                        {msg.sender.name[0].toUpperCase()}
-                      </AvatarFallback>
+                      <AvatarFallback>{msg.sender.name[0].toUpperCase()}</AvatarFallback>
                     </Avatar>
 
                     <div className="min-w-0 flex-1">

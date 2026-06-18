@@ -44,11 +44,7 @@ export function TypingIndicator({ channelId }: { channelId: string }) {
 
   return (
     // Fixed height so the message list never jumps when typing state changes
-    <div
-      className="flex h-5 items-center gap-1.5 px-4"
-      aria-live="polite"
-      aria-atomic="true"
-    >
+    <div className="flex h-5 items-center gap-1.5 px-4" aria-live="polite" aria-atomic="true">
       {typists.length > 0 && (
         <>
           <span className="text-xs text-muted-foreground">

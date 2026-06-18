@@ -3,12 +3,7 @@
 import { useState } from 'react';
 import { Search, Users, Loader2, Hash } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -28,10 +23,7 @@ export function BrowseChannelsDialog({
   const [search, setSearch] = useState('');
   const [joiningId, setJoiningId] = useState<string | null>(null);
 
-  const { data: channels, isLoading } = trpc.chat.browseChannels.useQuery(
-    {},
-    { enabled: open }
-  );
+  const { data: channels, isLoading } = trpc.chat.browseChannels.useQuery({}, { enabled: open });
 
   const joinChannel = trpc.chat.joinChannel.useMutation({
     onSuccess: (_, variables) => {
@@ -122,11 +114,7 @@ export function BrowseChannelsDialog({
                     }}
                     className="mt-0.5 shrink-0"
                   >
-                    {joiningId === ch.id ? (
-                      <Loader2 className="animate-spin" />
-                    ) : (
-                      'Join'
-                    )}
+                    {joiningId === ch.id ? <Loader2 className="animate-spin" /> : 'Join'}
                   </Button>
                 </li>
               ))}

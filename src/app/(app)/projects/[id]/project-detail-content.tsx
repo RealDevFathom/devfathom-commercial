@@ -29,6 +29,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
+import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { NotesContent } from '@/app/(app)/notes/notes-content';
@@ -76,6 +77,9 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
   const deleteProject = trpc.projects.delete.useMutation({
     onSuccess: () => router.push('/projects'),
   });
+
+  // Show the project name in the topbar breadcrumb instead of the raw id.
+  useBreadcrumbLabel(projectId, project?.name);
 
   if (isLoading) return <ProjectDetailSkeleton />;
   if (!project) return <ProjectNotFound />;

@@ -145,6 +145,68 @@ export function passwordReset(p: {
   };
 }
 
+export function inviteMember(p: {
+  name: string;
+  inviterName?: string;
+  role?: string;
+  workspace?: string;
+  acceptUrl: string;
+  expiresLabel?: string;
+}): EmailContent {
+  const workspace = p.workspace ?? 'DevFathom';
+  const firstName = p.name?.trim().split(/\s+/)[0] || 'there';
+  const rows: MetaRow[] = [{ label: 'Workspace', value: workspace }];
+  if (p.role) rows.push({ label: 'Role', value: p.role });
+
+  const invitedByHtml = p.inviterName
+    ? `${esc(p.inviterName)} has invited you to join the team.`
+    : `You've been invited to join the team.`;
+  const invitedByText = p.inviterName
+    ? `${p.inviterName} has invited you to join the team.`
+    : `You've been invited to join the team.`;
+
+  return {
+    subject: `Welcome to ${workspace} — your invitation`,
+    html: renderDocument({
+      preheader: `${invitedByText} Accept to set your password and finish your profile.`,
+      body: [
+        eyebrow('Welcome aboard'),
+        heading(`Welcome to ${esc(workspace)}, ${esc(firstName)}`),
+        paragraph(
+          `We're glad to have you. ${invitedByHtml} ${esc(
+            workspace
+          )} is where the team plans projects, runs meetings, tracks work, and stays in sync — and there's a seat waiting for you.`,
+          { html: true }
+        ),
+        detailCard(rows),
+        paragraph(
+          `To get started, accept your invitation below. You'll choose your own password and add a few details — once that's done, you're all set.`
+        ),
+        button('Accept invitation & set password', p.acceptUrl),
+        callout(
+          `This invitation link is unique to you${
+            p.expiresLabel ? ` and expires ${esc(p.expiresLabel)}` : ''
+          }. Please don't forward it.`,
+          'neutral'
+        ),
+      ].join(''),
+      footnote: `If you weren't expecting this, you can safely ignore the email.`,
+    }),
+    text: text([
+      `Welcome to ${workspace}, ${firstName}`,
+      ``,
+      `We're glad to have you. ${invitedByText}`,
+      `${workspace} is where the team plans projects, runs meetings, tracks work, and stays in sync.`,
+      ``,
+      `To get started, accept your invitation (set a password and finish your profile):`,
+      p.acceptUrl,
+      p.expiresLabel && `This link expires ${p.expiresLabel}.`,
+      ``,
+      `Didn't expect this? You can safely ignore this email.`,
+    ]),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tasks
 // ---------------------------------------------------------------------------
@@ -714,5 +776,146 @@ export function alert(p: {
       ].join(''),
     }),
     text: text([p.title, ``, p.message, p.ctaUrl && `\n${p.ctaLabel ?? 'Open'}: ${p.ctaUrl}`]),
+  };
+}
+
+export function accountDeactivated(p: {
+  name: string;
+  byName?: string;
+  effectiveLabel?: string;
+  supportEmail?: string;
+  reason?: string;
+}): EmailContent {
+  const who = p.byName ? ` by ${esc(p.byName)}` : '';
+  const when = p.effectiveLabel ? `, effective ${esc(p.effectiveLabel)}` : '';
+  const reason = p.reason?.trim();
+  return {
+    subject: 'Your DevFathom access has been deactivated',
+    html: renderDocument({
+      preheader: 'Your DevFathom account has been deactivated.',
+      body: [
+        eyebrow('Account update', palette.destructive),
+        heading('Your access has ended'),
+        paragraph(
+          `Hi ${firstName(p.name)} — your DevFathom account has been deactivated${who}${when}. You no longer have access to the hub.`,
+          { html: true }
+        ),
+        reason ? callout(`<strong>Reason provided:</strong> ${esc(reason)}`, 'warning') : '',
+        callout(
+          `If you believe this is a mistake, please contact ${
+            p.supportEmail ? `<strong>${esc(p.supportEmail)}</strong>` : 'your administrator'
+          }.`,
+          'neutral'
+        ),
+      ].join(''),
+      footnote: 'This is an automated message from DevFathom.',
+    }),
+    text: text([
+      'Your DevFathom access has been deactivated',
+      ``,
+      `Hi ${p.name.split(' ')[0]} — your DevFathom account has been deactivated${
+        p.byName ? ` by ${p.byName}` : ''
+      }${p.effectiveLabel ? `, effective ${p.effectiveLabel}` : ''}.`,
+      `You no longer have access to the hub.`,
+      reason ? `` : false,
+      reason ? `Reason provided: ${reason}` : false,
+      ``,
+      p.supportEmail
+        ? `Questions? Contact ${p.supportEmail}.`
+        : `Questions? Contact your administrator.`,
+    ]),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Resignations
+// ---------------------------------------------------------------------------
+
+// Notify HR / admins that a team member has submitted a resignation that needs
+// review. Carries the stated reason and the employee's proposed last day.
+export function resignationSubmitted(p: {
+  employeeName: string;
+  reason: string;
+  proposedLastDayLabel: string;
+  reviewUrl: string;
+}): EmailContent {
+  return {
+    subject: `Resignation submitted · ${p.employeeName}`,
+    html: renderDocument({
+      preheader: `${p.employeeName} submitted a resignation — proposed last day ${p.proposedLastDayLabel}.`,
+      body: [
+        eyebrow('Resignation', palette.warning),
+        heading(`${esc(p.employeeName)} has resigned`),
+        paragraph(
+          `<strong>${esc(p.employeeName)}</strong> submitted a resignation and it's awaiting your review.`,
+          { html: true }
+        ),
+        detailCard([
+          { label: 'Employee', value: p.employeeName },
+          { label: 'Proposed last day', value: p.proposedLastDayLabel },
+        ]),
+        quote(p.reason),
+        button('Review resignation', p.reviewUrl),
+      ].join(''),
+    }),
+    text: text([
+      `Resignation submitted — ${p.employeeName}`,
+      ``,
+      `${p.employeeName} submitted a resignation and it's awaiting review.`,
+      `Proposed last day: ${p.proposedLastDayLabel}`,
+      ``,
+      `Reason: ${p.reason}`,
+      ``,
+      `Review: ${p.reviewUrl}`,
+    ]),
+  };
+}
+
+// Tell an employee the outcome of their resignation. On approval, confirms the
+// final working day; includes the reviewer's note when one was left.
+export function resignationDecision(p: {
+  recipientName: string;
+  decision: 'APPROVED' | 'DECLINED';
+  lastWorkingDayLabel?: string;
+  reviewNote?: string;
+  url: string;
+}): EmailContent {
+  const approved = p.decision === 'APPROVED';
+  const decisionLabel = approved ? 'approved' : 'declined';
+  const tone: Tone = approved ? 'success' : 'danger';
+  const note = p.reviewNote?.trim();
+  const intro = approved
+    ? `Hi ${firstName(p.recipientName)} — your resignation has been approved. Thank you for everything you've contributed.`
+    : `Hi ${firstName(p.recipientName)} — your resignation has been declined. Please reach out to HR to discuss next steps.`;
+  return {
+    subject: `Your resignation has been ${decisionLabel}`,
+    html: renderDocument({
+      preheader: `Your resignation has been ${decisionLabel}.`,
+      body: [
+        eyebrow('Resignation', approved ? palette.success : palette.destructive),
+        heading(`Your resignation has been ${decisionLabel}`),
+        paragraph(intro),
+        approved && p.lastWorkingDayLabel
+          ? callout(
+              `Your confirmed last working day is <strong>${esc(p.lastWorkingDayLabel)}</strong>.`,
+              'success'
+            )
+          : '',
+        note ? callout(`<strong>Note from the reviewer:</strong> ${esc(note)}`, 'neutral') : '',
+        button('View details', p.url, tone),
+      ].join(''),
+    }),
+    text: text([
+      `Your resignation has been ${decisionLabel}`,
+      ``,
+      intro,
+      approved && p.lastWorkingDayLabel
+        ? `Confirmed last working day: ${p.lastWorkingDayLabel}`
+        : false,
+      note ? `` : false,
+      note ? `Note from the reviewer: ${note}` : false,
+      ``,
+      `View details: ${p.url}`,
+    ]),
   };
 }

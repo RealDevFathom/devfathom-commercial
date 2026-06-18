@@ -37,9 +37,7 @@ const KanbanBoardContent = dynamic(
   }
 );
 
-export default function BoardPage(props: {
-  params: Promise<{ id: string; boardId: string }>;
-}) {
+export default function BoardPage(props: { params: Promise<{ id: string; boardId: string }> }) {
   const { id, boardId } = use(props.params);
   return <KanbanBoardContent projectId={id} boardId={boardId} />;
 }

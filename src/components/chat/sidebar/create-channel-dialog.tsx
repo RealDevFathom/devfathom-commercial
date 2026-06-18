@@ -76,7 +76,12 @@ export function CreateChannelDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!createChannel.isPending) onOpenChange(v); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!createChannel.isPending) onOpenChange(v);
+      }}
+    >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Create a channel</DialogTitle>
@@ -139,11 +144,7 @@ export function CreateChannelDialog({
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-foreground">Private</label>
               <div className="flex h-8 items-center">
-                <Switch
-                  checked={isPrivate}
-                  onCheckedChange={setIsPrivate}
-                  size="sm"
-                />
+                <Switch checked={isPrivate} onCheckedChange={setIsPrivate} size="sm" />
               </div>
             </div>
           </div>
@@ -170,9 +171,7 @@ export function CreateChannelDialog({
                         checked={checked}
                         onCheckedChange={(v) =>
                           setSelectedMembers((prev) =>
-                            v
-                              ? [...prev, member.id]
-                              : prev.filter((id) => id !== member.id)
+                            v ? [...prev, member.id] : prev.filter((id) => id !== member.id)
                           )
                         }
                       />
@@ -201,10 +200,7 @@ export function CreateChannelDialog({
         </div>
 
         <DialogFooter showCloseButton>
-          <Button
-            onClick={handleSubmit}
-            disabled={!name.trim() || createChannel.isPending}
-          >
+          <Button onClick={handleSubmit} disabled={!name.trim() || createChannel.isPending}>
             {createChannel.isPending && <Loader2 className="animate-spin" />}
             Create Channel
           </Button>

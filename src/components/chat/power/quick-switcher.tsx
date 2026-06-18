@@ -97,12 +97,8 @@ export function QuickSwitcher({
                 onSelect={() => handleSelectChannel(ch.id)}
               >
                 <Avatar size="sm" className="shrink-0">
-                  {ch.dmPeer?.avatar && (
-                    <AvatarImage src={ch.dmPeer.avatar} alt={ch.dmPeer.name} />
-                  )}
-                  <AvatarFallback>
-                    {(ch.dmPeer?.name ?? '?')[0].toUpperCase()}
-                  </AvatarFallback>
+                  {ch.dmPeer?.avatar && <AvatarImage src={ch.dmPeer.avatar} alt={ch.dmPeer.name} />}
+                  <AvatarFallback>{(ch.dmPeer?.name ?? '?')[0].toUpperCase()}</AvatarFallback>
                 </Avatar>
                 <span className="truncate">{ch.dmPeer?.name ?? 'Unknown'}</span>
                 {ch.unreadCount > 0 && (
@@ -132,12 +128,8 @@ export function QuickSwitcher({
                 onSelect={() => void handleSelectPerson(person.id)}
               >
                 <Avatar size="sm" className="shrink-0">
-                  {person.avatar && (
-                    <AvatarImage src={person.avatar} alt={person.name} />
-                  )}
-                  <AvatarFallback>
-                    {(person.name ?? '?')[0].toUpperCase()}
-                  </AvatarFallback>
+                  {person.avatar && <AvatarImage src={person.avatar} alt={person.name} />}
+                  <AvatarFallback>{(person.name ?? '?')[0].toUpperCase()}</AvatarFallback>
                 </Avatar>
                 <span className="truncate">{person.name}</span>
                 {person.title && (

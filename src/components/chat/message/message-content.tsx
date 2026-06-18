@@ -18,7 +18,7 @@ const PROSE = cn(
   'text-[0.9375rem] leading-relaxed text-foreground break-words [overflow-wrap:anywhere]',
   '[&_p]:my-0 [&_p:not(:first-child)]:mt-2',
   '[&_a]:text-primary [&_a]:underline [&_a]:decoration-primary/40 [&_a]:underline-offset-2 hover:[&_a]:decoration-primary',
-  "[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]",
+  '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]',
   '[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border/60 [&_pre]:bg-muted [&_pre]:p-3 [&_pre]:text-[0.85em] [&_pre]:leading-relaxed',
   '[&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground',
   '[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_li]:pl-0.5',
@@ -111,8 +111,7 @@ function renderNode(node: TiptapNode | undefined, key: string): React.ReactNode 
     case 'hardBreak':
       return <br key={key} />;
     case 'mention': {
-      const label =
-        (node.attrs?.label as string) || (node.attrs?.id as string) || 'unknown';
+      const label = (node.attrs?.label as string) || (node.attrs?.id as string) || 'unknown';
       return (
         <span key={key} className="rounded bg-primary/10 px-1 text-primary font-medium">
           @{label}
@@ -166,13 +165,7 @@ function renderPlainWithLinks(text: string): React.ReactNode[] {
   return out;
 }
 
-export function MessageContent({
-  doc,
-  fallback,
-}: {
-  doc: TiptapDoc | null;
-  fallback: string;
-}) {
+export function MessageContent({ doc, fallback }: { doc: TiptapDoc | null; fallback: string }) {
   const useDoc = doc && !isEmptyDoc(doc);
   return (
     <div className={PROSE}>

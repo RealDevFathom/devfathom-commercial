@@ -17,22 +17,12 @@ import { Mention } from '@tiptap/extension-mention';
 import { toast } from 'sonner';
 
 import type { ChatMessage } from '@/lib/chat/contract';
-import {
-  tiptapToPlainText,
-  extractMentionIds,
-  plainTextToTiptap,
-} from '@/lib/chat/tiptap';
+import { tiptapToPlainText, extractMentionIds, plainTextToTiptap } from '@/lib/chat/tiptap';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
-export function MessageEditor({
-  message,
-  onDone,
-}: {
-  message: ChatMessage;
-  onDone: () => void;
-}) {
+export function MessageEditor({ message, onDone }: { message: ChatMessage; onDone: () => void }) {
   const utils = trpc.useUtils();
 
   const editMessage = trpc.chat.editMessage.useMutation({
@@ -47,11 +37,7 @@ export function MessageEditor({
   });
 
   const editor = useEditor({
-    extensions: [
-      StarterKit,
-      Link.configure({ openOnClick: false, autolink: true }),
-      Mention,
-    ],
+    extensions: [StarterKit, Link.configure({ openOnClick: false, autolink: true }), Mention],
     content: message.contentJson ?? plainTextToTiptap(message.content),
     immediatelyRender: false,
     autofocus: 'end',
@@ -102,8 +88,8 @@ export function MessageEditor({
           Cancel
         </Button>
         <span className="text-[11px] text-muted-foreground">
-          <kbd className={cn('font-sans')}>Esc</kbd> to cancel ·{' '}
-          <kbd className="font-sans">⌘↵</kbd> to save
+          <kbd className={cn('font-sans')}>Esc</kbd> to cancel · <kbd className="font-sans">⌘↵</kbd>{' '}
+          to save
         </span>
       </div>
     </div>

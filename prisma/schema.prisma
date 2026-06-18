@@ -19,6 +19,14 @@ datasource db {
 enum Role {
   ADMIN
   EMPLOYEE
+  HR
+}
+
+enum ResignationStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  WITHDRAWN
 }
 
 enum Department {
@@ -34,6 +42,7 @@ enum UserStatus {
   ACTIVE
   INACTIVE
   ON_LEAVE
+  INVITED
 }
 
 enum ProjectStatus {
@@ -123,6 +132,41 @@ enum NotePermission {
 }
 
 // ============================================
+// AUDIT LOG (admin-only, append-only)
+// ============================================
+
+enum AuditActorType {
+  USER // a logged-in session user
+  API_TOKEN // a df_ REST API token acting on behalf of a user
+  ANONYMOUS // no authenticated identity (e.g. a failed login attempt)
+  SYSTEM // an automated/internal process
+}
+
+enum AuditSource {
+  TRPC // a tRPC procedure call (the in-app UI)
+  REST_API // a /api/v1 call made with a df_ token
+  AUTH // an authentication event (login/logout)
+  SYSTEM // an internal/automated event
+}
+
+enum AuditOperation {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  EXECUTE
+  OTHER
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+}
+
+// ============================================
 // AUTH & USERS
 // ============================================
 
@@ -130,7 +174,7 @@ model User {
   id            String     @id @default(cuid())
   name          String
   email         String     @unique
-  password      String
+  password      String?
   role          Role       @default(EMPLOYEE)
   department    Department
   title         String
@@ -170,8 +214,59 @@ model User {
   noteShares        NoteShare[]
   columnDefaults    ColumnDefaultAssignee[]
   attendanceLog     MeetingAttendanceLog[]
+  invitation        Invitation?        @relation("UserInvitation")
+  invitationsSent   Invitation[]       @relation("InvitationsSent")
+  auditLogs         AuditLog[]         @relation("UserAuditLogs")
+  resignations      Resignation[]      @relation("UserResignations")
+  resignationsReviewed Resignation[]   @relation("ResignationsReviewed")
 
   @@map("users")
+}
+
+// A self-service "quit the company" request. An employee submits one (reason +
+// proposed last working day); it sits PENDING until an HR or ADMIN reviewer
+// approves/declines it. Approval records the confirmed lastWorkingDay but does
+// NOT itself deactivate the account — offboarding happens on/after that day
+// (e.g. via the Lay-off action), so access is not pulled out from under someone
+// who is still working their notice period.
+model Resignation {
+  id              String            @id @default(cuid())
+  userId          String
+  reason          String
+  proposedLastDay DateTime
+  status          ResignationStatus @default(PENDING)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+  lastWorkingDay  DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user       User  @relation("UserResignations", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("ResignationsReviewed", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([userId])
+  @@map("resignations")
+}
+
+// A pending invitation for a User created in the INVITED state. The raw token is
+// emailed to the invitee; only its SHA-256 hash is stored here. Accepting the
+// invite sets the user's password, flips status to ACTIVE, and stamps acceptedAt.
+model Invitation {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  user        User      @relation("UserInvitation", fields: [userId], references: [id], onDelete: Cascade)
+  email       String
+  tokenHash   String    @unique
+  invitedById String?
+  invitedBy   User?     @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("invitations")
 }
 
 // ============================================
@@ -803,6 +898,72 @@ model Notification {
   @@index([userId, isRead])
   @@index([createdAt])
   @@map("notifications")
+}
+
+// ============================================
+// AUDIT LOG
+// ============================================
+
+/// Extreme-granular, admin-only audit trail. Every mutation (tRPC + REST),
+/// every authentication event, and every sensitive read appends one immutable
+/// row here. Actor identity is *snapshotted* (name/email/role) so the trail
+/// stays meaningful even after the user is deleted (actor relation is SetNull).
+/// Sensitive input fields (passwords, tokens) are redacted before storage.
+model AuditLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now()) // WHEN
+
+  // WHO — snapshotted at the time of the action for durability
+  actorType  AuditActorType @default(USER)
+  actorId    String? // null for anonymous (e.g. failed login)
+  actorName  String?
+  actorEmail String?
+  actorRole  String?
+  tokenId    String? // the ApiToken used, when actorType = API_TOKEN
+  tokenName  String?
+
+  // WHAT
+  source      AuditSource
+  category    String // TEAM, FINANCE, PROJECT, TASK, CLIENT, CHAT, NOTE, MEETING, API_TOKEN, AUTH, SYSTEM
+  operation   AuditOperation @default(OTHER)
+  action      String // "team.updateMember", "POST /api/v1/tasks", "auth.login"
+  description String?
+
+  // WHAT WAS ACTED ON
+  targetType  String? // Project, Task, User, Invoice, ...
+  targetId    String?
+  targetLabel String? // human-readable name snapshot
+
+  // HOW (full payloads — redacted)
+  input    Json? // the request arguments / body
+  changes  Json? // field-level before -> after diff, where instrumented
+  result   Json? // a summary of what was returned/created
+  metadata Json? // any extra structured context
+
+  // WHERE / CONTEXT
+  ip         String?
+  userAgent  String?
+  httpMethod String?
+  path       String?
+  statusCode Int?
+
+  // OUTCOME
+  outcome      AuditOutcome @default(SUCCESS)
+  errorCode    String?
+  errorMessage String?
+  durationMs   Int?
+
+  actor User? @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([category, createdAt])
+  @@index([source, createdAt])
+  @@index([operation, createdAt])
+  @@index([outcome, createdAt])
+  @@index([action])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
 }
 
 // ============================================

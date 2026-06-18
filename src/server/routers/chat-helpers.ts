@@ -25,7 +25,10 @@ export const messageInclude = {
   replies: {
     take: 3,
     orderBy: { createdAt: 'desc' as const },
-    select: { createdAt: true, sender: { select: { id: true, name: true, avatar: true, title: true } } },
+    select: {
+      createdAt: true,
+      sender: { select: { id: true, name: true, avatar: true, title: true } },
+    },
   },
   _count: { select: { replies: true } },
 } satisfies Prisma.MessageInclude;
@@ -94,7 +97,13 @@ export function toChatMessage(m: MessageRow, currentUserId: string): ChatMessage
     reactions: deleted ? [] : aggregateReactions(m.reactions, currentUserId),
     attachments: deleted
       ? []
-      : m.attachments.map((a) => ({ id: a.id, name: a.name, url: a.url, type: a.type, size: a.size })),
+      : m.attachments.map((a) => ({
+          id: a.id,
+          name: a.name,
+          url: a.url,
+          type: a.type,
+          size: a.size,
+        })),
     mentionIds: m.mentions.map((x) => x.userId),
     replyCount: m._count.replies,
     lastReplyAt: m.replies[0]?.createdAt?.toISOString() ?? null,

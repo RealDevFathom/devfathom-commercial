@@ -370,8 +370,7 @@ const TransactionRow = memo(function TransactionRow({
                   description: eDesc.trim(),
                   amount: parseFloat(eAmount),
                   date: new Date(eDate),
-                  category:
-                    t.type === 'EXPENSE' && eCategory ? (eCategory as 'SALARIES') : null,
+                  category: t.type === 'EXPENSE' && eCategory ? (eCategory as 'SALARIES') : null,
                 });
               }
             }}

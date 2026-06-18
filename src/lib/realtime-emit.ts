@@ -13,9 +13,7 @@
 import { channelRoom, userRoom } from '@/lib/chat/contract';
 
 const SOCKET_URL =
-  process.env.SOCKET_INTERNAL_URL ||
-  process.env.NEXT_PUBLIC_SOCKET_URL ||
-  'http://localhost:3001';
+  process.env.SOCKET_INTERNAL_URL || process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 
 const SECRET = process.env.SOCKET_SHARED_SECRET || process.env.AUTH_SECRET || '';
 

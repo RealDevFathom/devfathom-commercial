@@ -3,12 +3,7 @@
 import { useState } from 'react';
 import { Search, Loader2, MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
@@ -46,11 +41,7 @@ export function NewDmDialog({
 
   const q = search.toLowerCase().trim();
   const filtered = q
-    ? team?.filter(
-        (m) =>
-          m.name.toLowerCase().includes(q) ||
-          m.email.toLowerCase().includes(q)
-      )
+    ? team?.filter((m) => m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q))
     : team;
 
   return (

@@ -20,6 +20,7 @@ declare module 'next-auth' {
     role?: string;
     department?: string;
     title?: string;
+    status?: string;
   }
 }
 

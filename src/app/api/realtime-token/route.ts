@@ -26,9 +26,7 @@ import { auth } from '@/lib/auth';
 const TICKET_SECRET = process.env.SOCKET_SHARED_SECRET || process.env.AUTH_SECRET || '';
 if (!TICKET_SECRET) {
   // Fail loudly at module load rather than silently issuing unverifiable tickets.
-  throw new Error(
-    'SOCKET_SHARED_SECRET or AUTH_SECRET must be set to sign realtime tickets'
-  );
+  throw new Error('SOCKET_SHARED_SECRET or AUTH_SECRET must be set to sign realtime tickets');
 }
 
 // Tickets are single-use-ish and short-lived: just long enough to complete a
@@ -52,10 +50,7 @@ export async function GET() {
   ).toString('base64url');
 
   // sig = base64url(HMAC-SHA256(secret, payload))
-  const sig = crypto
-    .createHmac('sha256', TICKET_SECRET)
-    .update(payload)
-    .digest('base64url');
+  const sig = crypto.createHmac('sha256', TICKET_SECRET).update(payload).digest('base64url');
 
   const ticket = `${payload}.${sig}`;
 

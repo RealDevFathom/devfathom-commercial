@@ -28,6 +28,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
+import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { NotesContent } from '@/app/(app)/notes/notes-content';
@@ -74,6 +75,9 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
   const deleteClient = trpc.clients.delete.useMutation({
     onSuccess: () => router.push('/clients'),
   });
+
+  // Show the client name in the topbar breadcrumb instead of the raw id.
+  useBreadcrumbLabel(clientId, client?.name);
 
   if (isLoading) {
     return (

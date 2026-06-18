@@ -2,7 +2,6 @@
 
 import { useState, memo } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
   ArrowLeft,
@@ -37,7 +36,18 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
+import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -54,6 +64,12 @@ const leaveStatusConfig: Record<string, { bg: string; label: string }> = {
   PENDING: { bg: 'bg-amber-500/10 text-amber-500', label: 'Pending' },
   APPROVED: { bg: 'bg-emerald-500/10 text-emerald-500', label: 'Approved' },
   REJECTED: { bg: 'bg-red-500/10 text-red-500', label: 'Rejected' },
+};
+
+const roleBadge: Record<string, { bg: string; label: string }> = {
+  ADMIN: { bg: 'bg-primary/10 text-primary', label: 'Admin' },
+  HR: { bg: 'bg-indigo-500/10 text-indigo-500', label: 'HR' },
+  EMPLOYEE: { bg: 'bg-secondary text-foreground', label: 'Employee' },
 };
 
 const departmentOptions = [
@@ -78,10 +94,8 @@ type PersonalStats = RouterOutput['teamStats']['getForUser'];
 type PerformanceNotes = RouterOutput['team']['listPerformanceNotes'];
 
 export function MemberDetailContent({ memberId }: { memberId: string }) {
-  const router = useRouter();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
-  const utils = trpc.useUtils();
   const { data: member, isLoading } = trpc.team.getById.useQuery({ id: memberId });
 
   // Hoisted so they batch with getById on mount instead of waterfalling behind
@@ -100,14 +114,10 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
   const [isEditing, setIsEditing] = useState(false);
   const [showResetPw, setShowResetPw] = useState(false);
   const [pwSuccess, setPwSuccess] = useState(false);
-  const [showDeactivate, setShowDeactivate] = useState(false);
+  const [showLayOff, setShowLayOff] = useState(false);
 
-  const deactivate = trpc.team.deactivateMember.useMutation({
-    onSuccess: () => {
-      utils.team.getAll.invalidate();
-      router.push('/team');
-    },
-  });
+  // Show the member's name in the topbar breadcrumb instead of the raw id.
+  useBreadcrumbLabel(memberId, member?.name);
 
   if (isLoading)
     return (
@@ -166,30 +176,12 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
             >
               <Lock className="h-3.5 w-3.5" /> Reset Password
             </button>
-            {!showDeactivate ? (
-              <button
-                onClick={() => setShowDeactivate(true)}
-                className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-colors"
-              >
-                <UserX className="h-3.5 w-3.5" />
-              </button>
-            ) : (
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => deactivate.mutate({ id: memberId })}
-                  disabled={deactivate.isPending}
-                  className="rounded-xl bg-red-500 px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
-                >
-                  {deactivate.isPending ? 'Deactivating...' : 'Confirm Deactivate'}
-                </button>
-                <button
-                  onClick={() => setShowDeactivate(false)}
-                  className="text-xs text-muted-foreground hover:text-foreground px-1"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
+            <button
+              onClick={() => setShowLayOff(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-colors"
+            >
+              <UserX className="h-3.5 w-3.5" /> Lay off
+            </button>
           </div>
         )}
       </div>
@@ -216,6 +208,16 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
       {/* Edit form */}
       {isEditing && isAdmin && (
         <EditMemberForm memberId={memberId} member={member} onClose={() => setIsEditing(false)} />
+      )}
+
+      {/* Lay off (termination) modal */}
+      {isAdmin && (
+        <LayOffDialog
+          memberId={memberId}
+          memberName={member.name}
+          open={showLayOff}
+          onOpenChange={setShowLayOff}
+        />
       )}
 
       {/* Profile header */}
@@ -309,7 +311,10 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
                         </p>
                       </div>
                       <span
-                        className={cn('text-xs font-medium', projectStatusColors[pm.project.status])}
+                        className={cn(
+                          'text-xs font-medium',
+                          projectStatusColors[pm.project.status]
+                        )}
                       >
                         {pm.project.status.replace('_', ' ')}
                       </span>
@@ -337,7 +342,14 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
                 <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                   Role
                 </p>
-                <p className="text-sm font-medium text-foreground">{member.role}</p>
+                <span
+                  className={cn(
+                    'inline-flex rounded-md px-2 py-0.5 text-xs font-medium',
+                    roleBadge[member.role]?.bg ?? 'bg-secondary text-foreground'
+                  )}
+                >
+                  {roleBadge[member.role]?.label ?? member.role}
+                </span>
               </div>
               <div>
                 <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
@@ -477,6 +489,93 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
    Admin-only forms — own their local input state so typing doesn't re-render
    the whole profile page.
    ============================================ */
+
+// Lay off (terminate) a team member. Captures a mandatory reason, then soft-
+// terminates them (status → INACTIVE) and emails them a notice via the server.
+function LayOffDialog({
+  memberId,
+  memberName,
+  open,
+  onOpenChange,
+}: {
+  memberId: string;
+  memberName: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const utils = trpc.useUtils();
+  const [reason, setReason] = useState('');
+
+  const layOff = trpc.team.layOffMember.useMutation({
+    onSuccess: () => {
+      utils.team.getById.invalidate({ id: memberId });
+      utils.team.getAll.invalidate();
+      setReason('');
+      onOpenChange(false);
+    },
+  });
+
+  const trimmed = reason.trim();
+  const canSubmit = trimmed.length >= 3 && !layOff.isPending;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (layOff.isPending) return;
+        if (!v) {
+          setReason('');
+          layOff.reset();
+        }
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-1.5 text-red-500">
+            <UserX className="h-4 w-4" /> Lay off {memberName}
+          </DialogTitle>
+          <DialogDescription>
+            This deactivates {memberName}&apos;s access and emails them a termination notice. Their
+            record is kept for audit history. Please provide a reason.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-foreground">
+            Reason <span className="text-destructive">*</span>
+          </label>
+          <Textarea
+            autoFocus
+            rows={4}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Why is this person being laid off? (required)"
+            disabled={layOff.isPending}
+          />
+          {layOff.error && (
+            <p className="mt-2 text-xs text-destructive">{layOff.error.message}</p>
+          )}
+        </div>
+
+        <DialogFooter showCloseButton>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (!canSubmit) return;
+              layOff.mutate({ id: memberId, reason: trimmed });
+            }}
+            disabled={!canSubmit}
+          >
+            {layOff.isPending && <Loader2 className="animate-spin" />}
+            {layOff.isPending ? 'Laying off...' : 'Lay off'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ResetPasswordForm({
   memberId,
   memberName,
@@ -613,7 +712,7 @@ function EditMemberForm({
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Role</label>
             <div className="flex rounded-xl border border-border overflow-hidden">
-              {(['EMPLOYEE', 'ADMIN'] as const).map((r) => (
+              {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
                 <button
                   key={r}
                   onClick={() => setEditRole(r)}
@@ -624,7 +723,7 @@ function EditMemberForm({
                       : 'bg-card text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  {r === 'EMPLOYEE' ? 'Employee' : 'Admin'}
+                  {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
                 </button>
               ))}
             </div>
@@ -717,7 +816,7 @@ function EditMemberForm({
                 name: editName.trim() || undefined,
                 title: editTitle.trim() || undefined,
                 department: editDept as (typeof departmentOptions)[number],
-                role: editRole as 'ADMIN' | 'EMPLOYEE',
+                role: editRole as 'ADMIN' | 'HR' | 'EMPLOYEE',
                 phone: editPhone || null,
                 bio: editBio || null,
                 skills: editSkills,

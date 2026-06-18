@@ -12,12 +12,7 @@ import { Loader2, MessageSquare } from 'lucide-react';
 import { differenceInMinutes } from 'date-fns';
 
 import { trpc } from '@/lib/trpc';
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { MessageItem } from './message-item';
 import { MessageComposer } from '@/components/chat/composer/message-composer';
 
@@ -80,12 +75,7 @@ export function ThreadPanel({
           ) : (
             <>
               <div className="py-1">
-                <MessageItem
-                  message={data.parent}
-                  grouped={false}
-                  channelId={channelId}
-                  inThread
-                />
+                <MessageItem message={data.parent} grouped={false} channelId={channelId} inThread />
               </div>
 
               <div className="flex items-center gap-3 px-4 py-2">

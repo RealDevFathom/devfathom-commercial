@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -15,11 +15,23 @@ import {
   UserPlus,
   PartyPopper,
   Users,
+  LogOut,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { inferRouterOutputs } from '@trpc/server';
 import { trpc } from '@/lib/trpc';
@@ -28,6 +40,7 @@ import type { AppRouter } from '@/server/routers/_app';
 import { format, formatDistanceToNow } from 'date-fns';
 
 type LeaveRequest = inferRouterOutputs<AppRouter>['team']['getLeaveRequests'][number];
+type ResignationRow = inferRouterOutputs<AppRouter>['resignations']['listAll'][number];
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
   PENDING: { bg: 'bg-amber-500/10 text-amber-500', label: 'Pending' },
@@ -53,6 +66,8 @@ const departmentColors: Record<string, string> = {
 export function HRContent() {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
+  // The /hr route is open to both ADMIN and HR — both review resignations.
+  const isReviewer = isAdmin || session?.user?.role === 'HR';
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -69,6 +84,7 @@ export function HRContent() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="leave">Leave</TabsTrigger>
+          <TabsTrigger value="resignations">Resignations</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -77,6 +93,10 @@ export function HRContent() {
 
         <TabsContent value="leave">
           <LeaveTab isAdmin={isAdmin} />
+        </TabsContent>
+
+        <TabsContent value="resignations">
+          <ResignationsTab isReviewer={isReviewer} />
         </TabsContent>
       </Tabs>
     </div>
@@ -691,5 +711,281 @@ function StatTile({
         {hint && <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>}
       </CardContent>
     </Card>
+  );
+}
+
+/* ============================================================
+   Resignations tab — ADMIN/HR review queue
+   ============================================================ */
+type ReviewTarget = {
+  id: string;
+  name: string;
+  proposedLastDay: Date;
+  decision: 'APPROVED' | 'DECLINED';
+};
+
+function ResignationsTab({ isReviewer }: { isReviewer: boolean }) {
+  const { data, isLoading } = trpc.resignations.listAll.useQuery(
+    { status: 'PENDING' },
+    { enabled: isReviewer }
+  );
+  const [target, setTarget] = useState<ReviewTarget | null>(null);
+
+  const openReview = useCallback(
+    (row: ResignationRow, decision: 'APPROVED' | 'DECLINED') =>
+      setTarget({
+        id: row.id,
+        name: row.user.name,
+        proposedLastDay: new Date(row.proposedLastDay),
+        decision,
+      }),
+    []
+  );
+
+  if (!isReviewer) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Resignations are available to HR and admins only.
+      </p>
+    );
+  }
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-destructive/10">
+            <LogOut className="h-3.5 w-3.5 text-destructive" />
+          </div>
+          Resignations
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Pending requests awaiting your review.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-3 py-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full" />
+            ))}
+          </div>
+        ) : !data || data.length === 0 ? (
+          <div className="py-16 text-center">
+            <LogOut className="mx-auto h-10 w-10 text-muted-foreground/20" />
+            <p className="mt-3 text-sm text-muted-foreground">No pending resignations</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/60">
+            {data.map((row) => (
+              <ResignationReviewRow key={row.id} row={row} onReview={openReview} />
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      <ReviewResignationDialog target={target} onClose={() => setTarget(null)} />
+    </Card>
+  );
+}
+
+function ResignationReviewRow({
+  row,
+  onReview,
+}: {
+  row: ResignationRow;
+  onReview: (row: ResignationRow, decision: 'APPROVED' | 'DECLINED') => void;
+}) {
+  const initials = row.user.name
+    .split(' ')
+    .map((n) => n[0])
+    .join('');
+  const dept = row.user.department;
+
+  return (
+    <div className="flex items-start gap-3 py-4">
+      <Link href={`/team/${row.user.id}`} className="shrink-0">
+        <Avatar className="h-10 w-10">
+          <AvatarImage src={row.user.avatar ?? undefined} />
+          <AvatarFallback className="bg-secondary text-foreground font-medium text-sm">
+            {initials}
+          </AvatarFallback>
+        </Avatar>
+      </Link>
+      <div className="flex-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={`/team/${row.user.id}`}
+            className="text-sm font-semibold text-foreground hover:text-primary transition-colors"
+          >
+            {row.user.name}
+          </Link>
+          {dept && (
+            <span
+              className={cn(
+                'rounded-md px-2 py-0.5 text-[10px] font-medium',
+                departmentColors[dept] ?? 'bg-secondary text-muted-foreground'
+              )}
+            >
+              {dept.charAt(0) + dept.slice(1).toLowerCase()}
+            </span>
+          )}
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            {row.user.role}
+          </span>
+        </div>
+        {row.user.title && (
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">{row.user.title}</p>
+        )}
+        <p className="text-xs text-muted-foreground mt-1">
+          Proposed last day {format(new Date(row.proposedLastDay), 'MMM d, yyyy')} · submitted{' '}
+          {formatDistanceToNow(new Date(row.createdAt), { addSuffix: true })}
+        </p>
+        <p className="text-sm text-foreground mt-2 whitespace-pre-wrap leading-relaxed">
+          &ldquo;{row.reason}&rdquo;
+        </p>
+        <div className="flex items-center gap-2 mt-3">
+          <Button size="sm" onClick={() => onReview(row, 'APPROVED')}>
+            <CheckCircle2 className="h-3.5 w-3.5" /> Approve
+          </Button>
+          <Button variant="destructive" size="sm" onClick={() => onReview(row, 'DECLINED')}>
+            <XCircle className="h-3.5 w-3.5" /> Decline
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReviewResignationDialog({
+  target,
+  onClose,
+}: {
+  target: ReviewTarget | null;
+  onClose: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [note, setNote] = useState('');
+  const [lastDay, setLastDay] = useState('');
+
+  const review = trpc.resignations.review.useMutation({
+    onSuccess: () => {
+      utils.resignations.listAll.invalidate();
+      utils.team.getHrOverview.invalidate();
+      onClose();
+    },
+  });
+
+  // Seed the editable fields each time a new request is opened.
+  useEffect(() => {
+    if (target) {
+      setNote('');
+      setLastDay(new Date(target.proposedLastDay).toISOString().slice(0, 10));
+    }
+  }, [target]);
+
+  const isApprove = target?.decision === 'APPROVED';
+  const today = new Date().toISOString().slice(0, 10);
+  const dateValid = !isApprove || (!!lastDay && lastDay >= today);
+  const canSubmit = dateValid && !review.isPending;
+
+  return (
+    <Dialog
+      open={!!target}
+      onOpenChange={(v) => {
+        if (review.isPending) return;
+        if (!v) {
+          review.reset();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle
+            className={cn(
+              'flex items-center gap-1.5',
+              isApprove ? 'text-emerald-600 dark:text-emerald-500' : 'text-destructive'
+            )}
+          >
+            {isApprove ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : (
+              <XCircle className="h-4 w-4" />
+            )}
+            {isApprove ? 'Approve' : 'Decline'} resignation
+          </DialogTitle>
+          <DialogDescription>
+            {isApprove
+              ? `Confirm ${target?.name}'s last working day. You can add an optional note.`
+              : `Decline ${target?.name}'s resignation. You can add an optional note.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {isApprove && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-foreground">
+                Last working day <span className="text-destructive">*</span>
+              </label>
+              <Input
+                type="date"
+                min={today}
+                value={lastDay}
+                onChange={(e) => setLastDay(e.target.value)}
+                disabled={review.isPending}
+              />
+              {lastDay && !dateValid && (
+                <p className="mt-1 text-[11px] text-destructive">
+                  The last working day can&apos;t be in the past.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-foreground">
+              Review note (optional)
+            </label>
+            <Textarea
+              rows={3}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={
+                isApprove
+                  ? 'Any handover or offboarding details...'
+                  : 'Let the employee know why...'
+              }
+              disabled={review.isPending}
+            />
+          </div>
+
+          {review.error && <p className="text-xs text-destructive">{review.error.message}</p>}
+        </div>
+
+        <DialogFooter showCloseButton>
+          <Button
+            variant={isApprove ? 'default' : 'destructive'}
+            onClick={() => {
+              if (!target || !canSubmit) return;
+              review.mutate({
+                id: target.id,
+                decision: target.decision,
+                reviewNote: note.trim() || undefined,
+                lastWorkingDay: isApprove && lastDay ? new Date(lastDay) : undefined,
+              });
+            }}
+            disabled={!canSubmit}
+          >
+            {review.isPending && <Loader2 className="animate-spin" />}
+            {review.isPending
+              ? 'Saving...'
+              : isApprove
+                ? 'Approve resignation'
+                : 'Decline resignation'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -25,6 +25,7 @@ import {
 import { useTheme } from 'next-themes';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
+import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -43,21 +44,11 @@ const CommandDialog = dynamic(
   () => import('@/components/ui/command').then((m) => m.CommandDialog),
   { ssr: false }
 );
-const CommandEmpty = dynamic(() =>
-  import('@/components/ui/command').then((m) => m.CommandEmpty)
-);
-const CommandGroup = dynamic(() =>
-  import('@/components/ui/command').then((m) => m.CommandGroup)
-);
-const CommandInput = dynamic(() =>
-  import('@/components/ui/command').then((m) => m.CommandInput)
-);
-const CommandItem = dynamic(() =>
-  import('@/components/ui/command').then((m) => m.CommandItem)
-);
-const CommandList = dynamic(() =>
-  import('@/components/ui/command').then((m) => m.CommandList)
-);
+const CommandEmpty = dynamic(() => import('@/components/ui/command').then((m) => m.CommandEmpty));
+const CommandGroup = dynamic(() => import('@/components/ui/command').then((m) => m.CommandGroup));
+const CommandInput = dynamic(() => import('@/components/ui/command').then((m) => m.CommandInput));
+const CommandItem = dynamic(() => import('@/components/ui/command').then((m) => m.CommandItem));
+const CommandList = dynamic(() => import('@/components/ui/command').then((m) => m.CommandList));
 
 const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -85,6 +76,9 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const { data: session } = useSession();
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
+  // Detail pages register their loaded entity name here (id segment -> name),
+  // so e.g. /team/<id> shows "Saad Ajmal" instead of the raw id.
+  const breadcrumbLabels = useBreadcrumbStore((s) => s.labels);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -134,12 +128,15 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
     let path = '';
     for (const segment of segments) {
       path += `/${segment}`;
-      const label = routeLabels[path] || segment.charAt(0).toUpperCase() + segment.slice(1);
+      const label =
+        routeLabels[path] ||
+        breadcrumbLabels[segment] ||
+        segment.charAt(0).toUpperCase() + segment.slice(1);
       crumbs.push({ label, href: path });
     }
 
     return crumbs;
-  }, [pathname]);
+  }, [pathname, breadcrumbLabels]);
 
   const breadcrumbs = getBreadcrumbs();
 
@@ -265,136 +262,138 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           onOpenChange={setCommandOpen}
           commandProps={{ shouldFilter: false }}
         >
-        <CommandInput
-          placeholder="Search projects, tasks, clients, notes, team…"
-          value={searchInput}
-          onValueChange={setSearchInput}
-        />
-        <CommandList>
-          {debouncedSearch.length === 0 ? (
-            <CommandGroup heading="Navigation">
-              {Object.entries(routeLabels).map(([href, label]) => (
-                <CommandItem key={href} onSelect={() => goTo(href)}>
-                  {label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          ) : searchQuery.isLoading ? (
-            <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">
-              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Searching…
-            </div>
-          ) : (
-            (() => {
-              const r = searchQuery.data;
-              const empty =
-                !r ||
-                (r.projects.length === 0 &&
-                  r.tasks.length === 0 &&
-                  r.clients.length === 0 &&
-                  r.notes.length === 0 &&
-                  r.team.length === 0);
-              if (empty)
-                return <CommandEmpty>No results for &ldquo;{debouncedSearch}&rdquo;.</CommandEmpty>;
-              return (
-                <>
-                  {r!.projects.length > 0 && (
-                    <CommandGroup heading="Projects">
-                      {r!.projects.map((p) => (
-                        <CommandItem
-                          key={`p-${p.id}`}
-                          value={`project ${p.name} ${p.client?.name ?? ''}`}
-                          onSelect={() => goTo(`/projects/${p.id}`)}
-                        >
-                          <FolderKanban className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="flex-1 truncate">{p.name}</span>
-                          <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
-                            {p.client?.name ?? (p.type === 'INTERNAL' ? 'Internal' : '')}
-                          </span>
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  )}
-                  {r!.tasks.length > 0 && (
-                    <CommandGroup heading="Tasks">
-                      {r!.tasks.map((t) => {
-                        const projectId = t.column?.board?.project?.id;
-                        const projectName = t.column?.board?.project?.name ?? '';
-                        return (
+          <CommandInput
+            placeholder="Search projects, tasks, clients, notes, team…"
+            value={searchInput}
+            onValueChange={setSearchInput}
+          />
+          <CommandList>
+            {debouncedSearch.length === 0 ? (
+              <CommandGroup heading="Navigation">
+                {Object.entries(routeLabels).map(([href, label]) => (
+                  <CommandItem key={href} onSelect={() => goTo(href)}>
+                    {label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : searchQuery.isLoading ? (
+              <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Searching…
+              </div>
+            ) : (
+              (() => {
+                const r = searchQuery.data;
+                const empty =
+                  !r ||
+                  (r.projects.length === 0 &&
+                    r.tasks.length === 0 &&
+                    r.clients.length === 0 &&
+                    r.notes.length === 0 &&
+                    r.team.length === 0);
+                if (empty)
+                  return (
+                    <CommandEmpty>No results for &ldquo;{debouncedSearch}&rdquo;.</CommandEmpty>
+                  );
+                return (
+                  <>
+                    {r!.projects.length > 0 && (
+                      <CommandGroup heading="Projects">
+                        {r!.projects.map((p) => (
                           <CommandItem
-                            key={`t-${t.id}`}
-                            value={`task ${t.title} ${projectName}`}
-                            onSelect={() => projectId && goTo(`/projects/${projectId}`)}
+                            key={`p-${p.id}`}
+                            value={`project ${p.name} ${p.client?.name ?? ''}`}
+                            onSelect={() => goTo(`/projects/${p.id}`)}
                           >
-                            <CheckSquare className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                            <span className="flex-1 truncate">{t.title}</span>
+                            <FolderKanban className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="flex-1 truncate">{p.name}</span>
                             <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
-                              {projectName}
+                              {p.client?.name ?? (p.type === 'INTERNAL' ? 'Internal' : '')}
                             </span>
                           </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  )}
-                  {r!.clients.length > 0 && (
-                    <CommandGroup heading="Clients">
-                      {r!.clients.map((c) => (
-                        <CommandItem
-                          key={`c-${c.id}`}
-                          value={`client ${c.name} ${c.industry ?? ''}`}
-                          onSelect={() => goTo(`/clients/${c.id}`)}
-                        >
-                          <Briefcase className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="flex-1 truncate">{c.name}</span>
-                          {c.industry && (
-                            <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
-                              {c.industry}
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {r!.tasks.length > 0 && (
+                      <CommandGroup heading="Tasks">
+                        {r!.tasks.map((t) => {
+                          const projectId = t.column?.board?.project?.id;
+                          const projectName = t.column?.board?.project?.name ?? '';
+                          return (
+                            <CommandItem
+                              key={`t-${t.id}`}
+                              value={`task ${t.title} ${projectName}`}
+                              onSelect={() => projectId && goTo(`/projects/${projectId}`)}
+                            >
+                              <CheckSquare className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="flex-1 truncate">{t.title}</span>
+                              <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
+                                {projectName}
+                              </span>
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    )}
+                    {r!.clients.length > 0 && (
+                      <CommandGroup heading="Clients">
+                        {r!.clients.map((c) => (
+                          <CommandItem
+                            key={`c-${c.id}`}
+                            value={`client ${c.name} ${c.industry ?? ''}`}
+                            onSelect={() => goTo(`/clients/${c.id}`)}
+                          >
+                            <Briefcase className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="flex-1 truncate">{c.name}</span>
+                            {c.industry && (
+                              <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
+                                {c.industry}
+                              </span>
+                            )}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {r!.notes.length > 0 && (
+                      <CommandGroup heading="Notes">
+                        {r!.notes.map((n) => (
+                          <CommandItem
+                            key={`n-${n.id}`}
+                            value={`note ${n.title}`}
+                            onSelect={() => goTo(`/notes/${n.id}`)}
+                          >
+                            <StickyNote className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="flex-1 truncate">{n.title || 'Untitled'}</span>
+                            <span className="ml-2 shrink-0 text-[10px] text-muted-foreground capitalize">
+                              {n.visibility.toLowerCase()}
                             </span>
-                          )}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  )}
-                  {r!.notes.length > 0 && (
-                    <CommandGroup heading="Notes">
-                      {r!.notes.map((n) => (
-                        <CommandItem
-                          key={`n-${n.id}`}
-                          value={`note ${n.title}`}
-                          onSelect={() => goTo(`/notes/${n.id}`)}
-                        >
-                          <StickyNote className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="flex-1 truncate">{n.title || 'Untitled'}</span>
-                          <span className="ml-2 shrink-0 text-[10px] text-muted-foreground capitalize">
-                            {n.visibility.toLowerCase()}
-                          </span>
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  )}
-                  {r!.team.length > 0 && (
-                    <CommandGroup heading="Team">
-                      {r!.team.map((u) => (
-                        <CommandItem
-                          key={`u-${u.id}`}
-                          value={`user ${u.name} ${u.title ?? ''}`}
-                          onSelect={() => goTo(`/team/${u.id}`)}
-                        >
-                          <UsersIcon className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="flex-1 truncate">{u.name}</span>
-                          {u.title && (
-                            <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
-                              {u.title}
-                            </span>
-                          )}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  )}
-                </>
-              );
-            })()
-          )}
-        </CommandList>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {r!.team.length > 0 && (
+                      <CommandGroup heading="Team">
+                        {r!.team.map((u) => (
+                          <CommandItem
+                            key={`u-${u.id}`}
+                            value={`user ${u.name} ${u.title ?? ''}`}
+                            onSelect={() => goTo(`/team/${u.id}`)}
+                          >
+                            <UsersIcon className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="flex-1 truncate">{u.name}</span>
+                            {u.title && (
+                              <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
+                                {u.title}
+                              </span>
+                            )}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </>
+                );
+              })()
+            )}
+          </CommandList>
         </CommandDialog>
       )}
     </>

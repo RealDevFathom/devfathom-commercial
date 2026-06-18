@@ -29,7 +29,9 @@ export const GET = withApiAuth(
     });
     if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     // Object-level authz: the task's owning project must be accessible.
-    if (!(await canAccessProject(db, authCtx.userId, authCtx.userRole, task.column.board.projectId))) {
+    if (
+      !(await canAccessProject(db, authCtx.userId, authCtx.userRole, task.column.board.projectId))
+    ) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     return NextResponse.json({ data: task });

@@ -187,7 +187,9 @@ function DescriptionEditor({
       }}
       className={cn(
         'rounded-xl border border-transparent px-4 py-3 text-sm leading-relaxed cursor-text transition-colors hover:border-border hover:bg-secondary/30',
-        description ? 'text-muted-foreground whitespace-pre-wrap' : 'text-muted-foreground/50 italic'
+        description
+          ? 'text-muted-foreground whitespace-pre-wrap'
+          : 'text-muted-foreground/50 italic'
       )}
     >
       {description || 'Click to add a description...'}

@@ -14,9 +14,7 @@ function PresenceDot({ online }: { online: boolean }) {
       aria-label={online ? 'Online' : 'Offline'}
       className={cn(
         'block size-2.5 rounded-full ring-2 ring-card',
-        online
-          ? 'bg-emerald-500'
-          : 'border border-muted-foreground/40 bg-transparent'
+        online ? 'bg-emerald-500' : 'border border-muted-foreground/40 bg-transparent'
       )}
     />
   );
@@ -81,9 +79,7 @@ export function ChannelListItem({
       <span className="flex shrink-0 items-center gap-1">
         {channel.muted && <BellOff className="size-3 opacity-50" />}
         {hasMention && (
-          <span
-            className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-brass px-1 text-[10px] font-semibold leading-none text-[#161a19]"
-          >
+          <span className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-brass px-1 text-[10px] font-semibold leading-none text-[#161a19]">
             {channel.mentionCount}
           </span>
         )}

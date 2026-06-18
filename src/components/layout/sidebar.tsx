@@ -19,6 +19,7 @@ import {
   Video,
   StickyNote,
   BarChart3,
+  ScrollText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -31,6 +32,8 @@ interface NavItem {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   adminOnly?: boolean;
+  // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
+  hrAccess?: boolean;
 }
 
 const navigation: NavItem[] = [
@@ -43,7 +46,8 @@ const navigation: NavItem[] = [
   { label: 'Chat', href: '/chat', icon: MessageSquare },
   { label: 'Team', href: '/team', icon: Users },
   { label: 'Insights', href: '/team/stats', icon: BarChart3, adminOnly: true },
-  { label: 'HR', href: '/hr', icon: UserCog, adminOnly: true },
+  { label: 'HR', href: '/hr', icon: UserCog, hrAccess: true },
+  { label: 'Audit Log', href: '/audit-logs', icon: ScrollText, adminOnly: true },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
 
@@ -52,8 +56,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const pathname = usePathname();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
+  const isHr = session?.user?.role === 'HR';
 
-  const filteredNav = navigation.filter((item) => !item.adminOnly || isAdmin);
+  const filteredNav = navigation.filter((item) => {
+    if (item.hrAccess) return isAdmin || isHr; // people-ops surfaces (HR console)
+    if (item.adminOnly) return isAdmin;
+    return true;
+  });
 
   const getInitials = (name: string) => {
     return name

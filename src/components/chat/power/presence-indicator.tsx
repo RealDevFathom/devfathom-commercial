@@ -24,9 +24,7 @@ export function PresenceDot({
         'inline-block shrink-0 rounded-full',
         // Size defaults to 8px; callers can override via className
         'size-2',
-        online
-          ? 'bg-success'
-          : 'border border-muted-foreground/40 bg-muted',
+        online ? 'bg-success' : 'border border-muted-foreground/40 bg-muted',
         className
       )}
     />
@@ -37,20 +35,11 @@ export function PresenceDot({
 // PresenceLabel — "Active" / "Away" text that mirrors PresenceDot state
 // ---------------------------------------------------------------------------
 
-export function PresenceLabel({
-  userId,
-}: {
-  userId: string | null | undefined;
-}) {
+export function PresenceLabel({ userId }: { userId: string | null | undefined }) {
   const online = useIsOnline(userId);
 
   return (
-    <span
-      className={cn(
-        'text-xs',
-        online ? 'text-success' : 'text-muted-foreground'
-      )}
-    >
+    <span className={cn('text-xs', online ? 'text-success' : 'text-muted-foreground')}>
       {online ? 'Active' : 'Away'}
     </span>
   );

@@ -7,23 +7,35 @@ import { Sparkles, ArrowUp, Check, X, Loader2, Wrench, Square } from 'lucide-rea
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { useAssistant } from '@/lib/assistant-store';
 import { cn } from '@/lib/utils';
+import { AssistantMarkdown } from './markdown';
 
 const TOOL_LABELS: Record<string, string> = {
-  listProjects: 'projects',
-  listMyTasks: 'your tasks',
-  listClients: 'clients',
   listTeam: 'the team',
-  getFinanceSummary: 'finance',
+  getTeamMember: 'profile',
+  searchTasks: 'tasks',
+  listMyTasks: 'your tasks',
   findOverdueTasks: 'overdue tasks',
+  listProjects: 'projects',
+  getProject: 'project',
   findProjectsBehindSchedule: 'projects behind',
+  listClients: 'clients',
+  getClient: 'client',
+  listMeetings: 'the schedule',
+  getLeaveOverview: 'time off',
+  searchNotes: 'notes',
+  getRecentActivity: 'recent activity',
+  getOverview: 'your briefing',
+  getFinanceSummary: 'finance',
+  listInvoices: 'invoices',
   createTask: 'task',
   createClient: 'client',
+  setTeamMemberStatus: 'member status',
 };
 
 const SUGGESTIONS = [
-  'What tasks are assigned to me?',
-  'List our active projects',
-  'Add a client called Northwind',
+  'Brief me on my day',
+  "What is Aisha working on?",
+  'Which projects are behind schedule?',
   "How's our finance this month?",
 ];
 
@@ -150,9 +162,21 @@ type AnyPart = {
   state?: string;
   text?: string;
   input?: unknown;
+  output?: unknown;
   errorText?: string;
   approval?: { id: string };
 };
+
+/** A tool can succeed at the SDK level but return a refusal/clarification in its
+ *  result (e.g. "you can't deactivate the last admin"). Pull that message out so
+ *  the UI never shows a misleading "Done" for a write that didn't happen. */
+function resultMessage(output: unknown): { kind: 'error' | 'clarify'; text: string } | null {
+  if (!output || typeof output !== 'object') return null;
+  const o = output as Record<string, unknown>;
+  if (typeof o.error === 'string') return { kind: 'error', text: o.error };
+  if (typeof o.needsClarification === 'string') return { kind: 'clarify', text: o.needsClarification };
+  return null;
+}
 
 function MessageBubble({
   message,
@@ -191,7 +215,13 @@ function MessageBubble({
       >
         {visible.map((part, i) => {
           if (part.type === 'text' && part.text) {
-            return <FormattedText key={i} text={part.text} />;
+            return isUser ? (
+              <p key={i} className="whitespace-pre-wrap break-words text-current">
+                {part.text}
+              </p>
+            ) : (
+              <AssistantMarkdown key={i}>{part.text}</AssistantMarkdown>
+            );
           }
           if (part.type.startsWith('tool-')) {
             return (
@@ -220,7 +250,7 @@ function ToolPart({
   onApprove: (approvalId: string, approved: boolean) => void;
 }) {
   const label = TOOL_LABELS[toolName] ?? toolName;
-  const isWrite = toolName.startsWith('create');
+  const isWrite = !/^(list|find|get)/.test(toolName);
 
   if (part.state === 'approval-requested' && part.approval) {
     return (
@@ -238,10 +268,22 @@ function ToolPart({
     );
   }
   if (part.state === 'output-available') {
+    // A tool can return a refusal/clarification even though the call "succeeded".
+    // Surface it instead of a misleading "Done"/"Read" chip.
+    const msg = resultMessage(part.output);
+    if (msg) {
+      return (
+        <StatusChip
+          icon={msg.kind === 'error' ? <X className="h-3 w-3" /> : <Loader2 className="h-3 w-3" />}
+          text={msg.text}
+          tone={msg.kind === 'error' ? 'error' : 'muted'}
+        />
+      );
+    }
     return (
       <StatusChip
         icon={<Check className="h-3 w-3" />}
-        text={isWrite ? `Created ${label}` : `Read ${label}`}
+        text={isWrite ? 'Done' : `Read ${label}`}
         tone={isWrite ? 'success' : 'muted'}
       />
     );
@@ -363,60 +405,19 @@ function describeAction(
       ]),
     };
   }
+  if (toolName === 'setTeamMemberStatus') {
+    const action =
+      o.status === 'INACTIVE'
+        ? 'Deactivate member'
+        : o.status === 'ACTIVE'
+          ? 'Reactivate member'
+          : 'Set member status';
+    return {
+      title: action,
+      fields: clean([row('Member', o.name ?? o.userId), row('Status', o.status)]),
+    };
+  }
   return { title: toolName, fields: clean(Object.entries(o).map(([k, v]) => row(k, v))) };
-}
-
-/* ------------------------------------------------------------- formatting */
-
-function inline(s: string): ReactNode[] {
-  return s.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((p, i) => {
-    if (/^\*\*[^*]+\*\*$/.test(p)) {
-      return (
-        <strong key={i} className="font-semibold">
-          {p.slice(2, -2)}
-        </strong>
-      );
-    }
-    if (/^`[^`]+`$/.test(p)) {
-      return (
-        <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-          {p.slice(1, -1)}
-        </code>
-      );
-    }
-    return <span key={i}>{p}</span>;
-  });
-}
-
-function FormattedText({ text }: { text: string }) {
-  const blocks = text.trim().split(/\n{2,}/);
-  return (
-    <div className="space-y-2 leading-relaxed">
-      {blocks.map((block, bi) => {
-        const lines = block.split('\n');
-        const bulletLines = lines.filter((l) => /^\s*[-*]\s+/.test(l));
-        if (bulletLines.length > 0 && bulletLines.length === lines.filter((l) => l.trim()).length) {
-          return (
-            <ul key={bi} className="list-disc space-y-0.5 pl-4">
-              {bulletLines.map((l, li) => (
-                <li key={li}>{inline(l.replace(/^\s*[-*]\s+/, ''))}</li>
-              ))}
-            </ul>
-          );
-        }
-        return (
-          <p key={bi} className="break-words text-current">
-            {block.split('\n').map((l, li) => (
-              <span key={li}>
-                {li > 0 && <br />}
-                {inline(l)}
-              </span>
-            ))}
-          </p>
-        );
-      })}
-    </div>
-  );
 }
 
 function Thinking() {

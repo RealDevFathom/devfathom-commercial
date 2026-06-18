@@ -49,7 +49,16 @@ export function LoginForm() {
     });
 
     if (result?.error) {
-      setError('Invalid email or password. Please try again.');
+      // A deactivated account that supplied the CORRECT password is surfaced by
+      // the server with code 'suspended' (see SuspendedError in src/lib/auth.ts).
+      // Every other failure — wrong password or unknown email, including a wrong
+      // password for a suspended account — stays on the generic message so the
+      // form can't be used to enumerate which emails are suspended.
+      setError(
+        result.code === 'suspended'
+          ? 'Your account has been suspended. Please contact your workspace administrator.'
+          : 'Invalid email or password. Please try again.'
+      );
     } else {
       router.push(callbackUrl);
       router.refresh();

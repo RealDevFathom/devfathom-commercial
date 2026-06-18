@@ -50,10 +50,14 @@ export const MentionList = forwardRef<MentionListHandle, MentionListProps>(
 
     if (items.length === 0) {
       return (
-        <div aria-live="polite" className="w-64 rounded-xl border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-lg ring-1 ring-foreground/5">
+        <div
+          aria-live="polite"
+          className="w-64 rounded-xl border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-lg ring-1 ring-foreground/5"
+        >
           {query.trim() ? (
             <>
-              No people matching &ldquo;<span className="text-foreground">{query.trim()}</span>&rdquo;
+              No people matching &ldquo;<span className="text-foreground">{query.trim()}</span>
+              &rdquo;
             </>
           ) : (
             'Type a name to mention…'

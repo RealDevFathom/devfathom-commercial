@@ -92,13 +92,7 @@ export function useToggleReaction(channelId: string) {
   });
 }
 
-export function ReactionBar({
-  message,
-  channelId,
-}: {
-  message: ChatMessage;
-  channelId: string;
-}) {
+export function ReactionBar({ message, channelId }: { message: ChatMessage; channelId: string }) {
   const toggle = useToggleReaction(channelId);
 
   // The add-reaction affordance lives in the hover action bar; nothing to show

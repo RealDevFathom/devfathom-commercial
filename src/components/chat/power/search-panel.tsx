@@ -5,12 +5,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { SearchIcon } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import type { ChatMessage } from '@/lib/chat/contract';
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
@@ -20,13 +15,7 @@ import { cn } from '@/lib/utils';
 // Inline highlight helper — marks the matched query span in plaintext
 // ---------------------------------------------------------------------------
 
-function HighlightedSnippet({
-  text,
-  query,
-}: {
-  text: string;
-  query: string;
-}) {
+function HighlightedSnippet({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
   const lower = text.toLowerCase();
   const idx = lower.indexOf(query.toLowerCase());
@@ -74,10 +63,7 @@ export function SearchPanel({
 
   return (
     <Sheet open={open} onOpenChange={(o) => onOpenChange(o)}>
-      <SheetContent
-        side="right"
-        className="flex w-[360px] flex-col gap-0 p-0 sm:max-w-[360px]"
-      >
+      <SheetContent side="right" className="flex w-[360px] flex-col gap-0 p-0 sm:max-w-[360px]">
         <SheetHeader className="border-b border-border/60 px-4 pb-3 pt-4">
           <SheetTitle>Search messages</SheetTitle>
           <div className="relative mt-2">
@@ -87,7 +73,6 @@ export function SearchPanel({
               onChange={(e) => setRawQuery(e.target.value)}
               placeholder="Search…"
               className="pl-8"
-               
               autoFocus
             />
           </div>
@@ -142,13 +127,9 @@ export function SearchPanel({
                         {msg.sender.avatar && (
                           <AvatarImage src={msg.sender.avatar} alt={msg.sender.name} />
                         )}
-                        <AvatarFallback>
-                          {msg.sender.name[0].toUpperCase()}
-                        </AvatarFallback>
+                        <AvatarFallback>{msg.sender.name[0].toUpperCase()}</AvatarFallback>
                       </Avatar>
-                      <span className="text-xs font-medium text-foreground">
-                        {msg.sender.name}
-                      </span>
+                      <span className="text-xs font-medium text-foreground">{msg.sender.name}</span>
                       <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                         {formatDistanceToNow(new Date(msg.createdAt), { addSuffix: true })}
                       </span>

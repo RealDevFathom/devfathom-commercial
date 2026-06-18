@@ -21,11 +21,31 @@ import {
   Copy,
   ExternalLink,
   AlertCircle,
+  LogOut,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+
+function formatDay(d: Date | string) {
+  return new Date(d).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
 
 export function SettingsContent() {
   const { data: session } = useSession();
@@ -136,6 +156,9 @@ export function SettingsContent() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Leave the company */}
+      <ResignationSection />
     </div>
   );
 }
@@ -748,5 +771,239 @@ function ApiTokensSection() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/* ============================================================
+   Leave the company — employee self-service resignation
+   ============================================================ */
+function ResignationSection() {
+  const utils = trpc.useUtils();
+  const { data: resignations } = trpc.resignations.mine.useQuery();
+  const [showResign, setShowResign] = useState(false);
+
+  // mine is returned newest-first, so the head is the most recent request.
+  const latest = resignations?.[0];
+  const status = latest?.status;
+
+  const withdraw = trpc.resignations.withdraw.useMutation({
+    onSuccess: () => utils.resignations.mine.invalidate(),
+  });
+
+  // A new request can be filed when there's nothing on record, or the most
+  // recent one is no longer active (withdrawn or declined).
+  const canResign = !latest || status === 'WITHDRAWN' || status === 'DECLINED';
+
+  return (
+    <Card className="border-destructive/30">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-destructive/10">
+            <LogOut className="h-3.5 w-3.5 text-destructive" />
+          </div>
+          Leave the company
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Submitting a resignation sends a request to HR for review. It is not final until
+          approved.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {status === 'PENDING' && latest && (
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-foreground">
+                  Resignation pending review
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Proposed last working day: {formatDay(latest.proposedLastDay)}. HR will be in
+                  touch.
+                </p>
+                <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap leading-relaxed">
+                  &ldquo;{latest.reason}&rdquo;
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => withdraw.mutate({ id: latest.id })}
+                disabled={withdraw.isPending}
+              >
+                {withdraw.isPending && <Loader2 className="animate-spin" />}
+                {withdraw.isPending ? 'Withdrawing...' : 'Withdraw'}
+              </Button>
+            </div>
+            {withdraw.error && (
+              <p className="text-xs text-destructive text-right">{withdraw.error.message}</p>
+            )}
+          </div>
+        )}
+
+        {status === 'APPROVED' && latest && (
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+            <p className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+              <Check className="h-3.5 w-3.5 text-emerald-500" /> Resignation approved
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Your last working day is{' '}
+              <span className="font-medium text-foreground">
+                {formatDay(latest.lastWorkingDay ?? latest.proposedLastDay)}
+              </span>
+              .
+            </p>
+            {latest.reviewNote && (
+              <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap leading-relaxed">
+                Note{latest.reviewedBy ? ` from ${latest.reviewedBy.name}` : ''}: &ldquo;
+                {latest.reviewNote}&rdquo;
+              </p>
+            )}
+          </div>
+        )}
+
+        {status === 'DECLINED' && latest && (
+          <div className="rounded-xl border border-border bg-secondary/30 p-4">
+            <p className="text-sm font-semibold text-foreground">Resignation declined</p>
+            {latest.reviewNote ? (
+              <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap leading-relaxed">
+                &ldquo;{latest.reviewNote}&rdquo;
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-1">
+                Your previous request was not approved.
+              </p>
+            )}
+          </div>
+        )}
+
+        {canResign ? (
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm text-muted-foreground">
+              Considering moving on? You can formally resign here.
+            </p>
+            <Button variant="destructive" size="sm" onClick={() => setShowResign(true)}>
+              <LogOut className="h-3.5 w-3.5" />
+              Resign from the company
+            </Button>
+          </div>
+        ) : null}
+      </CardContent>
+
+      <ResignDialog open={showResign} onOpenChange={setShowResign} />
+    </Card>
+  );
+}
+
+function ResignDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const utils = trpc.useUtils();
+  const [reason, setReason] = useState('');
+  const [lastDay, setLastDay] = useState('');
+
+  const submit = trpc.resignations.submit.useMutation({
+    onSuccess: () => {
+      utils.resignations.mine.invalidate();
+      setReason('');
+      setLastDay('');
+      onOpenChange(false);
+    },
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const trimmed = reason.trim();
+  const reasonValid = trimmed.length >= 10;
+  const dateValid = !!lastDay && lastDay >= today;
+  const canSubmit = reasonValid && dateValid && !submit.isPending;
+
+  const reset = () => {
+    setReason('');
+    setLastDay('');
+    submit.reset();
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (submit.isPending) return;
+        if (!v) reset();
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-1.5 text-destructive">
+            <LogOut className="h-4 w-4" /> Resign from the company
+          </DialogTitle>
+          <DialogDescription>
+            This sends a resignation request to HR for review. You can withdraw it any time before
+            it&apos;s reviewed.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-foreground">
+              Reason <span className="text-destructive">*</span>
+            </label>
+            <Textarea
+              autoFocus
+              rows={4}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Let HR know why you're leaving (at least 10 characters)."
+              disabled={submit.isPending}
+            />
+            {reason.length > 0 && !reasonValid && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Please write at least 10 characters.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-foreground">
+              Proposed last working day <span className="text-destructive">*</span>
+            </label>
+            <Input
+              type="date"
+              min={today}
+              value={lastDay}
+              onChange={(e) => setLastDay(e.target.value)}
+              disabled={submit.isPending}
+            />
+            {lastDay && !dateValid && (
+              <p className="mt-1 text-[11px] text-destructive">
+                Your last working day can&apos;t be in the past.
+              </p>
+            )}
+          </div>
+
+          {submit.error && <p className="text-xs text-destructive">{submit.error.message}</p>}
+        </div>
+
+        <DialogFooter showCloseButton>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (!canSubmit) return;
+              submit.mutate({ reason: trimmed, proposedLastDay: new Date(lastDay) });
+            }}
+            disabled={!canSubmit}
+          >
+            {submit.isPending && <Loader2 className="animate-spin" />}
+            {submit.isPending ? 'Submitting...' : 'Submit resignation'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

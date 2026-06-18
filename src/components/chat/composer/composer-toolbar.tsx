@@ -1,7 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Bold, Italic, Strikethrough, Code, SquareCode, List, ListOrdered, Link2 } from 'lucide-react';
+import {
+  Bold,
+  Italic,
+  Strikethrough,
+  Code,
+  SquareCode,
+  List,
+  ListOrdered,
+  Link2,
+} from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import { cn } from '@/lib/utils';
 

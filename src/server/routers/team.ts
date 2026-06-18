@@ -1,23 +1,20 @@
 import { z } from 'zod';
 import { hash, compare } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
-import { router, protectedProcedure, adminProcedure } from '../trpc';
+import { router, protectedProcedure, adminProcedure, hrProcedure, capabilityProcedure } from '../trpc';
+import { can, subjectFromSession } from '@/lib/abac';
 import { assertNotificationOwner } from '../authz';
-import { appUrl, templates } from '@/lib/email';
+import { annotateAudit, diffChanges } from '../audit';
+import { appUrl, templates, sendEmail } from '@/lib/email';
 import { notify } from '@/lib/notifications';
+import { passwordSchema } from '@/lib/password-policy';
+import { generateInviteToken } from '@/lib/invite-token';
 
-// "LEADERSHIP" → "Leadership", "ADMIN" → "Admin".
-const titleCase = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
+// "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
+const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
 
-// Strong password policy shared by every mutation that sets a password
-// (createMember, changePassword, adminResetPassword): at least 12 characters
-// with lowercase, uppercase, and a digit.
-const passwordSchema = z
-  .string()
-  .min(12, 'Password must be at least 12 characters long')
-  .regex(/[a-z]/, 'Password must include a lowercase letter')
-  .regex(/[A-Z]/, 'Password must include an uppercase letter')
-  .regex(/[0-9]/, 'Password must include a number');
+// How long an invitation link stays valid.
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
@@ -55,13 +52,16 @@ export const teamRouter = router({
     });
   }),
 
-  createMember: adminProcedure
+  // Invite a new member: create them in the INVITED state with no password, mint
+  // a single-use token, and email them a link to set their own password and finish
+  // their profile. The admin never sets (or sees) a password. Re-inviting someone
+  // who is still pending just refreshes their details and issues a new link.
+  inviteMember: adminProcedure
     .input(
       z.object({
         name: z.string().min(1),
         email: z.string().email(),
-        password: passwordSchema,
-        role: z.enum(['ADMIN', 'EMPLOYEE']).default('EMPLOYEE'),
+        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
         department: z.enum([
           'LEADERSHIP',
           'ENGINEERING',
@@ -77,38 +77,79 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.db.user.findUnique({ where: { email: input.email } });
-      if (existing)
+      const email = input.email.toLowerCase();
+      const existing = await ctx.db.user.findUnique({
+        where: { email },
+        select: { id: true, status: true },
+      });
+      // Only a still-pending invite may be re-sent; an active/real account blocks.
+      if (existing && existing.status !== 'INVITED') {
         throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
+      }
 
-      const hashed = await hash(input.password, 12);
-      const created = await ctx.db.user.create({
-        data: {
-          ...input,
-          password: hashed,
-        },
+      const { token, tokenHash } = generateInviteToken();
+      const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+      const profile = {
+        name: input.name,
+        role: input.role,
+        department: input.department,
+        title: input.title,
+        phone: input.phone ?? null,
+        bio: input.bio ?? null,
+        skills: input.skills,
+      };
+
+      const user = await ctx.db.$transaction(async (tx) => {
+        // Upsert the user (re-invite refreshes the seeded details), then replace
+        // any prior invitation with a fresh single-use token.
+        const u = existing
+          ? await tx.user.update({
+              where: { id: existing.id },
+              data: { ...profile, password: null, status: 'INVITED' },
+            })
+          : await tx.user.create({
+              data: { ...profile, email, password: null, status: 'INVITED' },
+            });
+
+        await tx.invitation.upsert({
+          where: { userId: u.id },
+          create: {
+            userId: u.id,
+            email,
+            tokenHash,
+            invitedById: ctx.session.user.id,
+            expiresAt,
+          },
+          update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.session.user.id },
+        });
+
+        return u;
       });
 
-      // Welcome the new member with their sign-in details.
-      notify(ctx.db, [created.id], {
-        type: 'user_welcome',
-        title: 'Welcome to DevFathom',
-        message: 'Your DevFathom account has been created.',
-        entityType: 'User',
-        entityId: created.id,
-        email: (r) =>
-          templates.welcome({
-            name: r.name,
-            workspace: 'DevFathom',
-            role: `${titleCase(input.role)} · ${titleCase(input.department)}`,
-            email: r.email,
-            tempPassword: input.password,
-            loginUrl: `${appUrl()}/login`,
-            inviterName: ctx.session.user.name,
-          }),
-      });
+      const inviteUrl = `${appUrl()}/invite/${token}`;
 
-      return created;
+      // Best-effort send — never fail the mutation on an email hiccup; the admin
+      // still gets the inviteUrl back to share manually if delivery is unverified.
+      const mail = templates.inviteMember({
+        name: user.name,
+        inviterName: ctx.session.user.name ?? undefined,
+        role: `${titleCase(input.role)} · ${titleCase(input.department)}`,
+        workspace: 'DevFathom',
+        acceptUrl: inviteUrl,
+        expiresLabel: 'in 7 days',
+      });
+      try {
+        await sendEmail({
+          to: { email, name: user.name },
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+        });
+      } catch (err) {
+        console.error('[inviteMember] invite email failed for', email, err);
+      }
+
+      return { id: user.id, inviteUrl };
     }),
 
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
@@ -154,7 +195,7 @@ export const teamRouter = router({
     });
   }),
 
-  getLeaveRequests: adminProcedure
+  getLeaveRequests: hrProcedure
     .input(
       z
         .object({
@@ -191,7 +232,7 @@ export const teamRouter = router({
       });
     }),
 
-  updateLeaveStatus: adminProcedure
+  updateLeaveStatus: capabilityProcedure('leave:approve')
     .input(
       z.object({
         id: z.string(),
@@ -288,7 +329,7 @@ export const teamRouter = router({
         where: { id: ctx.session.user.id },
         select: { password: true },
       });
-      if (!user) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!user || !user.password) throw new TRPCError({ code: 'NOT_FOUND' });
 
       const valid = await compare(input.currentPassword, user.password);
       if (!valid)
@@ -308,7 +349,7 @@ export const teamRouter = router({
         id: z.string(),
         name: z.string().min(1).optional(),
         email: z.string().email().optional(),
-        role: z.enum(['ADMIN', 'EMPLOYEE']).optional(),
+        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).optional(),
         department: z
           .enum(['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN'])
           .optional(),
@@ -321,7 +362,38 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      return ctx.db.user.update({ where: { id }, data });
+      const auditFields = [
+        'name',
+        'email',
+        'role',
+        'department',
+        'title',
+        'phone',
+        'bio',
+        'skills',
+        'status',
+      ] as const;
+      const before = await ctx.db.user.findUnique({
+        where: { id },
+        select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
+          (typeof auditFields)[number],
+          true
+        >,
+      });
+      const updated = await ctx.db.user.update({ where: { id }, data });
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: id,
+        targetLabel: updated.name,
+        description: `Updated team member ${updated.name}`,
+        changes:
+          diffChanges(
+            before as Record<string, unknown> | null,
+            updated as unknown as Record<string, unknown>,
+            [...auditFields]
+          ) ?? undefined,
+      });
+      return updated;
     }),
 
   adminResetPassword: adminProcedure
@@ -333,23 +405,94 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const hashed = await hash(input.newPassword, 12);
-      await ctx.db.user.update({
+      const user = await ctx.db.user.update({
         where: { id: input.id },
         data: { password: hashed },
+        select: { name: true },
+      });
+      // The new password is redacted by the audit layer; record only that a
+      // reset happened, by whom, and for whom.
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: input.id,
+        targetLabel: user.name,
+        description: `Reset password for ${user.name}`,
+        metadata: { passwordReset: true },
       });
       return { success: true };
     }),
 
-  deactivateMember: adminProcedure
-    .input(z.object({ id: z.string() }))
+  // Lay off (terminate) a team member. Soft-delete: the row is kept (status →
+  // INACTIVE) so audit history and FK integrity survive. Captures a mandatory
+  // reason, records it in the audit trail, and emails the member a notice.
+  layOffMember: hrProcedure
+    .input(z.object({ id: z.string(), reason: z.string().min(3).max(2000) }))
     .mutation(async ({ ctx, input }) => {
       if (input.id === ctx.session.user.id) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself' });
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot lay off yourself' });
       }
-      return ctx.db.user.update({
+      const before = await ctx.db.user.findUnique({
+        where: { id: input.id },
+        select: { status: true, name: true, email: true, role: true },
+      });
+      if (!before) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
+      }
+      // ABAC: admins may lay off anyone; HR may lay off non-admins only. The
+      // coarse hrProcedure gate already required ADMIN/HR; this resource-level
+      // check enforces the "HR can't terminate an admin" attribute condition.
+      const subject = subjectFromSession(ctx.session.user);
+      if (!(await can(subject, 'team:layoff', { type: 'User', targetRole: before.role }, { source: 'TRPC' }))) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to lay off this member.',
+        });
+      }
+      // Never strand the workspace without an admin: if the target is the last
+      // active ADMIN, block the lay-off.
+      if (before.role === 'ADMIN') {
+        const otherActiveAdmins = await ctx.db.user.count({
+          where: { id: { not: input.id }, role: 'ADMIN', status: 'ACTIVE' },
+        });
+        if (otherActiveAdmins === 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'You cannot lay off the last active admin',
+          });
+        }
+      }
+      const reason = input.reason.trim();
+      const updated = await ctx.db.user.update({
         where: { id: input.id },
         data: { status: 'INACTIVE' },
       });
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: input.id,
+        targetLabel: updated.name,
+        description: `Laid off ${updated.name}`,
+        changes: { status: { before: before.status ?? null, after: 'INACTIVE' } },
+        metadata: { laidOff: true, reason },
+      });
+
+      // Best-effort notice — never fail the mutation if email delivery hiccups.
+      try {
+        const mail = templates.accountDeactivated({
+          name: updated.name,
+          byName: ctx.session.user.name ?? undefined,
+          reason,
+        });
+        await sendEmail({
+          to: { email: before.email, name: updated.name },
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+        });
+      } catch (err) {
+        console.error('[layOffMember] notice email failed for', before.email, err);
+      }
+
+      return updated;
     }),
 
   // Performance notes — admin-authored feedback on a team member.
@@ -398,7 +541,7 @@ export const teamRouter = router({
     }),
 
   // HR overview — dashboard stats for the HR landing page.
-  getHrOverview: adminProcedure.query(async ({ ctx }) => {
+  getHrOverview: hrProcedure.query(async ({ ctx }) => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);

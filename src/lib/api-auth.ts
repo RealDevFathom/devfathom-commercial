@@ -2,10 +2,12 @@ import { db } from '@/lib/db';
 import { compare, hash } from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { NextResponse } from 'next/server';
+import { recordRestAudit } from '@/server/audit';
+import { ACTIVE_STATUSES } from '@/lib/abac';
 
 export type ApiContext = {
   userId: string;
-  userRole: 'ADMIN' | 'EMPLOYEE';
+  userRole: 'ADMIN' | 'EMPLOYEE' | 'HR';
   scopes: string[];
   tokenId: string;
 };
@@ -54,7 +56,7 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
     const valid = await compare(token, candidate.tokenHash);
     if (!valid) continue;
 
-    if (candidate.user.status !== 'ACTIVE') {
+    if (!ACTIVE_STATUSES.has(candidate.user.status)) {
       return NextResponse.json({ error: 'User account is inactive' }, { status: 403 });
     }
 
@@ -106,32 +108,78 @@ export function withApiAuth<T extends unknown[]>(
   handler: (ctx: ApiContext, request: Request, ...args: T) => Promise<Response> | Response
 ) {
   return async (request: Request, ...args: T): Promise<Response> => {
+    const start = Date.now();
+
     const auth = await authenticateApiRequest(request);
-    if (auth instanceof NextResponse) return auth;
+    if (auth instanceof NextResponse) {
+      // Authentication failed — record the attempt with no actor.
+      recordRestAudit({
+        request,
+        ctx: null,
+        scope: requiredScope,
+        status: auth.status,
+        durationMs: Date.now() - start,
+      });
+      return auth;
+    }
 
     if (!hasScope(auth, requiredScope)) {
-      return NextResponse.json(
+      const res = NextResponse.json(
         { error: `Insufficient permissions. Required scope: ${requiredScope}` },
         { status: 403 }
       );
+      recordRestAudit({
+        request,
+        ctx: auth,
+        scope: requiredScope,
+        status: 403,
+        error: 'Insufficient scope',
+        durationMs: Date.now() - start,
+      });
+      return res;
     }
 
     // Finance is an admin-only domain. Enforce the bound user's ROLE here (not
     // just the token scope) so that even a wildcard "*" token issued to a
     // non-admin user cannot read or mutate finance data.
     if (requiredScope.startsWith('finance') && auth.userRole !== 'ADMIN') {
-      return NextResponse.json(
+      const res = NextResponse.json(
         { error: 'Forbidden: finance endpoints require an admin-bound token' },
         { status: 403 }
       );
+      recordRestAudit({
+        request,
+        ctx: auth,
+        scope: requiredScope,
+        status: 403,
+        error: 'Finance requires admin-bound token',
+        durationMs: Date.now() - start,
+      });
+      return res;
     }
 
     try {
-      return await handler(auth, request, ...args);
+      const res = await handler(auth, request, ...args);
+      recordRestAudit({
+        request,
+        ctx: auth,
+        scope: requiredScope,
+        status: res.status,
+        durationMs: Date.now() - start,
+      });
+      return res;
     } catch (err) {
       // Log the full error server-side, but never leak DB/Prisma internals or
       // stack details to the client — respond with a generic 500.
       console.error(`API error in ${requiredScope}:`, err);
+      recordRestAudit({
+        request,
+        ctx: auth,
+        scope: requiredScope,
+        status: 500,
+        error: err,
+        durationMs: Date.now() - start,
+      });
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
   };

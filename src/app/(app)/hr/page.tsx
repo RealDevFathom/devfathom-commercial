@@ -7,7 +7,9 @@ export const metadata: Metadata = { title: 'HR & Leave' };
 
 export default async function HRPage() {
   const session = await auth();
-  if (session?.user?.role !== 'ADMIN') {
+  // The HR console is for people-ops: ADMINs and the HR role.
+  const role = session?.user?.role;
+  if (role !== 'ADMIN' && role !== 'HR') {
     redirect('/dashboard');
   }
   return <HRContent />;

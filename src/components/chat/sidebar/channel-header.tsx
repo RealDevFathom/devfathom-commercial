@@ -3,12 +3,7 @@
 import { Bell, BellOff, Hash, Lock, Pin, Search, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-  TooltipProvider,
-} from '@/components/ui/tooltip';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -76,7 +71,9 @@ export function ChannelHeader({
           {channel.topic && (
             <>
               <span className="select-none text-muted-foreground/40">·</span>
-              <span className="min-w-0 truncate text-xs text-muted-foreground">{channel.topic}</span>
+              <span className="min-w-0 truncate text-xs text-muted-foreground">
+                {channel.topic}
+              </span>
             </>
           )}
         </div>

@@ -206,7 +206,8 @@ const GRID_COLS = 8;
 
 function handleGridKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
   const { key } = e;
-  if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'ArrowUp' && key !== 'ArrowDown') return;
+  if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'ArrowUp' && key !== 'ArrowDown')
+    return;
   e.preventDefault();
   const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button'));
   const idx = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -295,7 +296,14 @@ export function EmojiPicker({
           <div className="p-2">
             {matches ? (
               matches.length > 0 ? (
-                <div role="grid" aria-label="Search results" className="grid grid-cols-8 gap-0.5" onKeyDown={handleGridKeyDown}>{matches.map(renderEmoji)}</div>
+                <div
+                  role="grid"
+                  aria-label="Search results"
+                  className="grid grid-cols-8 gap-0.5"
+                  onKeyDown={handleGridKeyDown}
+                >
+                  {matches.map(renderEmoji)}
+                </div>
               ) : (
                 <p className="px-1 py-8 text-center text-xs text-muted-foreground">
                   No emoji found
@@ -307,7 +315,14 @@ export function EmojiPicker({
                   <p className="px-1 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
                     {group.name}
                   </p>
-                  <div role="grid" aria-label={group.name} className="grid grid-cols-8 gap-0.5" onKeyDown={handleGridKeyDown}>{group.emojis.map(renderEmoji)}</div>
+                  <div
+                    role="grid"
+                    aria-label={group.name}
+                    className="grid grid-cols-8 gap-0.5"
+                    onKeyDown={handleGridKeyDown}
+                  >
+                    {group.emojis.map(renderEmoji)}
+                  </div>
                 </div>
               ))
             )}

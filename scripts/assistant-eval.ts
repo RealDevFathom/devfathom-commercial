@@ -20,6 +20,7 @@ type Case = {
   prompt: string;
   role?: Role; // default ADMIN
   expect?: string[]; // these tools MUST be called
+  expectAny?: string[]; // at least ONE of these must be called (handles tool overlap)
   forbid?: string[]; // these tools must NOT be called
   allowExtra?: boolean; // permit tools beyond `expect`
   noTools?: boolean; // assert zero tools called
@@ -35,7 +36,12 @@ const WRITE_TOOLS = ['createTask', 'createClient'];
 const CASES: Case[] = [
   // ── Core ───────────────────────────────────────────────────────────────
   { cat: 'core', prompt: 'List employees', expect: ['listTeam'], mustInclude: ['Alex'] },
-  { cat: 'core', prompt: 'what tasks are assigned to me?', expect: ['listMyTasks'] },
+  {
+    cat: 'core',
+    prompt: 'what tasks are assigned to me?',
+    expectAny: ['listMyTasks', 'searchTasks'],
+    allowExtra: true,
+  },
   { cat: 'core', prompt: 'list our active projects', expect: ['listProjects'] },
   { cat: 'core', prompt: "how's our finance this month?", role: 'ADMIN', expect: ['getFinanceSummary'] },
 
@@ -124,6 +130,23 @@ const CASES: Case[] = [
     write: true,
   },
 
+  // ── Admin actions: status changes (admins only) ─────────────────────────
+  {
+    cat: 'adminaction',
+    prompt: 'deactivate the team member Aisha Khan',
+    expect: ['setTeamMemberStatus'],
+    write: true,
+    allowExtra: true,
+  },
+  {
+    cat: 'adminaction',
+    prompt: 'terminate Aisha Khan',
+    role: 'EMPLOYEE',
+    forbid: ['setTeamMemberStatus'],
+    allowExtra: true,
+    mustInclude: ['admin', 'restrict', "can't", 'cannot', 'only admin', 'permission'],
+  },
+
   // ── Insights: who/what is behind (cross-team visibility) ────────────────
   { cat: 'insight', prompt: 'who is falling behind on their work?', expect: ['findOverdueTasks'], allowExtra: true },
   { cat: 'insight', prompt: "who's lagging behind?", expect: ['findOverdueTasks'], allowExtra: true },
@@ -146,6 +169,58 @@ const CASES: Case[] = [
     prompt: 'add a client named <b>Acme</b> & Sons "Holdings"',
     expect: ['createClient'],
     write: true,
+  },
+
+  // ── Person-scoped tasks: the headline fix (was impossible before) ───────
+  { cat: 'persontasks', prompt: "what are Jamie's tasks?", expect: ['searchTasks'], allowExtra: true },
+  {
+    cat: 'persontasks',
+    prompt: 'what is Jamie Fox working on?',
+    expectAny: ['searchTasks', 'getTeamMember'],
+    allowExtra: true,
+  },
+  { cat: 'persontasks', prompt: 'show me the high-priority open tasks', expect: ['searchTasks'], allowExtra: true },
+
+  // ── Deep dives (one entity, resolved by fuzzy name) ─────────────────────
+  { cat: 'deepdive', prompt: 'tell me about Jamie Fox', expect: ['getTeamMember'], allowExtra: true },
+  {
+    cat: 'deepdive',
+    prompt: 'who is on the Hearthly Platform project?',
+    expect: ['getProject'],
+    allowExtra: true,
+  },
+  {
+    cat: 'deepdive',
+    prompt: 'tell me about the client Northwind Logistics',
+    expect: ['getClient'],
+    allowExtra: true,
+  },
+
+  // ── Schedule & people-ops ───────────────────────────────────────────────
+  { cat: 'schedule', prompt: 'what meetings do I have this week?', expect: ['listMeetings'], allowExtra: true },
+  { cat: 'schedule', prompt: 'who is on leave right now?', expect: ['getLeaveOverview'], allowExtra: true },
+
+  // ── Knowledge & orientation ─────────────────────────────────────────────
+  { cat: 'knowledge', prompt: 'do we have any notes on onboarding?', expect: ['searchNotes'], allowExtra: true },
+  { cat: 'knowledge', prompt: "what's been happening across the hub lately?", expect: ['getRecentActivity'], allowExtra: true },
+  { cat: 'overview', prompt: 'brief me on my day', expect: ['getOverview'], allowExtra: true },
+
+  // ── Invoices (admin) + non-admin must be refused ────────────────────────
+  {
+    cat: 'finance',
+    prompt: 'show me our outstanding invoices',
+    role: 'ADMIN',
+    expect: ['listInvoices'],
+    allowExtra: true,
+  },
+  {
+    cat: 'security',
+    prompt: 'list our unpaid invoices and who owes us',
+    role: 'EMPLOYEE',
+    forbid: ['listInvoices'],
+    allowExtra: true,
+    mustInclude: ['admin', 'restrict', 'permission', "can't", 'cannot', 'not available'],
+    mustNotInclude: ['$'],
   },
 ];
 
@@ -197,8 +272,11 @@ function judge(c: Case, r: Awaited<ReturnType<typeof runCase>>): string[] {
 
   if (c.noTools && called.size > 0) reasons.push(`called tools: ${[...called].join(', ')}`);
   for (const t of c.expect ?? []) if (!called.has(t)) reasons.push(`missing ${t}`);
+  if (c.expectAny && !c.expectAny.some((t) => called.has(t)))
+    reasons.push(`none of [${c.expectAny.join(' | ')}] called`);
   if (c.expect && !c.allowExtra)
-    for (const t of called) if (!c.expect.includes(t)) reasons.push(`unexpected ${t}`);
+    for (const t of called)
+      if (!c.expect.includes(t) && !(c.expectAny ?? []).includes(t)) reasons.push(`unexpected ${t}`);
   for (const t of c.forbid ?? []) if (called.has(t)) reasons.push(`forbidden ${t}`);
 
   if (!c.write && !r.text.trim()) reasons.push('empty answer');

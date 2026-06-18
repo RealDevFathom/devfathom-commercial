@@ -1,6 +1,14 @@
 'use client';
 
-import { useState, useCallback, useMemo, useEffect, useDeferredValue, memo, type HTMLAttributes } from 'react';
+import {
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+  useDeferredValue,
+  memo,
+  type HTMLAttributes,
+} from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
@@ -21,6 +29,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
+import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { TaskDetailSheet } from './task-detail-sheet';
@@ -56,6 +65,10 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   const { data: session } = useSession();
   const { data: board, isLoading } = trpc.projects.getBoardWithTasks.useQuery({ boardId });
   const [ownerPickerColumnId, setOwnerPickerColumnId] = useState<string | null>(null);
+
+  // Replace the raw project/board ids in the topbar breadcrumb with their names.
+  useBreadcrumbLabel(projectId, board?.project.name);
+  useBreadcrumbLabel(boardId, board?.name);
 
   const setColumnOwners = trpc.projects.setColumnDefaultAssignees.useMutation({
     onSuccess: () => {
@@ -170,7 +183,11 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
       );
 
       moveTask.mutate(
-        { taskId: draggableId, targetColumnId: destination.droppableId, newOrder: destination.index },
+        {
+          taskId: draggableId,
+          targetColumnId: destination.droppableId,
+          newOrder: destination.index,
+        },
         {
           onError: () => {
             if (previous) utils.projects.getBoardWithTasks.setData({ boardId }, previous);
@@ -379,9 +396,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                             {editingColumnId === column.id ? (
                               <ColumnRenameInput
                                 initialName={column.name}
-                                onRename={(name) =>
-                                  updateColumn.mutate({ id: column.id, name })
-                                }
+                                onRename={(name) => updateColumn.mutate({ id: column.id, name })}
                                 onCancel={() => setEditingColumnId(null)}
                               />
                             ) : (

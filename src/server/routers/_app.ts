@@ -11,6 +11,9 @@ import { apiTokensRouter } from './api-tokens';
 import { notesRouter } from './notes';
 import { searchRouter } from './search';
 import { teamStatsRouter } from './team-stats';
+import { invitationsRouter } from './invitations';
+import { auditRouter } from './audit';
+import { resignationsRouter } from './resignations';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -25,6 +28,9 @@ export const appRouter = router({
   notes: notesRouter,
   search: searchRouter,
   teamStats: teamStatsRouter,
+  invitations: invitationsRouter,
+  audit: auditRouter,
+  resignations: resignationsRouter,
 });
 
 export type AppRouter = typeof appRouter;

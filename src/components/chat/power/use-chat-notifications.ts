@@ -36,10 +36,7 @@ export function useChatNotifications() {
     if (permAskedRef.current) return;
     permAskedRef.current = true;
 
-    if (
-      typeof Notification !== 'undefined' &&
-      Notification.permission === 'default'
-    ) {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
       void Notification.requestPermission().catch(() => {
         // Silently swallow — some browsers throw when called outside a gesture
       });

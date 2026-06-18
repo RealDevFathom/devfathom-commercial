@@ -283,8 +283,8 @@ export function TrelloImportContent() {
               <div>
                 <p className="text-sm font-medium text-foreground">Include archived cards</p>
                 <p className="text-xs text-muted-foreground">
-                  {counts?.archivedCards ?? 0} archived cards will be added to
-                  an &quot;Archived&quot; column
+                  {counts?.archivedCards ?? 0} archived cards will be added to an
+                  &quot;Archived&quot; column
                 </p>
               </div>
             </label>

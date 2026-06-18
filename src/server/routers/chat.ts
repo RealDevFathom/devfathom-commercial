@@ -69,10 +69,18 @@ export const chatRouter = router({
         const since = myMember?.lastReadAt ?? new Date(0);
         const [unreadCount, mentionCount] = await Promise.all([
           ctx.db.message.count({
-            where: { channelId: ch.id, deletedAt: null, senderId: { not: me }, createdAt: { gt: since } },
+            where: {
+              channelId: ch.id,
+              deletedAt: null,
+              senderId: { not: me },
+              createdAt: { gt: since },
+            },
           }),
           ctx.db.messageMention.count({
-            where: { userId: me, message: { channelId: ch.id, deletedAt: null, createdAt: { gt: since } } },
+            where: {
+              userId: me,
+              message: { channelId: ch.id, deletedAt: null, createdAt: { gt: since } },
+            },
           }),
         ]);
         return toChatChannel(ch, me, unreadCount, mentionCount);
@@ -127,7 +135,9 @@ export const chatRouter = router({
         where: {
           deletedAt: null,
           content: { contains: input.query, mode: 'insensitive' },
-          channel: input.channelId ? { id: input.channelId } : { members: { some: { userId: me } } },
+          channel: input.channelId
+            ? { id: input.channelId }
+            : { members: { some: { userId: me } } },
         },
         include: msgIncludeFor(me),
         orderBy: { createdAt: 'desc' },
@@ -169,7 +179,11 @@ export const chatRouter = router({
         where: { channelId: input.channelId },
         include: { user: { select: { id: true, name: true, avatar: true, title: true } } },
       });
-      return members.map((m) => ({ ...toUserLite(m.user), role: m.role, presence: 'offline' as const }));
+      return members.map((m) => ({
+        ...toUserLite(m.user),
+        role: m.role,
+        presence: 'offline' as const,
+      }));
     }),
 
   getMentionTargets: protectedProcedure
@@ -237,7 +251,9 @@ export const chatRouter = router({
       }
       // Authoritative server-side derivation — never trust client content/mentions.
       const content = input.contentJson ? tiptapToPlainText(input.contentJson) : input.content;
-      const rawMentions = input.contentJson ? extractMentionIds(input.contentJson) : (input.mentionIds ?? []);
+      const rawMentions = input.contentJson
+        ? extractMentionIds(input.contentJson)
+        : (input.mentionIds ?? []);
       if (!content.trim() && !input.attachments?.length) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Message is empty' });
       }
@@ -260,9 +276,18 @@ export const chatRouter = router({
           senderId: me,
           parentId: input.parentId,
           attachments: input.attachments?.length
-            ? { create: input.attachments.map((a) => ({ name: a.name, url: a.url, type: a.type ?? null, size: a.size ?? null })) }
+            ? {
+                create: input.attachments.map((a) => ({
+                  name: a.name,
+                  url: a.url,
+                  type: a.type ?? null,
+                  size: a.size ?? null,
+                })),
+              }
             : undefined,
-          mentions: validMentions.length ? { create: validMentions.map((userId) => ({ userId })) } : undefined,
+          mentions: validMentions.length
+            ? { create: validMentions.map((userId) => ({ userId })) }
+            : undefined,
         },
         include: msgIncludeFor(me),
       });
@@ -311,7 +336,14 @@ export const chatRouter = router({
     }),
 
   editMessage: protectedProcedure
-    .input(z.object({ messageId: z.string(), content: z.string().default(''), contentJson: z.any().optional(), mentionIds: z.array(z.string()).optional() }))
+    .input(
+      z.object({
+        messageId: z.string(),
+        content: z.string().default(''),
+        contentJson: z.any().optional(),
+        mentionIds: z.array(z.string()).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const me = ctx.session.user.id;
       const existing = await ctx.db.message.findUnique({
@@ -319,11 +351,15 @@ export const chatRouter = router({
         select: { senderId: true, channelId: true, deletedAt: true },
       });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
-      if (existing.senderId !== me) throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own messages' });
-      if (existing.deletedAt) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot edit a deleted message' });
+      if (existing.senderId !== me)
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own messages' });
+      if (existing.deletedAt)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot edit a deleted message' });
 
       const content = input.contentJson ? tiptapToPlainText(input.contentJson) : input.content;
-      const rawMentions = input.contentJson ? extractMentionIds(input.contentJson) : (input.mentionIds ?? []);
+      const rawMentions = input.contentJson
+        ? extractMentionIds(input.contentJson)
+        : (input.mentionIds ?? []);
       const validMentions = rawMentions.length
         ? (
             await ctx.db.channelMember.findMany({
@@ -342,13 +378,18 @@ export const chatRouter = router({
             contentJson: input.contentJson ?? undefined,
             isEdited: true,
             editedAt: new Date(),
-            mentions: validMentions.length ? { create: validMentions.map((userId) => ({ userId })) } : undefined,
+            mentions: validMentions.length
+              ? { create: validMentions.map((userId) => ({ userId })) }
+              : undefined,
           },
         }),
       ]);
       const reloaded = await loadMessage(ctx.db, input.messageId, me);
       const message = toChatMessage(reloaded as MessageRow, me);
-      emitToChannel(existing.channelId, RT.MESSAGE_UPDATE, { channelId: existing.channelId, message });
+      emitToChannel(existing.channelId, RT.MESSAGE_UPDATE, {
+        channelId: existing.channelId,
+        message,
+      });
       return message;
     }),
 
@@ -365,13 +406,19 @@ export const chatRouter = router({
       // never DMs (DM privacy holds even for admins).
       const canModerate = ctx.session.user.role === 'ADMIN' && existing.channel.type !== 'DM';
       if (existing.senderId !== me && !canModerate) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only delete your own messages' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only delete your own messages',
+        });
       }
       await ctx.db.message.update({
         where: { id: input.messageId },
         data: { deletedAt: new Date(), content: '', contentJson: undefined },
       });
-      emitToChannel(existing.channelId, RT.MESSAGE_DELETE, { channelId: existing.channelId, messageId: input.messageId });
+      emitToChannel(existing.channelId, RT.MESSAGE_DELETE, {
+        channelId: existing.channelId,
+        messageId: input.messageId,
+      });
       return { id: input.messageId };
     }),
 
@@ -379,21 +426,33 @@ export const chatRouter = router({
     .input(z.object({ messageId: z.string(), emoji: z.string().min(1).max(32) }))
     .mutation(async ({ ctx, input }) => {
       const me = ctx.session.user.id;
-      const msg = await ctx.db.message.findUnique({ where: { id: input.messageId }, select: { channelId: true } });
+      const msg = await ctx.db.message.findUnique({
+        where: { id: input.messageId },
+        select: { channelId: true },
+      });
       if (!msg) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
       await assertChannelMember(ctx, msg.channelId);
       const existing = await ctx.db.messageReaction.findUnique({
-        where: { messageId_userId_emoji: { messageId: input.messageId, userId: me, emoji: input.emoji } },
+        where: {
+          messageId_userId_emoji: { messageId: input.messageId, userId: me, emoji: input.emoji },
+        },
         select: { id: true },
       });
       if (existing) await ctx.db.messageReaction.delete({ where: { id: existing.id } });
-      else await ctx.db.messageReaction.create({ data: { messageId: input.messageId, userId: me, emoji: input.emoji } });
+      else
+        await ctx.db.messageReaction.create({
+          data: { messageId: input.messageId, userId: me, emoji: input.emoji },
+        });
       const rows = await ctx.db.messageReaction.findMany({
         where: { messageId: input.messageId },
         select: { emoji: true, userId: true },
       });
       const reactions = aggregateReactions(rows, me);
-      emitToChannel(msg.channelId, RT.REACTION, { channelId: msg.channelId, messageId: input.messageId, reactions });
+      emitToChannel(msg.channelId, RT.REACTION, {
+        channelId: msg.channelId,
+        messageId: input.messageId,
+        reactions,
+      });
       return reactions;
     }),
 
@@ -407,7 +466,11 @@ export const chatRouter = router({
         where: { channelId_userId: { channelId: input.channelId, userId: me } },
         data: { lastReadAt: now },
       });
-      emitToChannel(input.channelId, RT.READ, { channelId: input.channelId, userId: me, lastReadAt: now.toISOString() });
+      emitToChannel(input.channelId, RT.READ, {
+        channelId: input.channelId,
+        userId: me,
+        lastReadAt: now.toISOString(),
+      });
       return { lastReadAt: now.toISOString() };
     }),
 
@@ -434,7 +497,10 @@ export const chatRouter = router({
           isPrivate: input.isPrivate,
           createdById: me,
           members: {
-            create: [{ userId: me, role: 'OWNER' }, ...others.map((userId) => ({ userId, role: 'MEMBER' }))],
+            create: [
+              { userId: me, role: 'OWNER' },
+              ...others.map((userId) => ({ userId, role: 'MEMBER' })),
+            ],
           },
         },
         include: channelListInclude,
@@ -443,10 +509,20 @@ export const chatRouter = router({
     }),
 
   updateChannel: protectedProcedure
-    .input(z.object({ id: z.string(), name: z.string().min(1).optional(), description: z.string().nullable().optional(), topic: z.string().nullable().optional() }))
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).optional(),
+        description: z.string().nullable().optional(),
+        topic: z.string().nullable().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       if (!(await canManageChannel(ctx.db, input.id, ctx.session.user.id, ctx.session.user.role)))
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only channel admins can edit this channel' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only channel admins can edit this channel',
+        });
       const { id, ...data } = input;
       const ch = await ctx.db.channel.update({ where: { id }, data, include: channelListInclude });
       return toChatChannel(ch, ctx.session.user.id);
@@ -456,7 +532,10 @@ export const chatRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       if (!(await canManageChannel(ctx.db, input.id, ctx.session.user.id, ctx.session.user.role)))
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only channel admins can archive this channel' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only channel admins can archive this channel',
+        });
       await ctx.db.channel.update({ where: { id: input.id }, data: { isArchived: true } });
       return { id: input.id };
     }),
@@ -465,7 +544,10 @@ export const chatRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       if (!(await canManageChannel(ctx.db, input.id, ctx.session.user.id, ctx.session.user.role)))
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only channel admins can delete this channel' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only channel admins can delete this channel',
+        });
       await ctx.db.channel.delete({ where: { id: input.id } });
       return { id: input.id };
     }),
@@ -474,9 +556,13 @@ export const chatRouter = router({
     .input(z.object({ channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const me = ctx.session.user.id;
-      const ch = await ctx.db.channel.findUnique({ where: { id: input.channelId }, select: { isPrivate: true, type: true } });
+      const ch = await ctx.db.channel.findUnique({
+        where: { id: input.channelId },
+        select: { isPrivate: true, type: true },
+      });
       if (!ch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Channel not found' });
-      if (ch.isPrivate || ch.type === 'DM') throw new TRPCError({ code: 'FORBIDDEN', message: 'This channel is private' });
+      if (ch.isPrivate || ch.type === 'DM')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'This channel is private' });
       await ctx.db.channelMember.upsert({
         where: { channelId_userId: { channelId: input.channelId, userId: me } },
         create: { channelId: input.channelId, userId: me, role: 'MEMBER' },
@@ -488,21 +574,40 @@ export const chatRouter = router({
   leaveChannel: protectedProcedure
     .input(z.object({ channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.channelMember.deleteMany({ where: { channelId: input.channelId, userId: ctx.session.user.id } });
+      await ctx.db.channelMember.deleteMany({
+        where: { channelId: input.channelId, userId: ctx.session.user.id },
+      });
       return { channelId: input.channelId };
     }),
 
   addMembers: protectedProcedure
     .input(z.object({ channelId: z.string(), userIds: z.array(z.string()).min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const channel = await ctx.db.channel.findUnique({ where: { id: input.channelId }, select: { type: true } });
+      const channel = await ctx.db.channel.findUnique({
+        where: { id: input.channelId },
+        select: { type: true },
+      });
       if (!channel) throw new TRPCError({ code: 'NOT_FOUND', message: 'Channel not found' });
       if (channel.type === 'DM')
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot add members to a direct message' });
-      if (!(await canManageChannel(ctx.db, input.channelId, ctx.session.user.id, ctx.session.user.role)))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Cannot add members to a direct message',
+        });
+      if (
+        !(await canManageChannel(
+          ctx.db,
+          input.channelId,
+          ctx.session.user.id,
+          ctx.session.user.role
+        ))
+      )
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Only channel admins can add members' });
       await ctx.db.channelMember.createMany({
-        data: input.userIds.map((userId) => ({ channelId: input.channelId, userId, role: 'MEMBER' })),
+        data: input.userIds.map((userId) => ({
+          channelId: input.channelId,
+          userId,
+          role: 'MEMBER',
+        })),
         skipDuplicates: true,
       });
       return { channelId: input.channelId };
@@ -512,9 +617,17 @@ export const chatRouter = router({
     .input(z.object({ channelId: z.string(), userId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const me = ctx.session.user.id;
-      if (input.userId !== me && !(await canManageChannel(ctx.db, input.channelId, me, ctx.session.user.role)))
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only channel admins can remove members' });
-      await ctx.db.channelMember.deleteMany({ where: { channelId: input.channelId, userId: input.userId } });
+      if (
+        input.userId !== me &&
+        !(await canManageChannel(ctx.db, input.channelId, me, ctx.session.user.role))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only channel admins can remove members',
+        });
+      await ctx.db.channelMember.deleteMany({
+        where: { channelId: input.channelId, userId: input.userId },
+      });
       return { channelId: input.channelId };
     }),
 
@@ -522,9 +635,16 @@ export const chatRouter = router({
     .input(z.object({ userId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const me = ctx.session.user.id;
-      if (input.userId === me) throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot DM yourself' });
+      if (input.userId === me)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot DM yourself' });
       const candidates = await ctx.db.channel.findMany({
-        where: { type: 'DM', AND: [{ members: { some: { userId: me } } }, { members: { some: { userId: input.userId } } }] },
+        where: {
+          type: 'DM',
+          AND: [
+            { members: { some: { userId: me } } },
+            { members: { some: { userId: input.userId } } },
+          ],
+        },
         include: { ...channelListInclude, _count: { select: { members: true } } },
       });
       let dm = candidates.find((c) => c._count.members === 2) ?? null;
@@ -534,7 +654,12 @@ export const chatRouter = router({
             type: 'DM',
             isPrivate: true,
             createdById: me,
-            members: { create: [{ userId: me, role: 'MEMBER' }, { userId: input.userId, role: 'MEMBER' }] },
+            members: {
+              create: [
+                { userId: me, role: 'MEMBER' },
+                { userId: input.userId, role: 'MEMBER' },
+              ],
+            },
           },
           include: { ...channelListInclude, _count: { select: { members: true } } },
         });
@@ -546,21 +671,32 @@ export const chatRouter = router({
     .input(z.object({ messageId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const me = ctx.session.user.id;
-      const msg = await ctx.db.message.findUnique({ where: { id: input.messageId }, select: { channelId: true } });
+      const msg = await ctx.db.message.findUnique({
+        where: { id: input.messageId },
+        select: { channelId: true },
+      });
       if (!msg) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
       await assertChannelMember(ctx, msg.channelId);
-      const existing = await ctx.db.pinnedMessage.findUnique({ where: { messageId: input.messageId }, select: { id: true } });
+      const existing = await ctx.db.pinnedMessage.findUnique({
+        where: { messageId: input.messageId },
+        select: { id: true },
+      });
       let isPinned: boolean;
       if (existing) {
         await ctx.db.pinnedMessage.delete({ where: { id: existing.id } });
         isPinned = false;
       } else {
-        await ctx.db.pinnedMessage.create({ data: { messageId: input.messageId, channelId: msg.channelId, pinnedById: me } });
+        await ctx.db.pinnedMessage.create({
+          data: { messageId: input.messageId, channelId: msg.channelId, pinnedById: me },
+        });
         isPinned = true;
       }
       const reloaded = await loadMessage(ctx.db, input.messageId, me);
       if (reloaded)
-        emitToChannel(msg.channelId, RT.MESSAGE_UPDATE, { channelId: msg.channelId, message: toChatMessage(reloaded as MessageRow, me) });
+        emitToChannel(msg.channelId, RT.MESSAGE_UPDATE, {
+          channelId: msg.channelId,
+          message: toChatMessage(reloaded as MessageRow, me),
+        });
       return { isPinned };
     }),
 
@@ -570,7 +706,10 @@ export const chatRouter = router({
       const me = ctx.session.user.id;
       // Membership check closes an IDOR: without it, saving an arbitrary message
       // id would expose its full contents (incl. private DMs) via getSaved.
-      const msg = await ctx.db.message.findUnique({ where: { id: input.messageId }, select: { channelId: true } });
+      const msg = await ctx.db.message.findUnique({
+        where: { id: input.messageId },
+        select: { channelId: true },
+      });
       if (!msg) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
       await assertChannelMember(ctx, msg.channelId);
       const existing = await ctx.db.savedMessage.findUnique({

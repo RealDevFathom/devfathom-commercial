@@ -50,10 +50,7 @@ export function SavedView({
 
   return (
     <Sheet open={open} onOpenChange={(o) => onOpenChange(o)}>
-      <SheetContent
-        side="right"
-        className="flex w-[360px] flex-col gap-0 p-0 sm:max-w-[360px]"
-      >
+      <SheetContent side="right" className="flex w-[360px] flex-col gap-0 p-0 sm:max-w-[360px]">
         <SheetHeader className="border-b border-border/60 px-4 pb-3 pt-4">
           <SheetTitle>Saved items</SheetTitle>
           <SheetDescription>
@@ -80,19 +77,14 @@ export function SavedView({
 
           {/* Empty */}
           {!isLoading && savedCount === 0 && (
-            <p className="p-6 text-center text-sm text-muted-foreground">
-              No saved messages yet
-            </p>
+            <p className="p-6 text-center text-sm text-muted-foreground">No saved messages yet</p>
           )}
 
           {/* Saved list */}
           {!isLoading && savedCount > 0 && (
             <ul>
               {(saved as ChatMessage[]).map((msg) => (
-                <li
-                  key={msg.id}
-                  className="group/saved border-b border-border/40 last:border-0"
-                >
+                <li key={msg.id} className="group/saved border-b border-border/40 last:border-0">
                   {/* Clickable row → jump to message */}
                   <div
                     role="button"
@@ -110,9 +102,7 @@ export function SavedView({
                       {msg.sender.avatar && (
                         <AvatarImage src={msg.sender.avatar} alt={msg.sender.name} />
                       )}
-                      <AvatarFallback>
-                        {msg.sender.name[0].toUpperCase()}
-                      </AvatarFallback>
+                      <AvatarFallback>{msg.sender.name[0].toUpperCase()}</AvatarFallback>
                     </Avatar>
 
                     <div className="min-w-0 flex-1">

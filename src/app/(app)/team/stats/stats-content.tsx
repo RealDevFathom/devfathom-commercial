@@ -21,6 +21,7 @@ import {
   Sparkles,
   Target,
   Zap,
+  ChevronDown,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -73,6 +74,7 @@ export function TeamStatsContent() {
   const stats = trpc.teamStats.getAll.useQuery(undefined, {
     staleTime: 60_000, // 1 minute — batch is ~500ms so don't re-fetch on every navigation
   });
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
 
   if (stats.isLoading) return <StatsSkeleton />;
 
@@ -156,10 +158,23 @@ export function TeamStatsContent() {
           </CardHeader>
           <CardContent className="pt-0">
             <div className="space-y-1.5">
-              {alerts.slice(0, 8).map((alert, i) => (
+              {(showAllAlerts ? alerts : alerts.slice(0, 8)).map((alert, i) => (
                 <AlertRow key={`${alert.userId}-${alert.kind}-${i}`} alert={alert} />
               ))}
             </div>
+            {alerts.length > 8 && (
+              <button
+                type="button"
+                onClick={() => setShowAllAlerts((v) => !v)}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] font-medium text-amber-600 transition-colors hover:bg-amber-500/5 dark:text-amber-500"
+                aria-expanded={showAllAlerts}
+              >
+                {showAllAlerts ? 'Show less' : `Show ${alerts.length - 8} more`}
+                <ChevronDown
+                  className={cn('h-3.5 w-3.5 transition-transform', showAllAlerts && 'rotate-180')}
+                />
+              </button>
+            )}
           </CardContent>
         </Card>
       )}
@@ -321,11 +336,9 @@ function WorkloadChart({
 }) {
   const R = useRecharts();
   // Sort once; a stable array identity also avoids re-feeding the chart each render.
-  const sorted = useMemo(
-    () => [...members].sort((a, b) => b.openTasks - a.openTasks),
-    [members]
-  );
-  if (!R) return <Skeleton className="w-full" style={{ height: Math.max(180, members.length * 32) }} />;
+  const sorted = useMemo(() => [...members].sort((a, b) => b.openTasks - a.openTasks), [members]);
+  if (!R)
+    return <Skeleton className="w-full" style={{ height: Math.max(180, members.length * 32) }} />;
   const { ResponsiveContainer, BarChart, Bar, Cell, Tooltip, XAxis, YAxis, CartesianGrid } = R;
   return (
     <ResponsiveContainer width="100%" height={Math.max(180, members.length * 32)}>
@@ -641,9 +654,9 @@ function MemberStatsCard({
             };
 
   return (
-    <Link href={`/team/${stats.userId}`}>
-      <Card className="group border-border/60 transition-all hover:border-border hover:shadow-lg hover:-translate-y-0.5">
-        <CardContent className="p-5">
+    <Link href={`/team/${stats.userId}`} className="block h-full">
+      <Card className="group h-full border-border/60 transition-all hover:border-border hover:shadow-lg hover:-translate-y-0.5">
+        <CardContent className="flex h-full flex-col p-5">
           {/* Header */}
           <div className="flex items-center gap-3 mb-4">
             <Avatar className="h-10 w-10">
@@ -660,9 +673,9 @@ function MemberStatsCard({
               <p className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
                 {stats.name}
               </p>
-              {stats.title && (
-                <p className="text-[11px] text-muted-foreground truncate">{stats.title}</p>
-              )}
+              <p className="text-[11px] text-muted-foreground truncate">
+                {stats.title || ' '}
+              </p>
             </div>
             <div
               className={cn(
@@ -721,8 +734,10 @@ function MemberStatsCard({
             7-day activity
           </p>
 
-          {/* Meta row: meetings + collaboration + last active */}
-          <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between text-[11px] text-muted-foreground">
+          {/* Meta row: meetings + collaboration + last active.
+              Sits at a fixed offset; with the header/stats/sparkline all
+              constant-height, this row aligns across every card. */}
+          <div className="mt-4 pt-3 border-t border-border/60 flex items-center justify-between text-[11px] text-muted-foreground">
             <div className="flex items-center gap-1.5" title="Meetings attended">
               <Timer className="h-3 w-3" />
               <span className="tabular-nums">
@@ -767,15 +782,15 @@ function Stat({
       <p className={cn('mt-0.5 font-display text-xl font-bold tabular-nums', STAT_TONES[tone])}>
         {value}
       </p>
-      {delta !== undefined && delta !== 0 && (
+      {delta !== undefined && (
         <p
           className={cn(
             'text-[9px] font-medium tabular-nums',
             delta > 0 ? 'text-emerald-500' : 'text-amber-500'
           )}
         >
-          {delta > 0 ? '+' : ''}
-          {delta} vs last week
+          {/* Reserve the line height even at 0 so cards stay aligned. */}
+          {delta !== 0 ? `${delta > 0 ? '+' : ''}${delta} vs last week` : ' '}
         </p>
       )}
     </div>

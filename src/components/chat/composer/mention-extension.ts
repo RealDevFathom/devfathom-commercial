@@ -18,7 +18,6 @@ export const ChatMentionPluginKey = new PluginKey('chatMention');
 // it once so a future TipTap rename fails loudly here instead of silently
 // breaking attribution downstream.
 if (Mention.name !== MENTION_NODE) {
-   
   console.warn(
     `[chat] Mention node name "${Mention.name}" does not match MENTION_NODE "${MENTION_NODE}".`
   );

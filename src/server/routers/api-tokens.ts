@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, adminProcedure } from '../trpc';
 import { generateApiToken } from '@/lib/api-auth';
+import { ACTIVE_STATUSES } from '@/lib/abac';
+import { annotateAudit } from '../audit';
 
 export const apiTokensRouter = router({
   list: adminProcedure.query(async ({ ctx }) => {
@@ -38,7 +40,7 @@ export const apiTokensRouter = router({
         if (!targetUser) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Target user not found.' });
         }
-        if (targetUser.status !== 'ACTIVE') {
+        if (!ACTIVE_STATUSES.has(targetUser.status)) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Cannot issue a token for an inactive user.',
@@ -64,6 +66,19 @@ export const apiTokensRouter = router({
         include: { user: { select: { id: true, name: true } } },
       });
 
+      annotateAudit(ctx, {
+        targetType: 'ApiToken',
+        targetId: created.id,
+        targetLabel: created.name,
+        description: `Created API token "${created.name}" (${created.prefix}…)`,
+        metadata: {
+          scopes: input.scopes,
+          prefix: created.prefix,
+          boundUserId: targetUserId,
+          expiresAt,
+        },
+      });
+
       // Return the full token ONLY once — user must save it
       return {
         id: created.id,
@@ -77,6 +92,14 @@ export const apiTokensRouter = router({
     }),
 
   revoke: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
-    return ctx.db.apiToken.delete({ where: { id: input.id } });
+    const deleted = await ctx.db.apiToken.delete({ where: { id: input.id } });
+    annotateAudit(ctx, {
+      targetType: 'ApiToken',
+      targetId: deleted.id,
+      targetLabel: deleted.name,
+      description: `Revoked API token "${deleted.name}" (${deleted.prefix}…)`,
+      metadata: { prefix: deleted.prefix, scopes: deleted.scopes },
+    });
+    return deleted;
   }),
 });

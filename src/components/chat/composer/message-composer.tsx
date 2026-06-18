@@ -130,7 +130,9 @@ export function MessageComposer({
       // just drop the temp (dedupe by real id).
       const reconcile = (items: ChatMessage[]) => {
         const withoutTemp = tempId ? items.filter((m) => m.id !== tempId) : items;
-        return withoutTemp.some((m) => m.id === message.id) ? withoutTemp : [...withoutTemp, message];
+        return withoutTemp.some((m) => m.id === message.id)
+          ? withoutTemp
+          : [...withoutTemp, message];
       };
       if (message.parentId) {
         utils.chat.getThread.setData({ parentId: message.parentId }, (old) =>
@@ -162,7 +164,13 @@ export function MessageComposer({
       } else if (tempId) {
         utils.chat.getMessages.setInfiniteData({ channelId: vars.channelId }, (old) =>
           old
-            ? { ...old, pages: old.pages.map((p) => ({ ...p, items: p.items.filter((m) => m.id !== tempId) })) }
+            ? {
+                ...old,
+                pages: old.pages.map((p) => ({
+                  ...p,
+                  items: p.items.filter((m) => m.id !== tempId),
+                })),
+              }
             : old
         );
       }

@@ -16,7 +16,10 @@ export function tiptapToPlainText(doc: unknown): string {
   if (!root || typeof root !== 'object') return '';
   const out: string[] = [];
   walk(root, out);
-  return out.join('').replace(/\n{3,}/g, '\n\n').trim();
+  return out
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function walk(node: TiptapNode, out: string[]): void {

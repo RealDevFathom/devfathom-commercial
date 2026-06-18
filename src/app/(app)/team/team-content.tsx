@@ -11,8 +11,8 @@ import {
   Plus,
   X,
   Loader2,
-  Eye,
-  EyeOff,
+  Check,
+  Copy,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -38,6 +38,7 @@ const statusDot: Record<string, string> = {
   ACTIVE: 'bg-emerald-500',
   INACTIVE: 'bg-muted-foreground',
   ON_LEAVE: 'bg-amber-500',
+  INVITED: 'bg-sky-500',
 };
 
 export function TeamContent() {
@@ -209,6 +210,11 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
                     Admin
                   </span>
                 )}
+                {member.role === 'HR' && (
+                  <span className="rounded-md bg-indigo-500/10 px-2 py-0.5 text-[10px] font-medium text-indigo-500">
+                    HR
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -225,9 +231,7 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
               </span>
             </div>
             {member.lastActiveAt && (
-              <span>
-                {formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })}
-              </span>
+              <span>{formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })}</span>
             )}
           </div>
         </CardContent>
@@ -247,18 +251,11 @@ const departmentOptions = [
 
 function AddMemberModal({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
-  const createMember = trpc.team.createMember.useMutation({
-    onSuccess: () => {
-      utils.team.getAll.invalidate();
-      onClose();
-    },
-  });
+  const inviteMember = trpc.team.inviteMember.useMutation();
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [role, setRole] = useState<'ADMIN' | 'EMPLOYEE'>('EMPLOYEE');
+  const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE'>('EMPLOYEE');
   const [department, setDepartment] = useState<(typeof departmentOptions)[number]>('ENGINEERING');
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -266,19 +263,17 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
   const [skillInput, setSkillInput] = useState('');
   const [skills, setSkills] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [sent, setSent] = useState<{ email: string; inviteUrl: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const handleSubmit = () => {
     setError('');
-    if (!name.trim() || !email.trim() || !password || !title.trim()) return;
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters');
-      return;
-    }
-    createMember.mutate(
+    if (!name.trim() || !email.trim() || !title.trim()) return;
+    const submittedEmail = email.trim().toLowerCase();
+    inviteMember.mutate(
       {
         name: name.trim(),
-        email: email.trim().toLowerCase(),
-        password,
+        email: submittedEmail,
         role,
         department,
         title: title.trim(),
@@ -287,9 +282,20 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
         skills,
       },
       {
+        onSuccess: (data) => {
+          utils.team.getAll.invalidate();
+          setSent({ email: submittedEmail, inviteUrl: data.inviteUrl });
+        },
         onError: (err) => setError(err.message),
       }
     );
+  };
+
+  const handleCopy = async () => {
+    if (!sent) return;
+    await navigator.clipboard.writeText(sent.inviteUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -312,6 +318,41 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
 
+          {sent ? (
+            <div className="p-6">
+              <div className="flex flex-col items-center py-6 text-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
+                  <Check className="h-7 w-7 text-primary" />
+                </div>
+                <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
+                  Invitation sent to {sent.email}
+                </h3>
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  They&apos;ll receive an email to set their password and finish their profile.
+                </p>
+                <div className="mt-6 w-full rounded-xl border border-border bg-card px-4 py-3 text-left">
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">Invite link</p>
+                  <p className="break-all text-sm text-foreground">{sent.inviteUrl}</p>
+                </div>
+                <div className="mt-4 flex w-full items-center gap-2">
+                  <button
+                    onClick={handleCopy}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+                  >
+                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    {copied ? 'Copied!' : 'Copy invite link'}
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
           <div className="p-6 space-y-5">
             {error && (
               <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
@@ -341,27 +382,6 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
                   placeholder="john@company.com"
                   className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Password *</label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Minimum 8 characters"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                  tabIndex={-1}
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
               </div>
             </div>
 
@@ -408,7 +428,7 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
                 <div className="flex rounded-xl border border-border overflow-hidden">
-                  {(['EMPLOYEE', 'ADMIN'] as const).map((r) => (
+                  {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
                     <button
                       key={r}
                       onClick={() => setRole(r)}
@@ -419,7 +439,7 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
                           : 'bg-card text-muted-foreground hover:text-foreground'
                       )}
                     >
-                      {r === 'EMPLOYEE' ? 'Employee' : 'Admin'}
+                      {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
                     </button>
                   ))}
                 </div>
@@ -490,22 +510,23 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
               disabled={
                 !name.trim() ||
                 !email.trim() ||
-                !password ||
                 !title.trim() ||
-                createMember.isPending
+                inviteMember.isPending
               }
               className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
             >
-              {createMember.isPending ? (
+              {inviteMember.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Creating...
+                  Sending…
                 </>
               ) : (
-                'Add Member'
+                'Send Invite'
               )}
             </button>
           </div>
+            </>
+          )}
         </div>
       </div>
     </>

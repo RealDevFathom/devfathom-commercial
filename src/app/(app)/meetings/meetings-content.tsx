@@ -22,6 +22,7 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
+import { TimePicker } from '@/components/ui/time-picker';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { computePunctuality } from '@/lib/meeting-occurrence';
@@ -251,20 +252,20 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Start *</label>
-            <input
-              type="time"
+            <TimePicker
               value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              onChange={setStartTime}
+              aria-label="Start time"
+              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">End *</label>
-            <input
-              type="time"
+            <TimePicker
               value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              onChange={setEndTime}
+              aria-label="End time"
+              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
         </div>
@@ -519,20 +520,20 @@ const MeetingCard = memo(function MeetingCard({
             </div>
             <div>
               <label className="block text-[10px] font-medium text-foreground mb-1">Start</label>
-              <input
-                type="time"
+              <TimePicker
                 value={eStart}
-                onChange={(e) => setEStart(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                onChange={setEStart}
+                aria-label="Start time"
+                className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
             <div>
               <label className="block text-[10px] font-medium text-foreground mb-1">End</label>
-              <input
-                type="time"
+              <TimePicker
                 value={eEnd}
-                onChange={(e) => setEEnd(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                onChange={setEEnd}
+                aria-label="End time"
+                className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
@@ -808,9 +809,7 @@ const MeetingCard = memo(function MeetingCard({
                       {user.name[0]}
                     </AvatarFallback>
                   </Avatar>
-                  <p className="flex-1 text-xs font-medium text-foreground truncate">
-                    {user.name}
-                  </p>
+                  <p className="flex-1 text-xs font-medium text-foreground truncate">{user.name}</p>
                   {joined ? (
                     <>
                       <span

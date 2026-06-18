@@ -95,10 +95,16 @@ export function ChatContent() {
     <div className="flex h-[calc(100vh-8rem)] -m-6 flex-col animate-fade-in">
       {/* Global bar — jump-to + saved live here (workspace-wide, not per channel). */}
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/60 bg-card px-4">
-        <button type="button" onClick={() => setSwitcherOpen(true)} className={cn(topBtn, 'min-w-56 justify-start text-muted-foreground/80')}>
+        <button
+          type="button"
+          onClick={() => setSwitcherOpen(true)}
+          className={cn(topBtn, 'min-w-56 justify-start text-muted-foreground/80')}
+        >
           <Search className="h-3.5 w-3.5" />
           Jump to a channel or person…
-          <kbd className="ml-auto rounded border border-border/60 bg-background px-1 text-[10px]">⌘K</kbd>
+          <kbd className="ml-auto rounded border border-border/60 bg-background px-1 text-[10px]">
+            ⌘K
+          </kbd>
         </button>
         <button type="button" onClick={() => setSavedOpen(true)} className={topBtn}>
           <Bookmark className="h-3.5 w-3.5" />
@@ -133,7 +139,11 @@ export function ChatContent() {
               <TypingIndicator channelId={selectedChannel.id} />
               <div className="px-4 pb-4 pt-1">
                 {/* key remounts the composer per channel: clean draft/editor reset + focus. */}
-                <MessageComposer key={selectedChannel.id} channelId={selectedChannel.id} autoFocus />
+                <MessageComposer
+                  key={selectedChannel.id}
+                  channelId={selectedChannel.id}
+                  autoFocus
+                />
               </div>
             </>
           ) : (

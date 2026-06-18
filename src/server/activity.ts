@@ -22,12 +22,13 @@ export type ActivityType =
   | 'invoice_created'
   | 'invoice_sent'
   | 'invoice_paid'
-  | 'meeting_joined';
+  | 'meeting_joined'
+  | 'member_status_changed';
 
 export interface LogActivityArgs {
   type: ActivityType;
   message: string;
-  entityType?: 'Project' | 'Task' | 'Note' | 'Client' | 'Invoice' | 'Meeting';
+  entityType?: 'Project' | 'Task' | 'Note' | 'Client' | 'Invoice' | 'Meeting' | 'User';
   entityId?: string;
   metadata?: Record<string, unknown>;
 }

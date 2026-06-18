@@ -72,9 +72,7 @@ export function MessageActions({
           ...data,
           pages: data.pages.map((pg) => ({
             ...pg,
-            items: pg.items.map((m) =>
-              m.id === messageId ? { ...m, deletedAt: now } : m
-            ),
+            items: pg.items.map((m) => (m.id === messageId ? { ...m, deletedAt: now } : m)),
           })),
         };
       });

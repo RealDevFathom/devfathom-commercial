@@ -4,12 +4,7 @@ import { useState } from 'react';
 import { X, UserPlus, Loader2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSession } from 'next-auth/react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
@@ -70,8 +65,7 @@ export function ChannelMembersDialog({
 
   const viewerId = session?.user?.id;
   const viewerMember = members?.find((m) => m.id === viewerId);
-  const isElevated =
-    viewerMember?.role === 'OWNER' || viewerMember?.role === 'ADMIN';
+  const isElevated = viewerMember?.role === 'OWNER' || viewerMember?.role === 'ADMIN';
 
   // Exclude current members from add picker
   const memberIds = new Set(members?.map((m) => m.id) ?? []);
@@ -112,9 +106,7 @@ export function ChannelMembersDialog({
                   member={member}
                   canRemove={isElevated && member.id !== viewerId}
                   removing={removeMember.isPending}
-                  onRemove={() =>
-                    removeMember.mutate({ channelId, userId: member.id })
-                  }
+                  onRemove={() => removeMember.mutate({ channelId, userId: member.id })}
                 />
               ))}
             </ul>
@@ -144,9 +136,7 @@ export function ChannelMembersDialog({
                           checked={selectedToAdd.includes(m.id)}
                           onCheckedChange={(v) =>
                             setSelectedToAdd((prev) =>
-                              v
-                                ? [...prev, m.id]
-                                : prev.filter((id) => id !== m.id)
+                              v ? [...prev, m.id] : prev.filter((id) => id !== m.id)
                             )
                           }
                         />
@@ -179,13 +169,11 @@ export function ChannelMembersDialog({
                   <Button
                     size="sm"
                     disabled={selectedToAdd.length === 0 || addMembers.isPending}
-                    onClick={() =>
-                      addMembers.mutate({ channelId, userIds: selectedToAdd })
-                    }
+                    onClick={() => addMembers.mutate({ channelId, userIds: selectedToAdd })}
                   >
                     {addMembers.isPending && <Loader2 className="animate-spin" />}
-                    Add{selectedToAdd.length > 0 ? ` ${selectedToAdd.length}` : ''}
-                    {' '}member{selectedToAdd.length !== 1 ? 's' : ''}
+                    Add{selectedToAdd.length > 0 ? ` ${selectedToAdd.length}` : ''} member
+                    {selectedToAdd.length !== 1 ? 's' : ''}
                   </Button>
                 </div>
               </div>
@@ -219,12 +207,7 @@ function MemberRow({
   onRemove: () => void;
 }) {
   const online = useIsOnline(member.id);
-  const roleLabel =
-    member.role === 'OWNER'
-      ? 'Owner'
-      : member.role === 'ADMIN'
-        ? 'Admin'
-        : null;
+  const roleLabel = member.role === 'OWNER' ? 'Owner' : member.role === 'ADMIN' ? 'Admin' : null;
 
   return (
     <li className="group flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-secondary/50">
@@ -242,9 +225,7 @@ function MemberRow({
       </span>
 
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">
-          {member.name}
-        </span>
+        <span className="block truncate text-sm font-medium text-foreground">{member.name}</span>
       </span>
 
       {roleLabel && (
