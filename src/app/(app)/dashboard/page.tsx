@@ -1,10 +1,39 @@
 import type { Metadata } from 'next';
+import { HydrationBoundary } from '@tanstack/react-query';
+import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
 };
 
-export default function DashboardPage() {
-  return <DashboardContent />;
+export default async function DashboardPage() {
+  const { helpers } = await createSSRHelpers();
+
+  // Prefetch above-the-fold data on the server so it arrives hydrated. The
+  // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
+  // `useQuery` calls in DashboardContent serve it from cache on mount instead
+  // of firing a client round-trip (no skeleton flash).
+  //
+  // `dashboard.getRevenueChart` is intentionally NOT prefetched: it is the
+  // heaviest query and admin-only, so we keep it off the TTFB path and let it
+  // load client-side after paint (KPI cards stay the priority for LCP).
+  //
+  // `.prefetch()` never throws — react-query captures errors into the cache, so
+  // an UNAUTHORIZED/FORBIDDEN result degrades gracefully to the client fetch.
+  await Promise.all([
+    helpers.dashboard.getStats.prefetch(),
+    helpers.dashboard.getRecentActivity.prefetch(),
+    helpers.dashboard.getUpcomingDeadlines.prefetch(),
+    helpers.dashboard.getProjectCards.prefetch(),
+    helpers.dashboard.getMyTasks.prefetch(),
+    helpers.meetings.getUpcoming.prefetch(),
+    helpers.team.getAll.prefetch(),
+  ]);
+
+  return (
+    <HydrationBoundary state={helpers.dehydrate()}>
+      <DashboardContent />
+    </HydrationBoundary>
+  );
 }
