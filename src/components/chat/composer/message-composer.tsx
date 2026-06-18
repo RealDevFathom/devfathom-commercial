@@ -11,7 +11,12 @@ import { trpc } from '@/lib/trpc';
 import { useSocket } from '@/lib/socket';
 import { uploadAttachment } from '@/lib/chat/upload-client';
 import { tiptapToPlainText, isEmptyDoc } from '@/lib/chat/tiptap';
-import { MAX_ATTACHMENT_BYTES, type SendAttachmentInput } from '@/lib/chat/contract';
+import {
+  MAX_ATTACHMENT_BYTES,
+  type SendAttachmentInput,
+  type ChatMessage,
+  type TiptapDoc,
+} from '@/lib/chat/contract';
 import { cn } from '@/lib/utils';
 import { createMentionExtension, ChatMentionPluginKey } from './mention-extension';
 import { ComposerToolbar } from './composer-toolbar';
@@ -68,27 +73,101 @@ export function MessageComposer({
   const typingRef = useRef<() => void>(() => {});
 
   const sendMessage = trpc.chat.sendMessage.useMutation({
-    onSuccess: (message) => {
-      // Insert into the cache so the message shows immediately even if the
-      // realtime echo doesn't round-trip (socket down / mid-reconnect). The
-      // realtime handlers dedupe by id, so this never double-inserts.
+    // Optimistic: render the message INSTANTLY, then reconcile with the server
+    // response. This hides the DB round-trip latency so sending feels instant.
+    onMutate: async (vars) => {
+      const tempId = `optimistic-${crypto.randomUUID()}`;
+      const optimistic: ChatMessage = {
+        id: tempId,
+        channelId: vars.channelId,
+        content: vars.content ?? '',
+        contentJson: (vars.contentJson as TiptapDoc) ?? null,
+        sender: {
+          id: currentUserId ?? '',
+          name: currentUserName,
+          avatar: session?.user?.image ?? null,
+          title: null,
+        },
+        parentId: vars.parentId ?? null,
+        isEdited: false,
+        editedAt: null,
+        deletedAt: null,
+        createdAt: new Date().toISOString(),
+        reactions: [],
+        attachments: (vars.attachments ?? []).map((a, i) => ({
+          id: `${tempId}-att-${i}`,
+          name: a.name,
+          url: a.url,
+          type: a.type ?? null,
+          size: a.size ?? null,
+        })),
+        mentionIds: [],
+        replyCount: 0,
+        lastReplyAt: null,
+        threadParticipants: [],
+        isPinned: false,
+        isSaved: false,
+      };
+      if (vars.parentId) {
+        await utils.chat.getThread.cancel({ parentId: vars.parentId });
+        utils.chat.getThread.setData({ parentId: vars.parentId }, (old) =>
+          old ? { ...old, replies: [...old.replies, optimistic] } : old
+        );
+      } else {
+        await utils.chat.getMessages.cancel({ channelId: vars.channelId });
+        utils.chat.getMessages.setInfiniteData({ channelId: vars.channelId }, (old) => {
+          if (!old || old.pages.length === 0) return old;
+          const pages = old.pages.slice();
+          pages[0] = { ...pages[0], items: [...pages[0].items, optimistic] };
+          return { ...old, pages };
+        });
+      }
+      return { tempId };
+    },
+    onSuccess: (message, vars, ctx) => {
+      const tempId = ctx?.tempId;
+      // Swap temp → real; if the realtime echo already inserted the real one,
+      // just drop the temp (dedupe by real id).
+      const reconcile = (items: ChatMessage[]) => {
+        const withoutTemp = tempId ? items.filter((m) => m.id !== tempId) : items;
+        return withoutTemp.some((m) => m.id === message.id) ? withoutTemp : [...withoutTemp, message];
+      };
       if (message.parentId) {
         utils.chat.getThread.setData({ parentId: message.parentId }, (old) =>
-          old && !old.replies.some((r) => r.id === message.id)
-            ? { ...old, replies: [...old.replies, message] }
-            : old
+          old ? { ...old, replies: reconcile(old.replies) } : old
         );
         return;
       }
-      utils.chat.getMessages.setInfiniteData({ channelId }, (old) => {
-        if (!old || old.pages.length === 0) return old;
-        if (old.pages.some((p) => p.items.some((m) => m.id === message.id))) return old;
-        const pages = old.pages.slice();
-        pages[0] = { ...pages[0], items: [...pages[0].items, message] };
-        return { ...old, pages };
-      });
+      utils.chat.getMessages.setInfiniteData({ channelId: vars.channelId }, (old) =>
+        old
+          ? {
+              ...old,
+              pages: old.pages.map((p, i) =>
+                i === 0
+                  ? { ...p, items: reconcile(p.items) }
+                  : tempId
+                    ? { ...p, items: p.items.filter((m) => m.id !== tempId) }
+                    : p
+              ),
+            }
+          : old
+      );
     },
-    onError: (err) => toast.error(err.message || 'Failed to send message'),
+    onError: (err, vars, ctx) => {
+      const tempId = ctx?.tempId;
+      if (tempId && vars.parentId) {
+        utils.chat.getThread.setData({ parentId: vars.parentId }, (old) =>
+          old ? { ...old, replies: old.replies.filter((m) => m.id !== tempId) } : old
+        );
+      } else if (tempId) {
+        utils.chat.getMessages.setInfiniteData({ channelId: vars.channelId }, (old) =>
+          old
+            ? { ...old, pages: old.pages.map((p) => ({ ...p, items: p.items.filter((m) => m.id !== tempId) })) }
+            : old
+        );
+      }
+      toast.error(err.message || 'Failed to send message');
+    },
   });
 
   const extensions = useMemo(

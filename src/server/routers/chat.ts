@@ -266,7 +266,11 @@ export const chatRouter = router({
         },
         include: msgIncludeFor(me),
       });
-      await ctx.db.channel.update({ where: { id: input.channelId }, data: { updatedAt: new Date() } });
+      // Fire-and-forget: bumping updatedAt only re-sorts the sidebar; don't make
+      // the sender wait an extra DB round-trip for it.
+      void ctx.db.channel
+        .update({ where: { id: input.channelId }, data: { updatedAt: new Date() } })
+        .catch(() => {});
 
       const message = toChatMessage(created as MessageRow, me);
       // Top-level messages hit the channel timeline; replies only update their
