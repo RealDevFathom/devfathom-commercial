@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import { useSession } from 'next-auth/react';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
 import {
   Hash,
   Send,
@@ -26,6 +28,17 @@ const channelTypeIcons: Record<string, string> = {
   DM: '@',
 };
 
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type ChatMessage = RouterOutputs['chat']['getMessages'][number];
+type ChatChannel = RouterOutputs['chat']['getChannels'][number];
+
+const formatMsgTime = (date: Date) => {
+  const d = new Date(date);
+  if (isToday(d)) return format(d, 'h:mm a');
+  if (isYesterday(d)) return `Yesterday ${format(d, 'h:mm a')}`;
+  return format(d, 'MMM d, h:mm a');
+};
+
 export function ChatContent() {
   const { data: session } = useSession();
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
@@ -33,14 +46,10 @@ export function ChatContent() {
 
   const { data: channels, isLoading: channelsLoading } = trpc.chat.getChannels.useQuery();
 
-  // Auto-select first channel
-  useEffect(() => {
-    if (channels?.length && !selectedChannelId) {
-      setSelectedChannelId(channels[0].id);
-    }
-  }, [channels, selectedChannelId]);
-
-  const selectedChannel = channels?.find((c) => c.id === selectedChannelId);
+  // Derive the effective channel synchronously so getMessages fires in the same
+  // render pass as the channel list resolving (no post-resolve useEffect waterfall).
+  const effectiveChannelId = selectedChannelId ?? channels?.[0]?.id ?? null;
+  const selectedChannel = channels?.find((c) => c.id === effectiveChannelId);
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-0 -m-6 animate-fade-in">
@@ -67,7 +76,7 @@ export function ChatContent() {
             <div className="p-2 space-y-0.5">
               {channels.map((channel) => {
                 const lastMsg = channel.messages[0];
-                const isSelected = channel.id === selectedChannelId;
+                const isSelected = channel.id === effectiveChannelId;
                 return (
                   <button
                     key={channel.id}
@@ -288,35 +297,157 @@ function ChannelHeader({
   );
 }
 
+const MessageRow = memo(function MessageRow({
+  msg,
+  isOwn,
+}: {
+  msg: ChatMessage;
+  isOwn: boolean;
+}) {
+  return (
+    <div className={cn('flex gap-3 group', isOwn && 'flex-row-reverse')}>
+      <Avatar className="h-8 w-8 shrink-0 mt-0.5">
+        <AvatarImage src={msg.sender.avatar ?? undefined} />
+        <AvatarFallback className="text-[10px] bg-secondary font-medium">
+          {msg.sender.name[0]}
+        </AvatarFallback>
+      </Avatar>
+      <div className={cn('max-w-[70%]', isOwn && 'text-right')}>
+        <div className={cn('flex items-baseline gap-2', isOwn && 'flex-row-reverse')}>
+          <span className="text-xs font-semibold text-foreground">{msg.sender.name}</span>
+          <span className="text-[10px] text-muted-foreground/50">
+            {formatMsgTime(msg.createdAt)}
+          </span>
+        </div>
+        <div
+          className={cn(
+            'mt-1 inline-block rounded-2xl px-4 py-2 text-sm leading-relaxed',
+            isOwn
+              ? 'bg-primary text-white rounded-tr-md'
+              : 'bg-secondary text-foreground rounded-tl-md'
+          )}
+        >
+          {msg.content}
+        </div>
+        {msg._count.replies > 0 && (
+          <p className="text-[10px] text-muted-foreground mt-1">
+            {msg._count.replies} {msg._count.replies === 1 ? 'reply' : 'replies'}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const Composer = memo(function Composer({
+  onSend,
+  isPending,
+}: {
+  onSend: (content: string) => void;
+  isPending: boolean;
+}) {
+  const [input, setInput] = useState('');
+
+  const handleSend = () => {
+    if (!input.trim()) return;
+    onSend(input.trim());
+    setInput('');
+  };
+
+  return (
+    <div className="shrink-0 border-t border-border/60 px-6 py-3">
+      <div className="relative">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+          placeholder="Type a message..."
+          className="w-full rounded-xl border border-border bg-secondary/50 px-4 py-3 pr-12 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+        />
+        <button
+          onClick={handleSend}
+          disabled={!input.trim() || isPending}
+          className="absolute right-2 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-primary transition-colors disabled:opacity-30"
+        >
+          <Send className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+});
+
 function MessageArea({ channelId, currentUserId }: { channelId: string; currentUserId: string }) {
   const utils = trpc.useUtils();
+  const { data: session } = useSession();
   const { data: messages, isLoading } = trpc.chat.getMessages.useQuery({ channelId });
   const sendMessage = trpc.chat.sendMessage.useMutation({
-    onSuccess: () => {
+    onMutate: async ({ channelId, content }) => {
+      await utils.chat.getMessages.cancel({ channelId });
+      const prevMessages = utils.chat.getMessages.getData({ channelId });
+      const prevChannels = utils.chat.getChannels.getData();
+
+      const now = new Date();
+      const optimisticMsg: ChatMessage = {
+        id: `optimistic-${now.getTime()}`,
+        content,
+        channelId,
+        senderId: currentUserId,
+        parentId: null,
+        isEdited: false,
+        createdAt: now,
+        updatedAt: now,
+        reactions: [],
+        attachments: [],
+        sender: {
+          id: currentUserId,
+          name: session?.user?.name ?? 'You',
+          avatar: session?.user?.image ?? null,
+        },
+        _count: { replies: 0 },
+      };
+
+      utils.chat.getMessages.setData({ channelId }, (prev) => [...(prev ?? []), optimisticMsg]);
+
+      // Optimistically refresh the sidebar preview instead of refetching getChannels.
+      const previewMsg: ChatChannel['messages'][number] = {
+        id: optimisticMsg.id,
+        content,
+        channelId,
+        senderId: currentUserId,
+        parentId: null,
+        isEdited: false,
+        createdAt: now,
+        updatedAt: now,
+        sender: { id: currentUserId, name: session?.user?.name ?? 'You' },
+      };
+      utils.chat.getChannels.setData(undefined, (prev) =>
+        prev?.map((ch) => (ch.id === channelId ? { ...ch, messages: [previewMsg] } : ch))
+      );
+
+      return { prevMessages, prevChannels };
+    },
+    onError: (_err, { channelId }, ctx) => {
+      if (ctx?.prevMessages) utils.chat.getMessages.setData({ channelId }, ctx.prevMessages);
+      if (ctx?.prevChannels) utils.chat.getChannels.setData(undefined, ctx.prevChannels);
+    },
+    onSettled: (_data, _err, { channelId }) => {
       utils.chat.getMessages.invalidate({ channelId });
+      // Reconcile the sidebar (re-sort to top, unread/preview accuracy) — the
+      // optimistic setData above only patches preview content, not ordering.
       utils.chat.getChannels.invalidate();
-      setInput('');
     },
   });
 
-  const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  const handleSend = () => {
-    if (!input.trim()) return;
-    sendMessage.mutate({ channelId, content: input.trim() });
-  };
-
-  const formatMsgTime = (date: Date) => {
-    const d = new Date(date);
-    if (isToday(d)) return format(d, 'h:mm a');
-    if (isYesterday(d)) return `Yesterday ${format(d, 'h:mm a')}`;
-    return format(d, 'MMM d, h:mm a');
-  };
 
   return (
     <>
@@ -334,42 +465,9 @@ function MessageArea({ channelId, currentUserId }: { channelId: string; currentU
             ))}
           </div>
         ) : messages?.length ? (
-          messages.map((msg) => {
-            const isOwn = msg.sender.id === currentUserId;
-            return (
-              <div key={msg.id} className={cn('flex gap-3 group', isOwn && 'flex-row-reverse')}>
-                <Avatar className="h-8 w-8 shrink-0 mt-0.5">
-                  <AvatarImage src={msg.sender.avatar ?? undefined} />
-                  <AvatarFallback className="text-[10px] bg-secondary font-medium">
-                    {msg.sender.name[0]}
-                  </AvatarFallback>
-                </Avatar>
-                <div className={cn('max-w-[70%]', isOwn && 'text-right')}>
-                  <div className={cn('flex items-baseline gap-2', isOwn && 'flex-row-reverse')}>
-                    <span className="text-xs font-semibold text-foreground">{msg.sender.name}</span>
-                    <span className="text-[10px] text-muted-foreground/50">
-                      {formatMsgTime(msg.createdAt)}
-                    </span>
-                  </div>
-                  <div
-                    className={cn(
-                      'mt-1 inline-block rounded-2xl px-4 py-2 text-sm leading-relaxed',
-                      isOwn
-                        ? 'bg-primary text-white rounded-tr-md'
-                        : 'bg-secondary text-foreground rounded-tl-md'
-                    )}
-                  >
-                    {msg.content}
-                  </div>
-                  {msg._count.replies > 0 && (
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      {msg._count.replies} {msg._count.replies === 1 ? 'reply' : 'replies'}
-                    </p>
-                  )}
-                </div>
-              </div>
-            );
-          })
+          messages.map((msg) => (
+            <MessageRow key={msg.id} msg={msg} isOwn={msg.sender.id === currentUserId} />
+          ))
         ) : (
           <div className="flex-1 flex items-center justify-center py-20">
             <div className="text-center">
@@ -384,36 +482,17 @@ function MessageArea({ channelId, currentUserId }: { channelId: string; currentU
       </div>
 
       {/* Compose */}
-      <div className="shrink-0 border-t border-border/60 px-6 py-3">
-        <div className="relative">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Type a message..."
-            className="w-full rounded-xl border border-border bg-secondary/50 px-4 py-3 pr-12 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || sendMessage.isPending}
-            className="absolute right-2 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-primary transition-colors disabled:opacity-30"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      <Composer
+        isPending={sendMessage.isPending}
+        onSend={(content) => sendMessage.mutate({ channelId, content })}
+      />
     </>
   );
 }
 
 function CreateChannelModal({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
-  const { data: team } = trpc.team.getAll.useQuery();
+  const { data: team } = trpc.team.getRoster.useQuery();
 
   const createChannel = trpc.chat.createChannel.useMutation({
     onSuccess: () => {

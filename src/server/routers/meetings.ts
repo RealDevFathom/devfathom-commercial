@@ -14,28 +14,29 @@ export const meetingsRouter = router({
     // Include currently-running meetings (endTime still in the future),
     // not just strictly-future ones. A meeting that started 1 min ago and runs
     // for 30 minutes is still the "current" meeting until it ends.
-    const futureMeetings = await ctx.db.meeting.findMany({
-      where: {
-        attendees: { some: { userId } },
-        endTime: { gte: now },
-      },
-      include: {
-        attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-      },
-      orderBy: { startTime: 'asc' },
-      take: 50,
-    });
-
-    // Get recurring meetings (even if startTime is in the past — we compute next occurrence)
-    const recurringMeetings = await ctx.db.meeting.findMany({
-      where: {
-        attendees: { some: { userId } },
-        recurrence: { not: null },
-      },
-      include: {
-        attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-      },
-    });
+    const [futureMeetings, recurringMeetings] = await Promise.all([
+      ctx.db.meeting.findMany({
+        where: {
+          attendees: { some: { userId } },
+          endTime: { gte: now },
+        },
+        include: {
+          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+        },
+        orderBy: { startTime: 'asc' },
+        take: 50,
+      }),
+      // Get recurring meetings (even if startTime is in the past — we compute next occurrence)
+      ctx.db.meeting.findMany({
+        where: {
+          attendees: { some: { userId } },
+          recurrence: { not: null },
+        },
+        include: {
+          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+        },
+      }),
+    ]);
 
     // Compute next occurrences for recurring meetings
     const computed = recurringMeetings
@@ -67,28 +68,40 @@ export const meetingsRouter = router({
     return attachPerOccurrenceJoinedAt(ctx.db, merged);
   }),
 
-  getAll: protectedProcedure.query(async ({ ctx }) => {
-    const userId = ctx.session.user.id;
-    const now = new Date();
+  getAll: protectedProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(1000).optional(),
+          cursor: z.string().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const now = new Date();
+      const limit = input?.limit ? Math.min(input.limit, 1000) : undefined;
 
-    const meetings = await ctx.db.meeting.findMany({
-      where: { attendees: { some: { userId } } },
-      include: {
-        attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-      },
-      orderBy: { startTime: 'desc' },
-    });
+      const meetings = await ctx.db.meeting.findMany({
+        where: { attendees: { some: { userId } } },
+        include: {
+          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+        },
+        orderBy: { startTime: 'desc' },
+        take: limit,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
 
-    // For each meeting, resolve the "relevant" occurrence for display so the
-    // per-occurrence attendance lookup targets the right one. Non-recurring:
-    // the meeting's own start/end. Recurring: the occurrence closest to now.
-    const withResolvedStart = meetings.map((m) => {
-      const occ = findRelevantOccurrence(m.startTime, m.endTime, m.recurrence, now);
-      return { ...m, startTime: occ.start, endTime: occ.end };
-    });
+      // For each meeting, resolve the "relevant" occurrence for display so the
+      // per-occurrence attendance lookup targets the right one. Non-recurring:
+      // the meeting's own start/end. Recurring: the occurrence closest to now.
+      const withResolvedStart = meetings.map((m) => {
+        const occ = findRelevantOccurrence(m.startTime, m.endTime, m.recurrence, now);
+        return { ...m, startTime: occ.start, endTime: occ.end };
+      });
 
-    return attachPerOccurrenceJoinedAt(ctx.db, withResolvedStart);
-  }),
+      return attachPerOccurrenceJoinedAt(ctx.db, withResolvedStart);
+    }),
 
   create: protectedProcedure
     .input(

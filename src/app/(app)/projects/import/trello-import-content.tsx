@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -84,6 +84,19 @@ export function TrelloImportContent() {
     },
     [handleFileUpload]
   );
+
+  const counts = useMemo(() => {
+    if (!trelloData) return null;
+    const archivedCards = trelloData.cards.filter((c) => c.closed).length;
+    return {
+      openLists: trelloData.lists.filter((l) => !l.closed).length,
+      openCards: trelloData.cards.filter((c) => !c.closed).length,
+      labels: trelloData.labels.filter((l) => l.name || l.color).length,
+      members: trelloData.members.length,
+      archivedCards,
+      hasArchivedCards: archivedCards > 0,
+    };
+  }, [trelloData]);
 
   const handleImport = () => {
     if (!trelloData || !selectedProjectId) return;
@@ -209,22 +222,10 @@ export function TrelloImportContent() {
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <StatBadge
-                  icon={Columns3}
-                  label="Lists"
-                  value={trelloData.lists.filter((l) => !l.closed).length}
-                />
-                <StatBadge
-                  icon={StickyNote}
-                  label="Cards"
-                  value={trelloData.cards.filter((c) => !c.closed).length}
-                />
-                <StatBadge
-                  icon={Tag}
-                  label="Labels"
-                  value={trelloData.labels.filter((l) => l.name || l.color).length}
-                />
-                <StatBadge icon={Users} label="Members" value={trelloData.members.length} />
+                <StatBadge icon={Columns3} label="Lists" value={counts?.openLists ?? 0} />
+                <StatBadge icon={StickyNote} label="Cards" value={counts?.openCards ?? 0} />
+                <StatBadge icon={Tag} label="Labels" value={counts?.labels ?? 0} />
+                <StatBadge icon={Users} label="Members" value={counts?.members ?? 0} />
               </div>
             </CardContent>
           </Card>
@@ -271,7 +272,7 @@ export function TrelloImportContent() {
           )}
 
           {/* Include archived */}
-          {trelloData.cards.some((c) => c.closed) && (
+          {counts?.hasArchivedCards && (
             <label className="flex items-center gap-3 rounded-xl border border-border/60 bg-card p-4 cursor-pointer">
               <input
                 type="checkbox"
@@ -282,7 +283,7 @@ export function TrelloImportContent() {
               <div>
                 <p className="text-sm font-medium text-foreground">Include archived cards</p>
                 <p className="text-xs text-muted-foreground">
-                  {trelloData.cards.filter((c) => c.closed).length} archived cards will be added to
+                  {counts?.archivedCards ?? 0} archived cards will be added to
                   an &quot;Archived&quot; column
                 </p>
               </div>

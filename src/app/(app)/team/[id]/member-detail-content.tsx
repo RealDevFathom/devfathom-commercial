@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
@@ -40,6 +40,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
 
 const priorityConfig: Record<string, { color: string }> = {
   URGENT: { color: 'text-red-500' },
@@ -63,6 +65,18 @@ const departmentOptions = [
   'DESIGN',
 ] as const;
 
+const projectStatusColors: Record<string, string> = {
+  ACTIVE: 'text-emerald-500',
+  IN_DEVELOPMENT: 'text-blue-500',
+  ON_HOLD: 'text-amber-500',
+  COMPLETED: 'text-muted-foreground',
+};
+
+type RouterOutput = inferRouterOutputs<AppRouter>;
+type Member = NonNullable<RouterOutput['team']['getById']>;
+type PersonalStats = RouterOutput['teamStats']['getForUser'];
+type PerformanceNotes = RouterOutput['team']['listPerformanceNotes'];
+
 export function MemberDetailContent({ memberId }: { memberId: string }) {
   const router = useRouter();
   const { data: session } = useSession();
@@ -70,38 +84,24 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
   const utils = trpc.useUtils();
   const { data: member, isLoading } = trpc.team.getById.useQuery({ id: memberId });
 
+  // Hoisted so they batch with getById on mount instead of waterfalling behind
+  // it. Gated to the same self-or-admin visibility the blocks render under, so
+  // no extra requests are issued for users who can't see these sections.
+  const canViewPersonal = session?.user?.id === memberId || isAdmin;
+  const statsQuery = trpc.teamStats.getForUser.useQuery(
+    { userId: memberId },
+    { staleTime: 60_000, enabled: canViewPersonal }
+  );
+  const notesQuery = trpc.team.listPerformanceNotes.useQuery(
+    { userId: memberId },
+    { enabled: canViewPersonal }
+  );
+
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState('');
-  const [editTitle, setEditTitle] = useState('');
-  const [editDept, setEditDept] = useState('');
-  const [editRole, setEditRole] = useState('');
-  const [editPhone, setEditPhone] = useState('');
-  const [editBio, setEditBio] = useState('');
-  const [editSkillInput, setEditSkillInput] = useState('');
-  const [editSkills, setEditSkills] = useState<string[]>([]);
-
   const [showResetPw, setShowResetPw] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
   const [pwSuccess, setPwSuccess] = useState(false);
-
   const [showDeactivate, setShowDeactivate] = useState(false);
 
-  const updateMember = trpc.team.adminUpdateMember.useMutation({
-    onSuccess: () => {
-      utils.team.getById.invalidate({ id: memberId });
-      utils.team.getAll.invalidate();
-      setIsEditing(false);
-    },
-  });
-  const resetPassword = trpc.team.adminResetPassword.useMutation({
-    onSuccess: () => {
-      setShowResetPw(false);
-      setNewPassword('');
-      setPwSuccess(true);
-      setTimeout(() => setPwSuccess(false), 3000);
-    },
-  });
   const deactivate = trpc.team.deactivateMember.useMutation({
     onSuccess: () => {
       utils.team.getAll.invalidate();
@@ -141,17 +141,6 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
       </div>
     );
 
-  const startEdit = () => {
-    setEditName(member.name);
-    setEditTitle(member.title);
-    setEditDept(member.department);
-    setEditRole(member.role);
-    setEditPhone(member.phone || '');
-    setEditBio(member.bio || '');
-    setEditSkills(member.skills);
-    setIsEditing(true);
-  };
-
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -166,7 +155,7 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
         {isAdmin && memberId !== session?.user?.id && (
           <div className="flex items-center gap-2">
             <button
-              onClick={startEdit}
+              onClick={() => setIsEditing(true)}
               className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
             >
               <Pencil className="h-3.5 w-3.5" /> Edit
@@ -207,55 +196,16 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
 
       {/* Reset password form */}
       {showResetPw && isAdmin && (
-        <Card className="border-amber-500/20">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                <Lock className="h-3.5 w-3.5 text-amber-500" /> Reset Password for {member.name}
-              </h3>
-              <button
-                onClick={() => setShowResetPw(false)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="flex gap-3">
-              <div className="relative flex-1">
-                <input
-                  type={showPw ? 'text' : 'password'}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && newPassword.length >= 8)
-                      resetPassword.mutate({ id: memberId, newPassword });
-                  }}
-                  placeholder="New password (min 8 chars)"
-                  className="w-full rounded-xl border border-border bg-background px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-                <button
-                  onClick={() => setShowPw(!showPw)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  tabIndex={-1}
-                >
-                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              <button
-                onClick={() => resetPassword.mutate({ id: memberId, newPassword })}
-                disabled={newPassword.length < 8 || resetPassword.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
-              >
-                {resetPassword.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Lock className="h-3.5 w-3.5" />
-                )}
-                Reset
-              </button>
-            </div>
-          </CardContent>
-        </Card>
+        <ResetPasswordForm
+          memberId={memberId}
+          memberName={member.name}
+          onClose={() => setShowResetPw(false)}
+          onSuccess={() => {
+            setShowResetPw(false);
+            setPwSuccess(true);
+            setTimeout(() => setPwSuccess(false), 3000);
+          }}
+        />
       )}
       {pwSuccess && (
         <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-sm text-emerald-500">
@@ -265,166 +215,7 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
 
       {/* Edit form */}
       {isEditing && isAdmin && (
-        <Card className="border-primary/20">
-          <CardContent className="p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-foreground">Edit Member</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Name</label>
-                <input
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Title</label>
-                <input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Department</label>
-                <select
-                  value={editDept}
-                  onChange={(e) => setEditDept(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                >
-                  {departmentOptions.map((d) => (
-                    <option key={d} value={d}>
-                      {d.charAt(0) + d.slice(1).toLowerCase()}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Role</label>
-                <div className="flex rounded-xl border border-border overflow-hidden">
-                  {(['EMPLOYEE', 'ADMIN'] as const).map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => setEditRole(r)}
-                      className={cn(
-                        'flex-1 py-2 text-xs font-medium transition-colors',
-                        editRole === r
-                          ? 'bg-foreground text-background'
-                          : 'bg-card text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {r === 'EMPLOYEE' ? 'Employee' : 'Admin'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Phone</label>
-                <input
-                  value={editPhone}
-                  onChange={(e) => setEditPhone(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Status</label>
-                <select
-                  defaultValue={member.status}
-                  onChange={(e) =>
-                    updateMember.mutate({
-                      id: memberId,
-                      status: e.target.value as 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE',
-                    })
-                  }
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                >
-                  <option value="ACTIVE">Active</option>
-                  <option value="ON_LEAVE">On Leave</option>
-                  <option value="INACTIVE">Inactive</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Bio</label>
-              <textarea
-                value={editBio}
-                onChange={(e) => setEditBio(e.target.value)}
-                rows={2}
-                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Skills</label>
-              <div className="flex gap-2">
-                <input
-                  value={editSkillInput}
-                  onChange={(e) => setEditSkillInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      const v = editSkillInput.trim();
-                      if (v && !editSkills.includes(v)) {
-                        setEditSkills([...editSkills, v]);
-                        setEditSkillInput('');
-                      }
-                    }
-                  }}
-                  placeholder="Add skill..."
-                  className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
-                />
-              </div>
-              {editSkills.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {editSkills.map((s) => (
-                    <span
-                      key={s}
-                      className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2 py-0.5 text-xs font-medium text-foreground"
-                    >
-                      {s}{' '}
-                      <button
-                        onClick={() => setEditSkills(editSkills.filter((sk) => sk !== s))}
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setIsEditing(false)}
-                className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() =>
-                  updateMember.mutate({
-                    id: memberId,
-                    name: editName.trim() || undefined,
-                    title: editTitle.trim() || undefined,
-                    department: editDept as (typeof departmentOptions)[number],
-                    role: editRole as 'ADMIN' | 'EMPLOYEE',
-                    phone: editPhone || null,
-                    bio: editBio || null,
-                    skills: editSkills,
-                  })
-                }
-                disabled={updateMember.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
-              >
-                {updateMember.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Save className="h-3.5 w-3.5" />
-                )}
-                Save Changes
-              </button>
-            </div>
-          </CardContent>
-        </Card>
+        <EditMemberForm memberId={memberId} member={member} onClose={() => setIsEditing(false)} />
       )}
 
       {/* Profile header */}
@@ -478,7 +269,13 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
       </div>
 
       {/* Personal stats — visible to self or admin */}
-      {(session?.user?.id === memberId || isAdmin) && <PersonalStatsBlock userId={memberId} />}
+      {canViewPersonal && (
+        <PersonalStatsBlock
+          data={statsQuery.data}
+          isLoading={statsQuery.isLoading}
+          isError={statsQuery.isError}
+        />
+      )}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         {/* Projects */}
@@ -497,12 +294,6 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
             ) : (
               <div className="divide-y divide-border/60">
                 {member.projectMembers.map((pm) => {
-                  const sColors: Record<string, string> = {
-                    ACTIVE: 'text-emerald-500',
-                    IN_DEVELOPMENT: 'text-blue-500',
-                    ON_HOLD: 'text-amber-500',
-                    COMPLETED: 'text-muted-foreground',
-                  };
                   return (
                     <Link
                       key={pm.project.id}
@@ -517,7 +308,9 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
                           {pm.project.type === 'CLIENT' ? 'Client' : 'Internal'} &middot; {pm.role}
                         </p>
                       </div>
-                      <span className={cn('text-xs font-medium', sColors[pm.project.status])}>
+                      <span
+                        className={cn('text-xs font-medium', projectStatusColors[pm.project.status])}
+                      >
                         {pm.project.status.replace('_', ' ')}
                       </span>
                     </Link>
@@ -667,11 +460,13 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
         )}
 
       {/* Performance notes — visible to self or admins; admins can write */}
-      {(isAdmin || session?.user?.id === memberId) && (
+      {canViewPersonal && (
         <PerformanceNotesBlock
           userId={memberId}
           canWrite={isAdmin}
           currentUserId={session?.user?.id ?? ''}
+          notes={notesQuery.data}
+          isLoading={notesQuery.isLoading}
         />
       )}
     </div>
@@ -679,13 +474,285 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
 }
 
 /* ============================================
+   Admin-only forms — own their local input state so typing doesn't re-render
+   the whole profile page.
+   ============================================ */
+function ResetPasswordForm({
+  memberId,
+  memberName,
+  onClose,
+  onSuccess,
+}: {
+  memberId: string;
+  memberName: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [newPassword, setNewPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
+
+  const resetPassword = trpc.team.adminResetPassword.useMutation({
+    onSuccess: () => {
+      setNewPassword('');
+      onSuccess();
+    },
+  });
+
+  return (
+    <Card className="border-amber-500/20">
+      <CardContent className="p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+            <Lock className="h-3.5 w-3.5 text-amber-500" /> Reset Password for {memberName}
+          </h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex gap-3">
+          <div className="relative flex-1">
+            <input
+              type={showPw ? 'text' : 'password'}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newPassword.length >= 8)
+                  resetPassword.mutate({ id: memberId, newPassword });
+              }}
+              placeholder="New password (min 8 chars)"
+              className="w-full rounded-xl border border-border bg-background px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <button
+              onClick={() => setShowPw(!showPw)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              tabIndex={-1}
+            >
+              {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          <button
+            onClick={() => resetPassword.mutate({ id: memberId, newPassword })}
+            disabled={newPassword.length < 8 || resetPassword.isPending}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            {resetPassword.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Lock className="h-3.5 w-3.5" />
+            )}
+            Reset
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function EditMemberForm({
+  memberId,
+  member,
+  onClose,
+}: {
+  memberId: string;
+  member: Member;
+  onClose: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [editName, setEditName] = useState(member.name);
+  const [editTitle, setEditTitle] = useState(member.title);
+  const [editDept, setEditDept] = useState<string>(member.department);
+  const [editRole, setEditRole] = useState<string>(member.role);
+  const [editPhone, setEditPhone] = useState(member.phone || '');
+  const [editBio, setEditBio] = useState(member.bio || '');
+  const [editSkillInput, setEditSkillInput] = useState('');
+  const [editSkills, setEditSkills] = useState<string[]>(member.skills);
+
+  const updateMember = trpc.team.adminUpdateMember.useMutation({
+    onSuccess: () => {
+      utils.team.getById.invalidate({ id: memberId });
+      utils.team.getAll.invalidate();
+      onClose();
+    },
+  });
+
+  return (
+    <Card className="border-primary/20">
+      <CardContent className="p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-foreground">Edit Member</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Name</label>
+            <input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Title</label>
+            <input
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Department</label>
+            <select
+              value={editDept}
+              onChange={(e) => setEditDept(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            >
+              {departmentOptions.map((d) => (
+                <option key={d} value={d}>
+                  {d.charAt(0) + d.slice(1).toLowerCase()}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Role</label>
+            <div className="flex rounded-xl border border-border overflow-hidden">
+              {(['EMPLOYEE', 'ADMIN'] as const).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setEditRole(r)}
+                  className={cn(
+                    'flex-1 py-2 text-xs font-medium transition-colors',
+                    editRole === r
+                      ? 'bg-foreground text-background'
+                      : 'bg-card text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {r === 'EMPLOYEE' ? 'Employee' : 'Admin'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Phone</label>
+            <input
+              value={editPhone}
+              onChange={(e) => setEditPhone(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Status</label>
+            <select
+              defaultValue={member.status}
+              onChange={(e) =>
+                updateMember.mutate({
+                  id: memberId,
+                  status: e.target.value as 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE',
+                })
+              }
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            >
+              <option value="ACTIVE">Active</option>
+              <option value="ON_LEAVE">On Leave</option>
+              <option value="INACTIVE">Inactive</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-foreground mb-1">Bio</label>
+          <textarea
+            value={editBio}
+            onChange={(e) => setEditBio(e.target.value)}
+            rows={2}
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-foreground mb-1">Skills</label>
+          <div className="flex gap-2">
+            <input
+              value={editSkillInput}
+              onChange={(e) => setEditSkillInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const v = editSkillInput.trim();
+                  if (v && !editSkills.includes(v)) {
+                    setEditSkills([...editSkills, v]);
+                    setEditSkillInput('');
+                  }
+                }
+              }}
+              placeholder="Add skill..."
+              className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+          {editSkills.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {editSkills.map((s) => (
+                <span
+                  key={s}
+                  className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2 py-0.5 text-xs font-medium text-foreground"
+                >
+                  {s}{' '}
+                  <button
+                    onClick={() => setEditSkills(editSkills.filter((sk) => sk !== s))}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() =>
+              updateMember.mutate({
+                id: memberId,
+                name: editName.trim() || undefined,
+                title: editTitle.trim() || undefined,
+                department: editDept as (typeof departmentOptions)[number],
+                role: editRole as 'ADMIN' | 'EMPLOYEE',
+                phone: editPhone || null,
+                bio: editBio || null,
+                skills: editSkills,
+              })
+            }
+            disabled={updateMember.isPending}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            {updateMember.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            Save Changes
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================================
    Personal stats block — rendered on a member's profile page.
    Visible only to the member themselves or an admin.
    ============================================ */
-function PersonalStatsBlock({ userId }: { userId: string }) {
-  const stats = trpc.teamStats.getForUser.useQuery({ userId }, { staleTime: 60_000 });
-
-  if (stats.isLoading) {
+const PersonalStatsBlock = memo(function PersonalStatsBlock({
+  data,
+  isLoading,
+  isError,
+}: {
+  data: PersonalStats | undefined;
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  if (isLoading) {
     return (
       <Card className="border-border/60">
         <CardContent className="p-5">
@@ -700,8 +767,8 @@ function PersonalStatsBlock({ userId }: { userId: string }) {
     );
   }
 
-  if (stats.isError || !stats.data) return null;
-  const s = stats.data;
+  if (isError || !data) return null;
+  const s = data;
 
   const delta = s.completedThisWeek - s.completedLastWeek;
   const maxSpark = Math.max(1, ...s.tasksDoneSparkline);
@@ -858,23 +925,26 @@ function PersonalStatsBlock({ userId }: { userId: string }) {
       </CardContent>
     </Card>
   );
-}
+});
 
 /* ============================================
    Performance notes — admin-authored feedback, visible to admins + subject.
    Admins can add notes; only the author can delete their own notes.
    ============================================ */
-function PerformanceNotesBlock({
+const PerformanceNotesBlock = memo(function PerformanceNotesBlock({
   userId,
   canWrite,
   currentUserId,
+  notes,
+  isLoading,
 }: {
   userId: string;
   canWrite: boolean;
   currentUserId: string;
+  notes: PerformanceNotes | undefined;
+  isLoading: boolean;
 }) {
   const utils = trpc.useUtils();
-  const { data: notes, isLoading } = trpc.team.listPerformanceNotes.useQuery({ userId });
   const [draft, setDraft] = useState('');
 
   const addNote = trpc.team.addPerformanceNote.useMutation({
@@ -972,7 +1042,7 @@ function PerformanceNotesBlock({
       </CardContent>
     </Card>
   );
-}
+});
 
 function StatTile({
   icon: Icon,

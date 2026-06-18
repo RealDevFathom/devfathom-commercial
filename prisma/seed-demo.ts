@@ -336,7 +336,7 @@ async function main() {
       for (let c = 0; c < numComments; c++) {
         const authorId = pick(pool, i + c);
         const createdAt = c === 0 ? daysAgo(2 + (i % 8), 14, (i * 7) % 60) : minutesAgo(30 + c * 45 + i);
-        const comment = await prisma.taskComment.create({
+        const comment: { id: string } = await prisma.taskComment.create({
           data: {
             content: pick(commentTemplates, i + c * 3)(''),
             taskId: t.id,
@@ -949,7 +949,7 @@ async function main() {
     }
 
     // expenses for Apr / May / Jun (existing seed only covered Jan–Mar)
-    const monthlyExpenses = (month: number, salary: number) => [
+    const monthlyExpenses = (_month: number, salary: number) => [
       { amount: salary, category: 'SALARIES', desc: `Monthly Salaries`, day: 28 },
       { amount: 299, category: 'HOSTING', desc: 'AWS Cloud Services', day: 5 },
       { amount: 20, category: 'SUBSCRIPTIONS', desc: 'Vercel Pro', day: 1 },

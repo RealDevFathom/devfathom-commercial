@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { memo, useState, useMemo } from 'react';
 import Link from 'next/link';
 import {
   Search,
@@ -543,11 +543,13 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ProjectGridCard({ project }: { project: ProjectData }) {
+const ProjectGridCard = memo(function ProjectGridCard({ project }: { project: ProjectData }) {
+  const utils = trpc.useUtils();
+  const prefetch = () => utils.projects.getById.prefetch({ id: project.id });
   const config = statusConfig[project.status] || statusConfig.ACTIVE;
 
   return (
-    <Link href={`/projects/${project.id}`}>
+    <Link href={`/projects/${project.id}`} onMouseEnter={prefetch} onFocus={prefetch}>
       <Card className="group h-full border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/20 hover:-translate-y-0.5 cursor-pointer">
         <CardContent className="p-6">
           {/* Header */}
@@ -632,13 +634,15 @@ function ProjectGridCard({ project }: { project: ProjectData }) {
       </Card>
     </Link>
   );
-}
+});
 
-function ProjectListRow({ project }: { project: ProjectData }) {
+const ProjectListRow = memo(function ProjectListRow({ project }: { project: ProjectData }) {
+  const utils = trpc.useUtils();
+  const prefetch = () => utils.projects.getById.prefetch({ id: project.id });
   const config = statusConfig[project.status] || statusConfig.ACTIVE;
 
   return (
-    <Link href={`/projects/${project.id}`}>
+    <Link href={`/projects/${project.id}`} onMouseEnter={prefetch} onFocus={prefetch}>
       <div className="group flex items-center gap-4 rounded-xl border border-border/60 bg-card p-4 transition-all duration-150 hover:border-border hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/20 cursor-pointer">
         {/* Name + client */}
         <div className="flex-1 min-w-0">
@@ -691,7 +695,7 @@ function ProjectListRow({ project }: { project: ProjectData }) {
       </div>
     </Link>
   );
-}
+});
 
 type ProjectData = {
   id: string;

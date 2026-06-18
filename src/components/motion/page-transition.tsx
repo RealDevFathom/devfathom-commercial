@@ -1,6 +1,6 @@
 'use client';
 
-import { motion, useReducedMotion } from 'motion/react';
+import { m, useReducedMotion } from 'motion/react';
 import { usePathname } from 'next/navigation';
 import { easeOutExpo } from '@/lib/motion';
 
@@ -21,7 +21,7 @@ export function PageTransition({
   if (reduce) return <div className={className}>{children}</div>;
 
   return (
-    <motion.div
+    <m.div
       key={pathname}
       className={className}
       initial={{ opacity: 0, y: 10 }}
@@ -29,6 +29,6 @@ export function PageTransition({
       transition={{ duration: 0.42, ease: easeOutExpo }}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }

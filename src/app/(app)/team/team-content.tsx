@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { memo, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -18,8 +18,12 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
+
+type TeamMember = inferRouterOutputs<AppRouter>['team']['getAll'][number];
 
 const departmentColors: Record<string, string> = {
   LEADERSHIP: 'bg-primary/10 text-primary',
@@ -150,72 +154,7 @@ export function TeamContent() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((member) => (
-            <Link key={member.id} href={`/team/${member.id}`}>
-              <Card className="group h-full border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:-translate-y-0.5 cursor-pointer">
-                <CardContent className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="relative">
-                      <Avatar className="h-14 w-14">
-                        <AvatarImage src={member.avatar ?? undefined} />
-                        <AvatarFallback className="bg-secondary text-foreground font-semibold text-lg">
-                          {member.name
-                            .split(' ')
-                            .map((n) => n[0])
-                            .join('')}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div
-                        className={cn(
-                          'absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card',
-                          statusDot[member.status]
-                        )}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
-                        {member.name}
-                      </h3>
-                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                        {member.title}
-                      </p>
-                      <div className="flex items-center gap-2 mt-2">
-                        <span
-                          className={cn(
-                            'rounded-md px-2 py-0.5 text-[10px] font-medium',
-                            departmentColors[member.department]
-                          )}
-                        >
-                          {member.department.charAt(0) + member.department.slice(1).toLowerCase()}
-                        </span>
-                        {member.role === 'ADMIN' && (
-                          <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                            Admin
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/60 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-3">
-                      <span className="flex items-center gap-1">
-                        <FolderKanban className="h-3 w-3" />
-                        {member._count.projectMembers}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <CheckSquare className="h-3 w-3" />
-                        {member._count.assignedTasks}
-                      </span>
-                    </div>
-                    {member.lastActiveAt && (
-                      <span>
-                        {formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })}
-                      </span>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
+            <TeamMemberCard key={member.id} member={member} />
           ))}
         </div>
       )}
@@ -224,6 +163,78 @@ export function TeamContent() {
     </div>
   );
 }
+
+const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMember }) {
+  const utils = trpc.useUtils();
+  const prefetch = () => utils.team.getById.prefetch({ id: member.id });
+
+  return (
+    <Link href={`/team/${member.id}`} onMouseEnter={prefetch} onFocus={prefetch}>
+      <Card className="group h-full border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:-translate-y-0.5 cursor-pointer">
+        <CardContent className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="relative">
+              <Avatar className="h-14 w-14">
+                <AvatarImage src={member.avatar ?? undefined} />
+                <AvatarFallback className="bg-secondary text-foreground font-semibold text-lg">
+                  {member.name
+                    .split(' ')
+                    .map((n) => n[0])
+                    .join('')}
+                </AvatarFallback>
+              </Avatar>
+              <div
+                className={cn(
+                  'absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card',
+                  statusDot[member.status]
+                )}
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
+                {member.name}
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5 truncate">{member.title}</p>
+              <div className="flex items-center gap-2 mt-2">
+                <span
+                  className={cn(
+                    'rounded-md px-2 py-0.5 text-[10px] font-medium',
+                    departmentColors[member.department]
+                  )}
+                >
+                  {member.department.charAt(0) + member.department.slice(1).toLowerCase()}
+                </span>
+                {member.role === 'ADMIN' && (
+                  <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                    Admin
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/60 text-xs text-muted-foreground">
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1">
+                <FolderKanban className="h-3 w-3" />
+                {member._count.projectMembers}
+              </span>
+              <span className="flex items-center gap-1">
+                <CheckSquare className="h-3 w-3" />
+                {member._count.assignedTasks}
+              </span>
+            </div>
+            {member.lastActiveAt && (
+              <span>
+                {formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })}
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+});
 
 const departmentOptions = [
   'LEADERSHIP',

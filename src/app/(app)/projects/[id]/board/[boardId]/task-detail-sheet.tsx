@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
   X,
   Calendar,
@@ -20,6 +20,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format, formatDistanceToNow } from 'date-fns';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
+
+type TaskDetailData = NonNullable<inferRouterOutputs<AppRouter>['projects']['getTaskDetail']>;
+type TaskComment = TaskDetailData['comments'][number];
 
 const priorities = [
   { value: 'URGENT', label: 'Urgent', color: 'text-red-500', bg: 'bg-red-500' },
@@ -28,8 +33,171 @@ const priorities = [
   { value: 'LOW', label: 'Low', color: 'text-muted-foreground', bg: 'bg-muted-foreground/40' },
 ] as const;
 
+// Per-comment formatting is memoized so re-renders of the sheet (e.g. typing in
+// the composer) don't recompute relative timestamps for every comment.
+const CommentItem = memo(function CommentItem({ comment }: { comment: TaskComment }) {
+  const relativeTime = useMemo(
+    () => formatDistanceToNow(new Date(comment.createdAt), { addSuffix: true }),
+    [comment.createdAt]
+  );
+  return (
+    <div className="flex gap-3">
+      <Avatar className="h-7 w-7 shrink-0 mt-0.5">
+        <AvatarImage src={comment.user.avatar ?? undefined} />
+        <AvatarFallback className="text-[9px] bg-secondary font-medium">
+          {comment.user.name[0]}
+        </AvatarFallback>
+      </Avatar>
+      <div className="flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-semibold text-foreground">{comment.user.name}</span>
+          <span className="text-[11px] text-muted-foreground/50">{relativeTime}</span>
+        </div>
+        <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">{comment.content}</p>
+      </div>
+    </div>
+  );
+});
+
+// Memoized comment list — only re-renders when the comments array identity
+// changes (i.e. after a real fetch), not on every keystroke in the sheet.
+const CommentList = memo(function CommentList({ comments }: { comments: TaskComment[] }) {
+  return (
+    <>
+      {comments.map((comment) => (
+        <CommentItem key={comment.id} comment={comment} />
+      ))}
+    </>
+  );
+});
+
+// Owns its own draft state so typing a comment doesn't re-render the whole sheet.
+function CommentComposer({
+  onSubmit,
+  isPending,
+}: {
+  onSubmit: (content: string) => void;
+  isPending: boolean;
+}) {
+  const [commentText, setCommentText] = useState('');
+  const submit = () => {
+    const trimmed = commentText.trim();
+    if (!trimmed) return;
+    onSubmit(trimmed);
+    setCommentText('');
+  };
+  return (
+    <div className="flex gap-3 pt-2 border-t border-border/60">
+      <div className="flex-1 relative">
+        <input
+          value={commentText}
+          onChange={(e) => setCommentText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+          }}
+          placeholder="Write a comment..."
+          className="w-full rounded-xl border border-border bg-secondary/50 px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+        />
+        <button
+          onClick={submit}
+          disabled={!commentText.trim() || isPending}
+          className="absolute right-2 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-primary transition-colors disabled:opacity-30"
+        >
+          <Send className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Owns its own edit/draft state so typing in the title doesn't re-render the sheet.
+function TitleEditor({ title, onSave }: { title: string; onSave: (title: string) => void }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const save = () => {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== title) onSave(trimmed);
+    setIsEditing(false);
+  };
+  if (isEditing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') save();
+          if (e.key === 'Escape') setIsEditing(false);
+        }}
+        className="w-full font-display text-xl font-bold tracking-tight text-foreground bg-transparent border-b-2 border-primary pb-1 focus:outline-none"
+      />
+    );
+  }
+  return (
+    <h2
+      onClick={() => {
+        setValue(title);
+        setIsEditing(true);
+      }}
+      className="font-display text-xl font-bold tracking-tight text-foreground leading-snug cursor-text hover:text-primary transition-colors"
+      title="Click to edit"
+    >
+      {title}
+    </h2>
+  );
+}
+
+// Owns its own edit/draft state so typing in the description doesn't re-render the sheet.
+function DescriptionEditor({
+  description,
+  onSave,
+}: {
+  description: string | null;
+  onSave: (description: string | null) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const save = () => {
+    const val = value.trim() || null;
+    if (val !== (description ?? null)) onSave(val);
+    setIsEditing(false);
+  };
+  if (isEditing) {
+    return (
+      <textarea
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setIsEditing(false);
+        }}
+        rows={4}
+        className="w-full rounded-xl border border-primary/30 bg-card px-4 py-3 text-sm text-foreground leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+        placeholder="Add a description..."
+      />
+    );
+  }
+  return (
+    <div
+      onClick={() => {
+        setValue(description ?? '');
+        setIsEditing(true);
+      }}
+      className={cn(
+        'rounded-xl border border-transparent px-4 py-3 text-sm leading-relaxed cursor-text transition-colors hover:border-border hover:bg-secondary/30',
+        description ? 'text-muted-foreground whitespace-pre-wrap' : 'text-muted-foreground/50 italic'
+      )}
+    >
+      {description || 'Click to add a description...'}
+    </div>
+  );
+}
+
 export function TaskDetailSheet({
   taskId,
+  boardId,
   onClose,
 }: {
   taskId: string;
@@ -40,7 +208,7 @@ export function TaskDetailSheet({
 
   const invalidateAll = () => {
     utils.projects.getTaskDetail.invalidate({ id: taskId });
-    utils.projects.getBoardWithTasks.invalidate();
+    utils.projects.getBoardWithTasks.invalidate({ boardId });
   };
 
   const { data: task, isLoading } = trpc.projects.getTaskDetail.useQuery({ id: taskId });
@@ -48,20 +216,74 @@ export function TaskDetailSheet({
   const updateTask = trpc.projects.updateTask.useMutation({ onSuccess: invalidateAll });
   const deleteTask = trpc.projects.deleteTask.useMutation({
     onSuccess: () => {
-      utils.projects.getBoardWithTasks.invalidate();
+      utils.projects.getBoardWithTasks.invalidate({ boardId });
       onClose();
     },
   });
   const addComment = trpc.projects.addComment.useMutation({
     onSuccess: () => {
       utils.projects.getTaskDetail.invalidate({ id: taskId });
-      setCommentText('');
     },
   });
-  const toggleItem = trpc.projects.toggleChecklistItem.useMutation({ onSuccess: invalidateAll });
-  const addLabelToTask = trpc.projects.addLabelToTask.useMutation({ onSuccess: invalidateAll });
+  // Optimistic checklist toggle: flip the item instantly, reconcile on settle.
+  const toggleItem = trpc.projects.toggleChecklistItem.useMutation({
+    onMutate: async ({ id, completed }) => {
+      await utils.projects.getTaskDetail.cancel({ id: taskId });
+      const previous = utils.projects.getTaskDetail.getData({ id: taskId });
+      utils.projects.getTaskDetail.setData({ id: taskId }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          checklists: old.checklists.map((cl) => ({
+            ...cl,
+            items: cl.items.map((it) => (it.id === id ? { ...it, completed } : it)),
+          })),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) utils.projects.getTaskDetail.setData({ id: taskId }, context.previous);
+    },
+    onSettled: invalidateAll,
+  });
+  // Optimistic label add: append the label from the board-labels cache instantly.
+  const addLabelToTask = trpc.projects.addLabelToTask.useMutation({
+    onMutate: async ({ labelId }) => {
+      await utils.projects.getTaskDetail.cancel({ id: taskId });
+      const previous = utils.projects.getTaskDetail.getData({ id: taskId });
+      utils.projects.getTaskDetail.setData({ id: taskId }, (old) => {
+        if (!old) return old;
+        if (old.labels.some((tl) => tl.label.id === labelId)) return old;
+        const label = boardLabels?.find((l) => l.id === labelId);
+        if (!label) return old;
+        return {
+          ...old,
+          labels: [...old.labels, { id: `optimistic-${labelId}`, taskId, labelId, label }],
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) utils.projects.getTaskDetail.setData({ id: taskId }, context.previous);
+    },
+    onSettled: invalidateAll,
+  });
+  // Optimistic label remove: drop the label instantly, reconcile on settle.
   const removeLabelFromTask = trpc.projects.removeLabelFromTask.useMutation({
-    onSuccess: invalidateAll,
+    onMutate: async ({ labelId }) => {
+      await utils.projects.getTaskDetail.cancel({ id: taskId });
+      const previous = utils.projects.getTaskDetail.getData({ id: taskId });
+      utils.projects.getTaskDetail.setData({ id: taskId }, (old) => {
+        if (!old) return old;
+        return { ...old, labels: old.labels.filter((tl) => tl.label.id !== labelId) };
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) utils.projects.getTaskDetail.setData({ id: taskId }, context.previous);
+    },
+    onSettled: invalidateAll,
   });
   const createLabel = trpc.projects.createLabel.useMutation({
     onSuccess: () => {
@@ -72,45 +294,59 @@ export function TaskDetailSheet({
     },
   });
 
+  // Optimistic assignee update: rebuild the assignee list instantly from cache + roster.
   const updateAssignees = trpc.projects.updateTaskAssignees.useMutation({
-    onSuccess: invalidateAll,
+    onMutate: async ({ assigneeIds }) => {
+      await utils.projects.getTaskDetail.cancel({ id: taskId });
+      const previous = utils.projects.getTaskDetail.getData({ id: taskId });
+      utils.projects.getTaskDetail.setData({ id: taskId }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          assignees: assigneeIds.flatMap((id) => {
+            const existing = old.assignees.find((a) => a.user.id === id);
+            if (existing) return [existing];
+            const member = teamMembers?.find((m) => m.id === id);
+            if (!member) return [];
+            return [
+              {
+                id: `optimistic-${id}`,
+                taskId,
+                userId: id,
+                user: {
+                  id: member.id,
+                  name: member.name,
+                  avatar: member.avatar,
+                  title: member.title,
+                },
+              },
+            ];
+          }),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) utils.projects.getTaskDetail.setData({ id: taskId }, context.previous);
+    },
+    onSettled: invalidateAll,
   });
 
   // Fetch board labels and team members when task is loaded
-  const boardId = task?.column?.board?.id;
+  const taskBoardId = task?.column?.board?.id;
   const { data: boardLabels } = trpc.projects.getBoardLabels.useQuery(
-    { boardId: boardId ?? '' },
-    { enabled: !!boardId }
+    { boardId: taskBoardId ?? '' },
+    { enabled: !!taskBoardId }
   );
-  const { data: teamMembers } = trpc.team.getAll.useQuery();
+  const { data: teamMembers } = trpc.team.getRoster.useQuery();
 
-  const [commentText, setCommentText] = useState('');
   const [showAssigneePicker, setShowAssigneePicker] = useState(false);
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [editTitle, setEditTitle] = useState('');
-  const [isEditingDesc, setIsEditingDesc] = useState(false);
-  const [editDesc, setEditDesc] = useState('');
   const [showPriorityMenu, setShowPriorityMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showLabelPicker, setShowLabelPicker] = useState(false);
   const [showNewLabelForm, setShowNewLabelForm] = useState(false);
   const [newLabelName, setNewLabelName] = useState('');
   const [newLabelColor, setNewLabelColor] = useState('#123A38');
-
-  const handleTitleSave = () => {
-    if (editTitle.trim() && editTitle.trim() !== task?.title) {
-      updateTask.mutate({ id: taskId, title: editTitle.trim() });
-    }
-    setIsEditingTitle(false);
-  };
-
-  const handleDescSave = () => {
-    const val = editDesc.trim() || null;
-    if (val !== (task?.description ?? null)) {
-      updateTask.mutate({ id: taskId, description: val });
-    }
-    setIsEditingDesc(false);
-  };
 
   const handlePriorityChange = (priority: 'URGENT' | 'HIGH' | 'MEDIUM' | 'LOW') => {
     updateTask.mutate({ id: taskId, priority });
@@ -187,30 +423,10 @@ export function TaskDetailSheet({
         ) : task ? (
           <div className="p-6 space-y-6">
             {/* Title — click to edit */}
-            {isEditingTitle ? (
-              <input
-                autoFocus
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                onBlur={handleTitleSave}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleTitleSave();
-                  if (e.key === 'Escape') setIsEditingTitle(false);
-                }}
-                className="w-full font-display text-xl font-bold tracking-tight text-foreground bg-transparent border-b-2 border-primary pb-1 focus:outline-none"
-              />
-            ) : (
-              <h2
-                onClick={() => {
-                  setEditTitle(task.title);
-                  setIsEditingTitle(true);
-                }}
-                className="font-display text-xl font-bold tracking-tight text-foreground leading-snug cursor-text hover:text-primary transition-colors"
-                title="Click to edit"
-              >
-                {task.title}
-              </h2>
-            )}
+            <TitleEditor
+              title={task.title}
+              onSave={(title) => updateTask.mutate({ id: taskId, title })}
+            />
 
             {/* Editable fields grid */}
             <div className="grid grid-cols-2 gap-3">
@@ -450,35 +666,10 @@ export function TaskDetailSheet({
               <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
                 Description
               </h4>
-              {isEditingDesc ? (
-                <textarea
-                  autoFocus
-                  value={editDesc}
-                  onChange={(e) => setEditDesc(e.target.value)}
-                  onBlur={handleDescSave}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') setIsEditingDesc(false);
-                  }}
-                  rows={4}
-                  className="w-full rounded-xl border border-primary/30 bg-card px-4 py-3 text-sm text-foreground leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
-                  placeholder="Add a description..."
-                />
-              ) : (
-                <div
-                  onClick={() => {
-                    setEditDesc(task.description ?? '');
-                    setIsEditingDesc(true);
-                  }}
-                  className={cn(
-                    'rounded-xl border border-transparent px-4 py-3 text-sm leading-relaxed cursor-text transition-colors hover:border-border hover:bg-secondary/30',
-                    task.description
-                      ? 'text-muted-foreground whitespace-pre-wrap'
-                      : 'text-muted-foreground/50 italic'
-                  )}
-                >
-                  {task.description || 'Click to add a description...'}
-                </div>
-              )}
+              <DescriptionEditor
+                description={task.description}
+                onSave={(description) => updateTask.mutate({ id: taskId, description })}
+              />
             </div>
 
             {/* Assignees */}
@@ -642,56 +833,13 @@ export function TaskDetailSheet({
               </h4>
 
               <div className="space-y-4">
-                {task.comments.map((comment) => (
-                  <div key={comment.id} className="flex gap-3">
-                    <Avatar className="h-7 w-7 shrink-0 mt-0.5">
-                      <AvatarImage src={comment.user.avatar ?? undefined} />
-                      <AvatarFallback className="text-[9px] bg-secondary font-medium">
-                        {comment.user.name[0]}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-sm font-semibold text-foreground">
-                          {comment.user.name}
-                        </span>
-                        <span className="text-[11px] text-muted-foreground/50">
-                          {formatDistanceToNow(new Date(comment.createdAt), { addSuffix: true })}
-                        </span>
-                      </div>
-                      <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">
-                        {comment.content}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                <CommentList comments={task.comments} />
 
                 {/* Add comment */}
-                <div className="flex gap-3 pt-2 border-t border-border/60">
-                  <div className="flex-1 relative">
-                    <input
-                      value={commentText}
-                      onChange={(e) => setCommentText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && commentText.trim()) {
-                          addComment.mutate({ taskId, content: commentText.trim() });
-                        }
-                      }}
-                      placeholder="Write a comment..."
-                      className="w-full rounded-xl border border-border bg-secondary/50 px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    />
-                    <button
-                      onClick={() => {
-                        if (commentText.trim())
-                          addComment.mutate({ taskId, content: commentText.trim() });
-                      }}
-                      disabled={!commentText.trim() || addComment.isPending}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-primary transition-colors disabled:opacity-30"
-                    >
-                      <Send className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
+                <CommentComposer
+                  onSubmit={(content) => addComment.mutate({ taskId, content })}
+                  isPending={addComment.isPending}
+                />
               </div>
             </div>
 

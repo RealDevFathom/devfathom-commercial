@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { motion } from 'motion/react';
+import { m } from 'motion/react';
 import {
   LayoutDashboard,
   FolderKanban,
@@ -120,7 +120,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
               )}
             >
               {isActive && (
-                <motion.span
+                <m.span
                   layoutId="sidebar-active"
                   className="absolute inset-0 rounded-lg bg-sidebar-accent shadow-sm"
                   transition={{ type: 'spring', stiffness: 420, damping: 34 }}
@@ -153,14 +153,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
           );
 
           return (
-            <motion.div
+            <m.div
               key={item.href}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.04 * i + 0.05, duration: 0.4, ease: easeOutExpo }}
             >
               {entry}
-            </motion.div>
+            </m.div>
           );
         })}
       </nav>

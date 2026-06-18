@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, memo } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
@@ -25,9 +26,19 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
-import { NoteEditor } from '@/components/notes/note-editor';
+
+// TipTap/ProseMirror is heavy; only load it on the client when a note detail
+// pane actually mounts (i.e. in edit/view of a selected note), keeping it out
+// of the initial bundle. ssr:false is allowed here because this is a Client
+// Component (see node_modules/next/dist/docs/.../lazy-loading.md).
+const NoteEditor = dynamic(
+  () => import('@/components/notes/note-editor').then((mod) => mod.NoteEditor),
+  { ssr: false }
+);
 
 type Visibility = 'PRIVATE' | 'SHARED' | 'TEAM';
 type Scope = 'all' | 'mine' | 'shared';
@@ -56,13 +67,25 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
 
   const [scope, setScope] = useState<Scope>('all');
   const [search, setSearch] = useState('');
+  // Debounce the raw input into the query so we don't refetch per keystroke
+  // (same ~200ms pattern as the topbar command search).
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 200);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const list = trpc.notes.list.useQuery({
-    scope,
-    projectId,
-    clientId,
-    search: search || undefined,
-  });
+  const list = trpc.notes.list.useQuery(
+    {
+      scope,
+      projectId,
+      clientId,
+      search: debouncedSearch || undefined,
+    },
+    // Keep showing the previous list while a new query resolves so the sidebar
+    // doesn't flash skeletons on every keystroke / filter change.
+    { placeholderData: (prev) => prev }
+  );
 
   const createNote = trpc.notes.create.useMutation({
     onSuccess: (note) => {
@@ -186,49 +209,14 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                 </button>
               </div>
             ) : (
-              list.data!.map((n) => {
-                const vc = visibilityConfig[n.visibility as Visibility];
-                const Icon = vc.icon;
-                const isSelected = selectedId === n.id;
-                return (
-                  <Link
-                    key={n.id}
-                    href={`/notes/${n.id}`}
-                    className={cn(
-                      'block rounded-xl border px-3 py-2.5 transition-all',
-                      isSelected
-                        ? 'border-primary/40 bg-primary/5'
-                        : 'border-border/60 bg-card hover:border-border hover:shadow-sm'
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium text-foreground truncate">
-                        {n.title || 'Untitled'}
-                      </p>
-                      <span
-                        className={cn(
-                          'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium',
-                          vc.bg
-                        )}
-                      >
-                        <Icon className="h-2.5 w-2.5" />
-                        {vc.label}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <Avatar className="h-3.5 w-3.5">
-                        <AvatarImage src={n.author.avatar ?? undefined} />
-                        <AvatarFallback className="bg-secondary text-[7px]">
-                          {n.author.name[0]}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span>{n.author.id === userId ? 'You' : n.author.name}</span>
-                      <span>·</span>
-                      <span>{format(new Date(n.updatedAt), 'MMM d')}</span>
-                    </div>
-                  </Link>
-                );
-              })
+              list.data!.map((n) => (
+                <NoteListRow
+                  key={n.id}
+                  note={n}
+                  isSelected={selectedId === n.id}
+                  userId={userId}
+                />
+              ))
             )}
           </div>
         </div>
@@ -261,6 +249,58 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
     </div>
   );
 }
+
+/* ============================================
+   Memoized sidebar row — keeps the list from re-rendering every row on each
+   keystroke / placeholder swap; only re-renders when its own props change.
+   ============================================ */
+type NoteListItem = inferRouterOutputs<AppRouter>['notes']['list'][number];
+
+const NoteListRow = memo(function NoteListRow({
+  note: n,
+  isSelected,
+  userId,
+}: {
+  note: NoteListItem;
+  isSelected: boolean;
+  userId?: string;
+}) {
+  const vc = visibilityConfig[n.visibility as Visibility];
+  const Icon = vc.icon;
+  return (
+    <Link
+      href={`/notes/${n.id}`}
+      className={cn(
+        'block rounded-xl border px-3 py-2.5 transition-all',
+        isSelected
+          ? 'border-primary/40 bg-primary/5'
+          : 'border-border/60 bg-card hover:border-border hover:shadow-sm'
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium text-foreground truncate">{n.title || 'Untitled'}</p>
+        <span
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium',
+            vc.bg
+          )}
+        >
+          <Icon className="h-2.5 w-2.5" />
+          {vc.label}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+        <Avatar className="h-3.5 w-3.5">
+          <AvatarImage src={n.author.avatar ?? undefined} />
+          <AvatarFallback className="bg-secondary text-[7px]">{n.author.name[0]}</AvatarFallback>
+        </Avatar>
+        <span>{n.author.id === userId ? 'You' : n.author.name}</span>
+        <span>·</span>
+        <span>{format(new Date(n.updatedAt), 'MMM d')}</span>
+      </div>
+    </Link>
+  );
+});
 
 /* ============================================
    Detail pane (editor + meta + backlinks)

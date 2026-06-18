@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -20,9 +20,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import type { inferRouterOutputs } from '@trpc/server';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import type { AppRouter } from '@/server/routers/_app';
 import { format, formatDistanceToNow } from 'date-fns';
+
+type LeaveRequest = inferRouterOutputs<AppRouter>['team']['getLeaveRequests'][number];
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
   PENDING: { bg: 'bg-amber-500/10 text-amber-500', label: 'Pending' },
@@ -388,8 +393,28 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
   const [endDate, setEndDate] = useState('');
   const [reason, setReason] = useState('');
 
-  const filtered = leaveRequests?.filter((lr) => filter === 'ALL' || lr.status === filter) ?? [];
-  const pendingCount = leaveRequests?.filter((lr) => lr.status === 'PENDING').length ?? 0;
+  const filtered = useMemo(
+    () => leaveRequests?.filter((lr) => filter === 'ALL' || lr.status === filter) ?? [],
+    [leaveRequests, filter]
+  );
+  const pendingCount = useMemo(
+    () => leaveRequests?.filter((lr) => lr.status === 'PENDING').length ?? 0,
+    [leaveRequests]
+  );
+
+  const handleUpdateStatus = useCallback(
+    (id: string, status: 'APPROVED' | 'REJECTED') => updateStatus.mutate({ id, status }),
+    [updateStatus]
+  );
+
+  // Virtualize the leave-history list — it can grow to hundreds of rows.
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 73,
+    overscan: 8,
+  });
 
   return (
     <div className="space-y-6">
@@ -528,73 +553,26 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
               <p className="mt-3 text-sm text-muted-foreground">No leave requests</p>
             </div>
           ) : (
-            <div className="divide-y divide-border/60">
-              {filtered.map((lr) => {
-                const sc = statusConfig[lr.status] || statusConfig.PENDING;
-                const tc = typeConfig[lr.type] || typeConfig.VACATION;
-                return (
-                  <div key={lr.id} className="flex items-center gap-4 px-6 py-4">
-                    <Link href={`/team/${lr.user.id}`} className="shrink-0">
-                      <Avatar className="h-10 w-10">
-                        <AvatarImage src={lr.user.avatar ?? undefined} />
-                        <AvatarFallback className="bg-secondary text-foreground font-medium text-sm">
-                          {lr.user.name
-                            .split(' ')
-                            .map((n) => n[0])
-                            .join('')}
-                        </AvatarFallback>
-                      </Avatar>
-                    </Link>
-                    <div className="flex-1 min-w-0">
-                      <Link
-                        href={`/team/${lr.user.id}`}
-                        className="text-sm font-semibold text-foreground hover:text-primary transition-colors"
-                      >
-                        {lr.user.name}
-                      </Link>
-                      <p className="text-xs text-muted-foreground">
-                        {format(new Date(lr.startDate), 'MMM d')} –{' '}
-                        {format(new Date(lr.endDate), 'MMM d, yyyy')}
-                        {lr.reason ? ` · ${lr.reason}` : ''}
-                      </p>
+            <div ref={parentRef} className="max-h-[70vh] overflow-y-auto">
+              <div
+                style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                className="relative w-full"
+              >
+                {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const lr = filtered[virtualRow.index];
+                  return (
+                    <div
+                      key={lr.id}
+                      data-index={virtualRow.index}
+                      ref={rowVirtualizer.measureElement}
+                      className="absolute left-0 top-0 w-full border-b border-border/60 last:border-b-0"
+                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                    >
+                      <LeaveRow lr={lr} isAdmin={isAdmin} onUpdateStatus={handleUpdateStatus} />
                     </div>
-                    <span
-                      className={cn(
-                        'rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0',
-                        tc.bg
-                      )}
-                    >
-                      {tc.label}
-                    </span>
-                    <span
-                      className={cn(
-                        'rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0',
-                        sc.bg
-                      )}
-                    >
-                      {sc.label}
-                    </span>
-                    {isAdmin && lr.status === 'PENDING' && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => updateStatus.mutate({ id: lr.id, status: 'APPROVED' })}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10 transition-colors"
-                          title="Approve"
-                        >
-                          <CheckCircle2 className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => updateStatus.mutate({ id: lr.id, status: 'REJECTED' })}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10 transition-colors"
-                          title="Reject"
-                        >
-                          <XCircle className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           )}
         </CardContent>
@@ -602,6 +580,76 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
     </div>
   );
 }
+
+/* ============================================================
+   Leave row — memoized; rendered inside the virtualized list
+   ============================================================ */
+const LeaveRow = memo(function LeaveRow({
+  lr,
+  isAdmin,
+  onUpdateStatus,
+}: {
+  lr: LeaveRequest;
+  isAdmin: boolean;
+  onUpdateStatus: (id: string, status: 'APPROVED' | 'REJECTED') => void;
+}) {
+  const sc = statusConfig[lr.status] || statusConfig.PENDING;
+  const tc = typeConfig[lr.type] || typeConfig.VACATION;
+  const initials = lr.user.name
+    .split(' ')
+    .map((n) => n[0])
+    .join('');
+  const dateRange = `${format(new Date(lr.startDate), 'MMM d')} – ${format(new Date(lr.endDate), 'MMM d, yyyy')}`;
+
+  return (
+    <div className="flex items-center gap-4 px-6 py-4">
+      <Link href={`/team/${lr.user.id}`} className="shrink-0">
+        <Avatar className="h-10 w-10">
+          <AvatarImage src={lr.user.avatar ?? undefined} />
+          <AvatarFallback className="bg-secondary text-foreground font-medium text-sm">
+            {initials}
+          </AvatarFallback>
+        </Avatar>
+      </Link>
+      <div className="flex-1 min-w-0">
+        <Link
+          href={`/team/${lr.user.id}`}
+          className="text-sm font-semibold text-foreground hover:text-primary transition-colors"
+        >
+          {lr.user.name}
+        </Link>
+        <p className="text-xs text-muted-foreground">
+          {dateRange}
+          {lr.reason ? ` · ${lr.reason}` : ''}
+        </p>
+      </div>
+      <span className={cn('rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0', tc.bg)}>
+        {tc.label}
+      </span>
+      <span className={cn('rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0', sc.bg)}>
+        {sc.label}
+      </span>
+      {isAdmin && lr.status === 'PENDING' && (
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => onUpdateStatus(lr.id, 'APPROVED')}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10 transition-colors"
+            title="Approve"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => onUpdateStatus(lr.id, 'REJECTED')}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10 transition-colors"
+            title="Reject"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+});
 
 /* ============================================================
    Stat tile — used on the overview grid

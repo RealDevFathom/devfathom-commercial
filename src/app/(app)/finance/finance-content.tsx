@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   DollarSign,
   TrendingUp,
@@ -22,8 +23,27 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
-import { PnlReport } from './pnl-report';
 import { InvoicesTab } from './invoices-tab';
+
+// P&L report pulls in recharts; it is tab-gated, so load it lazily (client-only)
+// and only when the P&L tab mounts to keep recharts out of the initial bundle.
+const PnlReport = dynamic(() => import('./pnl-report').then((mod) => mod.PnlReport), {
+  ssr: false,
+  loading: () => (
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+      <Card className="lg:col-span-2 border-border/60">
+        <CardContent className="p-6">
+          <Skeleton className="h-[300px] w-full rounded-xl" />
+        </CardContent>
+      </Card>
+      <Card className="border-border/60">
+        <CardContent className="p-6">
+          <Skeleton className="h-[300px] w-full rounded-xl" />
+        </CardContent>
+      </Card>
+    </div>
+  ),
+});
 
 const categoryLabels: Record<string, string> = {
   SALARIES: 'Salaries',
@@ -41,7 +61,6 @@ const categoryLabels: Record<string, string> = {
 export function FinanceContent() {
   const summary = trpc.finance.getFinancialSummary.useQuery();
   const transactions = trpc.finance.getTransactions.useQuery({});
-  const recurring = trpc.finance.getRecurringExpenses.useQuery();
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -123,7 +142,7 @@ export function FinanceContent() {
 
         {/* RECURRING */}
         <TabsContent value="recurring">
-          <RecurringTab data={recurring.data} isLoading={recurring.isLoading} />
+          <RecurringTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -196,28 +215,16 @@ function TransactionsTab({
   const utils = trpc.useUtils();
   const [showAdd, setShowAdd] = useState(false);
   const [filter, setFilter] = useState<'ALL' | 'INCOME' | 'EXPENSE'>('ALL');
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [eDesc, setEDesc] = useState('');
-  const [eAmount, setEAmount] = useState('');
-  const [eDate, setEDate] = useState('');
-  const [eCategory, setECategory] = useState('');
 
-  const invalidateFinance = () => {
+  const invalidateFinance = useCallback(() => {
     utils.finance.getTransactions.invalidate();
     utils.finance.getFinancialSummary.invalidate();
-  };
+  }, [utils]);
 
-  const deleteTransaction = trpc.finance.deleteTransaction.useMutation({
-    onSuccess: invalidateFinance,
-  });
-  const updateTransaction = trpc.finance.updateTransaction.useMutation({
-    onSuccess: () => {
-      invalidateFinance();
-      setEditingId(null);
-    },
-  });
-
-  const filtered = transactions?.filter((t) => filter === 'ALL' || t.type === filter) ?? [];
+  const filtered = useMemo(
+    () => transactions?.filter((t) => filter === 'ALL' || t.type === filter) ?? [],
+    [transactions, filter]
+  );
 
   return (
     <div className="space-y-4">
@@ -264,152 +271,9 @@ function TransactionsTab({
             </div>
           ) : (
             <div className="divide-y divide-border/60">
-              {filtered.map((t) => {
-                if (editingId === t.id) {
-                  return (
-                    <div
-                      key={t.id}
-                      className="px-6 py-3 border-b border-primary/10 bg-primary/[0.02]"
-                    >
-                      <div className="grid grid-cols-4 gap-2">
-                        <div className="col-span-2">
-                          <input
-                            value={eDesc}
-                            onChange={(e) => setEDesc(e.target.value)}
-                            placeholder="Description"
-                            className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={eAmount}
-                            onChange={(e) => setEAmount(e.target.value)}
-                            placeholder="Amount"
-                            className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground text-right focus:border-primary focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <input
-                            type="date"
-                            value={eDate}
-                            onChange={(e) => setEDate(e.target.value)}
-                            className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
-                          />
-                        </div>
-                      </div>
-                      {t.type === 'EXPENSE' && (
-                        <div className="mt-2">
-                          <select
-                            value={eCategory}
-                            onChange={(e) => setECategory(e.target.value)}
-                            className="rounded-lg border border-border bg-background px-2 py-1 text-xs text-foreground focus:border-primary focus:outline-none"
-                          >
-                            <option value="">No category</option>
-                            {Object.entries(categoryLabels).map(([k, v]) => (
-                              <option key={k} value={k}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                      <div className="flex justify-end gap-2 mt-2">
-                        <button
-                          onClick={() => setEditingId(null)}
-                          className="rounded-lg px-3 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (eDesc.trim() && eAmount) {
-                              updateTransaction.mutate({
-                                id: t.id,
-                                description: eDesc.trim(),
-                                amount: parseFloat(eAmount),
-                                date: new Date(eDate),
-                                category:
-                                  t.type === 'EXPENSE' && eCategory
-                                    ? (eCategory as 'SALARIES')
-                                    : null,
-                              });
-                            }
-                          }}
-                          disabled={!eDesc.trim() || !eAmount || updateTransaction.isPending}
-                          className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
-                        >
-                          {updateTransaction.isPending ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : null}{' '}
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div
-                    key={t.id}
-                    className="flex items-center gap-4 px-6 py-3.5 group hover:bg-secondary/30 transition-colors"
-                  >
-                    <div
-                      className={cn(
-                        'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
-                        t.type === 'INCOME' ? 'bg-emerald-500/10' : 'bg-red-500/10'
-                      )}
-                    >
-                      {t.type === 'INCOME' ? (
-                        <ArrowDownLeft className="h-4 w-4 text-emerald-500" />
-                      ) : (
-                        <ArrowUpRight className="h-4 w-4 text-red-500" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground truncate">
-                        {t.description}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {t.category ? categoryLabels[t.category] || t.category : ''}
-                        {t.project ? ` · ${t.project.name}` : ''}
-                        {t.client ? ` · ${t.client.name}` : ''}
-                      </p>
-                    </div>
-                    <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">
-                      {format(new Date(t.date), 'MMM d, yyyy')}
-                    </span>
-                    <span
-                      className={cn(
-                        'text-sm font-semibold tabular-nums shrink-0',
-                        t.type === 'INCOME' ? 'text-emerald-500' : 'text-foreground'
-                      )}
-                    >
-                      {t.type === 'INCOME' ? '+' : '-'}${Number(t.amount).toLocaleString()}
-                    </span>
-                    <button
-                      onClick={() => {
-                        setEditingId(t.id);
-                        setEDesc(t.description);
-                        setEAmount(String(Number(t.amount)));
-                        setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
-                        setECategory(t.category || '');
-                      }}
-                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-secondary hover:!text-foreground transition-all shrink-0"
-                      title="Edit"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => deleteTransaction.mutate({ id: t.id })}
-                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                );
-              })}
+              {filtered.map((t) => (
+                <TransactionRow key={t.id} t={t} onInvalidate={invalidateFinance} />
+              ))}
             </div>
           )}
         </CardContent>
@@ -417,6 +281,165 @@ function TransactionsTab({
     </div>
   );
 }
+
+/* ============================================
+   Transaction Row (memoized; owns its own inline-edit state)
+   ============================================ */
+const TransactionRow = memo(function TransactionRow({
+  t,
+  onInvalidate,
+}: {
+  t: TransactionData;
+  onInvalidate: () => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [eDesc, setEDesc] = useState('');
+  const [eAmount, setEAmount] = useState('');
+  const [eDate, setEDate] = useState('');
+  const [eCategory, setECategory] = useState('');
+
+  const deleteTransaction = trpc.finance.deleteTransaction.useMutation({
+    onSuccess: onInvalidate,
+  });
+  const updateTransaction = trpc.finance.updateTransaction.useMutation({
+    onSuccess: () => {
+      onInvalidate();
+      setIsEditing(false);
+    },
+  });
+
+  if (isEditing) {
+    return (
+      <div className="px-6 py-3 border-b border-primary/10 bg-primary/[0.02]">
+        <div className="grid grid-cols-4 gap-2">
+          <div className="col-span-2">
+            <input
+              value={eDesc}
+              onChange={(e) => setEDesc(e.target.value)}
+              placeholder="Description"
+              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div>
+            <input
+              type="number"
+              step="0.01"
+              value={eAmount}
+              onChange={(e) => setEAmount(e.target.value)}
+              placeholder="Amount"
+              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground text-right focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div>
+            <input
+              type="date"
+              value={eDate}
+              onChange={(e) => setEDate(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+        </div>
+        {t.type === 'EXPENSE' && (
+          <div className="mt-2">
+            <select
+              value={eCategory}
+              onChange={(e) => setECategory(e.target.value)}
+              className="rounded-lg border border-border bg-background px-2 py-1 text-xs text-foreground focus:border-primary focus:outline-none"
+            >
+              <option value="">No category</option>
+              {Object.entries(categoryLabels).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div className="flex justify-end gap-2 mt-2">
+          <button
+            onClick={() => setIsEditing(false)}
+            className="rounded-lg px-3 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              if (eDesc.trim() && eAmount) {
+                updateTransaction.mutate({
+                  id: t.id,
+                  description: eDesc.trim(),
+                  amount: parseFloat(eAmount),
+                  date: new Date(eDate),
+                  category:
+                    t.type === 'EXPENSE' && eCategory ? (eCategory as 'SALARIES') : null,
+                });
+              }
+            }}
+            disabled={!eDesc.trim() || !eAmount || updateTransaction.isPending}
+            className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            {updateTransaction.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-4 px-6 py-3.5 group hover:bg-secondary/30 transition-colors">
+      <div
+        className={cn(
+          'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
+          t.type === 'INCOME' ? 'bg-emerald-500/10' : 'bg-red-500/10'
+        )}
+      >
+        {t.type === 'INCOME' ? (
+          <ArrowDownLeft className="h-4 w-4 text-emerald-500" />
+        ) : (
+          <ArrowUpRight className="h-4 w-4 text-red-500" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-foreground truncate">{t.description}</p>
+        <p className="text-xs text-muted-foreground">
+          {t.category ? categoryLabels[t.category] || t.category : ''}
+          {t.project ? ` · ${t.project.name}` : ''}
+          {t.client ? ` · ${t.client.name}` : ''}
+        </p>
+      </div>
+      <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">
+        {format(new Date(t.date), 'MMM d, yyyy')}
+      </span>
+      <span
+        className={cn(
+          'text-sm font-semibold tabular-nums shrink-0',
+          t.type === 'INCOME' ? 'text-emerald-500' : 'text-foreground'
+        )}
+      >
+        {t.type === 'INCOME' ? '+' : '-'}${Number(t.amount).toLocaleString()}
+      </span>
+      <button
+        onClick={() => {
+          setEDesc(t.description);
+          setEAmount(String(Number(t.amount)));
+          setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
+          setECategory(t.category || '');
+          setIsEditing(true);
+        }}
+        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-secondary hover:!text-foreground transition-all shrink-0"
+        title="Edit"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </button>
+      <button
+        onClick={() => deleteTransaction.mutate({ id: t.id })}
+        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+});
 
 /* ============================================
    Add Transaction Form
@@ -598,25 +621,10 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
 /* ============================================
    Recurring Expenses Tab
    ============================================ */
-type RecurringData = {
-  id: string;
-  name: string;
-  amount: unknown;
-  currency: string;
-  category: string;
-  interval: string;
-  nextDueDate: Date;
-  vendorName: string | null;
-};
-
-function RecurringTab({
-  data,
-  isLoading,
-}: {
-  data: RecurringData[] | undefined;
-  isLoading: boolean;
-}) {
+function RecurringTab() {
   const utils = trpc.useUtils();
+  // Query lives here so it only fires when the Recurring tab mounts.
+  const { data, isLoading } = trpc.finance.getRecurringExpenses.useQuery();
   const [showAdd, setShowAdd] = useState(false);
 
   const deleteRecurring = trpc.finance.deleteRecurringExpense.useMutation({

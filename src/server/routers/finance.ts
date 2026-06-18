@@ -112,15 +112,26 @@ export const financeRouter = router({
       return ctx.db.transaction.delete({ where: { id: input.id } });
     }),
 
-  getInvoices: adminProcedure.query(async ({ ctx }) => {
-    return ctx.db.invoice.findMany({
-      include: {
-        client: { select: { id: true, name: true, logo: true } },
-        project: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-  }),
+  getInvoices: adminProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().min(1).max(1000).optional(),
+          cursor: z.string().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      return ctx.db.invoice.findMany({
+        include: {
+          client: { select: { id: true, name: true, logo: true } },
+          project: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: input?.limit ? Math.min(input.limit, 1000) : undefined,
+        ...(input?.cursor && { cursor: { id: input.cursor }, skip: 1 }),
+      });
+    }),
 
   getInvoiceById: adminProcedure
     .input(z.object({ id: z.string() }))
@@ -328,14 +339,16 @@ export const financeRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      const data = [];
       const now = new Date();
 
+      // Build all per-month aggregate promises up front, then await once.
+      const monthRanges = [];
+      const aggregatePromises = [];
       for (let i = input.months - 1; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
         const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
-
-        const [income, expense] = await Promise.all([
+        monthRanges.push(date);
+        aggregatePromises.push(
           ctx.db.transaction.aggregate({
             _sum: { amount: true },
             where: { type: 'INCOME', date: { gte: date, lte: endOfMonth } },
@@ -343,20 +356,26 @@ export const financeRouter = router({
           ctx.db.transaction.aggregate({
             _sum: { amount: true },
             where: { type: 'EXPENSE', date: { gte: date, lte: endOfMonth } },
-          }),
-        ]);
+          })
+        );
+      }
 
+      const aggregates = await Promise.all(aggregatePromises);
+
+      const data = monthRanges.map((date, idx) => {
+        const income = aggregates[idx * 2];
+        const expense = aggregates[idx * 2 + 1];
         const incomeAmt = Number(income._sum.amount || 0);
         const expenseAmt = Number(expense._sum.amount || 0);
 
-        data.push({
+        return {
           period: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
           income: incomeAmt,
           expense: expenseAmt,
           profit: incomeAmt - expenseAmt,
           margin: incomeAmt > 0 ? ((incomeAmt - expenseAmt) / incomeAmt) * 100 : 0,
-        });
-      }
+        };
+      });
 
       // Expense breakdown by category
       const categoryBreakdown = await ctx.db.transaction.groupBy({

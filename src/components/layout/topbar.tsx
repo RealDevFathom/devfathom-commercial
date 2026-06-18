@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { usePathname, useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import {
@@ -35,14 +36,28 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command';
+// Lazy-load the cmdk-backed command palette so cmdk only loads on first ⌘K.
+// All Command* primitives live in the same module (which pulls in cmdk), so
+// every one must be dynamic to keep cmdk out of the topbar chunk.
+const CommandDialog = dynamic(
+  () => import('@/components/ui/command').then((m) => m.CommandDialog),
+  { ssr: false }
+);
+const CommandEmpty = dynamic(() =>
+  import('@/components/ui/command').then((m) => m.CommandEmpty)
+);
+const CommandGroup = dynamic(() =>
+  import('@/components/ui/command').then((m) => m.CommandGroup)
+);
+const CommandInput = dynamic(() =>
+  import('@/components/ui/command').then((m) => m.CommandInput)
+);
+const CommandItem = dynamic(() =>
+  import('@/components/ui/command').then((m) => m.CommandItem)
+);
+const CommandList = dynamic(() =>
+  import('@/components/ui/command').then((m) => m.CommandList)
+);
 
 const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -59,6 +74,10 @@ const routeLabels: Record<string, string> = {
 
 export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
+  // Mount the (lazily-imported) palette once it has first been opened, then
+  // keep it mounted so cmdk's chunk is fetched only on first ⌘K.
+  const [commandLoaded, setCommandLoaded] = useState(false);
+  if (commandOpen && !commandLoaded) setCommandLoaded(true);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const pathname = usePathname();
@@ -240,11 +259,12 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
       </header>
 
       {/* Command palette (Cmd+K) */}
-      <CommandDialog
-        open={commandOpen}
-        onOpenChange={setCommandOpen}
-        commandProps={{ shouldFilter: false }}
-      >
+      {commandLoaded && (
+        <CommandDialog
+          open={commandOpen}
+          onOpenChange={setCommandOpen}
+          commandProps={{ shouldFilter: false }}
+        >
         <CommandInput
           placeholder="Search projects, tasks, clients, notes, team…"
           value={searchInput}
@@ -375,7 +395,8 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
             })()
           )}
         </CommandList>
-      </CommandDialog>
+        </CommandDialog>
+      )}
     </>
   );
 }
@@ -385,7 +406,19 @@ function NotificationBell() {
   const utils = trpc.useUtils();
   const { data: notifications } = trpc.team.getNotifications.useQuery();
   const markRead = trpc.team.markNotificationRead.useMutation({
-    onSuccess: () => utils.team.getNotifications.invalidate(),
+    // Optimistically flip the single notification to read instead of
+    // invalidating (and refetching) the whole notifications list.
+    onMutate: async ({ id }) => {
+      await utils.team.getNotifications.cancel();
+      const prev = utils.team.getNotifications.getData();
+      utils.team.getNotifications.setData(undefined, (old) =>
+        old?.map((n) => (n.id === id ? { ...n, isRead: true } : n))
+      );
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) utils.team.getNotifications.setData(undefined, ctx.prev);
+    },
   });
   const markAllRead = trpc.team.markAllNotificationsRead.useMutation({
     onSuccess: () => utils.team.getNotifications.invalidate(),

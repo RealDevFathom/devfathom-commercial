@@ -4,11 +4,15 @@ import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 
-export const GET = withApiAuth('projects:read', async (ctx) => {
+export const GET = withApiAuth('projects:read', async (ctx, request) => {
+  const url = new URL(request.url);
+  const limitParam = url.searchParams.get('limit');
+  const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
   // Object-level scoping: non-admins only see projects they are a member of.
   const where = ctx.userRole === 'ADMIN' ? {} : { members: { some: { userId: ctx.userId } } };
   const projects = await db.project.findMany({
     where,
+    take: limit,
     include: {
       client: { select: { id: true, name: true } },
       members: { include: { user: { select: { id: true, name: true, email: true } } } },

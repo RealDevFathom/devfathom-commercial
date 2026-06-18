@@ -3,9 +3,13 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 
-export const GET = withApiAuth('meetings:read', async (ctx) => {
+export const GET = withApiAuth('meetings:read', async (ctx, request) => {
+  const url = new URL(request.url);
+  const limitParam = url.searchParams.get('limit');
+  const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
   const meetings = await db.meeting.findMany({
     where: { attendees: { some: { userId: ctx.userId } } },
+    take: limit,
     include: { attendees: { include: { user: { select: { id: true, name: true } } } } },
     orderBy: { startTime: 'asc' },
   });

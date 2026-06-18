@@ -212,7 +212,11 @@ io.on('connection', (socket: Socket) => {
 
   // Presence uses the verified userId only.
   onlineUsers.set(userId, socket.id);
-  io.emit('user:online', { userId, onlineUsers: Array.from(onlineUsers.keys()) });
+  // Send the full current roster ONCE, only to the joining socket. Avoids
+  // fanning the whole roster to every connected socket on each connect.
+  socket.emit('presence:init', { onlineUsers: Array.from(onlineUsers.keys()) });
+  // Broadcast only a DELTA to everyone: this user just came online.
+  io.emit('user:online', { userId, online: true });
 
   // Chat events --------------------------------------------------------------
   socket.on('chat:join', async (channelId: unknown) => {
@@ -311,7 +315,8 @@ io.on('connection', (socket: Socket) => {
     // stale tab closing doesn't wipe out a newer tab's presence. Bounds the map.
     if (onlineUsers.get(userId) === socket.id) {
       onlineUsers.delete(userId);
-      io.emit('user:offline', { userId, onlineUsers: Array.from(onlineUsers.keys()) });
+      // Broadcast only a DELTA to everyone: this user just went offline.
+      io.emit('user:offline', { userId, online: false });
     }
   });
 });

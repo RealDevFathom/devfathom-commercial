@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle,
@@ -24,21 +25,49 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  Tooltip,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  BarChart,
-  Bar,
-  Cell,
-} from 'recharts';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format, formatDistanceToNow } from 'date-fns';
+
+/* ============================================
+   Lazy recharts loader — keeps the recharts bundle
+   out of the eager/SSR path. The library is fetched
+   in a separate chunk on the client after mount, and
+   the real recharts components are used (so recharts'
+   child-type introspection keeps working).
+   ============================================ */
+function useRecharts() {
+  const [recharts, setRecharts] = useState<typeof import('recharts') | null>(null);
+  useEffect(() => {
+    let active = true;
+    void import('recharts').then((mod) => {
+      if (active) setRecharts(mod);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return recharts;
+}
+
+/* ============================================
+   Hoisted constant lookup objects
+   ============================================ */
+const KPI_TONES: Record<string, string> = {
+  emerald: 'bg-emerald-500/10 text-emerald-500',
+  blue: 'bg-blue-500/10 text-blue-500',
+  amber: 'bg-amber-500/10 text-amber-500',
+  violet: 'bg-violet-500/10 text-violet-500',
+  muted: 'bg-muted text-muted-foreground',
+};
+
+const STAT_TONES: Record<string, string> = {
+  emerald: 'text-emerald-500',
+  blue: 'text-blue-500',
+  amber: 'text-amber-500',
+  violet: 'text-violet-500',
+  muted: 'text-muted-foreground',
+};
 
 export function TeamStatsContent() {
   const stats = trpc.teamStats.getAll.useQuery(undefined, {
@@ -149,48 +178,7 @@ export function TeamStatsContent() {
           </p>
         </CardHeader>
         <CardContent className="pl-4 pr-6 pb-6">
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={velocity}>
-              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.08} />
-              <XAxis
-                dataKey="date"
-                tickFormatter={(d) => format(new Date(d), 'MMM d')}
-                interval={4}
-                stroke="currentColor"
-                fontSize={11}
-                strokeOpacity={0.5}
-              />
-              <YAxis
-                allowDecimals={false}
-                stroke="currentColor"
-                fontSize={11}
-                strokeOpacity={0.5}
-                width={24}
-              />
-              <Tooltip
-                cursor={{ stroke: 'var(--border)', strokeWidth: 1, strokeDasharray: '3 3' }}
-                contentStyle={{
-                  background: 'var(--popover)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: 'var(--popover-foreground)',
-                }}
-                labelStyle={{ color: 'var(--popover-foreground)', fontWeight: 600 }}
-                itemStyle={{ color: 'var(--popover-foreground)' }}
-                labelFormatter={(d) => format(new Date(d), 'EEE, MMM d')}
-                formatter={(value) => [String(value), 'completed']}
-              />
-              <Line
-                type="monotone"
-                dataKey="count"
-                stroke="#10b981"
-                strokeWidth={2.5}
-                dot={{ r: 0 }}
-                activeDot={{ r: 4, fill: '#10b981' }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <VelocityChart velocity={velocity} />
         </CardContent>
       </Card>
 
@@ -209,62 +197,7 @@ export function TeamStatsContent() {
             </p>
           </CardHeader>
           <CardContent className="pl-4 pr-6 pb-6">
-            <ResponsiveContainer width="100%" height={Math.max(180, members.length * 32)}>
-              <BarChart
-                data={[...members].sort((a, b) => b.openTasks - a.openTasks)}
-                layout="vertical"
-                margin={{ left: 8, right: 30, top: 4, bottom: 4 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="currentColor"
-                  strokeOpacity={0.08}
-                  horizontal={false}
-                />
-                <XAxis
-                  type="number"
-                  stroke="currentColor"
-                  fontSize={11}
-                  strokeOpacity={0.5}
-                  allowDecimals={false}
-                />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  stroke="currentColor"
-                  fontSize={11}
-                  strokeOpacity={0.7}
-                  width={90}
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(name: string) => name.split(' ')[0]}
-                />
-                <Tooltip
-                  cursor={{ fill: 'rgba(188,136,80,0.1)' }}
-                  contentStyle={{
-                    background: 'var(--popover)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    fontSize: 12,
-                    color: 'var(--popover-foreground)',
-                  }}
-                  labelStyle={{ color: 'var(--popover-foreground)', fontWeight: 600 }}
-                  itemStyle={{ color: 'var(--popover-foreground)' }}
-                  formatter={(value) => [String(value), 'open tasks']}
-                />
-                <Bar dataKey="openTasks" radius={[0, 6, 6, 0]}>
-                  {[...members]
-                    .sort((a, b) => b.openTasks - a.openTasks)
-                    .map((m) => (
-                      <Cell
-                        key={m.userId}
-                        fill={
-                          m.openTasks === 0 ? '#64748b' : m.openTasks > 10 ? '#f59e0b' : '#3b82f6'
-                        }
-                      />
-                    ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <WorkloadChart members={members} />
           </CardContent>
         </Card>
 
@@ -326,6 +259,127 @@ export function TeamStatsContent() {
 }
 
 /* ============================================
+   Team velocity chart (lazy recharts)
+   ============================================ */
+function VelocityChart({ velocity }: { velocity: { date: string; count: number }[] }) {
+  const R = useRecharts();
+  if (!R) return <Skeleton className="h-[180px] w-full" />;
+  const { ResponsiveContainer, LineChart, Line, Tooltip, XAxis, YAxis, CartesianGrid } = R;
+  return (
+    <ResponsiveContainer width="100%" height={180}>
+      <LineChart data={velocity}>
+        <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.08} />
+        <XAxis
+          dataKey="date"
+          tickFormatter={(d) => format(new Date(d), 'MMM d')}
+          interval={4}
+          stroke="currentColor"
+          fontSize={11}
+          strokeOpacity={0.5}
+        />
+        <YAxis
+          allowDecimals={false}
+          stroke="currentColor"
+          fontSize={11}
+          strokeOpacity={0.5}
+          width={24}
+        />
+        <Tooltip
+          cursor={{ stroke: 'var(--border)', strokeWidth: 1, strokeDasharray: '3 3' }}
+          contentStyle={{
+            background: 'var(--popover)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            fontSize: 12,
+            color: 'var(--popover-foreground)',
+          }}
+          labelStyle={{ color: 'var(--popover-foreground)', fontWeight: 600 }}
+          itemStyle={{ color: 'var(--popover-foreground)' }}
+          labelFormatter={(d) => format(new Date(d), 'EEE, MMM d')}
+          formatter={(value) => [String(value), 'completed']}
+        />
+        <Line
+          type="monotone"
+          dataKey="count"
+          stroke="#10b981"
+          strokeWidth={2.5}
+          dot={{ r: 0 }}
+          activeDot={{ r: 4, fill: '#10b981' }}
+        />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+/* ============================================
+   Workload distribution chart (lazy recharts)
+   ============================================ */
+function WorkloadChart({
+  members,
+}: {
+  members: { userId: string; name: string; openTasks: number }[];
+}) {
+  const R = useRecharts();
+  // Sort once; a stable array identity also avoids re-feeding the chart each render.
+  const sorted = useMemo(
+    () => [...members].sort((a, b) => b.openTasks - a.openTasks),
+    [members]
+  );
+  if (!R) return <Skeleton className="w-full" style={{ height: Math.max(180, members.length * 32) }} />;
+  const { ResponsiveContainer, BarChart, Bar, Cell, Tooltip, XAxis, YAxis, CartesianGrid } = R;
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(180, members.length * 32)}>
+      <BarChart data={sorted} layout="vertical" margin={{ left: 8, right: 30, top: 4, bottom: 4 }}>
+        <CartesianGrid
+          strokeDasharray="3 3"
+          stroke="currentColor"
+          strokeOpacity={0.08}
+          horizontal={false}
+        />
+        <XAxis
+          type="number"
+          stroke="currentColor"
+          fontSize={11}
+          strokeOpacity={0.5}
+          allowDecimals={false}
+        />
+        <YAxis
+          type="category"
+          dataKey="name"
+          stroke="currentColor"
+          fontSize={11}
+          strokeOpacity={0.7}
+          width={90}
+          tick={{ fontSize: 11 }}
+          tickFormatter={(name: string) => name.split(' ')[0]}
+        />
+        <Tooltip
+          cursor={{ fill: 'rgba(188,136,80,0.1)' }}
+          contentStyle={{
+            background: 'var(--popover)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            fontSize: 12,
+            color: 'var(--popover-foreground)',
+          }}
+          labelStyle={{ color: 'var(--popover-foreground)', fontWeight: 600 }}
+          itemStyle={{ color: 'var(--popover-foreground)' }}
+          formatter={(value) => [String(value), 'open tasks']}
+        />
+        <Bar dataKey="openTasks" radius={[0, 6, 6, 0]}>
+          {sorted.map((m) => (
+            <Cell
+              key={m.userId}
+              fill={m.openTasks === 0 ? '#64748b' : m.openTasks > 10 ? '#f59e0b' : '#3b82f6'}
+            />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+/* ============================================
    KPI card — top strip
    ============================================ */
 function KpiCard({
@@ -343,14 +397,6 @@ function KpiCard({
   subtitle?: string;
   tone: 'emerald' | 'blue' | 'amber' | 'violet' | 'muted';
 }) {
-  const tones: Record<string, string> = {
-    emerald: 'bg-emerald-500/10 text-emerald-500',
-    blue: 'bg-blue-500/10 text-blue-500',
-    amber: 'bg-amber-500/10 text-amber-500',
-    violet: 'bg-violet-500/10 text-violet-500',
-    muted: 'bg-muted text-muted-foreground',
-  };
-
   return (
     <Card className="border-border/60">
       <CardContent className="p-5">
@@ -389,7 +435,7 @@ function KpiCard({
           <div
             className={cn(
               'flex h-10 w-10 items-center justify-center rounded-xl shrink-0',
-              tones[tone]
+              KPI_TONES[tone]
             )}
           >
             <Icon className="h-5 w-5" />
@@ -713,19 +759,12 @@ function Stat({
   delta?: number;
   tone: 'emerald' | 'blue' | 'amber' | 'violet' | 'muted';
 }) {
-  const tones: Record<string, string> = {
-    emerald: 'text-emerald-500',
-    blue: 'text-blue-500',
-    amber: 'text-amber-500',
-    violet: 'text-violet-500',
-    muted: 'text-muted-foreground',
-  };
   return (
     <div className="rounded-lg bg-background/50 border border-border/40 px-2.5 py-2">
       <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
         {label}
       </p>
-      <p className={cn('mt-0.5 font-display text-xl font-bold tabular-nums', tones[tone])}>
+      <p className={cn('mt-0.5 font-display text-xl font-bold tabular-nums', STAT_TONES[tone])}>
         {value}
       </p>
       {delta !== undefined && delta !== 0 && (

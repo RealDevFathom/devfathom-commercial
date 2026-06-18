@@ -1,6 +1,6 @@
 'use client';
 
-import { motion, useReducedMotion } from 'motion/react';
+import { m, useReducedMotion } from 'motion/react';
 import { easeOutExpo } from '@/lib/motion';
 
 /**
@@ -24,7 +24,7 @@ export function Reveal({
   if (reduce) return <div className={className}>{children}</div>;
 
   return (
-    <motion.div
+    <m.div
       className={className}
       initial={{ opacity: 0, y }}
       whileInView={{ opacity: 1, y: 0 }}
@@ -32,7 +32,7 @@ export function Reveal({
       transition={{ duration: 0.55, ease: easeOutExpo, delay }}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -56,7 +56,7 @@ export function Stagger({
   if (reduce) return <div className={className}>{children}</div>;
 
   return (
-    <motion.div
+    <m.div
       className={className}
       initial="hidden"
       whileInView="show"
@@ -67,7 +67,7 @@ export function Stagger({
       }}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -84,7 +84,7 @@ export function StaggerItem({
   if (reduce) return <div className={className}>{children}</div>;
 
   return (
-    <motion.div
+    <m.div
       className={className}
       variants={{
         hidden: { opacity: 0, y },
@@ -92,6 +92,6 @@ export function StaggerItem({
       }}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }

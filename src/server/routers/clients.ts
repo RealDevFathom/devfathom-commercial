@@ -11,10 +11,20 @@ export const clientsRouter = router({
       include: {
         contacts: { where: { isPrimary: true }, take: 1 },
         _count: { select: { projects: true, invoices: true, documents: true } },
-        invoices: { where: { status: 'PAID' }, select: { total: true } },
       },
       orderBy: { name: 'asc' },
     });
+
+    const revenueByClient = isAdmin
+      ? await ctx.db.invoice.groupBy({
+          by: ['clientId'],
+          where: { status: 'PAID' },
+          _sum: { total: true },
+        })
+      : [];
+    const revenueMap = new Map(
+      revenueByClient.map((r) => [r.clientId, Number(r._sum.total ?? 0)])
+    );
 
     return clients.map((c) => ({
       ...c,
@@ -22,8 +32,7 @@ export const clientsRouter = router({
         ...c._count,
         invoices: isAdmin ? c._count.invoices : 0,
       },
-      totalRevenue: isAdmin ? c.invoices.reduce((sum, inv) => sum + Number(inv.total), 0) : 0,
-      invoices: undefined,
+      totalRevenue: isAdmin ? revenueMap.get(c.id) ?? 0 : 0,
     }));
   }),
 

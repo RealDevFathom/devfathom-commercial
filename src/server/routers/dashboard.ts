@@ -173,15 +173,18 @@ export const dashboardRouter = router({
 
   getRevenueChart: adminProcedure.query(async ({ ctx }) => {
     const months = 6;
-    const data = [];
 
+    const monthRanges = [];
     for (let i = months - 1; i >= 0; i--) {
       const date = new Date();
       date.setMonth(date.getMonth() - i);
       const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
       const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+      monthRanges.push({ startOfMonth, endOfMonth });
+    }
 
-      const [income, expense] = await Promise.all([
+    const results = await Promise.all(
+      monthRanges.flatMap(({ startOfMonth, endOfMonth }) => [
         ctx.db.transaction.aggregate({
           _sum: { amount: true },
           where: {
@@ -196,15 +199,19 @@ export const dashboardRouter = router({
             date: { gte: startOfMonth, lte: endOfMonth },
           },
         }),
-      ]);
+      ])
+    );
 
-      data.push({
+    const data = monthRanges.map(({ startOfMonth }, idx) => {
+      const income = results[idx * 2];
+      const expense = results[idx * 2 + 1];
+      return {
         month: startOfMonth.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         income: Number(income._sum.amount || 0),
         expense: Number(expense._sum.amount || 0),
         profit: Number(income._sum.amount || 0) - Number(expense._sum.amount || 0),
-      });
-    }
+      };
+    });
 
     return data;
   }),

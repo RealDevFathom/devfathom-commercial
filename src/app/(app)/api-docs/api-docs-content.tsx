@@ -1,12 +1,17 @@
-'use client';
-
+import { headers } from 'next/headers';
 import Link from 'next/link';
 import { Key, Shield, Terminal, FileCode } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+export async function ApiDocsContent() {
+  let baseUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!baseUrl) {
+    const headersList = await headers();
+    const host = headersList.get('host') ?? 'localhost:3000';
+    const protocol = headersList.get('x-forwarded-proto') ?? 'http';
+    baseUrl = `${protocol}://${host}`;
+  }
 
-export function ApiDocsContent() {
   return (
     <div className="max-w-3xl space-y-6 animate-fade-in">
       {/* Header */}

@@ -8,6 +8,9 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   const url = new URL(request.url);
   const status = url.searchParams.get('status');
   const clientId = url.searchParams.get('clientId');
+  const cursor = url.searchParams.get('cursor');
+  const limitParam = url.searchParams.get('limit');
+  const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
 
   const where: Record<string, unknown> = {};
   if (status) where.status = status;
@@ -15,6 +18,8 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
 
   const invoices = await db.invoice.findMany({
     where,
+    take: limit,
+    ...(cursor && { cursor: { id: cursor }, skip: 1 }),
     include: {
       client: { select: { id: true, name: true } },
       project: { select: { id: true, name: true } },

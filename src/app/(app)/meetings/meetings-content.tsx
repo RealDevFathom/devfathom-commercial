@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useCallback, memo } from 'react';
 import { useSession } from 'next-auth/react';
 import {
   Video,
@@ -51,47 +51,22 @@ export function MeetingsContent() {
       utils.meetings.getUpcoming.invalidate();
       utils.meetings.getAll.invalidate();
       setShowCreate(false);
-      resetForm();
     },
   });
 
   const [showCreate, setShowCreate] = useState(false);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [date, setDate] = useState('');
-  const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
-  const [location, setLocation] = useState('');
-  const [recurrence, setRecurrence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly' | ''>(
-    ''
+
+  // Stable delete handler so memoized MeetingCards don't re-render when an
+  // unrelated piece of parent state changes. mutate is referentially stable.
+  const handleDelete = useCallback(
+    (id: string) => deleteMeeting.mutate({ id }),
+    [deleteMeeting.mutate]
   );
-  const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
 
-  const resetForm = () => {
-    setTitle('');
-    setDescription('');
-    setDate('');
-    setStartTime('');
-    setEndTime('');
-    setLocation('');
-    setRecurrence('');
-    setAttendeeIds([]);
-  };
-
-  const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
-    createMeeting.mutate({
-      title: title.trim(),
-      description: description.trim() || undefined,
-      startTime: new Date(`${date}T${startTime}`),
-      endTime: new Date(`${date}T${endTime}`),
-      location: location || undefined,
-      recurrence: recurrence || null,
-      attendeeIds,
-    });
-  };
-
-  const pastMeetings = all?.filter((m) => isPast(new Date(m.startTime)) && !m.recurrence) ?? [];
+  const pastMeetings = useMemo(
+    () => all?.filter((m) => isPast(new Date(m.startTime)) && !m.recurrence) ?? [],
+    [all]
+  );
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -115,172 +90,12 @@ export function MeetingsContent() {
 
       {/* Create form */}
       {showCreate && (
-        <Card className="border-primary/20">
-          <CardContent className="p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                <Video className="h-4 w-4 text-primary" /> New Meeting
-              </h3>
-              <button
-                onClick={() => {
-                  setShowCreate(false);
-                  resetForm();
-                }}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
-                <input
-                  autoFocus
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Sprint Planning"
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Location</label>
-                <input
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="Google Meet, Zoom, Office..."
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Description</label>
-              <input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="What's this meeting about?"
-                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Start *</label>
-                <input
-                  type="time"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">End *</label>
-                <input
-                  type="time"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                />
-              </div>
-            </div>
-
-            {/* Recurrence */}
-            <div>
-              <label className="block text-xs font-medium text-foreground mb-1.5">Repeat</label>
-              <div className="flex gap-1.5">
-                {[
-                  { value: '' as const, label: 'One-time' },
-                  { value: 'daily' as const, label: 'Daily' },
-                  { value: 'weekly' as const, label: 'Weekly' },
-                  { value: 'biweekly' as const, label: 'Bi-weekly' },
-                  { value: 'monthly' as const, label: 'Monthly' },
-                ].map((opt) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setRecurrence(opt.value)}
-                    className={cn(
-                      'rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors',
-                      recurrence === opt.value
-                        ? 'bg-foreground text-background'
-                        : 'bg-secondary text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Attendees */}
-            {team && (
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1.5">
-                  Attendees ({attendeeIds.length} selected)
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {team.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() =>
-                        setAttendeeIds((prev) =>
-                          prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev, m.id]
-                        )
-                      }
-                      className={cn(
-                        'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors',
-                        attendeeIds.includes(m.id)
-                          ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
-                          : 'bg-secondary text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      <Avatar className="h-4 w-4">
-                        <AvatarImage src={m.avatar ?? undefined} />
-                        <AvatarFallback className="text-[6px] bg-muted">{m.name[0]}</AvatarFallback>
-                      </Avatar>
-                      {m.name.split(' ')[0]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                onClick={() => {
-                  setShowCreate(false);
-                  resetForm();
-                }}
-                className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreate}
-                disabled={
-                  !title.trim() || !date || !startTime || !endTime || createMeeting.isPending
-                }
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
-              >
-                {createMeeting.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5" />
-                )}
-                Schedule
-              </button>
-            </div>
-          </CardContent>
-        </Card>
+        <CreateMeetingForm
+          onSubmit={createMeeting.mutate}
+          onClose={() => setShowCreate(false)}
+          isPending={createMeeting.isPending}
+          team={team}
+        />
       )}
 
       {/* Upcoming meetings */}
@@ -311,12 +126,7 @@ export function MeetingsContent() {
         ) : (
           <div className="space-y-3">
             {upcoming.map((m) => (
-              <MeetingCard
-                key={m.id}
-                meeting={m}
-                onDelete={() => deleteMeeting.mutate({ id: m.id })}
-                team={team}
-              />
+              <MeetingCard key={m.id} meeting={m} onDelete={handleDelete} team={team} />
             ))}
           </div>
         )}
@@ -333,12 +143,7 @@ export function MeetingsContent() {
           </h2>
           <div className="space-y-2">
             {pastMeetings.slice(0, 10).map((m) => (
-              <MeetingCard
-                key={m.id}
-                meeting={m}
-                onDelete={() => deleteMeeting.mutate({ id: m.id })}
-                isPast
-              />
+              <MeetingCard key={m.id} meeting={m} onDelete={handleDelete} isPast />
             ))}
           </div>
         </div>
@@ -347,7 +152,209 @@ export function MeetingsContent() {
   );
 }
 
-function MeetingCard({
+const CreateMeetingForm = memo(function CreateMeetingForm({
+  onSubmit,
+  onClose,
+  isPending,
+  team,
+}: {
+  onSubmit: (input: {
+    title: string;
+    description?: string;
+    startTime: Date;
+    endTime: Date;
+    location?: string;
+    recurrence: 'daily' | 'weekly' | 'biweekly' | 'monthly' | null;
+    attendeeIds: string[];
+  }) => void;
+  onClose: () => void;
+  isPending: boolean;
+  team?: Array<{ id: string; name: string; avatar: string | null }>;
+}) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [date, setDate] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [location, setLocation] = useState('');
+  const [recurrence, setRecurrence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly' | ''>(
+    ''
+  );
+  const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
+
+  const handleCreate = () => {
+    if (!title.trim() || !date || !startTime || !endTime) return;
+    onSubmit({
+      title: title.trim(),
+      description: description.trim() || undefined,
+      startTime: new Date(`${date}T${startTime}`),
+      endTime: new Date(`${date}T${endTime}`),
+      location: location || undefined,
+      recurrence: recurrence || null,
+      attendeeIds,
+    });
+  };
+
+  return (
+    <Card className="border-primary/20">
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <Video className="h-4 w-4 text-primary" /> New Meeting
+          </h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Sprint Planning"
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Location</label>
+            <input
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Google Meet, Zoom, Office..."
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-foreground mb-1">Description</label>
+          <input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="What's this meeting about?"
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Start *</label>
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">End *</label>
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {/* Recurrence */}
+        <div>
+          <label className="block text-xs font-medium text-foreground mb-1.5">Repeat</label>
+          <div className="flex gap-1.5">
+            {[
+              { value: '' as const, label: 'One-time' },
+              { value: 'daily' as const, label: 'Daily' },
+              { value: 'weekly' as const, label: 'Weekly' },
+              { value: 'biweekly' as const, label: 'Bi-weekly' },
+              { value: 'monthly' as const, label: 'Monthly' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setRecurrence(opt.value)}
+                className={cn(
+                  'rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors',
+                  recurrence === opt.value
+                    ? 'bg-foreground text-background'
+                    : 'bg-secondary text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Attendees */}
+        {team && (
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1.5">
+              Attendees ({attendeeIds.length} selected)
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {team.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() =>
+                    setAttendeeIds((prev) =>
+                      prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev, m.id]
+                    )
+                  }
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors',
+                    attendeeIds.includes(m.id)
+                      ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
+                      : 'bg-secondary text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <Avatar className="h-4 w-4">
+                    <AvatarImage src={m.avatar ?? undefined} />
+                    <AvatarFallback className="text-[6px] bg-muted">{m.name[0]}</AvatarFallback>
+                  </Avatar>
+                  {m.name.split(' ')[0]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            onClick={onClose}
+            className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={!title.trim() || !date || !startTime || !endTime || isPending}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            {isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            Schedule
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
+
+const MeetingCard = memo(function MeetingCard({
   meeting,
   onDelete,
   isPast,
@@ -366,7 +373,7 @@ function MeetingCard({
       user: { id: string; name: string; avatar: string | null };
     }>;
   };
-  onDelete: () => void;
+  onDelete: (id: string) => void;
   isPast?: boolean;
   team?: Array<{ id: string; name: string; avatar: string | null }>;
 }) {
@@ -413,6 +420,32 @@ function MeetingCard({
       setIsEditing(false);
     },
   });
+
+  // Memoize the derived occurrence dates so they keep a stable identity across
+  // re-renders (these feed the attendance computation below).
+  const start = useMemo(() => new Date(meeting.startTime), [meeting.startTime]);
+  const end = useMemo(() => new Date(meeting.endTime), [meeting.endTime]);
+
+  // Precompute per-attendee punctuality once per attendee/occurrence change
+  // instead of on every render of the attendance panel.
+  const attendanceRows = useMemo(
+    () =>
+      meeting.attendees.map((a) => {
+        const joined = !!a.joinedAt;
+        const joinedAt = joined ? new Date(a.joinedAt as Date) : null;
+        // Use the shared helper so recurring meetings compare against the
+        // actual occurrence start, not the original meeting startTime.
+        const p = computePunctuality(
+          { startTime: start, recurrence: meeting.recurrence },
+          joinedAt
+        );
+        const punctuality = p
+          ? { label: p.label, tone: p.isOnTime ? 'text-emerald-500' : 'text-amber-500' }
+          : null;
+        return { user: a.user, joined, joinedAt, punctuality };
+      }),
+    [meeting.attendees, meeting.recurrence, start]
+  );
 
   const startEdit = () => {
     const s = new Date(meeting.startTime);
@@ -575,8 +608,6 @@ function MeetingCard({
     );
   }
 
-  const start = new Date(meeting.startTime);
-  const end = new Date(meeting.endTime);
   const now = Date.now();
   const hasStarted = now >= start.getTime();
   const dateLabel = isToday(start)
@@ -744,7 +775,7 @@ function MeetingCard({
             <Pencil className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={onDelete}
+            onClick={() => onDelete(meeting.id)}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
             title="Delete"
           >
@@ -760,21 +791,10 @@ function MeetingCard({
             Attendance {hasStarted && `· ${joinedCount} of ${totalCount} joined`}
           </p>
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {meeting.attendees.map((a) => {
-              const joined = !!a.joinedAt;
-              const joinedAt = joined ? new Date(a.joinedAt!) : null;
-              // Use the shared helper so recurring meetings compare against
-              // the actual occurrence start, not the original meeting startTime.
-              const p = computePunctuality(
-                { startTime: start, recurrence: meeting.recurrence },
-                joinedAt
-              );
-              const punctuality = p
-                ? { label: p.label, tone: p.isOnTime ? 'text-emerald-500' : 'text-amber-500' }
-                : null;
+            {attendanceRows.map(({ user, joined, joinedAt, punctuality }) => {
               return (
                 <div
-                  key={a.user.id}
+                  key={user.id}
                   className={cn(
                     'flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5',
                     joined
@@ -783,13 +803,13 @@ function MeetingCard({
                   )}
                 >
                   <Avatar className="h-6 w-6">
-                    <AvatarImage src={a.user.avatar ?? undefined} />
+                    <AvatarImage src={user.avatar ?? undefined} />
                     <AvatarFallback className="text-[9px] bg-secondary font-medium">
-                      {a.user.name[0]}
+                      {user.name[0]}
                     </AvatarFallback>
                   </Avatar>
                   <p className="flex-1 text-xs font-medium text-foreground truncate">
-                    {a.user.name}
+                    {user.name}
                   </p>
                   {joined ? (
                     <>
@@ -819,4 +839,4 @@ function MeetingCard({
       )}
     </div>
   );
-}
+});

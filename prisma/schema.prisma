@@ -256,6 +256,7 @@ model ProjectMember {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, userId])
+  @@index([userId])
   @@map("project_members")
 }
 
@@ -347,6 +348,8 @@ model Task {
   attachments TaskAttachment[]
   timeEntries TimeEntry[]
 
+  @@index([columnId, order])
+  @@index([createdById])
   @@map("tasks")
 }
 
@@ -359,6 +362,7 @@ model TaskAssignee {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, userId])
+  @@index([userId])
   @@map("task_assignees")
 }
 
@@ -412,6 +416,8 @@ model TaskComment {
   parent  TaskComment?  @relation("CommentThread", fields: [parentId], references: [id])
   replies TaskComment[] @relation("CommentThread")
 
+  @@index([taskId])
+  @@index([userId, createdAt])
   @@map("task_comments")
 }
 
@@ -476,6 +482,9 @@ model Invoice {
   client  Client   @relation(fields: [clientId], references: [id])
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
+  @@index([status])
+  @@index([clientId])
+  @@index([projectId])
   @@map("invoices")
 }
 
@@ -496,6 +505,7 @@ model Transaction {
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   client  Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
 
+  @@index([clientId])
   @@index([date])
   @@index([type])
   @@map("transactions")
@@ -546,6 +556,7 @@ model ChannelMember {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([channelId, userId])
+  @@index([userId])
   @@map("channel_members")
 }
 
@@ -615,6 +626,8 @@ model LeaveRequest {
   user       User  @relation("LeaveRequester", fields: [userId], references: [id])
   approvedBy User? @relation("LeaveApprover", fields: [approvedById], references: [id])
 
+  @@index([status])
+  @@index([userId])
   @@map("leave_requests")
 }
 
@@ -684,6 +697,7 @@ model Milestone {
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  @@index([projectId])
   @@map("milestones")
 }
 
@@ -805,6 +819,7 @@ model ApiToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([prefix])
   @@map("api_tokens")
 }
 

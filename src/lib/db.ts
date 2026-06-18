@@ -13,7 +13,7 @@ const globalForPrisma = globalThis as unknown as {
 const PRISMA_VERSION = '7';
 
 function createPrismaClient() {
-  const pool = new pg.Pool({ connectionString });
+  const pool = new pg.Pool({ connectionString, max: 10 });
   const adapter = new PrismaPg(pool);
 
   return new PrismaClient({

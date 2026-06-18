@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -39,7 +39,6 @@ function NextMeetingBanner() {
   const { data: teamMembers } = trpc.team.getAll.useQuery();
   const meeting = meetings?.[0];
 
-  const [timeLeft, setTimeLeft] = useState({ hours: 0, minutes: 0, seconds: 0 });
   const [isLive, setIsLive] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState('');
@@ -97,27 +96,13 @@ function NextMeetingBanner() {
     });
   };
 
-  useEffect(() => {
-    if (!meeting) return;
-    const tick = () => {
-      const now = Date.now();
-      const start = new Date(meeting.startTime).getTime();
-      const end = new Date(meeting.endTime).getTime();
-      const live = now >= start && now < end;
-      setIsLive(live);
-      // When upcoming: count down to start. When live: count up from start.
-      // When ended: should get filtered out by the backend, but guard with Math.max.
-      const diff = live ? now - start : Math.max(0, start - now);
-      setTimeLeft({
-        hours: Math.floor(diff / 3600000),
-        minutes: Math.floor((diff % 3600000) / 60000),
-        seconds: Math.floor((diff % 60000) / 1000),
-      });
-    };
-    tick();
-    const interval = setInterval(tick, 1000);
-    return () => clearInterval(interval);
-  }, [meeting]);
+  // The per-second tick lives in the <MeetingCountdown> leaf so it doesn't
+  // re-render this whole banner every second. The leaf reports live/ended
+  // transitions up via this callback; the state setter bails when unchanged,
+  // so the banner only re-renders on an actual transition (not each tick).
+  const handleLiveChange = useCallback((live: boolean) => {
+    setIsLive((prev) => (prev === live ? prev : live));
+  }, []);
 
   // Refetch upcoming meetings when one transitions from live → ended
   // so the banner moves on to the next meeting automatically.
@@ -128,6 +113,19 @@ function NextMeetingBanner() {
     const t = setTimeout(() => utils.meetings.getUpcoming.invalidate(), endMs + 1000);
     return () => clearTimeout(t);
   }, [meeting, utils]);
+
+  const attendeeNames = useMemo(
+    () =>
+      meeting?.attendees
+        .slice(0, 3)
+        .map((a) => a.user.name.split(' ')[0])
+        .join(', ') ?? '',
+    [meeting]
+  );
+  const extra = useMemo(
+    () => (meeting && meeting.attendees.length > 3 ? ` +${meeting.attendees.length - 3}` : ''),
+    [meeting]
+  );
 
   // No meeting — show schedule button
   if (!meeting && !showCreate) {
@@ -288,12 +286,6 @@ function NextMeetingBanner() {
     );
   }
 
-  const attendeeNames = meeting!.attendees
-    .slice(0, 3)
-    .map((a) => a.user.name.split(' ')[0])
-    .join(', ');
-  const extra = meeting!.attendees.length > 3 ? ` +${meeting!.attendees.length - 3}` : '';
-
   return (
     <div
       className={cn(
@@ -341,13 +333,7 @@ function NextMeetingBanner() {
       </div>
 
       <div className="hidden sm:flex items-center gap-5">
-        <div className="flex items-baseline gap-1">
-          <TimeUnit value={timeLeft.hours} label="hr" live={isLive} />
-          <span className="text-muted-foreground/40 font-display text-lg font-bold -mx-0.5">:</span>
-          <TimeUnit value={timeLeft.minutes} label="min" live={isLive} />
-          <span className="text-muted-foreground/40 font-display text-lg font-bold -mx-0.5">:</span>
-          <TimeUnit value={timeLeft.seconds} label="sec" live={isLive} />
-        </div>
+        <MeetingCountdown meeting={meeting!} variant="desktop" onLiveChange={handleLiveChange} />
         {isLive && (
           <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
             elapsed
@@ -381,6 +367,57 @@ function NextMeetingBanner() {
         )}
       </div>
 
+      <MeetingCountdown meeting={meeting!} variant="mobile" />
+    </div>
+  );
+}
+
+/* ============================================
+   Meeting Countdown — leaf that owns the 1s tick
+   ============================================ */
+/**
+ * Owns the per-second setInterval + timeLeft state and renders ONLY the digit
+ * nodes, so the ~1Hz tick re-renders just this leaf rather than the entire
+ * banner. Live/ended transitions are reported up via onLiveChange (which the
+ * parent uses for banner-wide styling); the desktop instance is always mounted
+ * (CSS `hidden sm:flex`), so it drives onLiveChange across all viewports.
+ */
+function MeetingCountdown({
+  meeting,
+  variant,
+  onLiveChange,
+}: {
+  meeting: { startTime: Date | string; endTime: Date | string };
+  variant: 'desktop' | 'mobile';
+  onLiveChange?: (live: boolean) => void;
+}) {
+  const [timeLeft, setTimeLeft] = useState({ hours: 0, minutes: 0, seconds: 0 });
+  const [isLive, setIsLive] = useState(false);
+
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now();
+      const start = new Date(meeting.startTime).getTime();
+      const end = new Date(meeting.endTime).getTime();
+      const live = now >= start && now < end;
+      setIsLive(live);
+      onLiveChange?.(live);
+      // When upcoming: count down to start. When live: count up from start.
+      // When ended: should get filtered out by the backend, but guard with Math.max.
+      const diff = live ? now - start : Math.max(0, start - now);
+      setTimeLeft({
+        hours: Math.floor(diff / 3600000),
+        minutes: Math.floor((diff % 3600000) / 60000),
+        seconds: Math.floor((diff % 60000) / 1000),
+      });
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [meeting, onLiveChange]);
+
+  if (variant === 'mobile') {
+    return (
       <div className="flex sm:hidden items-baseline gap-0.5 shrink-0">
         <span
           className={cn(
@@ -409,6 +446,16 @@ function NextMeetingBanner() {
           {pad(timeLeft.seconds)}
         </span>
       </div>
+    );
+  }
+
+  return (
+    <div className="flex items-baseline gap-1">
+      <TimeUnit value={timeLeft.hours} label="hr" live={isLive} />
+      <span className="text-muted-foreground/40 font-display text-lg font-bold -mx-0.5">:</span>
+      <TimeUnit value={timeLeft.minutes} label="min" live={isLive} />
+      <span className="text-muted-foreground/40 font-display text-lg font-bold -mx-0.5">:</span>
+      <TimeUnit value={timeLeft.seconds} label="sec" live={isLive} />
     </div>
   );
 }
@@ -448,6 +495,13 @@ function pad(n: number) {
 /* ============================================
    KPI Card
    ============================================ */
+const KPI_ICON_BG: Record<string, string> = {
+  orange: 'bg-primary/10 text-primary',
+  emerald: 'bg-emerald-500/10 text-emerald-500',
+  amber: 'bg-amber-500/10 text-amber-500',
+  blue: 'bg-blue-500/10 text-blue-500',
+};
+
 function KPICard({
   title,
   value,
@@ -465,13 +519,6 @@ function KPICard({
   trend?: 'up' | 'down' | 'neutral';
   accentColor?: 'orange' | 'emerald' | 'amber' | 'blue';
 }) {
-  const iconBg: Record<string, string> = {
-    orange: 'bg-primary/10 text-primary',
-    emerald: 'bg-emerald-500/10 text-emerald-500',
-    amber: 'bg-amber-500/10 text-amber-500',
-    blue: 'bg-blue-500/10 text-blue-500',
-  };
-
   return (
     <Card className="group relative overflow-hidden border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/20">
       <CardContent className="p-6">
@@ -509,7 +556,7 @@ function KPICard({
           <div
             className={cn(
               'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-transform group-hover:scale-105',
-              iconBg[accentColor]
+              KPI_ICON_BG[accentColor]
             )}
           >
             <Icon className="h-5 w-5" />
@@ -523,6 +570,20 @@ function KPICard({
 /* ============================================
    My Tasks — personal task list
    ============================================ */
+const TASK_PRIORITY_CONFIG: Record<string, { color: string; label: string }> = {
+  URGENT: { color: 'text-red-500', label: 'Urgent' },
+  HIGH: { color: 'text-primary', label: 'High' },
+  MEDIUM: { color: 'text-amber-500', label: 'Medium' },
+  LOW: { color: 'text-muted-foreground', label: 'Low' },
+};
+
+const TASK_COLUMN_CONFIG: Record<string, string> = {
+  Backlog: 'bg-muted text-muted-foreground',
+  'To Do': 'bg-blue-500/10 text-blue-500',
+  'In Progress': 'bg-primary/10 text-primary',
+  Review: 'bg-violet-500/10 text-violet-500',
+};
+
 function TaskItem({
   task,
 }: {
@@ -535,22 +596,8 @@ function TaskItem({
     _count: { comments: number; checklists: number };
   };
 }) {
-  const priorityConfig: Record<string, { color: string; label: string }> = {
-    URGENT: { color: 'text-red-500', label: 'Urgent' },
-    HIGH: { color: 'text-primary', label: 'High' },
-    MEDIUM: { color: 'text-amber-500', label: 'Medium' },
-    LOW: { color: 'text-muted-foreground', label: 'Low' },
-  };
-
-  const columnConfig: Record<string, string> = {
-    Backlog: 'bg-muted text-muted-foreground',
-    'To Do': 'bg-blue-500/10 text-blue-500',
-    'In Progress': 'bg-primary/10 text-primary',
-    Review: 'bg-violet-500/10 text-violet-500',
-  };
-
-  const prio = priorityConfig[task.priority] || priorityConfig.MEDIUM;
-  const colClass = columnConfig[task.column.name] || 'bg-muted text-muted-foreground';
+  const prio = TASK_PRIORITY_CONFIG[task.priority] || TASK_PRIORITY_CONFIG.MEDIUM;
+  const colClass = TASK_COLUMN_CONFIG[task.column.name] || 'bg-muted text-muted-foreground';
   const boardUrl = `/projects/${task.column.board.projectId}/board/${task.column.board.id}`;
 
   return (
@@ -595,6 +642,14 @@ function TaskItem({
 /* ============================================
    Activity feed item
    ============================================ */
+const ACTIVITY_COLORS: Record<string, string> = {
+  task_completed: 'bg-emerald-500',
+  invoice_sent: 'bg-blue-500',
+  invoice_paid: 'bg-blue-500',
+  project_created: 'bg-primary',
+  project_updated: 'bg-primary',
+};
+
 function ActivityItem({
   activity,
 }: {
@@ -606,21 +661,6 @@ function ActivityItem({
     user: { id: string; name: string; avatar: string | null; title: string };
   };
 }) {
-  const getActivityColor = (type: string) => {
-    switch (type) {
-      case 'task_completed':
-        return 'bg-emerald-500';
-      case 'invoice_sent':
-      case 'invoice_paid':
-        return 'bg-blue-500';
-      case 'project_created':
-      case 'project_updated':
-        return 'bg-primary';
-      default:
-        return 'bg-muted-foreground/40';
-    }
-  };
-
   return (
     <div className="flex items-start gap-3.5 py-3.5">
       <div className="relative">
@@ -636,7 +676,7 @@ function ActivityItem({
         <div
           className={cn(
             'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card',
-            getActivityColor(activity.type)
+            ACTIVITY_COLORS[activity.type] ?? 'bg-muted-foreground/40'
           )}
         />
       </div>
@@ -656,6 +696,16 @@ function ActivityItem({
 /* ============================================
    Project card
    ============================================ */
+const PROJECT_STATUS_CONFIG: Record<string, { bg: string; dot: string }> = {
+  ACTIVE: {
+    bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    dot: 'bg-emerald-500',
+  },
+  IN_DEVELOPMENT: { bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', dot: 'bg-blue-500' },
+  ON_HOLD: { bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', dot: 'bg-amber-500' },
+  COMPLETED: { bg: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground' },
+};
+
 function ProjectCard({
   project,
 }: {
@@ -668,16 +718,7 @@ function ProjectCard({
     members: Array<{ user: { id: string; name: string; avatar: string | null } }>;
   };
 }) {
-  const statusConfig: Record<string, { bg: string; dot: string }> = {
-    ACTIVE: {
-      bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-      dot: 'bg-emerald-500',
-    },
-    IN_DEVELOPMENT: { bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', dot: 'bg-blue-500' },
-    ON_HOLD: { bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', dot: 'bg-amber-500' },
-    COMPLETED: { bg: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground' },
-  };
-  const config = statusConfig[project.status] || statusConfig.ACTIVE;
+  const config = PROJECT_STATUS_CONFIG[project.status] || PROJECT_STATUS_CONFIG.ACTIVE;
 
   return (
     <Link href={`/projects/${project.id}`}>

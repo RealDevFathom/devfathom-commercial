@@ -1,13 +1,26 @@
 'use client';
 
 import { useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { PageTransition } from '@/components/motion/page-transition';
-import { AssistantPanel } from '@/components/assistant/assistant-panel';
+import { useAssistant } from '@/lib/assistant-store';
+
+// Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
+// chunk; only fetched once the user first opens the assistant.
+const AssistantPanel = dynamic(
+  () => import('@/components/assistant/assistant-panel').then((m) => m.AssistantPanel),
+  { ssr: false }
+);
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const assistantOpen = useAssistant((s) => s.open);
+  // Mount the panel once it has been opened, then keep it mounted so chat
+  // state survives close/reopen.
+  const [assistantMounted, setAssistantMounted] = useState(false);
+  if (assistantOpen && !assistantMounted) setAssistantMounted(true);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -36,7 +49,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      <AssistantPanel />
+      {assistantMounted && <AssistantPanel />}
     </div>
   );
 }

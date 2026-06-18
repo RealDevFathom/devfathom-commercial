@@ -330,7 +330,7 @@ export const projectsRouter = router({
     return ctx.db.project.findUnique({
       where: { id: input.id },
       include: {
-        client: true,
+        client: { select: { name: true, website: true } },
         members: {
           include: {
             user: {
@@ -398,7 +398,7 @@ export const projectsRouter = router({
                   },
                   labels: { include: { label: true } },
                   checklists: {
-                    include: { items: true },
+                    include: { items: { select: { completed: true } } },
                   },
                   _count: { select: { comments: true, attachments: true, checklists: true } },
                 },

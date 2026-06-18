@@ -47,4 +47,4 @@ export {
   LeaveType,
   LeaveStatus,
   ClientStatus,
-} from '@/generated/prisma/client';
+} from '@/generated/prisma/enums';

@@ -34,6 +34,10 @@ const nextConfig: NextConfig = {
     // plain <img>, not next/image, so restricting to the production origin breaks
     // nothing. Add hosts here only as concrete needs arise.
     remotePatterns: [{ protocol: 'https', hostname: 'hub.devfathom.com' }],
+    formats: ['image/avif', 'image/webp'],
+  },
+  experimental: {
+    optimizePackageImports: ['@base-ui/react', 'cmdk'],
   },
   headers: async () => [
     {

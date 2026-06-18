@@ -42,6 +42,19 @@ export const teamRouter = router({
     });
   }),
 
+  // Lightweight roster — just enough to render avatars and names.
+  getRoster: protectedProcedure.query(async ({ ctx }) => {
+    return ctx.db.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        avatar: true,
+        title: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+  }),
+
   createMember: adminProcedure
     .input(
       z.object({
@@ -141,15 +154,27 @@ export const teamRouter = router({
     });
   }),
 
-  getLeaveRequests: adminProcedure.query(async ({ ctx }) => {
-    return ctx.db.leaveRequest.findMany({
-      include: {
-        user: { select: { id: true, name: true, avatar: true, department: true, title: true } },
-        approvedBy: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-  }),
+  getLeaveRequests: adminProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().min(1).max(1000).optional(),
+          cursor: z.string().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const limit = input?.limit ? Math.min(input.limit, 1000) : undefined;
+      return ctx.db.leaveRequest.findMany({
+        include: {
+          user: { select: { id: true, name: true, avatar: true, department: true, title: true } },
+          approvedBy: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
+    }),
 
   createLeaveRequest: protectedProcedure
     .input(

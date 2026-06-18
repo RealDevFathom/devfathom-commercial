@@ -1,12 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, Plus, ChevronDown, X, Loader2 } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
+
+type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
+
+const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
@@ -16,18 +21,76 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
   CANCELLED: { bg: 'bg-muted text-muted-foreground line-through', label: 'Cancelled' },
 };
 
+type InvoiceRowData = {
+  id: string;
+  invoiceNumber: string;
+  status: string;
+  total: unknown;
+  dueDate: Date | string;
+  client: { name: string };
+  project: { name: string } | null;
+};
+
 export function InvoicesTab() {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading } = trpc.finance.getInvoices.useQuery();
   const [showCreate, setShowCreate] = useState(false);
-  const [statusMenu, setStatusMenu] = useState<string | null>(null);
 
-  const updateStatus = trpc.finance.updateInvoiceStatus.useMutation({
-    onSuccess: () => {
-      utils.finance.getInvoices.invalidate();
-      utils.finance.getFinancialSummary.invalidate();
-      setStatusMenu(null);
+  const { mutate: mutateStatus } = trpc.finance.updateInvoiceStatus.useMutation({
+    // Optimistically patch the list cache instead of refetching every invoice.
+    onMutate: async ({ id, status }) => {
+      await utils.finance.getInvoices.cancel();
+      const previous = utils.finance.getInvoices.getData();
+      utils.finance.getInvoices.setData(undefined, (old) =>
+        old?.map((inv) => (inv.id === id ? { ...inv, status } : inv))
+      );
+      return { previous };
     },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previous) {
+        utils.finance.getInvoices.setData(undefined, ctx.previous);
+      }
+    },
+    onSettled: () => {
+      utils.finance.getFinancialSummary.invalidate();
+    },
+  });
+
+  const handleUpdateStatus = useCallback(
+    (id: string, status: InvoiceStatus) => mutateStatus({ id, status }),
+    [mutateStatus]
+  );
+
+  // Virtualize against the app's scrollable <main> ancestor so the list can grow
+  // without rendering every row (and without a nested scroll container that would
+  // clip the per-row status menu).
+  const listRef = useRef<HTMLDivElement>(null);
+  const scrollElRef = useRef<HTMLElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  useEffect(() => {
+    const measure = () => {
+      const scrollEl = listRef.current?.closest('main') as HTMLElement | null;
+      scrollElRef.current = scrollEl;
+      if (scrollEl && listRef.current) {
+        setScrollMargin(
+          listRef.current.getBoundingClientRect().top -
+            scrollEl.getBoundingClientRect().top +
+            scrollEl.scrollTop
+        );
+      }
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [isLoading, showCreate, invoices?.length]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: invoices?.length ?? 0,
+    getScrollElement: () => scrollElRef.current,
+    estimateSize: () => 65,
+    overscan: 8,
+    scrollMargin,
   });
 
   return (
@@ -69,91 +132,27 @@ export function InvoicesTab() {
                 <div className="col-span-2 text-center">Status</div>
                 <div className="col-span-2 text-right">Due Date</div>
               </div>
-              {invoices.map((inv) => {
-                const config = statusConfig[inv.status] || statusConfig.DRAFT;
-                return (
-                  <div
-                    key={inv.id}
-                    className="grid grid-cols-12 gap-4 items-center px-6 py-3.5 hover:bg-secondary/30 transition-colors"
-                  >
-                    <div className="col-span-2">
-                      <p className="text-sm font-semibold text-foreground font-mono">
-                        {inv.invoiceNumber}
-                      </p>
+              {/* Virtualized rows */}
+              <div
+                ref={listRef}
+                className="relative"
+                style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+              >
+                {rowVirtualizer.getVirtualItems().map((vi) => {
+                  const inv = invoices[vi.index];
+                  return (
+                    <div
+                      key={inv.id}
+                      data-index={vi.index}
+                      ref={rowVirtualizer.measureElement}
+                      className="absolute left-0 top-0 w-full"
+                      style={{ transform: `translateY(${vi.start - scrollMargin}px)` }}
+                    >
+                      <InvoiceRow inv={inv} onUpdateStatus={handleUpdateStatus} />
                     </div>
-                    <div className="col-span-3">
-                      <p className="text-sm text-foreground truncate">{inv.client.name}</p>
-                    </div>
-                    <div className="col-span-2">
-                      <p className="text-sm text-muted-foreground truncate">
-                        {inv.project?.name || '—'}
-                      </p>
-                    </div>
-                    <div className="col-span-1 text-right">
-                      <p className="text-sm font-semibold text-foreground tabular-nums">
-                        ${Number(inv.total).toLocaleString()}
-                      </p>
-                    </div>
-                    <div className="col-span-2 flex justify-center relative">
-                      <button
-                        onClick={() => setStatusMenu(statusMenu === inv.id ? null : inv.id)}
-                        className={cn(
-                          'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium',
-                          config.bg
-                        )}
-                      >
-                        {config.label}
-                        <ChevronDown className="h-3 w-3" />
-                      </button>
-                      {statusMenu === inv.id && (
-                        <>
-                          <div className="fixed inset-0 z-10" onClick={() => setStatusMenu(null)} />
-                          <div className="absolute top-full z-20 mt-1 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10 w-32">
-                            {(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'] as const).map(
-                              (s) => (
-                                <button
-                                  key={s}
-                                  onClick={() => updateStatus.mutate({ id: inv.id, status: s })}
-                                  className={cn(
-                                    'flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary',
-                                    inv.status === s && 'bg-secondary font-medium'
-                                  )}
-                                >
-                                  <div
-                                    className={cn(
-                                      'h-1.5 w-1.5 rounded-full',
-                                      s === 'PAID'
-                                        ? 'bg-emerald-500'
-                                        : s === 'OVERDUE'
-                                          ? 'bg-red-500'
-                                          : s === 'SENT'
-                                            ? 'bg-blue-500'
-                                            : 'bg-muted-foreground'
-                                    )}
-                                  />
-                                  {statusConfig[s].label}
-                                </button>
-                              )
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                    <div className="col-span-2 text-right">
-                      <p
-                        className={cn(
-                          'text-sm tabular-nums',
-                          inv.status === 'OVERDUE'
-                            ? 'text-red-500 font-medium'
-                            : 'text-muted-foreground'
-                        )}
-                      >
-                        {format(new Date(inv.dueDate), 'MMM d, yyyy')}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           )}
         </CardContent>
@@ -161,6 +160,95 @@ export function InvoicesTab() {
     </div>
   );
 }
+
+/* ============================================
+   Invoice Row (memoized; owns its own status-menu open state)
+   ============================================ */
+const InvoiceRow = memo(function InvoiceRow({
+  inv,
+  onUpdateStatus,
+}: {
+  inv: InvoiceRowData;
+  onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const config = statusConfig[inv.status] || statusConfig.DRAFT;
+
+  return (
+    <div className="grid grid-cols-12 gap-4 items-center px-6 py-3.5 border-b border-border/60 bg-card hover:bg-secondary/30 transition-colors">
+      <div className="col-span-2">
+        <p className="text-sm font-semibold text-foreground font-mono">{inv.invoiceNumber}</p>
+      </div>
+      <div className="col-span-3">
+        <p className="text-sm text-foreground truncate">{inv.client.name}</p>
+      </div>
+      <div className="col-span-2">
+        <p className="text-sm text-muted-foreground truncate">{inv.project?.name || '—'}</p>
+      </div>
+      <div className="col-span-1 text-right">
+        <p className="text-sm font-semibold text-foreground tabular-nums">
+          ${Number(inv.total).toLocaleString()}
+        </p>
+      </div>
+      <div className="col-span-2 flex justify-center relative">
+        <button
+          onClick={() => setMenuOpen((o) => !o)}
+          className={cn(
+            'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium',
+            config.bg
+          )}
+        >
+          {config.label}
+          <ChevronDown className="h-3 w-3" />
+        </button>
+        {menuOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+            <div className="absolute top-full z-20 mt-1 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10 w-32">
+              {INVOICE_STATUSES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    onUpdateStatus(inv.id, s);
+                    setMenuOpen(false);
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary',
+                    inv.status === s && 'bg-secondary font-medium'
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'h-1.5 w-1.5 rounded-full',
+                      s === 'PAID'
+                        ? 'bg-emerald-500'
+                        : s === 'OVERDUE'
+                          ? 'bg-red-500'
+                          : s === 'SENT'
+                            ? 'bg-blue-500'
+                            : 'bg-muted-foreground'
+                    )}
+                  />
+                  {statusConfig[s].label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      <div className="col-span-2 text-right">
+        <p
+          className={cn(
+            'text-sm tabular-nums',
+            inv.status === 'OVERDUE' ? 'text-red-500 font-medium' : 'text-muted-foreground'
+          )}
+        >
+          {format(new Date(inv.dueDate), 'MMM d, yyyy')}
+        </p>
+      </div>
+    </div>
+  );
+});
 
 /* ============================================
    Create Invoice Form

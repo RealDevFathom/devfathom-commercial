@@ -1,6 +1,7 @@
 'use client';
 
 import { SessionProvider } from 'next-auth/react';
+import { LazyMotion, domMax } from 'motion/react';
 import { ThemeProvider } from 'next-themes';
 import { TRPCProvider } from '@/lib/trpc-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -17,7 +18,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       >
         <TRPCProvider>
           <TooltipProvider delay={200}>
-            {children}
+            <LazyMotion features={domMax}>{children}</LazyMotion>
             <Toaster position="top-right" richColors closeButton />
           </TooltipProvider>
         </TRPCProvider>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
-import { motion, useMotionValue, useSpring, useReducedMotion } from 'motion/react';
+import { m, useMotionValue, useSpring, useReducedMotion } from 'motion/react';
 
 /**
  * Magnetic — pulls its children gently toward the cursor on hover.
@@ -39,7 +39,7 @@ export function Magnetic({
   };
 
   return (
-    <motion.div
+    <m.div
       ref={ref}
       className={className}
       style={{ x: sx, y: sy }}
@@ -47,6 +47,6 @@ export function Magnetic({
       onMouseLeave={reset}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }

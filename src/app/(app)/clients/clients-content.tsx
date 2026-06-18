@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -18,7 +18,11 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
+
+type Client = inferRouterOutputs<AppRouter>['clients']['getAll'][number];
 
 const statusConfig: Record<string, { bg: string; dot: string; label: string }> = {
   ACTIVE: {
@@ -37,8 +41,11 @@ export function ClientsContent() {
   const [showCreate, setShowCreate] = useState(false);
   const { data: clients, isLoading } = trpc.clients.getAll.useQuery();
 
-  const filtered =
-    clients?.filter((c) => !search || c.name.toLowerCase().includes(search.toLowerCase())) ?? [];
+  const filtered = useMemo(
+    () =>
+      clients?.filter((c) => !search || c.name.toLowerCase().includes(search.toLowerCase())) ?? [],
+    [clients, search]
+  );
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -100,84 +107,96 @@ export function ClientsContent() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((client) => {
-            const config = statusConfig[client.status] || statusConfig.ACTIVE;
-            const primaryContact = client.contacts[0];
-            return (
-              <Link key={client.id} href={`/clients/${client.id}`}>
-                <Card className="group h-full border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:-translate-y-0.5 cursor-pointer">
-                  <CardContent className="p-6">
-                    <div className="flex items-start justify-between gap-3 mb-3">
-                      <div className="min-w-0">
-                        <h3 className="font-display text-base font-semibold text-foreground truncate group-hover:text-primary transition-colors">
-                          {client.name}
-                        </h3>
-                        {client.industry && (
-                          <p className="text-xs text-muted-foreground mt-0.5">{client.industry}</p>
-                        )}
-                      </div>
-                      <div
-                        className={cn(
-                          'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0',
-                          config.bg
-                        )}
-                      >
-                        <div className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
-                        {config.label}
-                      </div>
-                    </div>
-
-                    {/* Contact & location */}
-                    <div className="space-y-1.5 mb-4">
-                      {primaryContact && (
-                        <p className="text-sm text-muted-foreground truncate">
-                          {primaryContact.name}{' '}
-                          {primaryContact.role ? `· ${primaryContact.role}` : ''}
-                        </p>
-                      )}
-                      {client.location && (
-                        <p className="text-xs text-muted-foreground flex items-center gap-1">
-                          <MapPin className="h-3 w-3" /> {client.location}
-                        </p>
-                      )}
-                      {client.website && (
-                        <p className="text-xs text-muted-foreground flex items-center gap-1">
-                          <Globe className="h-3 w-3" /> {client.website.replace(/^https?:\/\//, '')}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Stats footer */}
-                    <div className="flex items-center justify-between pt-3 border-t border-border/60">
-                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1">
-                          <FolderKanban className="h-3 w-3" />
-                          {client._count.projects}
-                        </span>
-                        {isAdmin && (
-                          <span className="flex items-center gap-1">
-                            <FileText className="h-3 w-3" />
-                            {client._count.invoices}
-                          </span>
-                        )}
-                        {isAdmin && client.totalRevenue > 0 && (
-                          <span className="font-semibold text-emerald-500">
-                            ${client.totalRevenue.toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                      <ArrowUpRight className="h-4 w-4 text-muted-foreground/30 group-hover:text-primary transition-all" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            );
-          })}
+          {filtered.map((client) => (
+            <ClientCard key={client.id} client={client} isAdmin={isAdmin} />
+          ))}
         </div>
       )}
     </div>
   );
 }
+
+const ClientCard = memo(function ClientCard({
+  client,
+  isAdmin,
+}: {
+  client: Client;
+  isAdmin: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const prefetch = () => utils.clients.getById.prefetch({ id: client.id });
+  const config = statusConfig[client.status] || statusConfig.ACTIVE;
+  const primaryContact = client.contacts[0];
+
+  return (
+    <Link href={`/clients/${client.id}`} onMouseEnter={prefetch} onFocus={prefetch}>
+      <Card className="group h-full border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:-translate-y-0.5 cursor-pointer">
+        <CardContent className="p-6">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="min-w-0">
+              <h3 className="font-display text-base font-semibold text-foreground truncate group-hover:text-primary transition-colors">
+                {client.name}
+              </h3>
+              {client.industry && (
+                <p className="text-xs text-muted-foreground mt-0.5">{client.industry}</p>
+              )}
+            </div>
+            <div
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0',
+                config.bg
+              )}
+            >
+              <div className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
+              {config.label}
+            </div>
+          </div>
+
+          {/* Contact & location */}
+          <div className="space-y-1.5 mb-4">
+            {primaryContact && (
+              <p className="text-sm text-muted-foreground truncate">
+                {primaryContact.name} {primaryContact.role ? `· ${primaryContact.role}` : ''}
+              </p>
+            )}
+            {client.location && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <MapPin className="h-3 w-3" /> {client.location}
+              </p>
+            )}
+            {client.website && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <Globe className="h-3 w-3" /> {client.website.replace(/^https?:\/\//, '')}
+              </p>
+            )}
+          </div>
+
+          {/* Stats footer */}
+          <div className="flex items-center justify-between pt-3 border-t border-border/60">
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <FolderKanban className="h-3 w-3" />
+                {client._count.projects}
+              </span>
+              {isAdmin && (
+                <span className="flex items-center gap-1">
+                  <FileText className="h-3 w-3" />
+                  {client._count.invoices}
+                </span>
+              )}
+              {isAdmin && client.totalRevenue > 0 && (
+                <span className="font-semibold text-emerald-500">
+                  ${client.totalRevenue.toLocaleString()}
+                </span>
+              )}
+            </div>
+            <ArrowUpRight className="h-4 w-4 text-muted-foreground/30 group-hover:text-primary transition-all" />
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+});
 
 function CreateClientForm({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();

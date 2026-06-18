@@ -5,14 +5,18 @@ import { withApiAuth } from '@/lib/api-auth';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 
-export const GET = withApiAuth('clients:read', async (ctx) => {
+export const GET = withApiAuth('clients:read', async (ctx, request) => {
   // Clients are a finance/admin domain — listing the directory en masse must
   // require an admin-bound token (otherwise the /clients/[id] admin gate is
   // trivially bypassed by enumerating the collection).
   if (!isAdmin(ctx.userRole)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+  const url = new URL(request.url);
+  const limitParam = url.searchParams.get('limit');
+  const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
   const clients = await db.client.findMany({
+    take: limit,
     include: {
       contacts: true,
       _count: { select: { projects: true, invoices: true } },

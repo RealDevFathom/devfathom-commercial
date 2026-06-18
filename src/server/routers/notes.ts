@@ -92,12 +92,15 @@ export const notesRouter = router({
           projectId: z.string().optional(),
           clientId: z.string().optional(),
           search: z.string().optional(),
+          limit: z.number().int().positive().optional(),
+          cursor: z.string().optional(),
         })
         .optional()
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
       const scope = input?.scope ?? 'all';
+      const take = input?.limit ? Math.min(input.limit, 1000) : undefined;
 
       const where: Prisma.NoteWhereInput = {
         AND: [
@@ -122,6 +125,8 @@ export const notesRouter = router({
       return ctx.db.note.findMany({
         where,
         orderBy: { updatedAt: 'desc' },
+        take,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
         select: {
           id: true,
           title: true,

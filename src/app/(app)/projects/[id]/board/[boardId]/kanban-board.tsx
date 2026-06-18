@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useDeferredValue, memo, type HTMLAttributes } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
@@ -34,7 +34,8 @@ const priorityColors: Record<string, string> = {
 
 type TaskLabel = { label: { id: string; name: string; color: string } };
 type TaskAssignee = { user: { id: string; name: string; avatar: string | null } };
-type ChecklistItem = { id: string; text: string; completed: boolean; order: number };
+// Board cards only need checklist completion counts — getBoardWithTasks selects items.completed only.
+type ChecklistItem = { completed: boolean };
 type TaskChecklist = { id: string; name: string; items: ChecklistItem[] };
 type TaskData = {
   id: string;
@@ -63,12 +64,15 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     },
   });
 
+  // Each drag captures its own pre-mutation snapshot locally (see handleDragEnd)
+  // and rolls back via a per-call onError, so overlapping drags can't clobber a
+  // shared snapshot. moveTask reconciles on settle (the server may auto-assign the
+  // destination column's default owners + recompute order); reorderColumns is
+  // purely positional, so it trusts the optimistic state with no refetch.
   const moveTask = trpc.projects.moveTask.useMutation({
-    onSuccess: () => utils.projects.getBoardWithTasks.invalidate({ boardId }),
+    onSettled: () => utils.projects.getBoardWithTasks.invalidate({ boardId }),
   });
-  const reorderColumns = trpc.projects.reorderColumns.useMutation({
-    onSuccess: () => utils.projects.getBoardWithTasks.invalidate({ boardId }),
-  });
+  const reorderColumns = trpc.projects.reorderColumns.useMutation();
   const createTask = trpc.projects.createTask.useMutation({
     onSuccess: () => utils.projects.getBoardWithTasks.invalidate({ boardId }),
   });
@@ -92,19 +96,17 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     },
   });
 
-  const { data: teamMembers } = trpc.team.getAll.useQuery();
+  const { data: teamMembers } = trpc.team.getRoster.useQuery();
   const [addingToColumn, setAddingToColumn] = useState<string | null>(null);
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskAssignees, setNewTaskAssignees] = useState<string[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [addingColumn, setAddingColumn] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
-  const [editColumnName, setEditColumnName] = useState('');
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [filterPriority, setFilterPriority] = useState<string>('ALL');
   const [filterAssignee, setFilterAssignee] = useState<string>('ALL');
   const [filterLabel, setFilterLabel] = useState<string>('ALL');
@@ -125,6 +127,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         const [moved] = newColumns.splice(source.index, 1);
         newColumns.splice(destination.index, 0, moved);
 
+        const previous = board;
         utils.projects.getBoardWithTasks.setData(
           { boardId },
           {
@@ -133,11 +136,14 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
           }
         );
 
-        reorderColumns.mutate({
-          boardId,
-          columnId: draggableId,
-          newOrder: destination.index,
-        });
+        reorderColumns.mutate(
+          { boardId, columnId: draggableId, newOrder: destination.index },
+          {
+            onError: () => {
+              if (previous) utils.projects.getBoardWithTasks.setData({ boardId }, previous);
+            },
+          }
+        );
         return;
       }
 
@@ -154,6 +160,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
       const [movedTask] = sourceCol.tasks.splice(source.index, 1);
       destCol.tasks.splice(destination.index, 0, movedTask);
 
+      const previous = board;
       utils.projects.getBoardWithTasks.setData(
         { boardId },
         {
@@ -162,22 +169,28 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         }
       );
 
-      moveTask.mutate({
-        taskId: draggableId,
-        targetColumnId: destination.droppableId,
-        newOrder: destination.index,
-      });
+      moveTask.mutate(
+        { taskId: draggableId, targetColumnId: destination.droppableId, newOrder: destination.index },
+        {
+          onError: () => {
+            if (previous) utils.projects.getBoardWithTasks.setData({ boardId }, previous);
+          },
+        }
+      );
     },
     [board, boardId, moveTask, reorderColumns, utils.projects.getBoardWithTasks]
   );
 
-  const handleAddTask = (columnId: string) => {
-    if (!newTaskTitle.trim()) return;
-    createTask.mutate({ title: newTaskTitle.trim(), columnId, assigneeIds: newTaskAssignees });
-    setNewTaskTitle('');
-    setNewTaskAssignees([]);
-    setAddingToColumn(null);
-  };
+  const handleAddTask = useCallback(
+    (columnId: string, title: string, assigneeIds: string[]) => {
+      createTask.mutate({ title, columnId, assigneeIds });
+      setAddingToColumn(null);
+    },
+    [createTask]
+  );
+
+  // Stable selection handler so memoized children don't re-render on every change.
+  const handleSelectTask = useCallback((taskId: string) => setSelectedTaskId(taskId), []);
 
   // Compute unique assignees and labels from board data for filter options
   const allAssignees = useMemo(() => {
@@ -205,7 +218,10 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     return board.columns.map((col) => ({
       ...col,
       tasks: col.tasks.filter((task) => {
-        if (searchQuery && !task.title.toLowerCase().includes(searchQuery.toLowerCase()))
+        if (
+          deferredSearchQuery &&
+          !task.title.toLowerCase().includes(deferredSearchQuery.toLowerCase())
+        )
           return false;
         if (filterPriority !== 'ALL' && task.priority !== filterPriority) return false;
         if (filterAssignee !== 'ALL' && !task.assignees.some((a) => a.user.id === filterAssignee))
@@ -215,7 +231,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         return true;
       }),
     }));
-  }, [board, searchQuery, filterPriority, filterAssignee, filterLabel, hasFilters]);
+  }, [board, deferredSearchQuery, filterPriority, filterAssignee, filterLabel, hasFilters]);
 
   if (isLoading) return <BoardSkeleton />;
   if (!board) return null;
@@ -341,7 +357,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                     {(colProvided, colSnapshot) => (
                       <div
                         ref={colProvided.innerRef}
-                        {...colProvided.draggableProps}
+                        {...(colProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
                         className={cn(
                           'flex flex-col w-72 shrink-0 max-h-full rounded-xl transition-shadow',
                           colSnapshot.isDragging &&
@@ -361,39 +377,16 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
 
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             {editingColumnId === column.id ? (
-                              <input
-                                autoFocus
-                                value={editColumnName}
-                                onChange={(e) => setEditColumnName(e.target.value)}
-                                onBlur={() => {
-                                  if (
-                                    editColumnName.trim() &&
-                                    editColumnName.trim() !== column.name
-                                  ) {
-                                    updateColumn.mutate({
-                                      id: column.id,
-                                      name: editColumnName.trim(),
-                                    });
-                                  } else {
-                                    setEditingColumnId(null);
-                                  }
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && editColumnName.trim())
-                                    updateColumn.mutate({
-                                      id: column.id,
-                                      name: editColumnName.trim(),
-                                    });
-                                  if (e.key === 'Escape') setEditingColumnId(null);
-                                }}
-                                className="text-sm font-semibold text-foreground bg-transparent border-b border-primary pb-0.5 focus:outline-none w-full"
+                              <ColumnRenameInput
+                                initialName={column.name}
+                                onRename={(name) =>
+                                  updateColumn.mutate({ id: column.id, name })
+                                }
+                                onCancel={() => setEditingColumnId(null)}
                               />
                             ) : (
                               <h3
-                                onDoubleClick={() => {
-                                  setEditingColumnId(column.id);
-                                  setEditColumnName(column.name);
-                                }}
+                                onDoubleClick={() => setEditingColumnId(column.id)}
                                 className="text-sm font-semibold text-foreground cursor-default truncate"
                                 title="Double-click to rename"
                               >
@@ -431,10 +424,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
                                 <button
-                                  onClick={() => {
-                                    setAddingToColumn(column.id);
-                                    setNewTaskTitle('');
-                                  }}
+                                  onClick={() => setAddingToColumn(column.id)}
                                   className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                                 >
                                   <Plus className="h-4 w-4" />
@@ -480,9 +470,9 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                   {(taskProvided, taskSnapshot) => (
                                     <div
                                       ref={taskProvided.innerRef}
-                                      {...taskProvided.draggableProps}
-                                      {...taskProvided.dragHandleProps}
-                                      onClick={() => setSelectedTaskId(task.id)}
+                                      {...(taskProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
+                                      {...(taskProvided.dragHandleProps as HTMLAttributes<HTMLDivElement>)}
+                                      onClick={() => handleSelectTask(task.id)}
                                       className={cn(
                                         'rounded-xl border border-border/60 bg-card p-3.5 cursor-pointer transition-all',
                                         taskSnapshot.isDragging
@@ -499,69 +489,12 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
 
                               {/* Inline add task */}
                               {addingToColumn === column.id && (
-                                <div className="rounded-xl border border-primary/30 bg-card p-3 space-y-2">
-                                  <input
-                                    autoFocus
-                                    value={newTaskTitle}
-                                    onChange={(e) => setNewTaskTitle(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') handleAddTask(column.id);
-                                      if (e.key === 'Escape') {
-                                        setAddingToColumn(null);
-                                        setNewTaskAssignees([]);
-                                      }
-                                    }}
-                                    placeholder="Task title..."
-                                    className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-                                  />
-                                  {/* Assignee picker */}
-                                  <div className="flex flex-wrap gap-1">
-                                    {teamMembers?.slice(0, 6).map((m) => (
-                                      <button
-                                        key={m.id}
-                                        onClick={() =>
-                                          setNewTaskAssignees((prev) =>
-                                            prev.includes(m.id)
-                                              ? prev.filter((id) => id !== m.id)
-                                              : [...prev, m.id]
-                                          )
-                                        }
-                                        className={cn(
-                                          'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
-                                          newTaskAssignees.includes(m.id)
-                                            ? 'bg-primary/10 text-primary'
-                                            : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-                                        )}
-                                      >
-                                        <Avatar className="h-3.5 w-3.5">
-                                          <AvatarImage src={m.avatar ?? undefined} />
-                                          <AvatarFallback className="text-[6px] bg-muted">
-                                            {m.name[0]}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                        {m.name.split(' ')[0]}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <button
-                                      onClick={() => handleAddTask(column.id)}
-                                      disabled={!newTaskTitle.trim()}
-                                      className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
-                                    >
-                                      Add
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setAddingToColumn(null);
-                                        setNewTaskAssignees([]);
-                                      }}
-                                      className="text-muted-foreground hover:text-foreground"
-                                    >
-                                      <X className="h-4 w-4" />
-                                    </button>
-                                  </div>
-                                </div>
+                                <AddTaskForm
+                                  columnId={column.id}
+                                  teamMembers={teamMembers}
+                                  onAdd={handleAddTask}
+                                  onCancel={() => setAddingToColumn(null)}
+                                />
                               )}
                             </div>
                           )}
@@ -641,7 +574,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   );
 }
 
-function TaskCard({ task }: { task: TaskData }) {
+const TaskCard = memo(function TaskCard({ task }: { task: TaskData }) {
   const hasChecklist = task.checklists && task.checklists.length > 0;
   const totalItems = hasChecklist
     ? task.checklists.reduce((sum: number, cl: TaskChecklist) => sum + cl.items.length, 0)
@@ -734,6 +667,117 @@ function TaskCard({ task }: { task: TaskData }) {
       </div>
     </>
   );
+});
+
+/* ============================================
+   Add Task — inline new-task form (owns its own draft state)
+   ============================================ */
+function AddTaskForm({
+  columnId,
+  teamMembers,
+  onAdd,
+  onCancel,
+}: {
+  columnId: string;
+  teamMembers: Array<{ id: string; name: string; avatar: string | null }> | undefined;
+  onAdd: (columnId: string, title: string, assigneeIds: string[]) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [assignees, setAssignees] = useState<string[]>([]);
+
+  const submit = () => {
+    if (!title.trim()) return;
+    onAdd(columnId, title.trim(), assignees);
+  };
+
+  return (
+    <div className="rounded-xl border border-primary/30 bg-card p-3 space-y-2">
+      <input
+        autoFocus
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') submit();
+          if (e.key === 'Escape') onCancel();
+        }}
+        placeholder="Task title..."
+        className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+      />
+      {/* Assignee picker */}
+      <div className="flex flex-wrap gap-1">
+        {teamMembers?.slice(0, 6).map((m) => (
+          <button
+            key={m.id}
+            onClick={() =>
+              setAssignees((prev) =>
+                prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev, m.id]
+              )
+            }
+            className={cn(
+              'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+              assignees.includes(m.id)
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+            )}
+          >
+            <Avatar className="h-3.5 w-3.5">
+              <AvatarImage src={m.avatar ?? undefined} />
+              <AvatarFallback className="text-[6px] bg-muted">{m.name[0]}</AvatarFallback>
+            </Avatar>
+            {m.name.split(' ')[0]}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center justify-between">
+        <button
+          onClick={submit}
+          disabled={!title.trim()}
+          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+        >
+          Add
+        </button>
+        <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================
+   Column Rename — inline rename input (owns its own draft state)
+   ============================================ */
+function ColumnRenameInput({
+  initialName,
+  onRename,
+  onCancel,
+}: {
+  initialName: string;
+  onRename: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initialName);
+
+  return (
+    <input
+      autoFocus
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => {
+        if (value.trim() && value.trim() !== initialName) {
+          onRename(value.trim());
+        } else {
+          onCancel();
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && value.trim()) onRename(value.trim());
+        if (e.key === 'Escape') onCancel();
+      }}
+      className="text-sm font-semibold text-foreground bg-transparent border-b border-primary pb-0.5 focus:outline-none w-full"
+    />
+  );
 }
 
 /* ============================================
@@ -784,12 +828,11 @@ function ColumnOwners({
     .map((o) => o.user.id)
     .sort()
     .join(',');
-  const lastSyncKey = useMemo(() => ownerIdsKey, [ownerIdsKey]);
   // Sync draft when picker opens or owners change
-  useMemo(() => {
+  useEffect(() => {
     if (pickerOpen) setDraft(new Set(owners.map((o) => o.user.id)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickerOpen, lastSyncKey]);
+  }, [pickerOpen, ownerIdsKey]);
 
   const toggle = (userId: string) => {
     setDraft((prev) => {
