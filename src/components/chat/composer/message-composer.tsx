@@ -8,7 +8,7 @@ import { useSession } from 'next-auth/react';
 import { Paperclip, Send, X, Loader2, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
-import { useSocket } from '@/lib/socket';
+import { useChatTyping } from '@/lib/ably';
 import { uploadAttachment } from '@/lib/chat/upload-client';
 import { tiptapToPlainText, isEmptyDoc } from '@/lib/chat/tiptap';
 import {
@@ -61,7 +61,7 @@ export function MessageComposer({
   const currentUserName = session?.user?.name ?? 'Someone';
 
   const utils = trpc.useUtils();
-  const { emitTyping } = useSocket(currentUserId);
+  const { emitTyping } = useChatTyping(currentUserId);
 
   const [attachments, setAttachments] = useState<SendAttachmentInput[]>([]);
   const [uploadingCount, setUploadingCount] = useState(0);

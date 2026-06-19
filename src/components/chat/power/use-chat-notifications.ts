@@ -3,8 +3,8 @@
 import { useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { toast } from 'sonner';
-import { useSocket } from '@/lib/socket';
-import type { RTNotification } from '@/lib/chat/contract';
+import { useAbly } from '@/lib/ably';
+import { RT, userRoom, type RTNotification } from '@/lib/chat/contract';
 
 // ---------------------------------------------------------------------------
 // useChatNotifications
@@ -13,7 +13,8 @@ import type { RTNotification } from '@/lib/chat/contract';
 // layout). It:
 //   1. Lazily requests desktop Notification permission on first mount (non-
 //      blocking; the browser may ignore it if the user hasn't interacted yet).
-//   2. Subscribes to `notification:new` socket events.
+//   2. Subscribes to `notification:new` events on the user's personal Ably
+//      channel (`user:{id}`), which the server publishes to.
 //   3. For every incoming notification:
 //      - Shows a sonner toast (always).
 //      - If the document is hidden AND Notification.permission is 'granted',
@@ -25,7 +26,7 @@ import type { RTNotification } from '@/lib/chat/contract';
 export function useChatNotifications() {
   const { data: session } = useSession();
   const userId = (session?.user as { id?: string } | undefined)?.id;
-  const { onNotification } = useSocket(userId);
+  const { client } = useAbly(userId);
 
   // Guard so we only call requestPermission once across re-renders / StrictMode
   const permAskedRef = useRef(false);
@@ -43,13 +44,14 @@ export function useChatNotifications() {
     }
   }, []);
 
-  // Subscribe to socket notifications
+  // Subscribe to personal-channel notifications
   useEffect(() => {
-    if (!userId) return;
+    if (!client || !userId) return;
+    const channel = client.channels.get(userRoom(userId));
 
-    const unsub = onNotification((raw: unknown) => {
+    const handler = (msg: { data?: unknown }) => {
       try {
-        const n = raw as RTNotification;
+        const n = (msg.data ?? {}) as RTNotification;
 
         // Always show a sonner toast
         toast(n.title, {
@@ -74,8 +76,11 @@ export function useChatNotifications() {
       } catch {
         // Best-effort — never let a notification error bubble into the app
       }
-    });
+    };
 
-    return unsub;
-  }, [userId, onNotification]);
+    void channel.subscribe(RT.NOTIFICATION, handler);
+    return () => {
+      channel.unsubscribe(RT.NOTIFICATION, handler);
+    };
+  }, [client, userId]);
 }

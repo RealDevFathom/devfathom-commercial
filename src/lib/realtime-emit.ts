@@ -1,63 +1,50 @@
 /**
- * Backend → socket bridge.
+ * Backend → realtime bridge (Ably REST).
  *
  * After a chat mutation persists, the router calls these helpers to broadcast
- * the change to connected clients via the standalone Socket.IO server's
- * authenticated `/emit` endpoint (shared-secret).
+ * the change to connected clients by publishing to an Ably channel. The Next
+ * app holds the Ably API key (full capability), so it — and only it — publishes
+ * to the subscribe-only `channel:{id}` / `user:{id}` channels. Clients can never
+ * forge these events.
  *
  * Fire-and-forget: never throws into the caller — the user's write already
  * succeeded, so a failed broadcast must not surface an error (mirrors notify()).
- * If the socket bridge isn't configured (no secret), every call is a silent
- * no-op, so local web-only dev still works.
+ * If Ably isn't configured (no API key), every call is a silent no-op, so local
+ * web-only dev still works.
  */
+import * as Ably from 'ably';
 import { channelRoom, userRoom } from '@/lib/chat/contract';
 
-const SOCKET_URL =
-  process.env.SOCKET_INTERNAL_URL || process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+const ABLY_API_KEY = process.env.ABLY_API_KEY;
 
-const SECRET = process.env.SOCKET_SHARED_SECRET || process.env.AUTH_SECRET || '';
-
-interface EmitBody {
-  room: string;
-  event: string;
-  payload: unknown;
+let rest: Ably.Rest | null = null;
+function getRest(): Ably.Rest | null {
+  if (!ABLY_API_KEY) return null;
+  if (!rest) rest = new Ably.Rest(ABLY_API_KEY);
+  return rest;
 }
 
-/** Broadcast an event to a raw socket room. */
+/** Broadcast an event to a raw channel name. */
 export function emitToRoom(room: string, event: string, payload: unknown): void {
-  void post({ room, event, payload }).catch((err) =>
-    console.error('[realtime-emit] failed', event, room, err)
-  );
+  const client = getRest();
+  if (!client) return; // bridge not configured → no-op
+  void client.channels
+    .get(room)
+    .publish(event, payload)
+    .catch((err) => console.error('[realtime-emit] failed', event, room, err));
 }
 
-/** Broadcast to everyone in a channel (`channel:{id}` room). */
+/** Broadcast to everyone subscribed to a channel (`channel:{id}`). */
 export function emitToChannel(channelId: string, event: string, payload: unknown): void {
   emitToRoom(channelRoom(channelId), event, payload);
 }
 
-/** Broadcast to one user across all their devices (`user:{id}` room). */
+/** Broadcast to one user across all their devices (`user:{id}`). */
 export function emitToUser(userId: string, event: string, payload: unknown): void {
   emitToRoom(userRoom(userId), event, payload);
 }
 
-/** Broadcast to several users' personal rooms (deduped). */
+/** Broadcast to several users' personal channels (deduped). */
 export function emitToUsers(userIds: string[], event: string, payload: unknown): void {
   for (const id of new Set(userIds.filter(Boolean))) emitToUser(id, event, payload);
-}
-
-async function post(body: EmitBody): Promise<void> {
-  if (!SECRET) return; // bridge not configured → no-op
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);
-  try {
-    const res = await fetch(`${SOCKET_URL}/emit`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-emit-secret': SECRET },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`emit responded ${res.status}`);
-  } finally {
-    clearTimeout(timeout);
-  }
 }

@@ -189,6 +189,11 @@ export interface RTNotification {
 
 export const channelRoom = (channelId: string) => `channel:${channelId}`;
 export const userRoom = (userId: string) => `user:${userId}`;
+// Clients publish typing pings here (separate from the subscribe-only message
+// channel, so a client can never forge a message event).
+export const typingRoom = (channelId: string) => `typing:${channelId}`;
+// Single global channel backing the online-presence roster (Ably presence).
+export const PRESENCE_CHANNEL = 'presence:global';
 
 // ---------------------------------------------------------------------------
 // UI constants
