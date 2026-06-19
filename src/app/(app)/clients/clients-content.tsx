@@ -245,7 +245,7 @@ function CreateClientForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Company Name *</label>
             <input
@@ -289,7 +289,7 @@ function CreateClientForm({ onClose }: { onClose: () => void }) {
           <p className="text-xs font-medium text-muted-foreground mb-2">
             Primary Contact (optional)
           </p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <input
               value={contactName}
               onChange={(e) => setContactName(e.target.value)}

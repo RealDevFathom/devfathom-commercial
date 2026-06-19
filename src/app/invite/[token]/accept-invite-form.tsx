@@ -130,7 +130,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
       </div>
 
       {/* Read-only summary */}
-      <dl className="mb-6 grid grid-cols-2 gap-x-4 gap-y-4 rounded-xl border border-border bg-background p-4">
+      <dl className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4 rounded-xl border border-border bg-background p-4">
         <div>
           <dt className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Full Name

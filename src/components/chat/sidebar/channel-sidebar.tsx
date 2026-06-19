@@ -9,6 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { trpc } from '@/lib/trpc';
+import { cn } from '@/lib/utils';
 import { ChannelListItem } from './channel-list-item';
 import { CreateChannelDialog } from './create-channel-dialog';
 import { BrowseChannelsDialog } from './browse-channels-dialog';
@@ -18,10 +19,13 @@ export function ChannelSidebar({
   selectedChannelId,
   onSelect,
   onOpenSearch,
+  className,
 }: {
   selectedChannelId: string | null;
   onSelect: (channelId: string) => void;
   onOpenSearch?: () => void;
+  /** Visibility/layout overrides from the parent (mobile master-detail toggle). */
+  className?: string;
 }) {
   const { data: channels, isLoading } = trpc.chat.getChannels.useQuery();
   const [filter, setFilter] = useState('');
@@ -42,7 +46,12 @@ export function ChannelSidebar({
 
   return (
     <TooltipProvider delay={600}>
-      <div className="flex h-full w-[280px] shrink-0 flex-col border-r border-border/60 bg-card/40">
+      <div
+        className={cn(
+          'flex h-full w-full shrink-0 flex-col border-r border-border/60 bg-card/40 md:w-[280px]',
+          className
+        )}
+      >
         {/* Filter toolbar */}
         <div className="flex items-center gap-1 border-b border-border/60 px-3 py-2.5">
           <div className="relative flex-1">

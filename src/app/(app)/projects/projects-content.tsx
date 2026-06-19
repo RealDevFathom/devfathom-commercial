@@ -340,7 +340,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* Type + Status */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Type</label>
                 <div className="flex rounded-xl border border-border overflow-hidden">
@@ -411,7 +411,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* Dates */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">
                   Start Date
@@ -486,7 +486,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
                   ({selectedMembers.length} selected)
                 </span>
               </label>
-              <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto rounded-xl border border-border bg-card p-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto rounded-xl border border-border bg-card p-2">
                 {team?.map((member) => (
                   <button
                     key={member.id}

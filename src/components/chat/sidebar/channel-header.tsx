@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, BellOff, Hash, Lock, Pin, Search, Users } from 'lucide-react';
+import { ArrowLeft, Bell, BellOff, Hash, Lock, Pin, Search, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
@@ -16,12 +16,15 @@ export function ChannelHeader({
   onOpenPins,
   onOpenSearch,
   onToggleMute,
+  onBack,
 }: {
   channel: ChatChannel;
   onOpenMembers: () => void;
   onOpenPins: () => void;
   onOpenSearch: () => void;
   onToggleMute: () => void;
+  /** Mobile only: return to the channel list (master-detail back nav). */
+  onBack?: () => void;
 }) {
   const utils = trpc.useUtils();
   const isDM = channel.type === 'DM';
@@ -42,7 +45,20 @@ export function ChannelHeader({
 
   return (
     <TooltipProvider delay={600}>
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/60 px-4">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border/60 px-3 sm:gap-3 sm:px-4">
+        {/* Back to channel list — mobile master-detail nav only */}
+        {onBack && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onBack}
+            aria-label="Back to channels"
+            className="-ml-1 shrink-0 text-muted-foreground md:hidden"
+          >
+            <ArrowLeft className="size-4" />
+          </Button>
+        )}
+
         {/* Identity — name + optional topic */}
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {isDM && channel.dmPeer ? (

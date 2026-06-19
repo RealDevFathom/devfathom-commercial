@@ -223,7 +223,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
         <Card className="border-primary/20">
           <CardContent className="p-5 space-y-4">
             <h3 className="text-sm font-semibold text-foreground">Edit Client</h3>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Name</label>
                 <input
@@ -321,7 +321,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                 {client.notes && (
                   <p className="text-sm text-muted-foreground leading-relaxed">{client.notes}</p>
                 )}
-                <div className="grid grid-cols-2 gap-4 pt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                   {client.timezone && (
                     <div>
                       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">

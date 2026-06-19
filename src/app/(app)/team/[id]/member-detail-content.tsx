@@ -678,7 +678,7 @@ function EditMemberForm({
     <Card className="border-primary/20">
       <CardContent className="p-5 space-y-4">
         <h3 className="text-sm font-semibold text-foreground">Edit Member</h3>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Name</label>
             <input

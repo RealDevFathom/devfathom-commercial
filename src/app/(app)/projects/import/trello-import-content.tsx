@@ -221,7 +221,7 @@ export function TrelloImportContent() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                 <StatBadge icon={Columns3} label="Lists" value={counts?.openLists ?? 0} />
                 <StatBadge icon={StickyNote} label="Cards" value={counts?.openCards ?? 0} />
                 <StatBadge icon={Tag} label="Labels" value={counts?.labels ?? 0} />
@@ -381,7 +381,7 @@ function MemberMappingRow({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-44 rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+        className="w-full sm:w-44 rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
       >
         <option value="">Unassigned</option>
         {hubMembers.map((m) => (

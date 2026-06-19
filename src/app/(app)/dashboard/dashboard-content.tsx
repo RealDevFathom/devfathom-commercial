@@ -166,7 +166,7 @@ function NextMeetingBanner() {
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-2">
             <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
             <input

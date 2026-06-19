@@ -58,6 +58,11 @@ export function ChatContent() {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   useQuickSwitcherHotkey(useCallback(() => setSwitcherOpen(true), []));
 
+  // Mobile master-detail: render the channel list OR the conversation, never
+  // both (they sit side-by-side from md up regardless of this). Loads on the
+  // list; picking a channel slides to the conversation, with a back button.
+  const [mobileView, setMobileView] = useState<'list' | 'conversation'>('list');
+
   const markRead = trpc.chat.markRead.useMutation({
     onSuccess: (_data, vars) => {
       // Reset locally too, so unread clears even if the socket echo is missed.
@@ -81,9 +86,13 @@ export function ChatContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveChannelId, activeUnread]);
 
-  const selectChannel = useCallback((id: string) => setSelectedChannelId(id), []);
+  const selectChannel = useCallback((id: string) => {
+    setSelectedChannelId(id);
+    setMobileView('conversation');
+  }, []);
   const jumpTo = useCallback((m: { channelId: string }) => {
     setSelectedChannelId(m.channelId);
+    setMobileView('conversation');
     setSearchOpen(false);
     setSavedOpen(false);
   }, []);
@@ -92,23 +101,30 @@ export function ChatContent() {
     'flex items-center gap-1.5 rounded-lg border border-border/60 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground';
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] -m-6 flex-col animate-fade-in">
+    <div className="flex h-[calc(100dvh-4rem)] -m-4 flex-col animate-fade-in sm:h-[calc(100vh-8rem)] sm:-m-6">
       {/* Global bar — jump-to + saved live here (workspace-wide, not per channel). */}
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/60 bg-card px-4">
+      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-card px-3 sm:px-4">
         <button
           type="button"
           onClick={() => setSwitcherOpen(true)}
-          className={cn(topBtn, 'min-w-56 justify-start text-muted-foreground/80')}
+          className={cn(
+            topBtn,
+            'min-w-0 flex-1 justify-start text-muted-foreground/80 sm:min-w-56 sm:flex-none'
+          )}
         >
-          <Search className="h-3.5 w-3.5" />
-          Jump to a channel or person…
-          <kbd className="ml-auto rounded border border-border/60 bg-background px-1 text-[10px]">
+          <Search className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">Jump to a channel or person…</span>
+          <kbd className="ml-auto hidden rounded border border-border/60 bg-background px-1 text-[10px] sm:inline">
             ⌘K
           </kbd>
         </button>
-        <button type="button" onClick={() => setSavedOpen(true)} className={topBtn}>
+        <button
+          type="button"
+          onClick={() => setSavedOpen(true)}
+          className={cn(topBtn, 'shrink-0')}
+        >
           <Bookmark className="h-3.5 w-3.5" />
-          Saved
+          <span className="hidden sm:inline">Saved</span>
         </button>
       </div>
 
@@ -117,9 +133,16 @@ export function ChatContent() {
           selectedChannelId={effectiveChannelId}
           onSelect={selectChannel}
           onOpenSearch={() => setSwitcherOpen(true)}
+          className={cn(mobileView === 'list' ? 'flex' : 'hidden', 'md:flex')}
         />
 
-        <main className="flex min-w-0 flex-1 flex-col bg-background">
+        <main
+          className={cn(
+            'min-w-0 flex-1 flex-col bg-background',
+            mobileView === 'conversation' ? 'flex' : 'hidden',
+            'md:flex'
+          )}
+        >
           {selectedChannel ? (
             <>
               <ChannelHeader
@@ -128,6 +151,7 @@ export function ChatContent() {
                 onOpenPins={() => setPinsOpen(true)}
                 onOpenSearch={() => setSearchOpen(true)}
                 onToggleMute={() => undefined}
+                onBack={() => setMobileView('list')}
               />
               {/* key per channel: MessageList snapshots lastReadAt at mount for a
                   stable "New messages" divider (markRead moves it afterwards). */}
@@ -187,6 +211,7 @@ export function ChatContent() {
         onOpenChange={setSwitcherOpen}
         onSelectChannel={(id) => {
           setSelectedChannelId(id);
+          setMobileView('conversation');
           setSwitcherOpen(false);
         }}
       />

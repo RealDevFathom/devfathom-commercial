@@ -208,7 +208,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
             <input
@@ -240,7 +240,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
             <input
@@ -489,7 +489,7 @@ const MeetingCard = memo(function MeetingCard({
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-medium text-foreground mb-1">Title</label>
               <input
@@ -508,7 +508,7 @@ const MeetingCard = memo(function MeetingCard({
               />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-[10px] font-medium text-foreground mb-1">Date</label>
               <input

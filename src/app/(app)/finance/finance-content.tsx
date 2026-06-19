@@ -311,7 +311,7 @@ const TransactionRow = memo(function TransactionRow({
   if (isEditing) {
     return (
       <div className="px-6 py-3 border-b border-primary/10 bg-primary/[0.02]">
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="col-span-2">
             <input
               value={eDesc}
@@ -507,7 +507,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
           ))}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Amount *</label>
             <input
@@ -540,7 +540,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {type === 'EXPENSE' && (
             <div>
               <label className="block text-xs font-medium text-foreground mb-1">Category</label>
@@ -679,7 +679,7 @@ function RecurringTab() {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Name *</label>
                 <input
@@ -699,7 +699,7 @@ function RecurringTab() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Amount *</label>
                 <input

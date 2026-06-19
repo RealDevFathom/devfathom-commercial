@@ -128,7 +128,7 @@ export function SettingsContent() {
           <CardTitle className="text-[15px] font-semibold text-foreground">Account</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <div>
               <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                 Email
@@ -271,7 +271,7 @@ function ProfileSection() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Name</label>
                 <input
@@ -415,7 +415,7 @@ function PasswordSection() {
             Password changed successfully
           </p>
         )}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">
               Current Password
@@ -644,7 +644,7 @@ function ApiTokensSection() {
         {/* Create form */}
         {showCreate ? (
           <div className="rounded-xl border border-primary/20 bg-card p-4 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Token Name</label>
                 <input

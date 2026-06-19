@@ -156,7 +156,7 @@ export function AuditContent() {
       </div>
 
       {/* Stat strip */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:grid-cols-4">
         <StatTile icon={Activity} label="Total events" value={stats?.total} tone="blue" />
         <StatTile icon={Clock} label="Last 24h" value={stats?.last24h} tone="violet" />
         <StatTile

@@ -465,7 +465,7 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Type</label>
                 <select

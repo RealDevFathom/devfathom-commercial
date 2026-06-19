@@ -112,7 +112,7 @@ export function TeamStatsContent() {
       </div>
 
       {/* Top KPI strip — team-level totals */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           icon={CheckCircle2}
           label="Completed this week"
@@ -807,7 +807,7 @@ function StatsSkeleton() {
         <Skeleton className="h-8 w-48 mb-2" />
         <Skeleton className="h-4 w-96" />
       </div>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <Card key={i} className="border-border/60">
             <CardContent className="p-5">

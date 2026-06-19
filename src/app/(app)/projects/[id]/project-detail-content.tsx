@@ -181,7 +181,7 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
         <Card className="border-primary/20">
           <CardContent className="p-5 space-y-4">
             <h3 className="text-sm font-semibold text-foreground">Edit Project</h3>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Name</label>
                 <input
@@ -278,7 +278,7 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                   </p>
                 )}
 
-                <div className="grid grid-cols-2 gap-4 pt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                   <div>
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
                       Type
@@ -682,7 +682,7 @@ function MilestonesTab({
       {showAdd && (
         <Card className="border-primary/20">
           <CardContent className="p-5 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Name *</label>
                 <input
@@ -768,7 +768,7 @@ function MilestonesTab({
                   key={ms.id}
                   className="rounded-xl border border-primary/20 bg-card p-4 space-y-3"
                 >
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[10px] font-medium text-foreground mb-1">
                         Name
@@ -1190,7 +1190,7 @@ function ProjectDetailSkeleton() {
           <CardContent className="p-6">
             <Skeleton className="h-4 w-32 mb-4" />
             <Skeleton className="h-20 w-full mb-4" />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Skeleton key={i} className="h-12 w-full" />
               ))}

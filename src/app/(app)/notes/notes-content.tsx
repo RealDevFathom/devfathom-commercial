@@ -136,7 +136,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
           note stretches the grid and pushes the Edit button past the viewport. */}
       <div
         className={cn(
-          'grid gap-5',
+          'grid gap-5 grid-cols-1',
           embedded ? 'lg:grid-cols-[280px_minmax(0,1fr)]' : 'lg:grid-cols-[320px_minmax(0,1fr)]'
         )}
       >

@@ -376,7 +376,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                         ref={colProvided.innerRef}
                         {...(colProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
                         className={cn(
-                          'flex flex-col w-72 shrink-0 max-h-full rounded-xl transition-shadow',
+                          'flex flex-col w-full sm:w-72 sm:shrink-0 max-h-full rounded-xl transition-shadow',
                           colSnapshot.isDragging &&
                             'shadow-2xl shadow-black/20 ring-1 ring-primary/20'
                         )}

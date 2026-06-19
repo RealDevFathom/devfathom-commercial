@@ -431,7 +431,7 @@ export function TaskDetailSheet({
             />
 
             {/* Editable fields grid */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* Priority picker */}
               <div className="relative">
                 <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
