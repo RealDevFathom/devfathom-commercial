@@ -45,8 +45,10 @@ const app = express();
 const server = createServer(app);
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
-// Dedicated port var so it never collides with Next.js's own PORT.
-const PORT = process.env.SOCKET_PORT || 3001;
+// Dedicated port var so it never collides with Next.js's own PORT in local dev.
+// In production, managed hosts (Railway/Render/Fly) inject PORT and expect the
+// process to bind to it, so fall back to that before the local default.
+const PORT = process.env.SOCKET_PORT || process.env.PORT || 3001;
 
 // Shared secret used to verify realtime tickets. MUST match the one the Next
 // route signs with — resolved in the SAME order so both sides agree on the key.
