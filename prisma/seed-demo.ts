@@ -446,7 +446,7 @@ async function main() {
             [txt('Pair with your onboarding buddy on a real PR.')],
           ),
           h(2, txt('Environments')),
-          bullet([txt('Local: Bun + Postgres')], [txt('Staging: auto-deploy from main')], [txt('Prod: hub.devfathom.com')]),
+          bullet([txt('Local: Bun + Postgres')], [txt('Staging: auto-deploy from main')], [txt('Prod: dev-fathom-hub.vercel.app')]),
         ),
       },
       {

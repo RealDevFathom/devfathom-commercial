@@ -45,7 +45,7 @@ export function priorityTone(priority?: string): Tone {
 // Build a plain-text body. Keeps deliverability healthy and is the fallback for
 // text-only clients.
 function text(lines: Array<string | false | undefined>): string {
-  return lines.filter(Boolean).join('\n') + '\n\n—\nDevFathom · hub.devfathom.com';
+  return lines.filter(Boolean).join('\n') + '\n\n—\nDevFathom · dev-fathom-hub.vercel.app';
 }
 
 // ---------------------------------------------------------------------------

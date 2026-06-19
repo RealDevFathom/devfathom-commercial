@@ -55,7 +55,7 @@ bun dev              # start web + socket server together
 ```
 
 Open [http://localhost:3000](http://localhost:3000). In production this runs at
-**hub.devfathom.com**.
+**dev-fathom-hub.vercel.app**.
 
 ### Useful scripts
 

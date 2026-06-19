@@ -31,7 +31,7 @@ const description =
   'The DevFathom company hub — projects, finance, clients, people, and real-time collaboration in one calm, unified workspace for the team that designs, builds, and advises.';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://hub.devfathom.com'),
+  metadataBase: new URL('https://dev-fathom-hub.vercel.app'),
   applicationName: 'DevFathom Hub',
   title: {
     default: 'DevFathom Hub',
@@ -61,7 +61,7 @@ export const metadata: Metadata = {
     title: 'DevFathom Hub',
     description,
     siteName: 'DevFathom',
-    url: 'https://hub.devfathom.com',
+    url: 'https://dev-fathom-hub.vercel.app',
   },
   twitter: {
     card: 'summary_large_image',

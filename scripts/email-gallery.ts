@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { sendEmail, templates } from '../src/lib/email';
 import type { EmailContent } from '../src/lib/email';
 
-const APP = 'https://hub.devfathom.com';
+const APP = 'https://dev-fathom-hub.vercel.app';
 
 const GALLERY: Array<{ name: string; label: string; content: EmailContent }> = [
   {

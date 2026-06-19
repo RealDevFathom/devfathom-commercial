@@ -33,7 +33,7 @@ const nextConfig: NextConfig = {
     // proxy (SSRF: `/_next/image?url=<any-host>`). The app renders avatars with
     // plain <img>, not next/image, so restricting to the production origin breaks
     // nothing. Add hosts here only as concrete needs arise.
-    remotePatterns: [{ protocol: 'https', hostname: 'hub.devfathom.com' }],
+    remotePatterns: [{ protocol: 'https', hostname: 'dev-fathom-hub.vercel.app' }],
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {

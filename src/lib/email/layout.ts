@@ -222,7 +222,7 @@ export function renderDocument(doc: EmailDocument): string {
           </tr>
           ${footer(doc.footnote)}
         </table>
-        <div style="font-family:${fonts.mono};font-size:11px;letter-spacing:0.08em;color:${palette.slate500};padding:20px 0 0;">DEVFATHOM · hub.devfathom.com</div>
+        <div style="font-family:${fonts.mono};font-size:11px;letter-spacing:0.08em;color:${palette.slate500};padding:20px 0 0;">DEVFATHOM · dev-fathom-hub.vercel.app</div>
       </td>
     </tr>
   </table>

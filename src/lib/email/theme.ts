@@ -58,7 +58,7 @@ export function appUrl(): string {
     process.env.NEXT_PUBLIC_APP_URL ??
     process.env.NEXTAUTH_URL ??
     process.env.AUTH_URL ??
-    'https://hub.devfathom.com'
+    'https://dev-fathom-hub.vercel.app'
   ).replace(/\/$/, '');
 }
 
