@@ -2,6 +2,7 @@
 
 import { useState, memo } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
   ArrowLeft,
@@ -94,6 +95,7 @@ type PersonalStats = RouterOutput['teamStats']['getForUser'];
 type PerformanceNotes = RouterOutput['team']['listPerformanceNotes'];
 
 export function MemberDetailContent({ memberId }: { memberId: string }) {
+  const router = useRouter();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
   const { data: member, isLoading } = trpc.team.getById.useQuery({ id: memberId });
@@ -115,6 +117,10 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
   const [showResetPw, setShowResetPw] = useState(false);
   const [pwSuccess, setPwSuccess] = useState(false);
   const [showLayOff, setShowLayOff] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  // Set on a successful lay-off so we can confirm it happened (and whether the
+  // termination email actually went out) instead of the action feeling silent.
+  const [layOffResult, setLayOffResult] = useState<{ emailSent: boolean } | null>(null);
 
   // Show the member's name in the topbar breadcrumb instead of the raw id.
   useBreadcrumbLabel(memberId, member?.name);
@@ -176,12 +182,22 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
             >
               <Lock className="h-3.5 w-3.5" /> Reset Password
             </button>
-            <button
-              onClick={() => setShowLayOff(true)}
-              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-colors"
-            >
-              <UserX className="h-3.5 w-3.5" /> Lay off
-            </button>
+            {member.status === 'INACTIVE' ? (
+              // Already laid off → the action becomes permanent deletion.
+              <button
+                onClick={() => setShowDelete(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 py-2 text-xs font-medium text-red-500 hover:bg-red-500/15 transition-colors"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Delete permanently
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowLayOff(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-colors"
+              >
+                <UserX className="h-3.5 w-3.5" /> Lay off
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -204,6 +220,15 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
           Password has been reset successfully.
         </div>
       )}
+      {layOffResult && (
+        <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 text-sm text-amber-600 dark:text-amber-400">
+          {member.name} has been laid off — their account access is revoked.{' '}
+          {layOffResult.emailSent
+            ? 'A termination notice was emailed to them.'
+            : 'The termination email could not be sent (check email configuration).'}{' '}
+          You can now permanently delete their record.
+        </div>
+      )}
 
       {/* Edit form */}
       {isEditing && isAdmin && (
@@ -217,6 +242,21 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
           memberName={member.name}
           open={showLayOff}
           onOpenChange={setShowLayOff}
+          onLaidOff={(res) => {
+            setLayOffResult(res);
+            setTimeout(() => setLayOffResult(null), 8000);
+          }}
+        />
+      )}
+
+      {/* Permanent deletion modal (only meaningful once laid off) */}
+      {isAdmin && (
+        <DeleteMemberDialog
+          memberId={memberId}
+          memberName={member.name}
+          open={showDelete}
+          onOpenChange={setShowDelete}
+          onDeleted={() => router.push('/team')}
         />
       )}
 
@@ -497,21 +537,25 @@ function LayOffDialog({
   memberName,
   open,
   onOpenChange,
+  onLaidOff,
 }: {
   memberId: string;
   memberName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onLaidOff?: (result: { emailSent: boolean }) => void;
 }) {
   const utils = trpc.useUtils();
   const [reason, setReason] = useState('');
 
   const layOff = trpc.team.layOffMember.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       utils.team.getById.invalidate({ id: memberId });
       utils.team.getAll.invalidate();
+      utils.team.getRoster.invalidate();
       setReason('');
       onOpenChange(false);
+      onLaidOff?.({ emailSent: data?.emailSent ?? false });
     },
   });
 
@@ -569,6 +613,95 @@ function LayOffDialog({
           >
             {layOff.isPending && <Loader2 className="animate-spin" />}
             {layOff.isPending ? 'Laying off...' : 'Lay off'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Permanently delete an already-laid-off member. Destructive and irreversible:
+// the server anonymizes the record (scrubs PII, removes them from all shared
+// surfaces, revokes access). Requires typing the member's name to confirm.
+function DeleteMemberDialog({
+  memberId,
+  memberName,
+  open,
+  onOpenChange,
+  onDeleted,
+}: {
+  memberId: string;
+  memberName: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDeleted: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [confirm, setConfirm] = useState('');
+
+  const del = trpc.team.deleteMember.useMutation({
+    onSuccess: () => {
+      utils.team.getAll.invalidate();
+      utils.team.getRoster.invalidate();
+      setConfirm('');
+      onOpenChange(false);
+      onDeleted();
+    },
+  });
+
+  const canSubmit = confirm.trim() === memberName && !del.isPending;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (del.isPending) return;
+        if (!v) {
+          setConfirm('');
+          del.reset();
+        }
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-1.5 text-red-500">
+            <Trash2 className="h-4 w-4" /> Delete {memberName}
+          </DialogTitle>
+          <DialogDescription>
+            This permanently removes {memberName}&apos;s account and personal data and cannot be
+            undone. Work they authored (tasks, messages, files) is kept but attributed to
+            &ldquo;Former Employee&rdquo;. Type their full name to confirm.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-foreground">
+            Type &ldquo;{memberName}&rdquo; to confirm
+          </label>
+          <input
+            autoFocus
+            type="text"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            placeholder={memberName}
+            disabled={del.isPending}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-red-500/50 disabled:opacity-50"
+          />
+          {del.error && <p className="mt-2 text-xs text-destructive">{del.error.message}</p>}
+        </div>
+
+        <DialogFooter showCloseButton>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (!canSubmit) return;
+              del.mutate({ id: memberId });
+            }}
+            disabled={!canSubmit}
+          >
+            {del.isPending && <Loader2 className="animate-spin" />}
+            {del.isPending ? 'Deleting...' : 'Delete permanently'}
           </Button>
         </DialogFooter>
       </DialogContent>

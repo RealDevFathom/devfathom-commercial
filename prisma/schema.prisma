@@ -185,6 +185,11 @@ model User {
   startDate     DateTime   @default(now())
   status        UserStatus @default(ACTIVE)
   lastActiveAt  DateTime?
+  // Set when an INACTIVE (laid-off) member is permanently deleted. The row is
+  // kept but anonymized (PII scrubbed) so authored history — tasks, messages,
+  // audit trail — stays intact and FK-safe. A non-null value means "gone":
+  // hidden from rosters/search and blocked from sign-in.
+  deletedAt     DateTime?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 

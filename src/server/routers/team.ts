@@ -19,6 +19,8 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     return ctx.db.user.findMany({
+      // Permanently-deleted (anonymized) members are tombstones — never list them.
+      where: { deletedAt: null },
       select: {
         id: true,
         name: true,
@@ -42,6 +44,7 @@ export const teamRouter = router({
   // Lightweight roster — just enough to render avatars and names.
   getRoster: protectedProcedure.query(async ({ ctx }) => {
     return ctx.db.user.findMany({
+      where: { deletedAt: null },
       select: {
         id: true,
         name: true,
@@ -433,9 +436,9 @@ export const teamRouter = router({
       }
       const before = await ctx.db.user.findUnique({
         where: { id: input.id },
-        select: { status: true, name: true, email: true, role: true },
+        select: { status: true, name: true, email: true, role: true, deletedAt: true },
       });
-      if (!before) {
+      if (!before || before.deletedAt) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
       }
       // ABAC: admins may lay off anyone; HR may lay off non-admins only. The
@@ -475,7 +478,10 @@ export const teamRouter = router({
         metadata: { laidOff: true, reason },
       });
 
-      // Best-effort notice — never fail the mutation if email delivery hiccups.
+      // Best-effort notice — never fail the mutation if email delivery hiccups,
+      // but report whether it sent so the admin gets honest feedback (e.g. if
+      // BREVO_* env vars are unset, the notice silently no-ops otherwise).
+      let emailSent = false;
       try {
         const mail = templates.accountDeactivated({
           name: updated.name,
@@ -488,11 +494,94 @@ export const teamRouter = router({
           html: mail.html,
           text: mail.text,
         });
+        emailSent = true;
       } catch (err) {
         console.error('[layOffMember] notice email failed for', before.email, err);
       }
 
-      return updated;
+      return { ...updated, emailSent };
+    }),
+
+  // Permanently delete an already-laid-off member. We do NOT drop the row —
+  // many tables (tasks they created, messages they sent, time/leave/perf
+  // records, the audit trail) reference a User with ON DELETE RESTRICT, and an
+  // agency must keep that history. Instead we anonymize: scrub all PII, pull
+  // the member out of every collaborative surface (projects, channels, task
+  // assignments, etc.), revoke API tokens, and stamp deletedAt. The tombstone
+  // is then hidden from rosters/search and blocked from sign-in. Admin-only and
+  // irreversible — gated behind a prior lay-off (status must be INACTIVE).
+  deleteMember: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.id === ctx.session.user.id) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot delete yourself' });
+      }
+      const before = await ctx.db.user.findUnique({
+        where: { id: input.id },
+        select: { status: true, name: true, email: true, role: true, deletedAt: true },
+      });
+      if (!before || before.deletedAt) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
+      }
+      // Two-step gate: a member must be laid off (deactivated) before they can be
+      // permanently removed. This keeps the destructive action deliberate.
+      if (before.status !== 'INACTIVE') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Lay off this member before deleting them permanently.',
+        });
+      }
+
+      const tombstoneEmail = `deleted+${input.id}@removed.invalid`;
+
+      await ctx.db.$transaction([
+        // Strip the member out of every collaborative / membership surface so
+        // they vanish from project rosters, channels, boards, mentions, etc.
+        ctx.db.projectMember.deleteMany({ where: { userId: input.id } }),
+        ctx.db.taskAssignee.deleteMany({ where: { userId: input.id } }),
+        ctx.db.channelMember.deleteMany({ where: { userId: input.id } }),
+        ctx.db.columnDefaultAssignee.deleteMany({ where: { userId: input.id } }),
+        ctx.db.messageReaction.deleteMany({ where: { userId: input.id } }),
+        ctx.db.messageMention.deleteMany({ where: { userId: input.id } }),
+        ctx.db.savedMessage.deleteMany({ where: { userId: input.id } }),
+        ctx.db.pinnedMessage.deleteMany({ where: { pinnedById: input.id } }),
+        ctx.db.meetingAttendee.deleteMany({ where: { userId: input.id } }),
+        ctx.db.meetingAttendanceLog.deleteMany({ where: { userId: input.id } }),
+        ctx.db.noteShare.deleteMany({ where: { userId: input.id } }),
+        // Personal / actionable rows that only matter while the account is live.
+        ctx.db.apiToken.deleteMany({ where: { userId: input.id } }),
+        ctx.db.notification.deleteMany({ where: { userId: input.id } }),
+        ctx.db.activity.deleteMany({ where: { userId: input.id } }),
+        // Anonymize the surviving row. Authored content (tasks, messages, files,
+        // audit entries) now attributes to "Former Employee". email must stay
+        // unique + non-null, so a per-id tombstone address is used.
+        ctx.db.user.update({
+          where: { id: input.id },
+          data: {
+            name: 'Former Employee',
+            title: 'Former Employee',
+            email: tombstoneEmail,
+            password: null,
+            avatar: null,
+            phone: null,
+            bio: null,
+            skills: [],
+            lastActiveAt: null,
+            deletedAt: new Date(),
+          },
+        }),
+      ]);
+
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: input.id,
+        targetLabel: before.name,
+        description: `Permanently deleted (anonymized) ${before.name}`,
+        changes: { deletedAt: { before: null, after: 'now' } },
+        metadata: { permanentlyDeleted: true, previousEmail: before.email },
+      });
+
+      return { success: true };
     }),
 
   // Performance notes — admin-authored feedback on a team member.
