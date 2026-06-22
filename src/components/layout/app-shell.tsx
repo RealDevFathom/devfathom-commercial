@@ -42,9 +42,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </>
       )}
 
-      <div className="flex flex-1 flex-col lg:pl-60 transition-all duration-300">
+      <div className="flex min-w-0 flex-1 flex-col lg:pl-60 transition-all duration-300">
         <Topbar onMenuClick={() => setMobileMenuOpen(true)} />
-        <main className="flex-1 overflow-y-auto">
+        <main className="min-w-0 flex-1 overflow-y-auto">
           <PageTransition className="mx-auto max-w-[1400px] p-4 sm:p-6">{children}</PageTransition>
         </main>
       </div>
