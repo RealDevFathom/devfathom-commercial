@@ -21,6 +21,7 @@ import {
   Check,
   Save,
   Pencil,
+  AtSign,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -42,7 +43,16 @@ const NoteEditor = dynamic(
 );
 
 type Visibility = 'PRIVATE' | 'SHARED' | 'TEAM';
-type Scope = 'all' | 'mine' | 'shared';
+type Scope = 'all' | 'mine' | 'shared' | 'mentions';
+
+// IMP-NOTE-02: 'mentions' surfaces notes that @mention the current user.
+const SCOPES: readonly Scope[] = ['all', 'mine', 'shared', 'mentions'];
+const SCOPE_LABELS: Record<Scope, string> = {
+  all: 'All',
+  mine: 'My notes',
+  shared: 'Shared',
+  mentions: 'Mentions',
+};
 
 const visibilityConfig: Record<Visibility, { icon: typeof Lock; label: string; bg: string }> = {
   PRIVATE: { icon: Lock, label: 'Private', bg: 'bg-muted text-muted-foreground' },
@@ -76,21 +86,33 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
     return () => clearTimeout(t);
   }, [search]);
 
-  const list = trpc.notes.list.useQuery(
+  const listResult = trpc.notes.list.useQuery(
     {
-      scope,
+      // The list procedure only knows mine/shared/all; the 'mentions' scope is
+      // served by a separate query below, so map it to a valid (disabled) value.
+      scope: scope === 'mentions' ? 'all' : scope,
       projectId,
       clientId,
       search: debouncedSearch || undefined,
     },
     // Keep showing the previous list while a new query resolves so the sidebar
     // doesn't flash skeletons on every keystroke / filter change.
-    { placeholderData: (prev) => prev }
+    { enabled: scope !== 'mentions', placeholderData: (prev) => prev }
   );
+
+  // IMP-NOTE-02: "notes that mention me" — only fetched when its chip is active.
+  const mentionsResult = trpc.notes.notesMentioningMe.useQuery(undefined, {
+    enabled: scope === 'mentions',
+    placeholderData: (prev) => prev,
+  });
+
+  const activeIsLoading = scope === 'mentions' ? mentionsResult.isLoading : listResult.isLoading;
+  const activeData = scope === 'mentions' ? mentionsResult.data : listResult.data;
 
   const createNote = trpc.notes.create.useMutation({
     onSuccess: (note) => {
       utils.notes.list.invalidate();
+      utils.notes.notesMentioningMe.invalidate();
       router.push(embedded ? `/notes/${note.id}` : `/notes/${note.id}`);
     },
   });
@@ -144,7 +166,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
         <div className="space-y-3">
           {/* Filter chips */}
           <div className="flex items-center gap-1.5">
-            {(['all', 'mine', 'shared'] as const).map((s) => (
+            {SCOPES.map((s) => (
               <button
                 key={s}
                 onClick={() => setScope(s)}
@@ -155,7 +177,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                     : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                 )}
               >
-                {s === 'all' ? 'All' : s === 'mine' ? 'My notes' : 'Shared'}
+                {SCOPE_LABELS[s]}
               </button>
             ))}
             {embedded && (
@@ -188,7 +210,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
 
           {/* List */}
           <div className="space-y-1.5">
-            {list.isLoading ? (
+            {activeIsLoading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <Card key={i} className="border-border/60">
                   <CardContent className="p-3">
@@ -197,20 +219,24 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                   </CardContent>
                 </Card>
               ))
-            ) : (list.data?.length ?? 0) === 0 ? (
+            ) : (activeData?.length ?? 0) === 0 ? (
               <div className="rounded-xl border border-dashed border-border p-6 text-center">
                 <FileText className="mx-auto h-8 w-8 text-muted-foreground/30" />
-                <p className="mt-2 text-xs text-muted-foreground">No notes yet</p>
-                <button
-                  onClick={handleCreate}
-                  disabled={createNote.isPending}
-                  className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
-                >
-                  <Plus className="h-3 w-3" /> New note
-                </button>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {scope === 'mentions' ? 'No notes mention you yet' : 'No notes yet'}
+                </p>
+                {scope !== 'mentions' && (
+                  <button
+                    onClick={handleCreate}
+                    disabled={createNote.isPending}
+                    className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+                  >
+                    <Plus className="h-3 w-3" /> New note
+                  </button>
+                )}
               </div>
             ) : (
-              list.data!.map((n) => (
+              activeData!.map((n) => (
                 <NoteListRow key={n.id} note={n} isSelected={selectedId === n.id} userId={userId} />
               ))
             )}
@@ -235,7 +261,9 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                 </p>
                 <p className="mt-3 max-w-sm text-xs text-muted-foreground/80">
                   Tip: type <span className="rounded bg-muted px-1.5 py-0.5 font-mono">[[</span>{' '}
-                  inside any note to link to another note.
+                  inside any note to link to another note, or{' '}
+                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono">@name</span> to mention
+                  a teammate (they&rsquo;re notified on save if they can see the note).
                 </p>
               </CardContent>
             </Card>
@@ -346,6 +374,8 @@ function NoteDetail({ noteId }: { noteId: string }) {
       // mode (or as part of the save flow), so it can't interrupt typing.
       utils.notes.getById.invalidate({ id: noteId });
       utils.notes.list.invalidate();
+      // IMP-NOTE-02: a save may have changed the @mention set.
+      utils.notes.notesMentioningMe.invalidate();
       setMode('view');
     },
   });
@@ -632,6 +662,31 @@ function NoteDetail({ noteId }: { noteId: string }) {
             </>
           )}
         </div>
+
+        {/* IMP-NOTE-02: people @mentioned in this note. The server already
+            scopes mentions to who can see the note, so showing them to any
+            viewer who passed the visibility check leaks nothing. */}
+        {note.mentions.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="flex items-center gap-1 font-medium text-muted-foreground">
+              <AtSign className="h-3 w-3" /> Mentioned:
+            </span>
+            {note.mentions.map((m) => (
+              <span
+                key={m.id}
+                className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-foreground"
+              >
+                <Avatar className="h-3.5 w-3.5">
+                  <AvatarImage src={m.user.avatar ?? undefined} />
+                  <AvatarFallback className="bg-secondary text-[7px]">
+                    {m.user.name[0]}
+                  </AvatarFallback>
+                </Avatar>
+                {m.user.id === userId ? 'You' : m.user.name}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Editor
             - View mode: keyed on updatedAt so server changes from teammates

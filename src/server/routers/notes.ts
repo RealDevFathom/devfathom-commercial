@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
 import { logActivity } from '../activity';
+import { notify } from '@/lib/notifications';
 
 const NoteVisibilityEnum = z.enum(['PRIVATE', 'SHARED', 'TEAM']);
 const NotePermissionEnum = z.enum(['VIEW', 'EDIT']);
@@ -45,6 +46,106 @@ function extractPlainText(doc: unknown): string {
 }
 
 /**
+ * IMP-NOTE-02 — collect user IDs from Tiptap `mention` nodes, in case a future
+ * mention extension emits them (attrs.id). A harmless no-op for the current
+ * plain-text editor, which has no mention extension.
+ */
+function extractMentionNodeUserIds(doc: unknown): string[] {
+  const ids = new Set<string>();
+  function walk(node: unknown) {
+    if (!node || typeof node !== 'object') return;
+    const n = node as Record<string, unknown>;
+    if (n.type === 'mention' && n.attrs && typeof n.attrs === 'object') {
+      const attrs = n.attrs as Record<string, unknown>;
+      if (typeof attrs.id === 'string') ids.add(attrs.id);
+    }
+    if (Array.isArray(n.content)) n.content.forEach(walk);
+  }
+  walk(doc);
+  return Array.from(ids);
+}
+
+/**
+ * IMP-NOTE-02 — resolve which team members are @mentioned in a note's text.
+ *
+ * The editor has no Tiptap mention autocomplete, so a mention is just plain
+ * text the author types and we resolve on save. Matching is deliberately
+ * simple but covers the common forms:
+ *   "@FirstnameLastname"  → normalized full name (no spaces)
+ *   "@firstname"          → first name (may resolve to several people)
+ *   "@local.part"         → email local-part
+ *   "@First Last"         → substring match on the full lowercased name
+ * Normalization strips non-alphanumerics + lowercases, so "@John.Smith",
+ * "@johnsmith" and "@JOHNSMITH" all resolve to John Smith.
+ */
+function resolveMentionedUserIds(
+  text: string,
+  team: Array<{ id: string; name: string; email: string }>
+): Set<string> {
+  const ids = new Set<string>();
+  if (!text) return ids;
+  const lower = text.toLowerCase();
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // Contiguous "@token" runs (no spaces): @johnsmith, @john, @john.smith
+  const tokens = new Set<string>();
+  for (const m of lower.matchAll(/@([a-z0-9._-]{2,40})/g)) {
+    const t = norm(m[1]);
+    if (t) tokens.add(t);
+  }
+
+  for (const u of team) {
+    const full = norm(u.name);
+    const first = norm(u.name.trim().split(/\s+/)[0] ?? '');
+    const local = norm(u.email.split('@')[0] ?? '');
+    if (
+      (full && tokens.has(full)) ||
+      (local && tokens.has(local)) ||
+      (first && tokens.has(first))
+    ) {
+      ids.add(u.id);
+      continue;
+    }
+    // Spaced full-name form: "@john smith"
+    const name = u.name.trim().toLowerCase();
+    if (name && lower.includes('@' + name)) ids.add(u.id);
+  }
+  return ids;
+}
+
+/**
+ * IMP-NOTE-02 — resolve @mentions and SCOPE them to who can actually see the
+ * note, so a PRIVATE note can never leak by mentioning someone without access:
+ *   PRIVATE → nobody (the author is excluded below regardless)
+ *   SHARED  → only users on the share list
+ *   TEAM    → any team member
+ * The author is always dropped — no self-mentions / self-notifications.
+ */
+function computeMentionTargets(opts: {
+  contentText: string;
+  contentJson: unknown;
+  visibility: string;
+  authorId: string;
+  shareUserIds: string[];
+  team: Array<{ id: string; name: string; email: string }>;
+}): string[] {
+  const resolved = resolveMentionedUserIds(opts.contentText, opts.team);
+  for (const id of extractMentionNodeUserIds(opts.contentJson)) resolved.add(id);
+
+  let canSee: (id: string) => boolean;
+  if (opts.visibility === 'TEAM') {
+    const teamIds = new Set(opts.team.map((u) => u.id));
+    canSee = (id) => teamIds.has(id);
+  } else if (opts.visibility === 'SHARED') {
+    const shareSet = new Set(opts.shareUserIds);
+    canSee = (id) => shareSet.has(id);
+  } else {
+    canSee = () => false; // PRIVATE
+  }
+  return [...resolved].filter((id) => id !== opts.authorId && canSee(id));
+}
+
+/**
  * Build a Prisma `where` clause that returns notes the user is allowed to see:
  * - they authored it
  * - it's TEAM-visible
@@ -75,6 +176,25 @@ function canEdit(
   }
   return false;
 }
+
+/**
+ * Shared list-row projection so `list` and `notesMentioningMe` return the exact
+ * same shape — and therefore the same inferred client type, letting the UI
+ * render both with one row component.
+ */
+const noteListSelect = {
+  id: true,
+  title: true,
+  visibility: true,
+  authorId: true,
+  projectId: true,
+  clientId: true,
+  updatedAt: true,
+  createdAt: true,
+  author: { select: { id: true, name: true, avatar: true } },
+  project: { select: { id: true, name: true } },
+  client: { select: { id: true, name: true } },
+} satisfies Prisma.NoteSelect;
 
 export const notesRouter = router({
   /**
@@ -127,21 +247,26 @@ export const notesRouter = router({
         orderBy: { updatedAt: 'desc' },
         take,
         ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
-        select: {
-          id: true,
-          title: true,
-          visibility: true,
-          authorId: true,
-          projectId: true,
-          clientId: true,
-          updatedAt: true,
-          createdAt: true,
-          author: { select: { id: true, name: true, avatar: true } },
-          project: { select: { id: true, name: true } },
-          client: { select: { id: true, name: true } },
-        },
+        select: noteListSelect,
       });
     }),
+
+  /**
+   * IMP-NOTE-02: notes that @mention the caller, newest first. Still gated by
+   * visibility — a NoteMention is only ever persisted for someone who can see
+   * the note, but we re-check here as defense-in-depth (e.g. if a note later
+   * flips to PRIVATE without its mention rows being re-derived).
+   */
+  notesMentioningMe: protectedProcedure.query(async ({ ctx }) => {
+    const userId = ctx.session.user.id;
+    return ctx.db.note.findMany({
+      where: {
+        AND: [visibilityWhere(userId), { mentions: { some: { userId } } }],
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: noteListSelect,
+    });
+  }),
 
   /**
    * Get a single note by id with full content + backlinks.
@@ -158,6 +283,12 @@ export const notesRouter = router({
         client: { select: { id: true, name: true } },
         shares: {
           include: { user: { select: { id: true, name: true, avatar: true } } },
+        },
+        // IMP-NOTE-02: people @mentioned in this note (already scoped to who can
+        // see it). Safe to return to any viewer who passed the visibility check.
+        mentions: {
+          include: { user: { select: { id: true, name: true, avatar: true } } },
+          orderBy: { createdAt: 'asc' },
         },
         // Outgoing forward-links and incoming backlinks
         linksFrom: {
@@ -277,6 +408,35 @@ export const notesRouter = router({
           clientId: input.clientId,
         },
       });
+
+      // IMP-NOTE-02: derive @mentions and notify them. A brand-new note has no
+      // shares yet, so PRIVATE/SHARED resolve to nobody; only a TEAM note can
+      // mention people at creation time. All targets are "new" → notify all.
+      const team = await ctx.db.user.findMany({
+        select: { id: true, name: true, email: true },
+      });
+      const mentionIds = computeMentionTargets({
+        contentText,
+        contentJson,
+        visibility: input.visibility,
+        authorId: userId,
+        shareUserIds: [],
+        team,
+      });
+      if (mentionIds.length > 0) {
+        await ctx.db.noteMention.createMany({
+          data: mentionIds.map((uid) => ({ noteId: note.id, userId: uid })),
+          skipDuplicates: true,
+        });
+        notify(ctx.db, mentionIds, {
+          type: 'mention',
+          title: 'You were mentioned in a note',
+          message: `${ctx.session.user.name} mentioned you in "${note.title}"`,
+          entityType: 'Note',
+          entityId: note.id,
+        });
+      }
+
       // Only team-visible notes produce feed entries — private notes should stay private.
       if (input.visibility !== 'PRIVATE') {
         logActivity(ctx.db, userId, {
@@ -309,7 +469,7 @@ export const notesRouter = router({
 
       const existing = await ctx.db.note.findUnique({
         where: { id: input.id },
-        include: { shares: true },
+        include: { shares: true, mentions: true },
       });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
       if (!canEdit(existing, userId)) throw new TRPCError({ code: 'FORBIDDEN' });
@@ -355,7 +515,36 @@ export const notesRouter = router({
         linkedIds = extractLinkedNoteIds(input.contentJson);
       }
 
-      // Apply update + resync backlinks atomically
+      // IMP-NOTE-02: re-derive the @mention set on every save — recomputed even
+      // when only visibility changes, so flipping SHARED→PRIVATE correctly drops
+      // mentions of people who can no longer see the note. Uses the new content
+      // when provided, otherwise the existing stored text/json. Shares are not
+      // editable here (that's `setShares`), so we use the current share list.
+      const team = await ctx.db.user.findMany({
+        select: { id: true, name: true, email: true },
+      });
+      const effectiveText =
+        input.contentJson !== undefined
+          ? extractPlainText(input.contentJson)
+          : existing.contentText;
+      const effectiveJson =
+        input.contentJson !== undefined ? input.contentJson : existing.contentJson;
+      const effectiveVisibility = input.visibility ?? existing.visibility;
+      const targets = computeMentionTargets({
+        contentText: effectiveText,
+        contentJson: effectiveJson,
+        visibility: effectiveVisibility,
+        authorId: existing.authorId,
+        shareUserIds: existing.shares.map((s) => s.userId),
+        team,
+      });
+      const targetSet = new Set(targets);
+      const existingMentionIds = existing.mentions.map((m) => m.userId);
+      const existingSet = new Set(existingMentionIds);
+      const toAdd = targets.filter((id) => !existingSet.has(id));
+      const toRemove = existingMentionIds.filter((id) => !targetSet.has(id));
+
+      // Apply update + resync backlinks + mentions atomically
       const updated = await ctx.db.$transaction(async (tx) => {
         const note = await tx.note.update({ where: { id: input.id }, data });
 
@@ -375,8 +564,31 @@ export const notesRouter = router({
             }
           }
         }
+
+        if (toRemove.length > 0) {
+          await tx.noteMention.deleteMany({
+            where: { noteId: note.id, userId: { in: toRemove } },
+          });
+        }
+        if (toAdd.length > 0) {
+          await tx.noteMention.createMany({
+            data: toAdd.map((uid) => ({ noteId: note.id, userId: uid })),
+            skipDuplicates: true,
+          });
+        }
         return note;
       });
+
+      // Notify only the newly added mentions (fire-and-forget, post-commit).
+      if (toAdd.length > 0) {
+        notify(ctx.db, toAdd, {
+          type: 'mention',
+          title: 'You were mentioned in a note',
+          message: `${ctx.session.user.name} mentioned you in "${updated.title}"`,
+          entityType: 'Note',
+          entityId: updated.id,
+        });
+      }
 
       return updated;
     }),
