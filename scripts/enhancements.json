@@ -249,7 +249,7 @@
     "tier": "medium",
     "title": "Import into a brand-new project + lead-only gate",
     "value": "Matches the common flow; tightens who can bulk-mutate",
-    "status": "todo",
+    "status": "partial",
     "acceptance": [
       "Import can create a new project",
       "Only project lead/admin may import into an existing project"
@@ -322,7 +322,7 @@
     "tier": "medium",
     "title": "Per-currency reporting & FX",
     "value": "First-class multi-currency",
-    "status": "partial",
+    "status": "implemented",
     "related": [
       "FIN-02"
     ],

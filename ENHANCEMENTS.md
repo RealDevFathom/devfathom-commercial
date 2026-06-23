@@ -5,9 +5,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 39 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 40 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 6 — card → In Progress.
-- **To build** (Quick Win / Medium): 16 — card → To Do.
+- **To build** (Quick Win / Medium): 15 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 9 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
@@ -40,13 +40,13 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-CLI-06 | quick-win | clients | Friendly delete-guards & inline validation errors | [#72](https://github.com/WhatTheStack1/DevFathom-Hub/issues/72) | `cmqqe87k4000msstw8v2ywv3w` | Implemented |
 | IMP-CLI-07 | quick-win | clients | Contract status state-machine + date/signedAt validation | [#73](https://github.com/WhatTheStack1/DevFathom-Hub/issues/73) | `cmqqe87xg000nsstw7gkhwfz7` | Implemented |
 | IMP-CLI-08 | quick-win | clients | Role-aware fetching & richer search | [#74](https://github.com/WhatTheStack1/DevFathom-Hub/issues/74) | `cmqqe88a8000osstw9g6316al` | Implemented |
-| IMP-TRELLO-01 | medium | trello | Import into a brand-new project + lead-only gate | [#75](https://github.com/WhatTheStack1/DevFathom-Hub/issues/75) | `cmqqe88o4000psstwqjia7pdu` | To build |
+| IMP-TRELLO-01 | medium | trello | Import into a brand-new project + lead-only gate | [#75](https://github.com/WhatTheStack1/DevFathom-Hub/issues/75) | `cmqqe88o4000psstwqjia7pdu` | Partial |
 | IMP-TRELLO-02 | medium | trello | Map more card data (cover/custom fields/due-complete) | [#76](https://github.com/WhatTheStack1/DevFathom-Hub/issues/76) | `cmqqe891i000qsstwwt3iprxj` | To build |
 | IMP-TRELLO-03 | quick-win | trello | Robust dates + per-column order normalization | [#77](https://github.com/WhatTheStack1/DevFathom-Hub/issues/77) | `cmqqe89ei000rsstwcjm5c1xh` | Implemented |
 | IMP-TRELLO-04 | quick-win | trello | Partial-failure / skipped-card reporting | [#78](https://github.com/WhatTheStack1/DevFathom-Hub/issues/78) | `cmqqe89ra000ssstwda9nzbs9` | Implemented |
 | IMP-TRELLO-05 | quick-win | trello | Dedup when trello.id is absent | [#79](https://github.com/WhatTheStack1/DevFathom-Hub/issues/79) | `cmqqe8a44000tsstwxcwmnips` | Implemented |
 | IMP-FIN-01 | medium | finance | Invoice edit + PDF/print + send-by-email | [#80](https://github.com/WhatTheStack1/DevFathom-Hub/issues/80) | `cmqqe8ahf000usstwhbr9hbbi` | Planned (greenlight) |
-| IMP-FIN-02 | medium | finance | Per-currency reporting & FX | [#81](https://github.com/WhatTheStack1/DevFathom-Hub/issues/81) | `cmqqe8auh000vsstwwpir69l7` | Partial |
+| IMP-FIN-02 | medium | finance | Per-currency reporting & FX | [#81](https://github.com/WhatTheStack1/DevFathom-Hub/issues/81) | `cmqqe8auh000vsstwwpir69l7` | Implemented |
 | IMP-FIN-03 | medium | finance | Recurring-expense posting + budgets vs actuals | [#82](https://github.com/WhatTheStack1/DevFathom-Hub/issues/82) | `cmqqe8b97000wsstw25hqwl45` | Partial |
 | IMP-FIN-04 | medium | finance | Payments / partial payments & overdue automation | [#83](https://github.com/WhatTheStack1/DevFathom-Hub/issues/83) | `cmqqe8bm9000xsstw0vi5sqq7` | To build |
 | IMP-FIN-05 | quick-win | finance | Decimal-safe math + bounded date windows | [#84](https://github.com/WhatTheStack1/DevFathom-Hub/issues/84) | `cmqqe8bzc000ysstwabptake0` | Implemented |
