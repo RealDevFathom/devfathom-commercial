@@ -310,7 +310,7 @@
     "tier": "medium",
     "title": "Invoice edit + PDF/print + send-by-email",
     "value": "Invoices that are actually sendable",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "Full invoice edit recomputes totals server-side",
       "PDF/print view; send to client contact via notify()"
@@ -391,7 +391,7 @@
     "tier": "big-bet",
     "title": "Version history / restore",
     "value": "Recover from mistakes/abuse; audit changes",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "Note revisions stored on edit; diff + restore",
       "Bounded retention"
@@ -491,7 +491,7 @@
     "tier": "big-bet",
     "title": "Leave balances + team calendar + overlap detection",
     "value": "Real people-ops",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "Accrual/balance model; team calendar view; overlap guard (done)"
     ]
@@ -585,7 +585,7 @@
     "tier": "big-bet",
     "title": "2FA / MFA",
     "value": "Materially raises account security",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "TOTP enrol/verify; recovery codes; enforced for admins"
     ]

@@ -5,10 +5,10 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 58 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 62 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
 - **To build** (Quick Win / Medium): 4 — card → To Do.
-- **Planned (needs-greenlight)** (Big Bets): 5 — card → To Do / Backlog, STOP for authorization.
+- **Planned (needs-greenlight)** (Big Bets): 1 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
 - **IMP-PROJ-01** — Time tracking (wire the modeled TimeEntry). Billing, utilization, project profitability. Phased plan + acceptance criteria filed; awaiting authorization.
@@ -45,13 +45,13 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-TRELLO-03 | quick-win | trello | Robust dates + per-column order normalization | [#77](https://github.com/WhatTheStack1/DevFathom-Hub/issues/77) | `cmqqe89ei000rsstwcjm5c1xh` | Implemented |
 | IMP-TRELLO-04 | quick-win | trello | Partial-failure / skipped-card reporting | [#78](https://github.com/WhatTheStack1/DevFathom-Hub/issues/78) | `cmqqe89ra000ssstwda9nzbs9` | Implemented |
 | IMP-TRELLO-05 | quick-win | trello | Dedup when trello.id is absent | [#79](https://github.com/WhatTheStack1/DevFathom-Hub/issues/79) | `cmqqe8a44000tsstwxcwmnips` | Implemented |
-| IMP-FIN-01 | medium | finance | Invoice edit + PDF/print + send-by-email | [#80](https://github.com/WhatTheStack1/DevFathom-Hub/issues/80) | `cmqqe8ahf000usstwhbr9hbbi` | Planned (greenlight) |
+| IMP-FIN-01 | medium | finance | Invoice edit + PDF/print + send-by-email | [#80](https://github.com/WhatTheStack1/DevFathom-Hub/issues/80) | `cmqqe8ahf000usstwhbr9hbbi` | Implemented |
 | IMP-FIN-02 | medium | finance | Per-currency reporting & FX | [#81](https://github.com/WhatTheStack1/DevFathom-Hub/issues/81) | `cmqqe8auh000vsstwwpir69l7` | Implemented |
 | IMP-FIN-03 | medium | finance | Recurring-expense posting + budgets vs actuals | [#82](https://github.com/WhatTheStack1/DevFathom-Hub/issues/82) | `cmqqe8b97000wsstw25hqwl45` | Implemented |
 | IMP-FIN-04 | medium | finance | Payments / partial payments & overdue automation | [#83](https://github.com/WhatTheStack1/DevFathom-Hub/issues/83) | `cmqqe8bm9000xsstw0vi5sqq7` | Implemented |
 | IMP-FIN-05 | quick-win | finance | Decimal-safe math + bounded date windows | [#84](https://github.com/WhatTheStack1/DevFathom-Hub/issues/84) | `cmqqe8bzc000ysstwabptake0` | Implemented |
 | IMP-FIN-06 | quick-win | finance | Finance export (CSV) + date-range filters | [#85](https://github.com/WhatTheStack1/DevFathom-Hub/issues/85) | `cmqqe8ccc000zsstw781d1fu8` | Implemented |
-| IMP-NOTE-01 | big-bet | notes | Version history / restore | [#86](https://github.com/WhatTheStack1/DevFathom-Hub/issues/86) | `cmqqe8crc0010sstwtojh8xoy` | Planned (greenlight) |
+| IMP-NOTE-01 | big-bet | notes | Version history / restore | [#86](https://github.com/WhatTheStack1/DevFathom-Hub/issues/86) | `cmqqe8crc0010sstwtojh8xoy` | Implemented |
 | IMP-NOTE-02 | medium | notes | People @mentions + notifications in notes | [#87](https://github.com/WhatTheStack1/DevFathom-Hub/issues/87) | `cmqqe8d440011sstwp1ibz4hb` | Implemented |
 | IMP-NOTE-03 | quick-win | notes | Author-only visibility control | [#88](https://github.com/WhatTheStack1/DevFathom-Hub/issues/88) | `cmqqe8djo0012sstw6sp86tj4` | Implemented |
 | IMP-NOTE-04 | medium | notes | Resolve shared-with-me backlinks instead of hiding | [#89](https://github.com/WhatTheStack1/DevFathom-Hub/issues/89) | `cmqqe8dxu0013sstw1dnx2tma` | Implemented |
@@ -59,7 +59,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-DASH-01 | medium | dashboard | Relevance-scoped activity feed | [#91](https://github.com/WhatTheStack1/DevFathom-Hub/issues/91) | `cmqqe8eno0015sstwpy1dvbg0` | Implemented |
 | IMP-DASH-02 | medium | dashboard | Customizable widgets + graceful empty states | [#92](https://github.com/WhatTheStack1/DevFathom-Hub/issues/92) | `cmqqe8f1a0016sstwrytsfv2p` | Implemented |
 | IMP-DASH-03 | quick-win | dashboard | Personal my-time-off / pending-leave widget | [#93](https://github.com/WhatTheStack1/DevFathom-Hub/issues/93) | `cmqqe8fec0017sstw0ecskjud` | Implemented |
-| IMP-HR-01 | big-bet | team | Leave balances + team calendar + overlap detection | [#94](https://github.com/WhatTheStack1/DevFathom-Hub/issues/94) | `cmqqe8fro0018sstwqvud8ijk` | Planned (greenlight) |
+| IMP-HR-01 | big-bet | team | Leave balances + team calendar + overlap detection | [#94](https://github.com/WhatTheStack1/DevFathom-Hub/issues/94) | `cmqqe8fro0018sstwqvud8ijk` | Implemented |
 | IMP-HR-02 | medium | team | Off-boarding automation | [#95](https://github.com/WhatTheStack1/DevFathom-Hub/issues/95) | `cmqqe8g5k0019sstwbfzwo4qn` | Implemented |
 | IMP-HR-03 | quick-win | team | Self-service leave edit/cancel | [#96](https://github.com/WhatTheStack1/DevFathom-Hub/issues/96) | `cmqqe8gkk001asstw0jyg41ys` | Implemented |
 | IMP-HR-04 | medium | team | Performance review workflow | [#97](https://github.com/WhatTheStack1/DevFathom-Hub/issues/97) | `cmqqe8gxm001bsstwxng4j3kv` | Implemented |
@@ -67,7 +67,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-HR-06 | quick-win | team | Directory privacy controls | [#99](https://github.com/WhatTheStack1/DevFathom-Hub/issues/99) | `cmqqe8hnh001dsstwf8usqz65` | Implemented |
 | IMP-HR-07 | quick-win | team | Include ON_LEAVE staff in people search | [#100](https://github.com/WhatTheStack1/DevFathom-Hub/issues/100) | `cmqqe8i0i001esstwyoj5u4ee` | Implemented |
 | IMP-AUTH-01 | medium | auth | Self-service password reset (forgot password) | [#101](https://github.com/WhatTheStack1/DevFathom-Hub/issues/101) | `cmqqe8idv001fsstwumd7rjjq` | Implemented |
-| IMP-AUTH-02 | big-bet | auth | 2FA / MFA | [#102](https://github.com/WhatTheStack1/DevFathom-Hub/issues/102) | `cmqqe8isa001gsstwkhb8mooe` | Planned (greenlight) |
+| IMP-AUTH-02 | big-bet | auth | 2FA / MFA | [#102](https://github.com/WhatTheStack1/DevFathom-Hub/issues/102) | `cmqqe8isa001gsstwkhb8mooe` | Implemented |
 | IMP-AUTH-03 | medium | auth | Session management + revoke-on-password-change | [#103](https://github.com/WhatTheStack1/DevFathom-Hub/issues/103) | `cmqqe8j6h001hsstw40gv14os` | Partial |
 | IMP-AUTH-04 | medium | auth | Notification preferences | [#104](https://github.com/WhatTheStack1/DevFathom-Hub/issues/104) | `cmqqe8jjt001isstw34mou5s9` | Implemented |
 | IMP-AUTH-05 | quick-win | auth | Live password-policy checklist on the change form | [#105](https://github.com/WhatTheStack1/DevFathom-Hub/issues/105) | `cmqqe8jww001jsstwfb3yyugt` | Implemented |
