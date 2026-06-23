@@ -293,6 +293,28 @@ export const notesRouter = router({
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
       if (!canEdit(existing, userId)) throw new TRPCError({ code: 'FORBIDDEN' });
 
+      // NOTE-01: visibility and project/client re-attach are the AUTHOR's
+      // prerogative (mirrors author-only `setShares`). A SHARED-EDIT grantee or a
+      // TEAM-note editor may change title/content only — otherwise they could flip
+      // a SHARED note to TEAM (company-wide) or PRIVATE (lock the author's other
+      // collaborators out). Enforced only when the value actually changes, so a
+      // collaborator's ordinary content save (which may echo the current
+      // visibility) is never rejected.
+      const isAuthorOrAdmin =
+        existing.authorId === userId || ctx.session.user.role === 'ADMIN';
+      const changesVisibility =
+        input.visibility !== undefined && input.visibility !== existing.visibility;
+      const changesProject =
+        input.projectId !== undefined && input.projectId !== existing.projectId;
+      const changesClient =
+        input.clientId !== undefined && input.clientId !== existing.clientId;
+      if ((changesVisibility || changesProject || changesClient) && !isAuthorOrAdmin) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the note author can change its visibility or linked project/client.',
+        });
+      }
+
       const data: Prisma.NoteUpdateInput = {};
       if (input.title !== undefined) data.title = input.title;
       if (input.visibility !== undefined) data.visibility = input.visibility;
