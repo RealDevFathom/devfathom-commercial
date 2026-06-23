@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { z } from 'zod';
 import { ipFromHeaders, recordAuthAudit } from '@/server/audit';
 import { rateLimit } from '@/lib/rate-limit';
+import { verifyTotp, hashRecoveryCode } from '@/lib/totp';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -17,6 +18,8 @@ if (process.env.NODE_ENV === 'production' && !process.env.AUTH_SECRET) {
 const loginSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
+  // IMP-AUTH-02: a TOTP code or recovery code, required only when 2FA is enabled.
+  totp: z.string().optional(),
 });
 
 // A valid bcrypt hash of a value no one will ever submit. When a login targets a
@@ -39,6 +42,16 @@ class SuspendedError extends CredentialsSignin {
   code = 'suspended';
 }
 
+// IMP-AUTH-02: thrown ONLY after the password is verified correct, so 2FA state is
+// never an enumeration oracle. '2fa_required' → the login form reveals the code
+// field; '2fa_invalid' → the entered code was wrong.
+class TwoFactorRequiredError extends CredentialsSignin {
+  code = '2fa_required';
+}
+class TwoFactorInvalidError extends CredentialsSignin {
+  code = '2fa_invalid';
+}
+
 // How long a JWT's cached role/status is trusted before being re-read from the DB.
 const REVALIDATE_AFTER_MS = 60_000;
 
@@ -49,6 +62,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       credentials: {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
+        totp: { label: 'Authentication code', type: 'text' },
       },
       async authorize(credentials, request) {
         // Best-effort request context for the audit trail.
@@ -99,6 +113,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             avatar: true,
             status: true,
             tokenVersion: true,
+            twoFactorEnabledAt: true,
+            twoFactorSecret: true,
           },
         });
 
@@ -143,6 +159,44 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             reason: `Account is ${user.status}`,
           });
           throw new SuspendedError();
+        }
+
+        // IMP-AUTH-02: second factor. Enforced AFTER the password is proven correct
+        // (so it never reveals whether an account exists or has 2FA). Accepts a TOTP
+        // code or a single-use recovery code.
+        if (user.twoFactorEnabledAt) {
+          const code = (parsed.data.totp ?? '').trim();
+          if (!code) {
+            recordAuthAudit({
+              type: 'LOGIN_FAILED', userId: user.id, name: user.name, email,
+              role: user.role, ip, userAgent, reason: '2FA code required',
+            });
+            throw new TwoFactorRequiredError();
+          }
+          let ok = user.twoFactorSecret ? verifyTotp(user.twoFactorSecret, code) : false;
+          if (!ok) {
+            // Fall back to a recovery code: match an unused hash, then consume it
+            // atomically (the usedAt:null guard makes it single-use under races).
+            const codeHash = hashRecoveryCode(code);
+            const match = await db.twoFactorRecoveryCode.findFirst({
+              where: { userId: user.id, codeHash, usedAt: null },
+              select: { id: true },
+            });
+            if (match) {
+              const res = await db.twoFactorRecoveryCode.updateMany({
+                where: { id: match.id, usedAt: null },
+                data: { usedAt: new Date() },
+              });
+              ok = res.count === 1;
+            }
+          }
+          if (!ok) {
+            recordAuthAudit({
+              type: 'LOGIN_FAILED', userId: user.id, name: user.name, email,
+              role: user.role, ip, userAgent, reason: 'Invalid 2FA code',
+            });
+            throw new TwoFactorInvalidError();
+          }
         }
 
         // Update last active

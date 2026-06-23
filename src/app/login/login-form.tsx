@@ -11,6 +11,8 @@ import { Eye, EyeOff, Loader2 } from 'lucide-react';
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid email address'),
   password: z.string().min(1, 'Password is required'),
+  // IMP-AUTH-02: only required once the server asks for it (2FA-enabled accounts).
+  totp: z.string().optional(),
 });
 
 type LoginFormData = z.infer<typeof loginSchema>;
@@ -30,6 +32,8 @@ export function LoginForm() {
   const callbackUrl = safeCallbackUrl(searchParams.get('callbackUrl'));
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  // IMP-AUTH-02: revealed after a correct password when the account has 2FA on.
+  const [twoFactor, setTwoFactor] = useState(false);
 
   const {
     register,
@@ -45,6 +49,7 @@ export function LoginForm() {
     const result = await signIn('credentials', {
       email: data.email,
       password: data.password,
+      totp: data.totp ?? '',
       redirect: false,
     });
 
@@ -54,11 +59,21 @@ export function LoginForm() {
       // Every other failure — wrong password or unknown email, including a wrong
       // password for a suspended account — stays on the generic message so the
       // form can't be used to enumerate which emails are suspended.
-      setError(
-        result.code === 'suspended'
-          ? 'Your account has been suspended. Please contact your workspace administrator.'
-          : 'Invalid email or password. Please try again.'
-      );
+      if (result.code === '2fa_required') {
+        // Password was correct; the account needs a second factor. Reveal the field.
+        setTwoFactor(true);
+        setError('Enter the 6-digit code from your authenticator app.');
+      } else if (result.code === '2fa_invalid') {
+        setTwoFactor(true);
+        setError('That code is incorrect or expired. Try again, or use a recovery code.');
+      } else {
+        setTwoFactor(false);
+        setError(
+          result.code === 'suspended'
+            ? 'Your account has been suspended. Please contact your workspace administrator.'
+            : 'Invalid email or password. Please try again.'
+        );
+      }
     } else {
       router.push(callbackUrl);
       router.refresh();
@@ -122,6 +137,27 @@ export function LoginForm() {
           </div>
           {errors.password && <p className="text-sm text-red-400">{errors.password.message}</p>}
         </div>
+
+        {twoFactor && (
+          <div className="space-y-2">
+            <label htmlFor="totp" className="block text-sm font-medium text-[#C2CBD1]">
+              Authentication code
+            </label>
+            <input
+              id="totp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="123456 or a recovery code"
+              autoFocus
+              {...register('totp')}
+              className={inputClass}
+            />
+            <p className="text-xs text-[#5A6670]">
+              Open your authenticator app, or enter one of your recovery codes.
+            </p>
+          </div>
+        )}
 
         <button
           type="submit"

@@ -16,6 +16,7 @@ import { auditRouter } from './audit';
 import { resignationsRouter } from './resignations';
 import { passwordResetRouter } from './password-reset';
 import { reviewsRouter } from './reviews';
+import { twoFactorRouter } from './two-factor';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -35,6 +36,7 @@ export const appRouter = router({
   resignations: resignationsRouter,
   passwordReset: passwordResetRouter,
   reviews: reviewsRouter,
+  twoFactor: twoFactorRouter,
 });
 
 export type AppRouter = typeof appRouter;

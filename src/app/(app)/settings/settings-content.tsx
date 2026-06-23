@@ -75,6 +75,9 @@ export function SettingsContent() {
       {/* Password */}
       <PasswordSection />
 
+      {/* Two-factor authentication (IMP-AUTH-02) */}
+      <TwoFactorSection />
+
       {/* Notification preferences (IMP-AUTH-04) */}
       <NotificationsSection />
 
@@ -632,6 +635,171 @@ function NotificationsSection() {
               </div>
             ))}
           </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TwoFactorSection() {
+  const utils = trpc.useUtils();
+  const status = trpc.twoFactor.getStatus.useQuery();
+  const [enrolling, setEnrolling] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [code, setCode] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const [disableOpen, setDisableOpen] = useState(false);
+  const [disableCode, setDisableCode] = useState('');
+  const [error, setError] = useState('');
+
+  const begin = trpc.twoFactor.beginEnrollment.useMutation({
+    onSuccess: (d) => {
+      setEnrolling(d);
+      setError('');
+    },
+    onError: (e) => setError(e.message),
+  });
+  const confirm = trpc.twoFactor.confirmEnrollment.useMutation({
+    onSuccess: (d) => {
+      setRecoveryCodes(d.recoveryCodes);
+      setEnrolling(null);
+      setCode('');
+      setError('');
+      utils.twoFactor.getStatus.invalidate();
+    },
+    onError: (e) => setError(e.message),
+  });
+  const disable = trpc.twoFactor.disable.useMutation({
+    onSuccess: () => {
+      setDisableOpen(false);
+      setDisableCode('');
+      setError('');
+      utils.twoFactor.getStatus.invalidate();
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  const enabled = status.data?.enabled;
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10">
+            <Lock className="h-3.5 w-3.5 text-emerald-500" />
+          </div>
+          Two-Factor Authentication
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Require a time-based code from an authenticator app at sign-in.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error && <p className="text-sm text-red-500 rounded-lg bg-red-500/10 px-3 py-2">{error}</p>}
+
+        {/* One-time recovery codes after enabling — shown once. */}
+        {recoveryCodes && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-2">
+            <p className="text-sm font-semibold text-foreground">Save your recovery codes</p>
+            <p className="text-xs text-muted-foreground">
+              Each code works once if you lose your authenticator. They won&apos;t be shown again.
+            </p>
+            <div className="grid grid-cols-2 gap-1.5 font-mono text-xs">
+              {recoveryCodes.map((c) => (
+                <code key={c} className="rounded bg-background border border-border px-2 py-1 text-foreground">
+                  {c}
+                </code>
+              ))}
+            </div>
+            <button
+              onClick={() => setRecoveryCodes(null)}
+              className="mt-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C]"
+            >
+              I&apos;ve saved them
+            </button>
+          </div>
+        )}
+
+        {enabled && !recoveryCodes ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+              <Check className="h-4 w-4" /> Two-factor authentication is on.
+            </p>
+            {disableOpen ? (
+              <div className="flex items-center gap-2">
+                <input
+                  value={disableCode}
+                  onChange={(e) => setDisableCode(e.target.value)}
+                  placeholder="Code"
+                  className="w-32 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                />
+                <button
+                  onClick={() => disable.mutate({ token: disableCode })}
+                  disabled={!disableCode || disable.isPending}
+                  className="rounded-lg bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50"
+                >
+                  Disable
+                </button>
+                <button onClick={() => setDisableOpen(false)} className="text-xs text-muted-foreground hover:text-foreground">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setDisableOpen(true)}
+                className="shrink-0 rounded-xl border border-border px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"
+              >
+                Disable
+              </button>
+            )}
+          </div>
+        ) : enrolling ? (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Add this account to your authenticator app — scan the URI or enter the key manually —
+              then enter the 6-digit code to confirm.
+            </p>
+            <div>
+              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">Setup key</p>
+              <code className="block break-all rounded-lg bg-background border border-border px-3 py-2 text-xs font-mono text-foreground">
+                {enrolling.secret}
+              </code>
+            </div>
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer">otpauth:// URI</summary>
+              <code className="mt-1 block break-all rounded-lg bg-background border border-border px-3 py-2 font-mono text-foreground">
+                {enrolling.otpauthUri}
+              </code>
+            </details>
+            <div className="flex items-center gap-2">
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="123456"
+                inputMode="numeric"
+                className="w-32 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              />
+              <button
+                onClick={() => confirm.mutate({ token: code })}
+                disabled={code.length < 6 || confirm.isPending}
+                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+              >
+                {confirm.isPending ? 'Verifying…' : 'Verify & enable'}
+              </button>
+              <button onClick={() => setEnrolling(null)} className="text-xs text-muted-foreground hover:text-foreground">
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          !recoveryCodes && (
+            <button
+              onClick={() => begin.mutate()}
+              disabled={begin.isPending}
+              className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+            >
+              {begin.isPending ? 'Starting…' : 'Enable two-factor authentication'}
+            </button>
+          )
         )}
       </CardContent>
     </Card>
