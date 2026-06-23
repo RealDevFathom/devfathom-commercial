@@ -471,12 +471,27 @@ export const teamRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Current password is incorrect' });
 
       const hashed = await hash(input.newPassword, 12);
+      // AUTH-01: bump tokenVersion so every other live JWT session for this user
+      // is revoked on its next jwt() revalidation. (The current session's token
+      // is also stale, so the actor is re-prompted to log in — expected after a
+      // password change.)
       await ctx.db.user.update({
         where: { id: ctx.session.user.id },
-        data: { password: hashed },
+        data: { password: hashed, passwordChangedAt: new Date(), tokenVersion: { increment: 1 } },
       });
       return { success: true };
     }),
+
+  // IMP-AUTH-03: "sign out everywhere". Bumping the caller's tokenVersion revokes
+  // every JWT issued before now (including the current one) on its next jwt()
+  // revalidation — the cross-device kill switch after a suspected compromise.
+  signOutEverywhere: protectedProcedure.mutation(async ({ ctx }) => {
+    await ctx.db.user.update({
+      where: { id: ctx.session.user.id },
+      data: { tokenVersion: { increment: 1 } },
+    });
+    return { success: true };
+  }),
 
   adminUpdateMember: adminProcedure
     .input(
@@ -558,9 +573,10 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const hashed = await hash(input.newPassword, 12);
+      // AUTH-01: an admin reset must also revoke the member's existing sessions.
       const user = await ctx.db.user.update({
         where: { id: input.id },
-        data: { password: hashed },
+        data: { password: hashed, passwordChangedAt: new Date(), tokenVersion: { increment: 1 } },
         select: { name: true },
       });
       // The new password is redacted by the audit layer; record only that a
@@ -615,9 +631,12 @@ export const teamRouter = router({
         }
       }
       const reason = input.reason.trim();
+      // AUTH-01: revoke the laid-off member's live sessions immediately (the
+      // status flip already blocks new auth; bumping tokenVersion cuts off any
+      // already-issued JWT on its next revalidation rather than at token expiry).
       const updated = await ctx.db.user.update({
         where: { id: input.id },
-        data: { status: 'INACTIVE' },
+        data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
       });
       annotateAudit(ctx, {
         targetType: 'User',

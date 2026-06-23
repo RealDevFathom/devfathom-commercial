@@ -120,6 +120,14 @@ enum ClientStatus {
   PROSPECT
 }
 
+enum ContractStatus {
+  DRAFT
+  SENT
+  SIGNED
+  EXPIRED
+  TERMINATED
+}
+
 enum NoteVisibility {
   PRIVATE  // only the author
   SHARED   // author + explicit users in NoteShare
@@ -185,6 +193,11 @@ model User {
   startDate     DateTime   @default(now())
   status        UserStatus @default(ACTIVE)
   lastActiveAt  DateTime?
+  // AUTH-01 / IMP-AUTH-03: bumped on password change, admin reset, and lay-off so
+  // all other live JWT sessions are invalidated on the next jwt() revalidation.
+  // "Sign out everywhere" bumps it too. passwordChangedAt is kept for display/audit.
+  tokenVersion      Int       @default(0)
+  passwordChangedAt DateTime?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -293,6 +306,7 @@ model Client {
   documents    Document[]
   transactions Transaction[]
   richNotes    Note[]
+  contracts    Contract[]
 
   @@map("clients")
 }
@@ -311,6 +325,28 @@ model ClientContact {
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@map("client_contacts")
+}
+
+model Contract {
+  id        String         @id @default(cuid())
+  clientId  String
+  title     String
+  fileUrl   String? // link to the signed document
+  value     Decimal?       @db.Decimal(12, 2)
+  currency  Currency       @default(USD)
+  status    ContractStatus @default(DRAFT)
+  startDate DateTime?
+  endDate   DateTime?
+  signedAt  DateTime?
+  notes     String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([status])
+  @@map("contracts")
 }
 
 // ============================================
@@ -703,6 +739,8 @@ model MessageAttachment {
   url       String
   type      String?
   size      Int?
+  // Playback length in milliseconds — set for audio/voice attachments only.
+  duration  Int?
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -1016,6 +1054,10 @@ model MeetingAttendanceLog {
   userId          String
   occurrenceStart DateTime
   joinedAt        DateTime
+  // Stamped when the user leaves the in-app video call (videoConferenceLeft /
+  // readyToClose). Null while the call is still open or for joins recorded
+  // outside the embedded call.
+  leftAt          DateTime?
   createdAt       DateTime @default(now())
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)

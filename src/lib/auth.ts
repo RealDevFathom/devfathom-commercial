@@ -98,6 +98,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             title: true,
             avatar: true,
             status: true,
+            tokenVersion: true,
           },
         });
 
@@ -169,6 +170,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           title: user.title,
           image: user.avatar,
           status: user.status,
+          tokenVersion: user.tokenVersion,
         };
       },
     }),
@@ -184,6 +186,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.department = (user as Record<string, unknown>).department as string;
         token.title = (user as Record<string, unknown>).title as string;
         token.status = ((user as Record<string, unknown>).status as string) ?? 'ACTIVE';
+        // AUTH-01: snapshot the session-revocation counter at sign-in.
+        token.tokenVersion = ((user as Record<string, unknown>).tokenVersion as number) ?? 0;
         token.lastValidatedAt = Date.now();
         return token;
       }
@@ -198,10 +202,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         try {
           const fresh = await db.user.findUnique({
             where: { id: token.id as string },
-            select: { role: true, status: true, department: true, title: true },
+            select: { role: true, status: true, department: true, title: true, tokenVersion: true },
           });
           if (!fresh) {
             token.status = 'DELETED';
+          } else if (fresh.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
+            // AUTH-01 / IMP-AUTH-03: the counter was bumped (password change,
+            // admin reset, lay-off, or "sign out everywhere"), so every token
+            // issued before it is stale. Force re-auth via the same path the
+            // page guard uses for deactivated/forged sessions.
+            token.status = 'REVOKED';
           } else {
             token.role = fresh.role;
             token.status = fresh.status;

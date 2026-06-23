@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useSession } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react';
 import { useTheme } from 'next-themes';
 import Link from 'next/link';
 import {
@@ -377,6 +377,11 @@ function PasswordSection() {
     onError: (err) => setError(err.message),
   });
 
+  // IMP-AUTH-03: revoke every other session, then sign this device out too.
+  const signOutEverywhere = trpc.team.signOutEverywhere.useMutation({
+    onSuccess: () => signOut({ callbackUrl: '/login' }),
+  });
+
   const [current, setCurrent] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -484,6 +489,23 @@ function PasswordSection() {
               <Lock className="h-3.5 w-3.5" />
             )}
             Change Password
+          </button>
+        </div>
+
+        {/* IMP-AUTH-03: cross-device session kill switch. */}
+        <div className="flex items-center justify-between border-t border-border/60 pt-4">
+          <div>
+            <p className="text-xs font-medium text-foreground">Sign out everywhere</p>
+            <p className="text-[11px] text-muted-foreground">
+              Revoke all sessions on every device. Use this if you suspect your account is compromised.
+            </p>
+          </div>
+          <button
+            onClick={() => signOutEverywhere.mutate()}
+            disabled={signOutEverywhere.isPending}
+            className="shrink-0 rounded-xl border border-border px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+          >
+            {signOutEverywhere.isPending ? 'Signing out…' : 'Sign out everywhere'}
           </button>
         </div>
       </CardContent>
