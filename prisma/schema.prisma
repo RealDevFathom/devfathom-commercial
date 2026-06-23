@@ -202,6 +202,10 @@ model User {
   preferences       Json?
   // IMP-AUTH-04: per-type/channel notification opt-outs, honored by notify().
   notificationPrefs Json?
+  // IMP-AUTH-02: TOTP 2FA. Secret is base32; enabledAt null = 2FA off (the secret
+  // may exist transiently during enrolment before the first verify).
+  twoFactorSecret    String?
+  twoFactorEnabledAt DateTime?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -239,6 +243,10 @@ model User {
   reviewsAbout        Review[]         @relation("ReviewSubject")
   reviewsWritten      Review[]         @relation("ReviewReviewer")
   noteMentions        NoteMention[]
+  // Big Bets: NOTE-01 versioning, HR-01 leave balances, AUTH-02 recovery codes
+  noteRevisions       NoteRevision[]   @relation("NoteRevisionEditor")
+  leaveBalances       LeaveBalance[]   @relation("UserLeaveBalances")
+  recoveryCodes       TwoFactorRecoveryCode[]
   auditLogs         AuditLog[]         @relation("UserAuditLogs")
   resignations      Resignation[]      @relation("UserResignations")
   resignationsReviewed Resignation[]   @relation("ResignationsReviewed")
@@ -1247,12 +1255,63 @@ model Note {
   linksFrom   NoteLink[]  @relation("LinksFrom") // outgoing links from this note
   linksTo     NoteLink[]  @relation("LinksTo")   // incoming backlinks to this note
   mentions    NoteMention[] // IMP-NOTE-02: @mentioned people on this note
+  revisions   NoteRevision[] // IMP-NOTE-01: version history
 
   @@index([authorId])
   @@index([projectId])
   @@index([clientId])
   @@index([updatedAt])
   @@map("notes")
+}
+
+// IMP-NOTE-01: an immutable snapshot of a note taken before each edit, so changes
+// can be diffed and restored. Bounded retention is enforced in the router.
+model NoteRevision {
+  id          String   @id @default(cuid())
+  noteId      String
+  title       String
+  contentJson Json
+  contentText String   @default("")
+  editedById  String?
+  createdAt   DateTime @default(now())
+
+  note     Note  @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  editedBy User? @relation("NoteRevisionEditor", fields: [editedById], references: [id], onDelete: SetNull)
+
+  @@index([noteId])
+  @@map("note_revisions")
+}
+
+// IMP-HR-01: per-user, per-year, per-type leave entitlement. "Used" days are
+// derived from APPROVED LeaveRequests; this stores the allowance to compare against.
+model LeaveBalance {
+  id           String    @id @default(cuid())
+  userId       String
+  year         Int
+  type         LeaveType
+  entitledDays Int
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation("UserLeaveBalances", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, type])
+  @@index([userId])
+  @@map("leave_balances")
+}
+
+// IMP-AUTH-02: single-use TOTP recovery codes. Only the hash is stored.
+model TwoFactorRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("two_factor_recovery_codes")
 }
 
 // IMP-NOTE-02: a person @mentioned in a note (scoped to the note's visibility),
