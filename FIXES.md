@@ -18,11 +18,14 @@ clean build/typecheck + pure-logic dynamic repro tests (no writes to the shared 
 |---|---|---|---|---|---|
 | 1 | HIGH | 3 | 3 | 0 | 0 |
 | 2 | MEDIUM | 22 | 21 | 1 (AUTH-01) | 0 |
-| 3 | LOW | 28 | 4 | 0 | 24 |
-| **All** | | **53** | **28** | **1** | **24** |
+| 3 | LOW | 28 | 28 | 0 | 0 |
+| **All** | | **53** | **52** | **1** | **0** |
 
-LOW already closed early (fixed alongside their domain cluster): PROJ-06, PROJ-07, RT-06,
-and REST-06 (transactions route; tasks route pending).
+**52/53 fixed, verified, and reconciled (Done cards = closed GitHub issues = merged commits).
+AUTH-01 is Blocked on a DB migration (escalated; issue #27 open with a documented plan).**
+Build green; `src/` typecheck clean; ABAC/IDOR/auth keystone re-verified intact after every
+security change (the `src/lib/abac` policy engine and `src/lib/authz.ts` object-guards were never
+modified — all fixes ADD restrictions).
 
 ---
 
@@ -114,10 +117,42 @@ in In Progress; GitHub issue open with a blocked comment; escalated to CTO.** Re
 
 ---
 
-## PHASE 3 — LOW (in progress)
+---
 
-LOW items already closed during PHASE 2 (fixed in their domain commit):
-- PROJ-06 (#40, `7cef86e`) — addComment verifies parentId belongs to the task.
-- PROJ-07 (#41, `7cef86e`) — completion logging uses the shared done-column heuristic.
-- RT-06 (#36, `54f2d68`) — atomic attendance insert (createMany+skipDuplicates).
-- REST-06 (#30, `18adfe4`) — transactions route limit NaN-safe (tasks route still pending).
+## PHASE 3 — LOW (28/28 fixed) — all verified, build green
+
+Commits: `7cef86e` (PROJ-06/07), `54f2d68` (RT-06), `293c19c` (SEC-01/02), `c6ad18e` (AUTH-02/SEC-03),
+`330a9c8` (FIN-08/09), `730dcf2` (AUTHZ-02), `748568b` (CON-01/02), `31008b4` (TRELLO-01),
+`18adfe4` (REST-06 tx), `28e28be` (RT-08/09), `4764f93` (AI-03), `e79b5f6` (REST-02/05/06/07),
+`e32ead7` (RT-10, CLI-02, UX-01, AI-04, AI-02, AUTHZ-04).
+
+| BUG-ID | GH | Fix |
+|---|---|---|
+| REST-02 | #28 | /api/v1/spec records a REST audit (success + 401). |
+| REST-05 | #29 | `readJson()` → clean 400 on malformed JSON across all 10 v1 write routes. |
+| REST-06 | #30 | `/tasks` + `/transactions` limit is NaN-safe/clamped. |
+| REST-07 | #31 | `/tasks`, `/transactions`, `/meetings` validate FKs → 400, not raw FK 500. |
+| FIN-08 | #32 | P&L profit/margin rounded to cents/2dp (no float artifacts in raw JSON). |
+| FIN-09 | #33 | P&L month-end includes final ms; invoice number per-year reset (tRPC+REST+AI). |
+| AUTHZ-02 | #34 | adminUpdateMember blocks demoting/deactivating the last active admin. |
+| AUTHZ-04 | #35 | Documented + aligned the canonical client-directory trust policy (tRPC/REST/AI). |
+| RT-06 | #36 | Atomic attendance insert (createMany+skipDuplicates) — no P2002/500 race. |
+| RT-08 | #37 | Client message sort adds an id tiebreak for same-ms messages. |
+| RT-09 | #38 | Read receipts emitted to the actor's own room, not broadcast to the channel. |
+| RT-10 | #39 | Occurrence resolver keeps the most recent past occurrence through the gap. |
+| PROJ-06 | #40 | addComment verifies parentId belongs to the same task. |
+| PROJ-07 | #41 | Completion logging uses the shared done-column heuristic. |
+| CON-01 | #42 | Contracts reject endDate before startDate. |
+| CON-02 | #43 | updateContract stamps signedAt on first SIGNED (matches inline dropdown). |
+| TRELLO-01 | #44 | safeDate() tolerates malformed dates instead of crashing the import. |
+| CLI-02 | #45 | addContact validates email when provided (contact CRUD UI → enhancement). |
+| UX-01 | #46 | Client create + edit forms render mutation errors inline. |
+| HR-02 | #47 | createLeaveRequest validates end>=start, rejects past + overlapping requests. |
+| DASH-02 | #48 | getStats pending-leave count company-wide for admins, own-only otherwise. |
+| AUTH-02 | #49 | /(app) layout server-side auth guard → clean redirect for stale/forged cookies. |
+| SEC-01 | #50 | CSP connect-src drops blanket ws:/wss: + stale socket origin. |
+| SEC-02 | #51 | CSP img-src tightened to `'self' data: blob:`. |
+| SEC-03 | #52 | Shared page-auth guard + precise proxy static-asset match. |
+| AI-02 | #53 | Added cross-user isolation eval cases; documented construction-level guard. |
+| AI-03 | #54 | Scoped AI pending-leave count + colleague project roster. |
+| AI-04 | #55 | Documented the approval-is-UX security invariant. |
