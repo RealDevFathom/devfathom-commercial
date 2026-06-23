@@ -60,7 +60,20 @@
 - `bun scripts/lint-tool-schemas.ts` — Groq-schema regression guard (must stay 96 checked / 0 violations).
 - Co-author trailer on commits: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 
-## REMAINING WORK (user said do EVERYTHING — execute via the proven schema workflow + per-ticket commits)
+## ✅ NEAR-COMPLETE (2026-06-24): 65/70 implemented · 3 partial · 2 todo · 0 planned. Bugs 53/53. All 6 Big Bets shipped.
+The ONLY remaining items are externally gated, not "unstarted work":
+- **PLAT-02 (Vercel Blob), PLAT-03 (observability)** — need a real deploy + external service
+  (Blob token / error-tracking DSN) + a dependency; can't be built/validated in this env. Deploy-gated.
+- **PROJ-05 (board-rename + file-delete), PROJ-07 (board templates)** — the code/affordances belong in
+  `project-detail-content.tsx`, which holds the user's large uncommitted REDESIGN blob. PROJ-05's
+  rename+file-delete are already written IN-TREE there; committing requires committing that blob. BLOCKED on
+  the user's decision to commit their redesign WIP. (PROJ-05 labels + PROJ-07 WIP-limits already shipped.)
+- **AI-02 citations half** — needs the untracked assistant `src/lib/ai/context.ts` WIP committed first
+  (audit-surfacing half already shipped → AI-02 is partial).
+If the user authorizes committing their WIP: commit the redesign blob → finish PROJ-05 (add file-delete/
+rename are already there; just stage) + PROJ-07 templates; commit the assistant WIP → add AI-02 citations.
+
+## (historical) REMAINING WORK — mostly DONE now; kept for context
 - **Schema tier (b) still TODO** (each: edit schema → generate → local db push → implement → build/tsc → reconcile → commit):
   `IMP-PROJ-06` subtasks/deps (Task.parentId self-rel + TaskBlocker), `IMP-PROJ-07` WIP limits
   (Column.wipLimit), `IMP-CLI-05` contract↔project link (Contract.projectId), `IMP-FIN-04` partial
