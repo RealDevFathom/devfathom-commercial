@@ -240,6 +240,28 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // HR-01: separation of duties. Load the request first, then refuse to
+      // (a) decide your OWN leave, or (b) re-decide anything not still PENDING —
+      // mirroring the resignation:review flow. The coarse leave:approve capability
+      // alone carried no owner/state conditions.
+      const existing = await ctx.db.leaveRequest.findUnique({
+        where: { id: input.id },
+        select: { userId: true, status: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Leave request not found' });
+      if (existing.userId === ctx.session.user.id) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You cannot approve or reject your own leave request.',
+        });
+      }
+      if (existing.status !== 'PENDING') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This leave request has already been decided.',
+        });
+      }
+
       const leave = await ctx.db.leaveRequest.update({
         where: { id: input.id },
         data: { status: input.status, approvedById: ctx.session.user.id },
