@@ -573,7 +573,7 @@
     "tier": "medium",
     "title": "Self-service password reset (forgot password)",
     "value": "Table-stakes account recovery",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "Reset link via invite-token infra; single-use, expiring",
       "Sets a new policy-valid password"
@@ -596,7 +596,7 @@
     "tier": "medium",
     "title": "Session management + revoke-on-password-change",
     "value": "Control after compromise",
-    "status": "planned",
+    "status": "partial",
     "related": [
       "AUTH-01"
     ],

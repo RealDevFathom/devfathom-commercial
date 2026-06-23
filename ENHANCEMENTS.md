@@ -5,10 +5,10 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 47 — issue closed, card → Done.
-- **Partial** (core delivered; remainder tracked): 1 — card → In Progress.
+- **Implemented** (delivered during QA remediation): 48 — issue closed, card → Done.
+- **Partial** (core delivered; remainder tracked): 2 — card → In Progress.
 - **To build** (Quick Win / Medium): 13 — card → To Do.
-- **Planned (needs-greenlight)** (Big Bets): 9 — card → To Do / Backlog, STOP for authorization.
+- **Planned (needs-greenlight)** (Big Bets): 7 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
 - **IMP-PROJ-01** — Time tracking (wire the modeled TimeEntry). Billing, utilization, project profitability. Phased plan + acceptance criteria filed; awaiting authorization.
@@ -66,9 +66,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-HR-05 | quick-win | team | Separation-of-duties on approvals | [#98](https://github.com/WhatTheStack1/DevFathom-Hub/issues/98) | `cmqqe8hao001csstwy1q8vczg` | Implemented |
 | IMP-HR-06 | quick-win | team | Directory privacy controls | [#99](https://github.com/WhatTheStack1/DevFathom-Hub/issues/99) | `cmqqe8hnh001dsstwf8usqz65` | Implemented |
 | IMP-HR-07 | quick-win | team | Include ON_LEAVE staff in people search | [#100](https://github.com/WhatTheStack1/DevFathom-Hub/issues/100) | `cmqqe8i0i001esstwyoj5u4ee` | Implemented |
-| IMP-AUTH-01 | medium | auth | Self-service password reset (forgot password) | [#101](https://github.com/WhatTheStack1/DevFathom-Hub/issues/101) | `cmqqe8idv001fsstwumd7rjjq` | Planned (greenlight) |
+| IMP-AUTH-01 | medium | auth | Self-service password reset (forgot password) | [#101](https://github.com/WhatTheStack1/DevFathom-Hub/issues/101) | `cmqqe8idv001fsstwumd7rjjq` | Implemented |
 | IMP-AUTH-02 | big-bet | auth | 2FA / MFA | [#102](https://github.com/WhatTheStack1/DevFathom-Hub/issues/102) | `cmqqe8isa001gsstwkhb8mooe` | Planned (greenlight) |
-| IMP-AUTH-03 | medium | auth | Session management + revoke-on-password-change | [#103](https://github.com/WhatTheStack1/DevFathom-Hub/issues/103) | `cmqqe8j6h001hsstw40gv14os` | Planned (greenlight) |
+| IMP-AUTH-03 | medium | auth | Session management + revoke-on-password-change | [#103](https://github.com/WhatTheStack1/DevFathom-Hub/issues/103) | `cmqqe8j6h001hsstw40gv14os` | Partial |
 | IMP-AUTH-04 | medium | auth | Notification preferences | [#104](https://github.com/WhatTheStack1/DevFathom-Hub/issues/104) | `cmqqe8jjt001isstw34mou5s9` | To build |
 | IMP-AUTH-05 | quick-win | auth | Live password-policy checklist on the change form | [#105](https://github.com/WhatTheStack1/DevFathom-Hub/issues/105) | `cmqqe8jww001jsstwfb3yyugt` | Implemented |
 | IMP-AUTH-06 | quick-win | auth | Edge token verification + consistent page-auth guard | [#106](https://github.com/WhatTheStack1/DevFathom-Hub/issues/106) | `cmqqe8kal001ksstwi3pq6zhh` | Implemented |
