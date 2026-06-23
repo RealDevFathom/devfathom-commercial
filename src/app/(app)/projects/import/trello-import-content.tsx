@@ -41,6 +41,8 @@ export function TrelloImportContent() {
     columnsCreated: number;
     tasksCreated: number;
     labelsCreated: number;
+    // IMP-TRELLO-02: completed (dueComplete) cards routed to the Done column.
+    completedCount?: number;
     // IMP-TRELLO-04: partial-failure / skipped-card reporting.
     skippedCount?: number;
     skipped?: Array<{ name: string; reason: string }>;
@@ -371,6 +373,13 @@ export function TrelloImportContent() {
             </span>{' '}
             has been imported with {importResult.columnsCreated} columns,{' '}
             {importResult.tasksCreated} tasks, and {importResult.labelsCreated} labels.
+            {!!importResult.completedCount && importResult.completedCount > 0 && (
+              <>
+                {' '}
+                {importResult.completedCount} completed card
+                {importResult.completedCount === 1 ? ' was' : 's were'} moved to the Done column.
+              </>
+            )}
           </p>
           {/* IMP-TRELLO-04: surface what was skipped instead of dropping silently. */}
           {!!importResult.skippedCount && importResult.skippedCount > 0 && (

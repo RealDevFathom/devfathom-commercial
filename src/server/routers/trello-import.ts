@@ -14,6 +14,59 @@ function safeDate(value: string | null | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// IMP-TRELLO-02 helpers — the Task model has no cover/custom-field columns, so
+// this extra Trello data is folded into the task description as clean lines.
+// Everything below is intentionally lenient (`unknown` inputs, never throws).
+
+function asText(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    return t ? t : null;
+  }
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  return null;
+}
+
+// Render a Trello custom-field value object ({ text } / { number } / { date } /
+// { checked }, or a dropdown option's value) into a display string.
+function valueText(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  if ('checked' in v) {
+    const c = asText(v.checked);
+    if (c === 'true') return '✓';
+    if (c === 'false') return '✗';
+    if (c) return c;
+  }
+  return (
+    asText(v.text) ??
+    asText(v.number) ??
+    asText(v.date) ??
+    asText(Object.values(v).find((x) => x !== null && x !== undefined))
+  );
+}
+
+// A card cover is shown as its color name or image URL, if either is present.
+function coverToText(cover: unknown): string | null {
+  if (!cover || typeof cover !== 'object') return null;
+  const c = cover as Record<string, unknown>;
+  return asText(c.color) ?? asText(c.url);
+}
+
+// Resolve one card custom-field item to a value string. Dropdown items reference
+// an option id on the board-level field definition; tolerate a missing field def.
+function customFieldText(item: unknown, field: unknown): string | null {
+  const it = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+  if (typeof it.idValue === 'string' && it.idValue) {
+    const f = (field && typeof field === 'object' ? field : {}) as Record<string, unknown>;
+    const options = Array.isArray(f.options) ? (f.options as Array<Record<string, unknown>>) : [];
+    const opt = options.find((o) => o && o.id === it.idValue);
+    return valueText(opt?.value);
+  }
+  return valueText(it.value);
+}
+
 export const trelloImportRouter = router({
   importBoard: protectedProcedure
     .input(
@@ -182,6 +235,26 @@ export const trelloImportRouter = router({
           }
         }
 
+        // IMP-TRELLO-02: index board-level custom-field definitions by id so a
+        // card's customFieldItems can be resolved to "Name: value" lines.
+        const customFieldMap = new Map<string, (typeof trello.customFields)[number]>();
+        for (const f of trello.customFields) customFieldMap.set(f.id, f);
+
+        // IMP-TRELLO-02: completed cards (dueComplete) should land in a DONE-like
+        // column rather than their original list. Reuse an existing done-like list
+        // column when the board already has one; otherwise lazily create a "Done"
+        // column the first time a completed card needs it.
+        const doneListRegex = /\b(done|complete|completed|finished|shipped)\b/i;
+        let doneColumnId: string | null = null;
+        for (const list of lists) {
+          if (doneListRegex.test(list.name)) {
+            doneColumnId = listIdMap.get(list.id) ?? null;
+            if (doneColumnId) break;
+          }
+        }
+        let createdDoneColumn = false;
+        let completedCount = 0;
+
         // Build checklist map: cardId -> checklists
         const checklistMap = new Map<string, typeof trello.checklists>();
         for (const cl of trello.checklists) {
@@ -212,7 +285,7 @@ export const trelloImportRouter = router({
         // exactly what was skipped instead of silently dropping them.
         const skippedCards: Array<{ name: string; reason: string }> = [];
         for (const card of cards) {
-          const columnId = card.closed ? archivedColumnId : listIdMap.get(card.idList);
+          let columnId = card.closed ? archivedColumnId : listIdMap.get(card.idList);
 
           if (!columnId) {
             skippedCards.push({
@@ -224,13 +297,53 @@ export const trelloImportRouter = router({
             continue;
           }
 
+          // IMP-TRELLO-02: a card marked `dueComplete` in Trello is re-routed to a
+          // done-like column so it lands as a completed task (not in its original
+          // list). Archived cards keep their Archived placement. Only cards that
+          // would otherwise have been placed are re-routed — skip behavior above is
+          // unchanged.
+          if (!card.closed && card.dueComplete) {
+            if (!doneColumnId) {
+              const doneCol = await tx.column.create({
+                data: {
+                  name: 'Done',
+                  boardId: board.id,
+                  order: lists.length + (archivedColumnId ? 1 : 0),
+                },
+              });
+              doneColumnId = doneCol.id;
+              createdDoneColumn = true;
+            }
+            columnId = doneColumnId;
+            completedCount++;
+          }
+
           const orderInColumn = columnOrder.get(columnId) ?? 0;
           columnOrder.set(columnId, orderInColumn + 1);
+
+          // IMP-TRELLO-02: the Task model has no cover/custom-field columns, so we
+          // fold that data into the description as clean lines: a "Cover:" header,
+          // the original card description, then "Field: value" custom-field lines.
+          const coverText = coverToText(card.cover);
+          const customFieldLines: string[] = [];
+          for (const item of card.customFieldItems) {
+            const field = customFieldMap.get(item.idCustomField ?? '');
+            const text = customFieldText(item, field);
+            if (!text) continue;
+            const fieldName = field?.name?.trim() || 'Field';
+            customFieldLines.push(`${fieldName}: ${text}`);
+          }
+          const descriptionBlocks = [
+            coverText ? `Cover: ${coverText}` : null,
+            card.desc || null,
+            customFieldLines.length ? customFieldLines.join('\n') : null,
+          ].filter((b): b is string => !!b);
+          const description = descriptionBlocks.length ? descriptionBlocks.join('\n\n') : null;
 
           const task = await tx.task.create({
             data: {
               title: card.name,
-              description: card.desc || null,
+              description,
               columnId,
               order: orderInColumn,
               priority: 'MEDIUM',
@@ -326,9 +439,12 @@ export const trelloImportRouter = router({
         return {
           boardId: board.id,
           boardName: board.name,
-          columnsCreated: lists.length + (archivedColumnId ? 1 : 0),
+          columnsCreated: lists.length + (archivedColumnId ? 1 : 0) + (createdDoneColumn ? 1 : 0),
           tasksCreated,
           labelsCreated: uniqueLabels.length,
+          // IMP-TRELLO-02: how many completed (dueComplete) cards were routed to
+          // the done column.
+          completedCount,
           // IMP-TRELLO-04: surface partial-failure / skipped-card detail.
           skippedCount: skippedCards.length,
           skipped: skippedCards.slice(0, 100),
