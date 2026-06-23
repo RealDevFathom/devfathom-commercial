@@ -1009,6 +1009,89 @@ export const projectsRouter = router({
       });
     }),
 
+  // IMP-PROJ-02: full checklist management (was toggle-only; checklists only
+  // appeared if imported from Trello).
+  createChecklist: protectedProcedure
+    .input(z.object({ taskId: z.string(), name: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertTaskAccess(ctx, input.taskId);
+      const max = await ctx.db.taskChecklist.aggregate({
+        _max: { order: true },
+        where: { taskId: input.taskId },
+      });
+      return ctx.db.taskChecklist.create({
+        data: { taskId: input.taskId, name: input.name, order: (max._max.order ?? -1) + 1 },
+      });
+    }),
+
+  renameChecklist: protectedProcedure
+    .input(z.object({ id: z.string(), name: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const cl = await ctx.db.taskChecklist.findUnique({
+        where: { id: input.id },
+        select: { taskId: true },
+      });
+      if (!cl) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, cl.taskId);
+      return ctx.db.taskChecklist.update({ where: { id: input.id }, data: { name: input.name } });
+    }),
+
+  deleteChecklist: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const cl = await ctx.db.taskChecklist.findUnique({
+        where: { id: input.id },
+        select: { taskId: true },
+      });
+      if (!cl) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, cl.taskId);
+      await ctx.db.taskChecklist.delete({ where: { id: input.id } }); // cascades items
+      return { success: true };
+    }),
+
+  addChecklistItem: protectedProcedure
+    .input(z.object({ checklistId: z.string(), text: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const cl = await ctx.db.taskChecklist.findUnique({
+        where: { id: input.checklistId },
+        select: { taskId: true },
+      });
+      if (!cl) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, cl.taskId);
+      const max = await ctx.db.taskChecklistItem.aggregate({
+        _max: { order: true },
+        where: { checklistId: input.checklistId },
+      });
+      return ctx.db.taskChecklistItem.create({
+        data: { checklistId: input.checklistId, text: input.text, order: (max._max.order ?? -1) + 1 },
+      });
+    }),
+
+  renameChecklistItem: protectedProcedure
+    .input(z.object({ id: z.string(), text: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const item = await ctx.db.taskChecklistItem.findUnique({
+        where: { id: input.id },
+        select: { checklist: { select: { taskId: true } } },
+      });
+      if (!item) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, item.checklist.taskId);
+      return ctx.db.taskChecklistItem.update({ where: { id: input.id }, data: { text: input.text } });
+    }),
+
+  deleteChecklistItem: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const item = await ctx.db.taskChecklistItem.findUnique({
+        where: { id: input.id },
+        select: { checklist: { select: { taskId: true } } },
+      });
+      if (!item) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, item.checklist.taskId);
+      await ctx.db.taskChecklistItem.delete({ where: { id: input.id } });
+      return { success: true };
+    }),
+
   updateTaskAssignees: protectedProcedure
     .input(
       z.object({

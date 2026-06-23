@@ -510,6 +510,45 @@ export const meetingsRouter = router({
 
       return { left: res.count > 0 };
     }),
+
+  // IMP-RT-01: attendance reporting — per-person attendance across all recorded
+  // occurrences of a meeting (count + rate + last join), so the logged data is
+  // actionable. Gated identically to the meeting itself.
+  getAttendanceReport: protectedProcedure
+    .input(z.object({ meetingId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertMeetingAccess(ctx, input.meetingId);
+      const logs = await ctx.db.meetingAttendanceLog.findMany({
+        where: { meetingId: input.meetingId },
+        include: { user: { select: { id: true, name: true, avatar: true } } },
+      });
+      const heldOccurrences = new Set(logs.map((l) => l.occurrenceStart.getTime())).size || 1;
+      const byUser = new Map<
+        string,
+        {
+          user: { id: string; name: string; avatar: string | null };
+          attended: number;
+          lastJoinedAt: Date | null;
+        }
+      >();
+      for (const l of logs) {
+        const e = byUser.get(l.userId) ?? { user: l.user, attended: 0, lastJoinedAt: null };
+        e.attended += 1;
+        if (!e.lastJoinedAt || l.joinedAt > e.lastJoinedAt) e.lastJoinedAt = l.joinedAt;
+        byUser.set(l.userId, e);
+      }
+      return {
+        heldOccurrences,
+        attendees: Array.from(byUser.values())
+          .map((e) => ({
+            user: e.user,
+            attended: e.attended,
+            rate: Math.round((e.attended / heldOccurrences) * 100),
+            lastJoinedAt: e.lastJoinedAt,
+          }))
+          .sort((a, b) => b.attended - a.attended),
+      };
+    }),
 });
 
 /**

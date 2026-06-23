@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { optionalWebsiteUrl } from '@/lib/validators';
@@ -88,6 +89,33 @@ export const clientsRouter = router({
     return client;
   }),
 
+  // IMP-CLI-02: per-client activity timeline (client events + its invoices/
+  // contracts for admins) — account context at a glance before a call.
+  getActivity: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const isAdmin = ctx.session.user.role === 'ADMIN';
+      const [invoices, contracts] = await Promise.all([
+        isAdmin
+          ? ctx.db.invoice.findMany({ where: { clientId: input.id }, select: { id: true } })
+          : Promise.resolve([]),
+        isAdmin
+          ? ctx.db.contract.findMany({ where: { clientId: input.id }, select: { id: true } })
+          : Promise.resolve([]),
+      ]);
+      const or: Prisma.ActivityWhereInput[] = [{ entityType: 'Client', entityId: input.id }];
+      if (invoices.length)
+        or.push({ entityType: 'Invoice', entityId: { in: invoices.map((i) => i.id) } });
+      if (contracts.length)
+        or.push({ entityType: 'Contract', entityId: { in: contracts.map((c) => c.id) } });
+      return ctx.db.activity.findMany({
+        where: { OR: or },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        include: { user: { select: { id: true, name: true, avatar: true } } },
+      });
+    }),
+
   create: adminProcedure
     .input(
       z.object({
@@ -169,6 +197,35 @@ export const clientsRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.clientContact.delete({ where: { id: input.id } });
+    }),
+
+  // IMP-CLI-01: edit a contact + set primary (one primary per client).
+  updateContact: adminProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).optional(),
+        email: z.string().email().or(z.literal('')).optional(),
+        phone: z.string().nullable().optional(),
+        role: z.string().nullable().optional(),
+        isPrimary: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...data } = input;
+      const contact = await ctx.db.clientContact.findUnique({
+        where: { id },
+        select: { clientId: true },
+      });
+      if (!contact) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contact not found' });
+      // A client has at most one primary contact — demote the others when promoting.
+      if (input.isPrimary === true) {
+        await ctx.db.clientContact.updateMany({
+          where: { clientId: contact.clientId, id: { not: id } },
+          data: { isPrimary: false },
+        });
+      }
+      return ctx.db.clientContact.update({ where: { id }, data });
     }),
 
   // ── Contracts ─────────────────────────────────────────────────────────────

@@ -195,6 +195,154 @@ function TaskActivityTimeline({ taskId }: { taskId: string }) {
   );
 }
 
+// IMP-PROJ-02: full checklist management (was a read-only dead-end).
+type ChecklistData = TaskDetailData['checklists'][number];
+
+function ChecklistBlock({
+  cl,
+  onDelete,
+  onToggle,
+  onAddItem,
+  onDeleteItem,
+}: {
+  cl: ChecklistData;
+  onDelete: () => void;
+  onToggle: (id: string, completed: boolean) => void;
+  onAddItem: (text: string) => void;
+  onDeleteItem: (id: string) => void;
+}) {
+  const [newItem, setNewItem] = useState('');
+  const total = cl.items.length;
+  const done = cl.items.filter((i) => i.completed).length;
+  const pct = total > 0 ? (done / total) * 100 : 0;
+  return (
+    <div className="group/cl">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium text-foreground">{cl.name}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">
+            {done}/{total}
+          </span>
+          <button
+            onClick={onDelete}
+            className="opacity-0 group-hover/cl:opacity-100 text-muted-foreground/60 hover:text-red-500 transition-opacity"
+            title="Delete checklist"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+      <div className="h-1.5 rounded-full bg-secondary mb-3">
+        <div
+          className={cn('h-full rounded-full transition-all', pct === 100 ? 'bg-emerald-500' : 'bg-primary')}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="space-y-1">
+        {cl.items.map((item) => (
+          <div
+            key={item.id}
+            className="group/it flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-secondary/50 transition-colors"
+          >
+            <input
+              type="checkbox"
+              checked={item.completed}
+              onChange={() => onToggle(item.id, !item.completed)}
+              className="h-4 w-4 rounded border-border accent-primary"
+            />
+            <span
+              className={cn(
+                'flex-1 text-sm',
+                item.completed ? 'text-muted-foreground line-through' : 'text-foreground'
+              )}
+            >
+              {item.text}
+            </span>
+            <button
+              onClick={() => onDeleteItem(item.id)}
+              className="opacity-0 group-hover/it:opacity-100 text-muted-foreground/60 hover:text-red-500 transition-opacity"
+              title="Delete item"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        <input
+          value={newItem}
+          onChange={(e) => setNewItem(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && newItem.trim()) {
+              onAddItem(newItem.trim());
+              setNewItem('');
+            }
+          }}
+          placeholder="Add an item…"
+          className="w-full rounded-lg px-2 py-1.5 text-sm bg-transparent text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:bg-secondary/30"
+        />
+      </div>
+    </div>
+  );
+}
+
+function ChecklistSection({
+  taskId,
+  checklists,
+  onMutated,
+}: {
+  taskId: string;
+  checklists: ChecklistData[];
+  onMutated: () => void;
+}) {
+  const createChecklist = trpc.projects.createChecklist.useMutation({ onSuccess: onMutated });
+  const deleteChecklist = trpc.projects.deleteChecklist.useMutation({ onSuccess: onMutated });
+  const addItem = trpc.projects.addChecklistItem.useMutation({ onSuccess: onMutated });
+  const deleteItem = trpc.projects.deleteChecklistItem.useMutation({ onSuccess: onMutated });
+  const toggleItem = trpc.projects.toggleChecklistItem.useMutation({ onSuccess: onMutated });
+  const [newName, setNewName] = useState('');
+  const addChecklist = () => {
+    if (!newName.trim()) return;
+    createChecklist.mutate({ taskId, name: newName.trim() });
+    setNewName('');
+  };
+  return (
+    <div>
+      <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1.5">
+        <CheckSquare className="h-3 w-3" /> Checklists
+      </h4>
+      <div className="space-y-4">
+        {checklists.map((cl) => (
+          <ChecklistBlock
+            key={cl.id}
+            cl={cl}
+            onDelete={() => deleteChecklist.mutate({ id: cl.id })}
+            onToggle={(id, completed) => toggleItem.mutate({ id, completed })}
+            onAddItem={(text) => addItem.mutate({ checklistId: cl.id, text })}
+            onDeleteItem={(id) => deleteItem.mutate({ id })}
+          />
+        ))}
+        <div className="flex items-center gap-2">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addChecklist();
+            }}
+            placeholder="Add a checklist…"
+            className="flex-1 rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+          />
+          <button
+            onClick={addChecklist}
+            disabled={!newName.trim()}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-primary disabled:opacity-30"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Owns its own draft state so typing a comment doesn't re-render the whole sheet.
 function CommentComposer({
   onSubmit,
@@ -395,28 +543,6 @@ export function TaskDetailSheet({
   const invalidateDetail = () => utils.projects.getTaskDetail.invalidate({ id: taskId });
   const updateComment = trpc.projects.updateComment.useMutation({ onSuccess: invalidateDetail });
   const deleteComment = trpc.projects.deleteComment.useMutation({ onSuccess: invalidateDetail });
-  // Optimistic checklist toggle: flip the item instantly, reconcile on settle.
-  const toggleItem = trpc.projects.toggleChecklistItem.useMutation({
-    onMutate: async ({ id, completed }) => {
-      await utils.projects.getTaskDetail.cancel({ id: taskId });
-      const previous = utils.projects.getTaskDetail.getData({ id: taskId });
-      utils.projects.getTaskDetail.setData({ id: taskId }, (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          checklists: old.checklists.map((cl) => ({
-            ...cl,
-            items: cl.items.map((it) => (it.id === id ? { ...it, completed } : it)),
-          })),
-        };
-      });
-      return { previous };
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) utils.projects.getTaskDetail.setData({ id: taskId }, context.previous);
-    },
-    onSettled: invalidateAll,
-  });
   // Optimistic label add: append the label from the board-labels cache instantly.
   const addLabelToTask = trpc.projects.addLabelToTask.useMutation({
     onMutate: async ({ labelId }) => {
@@ -1000,67 +1126,12 @@ export function TaskDetailSheet({
               )}
             </div>
 
-            {/* Checklists */}
-            {task.checklists.length > 0 && (
-              <div>
-                <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <CheckSquare className="h-3 w-3" /> Checklists
-                </h4>
-                <div className="space-y-4">
-                  {task.checklists.map((cl) => {
-                    const total = cl.items.length;
-                    const done = cl.items.filter((i) => i.completed).length;
-                    const pct = total > 0 ? (done / total) * 100 : 0;
-                    return (
-                      <div key={cl.id}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-medium text-foreground">{cl.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {done}/{total}
-                          </span>
-                        </div>
-                        <div className="h-1.5 rounded-full bg-secondary mb-3">
-                          <div
-                            className={cn(
-                              'h-full rounded-full transition-all',
-                              pct === 100 ? 'bg-emerald-500' : 'bg-primary'
-                            )}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          {cl.items.map((item) => (
-                            <label
-                              key={item.id}
-                              className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-secondary/50 cursor-pointer transition-colors"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={item.completed}
-                                onChange={() =>
-                                  toggleItem.mutate({ id: item.id, completed: !item.completed })
-                                }
-                                className="h-4 w-4 rounded border-border accent-primary"
-                              />
-                              <span
-                                className={cn(
-                                  'text-sm',
-                                  item.completed
-                                    ? 'text-muted-foreground line-through'
-                                    : 'text-foreground'
-                                )}
-                              >
-                                {item.text}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            {/* Checklists (IMP-PROJ-02: full management) */}
+            <ChecklistSection
+              taskId={taskId}
+              checklists={task.checklists}
+              onMutated={() => utils.projects.getTaskDetail.invalidate({ id: taskId })}
+            />
 
             {/* Activity timeline (PROJ-10) */}
             <TaskActivityTimeline taskId={taskId} />
