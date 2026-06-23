@@ -47,7 +47,7 @@
     "tier": "quick-win",
     "title": "Comment edit/delete",
     "value": "Fix typos / remove mistakes",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "updateComment/deleteComment mutations (author or admin)",
       "UI edit/delete affordances on a comment",
@@ -60,7 +60,7 @@
     "tier": "quick-win",
     "title": "Board rename/description + label edit/delete + project-file delete",
     "value": "Avoid permanently-mislabeled boards / accumulating labels & files",
-    "status": "todo",
+    "status": "partial",
     "acceptance": [
       "updateBoard (name/description)",
       "label rename/recolor/delete",
@@ -122,7 +122,7 @@
     "tier": "quick-win",
     "title": "Task activity timeline in the detail sheet",
     "value": "Surface task_created/task_completed already logged",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Detail sheet shows the task's activity rows in time order"
     ]
@@ -171,7 +171,7 @@
     "tier": "quick-win",
     "title": "Client status workflow + logo upload",
     "value": "PROSPECT→ACTIVE conversion + polish",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Status selector in edit UI (ACTIVE/INACTIVE/PROSPECT)",
       "Logo upload via /api/upload sets Client.logo"
@@ -237,7 +237,7 @@
     "tier": "quick-win",
     "title": "Role-aware fetching & richer search",
     "value": "No wasted finance loads for non-admins; better search",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "getById skips invoices/contracts for non-admins",
       "List search also matches contact/industry"
@@ -287,7 +287,7 @@
     "tier": "quick-win",
     "title": "Partial-failure / skipped-card reporting",
     "value": "Operators see what was skipped",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Import result reports skipped lists/cards + reasons"
     ]
@@ -380,7 +380,7 @@
     "tier": "quick-win",
     "title": "Finance export (CSV) + date-range filters",
     "value": "Standard for any finance view",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Export transactions/invoices to CSV; date-range filter on the views"
     ]
@@ -514,7 +514,7 @@
     "tier": "quick-win",
     "title": "Self-service leave edit/cancel",
     "value": "Withdraw/edit a pending leave",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Owner can edit/cancel a PENDING leave; not after decided"
     ]
@@ -550,7 +550,7 @@
     "tier": "quick-win",
     "title": "Directory privacy controls",
     "value": "Respect contact-field privacy",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Restrict email/phone/bio to HR/Admin or make opt-in"
     ]
@@ -744,7 +744,7 @@
     "tier": "quick-win",
     "title": "Pagination cursors + consistent list envelopes",
     "value": "Predictable API",
-    "status": "partial",
+    "status": "implemented",
     "related": [
       "REST-06"
     ],
@@ -824,7 +824,7 @@
     "tier": "quick-win",
     "title": "Groq-schema discipline lint",
     "value": "Prevent whole-request 400s",
-    "status": "partial",
+    "status": "implemented",
     "related": [
       "AI-01"
     ],
