@@ -234,6 +234,11 @@ model User {
   invitation        Invitation?        @relation("UserInvitation")
   invitationsSent   Invitation[]       @relation("InvitationsSent")
   passwordResetTokens PasswordResetToken[]
+  // IMP-HR-04 performance reviews + IMP-NOTE-02 note mentions
+  reviewCyclesCreated ReviewCycle[]    @relation("ReviewCycleCreator")
+  reviewsAbout        Review[]         @relation("ReviewSubject")
+  reviewsWritten      Review[]         @relation("ReviewReviewer")
+  noteMentions        NoteMention[]
   auditLogs         AuditLog[]         @relation("UserAuditLogs")
   resignations      Resignation[]      @relation("UserResignations")
   resignationsReviewed Resignation[]   @relation("ResignationsReviewed")
@@ -301,6 +306,48 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+// IMP-HR-04: a real performance-review process (cycles + per-subject reviews),
+// distinct from the freeform PerformanceNote table.
+model ReviewCycle {
+  id          String   @id @default(cuid())
+  name        String
+  startDate   DateTime
+  endDate     DateTime
+  status      String   @default("OPEN") // OPEN | CLOSED
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User     @relation("ReviewCycleCreator", fields: [createdById], references: [id])
+  reviews   Review[]
+
+  @@map("review_cycles")
+}
+
+model Review {
+  id           String    @id @default(cuid())
+  cycleId      String
+  subjectId    String
+  reviewerId   String
+  rating       Int? // 1..5
+  strengths    String?
+  improvements String?
+  comments     String?
+  status       String    @default("DRAFT") // DRAFT | SUBMITTED
+  submittedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  cycle    ReviewCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  subject  User        @relation("ReviewSubject", fields: [subjectId], references: [id], onDelete: Cascade)
+  reviewer User        @relation("ReviewReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+
+  @@unique([cycleId, subjectId, reviewerId])
+  @@index([subjectId])
+  @@index([reviewerId])
+  @@map("reviews")
 }
 
 // ============================================
@@ -498,12 +545,18 @@ model Task {
   priority    Priority  @default(MEDIUM)
   dueDate     DateTime?
   createdById String
+  // IMP-PROJ-06: optional parent for subtasks (self-relation).
+  parentId    String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   // Relations
   column      Column           @relation(fields: [columnId], references: [id], onDelete: Cascade)
   createdBy   User             @relation("TaskCreator", fields: [createdById], references: [id])
+  parent      Task?            @relation("TaskSubtasks", fields: [parentId], references: [id], onDelete: SetNull)
+  subtasks    Task[]           @relation("TaskSubtasks")
+  blockedBy   TaskBlocker[]    @relation("BlockedTask")
+  blocking    TaskBlocker[]    @relation("BlockingTask")
   assignees   TaskAssignee[]
   labels      TaskLabel[]
   checklists  TaskChecklist[]
@@ -513,7 +566,24 @@ model Task {
 
   @@index([columnId, order])
   @@index([createdById])
+  @@index([parentId])
   @@map("tasks")
+}
+
+// IMP-PROJ-06: a "blocked-by" edge between two tasks. Cycle prevention lives in
+// the router (reject an edge that would close a loop), not the DB.
+model TaskBlocker {
+  id             String   @id @default(cuid())
+  blockedTaskId  String
+  blockingTaskId String
+  createdAt      DateTime @default(now())
+
+  blockedTask  Task @relation("BlockedTask", fields: [blockedTaskId], references: [id], onDelete: Cascade)
+  blockingTask Task @relation("BlockingTask", fields: [blockingTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([blockedTaskId, blockingTaskId])
+  @@index([blockingTaskId])
+  @@map("task_blockers")
 }
 
 model TaskAssignee {
@@ -642,13 +712,32 @@ model Invoice {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  client  Client   @relation(fields: [clientId], references: [id])
-  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  client   Client    @relation(fields: [clientId], references: [id])
+  project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  payments Payment[] // IMP-FIN-04: partial payments recorded against this invoice
 
   @@index([status])
   @@index([clientId])
   @@index([projectId])
   @@map("invoices")
+}
+
+// IMP-FIN-04: a (partial) payment against an invoice. Invoice flips to PAID when
+// the sum of payments covers the total; OVERDUE automation is in the finance router.
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  amount    Decimal  @db.Decimal(12, 2)
+  currency  Currency @default(USD)
+  method    String?
+  note      String?
+  paidAt    DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("payments")
 }
 
 model Transaction {
@@ -754,10 +843,26 @@ model Message {
   mentions    MessageMention[]
   pins        PinnedMessage[]
   savedBy     SavedMessage[]
+  edits       MessageEdit[] // IMP-RT-02: prior-content snapshots per edit
 
   @@index([channelId, createdAt])
   @@index([parentId])
   @@map("messages")
+}
+
+// IMP-RT-02: a snapshot of a message's content taken just before each edit, so
+// the edit history can be reconstructed.
+model MessageEdit {
+  id                  String   @id @default(cuid())
+  messageId           String
+  previousContent     String
+  previousContentJson Json?
+  editedAt            DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("message_edits")
 }
 
 model MessageAttachment {
@@ -1141,12 +1246,29 @@ model Note {
   shares      NoteShare[]
   linksFrom   NoteLink[]  @relation("LinksFrom") // outgoing links from this note
   linksTo     NoteLink[]  @relation("LinksTo")   // incoming backlinks to this note
+  mentions    NoteMention[] // IMP-NOTE-02: @mentioned people on this note
 
   @@index([authorId])
   @@index([projectId])
   @@index([clientId])
   @@index([updatedAt])
   @@map("notes")
+}
+
+// IMP-NOTE-02: a person @mentioned in a note (scoped to the note's visibility),
+// used to notify them and surface "notes that mention me".
+model NoteMention {
+  id        String   @id @default(cuid())
+  noteId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, userId])
+  @@index([userId])
+  @@map("note_mentions")
 }
 
 model NoteShare {
