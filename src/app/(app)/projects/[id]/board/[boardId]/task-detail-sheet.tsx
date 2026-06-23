@@ -39,6 +39,20 @@ const priorities = [
   { value: 'LOW', label: 'Low', color: 'text-muted-foreground', bg: 'bg-muted-foreground/40' },
 ] as const;
 
+// Shared label palette — used by both the create-label form and the inline
+// edit (recolor) affordance in the picker (IMP-PROJ-05).
+const LABEL_COLORS = [
+  '#EF4444',
+  '#123A38',
+  '#F59E0B',
+  '#16A34A',
+  '#2563EB',
+  '#7C3AED',
+  '#DB2777',
+  '#0EA5E9',
+  '#6E7280',
+] as const;
+
 // Per-comment formatting is memoized so re-renders of the sheet (e.g. typing in
 // the composer) don't recompute relative timestamps for every comment.
 const CommentItem = memo(function CommentItem({
@@ -469,6 +483,143 @@ function DescriptionEditor({
   );
 }
 
+// IMP-PROJ-05: a board label in the picker, with inline rename/recolor + delete.
+// Toggling applies/removes it from the task; the edit + delete affordances call
+// updateLabel/deleteLabel (server enforces manage access).
+type BoardLabel = { id: string; name: string; color: string };
+
+function LabelRow({
+  label,
+  isApplied,
+  onToggle,
+  onRename,
+  onDelete,
+  isBusy,
+}: {
+  label: BoardLabel;
+  isApplied: boolean;
+  onToggle: () => void;
+  onRename: (name: string, color: string) => void;
+  onDelete: () => void;
+  isBusy: boolean;
+}) {
+  const [mode, setMode] = useState<'view' | 'edit' | 'confirmDelete'>('view');
+  const [name, setName] = useState(label.name);
+  const [color, setColor] = useState(label.color);
+
+  if (mode === 'edit') {
+    const save = () => {
+      const trimmed = name.trim();
+      if (trimmed) onRename(trimmed, color);
+      setMode('view');
+    };
+    return (
+      <div className="space-y-2 rounded-lg border border-primary/20 bg-secondary/30 p-2">
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') setMode('view');
+          }}
+          placeholder="Label name..."
+          className="w-full rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+        />
+        <div className="flex flex-wrap gap-1.5">
+          {LABEL_COLORS.map((c) => (
+            <button
+              key={c}
+              onClick={() => setColor(c)}
+              className={cn(
+                'h-5 w-5 rounded-full transition-all',
+                color === c
+                  ? 'ring-2 ring-foreground ring-offset-2 ring-offset-card scale-110'
+                  : 'hover:scale-110'
+              )}
+              style={{ backgroundColor: c }}
+            />
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={save}
+            disabled={!name.trim() || isBusy}
+            className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            Save
+          </button>
+          <button
+            onClick={() => {
+              setName(label.name);
+              setColor(label.color);
+              setMode('view');
+            }}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group/lbl flex items-center gap-1 rounded-lg transition-colors hover:bg-secondary">
+      <button
+        onClick={onToggle}
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm"
+      >
+        <div className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: label.color }} />
+        <span className="flex-1 truncate text-left font-medium text-foreground">{label.name}</span>
+        {isApplied && <Check className="h-4 w-4 shrink-0 text-primary" />}
+      </button>
+      {mode === 'confirmDelete' ? (
+        <div className="flex shrink-0 items-center gap-1 pr-1.5">
+          <button
+            onClick={() => {
+              onDelete();
+              setMode('view');
+            }}
+            disabled={isBusy}
+            className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600 disabled:opacity-50"
+            title="Permanently delete this label and remove it from every task"
+          >
+            Delete
+          </button>
+          <button
+            onClick={() => setMode('view')}
+            className="px-1 text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            No
+          </button>
+        </div>
+      ) : (
+        <div className="flex shrink-0 items-center gap-0.5 pr-1.5 opacity-0 transition-opacity group-hover/lbl:opacity-100">
+          <button
+            onClick={() => {
+              setName(label.name);
+              setColor(label.color);
+              setMode('edit');
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-card hover:text-foreground"
+            title="Rename / recolor label"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+          <button
+            onClick={() => setMode('confirmDelete')}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+            title="Delete label"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TaskDetailSheet({
   taskId,
   boardId,
@@ -589,6 +740,13 @@ export function TaskDetailSheet({
       setShowNewLabelForm(false);
     },
   });
+  // IMP-PROJ-05: rename/recolor + delete a board label from the picker.
+  const labelMutated = () => {
+    invalidateAll();
+    utils.projects.getBoardLabels.invalidate();
+  };
+  const updateLabel = trpc.projects.updateLabel.useMutation({ onSuccess: labelMutated });
+  const deleteLabel = trpc.projects.deleteLabel.useMutation({ onSuccess: labelMutated });
 
   // Optimistic assignee update: rebuild the assignee list instantly from cache + roster.
   const updateAssignees = trpc.projects.updateTaskAssignees.useMutation({
@@ -839,26 +997,23 @@ export function TaskDetailSheet({
                       {boardLabels.map((label) => {
                         const isApplied = task.labels.some((tl) => tl.label.id === label.id);
                         return (
-                          <button
+                          <LabelRow
                             key={label.id}
-                            onClick={() => {
+                            label={label}
+                            isApplied={isApplied}
+                            onToggle={() => {
                               if (isApplied) {
                                 removeLabelFromTask.mutate({ taskId, labelId: label.id });
                               } else {
                                 addLabelToTask.mutate({ taskId, labelId: label.id });
                               }
                             }}
-                            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-secondary"
-                          >
-                            <div
-                              className="h-3 w-3 rounded-full shrink-0"
-                              style={{ backgroundColor: label.color }}
-                            />
-                            <span className="flex-1 text-left text-foreground font-medium">
-                              {label.name}
-                            </span>
-                            {isApplied && <Check className="h-4 w-4 text-primary shrink-0" />}
-                          </button>
+                            onRename={(name, color) =>
+                              updateLabel.mutate({ id: label.id, name, color })
+                            }
+                            onDelete={() => deleteLabel.mutate({ id: label.id })}
+                            isBusy={updateLabel.isPending || deleteLabel.isPending}
+                          />
                         );
                       })}
                     </div>
@@ -893,17 +1048,7 @@ export function TaskDetailSheet({
                         className="w-full rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
                       />
                       <div className="flex flex-wrap gap-1.5">
-                        {[
-                          '#EF4444',
-                          '#123A38',
-                          '#F59E0B',
-                          '#16A34A',
-                          '#2563EB',
-                          '#7C3AED',
-                          '#DB2777',
-                          '#0EA5E9',
-                          '#6E7280',
-                        ].map((c) => (
+                        {LABEL_COLORS.map((c) => (
                           <button
                             key={c}
                             onClick={() => setNewLabelColor(c)}

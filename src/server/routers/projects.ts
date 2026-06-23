@@ -736,6 +736,78 @@ export const projectsRouter = router({
       return { success: true };
     }),
 
+  // IMP-PROJ-08: bulk-move the selected tasks to the end of a target column.
+  // Access-checks the destination column AND every task, then renumbers the
+  // destination column in a single transaction (avoids the per-task ordering
+  // races that looping moveTask in parallel would create). Source columns are
+  // left with order gaps, which the board read + moveTask tolerate (see PROJ-02).
+  bulkMoveTasks: protectedProcedure
+    .input(
+      z.object({
+        taskIds: z.array(z.string()).min(1),
+        targetColumnId: z.string(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertColumnAccess(ctx, input.targetColumnId);
+      for (const taskId of input.taskIds) {
+        await assertTaskAccess(ctx, taskId);
+      }
+
+      await ctx.db.$transaction(async (tx) => {
+        const moving = new Set(input.taskIds);
+        const targetList = await tx.task.findMany({
+          where: { columnId: input.targetColumnId },
+          orderBy: { order: 'asc' },
+          select: { id: true },
+        });
+        // Existing (non-moving) tasks keep their relative order; moved tasks are
+        // appended after them in the caller's selection order.
+        const finalIds = [
+          ...targetList.map((t) => t.id).filter((id) => !moving.has(id)),
+          ...input.taskIds,
+        ];
+
+        for (const taskId of input.taskIds) {
+          await tx.task.update({
+            where: { id: taskId },
+            data: { columnId: input.targetColumnId },
+          });
+        }
+        for (let i = 0; i < finalIds.length; i++) {
+          await tx.task.update({ where: { id: finalIds[i] }, data: { order: i } });
+        }
+
+        // Auto-assign the target column's default owners (additive), mirroring moveTask.
+        const defaults = await tx.columnDefaultAssignee.findMany({
+          where: { columnId: input.targetColumnId },
+          select: { userId: true },
+        });
+        if (defaults.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: input.taskIds.flatMap((taskId) =>
+              defaults.map((d) => ({ taskId, userId: d.userId }))
+            ),
+            skipDuplicates: true,
+          });
+        }
+      });
+
+      return { success: true };
+    }),
+
+  // IMP-PROJ-08: bulk-delete the selected tasks (cascades to comments,
+  // checklists, labels and assignees just like the single-task deleteTask).
+  bulkDeleteTasks: protectedProcedure
+    .input(z.object({ taskIds: z.array(z.string()).min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      for (const taskId of input.taskIds) {
+        await assertTaskAccess(ctx, taskId);
+      }
+      await ctx.db.task.deleteMany({ where: { id: { in: input.taskIds } } });
+      return { success: true };
+    }),
+
   // ============ BOARD MUTATIONS ============
 
   createBoard: protectedProcedure

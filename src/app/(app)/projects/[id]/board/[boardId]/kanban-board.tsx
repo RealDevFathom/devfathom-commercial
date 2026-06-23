@@ -8,6 +8,7 @@ import {
   useDeferredValue,
   memo,
   type HTMLAttributes,
+  type ReactNode,
 } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -25,6 +26,10 @@ import {
   Search,
   UserPlus,
   Crown,
+  Tag,
+  MoveRight,
+  ListChecks,
+  Check,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -40,6 +45,11 @@ const priorityColors: Record<string, string> = {
   MEDIUM: 'bg-amber-500',
   LOW: 'bg-muted-foreground/40',
 };
+
+// IMP-PROJ-09: how many tasks to render per column before a "Show more" prompt.
+// Bounds the initial paint regardless of board size; the cap applies to the
+// filtered result when a filter is active.
+const INITIAL_VISIBLE = 20;
 
 type TaskLabel = { label: { id: string; name: string; color: string } };
 type TaskAssignee = { user: { id: string; name: string; avatar: string | null } };
@@ -109,6 +119,16 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     },
   });
 
+  // IMP-PROJ-08: bulk actions. Move/delete go through dedicated server
+  // mutations (atomic, race-free); label/assign reuse the per-item mutations in
+  // a Promise.all loop. None of these auto-invalidate — we invalidate once after
+  // the whole batch settles (see afterBulk).
+  const bulkMove = trpc.projects.bulkMoveTasks.useMutation();
+  const bulkDelete = trpc.projects.bulkDeleteTasks.useMutation();
+  const bulkAddLabelM = trpc.projects.addLabelToTask.useMutation();
+  const bulkRemoveLabelM = trpc.projects.removeLabelFromTask.useMutation();
+  const bulkAssignM = trpc.projects.updateTaskAssignees.useMutation();
+
   const { data: teamMembers } = trpc.team.getRoster.useQuery();
   const [addingToColumn, setAddingToColumn] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -116,6 +136,17 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   const [newColumnName, setNewColumnName] = useState('');
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
+
+  // IMP-PROJ-08: multi-select / bulk-action state.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkMenu, setBulkMenu] = useState<'move' | 'addLabel' | 'removeLabel' | 'assign' | null>(
+    null
+  );
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+
+  // IMP-PROJ-09: per-column "visible task" cap (task id -> count). Absent = INITIAL_VISIBLE.
+  const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({});
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -228,6 +259,14 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         : destCol.tasks.length;
       destCol.tasks.splice(destRealIdx, 0, movedTask);
 
+      // IMP-PROJ-09: if the task lands beyond the destination column's visible
+      // cap, widen the cap so the moved card doesn't vanish below the fold.
+      setVisibleCounts((prev) => {
+        const cur = prev[destination.droppableId] ?? INITIAL_VISIBLE;
+        if (destRealIdx < cur) return prev;
+        return { ...prev, [destination.droppableId]: destRealIdx + 1 };
+      });
+
       const previous = board;
       utils.projects.getBoardWithTasks.setData(
         { boardId },
@@ -281,6 +320,94 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   const allLabels = useMemo(() => {
     return board?.labels ?? [];
   }, [board]);
+
+  // IMP-PROJ-08: fast lookup of a task's current data (labels/assignees) so
+  // bulk label/assign ops can skip no-ops and preserve existing assignees.
+  const tasksById = useMemo(() => {
+    const map = new Map<string, TaskData>();
+    if (board) {
+      for (const col of board.columns) {
+        for (const task of col.tasks) map.set(task.id, task);
+      }
+    }
+    return map;
+  }, [board]);
+
+  const selectedIds = useMemo(() => Array.from(selected), [selected]);
+
+  const toggleSelect = useCallback((taskId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelected(new Set());
+    setBulkMenu(null);
+    setBulkDeleteConfirm(false);
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    clearSelection();
+  }, [clearSelection]);
+
+  const isBulkBusy =
+    bulkMove.isPending ||
+    bulkDelete.isPending ||
+    bulkAddLabelM.isPending ||
+    bulkRemoveLabelM.isPending ||
+    bulkAssignM.isPending;
+
+  // Run after every bulk op: refresh the board once, then drop the selection.
+  const afterBulk = useCallback(async () => {
+    await utils.projects.getBoardWithTasks.invalidate({ boardId });
+    clearSelection();
+  }, [boardId, clearSelection, utils.projects.getBoardWithTasks]);
+
+  const handleBulkMove = async (targetColumnId: string) => {
+    if (selectedIds.length === 0) return;
+    await bulkMove.mutateAsync({ taskIds: selectedIds, targetColumnId });
+    await afterBulk();
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    await bulkDelete.mutateAsync({ taskIds: selectedIds });
+    await afterBulk();
+  };
+
+  const handleBulkAddLabel = async (labelId: string) => {
+    const ids = selectedIds.filter(
+      (id) => !tasksById.get(id)?.labels.some((l) => l.label.id === labelId)
+    );
+    await Promise.all(ids.map((id) => bulkAddLabelM.mutateAsync({ taskId: id, labelId })));
+    await afterBulk();
+  };
+
+  const handleBulkRemoveLabel = async (labelId: string) => {
+    const ids = selectedIds.filter((id) =>
+      tasksById.get(id)?.labels.some((l) => l.label.id === labelId)
+    );
+    await Promise.all(ids.map((id) => bulkRemoveLabelM.mutateAsync({ taskId: id, labelId })));
+    await afterBulk();
+  };
+
+  const handleBulkAssign = async (memberId: string) => {
+    await Promise.all(
+      selectedIds.map((id) => {
+        const t = tasksById.get(id);
+        if (!t) return Promise.resolve(undefined);
+        const current = t.assignees.map((a) => a.user.id);
+        if (current.includes(memberId)) return Promise.resolve(undefined);
+        return bulkAssignM.mutateAsync({ taskId: id, assigneeIds: [...current, memberId] });
+      })
+    );
+    await afterBulk();
+  };
 
   if (isLoading) return <BoardSkeleton />;
   if (!board) return null;
@@ -390,6 +517,20 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
               Clear
             </button>
           )}
+
+          {/* IMP-PROJ-08: enter/exit multi-select mode */}
+          <button
+            onClick={() => (selectionMode ? exitSelectionMode() : setSelectionMode(true))}
+            className={cn(
+              'ml-auto flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors',
+              selectionMode
+                ? 'border-primary/30 bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+            {selectionMode ? 'Done' : 'Select'}
+          </button>
         </div>
 
         {/* Board — columns are draggable horizontally */}
@@ -509,50 +650,102 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
 
                         {/* Droppable task zone */}
                         <Droppable droppableId={column.id} type="TASK">
-                          {(provided, snapshot) => (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.droppableProps}
-                              className={cn(
-                                'flex-1 space-y-2 rounded-xl p-2 min-h-[100px] overflow-y-auto transition-colors',
-                                snapshot.isDraggingOver
-                                  ? 'bg-primary/5 ring-1 ring-primary/20'
-                                  : 'bg-secondary/30'
-                              )}
-                            >
-                              {column.tasks.map((task, index) => (
-                                <Draggable key={task.id} draggableId={task.id} index={index}>
-                                  {(taskProvided, taskSnapshot) => (
-                                    <div
-                                      ref={taskProvided.innerRef}
-                                      {...(taskProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
-                                      {...(taskProvided.dragHandleProps as HTMLAttributes<HTMLDivElement>)}
-                                      onClick={() => handleSelectTask(task.id)}
-                                      className={cn(
-                                        'rounded-xl border border-border/60 bg-card p-3.5 cursor-pointer transition-all',
-                                        taskSnapshot.isDragging
-                                          ? 'shadow-xl shadow-black/10 rotate-[2deg] border-primary/30'
-                                          : 'hover:border-border hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/20'
+                          {(provided, snapshot) => {
+                            // IMP-PROJ-09: only render the first N (filtered) tasks.
+                            const visible = visibleCounts[column.id] ?? INITIAL_VISIBLE;
+                            const hiddenCount = column.tasks.length - visible;
+                            return (
+                              <div
+                                ref={provided.innerRef}
+                                {...provided.droppableProps}
+                                className={cn(
+                                  'flex-1 space-y-2 rounded-xl p-2 min-h-[100px] overflow-y-auto transition-colors',
+                                  snapshot.isDraggingOver
+                                    ? 'bg-primary/5 ring-1 ring-primary/20'
+                                    : 'bg-secondary/30'
+                                )}
+                              >
+                                {column.tasks.slice(0, visible).map((task, index) => {
+                                  const isSelected = selected.has(task.id);
+                                  return (
+                                    <Draggable key={task.id} draggableId={task.id} index={index}>
+                                      {(taskProvided, taskSnapshot) => (
+                                        <div
+                                          ref={taskProvided.innerRef}
+                                          {...(taskProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
+                                          {...(taskProvided.dragHandleProps as HTMLAttributes<HTMLDivElement>)}
+                                          onClick={() =>
+                                            selectionMode
+                                              ? toggleSelect(task.id)
+                                              : handleSelectTask(task.id)
+                                          }
+                                          className={cn(
+                                            'group/card relative rounded-xl border bg-card p-3.5 cursor-pointer transition-all',
+                                            isSelected
+                                              ? 'border-primary ring-2 ring-primary/30'
+                                              : 'border-border/60',
+                                            taskSnapshot.isDragging
+                                              ? 'shadow-xl shadow-black/10 rotate-[2deg] border-primary/30'
+                                              : 'hover:border-border hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/20'
+                                          )}
+                                        >
+                                          {/* IMP-PROJ-08: per-card select checkbox */}
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              if (!selectionMode) setSelectionMode(true);
+                                              toggleSelect(task.id);
+                                            }}
+                                            className={cn(
+                                              'absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-md border transition-all',
+                                              isSelected
+                                                ? 'border-primary bg-primary text-white opacity-100'
+                                                : 'border-border bg-card text-transparent opacity-0 group-hover/card:opacity-100',
+                                              selectionMode && 'opacity-100'
+                                            )}
+                                            title={isSelected ? 'Deselect task' : 'Select task'}
+                                            aria-label={isSelected ? 'Deselect task' : 'Select task'}
+                                          >
+                                            {isSelected && (
+                                              <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                                            )}
+                                          </button>
+                                          <TaskCard task={task} />
+                                        </div>
                                       )}
-                                    >
-                                      <TaskCard task={task} />
-                                    </div>
-                                  )}
-                                </Draggable>
-                              ))}
-                              {provided.placeholder}
+                                    </Draggable>
+                                  );
+                                })}
+                                {provided.placeholder}
 
-                              {/* Inline add task */}
-                              {addingToColumn === column.id && (
-                                <AddTaskForm
-                                  columnId={column.id}
-                                  teamMembers={teamMembers}
-                                  onAdd={handleAddTask}
-                                  onCancel={() => setAddingToColumn(null)}
-                                />
-                              )}
-                            </div>
-                          )}
+                                {/* IMP-PROJ-09: reveal more tasks in this column */}
+                                {hiddenCount > 0 && (
+                                  <button
+                                    onClick={() =>
+                                      setVisibleCounts((prev) => ({
+                                        ...prev,
+                                        [column.id]:
+                                          (prev[column.id] ?? INITIAL_VISIBLE) + INITIAL_VISIBLE,
+                                      }))
+                                    }
+                                    className="w-full rounded-lg border border-dashed border-border bg-card/50 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
+                                  >
+                                    Show {Math.min(INITIAL_VISIBLE, hiddenCount)} more
+                                  </button>
+                                )}
+
+                                {/* Inline add task */}
+                                {addingToColumn === column.id && (
+                                  <AddTaskForm
+                                    columnId={column.id}
+                                    teamMembers={teamMembers}
+                                    onAdd={handleAddTask}
+                                    onCancel={() => setAddingToColumn(null)}
+                                  />
+                                )}
+                              </div>
+                            );
+                          }}
                         </Droppable>
                       </div>
                     )}
@@ -616,6 +809,148 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
           </Droppable>
         </DragDropContext>
       </div>
+
+      {/* IMP-PROJ-08: bulk-action toolbar — appears while ≥1 task is selected */}
+      {selected.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 animate-fade-in">
+          <div className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 shadow-2xl shadow-black/25">
+            <span className="px-1 text-xs font-semibold text-foreground">
+              {selected.size} selected
+            </span>
+            <div className="h-5 w-px bg-border" />
+
+            {/* Move to column */}
+            <BulkMenuButton
+              label="Move"
+              icon={<MoveRight className="h-3.5 w-3.5" />}
+              open={bulkMenu === 'move'}
+              onToggle={() => setBulkMenu((m) => (m === 'move' ? null : 'move'))}
+              disabled={isBulkBusy}
+            >
+              {board.columns.map((c) => (
+                <BulkMenuItem key={c.id} onClick={() => handleBulkMove(c.id)}>
+                  {c.name}
+                </BulkMenuItem>
+              ))}
+            </BulkMenuButton>
+
+            {/* Add label */}
+            {allLabels.length > 0 && (
+              <BulkMenuButton
+                label="Label"
+                icon={<Tag className="h-3.5 w-3.5" />}
+                open={bulkMenu === 'addLabel'}
+                onToggle={() => setBulkMenu((m) => (m === 'addLabel' ? null : 'addLabel'))}
+                disabled={isBulkBusy}
+              >
+                <p className="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Add label
+                </p>
+                {allLabels.map((l) => (
+                  <BulkMenuItem key={l.id} onClick={() => handleBulkAddLabel(l.id)}>
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: l.color }}
+                    />
+                    {l.name}
+                  </BulkMenuItem>
+                ))}
+              </BulkMenuButton>
+            )}
+
+            {/* Remove label */}
+            {allLabels.length > 0 && (
+              <BulkMenuButton
+                label="Unlabel"
+                icon={<Tag className="h-3.5 w-3.5" />}
+                open={bulkMenu === 'removeLabel'}
+                onToggle={() => setBulkMenu((m) => (m === 'removeLabel' ? null : 'removeLabel'))}
+                disabled={isBulkBusy}
+              >
+                <p className="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Remove label
+                </p>
+                {allLabels.map((l) => (
+                  <BulkMenuItem key={l.id} onClick={() => handleBulkRemoveLabel(l.id)}>
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: l.color }}
+                    />
+                    {l.name}
+                  </BulkMenuItem>
+                ))}
+              </BulkMenuButton>
+            )}
+
+            {/* Assign member */}
+            {teamMembers && teamMembers.length > 0 && (
+              <BulkMenuButton
+                label="Assign"
+                icon={<UserPlus className="h-3.5 w-3.5" />}
+                open={bulkMenu === 'assign'}
+                onToggle={() => setBulkMenu((m) => (m === 'assign' ? null : 'assign'))}
+                disabled={isBulkBusy}
+              >
+                {teamMembers.map((m) => (
+                  <BulkMenuItem key={m.id} onClick={() => handleBulkAssign(m.id)}>
+                    <Avatar className="h-4 w-4">
+                      <AvatarImage src={m.avatar ?? undefined} />
+                      <AvatarFallback className="text-[7px] bg-secondary font-medium">
+                        {m.name[0]}
+                      </AvatarFallback>
+                    </Avatar>
+                    {m.name}
+                  </BulkMenuItem>
+                ))}
+              </BulkMenuButton>
+            )}
+
+            <div className="h-5 w-px bg-border" />
+
+            {/* Delete (single confirm) */}
+            {bulkDeleteConfirm ? (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={isBulkBusy}
+                  className="rounded-lg bg-red-500 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+                >
+                  {bulkDelete.isPending ? 'Deleting…' : `Delete ${selected.size}`}
+                </button>
+                <button
+                  onClick={() => setBulkDeleteConfirm(false)}
+                  className="rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setBulkMenu(null);
+                  setBulkDeleteConfirm(true);
+                }}
+                disabled={isBulkBusy}
+                className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                title="Delete selected tasks"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+
+            <div className="h-5 w-px bg-border" />
+
+            <button
+              onClick={clearSelection}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              title="Clear selection"
+              aria-label="Clear selection"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Task detail slide-over */}
       {selectedTaskId && (
@@ -1030,6 +1365,63 @@ function ColumnOwners({
         </div>
       )}
     </div>
+  );
+}
+
+/* ============================================
+   Bulk-action toolbar menus (IMP-PROJ-08)
+   A button whose dropdown opens upward (the toolbar is pinned to the bottom).
+   ============================================ */
+function BulkMenuButton({
+  label,
+  icon,
+  open,
+  onToggle,
+  disabled,
+  children,
+}: {
+  label: string;
+  icon: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <button
+        onClick={onToggle}
+        disabled={disabled}
+        className={cn(
+          'flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50',
+          open
+            ? 'bg-secondary text-foreground'
+            : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+        )}
+      >
+        {icon}
+        {label}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={onToggle} />
+          <div className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-48 overflow-y-auto rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/15">
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function BulkMenuItem({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-secondary"
+    >
+      {children}
+    </button>
   );
 }
 
