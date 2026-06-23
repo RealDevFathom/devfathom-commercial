@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   BarChart,
   Bar,
@@ -16,6 +17,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { TrendingUp, PieChart as PieIcon } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { moneyLabel } from '@/lib/finance/currency';
 
 const COLORS = [
   '#3C7A74',
@@ -34,10 +37,12 @@ function ChartTooltip({
   active,
   payload,
   label,
+  currency = 'USD',
 }: {
   active?: boolean;
   payload?: Array<{ value: number; dataKey: string; color: string }>;
   label?: string;
+  currency?: string;
 }) {
   if (!active || !payload?.length) return null;
   return (
@@ -50,7 +55,7 @@ function ChartTooltip({
             <span className="text-xs text-muted-foreground capitalize">{entry.dataKey}</span>
           </div>
           <span className="text-sm font-semibold text-foreground tabular-nums">
-            ${entry.value.toLocaleString()}
+            {moneyLabel(entry.value, currency)}
           </span>
         </div>
       ))}
@@ -59,7 +64,12 @@ function ChartTooltip({
 }
 
 export function PnlReport() {
-  const { data, isLoading } = trpc.finance.getPnlReport.useQuery({ period: 'monthly', months: 12 });
+  const { data: result, isLoading } = trpc.finance.getPnlReport.useQuery({
+    period: 'monthly',
+    months: 12,
+  });
+  // FIN-02: P&L is reported one currency at a time (USD-first by default).
+  const [currency, setCurrency] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -78,31 +88,52 @@ export function PnlReport() {
     );
   }
 
-  if (!data) return null;
+  if (!result || result.currencies.length === 0) return null;
 
-  const totalIncome = data.data.reduce((s, d) => s + d.income, 0);
-  const totalExpense = data.data.reduce((s, d) => s + d.expense, 0);
+  const selected = currency && result.byCurrency[currency] ? currency : result.currencies[0];
+  const view = result.byCurrency[selected];
+  const multiCurrency = result.currencies.length > 1;
+  const axisSymbol = selected === 'PKR' ? 'Rs ' : '$';
+
+  const totalIncome = view.data.reduce((s, d) => s + d.income, 0);
+  const totalExpense = view.data.reduce((s, d) => s + d.expense, 0);
   const totalProfit = totalIncome - totalExpense;
   const avgMargin =
-    data.data.length > 0 ? data.data.reduce((s, d) => s + d.margin, 0) / data.data.length : 0;
+    view.data.length > 0 ? view.data.reduce((s, d) => s + d.margin, 0) / view.data.length : 0;
 
   return (
     <div className="space-y-5">
+      {multiCurrency && (
+        <div className="flex w-fit items-center gap-1 rounded-lg border border-border p-0.5">
+          {result.currencies.map((c) => (
+            <button
+              key={c}
+              onClick={() => setCurrency(c)}
+              className={cn(
+                'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
+                selected === c ? 'bg-primary text-white' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
       {/* Summary row */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <SummaryCard
           label="Total Income"
-          value={`$${totalIncome.toLocaleString()}`}
+          value={moneyLabel(totalIncome, selected)}
           color="text-emerald-500"
         />
         <SummaryCard
           label="Total Expenses"
-          value={`$${totalExpense.toLocaleString()}`}
+          value={moneyLabel(totalExpense, selected)}
           color="text-red-500"
         />
         <SummaryCard
           label="Net Profit"
-          value={`$${totalProfit.toLocaleString()}`}
+          value={moneyLabel(totalProfit, selected)}
           color={totalProfit >= 0 ? 'text-emerald-500' : 'text-red-500'}
         />
         <SummaryCard label="Avg Margin" value={`${avgMargin.toFixed(1)}%`} color="text-primary" />
@@ -122,7 +153,7 @@ export function PnlReport() {
           <CardContent className="pt-2 pb-4">
             <div className="h-[300px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <BarChart data={view.data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
@@ -140,9 +171,9 @@ export function PnlReport() {
                     axisLine={false}
                     tickLine={false}
                     tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-                    tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={(v: number) => `${axisSymbol}${(v / 1000).toFixed(0)}k`}
                   />
-                  <Tooltip content={<ChartTooltip />} cursor={false} />
+                  <Tooltip content={<ChartTooltip currency={selected} />} cursor={false} />
                   <Bar dataKey="income" fill="#16A34A" radius={[4, 4, 0, 0]} barSize={20} />
                   <Bar dataKey="expense" fill="#EF4444" radius={[4, 4, 0, 0]} barSize={20} />
                 </BarChart>
@@ -172,13 +203,13 @@ export function PnlReport() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {data.categoryBreakdown.length > 0 ? (
+            {view.categoryBreakdown.length > 0 ? (
               <>
                 <div className="h-[180px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={data.categoryBreakdown}
+                        data={view.categoryBreakdown}
                         dataKey="amount"
                         nameKey="category"
                         cx="50%"
@@ -188,7 +219,7 @@ export function PnlReport() {
                         strokeWidth={2}
                         stroke="var(--card)"
                       >
-                        {data.categoryBreakdown.map((_, i) => (
+                        {view.categoryBreakdown.map((_, i) => (
                           <Cell key={i} fill={COLORS[i % COLORS.length]} />
                         ))}
                       </Pie>
@@ -196,7 +227,7 @@ export function PnlReport() {
                   </ResponsiveContainer>
                 </div>
                 <div className="space-y-2 mt-2">
-                  {data.categoryBreakdown.map((cat, i) => (
+                  {view.categoryBreakdown.map((cat, i) => (
                     <div key={cat.category} className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div
@@ -206,7 +237,7 @@ export function PnlReport() {
                         <span className="text-xs text-foreground font-medium">{cat.category}</span>
                       </div>
                       <span className="text-xs text-muted-foreground tabular-nums">
-                        ${cat.amount.toLocaleString()}
+                        {moneyLabel(cat.amount, selected)}
                       </span>
                     </div>
                   ))}

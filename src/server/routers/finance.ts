@@ -1,6 +1,41 @@
 import { z } from 'zod';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
+import {
+  fromCurrencyGroups,
+  diffByCurrency,
+  currenciesPresent,
+} from '@/lib/finance/currency';
+
+// Money columns (transaction.amount, invoice totals, etc.) are Decimal(12,2), so the
+// largest value Postgres will accept is 9,999,999,999.99. Bound amounts here so an
+// oversized input fails as a clean validation error instead of a raw DB 500.
+const MAX_MONEY = 9_999_999_999.99;
+const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
+const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
+const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
+
+// Round to 2 decimal places (cents). Used to derive invoice money server-side so
+// caller-supplied subtotal/total are never trusted (FIN-01).
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// A recurring expense's stored nextDueDate doesn't advance on its own, so once a
+// due date passes it goes stale (e.g. seeded "May 1" still showing in June). Roll
+// it forward by its interval until it lands today or later so the UI always shows
+// the genuine *next* occurrence. Computed on read — we don't mutate the row here.
+const INTERVAL_MONTHS: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 };
+
+function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
+  const stepMonths = INTERVAL_MONTHS[interval.toLowerCase()] ?? 1;
+  const next = new Date(due);
+  const anchorDay = next.getDate();
+  // Cap iterations so an unrecognized interval can never spin forever.
+  for (let i = 0; next < now && i < 600; i++) {
+    next.setDate(anchorDay);
+    next.setMonth(next.getMonth() + stepMonths);
+  }
+  return next;
+}
 
 export const financeRouter = router({
   getTransactions: adminProcedure
@@ -41,7 +76,7 @@ export const financeRouter = router({
     .input(
       z.object({
         type: z.enum(['INCOME', 'EXPENSE']),
-        amount: z.number().positive(),
+        amount: positiveMoney(),
         currency: z.enum(['USD', 'PKR']).default('USD'),
         category: z
           .enum([
@@ -79,7 +114,7 @@ export const financeRouter = router({
       z.object({
         id: z.string(),
         type: z.enum(['INCOME', 'EXPENSE']).optional(),
-        amount: z.number().positive().optional(),
+        amount: positiveMoney().optional(),
         description: z.string().min(1).optional(),
         category: z
           .enum([
@@ -154,19 +189,33 @@ export const financeRouter = router({
           z.object({
             description: z.string(),
             quantity: z.number().positive(),
-            rate: z.number().positive(),
-            amount: z.number(),
+            rate: positiveMoney(),
+            amount: nonNegativeMoney(),
           })
         ),
-        subtotal: z.number(),
-        tax: z.number().default(0),
-        total: z.number(),
+        subtotal: nonNegativeMoney(),
+        tax: nonNegativeMoney().default(0),
+        total: nonNegativeMoney(),
         currency: z.enum(['USD', 'PKR']).default('USD'),
         dueDate: z.date(),
         notes: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // FIN-01: never trust client-sent money. Derive every line `amount`, the
+      // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
+      // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
+      // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
+      const lineItems = input.items.map((it) => ({
+        description: it.description,
+        quantity: it.quantity,
+        rate: it.rate,
+        amount: round2(it.quantity * it.rate),
+      }));
+      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
+      const tax = round2(input.tax ?? 0);
+      const total = round2(subtotal + tax);
+
       // Generate invoice number
       const count = await ctx.db.invoice.count();
       const year = new Date().getFullYear();
@@ -177,10 +226,10 @@ export const financeRouter = router({
           invoiceNumber,
           clientId: input.clientId,
           projectId: input.projectId || null,
-          items: input.items,
-          subtotal: input.subtotal,
-          tax: input.tax,
-          total: input.total,
+          items: lineItems,
+          subtotal,
+          tax,
+          total,
           currency: input.currency,
           status: 'DRAFT',
           dueDate: input.dueDate,
@@ -237,17 +286,28 @@ export const financeRouter = router({
     }),
 
   getRecurringExpenses: adminProcedure.query(async ({ ctx }) => {
-    return ctx.db.recurringExpense.findMany({
+    const expenses = await ctx.db.recurringExpense.findMany({
       where: { active: true },
-      orderBy: { nextDueDate: 'asc' },
     });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Surface the next upcoming due date (rolled past any lapsed cycles), then sort
+    // by it so the soonest-due subscription leads the list.
+    return expenses
+      .map((exp) => ({
+        ...exp,
+        nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today),
+      }))
+      .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime());
   }),
 
   createRecurringExpense: adminProcedure
     .input(
       z.object({
         name: z.string().min(1),
-        amount: z.number().positive(),
+        amount: positiveMoney(),
         currency: z.enum(['USD', 'PKR']).default('USD'),
         category: z.enum([
           'SALARIES',
@@ -284,50 +344,54 @@ export const financeRouter = router({
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfYear = new Date(now.getFullYear(), 0, 1);
 
+    // FIN-02: group every aggregate BY currency. Summing USD + PKR into one
+    // scalar misstates totals (a hardcoded "$" on Rs hundreds of thousands), so
+    // each figure is returned as a per-currency breakdown the UI renders apart.
+    const txGroup = (where: Record<string, unknown>) =>
+      ctx.db.transaction.groupBy({ by: ['currency'], _sum: { amount: true }, where });
+
     const [
-      monthlyIncome,
-      monthlyExpense,
-      yearlyIncome,
-      yearlyExpense,
-      paidInvoices,
-      outstandingInvoices,
+      monthlyIncomeG,
+      monthlyExpenseG,
+      yearlyIncomeG,
+      yearlyExpenseG,
+      paidInvoicesG,
+      outstandingInvoicesG,
     ] = await Promise.all([
-      ctx.db.transaction.aggregate({
-        _sum: { amount: true },
-        where: { type: 'INCOME', date: { gte: startOfMonth } },
+      txGroup({ type: 'INCOME', date: { gte: startOfMonth } }),
+      txGroup({ type: 'EXPENSE', date: { gte: startOfMonth } }),
+      txGroup({ type: 'INCOME', date: { gte: startOfYear } }),
+      txGroup({ type: 'EXPENSE', date: { gte: startOfYear } }),
+      ctx.db.invoice.groupBy({
+        by: ['currency'],
+        _sum: { total: true },
+        _count: true,
+        where: { status: 'PAID' },
       }),
-      ctx.db.transaction.aggregate({
-        _sum: { amount: true },
-        where: { type: 'EXPENSE', date: { gte: startOfMonth } },
-      }),
-      ctx.db.transaction.aggregate({
-        _sum: { amount: true },
-        where: { type: 'INCOME', date: { gte: startOfYear } },
-      }),
-      ctx.db.transaction.aggregate({
-        _sum: { amount: true },
-        where: { type: 'EXPENSE', date: { gte: startOfYear } },
-      }),
-      ctx.db.invoice.aggregate({ _sum: { total: true }, _count: true, where: { status: 'PAID' } }),
-      ctx.db.invoice.aggregate({
+      ctx.db.invoice.groupBy({
+        by: ['currency'],
         _sum: { total: true },
         _count: true,
         where: { status: { in: ['SENT', 'OVERDUE'] } },
       }),
     ]);
 
+    const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
+    const monthlyExpense = fromCurrencyGroups(monthlyExpenseG, 'amount');
+    const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
+    const yearlyExpense = fromCurrencyGroups(yearlyExpenseG, 'amount');
+
     return {
-      monthlyIncome: Number(monthlyIncome._sum.amount || 0),
-      monthlyExpense: Number(monthlyExpense._sum.amount || 0),
-      monthlyProfit:
-        Number(monthlyIncome._sum.amount || 0) - Number(monthlyExpense._sum.amount || 0),
-      yearlyIncome: Number(yearlyIncome._sum.amount || 0),
-      yearlyExpense: Number(yearlyExpense._sum.amount || 0),
-      yearlyProfit: Number(yearlyIncome._sum.amount || 0) - Number(yearlyExpense._sum.amount || 0),
-      totalPaid: Number(paidInvoices._sum.total || 0),
-      paidCount: paidInvoices._count,
-      totalOutstanding: Number(outstandingInvoices._sum.total || 0),
-      outstandingCount: outstandingInvoices._count,
+      monthlyIncome,
+      monthlyExpense,
+      monthlyProfit: diffByCurrency(monthlyIncome, monthlyExpense),
+      yearlyIncome,
+      yearlyExpense,
+      yearlyProfit: diffByCurrency(yearlyIncome, yearlyExpense),
+      totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
+      paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
+      totalOutstanding: fromCurrencyGroups(outstandingInvoicesG, 'total'),
+      outstandingCount: outstandingInvoicesG.reduce((s, g) => s + g._count, 0),
     };
   }),
 
@@ -341,56 +405,93 @@ export const financeRouter = router({
     .query(async ({ ctx, input }) => {
       const now = new Date();
 
-      // Build all per-month aggregate promises up front, then await once.
-      const monthRanges = [];
-      const aggregatePromises = [];
+      // FIN-02: P&L is reported PER currency — income/expense are grouped by
+      // currency per month (and the category breakdown by category+currency), so
+      // the trend chart and pie never blend USD and PKR. The client picks one
+      // currency to view at a time.
+      const monthRanges: Date[] = [];
+      const groupPromises = [];
       for (let i = input.months - 1; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
         const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
         monthRanges.push(date);
-        aggregatePromises.push(
-          ctx.db.transaction.aggregate({
+        groupPromises.push(
+          ctx.db.transaction.groupBy({
+            by: ['currency'],
             _sum: { amount: true },
             where: { type: 'INCOME', date: { gte: date, lte: endOfMonth } },
           }),
-          ctx.db.transaction.aggregate({
+          ctx.db.transaction.groupBy({
+            by: ['currency'],
             _sum: { amount: true },
             where: { type: 'EXPENSE', date: { gte: date, lte: endOfMonth } },
           })
         );
       }
 
-      const aggregates = await Promise.all(aggregatePromises);
+      const monthGroups = await Promise.all(groupPromises);
 
-      const data = monthRanges.map((date, idx) => {
-        const income = aggregates[idx * 2];
-        const expense = aggregates[idx * 2 + 1];
-        const incomeAmt = Number(income._sum.amount || 0);
-        const expenseAmt = Number(expense._sum.amount || 0);
-
-        return {
-          period: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-          income: incomeAmt,
-          expense: expenseAmt,
-          profit: incomeAmt - expenseAmt,
-          margin: incomeAmt > 0 ? ((incomeAmt - expenseAmt) / incomeAmt) * 100 : 0,
-        };
-      });
-
-      // Expense breakdown by category
-      const categoryBreakdown = await ctx.db.transaction.groupBy({
-        by: ['category'],
+      // Expense breakdown by category AND currency (year-to-date).
+      const categoryGroups = await ctx.db.transaction.groupBy({
+        by: ['category', 'currency'],
         _sum: { amount: true },
         where: { type: 'EXPENSE', date: { gte: new Date(now.getFullYear(), 0, 1) } },
         orderBy: { _sum: { amount: 'desc' } },
       });
 
-      return {
-        data,
-        categoryBreakdown: categoryBreakdown.map((c) => ({
-          category: c.category || 'Uncategorized',
-          amount: Number(c._sum.amount || 0),
-        })),
-      };
+      // Per-month per-currency amount lookup helper.
+      const amountFor = (
+        groups: Array<{ currency: string; _sum: { amount: unknown } }>,
+        currency: string
+      ) => Number(groups.find((g) => g.currency === currency)?._sum.amount ?? 0);
+
+      const monthIncome = monthRanges.map((_, idx) => fromCurrencyGroups(monthGroups[idx * 2], 'amount'));
+      const monthExpense = monthRanges.map((_, idx) =>
+        fromCurrencyGroups(monthGroups[idx * 2 + 1], 'amount')
+      );
+      const currencies = currenciesPresent(
+        ...monthIncome,
+        ...monthExpense,
+        fromCurrencyGroups(categoryGroups, 'amount')
+      );
+
+      const byCurrency: Record<
+        string,
+        {
+          data: Array<{
+            period: string;
+            income: number;
+            expense: number;
+            profit: number;
+            margin: number;
+          }>;
+          categoryBreakdown: Array<{ category: string; amount: number }>;
+        }
+      > = {};
+
+      for (const currency of currencies) {
+        const data = monthRanges.map((date, idx) => {
+          const incomeAmt = amountFor(monthGroups[idx * 2], currency);
+          const expenseAmt = amountFor(monthGroups[idx * 2 + 1], currency);
+          return {
+            period: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+            income: incomeAmt,
+            expense: expenseAmt,
+            profit: incomeAmt - expenseAmt,
+            margin: incomeAmt > 0 ? ((incomeAmt - expenseAmt) / incomeAmt) * 100 : 0,
+          };
+        });
+        const categoryBreakdown = categoryGroups
+          .filter((c) => c.currency === currency)
+          .map((c) => ({
+            category: c.category || 'Uncategorized',
+            amount: Number(c._sum.amount || 0),
+          }))
+          .filter((c) => c.amount !== 0)
+          .sort((a, b) => b.amount - a.amount);
+        byCurrency[currency] = { data, categoryBreakdown };
+      }
+
+      return { currencies, byCurrency };
     }),
 });

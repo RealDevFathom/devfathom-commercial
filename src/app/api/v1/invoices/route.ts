@@ -29,20 +29,27 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   return NextResponse.json({ data: invoices });
 });
 
+// Money columns are Decimal(12,2): Postgres caps a value at 9,999,999,999.99.
+// Bound + non-negative so an oversized/negative input is a clean 400, not a raw
+// DB 500 (FIN-07) and not a paid/outstanding-corrupting negative (FIN-01).
+const MAX_MONEY = 9_999_999_999.99;
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 const lineItemSchema = z.object({
-  description: z.string(),
-  quantity: z.number().positive(),
-  rate: z.number().positive(),
-  amount: z.number(),
+  description: z.string().min(1),
+  quantity: z.number().positive().max(1_000_000),
+  rate: z.number().nonnegative().max(MAX_MONEY),
+  // amount is accepted for backward-compat but ignored — the server recomputes
+  // it from quantity × rate so a forged amount cannot skew the total.
+  amount: z.number().optional(),
 });
 
 const createInvoiceSchema = z.object({
   clientId: z.string(),
   projectId: z.string().optional(),
   items: z.array(lineItemSchema).min(1),
-  subtotal: z.number(),
-  tax: z.number().default(0),
-  total: z.number(),
+  // subtotal/total are intentionally NOT accepted — they are derived server-side.
+  tax: z.number().nonnegative().max(MAX_MONEY).default(0),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   dueDate: z.string().datetime(),
   notes: z.string().optional(),
@@ -58,6 +65,18 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
     );
   }
 
+  // FIN-01: derive line amounts, subtotal and total on the server from
+  // quantity × rate (+ tax). Client-sent subtotal/total are never used.
+  const items = parsed.data.items.map((it) => ({
+    description: it.description,
+    quantity: it.quantity,
+    rate: it.rate,
+    amount: round2(it.quantity * it.rate),
+  }));
+  const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
+  const tax = round2(parsed.data.tax);
+  const total = round2(subtotal + tax);
+
   const count = await db.invoice.count();
   const year = new Date().getFullYear();
   const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
@@ -67,10 +86,10 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
       invoiceNumber,
       clientId: parsed.data.clientId,
       projectId: parsed.data.projectId || null,
-      items: parsed.data.items,
-      subtotal: parsed.data.subtotal,
-      tax: parsed.data.tax,
-      total: parsed.data.total,
+      items,
+      subtotal,
+      tax,
+      total,
       currency: parsed.data.currency,
       status: 'DRAFT',
       dueDate: new Date(parsed.data.dueDate),

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   AreaChart,
   Area,
@@ -13,15 +14,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { TrendingUp } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { moneyLabel } from '@/lib/finance/currency';
 
 function ChartTooltipContent({
   active,
   payload,
   label,
+  currency = 'USD',
 }: {
   active?: boolean;
   payload?: Array<{ value: number; dataKey: string; color: string }>;
   label?: string;
+  currency?: string;
 }) {
   if (!active || !payload?.length) return null;
 
@@ -35,7 +40,7 @@ function ChartTooltipContent({
             <span className="text-xs text-muted-foreground capitalize">{entry.dataKey}</span>
           </div>
           <span className="text-sm font-semibold text-foreground tabular-nums">
-            ${entry.value.toLocaleString()}
+            {moneyLabel(entry.value, currency)}
           </span>
         </div>
       ))}
@@ -44,7 +49,9 @@ function ChartTooltipContent({
 }
 
 export function RevenueChart() {
-  const { data, isLoading } = trpc.dashboard.getRevenueChart.useQuery();
+  const { data: result, isLoading } = trpc.dashboard.getRevenueChart.useQuery();
+  // FIN-02: view one currency at a time (USD-first); never blend USD + PKR.
+  const [currency, setCurrency] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -59,7 +66,12 @@ export function RevenueChart() {
     );
   }
 
-  if (!data?.length) return null;
+  if (!result || result.currencies.length === 0) return null;
+
+  const selected = currency && result.byCurrency[currency] ? currency : result.currencies[0];
+  const data = result.byCurrency[selected];
+  const multiCurrency = result.currencies.length > 1;
+  const axisSymbol = selected === 'PKR' ? 'Rs ' : '$';
 
   const totalIncome = data.reduce((sum, d) => sum + d.income, 0);
   const totalProfit = data.reduce((sum, d) => sum + d.profit, 0);
@@ -75,6 +87,24 @@ export function RevenueChart() {
             Revenue Overview
           </CardTitle>
           <div className="flex items-center gap-5">
+            {multiCurrency && (
+              <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+                {result.currencies.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setCurrency(c)}
+                    className={cn(
+                      'rounded-md px-2 py-0.5 text-[11px] font-semibold transition-colors',
+                      selected === c
+                        ? 'bg-primary text-white'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-1.5">
               <div className="h-2 w-2 rounded-full bg-primary" />
               <span className="text-xs text-muted-foreground">Income</span>
@@ -88,13 +118,13 @@ export function RevenueChart() {
         <div className="flex items-baseline gap-4 mt-2">
           <div>
             <span className="font-display text-2xl font-bold text-foreground">
-              ${totalIncome.toLocaleString()}
+              {moneyLabel(totalIncome, selected)}
             </span>
             <span className="text-xs text-muted-foreground ml-1.5">total income</span>
           </div>
           <div>
             <span className="text-sm font-semibold text-emerald-500">
-              ${totalProfit.toLocaleString()}
+              {moneyLabel(totalProfit, selected)}
             </span>
             <span className="text-xs text-muted-foreground ml-1">net profit</span>
           </div>
@@ -131,9 +161,9 @@ export function RevenueChart() {
                 axisLine={false}
                 tickLine={false}
                 tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-                tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
+                tickFormatter={(v: number) => `${axisSymbol}${(v / 1000).toFixed(0)}k`}
               />
-              <Tooltip content={<ChartTooltipContent />} cursor={false} />
+              <Tooltip content={<ChartTooltipContent currency={selected} />} cursor={false} />
               <Area
                 type="monotone"
                 dataKey="income"

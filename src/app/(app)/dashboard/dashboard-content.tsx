@@ -30,6 +30,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
 import { RevenueChart } from './revenue-chart';
+import { moneyListLabel, diffByCurrency } from '@/lib/finance/currency';
 
 /* ============================================
    Next Meeting Countdown — real data
@@ -647,6 +648,8 @@ const ACTIVITY_COLORS: Record<string, string> = {
   task_completed: 'bg-emerald-500',
   invoice_sent: 'bg-blue-500',
   invoice_paid: 'bg-blue-500',
+  contract_created: 'bg-violet-500',
+  contract_updated: 'bg-violet-500',
   project_created: 'bg-primary',
   project_updated: 'bg-primary',
 };
@@ -927,7 +930,7 @@ export function DashboardContent() {
         {isAdmin && (
           <KPICard
             title="Revenue This Month"
-            value={`$${(stats.data?.revenue ?? 0).toLocaleString()}`}
+            value={moneyListLabel(stats.data?.revenue ?? [])}
             change="+12%"
             changeLabel="vs last month"
             icon={DollarSign}
@@ -955,10 +958,18 @@ export function DashboardContent() {
           <KPICard
             title="Outstanding Invoices"
             value={String(stats.data?.outstandingInvoices ?? 0)}
-            change={`$${((stats.data?.revenue ?? 0) - (stats.data?.expenses ?? 0)).toLocaleString()} net`}
+            change={`${moneyListLabel(
+              diffByCurrency(stats.data?.revenue ?? [], stats.data?.expenses ?? [])
+            )} net`}
             changeLabel="this month"
             icon={FileText}
-            trend={(stats.data?.revenue ?? 0) > (stats.data?.expenses ?? 0) ? 'up' : 'down'}
+            trend={
+              diffByCurrency(stats.data?.revenue ?? [], stats.data?.expenses ?? []).some(
+                (p) => p.amount < 0
+              )
+                ? 'down'
+                : 'up'
+            }
             accentColor="amber"
           />
         ) : (

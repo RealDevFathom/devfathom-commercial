@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
 
 export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   const url = new URL(request.url);
@@ -13,56 +14,64 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
     : new Date(now.getFullYear(), now.getMonth(), 1);
   const endDate = endDateParam ? new Date(endDateParam) : now;
 
-  const [income, expense, paidInvoices, outstandingInvoices, expenseByCategory] = await Promise.all(
-    [
-      db.transaction.aggregate({
-        _sum: { amount: true },
-        _count: true,
-        where: { type: 'INCOME', date: { gte: startDate, lte: endDate } },
-      }),
-      db.transaction.aggregate({
-        _sum: { amount: true },
-        _count: true,
-        where: { type: 'EXPENSE', date: { gte: startDate, lte: endDate } },
-      }),
-      db.invoice.aggregate({
-        _sum: { total: true },
-        _count: true,
-        where: { status: 'PAID' },
-      }),
-      db.invoice.aggregate({
-        _sum: { total: true },
-        _count: true,
-        where: { status: { in: ['SENT', 'OVERDUE'] } },
-      }),
-      db.transaction.groupBy({
-        by: ['category'],
-        _sum: { amount: true },
-        where: { type: 'EXPENSE', date: { gte: startDate, lte: endDate } },
-        orderBy: { _sum: { amount: 'desc' } },
-      }),
-    ]
-  );
+  // FIN-02: every monetary aggregate is grouped BY currency so the JSON never
+  // reports a USD + PKR sum as a single figure. Each total is an array of
+  // { currency, amount } pairs.
+  const [incomeG, expenseG, paidG, outstandingG, expenseByCategoryG] = await Promise.all([
+    db.transaction.groupBy({
+      by: ['currency'],
+      _sum: { amount: true },
+      _count: true,
+      where: { type: 'INCOME', date: { gte: startDate, lte: endDate } },
+    }),
+    db.transaction.groupBy({
+      by: ['currency'],
+      _sum: { amount: true },
+      _count: true,
+      where: { type: 'EXPENSE', date: { gte: startDate, lte: endDate } },
+    }),
+    db.invoice.groupBy({
+      by: ['currency'],
+      _sum: { total: true },
+      _count: true,
+      where: { status: 'PAID' },
+    }),
+    db.invoice.groupBy({
+      by: ['currency'],
+      _sum: { total: true },
+      _count: true,
+      where: { status: { in: ['SENT', 'OVERDUE'] } },
+    }),
+    db.transaction.groupBy({
+      by: ['category', 'currency'],
+      _sum: { amount: true },
+      where: { type: 'EXPENSE', date: { gte: startDate, lte: endDate } },
+      orderBy: { _sum: { amount: 'desc' } },
+    }),
+  ]);
 
-  const totalIncome = Number(income._sum.amount || 0);
-  const totalExpense = Number(expense._sum.amount || 0);
+  const income = fromCurrencyGroups(incomeG, 'amount');
+  const expense = fromCurrencyGroups(expenseG, 'amount');
 
   return NextResponse.json({
     data: {
       period: { startDate, endDate },
-      income: { total: totalIncome, count: income._count },
-      expense: { total: totalExpense, count: expense._count },
-      profit: totalIncome - totalExpense,
-      margin: totalIncome > 0 ? ((totalIncome - totalExpense) / totalIncome) * 100 : 0,
+      income: { byCurrency: income, count: incomeG.reduce((s, g) => s + g._count, 0) },
+      expense: { byCurrency: expense, count: expenseG.reduce((s, g) => s + g._count, 0) },
+      profit: { byCurrency: diffByCurrency(income, expense) },
       invoices: {
-        paid: { total: Number(paidInvoices._sum.total || 0), count: paidInvoices._count },
+        paid: {
+          byCurrency: fromCurrencyGroups(paidG, 'total'),
+          count: paidG.reduce((s, g) => s + g._count, 0),
+        },
         outstanding: {
-          total: Number(outstandingInvoices._sum.total || 0),
-          count: outstandingInvoices._count,
+          byCurrency: fromCurrencyGroups(outstandingG, 'total'),
+          count: outstandingG.reduce((s, g) => s + g._count, 0),
         },
       },
-      expenseByCategory: expenseByCategory.map((c) => ({
+      expenseByCategory: expenseByCategoryG.map((c) => ({
         category: c.category || 'Uncategorized',
+        currency: c.currency,
         amount: Number(c._sum.amount || 0),
       })),
     },

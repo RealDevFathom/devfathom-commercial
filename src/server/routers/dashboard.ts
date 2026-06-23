@@ -1,4 +1,9 @@
 import { router, protectedProcedure, adminProcedure } from '../trpc';
+import {
+  fromCurrencyGroups,
+  currenciesPresent,
+  type CurrencyAmount,
+} from '@/lib/finance/currency';
 
 export const dashboardRouter = router({
   getStats: protectedProcedure.query(async ({ ctx }) => {
@@ -35,9 +40,10 @@ export const dashboardRouter = router({
       }),
     ]);
 
-    // Admin-only financial stats
-    let revenue = 0;
-    let expenses = 0;
+    // Admin-only financial stats. FIN-02: revenue/expenses are per-currency
+    // breakdowns (never a single cross-currency "$" sum).
+    let revenue: CurrencyAmount[] = [];
+    let expenses: CurrencyAmount[] = [];
     let outstandingInvoices = 0;
 
     if (isAdmin) {
@@ -45,11 +51,13 @@ export const dashboardRouter = router({
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
       const [incomeResult, expenseResult, outstandingResult] = await Promise.all([
-        ctx.db.transaction.aggregate({
+        ctx.db.transaction.groupBy({
+          by: ['currency'],
           _sum: { amount: true },
           where: { type: 'INCOME', date: { gte: startOfMonth } },
         }),
-        ctx.db.transaction.aggregate({
+        ctx.db.transaction.groupBy({
+          by: ['currency'],
           _sum: { amount: true },
           where: { type: 'EXPENSE', date: { gte: startOfMonth } },
         }),
@@ -58,8 +66,8 @@ export const dashboardRouter = router({
         }),
       ]);
 
-      revenue = Number(incomeResult._sum.amount || 0);
-      expenses = Number(expenseResult._sum.amount || 0);
+      revenue = fromCurrencyGroups(incomeResult, 'amount');
+      expenses = fromCurrencyGroups(expenseResult, 'amount');
       outstandingInvoices = outstandingResult;
     }
 
@@ -78,8 +86,16 @@ export const dashboardRouter = router({
   getRecentActivity: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
 
-    // Hide finance-related activity from non-admins.
-    const financeTypes = ['invoice_created', 'invoice_sent', 'invoice_paid', 'transaction_created'];
+    // Hide finance-related activity from non-admins. Contracts are admin-only too.
+    const financeTypes = [
+      'invoice_created',
+      'invoice_sent',
+      'invoice_paid',
+      'transaction_created',
+      'contract_created',
+      'contract_updated',
+      'contract_deleted',
+    ];
 
     return ctx.db.activity.findMany({
       where: isAdmin ? {} : { type: { notIn: financeTypes } },
@@ -187,36 +203,51 @@ export const dashboardRouter = router({
       monthRanges.push({ startOfMonth, endOfMonth });
     }
 
+    // FIN-02: group each month by currency so the chart never blends USD + PKR.
+    // The client renders one currency series at a time (USD-first by default).
     const results = await Promise.all(
       monthRanges.flatMap(({ startOfMonth, endOfMonth }) => [
-        ctx.db.transaction.aggregate({
+        ctx.db.transaction.groupBy({
+          by: ['currency'],
           _sum: { amount: true },
-          where: {
-            type: 'INCOME',
-            date: { gte: startOfMonth, lte: endOfMonth },
-          },
+          where: { type: 'INCOME', date: { gte: startOfMonth, lte: endOfMonth } },
         }),
-        ctx.db.transaction.aggregate({
+        ctx.db.transaction.groupBy({
+          by: ['currency'],
           _sum: { amount: true },
-          where: {
-            type: 'EXPENSE',
-            date: { gte: startOfMonth, lte: endOfMonth },
-          },
+          where: { type: 'EXPENSE', date: { gte: startOfMonth, lte: endOfMonth } },
         }),
       ])
     );
 
-    const data = monthRanges.map(({ startOfMonth }, idx) => {
-      const income = results[idx * 2];
-      const expense = results[idx * 2 + 1];
-      return {
-        month: startOfMonth.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-        income: Number(income._sum.amount || 0),
-        expense: Number(expense._sum.amount || 0),
-        profit: Number(income._sum.amount || 0) - Number(expense._sum.amount || 0),
-      };
-    });
+    const monthIncome = monthRanges.map((_, idx) => fromCurrencyGroups(results[idx * 2], 'amount'));
+    const monthExpense = monthRanges.map((_, idx) =>
+      fromCurrencyGroups(results[idx * 2 + 1], 'amount')
+    );
+    const currencies = currenciesPresent(...monthIncome, ...monthExpense);
 
-    return data;
+    const amountFor = (
+      groups: Array<{ currency: string; _sum: { amount: unknown } }>,
+      currency: string
+    ) => Number(groups.find((g) => g.currency === currency)?._sum.amount ?? 0);
+
+    const byCurrency: Record<
+      string,
+      Array<{ month: string; income: number; expense: number; profit: number }>
+    > = {};
+    for (const currency of currencies) {
+      byCurrency[currency] = monthRanges.map(({ startOfMonth }, idx) => {
+        const income = amountFor(results[idx * 2], currency);
+        const expense = amountFor(results[idx * 2 + 1], currency);
+        return {
+          month: startOfMonth.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          income,
+          expense,
+          profit: income - expense,
+        };
+      });
+    }
+
+    return { currencies, byCurrency };
   }),
 });

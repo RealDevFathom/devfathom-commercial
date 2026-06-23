@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
+import { moneyListLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
 
 // P&L report pulls in recharts; it is tab-gated, so load it lazily (client-only)
@@ -89,25 +90,25 @@ export function FinanceContent() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <FinanceKPI
               title="Monthly Revenue"
-              value={`$${summary.data.monthlyIncome.toLocaleString()}`}
+              value={moneyListLabel(summary.data.monthlyIncome)}
               icon={TrendingUp}
               accent="emerald"
             />
             <FinanceKPI
               title="Monthly Expenses"
-              value={`$${summary.data.monthlyExpense.toLocaleString()}`}
+              value={moneyListLabel(summary.data.monthlyExpense)}
               icon={TrendingDown}
               accent="red"
             />
             <FinanceKPI
               title="Net Profit"
-              value={`$${summary.data.monthlyProfit.toLocaleString()}`}
+              value={moneyListLabel(summary.data.monthlyProfit)}
               icon={DollarSign}
-              accent={summary.data.monthlyProfit >= 0 ? 'emerald' : 'red'}
+              accent={summary.data.monthlyProfit.some((p) => p.amount < 0) ? 'red' : 'emerald'}
             />
             <FinanceKPI
               title="Outstanding"
-              value={`$${summary.data.totalOutstanding.toLocaleString()}`}
+              value={moneyListLabel(summary.data.totalOutstanding)}
               subtitle={`${summary.data.outstandingCount} invoices`}
               icon={FileText}
               accent="amber"
@@ -440,6 +441,10 @@ const TransactionRow = memo(function TransactionRow({
   );
 });
 
+// Money columns are Decimal(12,2) in the schema; the max value Postgres accepts is
+// 9,999,999,999.99. Keep this in sync with the server-side bound in finance.ts.
+const MAX_MONEY = 9_999_999_999.99;
+
 /* ============================================
    Add Transaction Form
    ============================================ */
@@ -464,8 +469,13 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
   const [clientId, setClientId] = useState('');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
+  // Mirrors the Decimal(12,2) ceiling enforced server-side so we flag oversized
+  // amounts inline instead of letting the request fail at the DB layer.
+  const amountNum = parseFloat(amount);
+  const amountTooLarge = amount !== '' && amountNum > MAX_MONEY;
+
   const handleSubmit = () => {
-    if (!amount || !description.trim()) return;
+    if (!amount || !description.trim() || amountTooLarge) return;
     createTransaction.mutate({
       type,
       amount: parseFloat(amount),
@@ -513,11 +523,21 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
             <input
               type="number"
               step="0.01"
+              min="0"
+              max={MAX_MONEY}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="0.00"
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className={cn(
+                'w-full rounded-xl border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2',
+                amountTooLarge
+                  ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20'
+                  : 'border-border focus:border-primary focus:ring-primary/20'
+              )}
             />
+            {amountTooLarge && (
+              <p className="mt-1 text-xs text-red-500">Max amount is 9,999,999,999.99</p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Date</label>
@@ -590,6 +610,10 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
+        {createTransaction.error && (
+          <p className="text-xs text-red-500">{createTransaction.error.message}</p>
+        )}
+
         <div className="flex justify-end gap-2 pt-1">
           <button
             onClick={onClose}
@@ -599,7 +623,9 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!amount || !description.trim() || createTransaction.isPending}
+            disabled={
+              !amount || !description.trim() || amountTooLarge || createTransaction.isPending
+            }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createTransaction.isPending ? (
