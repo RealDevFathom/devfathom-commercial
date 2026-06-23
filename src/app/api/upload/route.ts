@@ -40,12 +40,34 @@ export async function POST(request: Request) {
       'image/webp',
       'application/pdf',
       'text/plain',
+      // Audio (voice messages). Non-executable containers — safe to serve same-origin.
+      'audio/webm',
+      'audio/ogg',
+      'audio/mp4',
+      'audio/mpeg',
     ]);
-    const ALLOWED_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf', 'txt']);
+    const ALLOWED_EXT = new Set([
+      'png',
+      'jpg',
+      'jpeg',
+      'gif',
+      'webp',
+      'pdf',
+      'txt',
+      // Audio extensions paired with the MIME types above.
+      'webm',
+      'ogg',
+      'oga',
+      'm4a',
+      'mp4',
+      'mp3',
+    ]);
+    // MediaRecorder reports e.g. `audio/webm;codecs=opus` — match on the base type.
+    const baseType = file.type.split(';')[0].trim().toLowerCase();
     const ext = (file.name.split('.').pop() ?? '').toLowerCase();
-    if (!ALLOWED_TYPES.has(file.type) || !ALLOWED_EXT.has(ext)) {
+    if (!ALLOWED_TYPES.has(baseType) || !ALLOWED_EXT.has(ext)) {
       return NextResponse.json(
-        { error: 'Unsupported file type (images, PDF, or text only)' },
+        { error: 'Unsupported file type (images, PDF, text, or audio only)' },
         { status: 415 }
       );
     }
@@ -55,12 +77,14 @@ export async function POST(request: Request) {
     const safeName = file.name.replace(/[/\\]/g, '').replace(/[^a-zA-Z0-9._\-]/g, '_');
     const filename = `${id}-${safeName}`;
 
-    const uploadsDir = join(process.cwd(), 'public', 'uploads');
+    // RT-05: write to a PRIVATE dir (outside public/) and return an authenticated
+    // delivery URL, so files are no longer world-readable by raw URL.
+    const uploadsDir = join(process.cwd(), 'private-uploads');
     await mkdir(uploadsDir, { recursive: true });
     await writeFile(join(uploadsDir, filename), Buffer.from(await file.arrayBuffer()));
 
     return NextResponse.json({
-      url: '/uploads/' + filename,
+      url: '/api/files/' + filename,
       name: file.name,
       size: file.size,
       type: file.type,

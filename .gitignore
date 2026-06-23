@@ -44,3 +44,6 @@ next-env.d.ts
 
 # Local email/render previews
 .preview/
+
+# RT-05: authenticated local upload storage (dev)
+private-uploads/
