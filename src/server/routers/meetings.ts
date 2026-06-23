@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import jwt from 'jsonwebtoken';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
 import { assertMeetingManage, assertMeetingAccess } from '../authz';
@@ -269,40 +270,38 @@ export const meetingsRouter = router({
         return { skipped: 'too_late' as const, occurrence };
       }
 
-      // Upsert the log row for this specific occurrence. Double-clicks hit
-      // the unique constraint and become a no-op.
-      const existing = await ctx.db.meetingAttendanceLog.findUnique({
-        where: {
-          meetingId_userId_occurrenceStart: {
-            meetingId: input.meetingId,
-            userId,
-            occurrenceStart: occurrence.start,
-          },
-        },
+      // RT-06: atomic insert for this occurrence. createMany + skipDuplicates is
+      // race-safe; the old findUnique→create threw P2002 (500) on a genuine
+      // concurrent double-join. count === 0 means the row already existed.
+      const result = await ctx.db.meetingAttendanceLog.createMany({
+        data: [
+          { meetingId: input.meetingId, userId, occurrenceStart: occurrence.start, joinedAt: now },
+        ],
+        skipDuplicates: true,
       });
 
-      if (existing) {
+      if (result.count === 0) {
+        const existing = await ctx.db.meetingAttendanceLog.findUnique({
+          where: {
+            meetingId_userId_occurrenceStart: {
+              meetingId: input.meetingId,
+              userId,
+              occurrenceStart: occurrence.start,
+            },
+          },
+        });
         return {
-          joinedAt: existing.joinedAt,
+          joinedAt: existing?.joinedAt ?? now,
           alreadyJoined: true as const,
           occurrence,
         };
       }
 
-      const created = await ctx.db.meetingAttendanceLog.create({
-        data: {
-          meetingId: input.meetingId,
-          userId,
-          occurrenceStart: occurrence.start,
-          joinedAt: now,
-        },
-      });
-
       // Also stamp MeetingAttendee.joinedAt with the latest join time so the
       // deprecated field still looks reasonable for any stale code that reads
-      // it. New reads should go through the log.
-      await ctx.db.meetingAttendee.update({
-        where: { meetingId_userId: { meetingId: input.meetingId, userId } },
+      // it. updateMany so a non-formal attendee is a no-op, not a missing-row error.
+      await ctx.db.meetingAttendee.updateMany({
+        where: { meetingId: input.meetingId, userId },
         data: { joinedAt: now },
       });
 
@@ -319,10 +318,197 @@ export const meetingsRouter = router({
       });
 
       return {
-        joinedAt: created.joinedAt,
+        joinedAt: now,
         alreadyJoined: false as const,
         occurrence,
       };
+    }),
+
+  /**
+   * Mint a short-lived JaaS (8x8-hosted Jitsi) JWT so the caller can join this
+   * meeting's embedded video room.
+   *
+   * SECURITY: the RSA private key (JAAS_PRIVATE_KEY) never leaves the server —
+   * signing happens only here. The token is scoped to `meeting-${id}` (not '*'),
+   * lives 2 hours, and only the meeting creator or an admin is granted the
+   * moderator flag. Access is gated identically to the rest of this router via
+   * assertMeetingAccess (creator, attendee, or admin only).
+   */
+  getCallToken: protectedProcedure
+    .input(z.object({ meetingId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertMeetingAccess(ctx, input.meetingId);
+
+      const appId = process.env.NEXT_PUBLIC_JAAS_APP_ID;
+      const kid = process.env.JAAS_KID;
+      // Tolerate PEMs stored single-line with escaped newlines (Vercel dashboard,
+      // .env) as well as real multiline values.
+      const privateKey = process.env.JAAS_PRIVATE_KEY?.replace(/\\n/g, '\n');
+      if (!appId || !kid || !privateKey) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Video calling is not configured.',
+        });
+      }
+
+      const meeting = await ctx.db.meeting.findUnique({
+        where: { id: input.meetingId },
+        select: { createdById: true },
+      });
+      if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const { id, name, email, image, role } = ctx.session.user;
+      const isModerator = role === 'ADMIN' || meeting.createdById === id;
+
+      const iat = Math.floor(Date.now() / 1000);
+      const token = jwt.sign(
+        {
+          aud: 'jitsi',
+          iss: 'chat',
+          sub: appId,
+          room: `meeting-${input.meetingId}`,
+          iat,
+          nbf: iat - 5,
+          exp: iat + 7200, // 2-hour token
+          context: {
+            user: {
+              id,
+              name,
+              email,
+              avatar: image ?? undefined,
+              moderator: isModerator,
+            },
+            // MVP: premium features stay off until the JaaS plan supports them.
+            features: {
+              recording: false,
+              transcription: false,
+              livestreaming: false,
+              'outbound-call': false,
+            },
+          },
+        },
+        privateKey,
+        { algorithm: 'RS256', header: { alg: 'RS256', kid, typ: 'JWT' } }
+      );
+
+      return { jwt: token, roomName: `${appId}/meeting-${input.meetingId}` };
+    }),
+
+  /**
+   * Record that the current user joined the embedded video call. Upserts the
+   * per-occurrence MeetingAttendanceLog row (idempotent per occurrence). Gated
+   * identically to getCallToken via assertMeetingAccess.
+   */
+  logJoin: protectedProcedure
+    .input(z.object({ meetingId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertMeetingAccess(ctx, input.meetingId);
+      const userId = ctx.session.user.id;
+
+      const meeting = await ctx.db.meeting.findUnique({
+        where: { id: input.meetingId },
+        select: { id: true, title: true, startTime: true, endTime: true, recurrence: true },
+      });
+      if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const now = new Date();
+      const occurrence = findRelevantOccurrence(
+        meeting.startTime,
+        meeting.endTime,
+        meeting.recurrence,
+        now
+      );
+
+      // RT-01: logJoin is the PRIMARY, auto-fired attendance signal, so it MUST
+      // honour the same anti-backfill window markJoined enforces — otherwise a
+      // user who opens /meetings/<id>/call off-hours is stamped "present" for the
+      // resolved occurrence. Attendance counts only within [start-5min, end].
+      const windowStart = new Date(occurrence.start.getTime() - 5 * 60_000);
+      if (now < windowStart) return { skipped: 'too_early' as const, alreadyJoined: false as const };
+      if (now > occurrence.end) return { skipped: 'too_late' as const, alreadyJoined: false as const };
+
+      // RT-06: atomic insert. createMany + skipDuplicates can't race the way the
+      // old findUnique→create did (a genuine concurrent double-join threw P2002 →
+      // 500). count === 0 means the row already existed.
+      const result = await ctx.db.meetingAttendanceLog.createMany({
+        data: [
+          { meetingId: input.meetingId, userId, occurrenceStart: occurrence.start, joinedAt: now },
+        ],
+        skipDuplicates: true,
+      });
+      if (result.count === 0) {
+        const existing = await ctx.db.meetingAttendanceLog.findUnique({
+          where: {
+            meetingId_userId_occurrenceStart: {
+              meetingId: input.meetingId,
+              userId,
+              occurrenceStart: occurrence.start,
+            },
+          },
+        });
+        return { joinedAt: existing?.joinedAt ?? now, alreadyJoined: true as const };
+      }
+
+      // Keep the deprecated MeetingAttendee.joinedAt reasonable. updateMany (not
+      // update) so an admin who joins without being a formal attendee is a no-op
+      // rather than a missing-row error.
+      await ctx.db.meetingAttendee.updateMany({
+        where: { meetingId: input.meetingId, userId },
+        data: { joinedAt: now },
+      });
+
+      const punctuality = computePunctuality(
+        { startTime: occurrence.start, recurrence: null },
+        now
+      );
+
+      logActivity(ctx.db, userId, {
+        type: 'meeting_joined',
+        message: `joined meeting "${meeting.title}" (${punctuality?.label ?? 'on time'})`,
+        entityType: 'Meeting',
+        entityId: input.meetingId,
+      });
+
+      return { joinedAt: now, alreadyJoined: false as const };
+    }),
+
+  /**
+   * Stamp leftAt on the user's open attendance record for the current
+   * occurrence when they leave the call. updateMany so leaving without a
+   * recorded join (or after it's already stamped) is a harmless no-op. Gated
+   * identically to getCallToken.
+   */
+  logLeave: protectedProcedure
+    .input(z.object({ meetingId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertMeetingAccess(ctx, input.meetingId);
+      const userId = ctx.session.user.id;
+
+      const meeting = await ctx.db.meeting.findUnique({
+        where: { id: input.meetingId },
+        select: { startTime: true, endTime: true, recurrence: true },
+      });
+      if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const now = new Date();
+      const occurrence = findRelevantOccurrence(
+        meeting.startTime,
+        meeting.endTime,
+        meeting.recurrence,
+        now
+      );
+
+      const res = await ctx.db.meetingAttendanceLog.updateMany({
+        where: {
+          meetingId: input.meetingId,
+          userId,
+          occurrenceStart: occurrence.start,
+          leftAt: null,
+        },
+        data: { leftAt: now },
+      });
+
+      return { left: res.count > 0 };
     }),
 });
 
