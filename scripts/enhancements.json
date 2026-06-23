@@ -86,7 +86,7 @@
     "tier": "medium",
     "title": "Board/column templates + WIP limits",
     "value": "Faster setup, flow control",
-    "status": "todo",
+    "status": "partial",
     "acceptance": [
       "Create a board from a template; per-column WIP limit",
       "WIP limit warns/blocks on exceed"
@@ -195,7 +195,7 @@
     "tier": "medium",
     "title": "Contract ↔ project/invoice linkage + value rollup",
     "value": "Connect sales→delivery→billing",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Contract links to a project; generate invoice from contract value",
       "Per-client total contracted value rollup"
@@ -611,7 +611,7 @@
     "tier": "medium",
     "title": "Notification preferences",
     "value": "Reduce noise; respect prefs",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Per-user per-type/channel opt-out honored by notify()"
     ]
