@@ -166,18 +166,24 @@ export const clientsRouter = router({
   // invoices (see getById, which strips both for non-admins).
   addContract: adminProcedure
     .input(
-      z.object({
-        clientId: z.string(),
-        title: z.string().min(1),
-        fileUrl: z.string().optional(),
-        value: contractValue().optional(),
-        currency: currencyEnum.default('USD'),
-        status: contractStatusEnum.default('DRAFT'),
-        startDate: z.date().optional(),
-        endDate: z.date().optional(),
-        signedAt: z.date().optional(),
-        notes: z.string().optional(),
-      })
+      z
+        .object({
+          clientId: z.string(),
+          title: z.string().min(1),
+          fileUrl: z.string().optional(),
+          value: contractValue().optional(),
+          currency: currencyEnum.default('USD'),
+          status: contractStatusEnum.default('DRAFT'),
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          signedAt: z.date().optional(),
+          notes: z.string().optional(),
+        })
+        // CON-01: endDate must not precede startDate (when both are set).
+        .refine((d) => !(d.startDate && d.endDate) || d.endDate >= d.startDate, {
+          message: 'End date must be on or after the start date.',
+          path: ['endDate'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const contract = await ctx.db.contract.create({ data: input });
@@ -192,21 +198,36 @@ export const clientsRouter = router({
 
   updateContract: adminProcedure
     .input(
-      z.object({
-        id: z.string(),
-        title: z.string().min(1).optional(),
-        fileUrl: z.string().nullable().optional(),
-        value: contractValue().nullable().optional(),
-        currency: currencyEnum.optional(),
-        status: contractStatusEnum.optional(),
-        startDate: z.date().nullable().optional(),
-        endDate: z.date().nullable().optional(),
-        signedAt: z.date().nullable().optional(),
-        notes: z.string().nullable().optional(),
-      })
+      z
+        .object({
+          id: z.string(),
+          title: z.string().min(1).optional(),
+          fileUrl: z.string().nullable().optional(),
+          value: contractValue().nullable().optional(),
+          currency: currencyEnum.optional(),
+          status: contractStatusEnum.optional(),
+          startDate: z.date().nullable().optional(),
+          endDate: z.date().nullable().optional(),
+          signedAt: z.date().nullable().optional(),
+          notes: z.string().nullable().optional(),
+        })
+        // CON-01: endDate must not precede startDate when both are supplied.
+        .refine((d) => !(d.startDate && d.endDate) || d.endDate >= d.startDate, {
+          message: 'End date must be on or after the start date.',
+          path: ['endDate'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      // CON-02: stamp signedAt the first time the EDIT FORM marks a contract SIGNED
+      // — the inline status dropdown (setContractStatus) already did; now both agree.
+      if (data.status === 'SIGNED' && data.signedAt === undefined) {
+        const existing = await ctx.db.contract.findUnique({
+          where: { id },
+          select: { signedAt: true },
+        });
+        if (!existing?.signedAt) data.signedAt = new Date();
+      }
       const contract = await ctx.db.contract.update({ where: { id }, data });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'contract_updated',
