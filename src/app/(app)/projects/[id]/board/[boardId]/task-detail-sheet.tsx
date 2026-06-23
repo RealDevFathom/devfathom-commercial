@@ -19,6 +19,7 @@ import {
   Download,
   Loader2,
   Pencil,
+  Clock,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -166,6 +167,33 @@ const CommentList = memo(function CommentList({
     </>
   );
 });
+
+// IMP-PROJ-10: surface the task's already-logged activity (created/completed/...).
+function TaskActivityTimeline({ taskId }: { taskId: string }) {
+  const { data } = trpc.projects.getTaskActivity.useQuery({ taskId });
+  if (!data || data.length === 0) return null;
+  return (
+    <div>
+      <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+        <Clock className="h-3 w-3" /> Activity
+      </h4>
+      <ul className="space-y-1.5">
+        {data.map((a) => (
+          <li key={a.id} className="flex items-center gap-2 text-[11px]">
+            <Circle className="h-1.5 w-1.5 shrink-0 fill-current text-primary/50" />
+            <span className="text-muted-foreground">
+              <span className="font-medium text-foreground/80">{a.user?.name ?? 'Someone'}</span>{' '}
+              {a.message}
+            </span>
+            <span className="ml-auto shrink-0 text-muted-foreground/50">
+              {formatDistanceToNow(new Date(a.createdAt), { addSuffix: true })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 // Owns its own draft state so typing a comment doesn't re-render the whole sheet.
 function CommentComposer({
@@ -1033,6 +1061,9 @@ export function TaskDetailSheet({
                 </div>
               </div>
             )}
+
+            {/* Activity timeline (PROJ-10) */}
+            <TaskActivityTimeline taskId={taskId} />
 
             {/* Comments */}
             <div>

@@ -91,6 +91,10 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
   const [editIndustry, setEditIndustry] = useState('');
   const [editLocation, setEditLocation] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  // IMP-CLI-03: editable client status + logo.
+  const [editStatus, setEditStatus] = useState<'ACTIVE' | 'INACTIVE' | 'PROSPECT'>('ACTIVE');
+  const [editLogo, setEditLogo] = useState<string | null>(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const updateClient = trpc.clients.update.useMutation({
@@ -209,6 +213,8 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                   setEditIndustry(client.industry || '');
                   setEditLocation(client.location || '');
                   setEditNotes(client.notes || '');
+                  setEditStatus(client.status);
+                  setEditLogo(client.logo ?? null);
                 }
                 setIsEditing(!isEditing);
               }}
@@ -287,6 +293,65 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                   className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
+              {/* IMP-CLI-03: status selector */}
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Status</label>
+                <select
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value as 'ACTIVE' | 'INACTIVE' | 'PROSPECT')}
+                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                >
+                  <option value="PROSPECT">Prospect</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="INACTIVE">Inactive</option>
+                </select>
+              </div>
+              {/* IMP-CLI-03: logo upload */}
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Logo</label>
+                <div className="flex items-center gap-2">
+                  {editLogo && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={editLogo} alt="logo" className="h-9 w-9 rounded-lg object-cover" />
+                  )}
+                  <label className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary">
+                    {uploadingLogo ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Pencil className="h-3.5 w-3.5" />
+                    )}
+                    {editLogo ? 'Change' : 'Upload'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={uploadingLogo}
+                      onChange={async (e: ChangeEvent<HTMLInputElement>) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        setUploadingLogo(true);
+                        try {
+                          const fd = new FormData();
+                          fd.append('file', file);
+                          const res = await fetch('/api/upload', { method: 'POST', body: fd });
+                          if (res.ok) setEditLogo(((await res.json()) as { url: string }).url);
+                        } finally {
+                          setUploadingLogo(false);
+                        }
+                      }}
+                    />
+                  </label>
+                  {editLogo && (
+                    <button
+                      onClick={() => setEditLogo(null)}
+                      className="text-xs text-muted-foreground hover:text-red-500"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-foreground mb-1">Notes</label>
@@ -317,6 +382,8 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                     industry: editIndustry || null,
                     location: editLocation || null,
                     notes: editNotes || null,
+                    status: editStatus,
+                    logo: editLogo,
                   })
                 }
                 disabled={updateClient.isPending}
