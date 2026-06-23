@@ -17,17 +17,52 @@ function safeDate(value: string | null | undefined): Date | null {
 export const trelloImportRouter = router({
   importBoard: protectedProcedure
     .input(
-      z.object({
-        trelloJson: z.unknown(),
-        projectId: z.string(),
-        memberMapping: z.record(z.string(), z.string()), // trelloMemberId -> hubUserId
-        includeArchived: z.boolean().default(false),
-      })
+      z
+        .object({
+          trelloJson: z.unknown(),
+          // IMP-TRELLO-01: import into an EXISTING project (lead/admin only) OR
+          // create a brand-new project from the export.
+          projectId: z.string().optional(),
+          newProjectName: z.string().min(1).optional(),
+          memberMapping: z.record(z.string(), z.string()), // trelloMemberId -> hubUserId
+          includeArchived: z.boolean().default(false),
+        })
+        .refine((d) => !!d.projectId || !!d.newProjectName, {
+          message: 'Provide a target project or a new project name.',
+        })
     )
     .mutation(async ({ ctx, input }) => {
-      // AuthZ: only a member (or admin) of the target project may import into it.
-      // Without this, any employee could import a board into ANY project by id.
-      await assertProjectAccess(ctx, input.projectId);
+      // IMP-TRELLO-01: resolve the target project. A new project makes the caller
+      // its LEAD; importing into an EXISTING one is now lead/admin-only (bulk-
+      // mutating a shared board shouldn't be open to every member).
+      let projectId: string;
+      if (input.newProjectName) {
+        const project = await ctx.db.project.create({
+          data: {
+            name: input.newProjectName,
+            type: 'INTERNAL',
+            status: 'ACTIVE',
+            members: { create: { userId: ctx.session.user.id, role: 'LEAD' } },
+          },
+          select: { id: true },
+        });
+        projectId = project.id;
+      } else {
+        projectId = input.projectId!;
+        await assertProjectAccess(ctx, projectId);
+        if (ctx.session.user.role !== 'ADMIN') {
+          const membership = await ctx.db.projectMember.findUnique({
+            where: { projectId_userId: { projectId, userId: ctx.session.user.id } },
+            select: { role: true },
+          });
+          if (membership?.role !== 'LEAD') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Only the project lead or an admin can import into an existing project.',
+            });
+          }
+        }
+      }
 
       // Whitelist of real project members. Imported attribution (task assignees,
       // comment authorship) is constrained to this set so a caller-supplied
@@ -35,7 +70,7 @@ export const trelloImportRouter = router({
       const projectMemberIds = new Set(
         (
           await ctx.db.projectMember.findMany({
-            where: { projectId: input.projectId },
+            where: { projectId },
             select: { userId: true },
           })
         ).map((m) => m.userId)
@@ -99,7 +134,7 @@ export const trelloImportRouter = router({
           data: {
             name: trello.name,
             description: trello.desc || null,
-            projectId: input.projectId,
+            projectId,
             trelloBoardId: boardKey,
           },
         });
