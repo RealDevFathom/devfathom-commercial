@@ -61,9 +61,13 @@ export function MessageList({
         if (m.parentId === null) map.set(m.id, m);
       }
     }
-    return [...map.values()].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    );
+    // RT-08: tiebreak by id when createdAt is identical (same-ms messages) so the
+    // order is stable and matches the server's [createdAt, id] ordering — otherwise
+    // same-ms messages could reshuffle between renders.
+    return [...map.values()].sort((a, b) => {
+      const d = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      return d !== 0 ? d : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
   }, [data]);
 
   const scrollRef = React.useRef<HTMLDivElement | null>(null);

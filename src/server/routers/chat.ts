@@ -503,7 +503,10 @@ export const chatRouter = router({
         where: { channelId_userId: { channelId: input.channelId, userId: me } },
         data: { lastReadAt: now },
       });
-      emitToChannel(input.channelId, RT.READ, {
+      // RT-09: a read receipt is the actor's OWN state — emit it to their personal
+      // room (syncs their other tabs) instead of broadcasting everyone's read times
+      // to the whole channel, where any subscriber could observe them.
+      emitToUser(me, RT.READ, {
         channelId: input.channelId,
         userId: me,
         lastReadAt: now.toISOString(),

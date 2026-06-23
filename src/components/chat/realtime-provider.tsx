@@ -268,9 +268,20 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       void utils.chat.getChannels.invalidate();
       void client.auth.authorize().catch(() => {});
     };
+    // RT-09: own read receipts now arrive on the personal room (was broadcast to
+    // the whole channel, exposing everyone's read times to any subscriber).
+    const onRead = (m: Ably.Message) => {
+      const { channelId, userId: who } = (m.data ?? {}) as RTRead;
+      if (who !== myId || !channelId) return;
+      utils.chat.getChannels.setData(undefined, (old) =>
+        old?.map((c) => (c.id === channelId ? { ...c, unreadCount: 0, mentionCount: 0 } : c))
+      );
+    };
     void room.subscribe(RT.MEMBERSHIP_CHANGED, onMembershipChanged).catch(() => {});
+    void room.subscribe(RT.READ, onRead).catch(() => {});
     return () => {
       room.unsubscribe(RT.MEMBERSHIP_CHANGED, onMembershipChanged);
+      room.unsubscribe(RT.READ, onRead);
     };
   }, [client, myId, utils]);
 
