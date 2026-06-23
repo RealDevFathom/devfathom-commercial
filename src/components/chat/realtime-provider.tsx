@@ -21,6 +21,7 @@ import { useAbly } from '@/lib/ably';
 import {
   RT,
   channelRoom,
+  userRoom,
   typingRoom,
   PRESENCE_CHANNEL,
   type ChatMessage,
@@ -254,6 +255,24 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- idsKey captures channelIds; utils/client/myId are stable refs
   }, [client, userId, myId, idsKey]);
+
+  // --- Membership revocation (RT-02) ---------------------------------------
+  // When this user is removed from (or leaves) a channel, the server pushes
+  // MEMBERSHIP_CHANGED to their personal room. Refetching the channel set drops
+  // the revoked channel from `channelIds`, so the subscription effect above
+  // unsubscribes it live; re-authorizing refreshes the Ably token capability.
+  useEffect(() => {
+    if (!client || !myId) return;
+    const room = client.channels.get(userRoom(myId));
+    const onMembershipChanged = () => {
+      void utils.chat.getChannels.invalidate();
+      void client.auth.authorize().catch(() => {});
+    };
+    void room.subscribe(RT.MEMBERSHIP_CHANGED, onMembershipChanged).catch(() => {});
+    return () => {
+      room.unsubscribe(RT.MEMBERSHIP_CHANGED, onMembershipChanged);
+    };
+  }, [client, myId, utils]);
 
   return <>{children}</>;
 }

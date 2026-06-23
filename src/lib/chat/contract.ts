@@ -44,6 +44,8 @@ export interface ChatAttachment {
   url: string;
   type: string | null;
   size: number | null;
+  /** Playback length in milliseconds — set for audio/voice attachments only. */
+  duration: number | null;
 }
 
 /** Aggregated reaction for one emoji on one message. */
@@ -137,6 +139,9 @@ export const RT = {
   PRESENCE_ONLINE: 'user:online',
   PRESENCE_OFFLINE: 'user:offline',
   NOTIFICATION: 'notification:new',
+  // RT-02: pushed to a user's personal room when their channel membership
+  // changes (removed / left) so their client drops the channel live.
+  MEMBERSHIP_CHANGED: 'chat:membership',
 } as const;
 
 export type RTEventName = (typeof RT)[keyof typeof RT];
@@ -248,4 +253,6 @@ export interface SendAttachmentInput {
   url: string;
   type?: string | null;
   size?: number | null;
+  /** Playback length in milliseconds — set for audio/voice attachments only. */
+  duration?: number | null;
 }

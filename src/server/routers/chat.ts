@@ -52,6 +52,8 @@ const attachmentInput = z.object({
   url: z.string(),
   type: z.string().nullish(),
   size: z.number().nullish(),
+  // Playback length in ms — supplied for audio/voice attachments only.
+  duration: z.number().int().nonnegative().nullish(),
 });
 
 export const chatRouter = router({
@@ -282,6 +284,7 @@ export const chatRouter = router({
                   url: a.url,
                   type: a.type ?? null,
                   size: a.size ?? null,
+                  duration: a.duration ?? null,
                 })),
               }
             : undefined,
@@ -369,6 +372,14 @@ export const chatRouter = router({
           ).map((m) => m.userId)
         : [];
 
+      // RT-04: capture the pre-edit mention set so we can notify only the people
+      // NEWLY @mentioned by this edit (the transaction below replaces them).
+      const priorMentions = await ctx.db.messageMention.findMany({
+        where: { messageId: input.messageId },
+        select: { userId: true },
+      });
+      const priorMentionSet = new Set(priorMentions.map((m) => m.userId));
+
       await ctx.db.$transaction([
         ctx.db.messageMention.deleteMany({ where: { messageId: input.messageId } }),
         ctx.db.message.update({
@@ -390,6 +401,32 @@ export const chatRouter = router({
         channelId: existing.channelId,
         message,
       });
+
+      // RT-04: notify people newly @mentioned by this edit (mirrors sendMessage,
+      // which only fired for mentions present at create time).
+      const newlyMentioned = validMentions.filter((uid) => !priorMentionSet.has(uid) && uid !== me);
+      if (newlyMentioned.length) {
+        const senderName = ctx.session.user.name ?? 'Someone';
+        const title = `${senderName} mentioned you`;
+        const preview = content.slice(0, 140);
+        notify(ctx.db, newlyMentioned, {
+          type: 'mention',
+          title,
+          message: preview,
+          entityType: 'Message',
+          entityId: input.messageId,
+        });
+        for (const uid of newlyMentioned) {
+          emitToUser(uid, RT.NOTIFICATION, {
+            id: input.messageId,
+            title,
+            message: preview,
+            type: 'mention',
+            entityType: 'Message',
+            entityId: input.messageId,
+          });
+        }
+      }
       return message;
     }),
 
@@ -577,6 +614,8 @@ export const chatRouter = router({
       await ctx.db.channelMember.deleteMany({
         where: { channelId: input.channelId, userId: ctx.session.user.id },
       });
+      // RT-02: tell the user's other tabs to drop this channel's live subscription.
+      emitToUser(ctx.session.user.id, RT.MEMBERSHIP_CHANGED, { channelId: input.channelId });
       return { channelId: input.channelId };
     }),
 
@@ -628,6 +667,10 @@ export const chatRouter = router({
       await ctx.db.channelMember.deleteMany({
         where: { channelId: input.channelId, userId: input.userId },
       });
+      // RT-02: immediately cut the removed member's live stream — their client
+      // refetches channels (dropping this one's subscription) and re-authorizes
+      // Ably, instead of keeping live events until the next ~hourly token renewal.
+      emitToUser(input.userId, RT.MEMBERSHIP_CHANGED, { channelId: input.channelId });
       return { channelId: input.channelId };
     }),
 

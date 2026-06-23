@@ -59,6 +59,10 @@ export async function GET() {
   const tokenRequest = await rest.auth.createTokenRequest({
     clientId: userId,
     capability: JSON.stringify(capability),
+    // RT-02: a short TTL bounds how long a stale capability can linger after a
+    // membership change (the client also re-authorizes immediately on a
+    // membership-changed event, so this is defense-in-depth).
+    ttl: 30 * 60 * 1000, // 30 minutes
   });
 
   return Response.json(tokenRequest);
