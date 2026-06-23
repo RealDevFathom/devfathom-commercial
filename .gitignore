@@ -50,3 +50,5 @@ private-uploads/
 
 # Enhancement filing temp body files
 scripts/.enh-*.md
+scripts/.enh-gh-map.json
+scripts/.enh-internal-map.json
