@@ -5,9 +5,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 63 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 65 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
-- **To build** (Quick Win / Medium): 4 — card → To Do.
+- **To build** (Quick Win / Medium): 2 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 0 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
@@ -41,7 +41,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-CLI-07 | quick-win | clients | Contract status state-machine + date/signedAt validation | [#73](https://github.com/WhatTheStack1/DevFathom-Hub/issues/73) | `cmqqe87xg000nsstw7gkhwfz7` | Implemented |
 | IMP-CLI-08 | quick-win | clients | Role-aware fetching & richer search | [#74](https://github.com/WhatTheStack1/DevFathom-Hub/issues/74) | `cmqqe88a8000osstw9g6316al` | Implemented |
 | IMP-TRELLO-01 | medium | trello | Import into a brand-new project + lead-only gate | [#75](https://github.com/WhatTheStack1/DevFathom-Hub/issues/75) | `cmqqe88o4000psstwqjia7pdu` | Implemented |
-| IMP-TRELLO-02 | medium | trello | Map more card data (cover/custom fields/due-complete) | [#76](https://github.com/WhatTheStack1/DevFathom-Hub/issues/76) | `cmqqe891i000qsstwwt3iprxj` | To build |
+| IMP-TRELLO-02 | medium | trello | Map more card data (cover/custom fields/due-complete) | [#76](https://github.com/WhatTheStack1/DevFathom-Hub/issues/76) | `cmqqe891i000qsstwwt3iprxj` | Implemented |
 | IMP-TRELLO-03 | quick-win | trello | Robust dates + per-column order normalization | [#77](https://github.com/WhatTheStack1/DevFathom-Hub/issues/77) | `cmqqe89ei000rsstwcjm5c1xh` | Implemented |
 | IMP-TRELLO-04 | quick-win | trello | Partial-failure / skipped-card reporting | [#78](https://github.com/WhatTheStack1/DevFathom-Hub/issues/78) | `cmqqe89ra000ssstwda9nzbs9` | Implemented |
 | IMP-TRELLO-05 | quick-win | trello | Dedup when trello.id is absent | [#79](https://github.com/WhatTheStack1/DevFathom-Hub/issues/79) | `cmqqe8a44000tsstwxcwmnips` | Implemented |
@@ -68,7 +68,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-HR-07 | quick-win | team | Include ON_LEAVE staff in people search | [#100](https://github.com/WhatTheStack1/DevFathom-Hub/issues/100) | `cmqqe8i0i001esstwyoj5u4ee` | Implemented |
 | IMP-AUTH-01 | medium | auth | Self-service password reset (forgot password) | [#101](https://github.com/WhatTheStack1/DevFathom-Hub/issues/101) | `cmqqe8idv001fsstwumd7rjjq` | Implemented |
 | IMP-AUTH-02 | big-bet | auth | 2FA / MFA | [#102](https://github.com/WhatTheStack1/DevFathom-Hub/issues/102) | `cmqqe8isa001gsstwkhb8mooe` | Implemented |
-| IMP-AUTH-03 | medium | auth | Session management + revoke-on-password-change | [#103](https://github.com/WhatTheStack1/DevFathom-Hub/issues/103) | `cmqqe8j6h001hsstw40gv14os` | Partial |
+| IMP-AUTH-03 | medium | auth | Session management + revoke-on-password-change | [#103](https://github.com/WhatTheStack1/DevFathom-Hub/issues/103) | `cmqqe8j6h001hsstw40gv14os` | Implemented |
 | IMP-AUTH-04 | medium | auth | Notification preferences | [#104](https://github.com/WhatTheStack1/DevFathom-Hub/issues/104) | `cmqqe8jjt001isstw34mou5s9` | Implemented |
 | IMP-AUTH-05 | quick-win | auth | Live password-policy checklist on the change form | [#105](https://github.com/WhatTheStack1/DevFathom-Hub/issues/105) | `cmqqe8jww001jsstwfb3yyugt` | Implemented |
 | IMP-AUTH-06 | quick-win | auth | Edge token verification + consistent page-auth guard | [#106](https://github.com/WhatTheStack1/DevFathom-Hub/issues/106) | `cmqqe8kal001ksstwi3pq6zhh` | Implemented |
@@ -84,7 +84,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-REST-04 | quick-win | platform | Scope hygiene + audit completeness | [#116](https://github.com/WhatTheStack1/DevFathom-Hub/issues/116) | `cmqqe8nyf001usstwrextegug` | Implemented |
 | IMP-REST-05 | quick-win | platform | Consistent 400/404 on bad input | [#117](https://github.com/WhatTheStack1/DevFathom-Hub/issues/117) | `cmqqe8obr001vsstww4bf0oa2` | Implemented |
 | IMP-AI-01 | medium | ai | Authorization & isolation tests in the eval | [#118](https://github.com/WhatTheStack1/DevFathom-Hub/issues/118) | `cmqqe8oos001wsstw34jyvqz3` | Implemented |
-| IMP-AI-02 | medium | ai | Streaming citations / why + action audit surfacing | [#119](https://github.com/WhatTheStack1/DevFathom-Hub/issues/119) | `cmqqe8p1l001xsstw3nttmymv` | To build |
+| IMP-AI-02 | medium | ai | Streaming citations / why + action audit surfacing | [#119](https://github.com/WhatTheStack1/DevFathom-Hub/issues/119) | `cmqqe8p1l001xsstw3nttmymv` | Partial |
 | IMP-AI-03 | quick-win | ai | Groq-schema discipline lint | [#120](https://github.com/WhatTheStack1/DevFathom-Hub/issues/120) | `cmqqe8pfh001ysstwtvv7tkyj` | Implemented |
 | IMP-AI-04 | quick-win | ai | Parity fixes with the app | [#121](https://github.com/WhatTheStack1/DevFathom-Hub/issues/121) | `cmqqe8psj001zsstwgvr1by2j` | Implemented |
 | IMP-PLAT-01 | quick-win | platform | Tighten CSP & image origins | [#122](https://github.com/WhatTheStack1/DevFathom-Hub/issues/122) | `cmqqe8q5l0020sstwyasjnmse` | Implemented |

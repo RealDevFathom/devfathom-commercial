@@ -261,7 +261,7 @@
     "tier": "medium",
     "title": "Map more card data (cover/custom fields/due-complete)",
     "value": "Higher-fidelity import",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Cover image, custom fields, dueComplete are mapped"
     ]
@@ -596,7 +596,7 @@
     "tier": "medium",
     "title": "Session management + revoke-on-password-change",
     "value": "Control after compromise",
-    "status": "partial",
+    "status": "implemented",
     "related": [
       "AUTH-01"
     ],
@@ -813,7 +813,7 @@
     "tier": "medium",
     "title": "Streaming citations / why + action audit surfacing",
     "value": "Trust + traceability",
-    "status": "todo",
+    "status": "partial",
     "acceptance": [
       "Show which records an answer used; link assistant writes into audit/activity views"
     ]
