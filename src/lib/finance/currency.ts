@@ -77,6 +77,28 @@ export function diffByCurrency(
   );
 }
 
+// IMP-FIN-02 (FX): static approximate FX rates to USD. This is the convert-to-base
+// half of multi-currency reporting; swap for a live FX feed in production. Per-
+// currency figures remain authoritative — this only powers an "≈ $X" convenience.
+const FX_TO_USD: Record<string, number> = { USD: 1, PKR: 1 / 280 };
+
+/** Sum a per-currency breakdown into a single base-currency (default USD) total. */
+export function convertToBase(rows: CurrencyAmount[], base = 'USD'): number {
+  const baseRate = FX_TO_USD[base] ?? 1;
+  return (
+    Math.round(
+      (rows.reduce((s, r) => s + r.amount * (FX_TO_USD[r.currency] ?? 0), 0) / baseRate) * 100
+    ) / 100
+  );
+}
+
+/** "≈ $12,300" base-currency equivalent — only meaningful across >1 currency. */
+export function baseEquivalentLabel(rows: CurrencyAmount[], base = 'USD'): string | null {
+  const present = new Set(rows.filter((r) => r.amount !== 0).map((r) => r.currency));
+  if (present.size < 2) return null; // single currency → the per-currency label already says it
+  return `≈ ${moneyLabel(convertToBase(rows, base), base)}`;
+}
+
 /** The currencies present in any of the given breakdowns, USD-first. */
 export function currenciesPresent(...lists: CurrencyAmount[][]): string[] {
   const set = new Set<string>();

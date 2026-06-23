@@ -23,7 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
-import { moneyListLabel } from '@/lib/finance/currency';
+import { moneyListLabel, baseEquivalentLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
 
 // P&L report pulls in recharts; it is tab-gated, so load it lazily (client-only)
@@ -91,18 +91,21 @@ export function FinanceContent() {
             <FinanceKPI
               title="Monthly Revenue"
               value={moneyListLabel(summary.data.monthlyIncome)}
+              subtitle={baseEquivalentLabel(summary.data.monthlyIncome) ?? undefined}
               icon={TrendingUp}
               accent="emerald"
             />
             <FinanceKPI
               title="Monthly Expenses"
               value={moneyListLabel(summary.data.monthlyExpense)}
+              subtitle={baseEquivalentLabel(summary.data.monthlyExpense) ?? undefined}
               icon={TrendingDown}
               accent="red"
             />
             <FinanceKPI
               title="Net Profit"
               value={moneyListLabel(summary.data.monthlyProfit)}
+              subtitle={baseEquivalentLabel(summary.data.monthlyProfit) ?? undefined}
               icon={DollarSign}
               accent={summary.data.monthlyProfit.some((p) => p.amount < 0) ? 'red' : 'emerald'}
             />
