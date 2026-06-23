@@ -227,6 +227,29 @@ function TransactionsTab({
     [transactions, filter]
   );
 
+  // IMP-FIN-06: export the currently-filtered transactions to CSV.
+  const exportCsv = useCallback(() => {
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = ['Date', 'Type', 'Amount', 'Currency', 'Category', 'Description', 'Project', 'Client'];
+    const rows = filtered.map((t) => [
+      format(new Date(t.date), 'yyyy-MM-dd'),
+      t.type,
+      Number(t.amount),
+      t.currency,
+      t.category ?? '',
+      t.description,
+      t.project?.name ?? '',
+      t.client?.name ?? '',
+    ]);
+    const csv = [header, ...rows].map((r) => r.map(esc).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transactions-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filtered]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -246,13 +269,24 @@ function TransactionsTab({
             </button>
           ))}
         </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add Transaction
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportCsv}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground transition-colors hover:bg-secondary disabled:opacity-40"
+            title="Export the filtered transactions to CSV"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            Export CSV
+          </button>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Transaction
+          </button>
+        </div>
       </div>
 
       {showAdd && <AddTransactionForm onClose={() => setShowAdd(false)} />}

@@ -57,6 +57,9 @@ export const clientsRouter = router({
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
 
+    // IMP-CLI-08: don't FETCH finance-sensitive rows for non-admins (was loaded
+    // then discarded). `take: 0` skips the row load while keeping the array shape
+    // stable, so no post-query strip is needed.
     const client = await ctx.db.client.findUnique({
       where: { id: input.id },
       include: {
@@ -70,6 +73,7 @@ export const clientsRouter = router({
           },
         },
         invoices: {
+          take: isAdmin ? undefined : 0,
           orderBy: { createdAt: 'desc' },
           include: { project: { select: { id: true, name: true } } },
         },
@@ -77,20 +81,11 @@ export const clientsRouter = router({
           include: { uploadedBy: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'desc' },
         },
-        contracts: { orderBy: { createdAt: 'desc' } },
+        contracts: { take: isAdmin ? undefined : 0, orderBy: { createdAt: 'desc' } },
       },
     });
 
-    if (!client) return null;
-    // Strip finance-sensitive relations for non-admins — keep array shapes so
-    // client types stay stable.
-    return isAdmin
-      ? client
-      : {
-          ...client,
-          invoices: [] as typeof client.invoices,
-          contracts: [] as typeof client.contracts,
-        };
+    return client;
   }),
 
   create: adminProcedure
@@ -143,6 +138,8 @@ export const clientsRouter = router({
         timezone: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
         status: z.enum(['ACTIVE', 'INACTIVE', 'PROSPECT']).optional(),
+        // IMP-CLI-03: logo is modeled + shown but was never settable.
+        logo: z.string().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {

@@ -18,7 +18,7 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
-    return ctx.db.user.findMany({
+    const rows = await ctx.db.user.findMany({
       select: {
         id: true,
         name: true,
@@ -37,6 +37,12 @@ export const teamRouter = router({
       },
       orderBy: { name: 'asc' },
     });
+    // IMP-HR-06: directory privacy — contact PII (email/phone) is visible to
+    // HR/Admin and to a person on their OWN row; everyone else sees it redacted.
+    const isPrivileged = ['ADMIN', 'HR'].includes(ctx.session.user.role);
+    if (isPrivileged) return rows;
+    const me = ctx.session.user.id;
+    return rows.map((u) => (u.id === me ? u : { ...u, email: '', phone: null }));
   }),
 
   // Lightweight roster — just enough to render avatars and names.
@@ -260,6 +266,82 @@ export const teamRouter = router({
       }
       return ctx.db.leaveRequest.create({
         data: { ...input, userId: ctx.session.user.id },
+      });
+    }),
+
+  // IMP-HR-03: self-service — withdraw your OWN still-PENDING leave request.
+  cancelLeaveRequest: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const leave = await ctx.db.leaveRequest.findUnique({
+        where: { id: input.id },
+        select: { userId: true, status: true },
+      });
+      if (!leave) throw new TRPCError({ code: 'NOT_FOUND', message: 'Leave request not found' });
+      if (leave.userId !== ctx.session.user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only cancel your own request.' });
+      }
+      if (leave.status !== 'PENDING') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only a pending request can be cancelled.' });
+      }
+      await ctx.db.leaveRequest.delete({ where: { id: input.id } });
+      return { success: true };
+    }),
+
+  // IMP-HR-03: self-service — edit your OWN pending request (same validation as create).
+  updateLeaveRequest: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        type: z.enum(['VACATION', 'SICK', 'REMOTE']).optional(),
+        startDate: z.date().optional(),
+        endDate: z.date().optional(),
+        reason: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.leaveRequest.findUnique({
+        where: { id: input.id },
+        select: { userId: true, status: true, startDate: true, endDate: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Leave request not found' });
+      if (existing.userId !== ctx.session.user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own request.' });
+      }
+      if (existing.status !== 'PENDING') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only a pending request can be edited.' });
+      }
+      const start = input.startDate ?? existing.startDate;
+      const end = input.endDate ?? existing.endDate;
+      if (end < start) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'End date must be on or after the start date.' });
+      }
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (start < today) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Leave cannot start in the past.' });
+      }
+      const overlap = await ctx.db.leaveRequest.findFirst({
+        where: {
+          id: { not: input.id },
+          userId: ctx.session.user.id,
+          status: { in: ['PENDING', 'APPROVED'] },
+          startDate: { lte: end },
+          endDate: { gte: start },
+        },
+        select: { id: true },
+      });
+      if (overlap) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'You already have a leave request overlapping these dates.' });
+      }
+      return ctx.db.leaveRequest.update({
+        where: { id: input.id },
+        data: {
+          ...(input.type ? { type: input.type } : {}),
+          startDate: start,
+          endDate: end,
+          ...(input.reason !== undefined ? { reason: input.reason } : {}),
+        },
       });
     }),
 

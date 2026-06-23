@@ -1,6 +1,7 @@
 'use client';
 
 import { memo, useMemo, useState, type ChangeEvent } from 'react';
+import { useSession } from 'next-auth/react';
 import {
   X,
   Calendar,
@@ -17,6 +18,7 @@ import {
   Paperclip,
   Download,
   Loader2,
+  Pencil,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -38,13 +40,29 @@ const priorities = [
 
 // Per-comment formatting is memoized so re-renders of the sheet (e.g. typing in
 // the composer) don't recompute relative timestamps for every comment.
-const CommentItem = memo(function CommentItem({ comment }: { comment: TaskComment }) {
+const CommentItem = memo(function CommentItem({
+  comment,
+  currentUserId,
+  isAdmin,
+  onEdit,
+  onDelete,
+}: {
+  comment: TaskComment;
+  currentUserId?: string;
+  isAdmin?: boolean;
+  onEdit: (id: string, content: string) => void;
+  onDelete: (id: string) => void;
+}) {
   const relativeTime = useMemo(
     () => formatDistanceToNow(new Date(comment.createdAt), { addSuffix: true }),
     [comment.createdAt]
   );
+  // IMP-PROJ-04: a comment author (or admin) can edit/delete their comment.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(comment.content);
+  const canModify = comment.user.id === currentUserId || !!isAdmin;
   return (
-    <div className="flex gap-3">
+    <div className="group/comment flex gap-3">
       <Avatar className="h-7 w-7 shrink-0 mt-0.5">
         <AvatarImage src={comment.user.avatar ?? undefined} />
         <AvatarFallback className="text-[9px] bg-secondary font-medium">
@@ -55,8 +73,64 @@ const CommentItem = memo(function CommentItem({ comment }: { comment: TaskCommen
         <div className="flex items-baseline gap-2">
           <span className="text-sm font-semibold text-foreground">{comment.user.name}</span>
           <span className="text-[11px] text-muted-foreground/50">{relativeTime}</span>
+          {canModify && !editing && (
+            <div className="ml-auto flex gap-0.5 opacity-0 group-hover/comment:opacity-100 transition-opacity">
+              <button
+                onClick={() => {
+                  setDraft(comment.content);
+                  setEditing(true);
+                }}
+                className="text-muted-foreground/60 hover:text-foreground"
+                title="Edit"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => onDelete(comment.id)}
+                className="text-muted-foreground/60 hover:text-red-500"
+                title="Delete"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          )}
         </div>
-        <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">{comment.content}</p>
+        {editing ? (
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && draft.trim()) {
+                  onEdit(comment.id, draft.trim());
+                  setEditing(false);
+                }
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              className="flex-1 rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+            <button
+              onClick={() => {
+                if (draft.trim()) {
+                  onEdit(comment.id, draft.trim());
+                  setEditing(false);
+                }
+              }}
+              className="text-[11px] font-semibold text-primary"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              className="text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">{comment.content}</p>
+        )}
       </div>
     </div>
   );
@@ -64,11 +138,30 @@ const CommentItem = memo(function CommentItem({ comment }: { comment: TaskCommen
 
 // Memoized comment list — only re-renders when the comments array identity
 // changes (i.e. after a real fetch), not on every keystroke in the sheet.
-const CommentList = memo(function CommentList({ comments }: { comments: TaskComment[] }) {
+const CommentList = memo(function CommentList({
+  comments,
+  currentUserId,
+  isAdmin,
+  onEdit,
+  onDelete,
+}: {
+  comments: TaskComment[];
+  currentUserId?: string;
+  isAdmin?: boolean;
+  onEdit: (id: string, content: string) => void;
+  onDelete: (id: string) => void;
+}) {
   return (
     <>
       {comments.map((comment) => (
-        <CommentItem key={comment.id} comment={comment} />
+        <CommentItem
+          key={comment.id}
+          comment={comment}
+          currentUserId={currentUserId}
+          isAdmin={isAdmin}
+          onEdit={onEdit}
+          onDelete={onDelete}
+        />
       ))}
     </>
   );
@@ -267,6 +360,13 @@ export function TaskDetailSheet({
       utils.projects.getTaskDetail.invalidate({ id: taskId });
     },
   });
+  // IMP-PROJ-04: comment edit/delete.
+  const { data: session } = useSession();
+  const currentUserId = session?.user?.id;
+  const isAdmin = session?.user?.role === 'ADMIN';
+  const invalidateDetail = () => utils.projects.getTaskDetail.invalidate({ id: taskId });
+  const updateComment = trpc.projects.updateComment.useMutation({ onSuccess: invalidateDetail });
+  const deleteComment = trpc.projects.deleteComment.useMutation({ onSuccess: invalidateDetail });
   // Optimistic checklist toggle: flip the item instantly, reconcile on settle.
   const toggleItem = trpc.projects.toggleChecklistItem.useMutation({
     onMutate: async ({ id, completed }) => {
@@ -941,7 +1041,13 @@ export function TaskDetailSheet({
               </h4>
 
               <div className="space-y-4">
-                <CommentList comments={task.comments} />
+                <CommentList
+                  comments={task.comments}
+                  currentUserId={currentUserId}
+                  isAdmin={isAdmin}
+                  onEdit={(id, content) => updateComment.mutate({ id, content })}
+                  onDelete={(id) => deleteComment.mutate({ id })}
+                />
 
                 {/* Add comment */}
                 <CommentComposer

@@ -173,10 +173,21 @@ export const trelloImportRouter = router({
         // ordering. `tasksCreated` is kept only for the import count.
         let tasksCreated = 0;
         const columnOrder = new Map<string, number>();
+        // IMP-TRELLO-04: record cards we couldn't place so the result can report
+        // exactly what was skipped instead of silently dropping them.
+        const skippedCards: Array<{ name: string; reason: string }> = [];
         for (const card of cards) {
           const columnId = card.closed ? archivedColumnId : listIdMap.get(card.idList);
 
-          if (!columnId) continue;
+          if (!columnId) {
+            skippedCards.push({
+              name: card.name,
+              reason: card.closed
+                ? 'archived (and the Archived column was not created)'
+                : 'its list was not imported',
+            });
+            continue;
+          }
 
           const orderInColumn = columnOrder.get(columnId) ?? 0;
           columnOrder.set(columnId, orderInColumn + 1);
@@ -283,6 +294,9 @@ export const trelloImportRouter = router({
           columnsCreated: lists.length + (archivedColumnId ? 1 : 0),
           tasksCreated,
           labelsCreated: uniqueLabels.length,
+          // IMP-TRELLO-04: surface partial-failure / skipped-card detail.
+          skippedCount: skippedCards.length,
+          skipped: skippedCards.slice(0, 100),
         };
       });
 

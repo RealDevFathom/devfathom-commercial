@@ -1229,4 +1229,122 @@ export const projectsRouter = router({
       });
       return { success: true };
     }),
+
+  // IMP-PROJ-05: board rename/description (was create/delete only).
+  updateBoard: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).optional(),
+        description: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertBoardAccess(ctx, input.id, { manage: true });
+      const { id, ...data } = input;
+      return ctx.db.board.update({ where: { id }, data });
+    }),
+
+  // IMP-PROJ-05: label rename/recolor.
+  updateLabel: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).optional(),
+        color: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const label = await ctx.db.label.findUnique({
+        where: { id: input.id },
+        select: { boardId: true },
+      });
+      if (!label) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertBoardAccess(ctx, label.boardId, { manage: true });
+      const { id, ...data } = input;
+      return ctx.db.label.update({ where: { id }, data });
+    }),
+
+  // IMP-PROJ-05: label delete (detaches from tasks first to avoid FK errors).
+  deleteLabel: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const label = await ctx.db.label.findUnique({
+        where: { id: input.id },
+        select: { boardId: true },
+      });
+      if (!label) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertBoardAccess(ctx, label.boardId, { manage: true });
+      await ctx.db.$transaction([
+        ctx.db.taskLabel.deleteMany({ where: { labelId: input.id } }),
+        ctx.db.label.delete({ where: { id: input.id } }),
+      ]);
+      return { success: true };
+    }),
+
+  // IMP-PROJ-05: project-file delete.
+  deleteFile: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const file = await ctx.db.projectFile.findUnique({
+        where: { id: input.id },
+        select: { projectId: true },
+      });
+      if (!file) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertProjectAccess(ctx, file.projectId);
+      return ctx.db.projectFile.delete({ where: { id: input.id } });
+    }),
+
+  // IMP-PROJ-04: comment edit (author or admin).
+  updateComment: protectedProcedure
+    .input(z.object({ id: z.string(), content: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const comment = await ctx.db.taskComment.findUnique({
+        where: { id: input.id },
+        select: { taskId: true, userId: true },
+      });
+      if (!comment) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, comment.taskId);
+      if (comment.userId !== ctx.session.user.id && ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own comment.' });
+      }
+      return ctx.db.taskComment.update({
+        where: { id: input.id },
+        data: { content: input.content },
+        include: { user: { select: { id: true, name: true, avatar: true } } },
+      });
+    }),
+
+  // IMP-PROJ-04: comment delete (author or admin; removes its replies first).
+  deleteComment: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const comment = await ctx.db.taskComment.findUnique({
+        where: { id: input.id },
+        select: { taskId: true, userId: true },
+      });
+      if (!comment) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, comment.taskId);
+      if (comment.userId !== ctx.session.user.id && ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only delete your own comment.' });
+      }
+      await ctx.db.$transaction([
+        ctx.db.taskComment.deleteMany({ where: { parentId: input.id } }),
+        ctx.db.taskComment.delete({ where: { id: input.id } }),
+      ]);
+      return { success: true };
+    }),
+
+  // IMP-PROJ-10: surface the task's already-logged activity (created/completed/...).
+  getTaskActivity: protectedProcedure
+    .input(z.object({ taskId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertTaskAccess(ctx, input.taskId);
+      return ctx.db.activity.findMany({
+        where: { entityType: 'Task', entityId: input.taskId },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        include: { user: { select: { id: true, name: true, avatar: true } } },
+      });
+    }),
 });

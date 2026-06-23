@@ -41,11 +41,21 @@ export function ClientsContent() {
   const [showCreate, setShowCreate] = useState(false);
   const { data: clients, isLoading } = trpc.clients.getAll.useQuery();
 
-  const filtered = useMemo(
-    () =>
-      clients?.filter((c) => !search || c.name.toLowerCase().includes(search.toLowerCase())) ?? [],
-    [clients, search]
-  );
+  // IMP-CLI-08: richer search — match name, industry, location and contact name,
+  // not just the client name.
+  const filtered = useMemo(() => {
+    if (!search) return clients ?? [];
+    const q = search.toLowerCase();
+    return (
+      clients?.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.industry?.toLowerCase().includes(q) ?? false) ||
+          (c.location?.toLowerCase().includes(q) ?? false) ||
+          (c.contacts ?? []).some((ct) => ct.name?.toLowerCase().includes(q))
+      ) ?? []
+    );
+  }, [clients, search]);
 
   return (
     <div className="space-y-6 animate-fade-in">
