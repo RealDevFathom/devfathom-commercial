@@ -1,12 +1,15 @@
 import { z } from 'zod';
+import { format } from 'date-fns';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { TRPCError } from '@trpc/server';
+import { sendEmail, templates, appUrl } from '@/lib/email';
 import {
   fromCurrencyGroups,
   diffByCurrency,
   sumByCurrency,
   currenciesPresent,
+  moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 
@@ -281,6 +284,152 @@ export const financeRouter = router({
       });
 
       return invoice;
+    }),
+
+  // IMP-FIN-01: full line-item edit of an unsettled invoice. Like createInvoice,
+  // every line `amount`, the `subtotal` and the `total` are recomputed SERVER-SIDE
+  // from quantity × rate (+ tax) — a caller-supplied total is never trusted (FIN-01).
+  // Only a DRAFT or SENT invoice may be edited; a PAID/CANCELLED/OVERDUE invoice is
+  // settled or void and its figures are frozen.
+  updateInvoice: adminProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        items: z
+          .array(
+            z.object({
+              description: z.string().min(1),
+              quantity: z.number().positive(),
+              rate: positiveMoney(),
+            })
+          )
+          .min(1),
+        tax: nonNegativeMoney().optional(),
+        dueDate: z.date().optional(),
+        notes: z.string().optional(),
+        status: z.enum(['DRAFT', 'SENT']).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const current = await ctx.db.invoice.findUnique({
+        where: { id: input.id },
+        select: { status: true },
+      });
+      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+      if (current.status !== 'DRAFT' && current.status !== 'SENT') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
+        });
+      }
+
+      // Recompute money server-side, identical to createInvoice.
+      const lineItems = input.items.map((it) => ({
+        description: it.description,
+        quantity: it.quantity,
+        rate: it.rate,
+        amount: round2(it.quantity * it.rate),
+      }));
+      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
+      const tax = round2(input.tax ?? 0);
+      const total = round2(subtotal + tax);
+
+      const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
+      if (input.dueDate) data.dueDate = input.dueDate;
+      if (input.notes !== undefined) data.notes = input.notes.trim() || null;
+      if (input.status && input.status !== current.status) {
+        data.status = input.status;
+        // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
+        if (input.status === 'SENT') data.sentAt = new Date();
+        if (input.status === 'DRAFT') data.sentAt = null;
+      }
+
+      const invoice = await ctx.db.invoice.update({
+        where: { id: input.id },
+        data,
+        include: {
+          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+          project: { select: { id: true, name: true } },
+          payments: { orderBy: { paidAt: 'desc' } },
+        },
+      });
+
+      const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
+      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+    }),
+
+  // IMP-FIN-01: email the invoice to the client's primary contact (falling back to
+  // any contact that has an email), linking to the print/PDF view. Best-effort send
+  // surfaced as a clean error; on success a DRAFT is promoted to SENT + sentAt.
+  sendInvoiceEmail: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const invoice = await ctx.db.invoice.findUnique({
+        where: { id: input.id },
+        include: {
+          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+        },
+      });
+      if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+
+      // Prefer the primary contact; otherwise any contact on the client with an email.
+      let recipient = invoice.client.contacts[0];
+      if (!recipient?.email) {
+        const fallback = await ctx.db.clientContact.findFirst({
+          where: { clientId: invoice.clientId, email: { not: null } },
+        });
+        if (fallback) recipient = fallback;
+      }
+      if (!recipient?.email) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `No contact email on file for ${invoice.client.name}. Add a contact with an email address first.`,
+        });
+      }
+
+      const mail = templates.invoiceIssued({
+        recipientName: recipient.name,
+        invoiceNumber: invoice.invoiceNumber,
+        clientName: invoice.client.name,
+        amountLabel: moneyLabel(Number(invoice.total), invoice.currency),
+        dueDate: format(new Date(invoice.dueDate), 'MMM d, yyyy'),
+        url: `${appUrl()}/finance/invoices/${invoice.id}/print`,
+      });
+
+      try {
+        await sendEmail({
+          to: { email: recipient.email, name: recipient.name },
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+        });
+      } catch (err) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Couldn't send the invoice email: ${err instanceof Error ? err.message : 'unknown error'}`,
+        });
+      }
+
+      // Promote DRAFT → SENT only after a successful send.
+      const wasDraft = invoice.status === 'DRAFT';
+      if (wasDraft) {
+        await ctx.db.invoice.update({
+          where: { id: invoice.id },
+          data: { status: 'SENT', sentAt: new Date() },
+        });
+      }
+
+      logActivity(ctx.db, ctx.session.user.id, {
+        type: 'invoice_sent',
+        message: `emailed invoice ${invoice.invoiceNumber} to ${recipient.email} (${invoice.client.name})`,
+        entityType: 'Invoice',
+        entityId: invoice.id,
+      });
+
+      return {
+        sentTo: recipient.email,
+        status: wasDraft ? ('SENT' as const) : invoice.status,
+      };
     }),
 
   updateInvoiceStatus: adminProcedure

@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
+import { InvoiceManagePanel } from '@/components/finance/invoice-manage-panel';
 
 // P&L report pulls in recharts; it is tab-gated, so load it lazily (client-only)
 // and only when the P&L tab mounts to keep recharts out of the initial bundle.
@@ -140,6 +141,8 @@ export function FinanceContent() {
         {/* INVOICES */}
         <TabsContent value="invoices" className="space-y-6">
           <InvoicesTab />
+          {/* IMP-FIN-01: full edit (line items / tax / due / notes), email, print/PDF. */}
+          <InvoiceManagePanel />
           {/* IMP-FIN-04: partial payments + overdue automation. */}
           <InvoicePaymentsPanel />
         </TabsContent>
