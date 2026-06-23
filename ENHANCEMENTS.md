@@ -5,10 +5,10 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 62 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 63 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
 - **To build** (Quick Win / Medium): 4 — card → To Do.
-- **Planned (needs-greenlight)** (Big Bets): 1 — card → To Do / Backlog, STOP for authorization.
+- **Planned (needs-greenlight)** (Big Bets): 0 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
 - **IMP-PROJ-01** — Time tracking (wire the modeled TimeEntry). Billing, utilization, project profitability. Phased plan + acceptance criteria filed; awaiting authorization.
@@ -80,7 +80,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-RT-06 | quick-win | meetings | Robust call exit handling | [#112](https://github.com/WhatTheStack1/DevFathom-Hub/issues/112) | `cmqqe8mir001qsstwza933bl8` | Implemented |
 | IMP-REST-01 | medium | platform | Rate limiting + per-token usage metrics | [#113](https://github.com/WhatTheStack1/DevFathom-Hub/issues/113) | `cmqqe8mvi001rsstwn73ear5h` | Implemented |
 | IMP-REST-02 | quick-win | platform | Pagination cursors + consistent list envelopes | [#114](https://github.com/WhatTheStack1/DevFathom-Hub/issues/114) | `cmqqe8n8b001ssstwx2pl4xpl` | Implemented |
-| IMP-REST-03 | big-bet | platform | Webhooks / events | [#115](https://github.com/WhatTheStack1/DevFathom-Hub/issues/115) | `cmqqe8nle001tsstw2y18ohyy` | Planned (greenlight) |
+| IMP-REST-03 | big-bet | platform | Webhooks / events | [#115](https://github.com/WhatTheStack1/DevFathom-Hub/issues/115) | `cmqqe8nle001tsstw2y18ohyy` | Implemented |
 | IMP-REST-04 | quick-win | platform | Scope hygiene + audit completeness | [#116](https://github.com/WhatTheStack1/DevFathom-Hub/issues/116) | `cmqqe8nyf001usstwrextegug` | Implemented |
 | IMP-REST-05 | quick-win | platform | Consistent 400/404 on bad input | [#117](https://github.com/WhatTheStack1/DevFathom-Hub/issues/117) | `cmqqe8obr001vsstww4bf0oa2` | Implemented |
 | IMP-AI-01 | medium | ai | Authorization & isolation tests in the eval | [#118](https://github.com/WhatTheStack1/DevFathom-Hub/issues/118) | `cmqqe8oos001wsstw34jyvqz3` | Implemented |

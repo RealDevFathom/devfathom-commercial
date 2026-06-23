@@ -758,7 +758,7 @@
     "tier": "big-bet",
     "title": "Webhooks / events",
     "value": "Real integrations for an agent-operable API",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "Outbound events (invoice.paid, task.created) with subscriptions + signing"
     ]
