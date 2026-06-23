@@ -15,6 +15,7 @@ import { invitationsRouter } from './invitations';
 import { auditRouter } from './audit';
 import { resignationsRouter } from './resignations';
 import { passwordResetRouter } from './password-reset';
+import { reviewsRouter } from './reviews';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -33,6 +34,7 @@ export const appRouter = router({
   audit: auditRouter,
   resignations: resignationsRouter,
   passwordReset: passwordResetRouter,
+  reviews: reviewsRouter,
 });
 
 export type AppRouter = typeof appRouter;

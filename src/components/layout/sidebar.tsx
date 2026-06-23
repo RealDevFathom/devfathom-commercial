@@ -20,6 +20,7 @@ import {
   StickyNote,
   BarChart3,
   ScrollText,
+  ClipboardList,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -45,6 +46,7 @@ const navigation: NavItem[] = [
   { label: 'Meetings', href: '/meetings', icon: Video },
   { label: 'Chat', href: '/chat', icon: MessageSquare },
   { label: 'Team', href: '/team', icon: Users },
+  { label: 'Reviews', href: '/reviews', icon: ClipboardList },
   { label: 'Insights', href: '/team/stats', icon: BarChart3, adminOnly: true },
   { label: 'HR', href: '/hr', icon: UserCog, hrAccess: true },
   { label: 'Audit Log', href: '/audit-logs', icon: ScrollText, adminOnly: true },
