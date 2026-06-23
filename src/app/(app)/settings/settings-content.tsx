@@ -510,6 +510,7 @@ function ApiTokensSection() {
   const utils = trpc.useUtils();
   const { data: session } = useSession();
   const { data: tokens } = trpc.apiTokens.list.useQuery();
+  const { data: usage } = trpc.apiTokens.usage.useQuery(); // IMP-REST-01
   const { data: team } = trpc.team.getAll.useQuery();
   const createToken = trpc.apiTokens.create.useMutation({
     onSuccess: (result) => {
@@ -650,6 +651,20 @@ function ApiTokensSection() {
                       ? `Used ${new Date(t.lastUsedAt).toLocaleDateString()}`
                       : 'Never used'}
                   </p>
+                  {/* IMP-REST-01: per-token request metrics from the audit trail. */}
+                  {usage?.[t.id] ? (
+                    <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">
+                      {usage[t.id].total.toLocaleString()} req
+                      {usage[t.id].failure > 0 && (
+                        <span className="text-red-500"> · {usage[t.id].failure} failed</span>
+                      )}
+                      {usage[t.id].last7d > 0 && (
+                        <span className="text-muted-foreground/70"> · {usage[t.id].last7d} in 7d</span>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground/60">0 req</p>
+                  )}
                 </div>
                 <button
                   onClick={() => revokeToken.mutate({ id: t.id })}

@@ -15,6 +15,47 @@ export const apiTokensRouter = router({
     });
   }),
 
+  // IMP-REST-01: per-token usage metrics. Every /api/v1 request stamps
+  // AuditLog.tokenId (recordRestAudit), so request counts, success/failure split,
+  // last-used and recent (7-day) volume are derivable without a dedicated
+  // counter. Returns a map keyed by tokenId for the token list to render inline.
+  usage: adminProcedure.query(async ({ ctx }) => {
+    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const [byOutcome, recent] = await Promise.all([
+      ctx.db.auditLog.groupBy({
+        by: ['tokenId', 'outcome'],
+        _count: { _all: true },
+        _max: { createdAt: true },
+        where: { source: 'REST_API', tokenId: { not: null } },
+      }),
+      ctx.db.auditLog.groupBy({
+        by: ['tokenId'],
+        _count: { _all: true },
+        where: { source: 'REST_API', tokenId: { not: null }, createdAt: { gte: since7d } },
+      }),
+    ]);
+
+    const recentMap = new Map<string, number>();
+    for (const r of recent) if (r.tokenId) recentMap.set(r.tokenId, r._count._all);
+
+    const stats: Record<
+      string,
+      { total: number; success: number; failure: number; last7d: number; lastUsedAt: string | null }
+    > = {};
+    for (const row of byOutcome) {
+      const id = row.tokenId!;
+      const s =
+        stats[id] ?? (stats[id] = { total: 0, success: 0, failure: 0, last7d: recentMap.get(id) ?? 0, lastUsedAt: null });
+      s.total += row._count._all;
+      if (row.outcome === 'SUCCESS') s.success += row._count._all;
+      else if (row.outcome === 'FAILURE') s.failure += row._count._all;
+      const last = row._max.createdAt;
+      if (last && (!s.lastUsedAt || last > new Date(s.lastUsedAt))) s.lastUsedAt = last.toISOString();
+    }
+    return stats;
+  }),
+
   create: adminProcedure
     .input(
       z.object({
