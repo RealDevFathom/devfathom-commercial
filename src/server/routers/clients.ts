@@ -1,7 +1,17 @@
 import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { optionalWebsiteUrl } from '@/lib/validators';
+
+// Contract `value` shares the Decimal(12,2) money columns used across finance, so
+// the largest value Postgres will accept is 9,999,999,999.99 — bound it here so an
+// oversized input fails as a clean validation error instead of a raw DB 500.
+const MAX_MONEY = 9_999_999_999.99;
+const contractValue = () =>
+  z.number().nonnegative().max(MAX_MONEY, 'Amount must be 9,999,999,999.99 or less');
+const contractStatusEnum = z.enum(['DRAFT', 'SENT', 'SIGNED', 'EXPIRED', 'TERMINATED']);
+const currencyEnum = z.enum(['USD', 'PKR']);
 
 export const clientsRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
@@ -57,12 +67,20 @@ export const clientsRouter = router({
           include: { uploadedBy: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'desc' },
         },
+        contracts: { orderBy: { createdAt: 'desc' } },
       },
     });
 
     if (!client) return null;
-    // Strip invoices for non-admin users — keep array shape so client types stay stable.
-    return isAdmin ? client : { ...client, invoices: [] as typeof client.invoices };
+    // Strip finance-sensitive relations for non-admins — keep array shapes so
+    // client types stay stable.
+    return isAdmin
+      ? client
+      : {
+          ...client,
+          invoices: [] as typeof client.invoices,
+          contracts: [] as typeof client.contracts,
+        };
   }),
 
   create: adminProcedure
@@ -143,18 +161,120 @@ export const clientsRouter = router({
       return ctx.db.clientContact.delete({ where: { id: input.id } });
     }),
 
+  // ── Contracts ─────────────────────────────────────────────────────────────
+  // Contracts carry a money `value`, so they're admin-only like the client's
+  // invoices (see getById, which strips both for non-admins).
+  addContract: adminProcedure
+    .input(
+      z.object({
+        clientId: z.string(),
+        title: z.string().min(1),
+        fileUrl: z.string().optional(),
+        value: contractValue().optional(),
+        currency: currencyEnum.default('USD'),
+        status: contractStatusEnum.default('DRAFT'),
+        startDate: z.date().optional(),
+        endDate: z.date().optional(),
+        signedAt: z.date().optional(),
+        notes: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const contract = await ctx.db.contract.create({ data: input });
+      logActivity(ctx.db, ctx.session.user.id, {
+        type: 'contract_created',
+        message: `added contract "${contract.title}"`,
+        entityType: 'Contract',
+        entityId: contract.id,
+      });
+      return contract;
+    }),
+
+  updateContract: adminProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        title: z.string().min(1).optional(),
+        fileUrl: z.string().nullable().optional(),
+        value: contractValue().nullable().optional(),
+        currency: currencyEnum.optional(),
+        status: contractStatusEnum.optional(),
+        startDate: z.date().nullable().optional(),
+        endDate: z.date().nullable().optional(),
+        signedAt: z.date().nullable().optional(),
+        notes: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...data } = input;
+      const contract = await ctx.db.contract.update({ where: { id }, data });
+      logActivity(ctx.db, ctx.session.user.id, {
+        type: 'contract_updated',
+        message: `updated contract "${contract.title}"`,
+        entityType: 'Contract',
+        entityId: contract.id,
+      });
+      return contract;
+    }),
+
+  setContractStatus: adminProcedure
+    .input(z.object({ id: z.string(), status: contractStatusEnum }))
+    .mutation(async ({ ctx, input }) => {
+      // Stamp signedAt the first time a contract is marked SIGNED.
+      const existing = await ctx.db.contract.findUnique({
+        where: { id: input.id },
+        select: { signedAt: true },
+      });
+      const contract = await ctx.db.contract.update({
+        where: { id: input.id },
+        data: {
+          status: input.status,
+          ...(input.status === 'SIGNED' && !existing?.signedAt ? { signedAt: new Date() } : {}),
+        },
+      });
+      logActivity(ctx.db, ctx.session.user.id, {
+        type: 'contract_updated',
+        message: `set contract "${contract.title}" to ${input.status.toLowerCase()}`,
+        entityType: 'Contract',
+        entityId: contract.id,
+      });
+      return contract;
+    }),
+
+  deleteContract: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const contract = await ctx.db.contract.delete({ where: { id: input.id } });
+      logActivity(ctx.db, ctx.session.user.id, {
+        type: 'contract_deleted',
+        message: `deleted contract "${contract.title}"`,
+      });
+      return contract;
+    }),
+
   delete: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     const client = await ctx.db.client.findUnique({
       where: { id: input.id },
-      select: { name: true },
+      select: { name: true, _count: { select: { invoices: true } } },
     });
-    const deleted = await ctx.db.client.delete({ where: { id: input.id } });
-    if (client) {
-      logActivity(ctx.db, ctx.session.user.id, {
-        type: 'client_deleted',
-        message: `deleted client ${client.name}`,
+    if (!client) throw new TRPCError({ code: 'NOT_FOUND', message: 'Client not found' });
+
+    // CLI-01: Invoice.clientId is a required relation with no onDelete (Prisma
+    // default = Restrict), unlike contacts/contracts/transactions (Cascade). A
+    // raw delete therefore throws P2003. Pre-check and return a friendly error
+    // the UI can render, instead of a generic failure.
+    if (client._count.invoices > 0) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Cannot delete ${client.name}: ${client._count.invoices} invoice(s) reference this client. Delete or reassign them first.`,
       });
     }
+
+    const deleted = await ctx.db.client.delete({ where: { id: input.id } });
+    logActivity(ctx.db, ctx.session.user.id, {
+      type: 'client_deleted',
+      message: `deleted client ${client.name}`,
+    });
     return deleted;
   }),
 });

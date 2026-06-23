@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
@@ -22,6 +22,11 @@ import {
   Pencil,
   Trash2,
   Save,
+  ScrollText,
+  Calendar,
+  ExternalLink,
+  Upload,
+  CheckCircle2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -32,6 +37,12 @@ import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { NotesContent } from '@/app/(app)/notes/notes-content';
+import { uploadAttachment } from '@/lib/chat/upload-client';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
+
+type ClientDetail = NonNullable<inferRouterOutputs<AppRouter>['clients']['getById']>;
+type ContractItem = ClientDetail['contracts'][number];
 
 const statusConfig: Record<string, { bg: string; dot: string; label: string }> = {
   ACTIVE: {
@@ -50,6 +61,22 @@ const invoiceStatusConfig: Record<string, { bg: string; label: string }> = {
   OVERDUE: { bg: 'bg-red-500/10 text-red-500', label: 'Overdue' },
   CANCELLED: { bg: 'bg-muted text-muted-foreground', label: 'Cancelled' },
 };
+
+const contractStatusConfig: Record<string, { bg: string; label: string }> = {
+  DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
+  SENT: { bg: 'bg-blue-500/10 text-blue-500', label: 'Sent' },
+  SIGNED: { bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400', label: 'Signed' },
+  EXPIRED: { bg: 'bg-amber-500/10 text-amber-500', label: 'Expired' },
+  TERMINATED: { bg: 'bg-red-500/10 text-red-500', label: 'Terminated' },
+};
+
+const CONTRACT_STATUSES = ['DRAFT', 'SENT', 'SIGNED', 'EXPIRED', 'TERMINATED'] as const;
+
+// Mirrors how money is formatted across finance (see src/lib/ai/tools/finance.ts).
+function formatContractValue(value: number | null, currency: string): string | null {
+  if (value == null) return null;
+  return currency === 'PKR' ? `Rs ${value.toLocaleString()}` : `$${value.toLocaleString()}`;
+}
 
 export function ClientDetailContent({ clientId }: { clientId: string }) {
   const router = useRouter();
@@ -215,6 +242,10 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
               </div>
             )}
           </div>
+          {/* CLI-01: surface a friendly delete error (e.g. client has invoices). */}
+          {deleteClient.error && (
+            <p className="mt-2 text-right text-xs text-red-500">{deleteClient.error.message}</p>
+          )}
         </div>
       </div>
 
@@ -305,6 +336,9 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
           <TabsTrigger value="projects">Projects ({client.projects.length})</TabsTrigger>
           {isAdmin && (
             <TabsTrigger value="invoices">Invoices ({client.invoices.length})</TabsTrigger>
+          )}
+          {isAdmin && (
+            <TabsTrigger value="contracts">Contracts ({client.contracts.length})</TabsTrigger>
           )}
           <TabsTrigger value="notes">Notes</TabsTrigger>
           <TabsTrigger value="contacts">Contacts ({client.contacts.length})</TabsTrigger>
@@ -461,6 +495,17 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+        )}
+
+        {/* CONTRACTS — admin only */}
+        {isAdmin && (
+          <TabsContent value="contracts">
+            <ClientContractsTab
+              clientId={clientId}
+              clientName={client.name}
+              contracts={client.contracts}
+            />
           </TabsContent>
         )}
 
@@ -757,6 +802,513 @@ function ClientProjectsTab({
             );
           })}
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================
+   Client Contracts Tab — admin only, with CRUD
+   ============================================ */
+const inputClass =
+  'w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+
+function ClientContractsTab({
+  clientId,
+  clientName,
+  contracts,
+}: {
+  clientId: string;
+  clientName: string;
+  contracts: ContractItem[];
+}) {
+  const utils = trpc.useUtils();
+
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const [title, setTitle] = useState('');
+  const [status, setStatus] = useState<(typeof CONTRACT_STATUSES)[number]>('DRAFT');
+  const [value, setValue] = useState('');
+  const [currency, setCurrency] = useState<'USD' | 'PKR'>('USD');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [signedAt, setSignedAt] = useState('');
+  const [fileUrl, setFileUrl] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const resetForm = () => {
+    setEditingId(null);
+    setTitle('');
+    setStatus('DRAFT');
+    setValue('');
+    setCurrency('USD');
+    setStartDate('');
+    setEndDate('');
+    setSignedAt('');
+    setFileUrl('');
+    setFileName('');
+    setNotes('');
+    setUploadError(null);
+    // Clear any prior save error so a reopened form starts clean.
+    addContract.reset();
+    updateContract.reset();
+  };
+
+  const closeForm = () => {
+    setShowForm(false);
+    resetForm();
+  };
+
+  const invalidate = () => utils.clients.getById.invalidate({ id: clientId });
+
+  const addContract = trpc.clients.addContract.useMutation({
+    onSuccess: () => {
+      invalidate();
+      closeForm();
+    },
+  });
+  const updateContract = trpc.clients.updateContract.useMutation({
+    onSuccess: () => {
+      invalidate();
+      closeForm();
+    },
+  });
+  const setContractStatus = trpc.clients.setContractStatus.useMutation({
+    onSuccess: () => invalidate(),
+  });
+  const deleteContract = trpc.clients.deleteContract.useMutation({
+    onSuccess: () => {
+      invalidate();
+      setDeletingId(null);
+    },
+  });
+
+  const isSaving = addContract.isPending || updateContract.isPending;
+  // Surface a save failure inline so the form stays open and the user can retry.
+  const saveError = (editingId ? updateContract.error : addContract.error)?.message;
+  const toDate = (s: string) => (s ? new Date(s) : undefined);
+
+  // Reuse the shared upload pipeline (uploadAttachment → /api/upload) for the
+  // optional signed-document link.
+  const handleFileSelect = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file after a failure
+    if (!file) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const uploaded = await uploadAttachment(file);
+      setFileUrl(uploaded.url);
+      setFileName(uploaded.name);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const openCreate = () => {
+    resetForm();
+    setShowForm(true);
+  };
+
+  const openEdit = (c: ContractItem) => {
+    setEditingId(c.id);
+    setTitle(c.title);
+    setStatus(c.status as (typeof CONTRACT_STATUSES)[number]);
+    setValue(c.value != null ? String(Number(c.value)) : '');
+    setCurrency(c.currency as 'USD' | 'PKR');
+    setStartDate(c.startDate ? format(new Date(c.startDate), 'yyyy-MM-dd') : '');
+    setEndDate(c.endDate ? format(new Date(c.endDate), 'yyyy-MM-dd') : '');
+    setSignedAt(c.signedAt ? format(new Date(c.signedAt), 'yyyy-MM-dd') : '');
+    setFileUrl(c.fileUrl ?? '');
+    setFileName(c.fileUrl ? (c.fileUrl.split('/').pop() ?? 'Document') : '');
+    setNotes(c.notes ?? '');
+    setUploadError(null);
+    // Clear any prior save error so the edit form starts clean.
+    addContract.reset();
+    updateContract.reset();
+    setShowForm(true);
+  };
+
+  const handleSubmit = () => {
+    if (!title.trim()) return;
+    const numericValue = value.trim() ? Number(value) : undefined;
+    if (numericValue !== undefined && Number.isNaN(numericValue)) return;
+    if (editingId) {
+      updateContract.mutate({
+        id: editingId,
+        title: title.trim(),
+        status,
+        value: numericValue ?? null,
+        currency,
+        startDate: toDate(startDate) ?? null,
+        endDate: toDate(endDate) ?? null,
+        signedAt: toDate(signedAt) ?? null,
+        fileUrl: fileUrl.trim() || null,
+        notes: notes.trim() || null,
+      });
+    } else {
+      addContract.mutate({
+        clientId,
+        title: title.trim(),
+        status,
+        value: numericValue,
+        currency,
+        startDate: toDate(startDate),
+        endDate: toDate(endDate),
+        signedAt: toDate(signedAt),
+        fileUrl: fileUrl.trim() || undefined,
+        notes: notes.trim() || undefined,
+      });
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          {contracts.length} contract{contracts.length !== 1 ? 's' : ''} for {clientName}
+        </p>
+        {!showForm && (
+          <button
+            onClick={openCreate}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Contract
+          </button>
+        )}
+      </div>
+
+      {/* Create / edit form */}
+      {showForm && (
+        <Card className="border-primary/20">
+          <CardContent className="p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground">
+                {editingId ? 'Edit Contract' : `New Contract for ${clientName}`}
+              </h3>
+              <button onClick={closeForm} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
+              <input
+                autoFocus
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Master Services Agreement"
+                className={inputClass}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Status</label>
+                <select
+                  value={status}
+                  onChange={(e) =>
+                    setStatus(e.target.value as (typeof CONTRACT_STATUSES)[number])
+                  }
+                  className={inputClass}
+                >
+                  {CONTRACT_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {contractStatusConfig[s].label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Value</label>
+                <div className="flex gap-2">
+                  <select
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value as 'USD' | 'PKR')}
+                    className={cn(inputClass, 'w-20 shrink-0')}
+                  >
+                    <option value="USD">USD</option>
+                    <option value="PKR">PKR</option>
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    placeholder="0"
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Start Date</label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">End Date</label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Signed Date</label>
+                <input
+                  type="date"
+                  value={signedAt}
+                  onChange={(e) => setSignedAt(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1">
+                Signed Document
+              </label>
+              {fileUrl ? (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-border bg-background px-3 py-2">
+                  <a
+                    href={safeHref(fileUrl)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-sm text-primary hover:underline truncate"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{fileName || 'Document'}</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFileUrl('');
+                      setFileName('');
+                    }}
+                    className="text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <label
+                  className={cn(
+                    'flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-border bg-background px-3 py-2 text-sm text-muted-foreground hover:border-primary hover:text-foreground transition-colors',
+                    uploading && 'pointer-events-none opacity-60'
+                  )}
+                >
+                  {uploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  {uploading ? 'Uploading…' : 'Upload signed document'}
+                  <input type="file" className="hidden" onChange={handleFileSelect} />
+                </label>
+              )}
+              {uploadError && <p className="mt-1 text-xs text-red-500">{uploadError}</p>}
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1">Notes</label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="Scope, terms, renewal details..."
+                className={cn(inputClass, 'resize-none')}
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              {saveError && <p className="mr-auto text-xs text-red-500">{saveError}</p>}
+              <button
+                onClick={closeForm}
+                className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={!title.trim() || isSaving || uploading}
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              >
+                {isSaving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                {editingId ? 'Save Changes' : 'Create Contract'}
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Contract list */}
+      {contracts.length === 0 && !showForm ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-20">
+          <ScrollText className="h-12 w-12 text-muted-foreground/20" />
+          <h3 className="mt-4 font-display text-lg font-semibold text-foreground">No contracts</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Track agreements and their terms for this client
+          </p>
+          <button
+            onClick={openCreate}
+            className="mt-4 flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] active:scale-[0.98] transition-all"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add First Contract
+          </button>
+        </div>
+      ) : (
+        contracts.length > 0 && (
+          <Card className="border-border/60">
+            <CardContent className="p-0">
+              <div className="divide-y divide-border/60">
+                {contracts.map((c) => {
+                  const sc = contractStatusConfig[c.status] || contractStatusConfig.DRAFT;
+                  const valueLabel = formatContractValue(
+                    c.value != null ? Number(c.value) : null,
+                    c.currency
+                  );
+                  return (
+                    <div key={c.id} className="px-6 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-semibold text-foreground">{c.title}</p>
+                            <select
+                              value={c.status}
+                              onChange={(e) =>
+                                setContractStatus.mutate({
+                                  id: c.id,
+                                  status: e.target.value as (typeof CONTRACT_STATUSES)[number],
+                                })
+                              }
+                              disabled={setContractStatus.isPending}
+                              aria-label="Contract status"
+                              className={cn(
+                                'cursor-pointer rounded-full border-0 px-2.5 py-1 text-[11px] font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-60',
+                                sc.bg
+                              )}
+                            >
+                              {CONTRACT_STATUSES.map((s) => (
+                                <option key={s} value={s} className="bg-card text-foreground">
+                                  {contractStatusConfig[s].label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          {setContractStatus.error && setContractStatus.variables?.id === c.id && (
+                            <p className="mt-1 text-xs text-red-500">
+                              {setContractStatus.error.message}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-4 mt-1.5 text-xs text-muted-foreground flex-wrap">
+                            {valueLabel && (
+                              <span className="font-semibold text-foreground tabular-nums">
+                                {valueLabel}
+                              </span>
+                            )}
+                            {(c.startDate || c.endDate) && (
+                              <span className="flex items-center gap-1">
+                                <Calendar className="h-3 w-3" />
+                                {c.startDate ? format(new Date(c.startDate), 'MMM d, yyyy') : '—'}
+                                {' – '}
+                                {c.endDate ? format(new Date(c.endDate), 'MMM d, yyyy') : '—'}
+                              </span>
+                            )}
+                            {c.signedAt && (
+                              <span className="flex items-center gap-1">
+                                <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                                Signed {format(new Date(c.signedAt), 'MMM d, yyyy')}
+                              </span>
+                            )}
+                            {c.fileUrl && (
+                              <a
+                                href={safeHref(c.fileUrl)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-primary hover:underline"
+                              >
+                                <ExternalLink className="h-3 w-3" /> Document
+                              </a>
+                            )}
+                          </div>
+                          {c.notes && (
+                            <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
+                              {c.notes}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {deletingId === c.id ? (
+                            <>
+                              <button
+                                onClick={() => deleteContract.mutate({ id: c.id })}
+                                disabled={deleteContract.isPending}
+                                className="rounded-lg bg-red-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-red-600 disabled:opacity-50"
+                              >
+                                {deleteContract.isPending ? '...' : 'Confirm'}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  deleteContract.reset();
+                                  setDeletingId(null);
+                                }}
+                                className="rounded-lg px-2 py-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => openEdit(c)}
+                                title="Edit"
+                                className="rounded-lg border border-border bg-card p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => setDeletingId(c.id)}
+                                title="Delete"
+                                className="rounded-lg border border-border bg-card p-1.5 text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-colors"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {deletingId === c.id &&
+                        deleteContract.error &&
+                        deleteContract.variables?.id === c.id && (
+                          <p className="mt-2 text-xs text-red-500 text-right">
+                            {deleteContract.error.message}
+                          </p>
+                        )}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )
       )}
     </div>
   );
