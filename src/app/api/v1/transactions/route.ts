@@ -15,6 +15,7 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   const category = url.searchParams.get('category');
   // REST-06: NaN-safe — a non-numeric ?limit= must not reach Prisma as take:NaN.
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1), 200);
+  const cursor = url.searchParams.get('cursor'); // REST-02: cursor pagination
 
   const where: Record<string, unknown> = {};
   if (type) where.type = type;
@@ -26,9 +27,11 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
     };
   }
 
-  const transactions = await db.transaction.findMany({
+  // REST-02: consistent { data, nextCursor } envelope (fetch one extra to detect more).
+  const rows = await db.transaction.findMany({
     where,
-    take: limit,
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     orderBy: { date: 'desc' },
     include: {
       project: { select: { id: true, name: true } },
@@ -36,7 +39,10 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
     },
   });
 
-  return NextResponse.json({ data: transactions });
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore ? data[data.length - 1].id : null;
+  return NextResponse.json({ data, nextCursor });
 });
 
 const createTransactionSchema = z.object({

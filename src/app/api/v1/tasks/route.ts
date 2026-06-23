@@ -14,6 +14,7 @@ export const GET = withApiAuth('tasks:read', async (ctx, request) => {
   const priority = url.searchParams.get('priority');
   // REST-06: NaN-safe — `?limit=abc` must not reach Prisma as take:NaN (→ 500).
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1), 100);
+  const cursor = url.searchParams.get('cursor'); // REST-02: cursor pagination
 
   const where: Record<string, unknown> = {};
   if (columnId) where.columnId = columnId;
@@ -24,9 +25,12 @@ export const GET = withApiAuth('tasks:read', async (ctx, request) => {
     where.column = { board: { project: { members: { some: { userId: ctx.userId } } } } };
   }
 
-  const tasks = await db.task.findMany({
+  // REST-02: fetch one extra row to know whether there's a next page, then return
+  // a consistent { data, nextCursor } envelope.
+  const rows = await db.task.findMany({
     where,
-    take: limit,
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     orderBy: { createdAt: 'desc' },
     include: {
       column: {
@@ -37,7 +41,10 @@ export const GET = withApiAuth('tasks:read', async (ctx, request) => {
     },
   });
 
-  return NextResponse.json({ data: tasks });
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore ? data[data.length - 1].id : null;
+  return NextResponse.json({ data, nextCursor });
 });
 
 // POST /api/v1/tasks
