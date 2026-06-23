@@ -926,14 +926,19 @@ export const projectsRouter = router({
     .input(
       z.object({
         id: z.string(),
-        name: z.string().min(1),
+        name: z.string().min(1).optional(),
+        // IMP-PROJ-07: per-column WIP limit. undefined = leave unchanged,
+        // null = clear the limit, 0+ = set it.
+        wipLimit: z.number().int().min(0).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       await assertColumnAccess(ctx, input.id);
       return ctx.db.column.update({
         where: { id: input.id },
-        data: { name: input.name },
+        // Prisma treats `undefined` as "don't touch" and `null` as "set null",
+        // which is exactly the semantics we want for an optional clearable limit.
+        data: { name: input.name, wipLimit: input.wipLimit },
       });
     }),
 

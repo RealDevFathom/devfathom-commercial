@@ -30,6 +30,7 @@ import {
   MoveRight,
   ListChecks,
   Check,
+  Gauge,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -110,6 +111,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     onSuccess: () => {
       utils.projects.getBoardWithTasks.invalidate({ boardId });
       setEditingColumnId(null);
+      setWipEditorColumnId(null);
     },
   });
   const deleteColumn = trpc.projects.deleteColumn.useMutation({
@@ -136,6 +138,16 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   const [newColumnName, setNewColumnName] = useState('');
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
+
+  // IMP-PROJ-07: per-column WIP limit — which column's limit editor is open,
+  // plus a transient (non-blocking) warning when a move/add pushes a column over.
+  const [wipEditorColumnId, setWipEditorColumnId] = useState<string | null>(null);
+  const [wipWarning, setWipWarning] = useState<string | null>(null);
+  useEffect(() => {
+    if (!wipWarning) return;
+    const t = setTimeout(() => setWipWarning(null), 4500);
+    return () => clearTimeout(t);
+  }, [wipWarning]);
 
   // IMP-PROJ-08: multi-select / bulk-action state.
   const [selectionMode, setSelectionMode] = useState(false);
@@ -267,6 +279,19 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         return { ...prev, [destination.droppableId]: destRealIdx + 1 };
       });
 
+      // IMP-PROJ-07: non-blocking warning when a cross-column move pushes the
+      // destination past its WIP limit. destCol.tasks already includes the moved
+      // card here, so its length is the post-move count. The move still proceeds.
+      if (
+        source.droppableId !== destination.droppableId &&
+        destCol.wipLimit != null &&
+        destCol.tasks.length > destCol.wipLimit
+      ) {
+        setWipWarning(
+          `"${destCol.name}" is over its WIP limit (${destCol.tasks.length}/${destCol.wipLimit}).`
+        );
+      }
+
       const previous = board;
       utils.projects.getBoardWithTasks.setData(
         { boardId },
@@ -296,8 +321,15 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
     (columnId: string, title: string, assigneeIds: string[]) => {
       createTask.mutate({ title, columnId, assigneeIds });
       setAddingToColumn(null);
+      // IMP-PROJ-07: non-blocking warning if adding this task exceeds the limit.
+      const col = board?.columns.find((c) => c.id === columnId);
+      if (col?.wipLimit != null && col.tasks.length + 1 > col.wipLimit) {
+        setWipWarning(
+          `"${col.name}" is over its WIP limit (${col.tasks.length + 1}/${col.wipLimit}).`
+        );
+      }
     },
-    [createTask]
+    [createTask, board]
   );
 
   // Stable selection handler so memoized children don't re-render on every change.
@@ -542,7 +574,12 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                 {...boardProvided.droppableProps}
                 className="flex gap-4 overflow-x-auto pb-4 flex-1 min-h-0"
               >
-                {filteredColumns.map((column, colIndex) => (
+                {filteredColumns.map((column, colIndex) => {
+                  // IMP-PROJ-07: WIP-limit values for this column's header indicator.
+                  const wipLimit = column.wipLimit;
+                  const wipCount = column.tasks.length;
+                  const wipOver = wipLimit != null && wipCount > wipLimit;
+                  return (
                   <Draggable key={column.id} draggableId={column.id} index={colIndex}>
                     {(colProvided, colSnapshot) => (
                       <div
@@ -581,8 +618,22 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                 {column.name}
                               </h3>
                             )}
-                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-secondary px-1.5 text-[11px] font-medium text-muted-foreground shrink-0">
-                              {column.tasks.length}
+                            {/* IMP-PROJ-07: task count, shown as count/limit when a
+                                WIP limit is set; red once the column is over. */}
+                            <span
+                              className={cn(
+                                'flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-medium shrink-0',
+                                wipOver
+                                  ? 'bg-red-500/15 text-red-500'
+                                  : 'bg-secondary text-muted-foreground'
+                              )}
+                              title={
+                                wipLimit != null
+                                  ? `${wipCount} of ${wipLimit} (WIP limit)`
+                                  : `${wipCount} task${wipCount === 1 ? '' : 's'}`
+                              }
+                            >
+                              {wipLimit != null ? `${wipCount}/${wipLimit}` : wipCount}
                             </span>
                           </div>
 
@@ -612,6 +663,25 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                               </div>
                             ) : (
                               <>
+                                {/* IMP-PROJ-07: set / clear this column's WIP limit */}
+                                <button
+                                  onClick={() =>
+                                    setWipEditorColumnId((prev) =>
+                                      prev === column.id ? null : column.id
+                                    )
+                                  }
+                                  className={cn(
+                                    'flex h-6 w-6 items-center justify-center rounded-md transition-all hover:bg-secondary hover:text-foreground',
+                                    wipLimit != null || wipEditorColumnId === column.id
+                                      ? 'text-muted-foreground'
+                                      : 'text-muted-foreground/0 group-hover/col:text-muted-foreground'
+                                  )}
+                                  title={
+                                    wipLimit != null ? `WIP limit: ${wipLimit}` : 'Set WIP limit'
+                                  }
+                                >
+                                  <Gauge className="h-3.5 w-3.5" />
+                                </button>
                                 <button
                                   onClick={() => setDeletingColumnId(column.id)}
                                   className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/0 group-hover/col:text-muted-foreground hover:!bg-red-500/10 hover:!text-red-500 transition-all"
@@ -629,6 +699,22 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                             )}
                           </div>
                         </div>
+
+                        {/* IMP-PROJ-07: WIP-limit editor (set / clear) */}
+                        {wipEditorColumnId === column.id && (
+                          <ColumnWipEditor
+                            initialLimit={wipLimit}
+                            taskCount={wipCount}
+                            isSaving={updateColumn.isPending}
+                            onSave={(limit) =>
+                              updateColumn.mutate({ id: column.id, wipLimit: limit })
+                            }
+                            onClear={() =>
+                              updateColumn.mutate({ id: column.id, wipLimit: null })
+                            }
+                            onCancel={() => setWipEditorColumnId(null)}
+                          />
+                        )}
 
                         {/* Column owners — auto-assigned when a task enters */}
                         <ColumnOwners
@@ -750,7 +836,8 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                       </div>
                     )}
                   </Draggable>
-                ))}
+                  );
+                })}
                 {boardProvided.placeholder}
 
                 {/* Add column */}
@@ -947,6 +1034,23 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
               aria-label="Clear selection"
             >
               <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* IMP-PROJ-07: transient, non-blocking WIP-limit warning */}
+      {wipWarning && (
+        <div className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2 animate-fade-in">
+          <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-card px-3.5 py-2 shadow-2xl shadow-black/25">
+            <span className="flex h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+            <span className="text-xs font-medium text-foreground">{wipWarning}</span>
+            <button
+              onClick={() => setWipWarning(null)}
+              className="ml-1 flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              aria-label="Dismiss warning"
+            >
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
@@ -1167,6 +1271,89 @@ function ColumnRenameInput({
       }}
       className="text-sm font-semibold text-foreground bg-transparent border-b border-primary pb-0.5 focus:outline-none w-full"
     />
+  );
+}
+
+/* ============================================
+   Column WIP limit — set / clear a column's work-in-progress cap (IMP-PROJ-07)
+   Owns its own draft state; a blank value clears the limit.
+   ============================================ */
+function ColumnWipEditor({
+  initialLimit,
+  taskCount,
+  onSave,
+  onClear,
+  onCancel,
+  isSaving,
+}: {
+  initialLimit: number | null;
+  taskCount: number;
+  onSave: (limit: number) => void;
+  onClear: () => void;
+  onCancel: () => void;
+  isSaving: boolean;
+}) {
+  const [value, setValue] = useState(initialLimit != null ? String(initialLimit) : '');
+  const trimmed = value.trim();
+  const num = Number(trimmed);
+  const valid = trimmed !== '' && Number.isInteger(num) && num >= 0;
+
+  const submit = () => {
+    if (trimmed === '') onClear();
+    else if (valid) onSave(num);
+  };
+
+  return (
+    <div className="px-1 -mt-1 mb-2">
+      <div className="rounded-lg border border-primary/20 bg-card p-2 shadow-lg">
+        <div className="flex items-center justify-between mb-2 px-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            WIP limit
+          </p>
+          <button
+            onClick={onCancel}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Close WIP editor"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+        <p className="px-1 mb-2 text-[10px] text-muted-foreground leading-snug">
+          Max tasks for this column ({taskCount} now). Leave blank to remove the limit.
+        </p>
+        <div className="flex items-center gap-1.5">
+          <input
+            autoFocus
+            type="number"
+            min={0}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+              if (e.key === 'Escape') onCancel();
+            }}
+            placeholder="No limit"
+            className="h-7 w-20 rounded-md border border-border bg-background px-2 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+          />
+          <button
+            onClick={submit}
+            disabled={isSaving || (trimmed !== '' && !valid)}
+            className="rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            {isSaving ? 'Saving…' : 'Save'}
+          </button>
+          {initialLimit != null && (
+            <button
+              onClick={onClear}
+              disabled={isSaving}
+              className="rounded-md px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

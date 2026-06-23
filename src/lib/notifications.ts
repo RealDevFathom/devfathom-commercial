@@ -2,6 +2,76 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { sendEmail } from '@/lib/email';
 import type { EmailContent } from '@/lib/email';
 
+/* ============================================================
+   IMP-AUTH-04 — per-user notification preferences
+   ============================================================
+   A small, typed model layered over notify(). Each NotifyArgs.type
+   maps to one CATEGORY; each delivery flows through one of two
+   CHANNELS (in-app row + email). Users may opt OUT of any
+   category × channel cell. Anything unset defaults to ON. */
+
+export const NOTIFICATION_CATEGORIES = [
+  'task',
+  'mention',
+  'meeting',
+  'leave',
+  'invoice',
+  'project',
+  'client',
+  'resignation',
+  'note',
+] as const;
+export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
+
+export const NOTIFICATION_CHANNELS = ['inApp', 'email'] as const;
+export type NotificationChannel = (typeof NOTIFICATION_CHANNELS)[number];
+
+/**
+ * Stored on User.notificationPrefs (Json?). Sparse by design: a missing
+ * category, a missing channel, or `true` all mean "opted in". Only an
+ * explicit `false` opts the user out of that category × channel cell, so an
+ * absent/empty record = everything ON.
+ */
+export type NotificationPrefs = Partial<
+  Record<NotificationCategory, Partial<Record<NotificationChannel, boolean>>>
+>;
+
+/**
+ * Map a NotifyArgs.type tag onto its category. Returns null for unrecognized
+ * tags — callers treat null as "never suppress" so a new/unmapped type is
+ * always delivered (fail-open, like the rest of notify()).
+ */
+export function categoryForType(type: string): NotificationCategory | null {
+  if (type.startsWith('task_')) return 'task';
+  if (type === 'mention') return 'mention';
+  if (type.startsWith('meeting_')) return 'meeting';
+  if (type.startsWith('leave_')) return 'leave';
+  if (type.startsWith('invoice_')) return 'invoice';
+  if (type.startsWith('project_')) return 'project';
+  if (type.startsWith('client_') || type.startsWith('contract_')) return 'client';
+  if (type.startsWith('resignation_')) return 'resignation';
+  if (type.startsWith('note_')) return 'note';
+  return null;
+}
+
+/**
+ * Decide whether `channel` is permitted for `category` given a user's raw
+ * (untrusted, possibly malformed) prefs blob. Defaults to ON for anything
+ * missing/unparseable, and never suppresses an unrecognized category.
+ */
+export function isChannelAllowed(
+  prefs: unknown,
+  category: NotificationCategory | null,
+  channel: NotificationChannel
+): boolean {
+  if (!category) return true; // unmapped type → always deliver
+  if (!prefs || typeof prefs !== 'object') return true; // missing/malformed → ON
+  const cat = (prefs as Record<string, unknown>)[category];
+  if (!cat || typeof cat !== 'object') return true;
+  // Only an explicit boolean false opts out; anything else (true/undefined/junk) = ON.
+  return (cat as Record<string, unknown>)[channel] !== false;
+}
+
 export interface NotifyArgs {
   /** Notification type tag, e.g. 'task_assigned' (mirrors Activity types). */
   type: string;
@@ -36,29 +106,56 @@ export function notify(db: PrismaClient, userIds: string[], args: NotifyArgs): v
 }
 
 async function deliver(db: PrismaClient, userIds: string[], args: NotifyArgs): Promise<void> {
-  // 1) In-app notification rows (best-effort).
-  await db.notification
-    .createMany({
-      data: userIds.map((userId) => ({
-        userId,
-        title: args.title,
-        message: args.message,
-        type: args.type,
-        entityType: args.entityType ?? null,
-        entityId: args.entityId ?? null,
-      })),
-    })
-    .catch((err) => console.error('[notify] notification insert failed', args.type, err));
+  const category = categoryForType(args.type);
 
-  // 2) Emails (best-effort, per recipient). Skip deactivated accounts.
+  // IMP-AUTH-04: load each recipient's prefs once (also reused for the email
+  // step's name/email/status). If the lookup itself fails, fall back to the
+  // legacy behaviour — deliver everything — so prefs never silence a real event.
+  let users: Array<{
+    id: string;
+    name: string;
+    email: string;
+    status: string;
+    notificationPrefs: unknown;
+  }> = [];
+  try {
+    users = await db.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, name: true, email: true, status: true, notificationPrefs: true },
+    });
+  } catch (err) {
+    console.error('[notify] prefs lookup failed', args.type, err);
+  }
+  const byId = new Map(users.map((u) => [u.id, u] as const));
+
+  // 1) In-app notification rows (best-effort). Drop recipients who opted OUT of
+  // the in-app channel for this category. Unknown ids (lookup miss/failure)
+  // default to ON so existing behaviour is preserved.
+  const inAppUserIds = userIds.filter((id) =>
+    isChannelAllowed(byId.get(id)?.notificationPrefs, category, 'inApp')
+  );
+  if (inAppUserIds.length > 0) {
+    await db.notification
+      .createMany({
+        data: inAppUserIds.map((userId) => ({
+          userId,
+          title: args.title,
+          message: args.message,
+          type: args.type,
+          entityType: args.entityType ?? null,
+          entityId: args.entityId ?? null,
+        })),
+      })
+      .catch((err) => console.error('[notify] notification insert failed', args.type, err));
+  }
+
+  // 2) Emails (best-effort, per recipient). Skip deactivated accounts and
+  // anyone who opted OUT of the email channel for this category.
   if (!args.email) return;
-  const users = await db.user.findMany({
-    where: { id: { in: userIds }, status: { not: 'INACTIVE' } },
-    select: { id: true, name: true, email: true },
-  });
-
   await Promise.all(
     users.map(async (u) => {
+      if (u.status === 'INACTIVE') return;
+      if (!isChannelAllowed(u.notificationPrefs, category, 'email')) return;
       const content = args.email?.(u);
       if (!content) return;
       try {

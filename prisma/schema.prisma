@@ -198,6 +198,10 @@ model User {
   // "Sign out everywhere" bumps it too. passwordChangedAt is kept for display/audit.
   tokenVersion      Int       @default(0)
   passwordChangedAt DateTime?
+  // IMP-DASH-02: per-user dashboard widget layout/visibility prefs (JSON blob).
+  preferences       Json?
+  // IMP-AUTH-04: per-type/channel notification opt-outs, honored by notify().
+  notificationPrefs Json?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -229,6 +233,7 @@ model User {
   attendanceLog     MeetingAttendanceLog[]
   invitation        Invitation?        @relation("UserInvitation")
   invitationsSent   Invitation[]       @relation("InvitationsSent")
+  passwordResetTokens PasswordResetToken[]
   auditLogs         AuditLog[]         @relation("UserAuditLogs")
   resignations      Resignation[]      @relation("UserResignations")
   resignationsReviewed Resignation[]   @relation("ResignationsReviewed")
@@ -280,6 +285,22 @@ model Invitation {
   updatedAt   DateTime  @updatedAt
 
   @@map("invitations")
+}
+
+// IMP-AUTH-01: self-service password reset. Single-use, expiring token; only the
+// SHA-256 hash is stored (raw token is emailed once), mirroring Invitation.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 // ============================================
@@ -339,13 +360,17 @@ model Contract {
   endDate   DateTime?
   signedAt  DateTime?
   notes     String?
+  // IMP-CLI-05: optionally tie a contract to the delivery project it funds.
+  projectId String?
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client  Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   @@index([clientId])
   @@index([status])
+  @@index([projectId])
   @@map("contracts")
 }
 
@@ -377,6 +402,7 @@ model Project {
   transactions Transaction[]
   timeEntries  TimeEntry[]
   notes        Note[]
+  contracts    Contract[] // IMP-CLI-05: contracts linked to this delivery project
 
   @@map("projects")
 }
@@ -421,6 +447,8 @@ model Column {
   name      String
   boardId   String
   order     Int
+  // IMP-PROJ-07: optional work-in-progress limit; the board warns/blocks past it.
+  wipLimit  Int?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

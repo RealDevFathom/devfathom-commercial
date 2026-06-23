@@ -577,6 +577,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
               clientId={clientId}
               clientName={client.name}
               contracts={client.contracts}
+              projects={client.projects}
             />
           </TabsContent>
         )}
@@ -1057,12 +1058,17 @@ function ClientContractsTab({
   clientId,
   clientName,
   contracts,
+  projects,
 }: {
   clientId: string;
   clientName: string;
   contracts: ContractItem[];
+  projects: Array<{ id: string; name: string }>;
 }) {
   const utils = trpc.useUtils();
+
+  // IMP-CLI-05: per-client total contracted value, grouped by currency.
+  const { data: contractedValue } = trpc.clients.contractedValue.useQuery({ id: clientId });
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1072,6 +1078,7 @@ function ClientContractsTab({
   const [status, setStatus] = useState<(typeof CONTRACT_STATUSES)[number]>('DRAFT');
   const [value, setValue] = useState('');
   const [currency, setCurrency] = useState<'USD' | 'PKR'>('USD');
+  const [projectId, setProjectId] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [signedAt, setSignedAt] = useState('');
@@ -1087,6 +1094,7 @@ function ClientContractsTab({
     setStatus('DRAFT');
     setValue('');
     setCurrency('USD');
+    setProjectId('');
     setStartDate('');
     setEndDate('');
     setSignedAt('');
@@ -1104,7 +1112,10 @@ function ClientContractsTab({
     resetForm();
   };
 
-  const invalidate = () => utils.clients.getById.invalidate({ id: clientId });
+  const invalidate = () => {
+    utils.clients.getById.invalidate({ id: clientId });
+    utils.clients.contractedValue.invalidate({ id: clientId });
+  };
 
   const addContract = trpc.clients.addContract.useMutation({
     onSuccess: () => {
@@ -1126,6 +1137,10 @@ function ClientContractsTab({
       invalidate();
       setDeletingId(null);
     },
+  });
+  // IMP-CLI-05: draft an invoice from a contract's value (refresh the invoices tab).
+  const generateInvoice = trpc.clients.generateInvoiceFromContract.useMutation({
+    onSuccess: () => invalidate(),
   });
 
   const isSaving = addContract.isPending || updateContract.isPending;
@@ -1163,6 +1178,7 @@ function ClientContractsTab({
     setStatus(c.status as (typeof CONTRACT_STATUSES)[number]);
     setValue(c.value != null ? String(Number(c.value)) : '');
     setCurrency(c.currency as 'USD' | 'PKR');
+    setProjectId(c.projectId ?? '');
     setStartDate(c.startDate ? format(new Date(c.startDate), 'yyyy-MM-dd') : '');
     setEndDate(c.endDate ? format(new Date(c.endDate), 'yyyy-MM-dd') : '');
     setSignedAt(c.signedAt ? format(new Date(c.signedAt), 'yyyy-MM-dd') : '');
@@ -1187,6 +1203,7 @@ function ClientContractsTab({
         status,
         value: numericValue ?? null,
         currency,
+        projectId: projectId || null,
         startDate: toDate(startDate) ?? null,
         endDate: toDate(endDate) ?? null,
         signedAt: toDate(signedAt) ?? null,
@@ -1200,6 +1217,7 @@ function ClientContractsTab({
         status,
         value: numericValue,
         currency,
+        projectId: projectId || undefined,
         startDate: toDate(startDate),
         endDate: toDate(endDate),
         signedAt: toDate(signedAt),
@@ -1225,6 +1243,27 @@ function ClientContractsTab({
           </button>
         )}
       </div>
+
+      {/* IMP-CLI-05: per-client total contracted value, grouped by currency. */}
+      {contractedValue && contractedValue.length > 0 && (
+        <Card className="border-border/60">
+          <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-3 p-4">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Total Contracted Value
+            </p>
+            {contractedValue.map((cv) => (
+              <div key={cv.currency} className="flex items-baseline gap-1.5">
+                <span className="text-base font-bold tabular-nums text-foreground">
+                  {formatContractValue(cv.total, cv.currency)}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  ({cv.count} {cv.currency})
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Create / edit form */}
       {showForm && (
@@ -1287,6 +1326,23 @@ function ClientContractsTab({
                     className={inputClass}
                   />
                 </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">
+                  Linked Project
+                </label>
+                <select
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">No project</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Start Date</label>
@@ -1464,6 +1520,15 @@ function ClientContractsTab({
                                 {valueLabel}
                               </span>
                             )}
+                            {c.project && (
+                              <Link
+                                href={`/projects/${c.project.id}`}
+                                className="flex items-center gap-1 text-primary hover:underline"
+                              >
+                                <FolderKanban className="h-3 w-3" />
+                                {c.project.name}
+                              </Link>
+                            )}
                             {(c.startDate || c.endDate) && (
                               <span className="flex items-center gap-1">
                                 <Calendar className="h-3 w-3" />
@@ -1517,6 +1582,26 @@ function ClientContractsTab({
                             </>
                           ) : (
                             <>
+                              {c.value != null && Number(c.value) > 0 && (
+                                <button
+                                  onClick={() =>
+                                    generateInvoice.mutate({ contractId: c.id })
+                                  }
+                                  disabled={
+                                    generateInvoice.isPending &&
+                                    generateInvoice.variables?.contractId === c.id
+                                  }
+                                  title="Generate draft invoice from value"
+                                  className="rounded-lg border border-border bg-card p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-50"
+                                >
+                                  {generateInvoice.isPending &&
+                                  generateInvoice.variables?.contractId === c.id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <FileText className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              )}
                               <button
                                 onClick={() => openEdit(c)}
                                 title="Edit"
@@ -1542,6 +1627,11 @@ function ClientContractsTab({
                             {deleteContract.error.message}
                           </p>
                         )}
+                      {generateInvoice.error && generateInvoice.variables?.contractId === c.id && (
+                        <p className="mt-2 text-xs text-red-500 text-right">
+                          {generateInvoice.error.message}
+                        </p>
+                      )}
                     </div>
                   );
                 })}

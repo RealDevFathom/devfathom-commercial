@@ -1,14 +1,36 @@
 import { z } from 'zod';
 import { hash, compare } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
+import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure, adminProcedure, hrProcedure, capabilityProcedure } from '../trpc';
 import { can, subjectFromSession } from '@/lib/abac';
 import { assertNotificationOwner } from '../authz';
 import { annotateAudit, diffChanges } from '../audit';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { notify } from '@/lib/notifications';
+import type { NotificationPrefs } from '@/lib/notifications';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
+
+// IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
+// anything unset means "opted in" (notify() defaults to ON). Keys mirror
+// NOTIFICATION_CATEGORIES in @/lib/notifications.
+const channelPrefsSchema = z
+  .object({ inApp: z.boolean().optional(), email: z.boolean().optional() })
+  .strict();
+const notificationPrefsSchema = z
+  .object({
+    task: channelPrefsSchema.optional(),
+    mention: channelPrefsSchema.optional(),
+    meeting: channelPrefsSchema.optional(),
+    leave: channelPrefsSchema.optional(),
+    invoice: channelPrefsSchema.optional(),
+    project: channelPrefsSchema.optional(),
+    client: channelPrefsSchema.optional(),
+    resignation: channelPrefsSchema.optional(),
+    note: channelPrefsSchema.optional(),
+  })
+  .strict();
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -492,6 +514,28 @@ export const teamRouter = router({
     });
     return { success: true };
   }),
+
+  // IMP-AUTH-04: read the caller's own notification preferences. Returns the
+  // stored sparse blob (or null when never set — the UI treats that as "all ON").
+  getNotificationPrefs: protectedProcedure.query(async ({ ctx }) => {
+    const me = await ctx.db.user.findUnique({
+      where: { id: ctx.session.user.id },
+      select: { notificationPrefs: true },
+    });
+    return (me?.notificationPrefs ?? null) as NotificationPrefs | null;
+  }),
+
+  // IMP-AUTH-04: persist the caller's own per-category × per-channel opt-outs.
+  // Stored sparsely; notify() reads this and skips opted-out channels.
+  updateNotificationPrefs: protectedProcedure
+    .input(notificationPrefsSchema)
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: { notificationPrefs: input as Prisma.InputJsonValue },
+      });
+      return { success: true };
+    }),
 
   adminUpdateMember: adminProcedure
     .input(

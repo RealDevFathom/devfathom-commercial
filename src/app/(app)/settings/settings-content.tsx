@@ -22,8 +22,10 @@ import {
   ExternalLink,
   AlertCircle,
   LogOut,
+  Bell,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Switch } from '@/components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Dialog,
@@ -39,6 +41,11 @@ import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
+import type {
+  NotificationPrefs,
+  NotificationCategory,
+  NotificationChannel,
+} from '@/lib/notifications';
 
 function formatDay(d: Date | string) {
   return new Date(d).toLocaleDateString(undefined, {
@@ -67,6 +74,9 @@ export function SettingsContent() {
 
       {/* Password */}
       <PasswordSection />
+
+      {/* Notification preferences (IMP-AUTH-04) */}
+      <NotificationsSection />
 
       {/* Appearance */}
       <Card className="border-border/60">
@@ -508,6 +518,121 @@ function PasswordSection() {
             {signOutEverywhere.isPending ? 'Signing out…' : 'Sign out everywhere'}
           </button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================================================
+   Notification preferences (IMP-AUTH-04)
+   Per-category × per-channel opt-outs. Honored by notify().
+   ============================================================ */
+const NOTIFICATION_SETTINGS: ReadonlyArray<{
+  key: NotificationCategory;
+  label: string;
+  desc: string;
+}> = [
+  { key: 'task', label: 'Tasks', desc: 'Task assignments and updates' },
+  { key: 'mention', label: 'Mentions', desc: 'When someone @mentions you in chat' },
+  { key: 'meeting', label: 'Meetings', desc: 'Meeting invites' },
+  { key: 'leave', label: 'Time off', desc: 'Decisions on your leave requests' },
+  { key: 'invoice', label: 'Invoices', desc: 'Invoice and billing activity' },
+  { key: 'project', label: 'Projects', desc: 'Project membership and files' },
+  { key: 'client', label: 'Clients', desc: 'Client and contract changes' },
+  { key: 'resignation', label: 'Resignations', desc: 'Resignation submissions and decisions' },
+  { key: 'note', label: 'Notes', desc: 'When a note is shared with you' },
+];
+
+function NotificationsSection() {
+  const utils = trpc.useUtils();
+  const { data: prefs, isLoading } = trpc.team.getNotificationPrefs.useQuery();
+
+  const update = trpc.team.updateNotificationPrefs.useMutation({
+    // Optimistic: flip the cell in cache immediately, roll back on error,
+    // and reconcile with the server afterwards.
+    onMutate: async (next) => {
+      await utils.team.getNotificationPrefs.cancel();
+      const prev = utils.team.getNotificationPrefs.getData();
+      utils.team.getNotificationPrefs.setData(undefined, next as NotificationPrefs);
+      return { prev };
+    },
+    onError: (_err, _next, context) => {
+      utils.team.getNotificationPrefs.setData(undefined, context?.prev ?? null);
+    },
+    onSettled: () => {
+      utils.team.getNotificationPrefs.invalidate();
+    },
+  });
+
+  // Unset / non-false = enabled (notify() defaults everything ON).
+  const isOn = (cat: NotificationCategory, ch: NotificationChannel) =>
+    prefs?.[cat]?.[ch] !== false;
+
+  const toggle = (cat: NotificationCategory, ch: NotificationChannel, value: boolean) => {
+    // Build a full explicit matrix from current state, then flip one cell, so
+    // the persisted blob is self-contained and unambiguous.
+    const next = {} as Record<NotificationCategory, { inApp: boolean; email: boolean }>;
+    for (const s of NOTIFICATION_SETTINGS) {
+      next[s.key] = { inApp: isOn(s.key, 'inApp'), email: isOn(s.key, 'email') };
+    }
+    next[cat][ch] = value;
+    update.mutate(next);
+  };
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-sky-500/10">
+            <Bell className="h-3.5 w-3.5 text-sky-500" />
+          </div>
+          Notifications
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Choose how you&apos;re notified. Turn off in-app or email for any category.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading preferences…
+          </div>
+        ) : (
+          <div className="divide-y divide-border/60">
+            {/* Column headers */}
+            <div className="flex items-center gap-4 pb-2">
+              <div className="flex-1" />
+              <span className="w-12 text-center text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                In-app
+              </span>
+              <span className="w-12 text-center text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Email
+              </span>
+            </div>
+            {NOTIFICATION_SETTINGS.map((s) => (
+              <div key={s.key} className="flex items-center gap-4 py-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground">{s.label}</p>
+                  <p className="text-[11px] text-muted-foreground">{s.desc}</p>
+                </div>
+                <div className="flex w-12 justify-center">
+                  <Switch
+                    size="sm"
+                    checked={isOn(s.key, 'inApp')}
+                    onCheckedChange={(v) => toggle(s.key, 'inApp', v)}
+                  />
+                </div>
+                <div className="flex w-12 justify-center">
+                  <Switch
+                    size="sm"
+                    checked={isOn(s.key, 'email')}
+                    onCheckedChange={(v) => toggle(s.key, 'email', v)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -14,6 +14,15 @@ const contractValue = () =>
 const contractStatusEnum = z.enum(['DRAFT', 'SENT', 'SIGNED', 'EXPIRED', 'TERMINATED']);
 const currencyEnum = z.enum(['USD', 'PKR']);
 
+// IMP-CLI-05: guard a contract's optional project link — fail with a clean 404
+// instead of a raw FK error (P2003) if the project id doesn't resolve.
+async function assertProjectExists(db: Prisma.TransactionClient, projectId: string) {
+  const project = await db.project.findUnique({ where: { id: projectId }, select: { id: true } });
+  if (!project) throw new TRPCError({ code: 'NOT_FOUND', message: 'Linked project not found.' });
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 export const clientsRouter = router({
   // CANONICAL CLIENT-DIRECTORY TRUST POLICY (AUTHZ-04). One policy, applied across
   // tRPC, REST and the AI assistant so the three surfaces no longer disagree:
@@ -82,7 +91,12 @@ export const clientsRouter = router({
           include: { uploadedBy: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'desc' },
         },
-        contracts: { take: isAdmin ? undefined : 0, orderBy: { createdAt: 'desc' } },
+        contracts: {
+          take: isAdmin ? undefined : 0,
+          orderBy: { createdAt: 'desc' },
+          // IMP-CLI-05: surface the delivery project a contract funds, if linked.
+          include: { project: { select: { id: true, name: true } } },
+        },
       },
     });
 
@@ -114,6 +128,27 @@ export const clientsRouter = router({
         take: 30,
         include: { user: { select: { id: true, name: true, avatar: true } } },
       });
+    }),
+
+  // IMP-CLI-05: per-client total contracted value, grouped by currency. Money is
+  // finance-sensitive, so this mirrors the contracts admin-only posture. USD and
+  // PKR contracts are kept on separate rows (never summed across currencies).
+  contractedValue: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.contract.groupBy({
+        by: ['currency'],
+        where: { clientId: input.id, value: { not: null } },
+        _sum: { value: true },
+        _count: { _all: true },
+      });
+      return rows
+        .map((r) => ({
+          currency: r.currency,
+          total: Number(r._sum.value ?? 0),
+          count: r._count._all,
+        }))
+        .sort((a, b) => b.total - a.total);
     }),
 
   create: adminProcedure
@@ -245,6 +280,8 @@ export const clientsRouter = router({
           endDate: z.date().optional(),
           signedAt: z.date().optional(),
           notes: z.string().optional(),
+          // IMP-CLI-05: optionally tie the contract to a delivery project.
+          projectId: z.string().optional(),
         })
         // CON-01: endDate must not precede startDate (when both are set).
         .refine((d) => !(d.startDate && d.endDate) || d.endDate >= d.startDate, {
@@ -253,6 +290,8 @@ export const clientsRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      // IMP-CLI-05: validate a supplied project link before persisting.
+      if (input.projectId) await assertProjectExists(ctx.db, input.projectId);
       const contract = await ctx.db.contract.create({ data: input });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'contract_created',
@@ -277,6 +316,8 @@ export const clientsRouter = router({
           endDate: z.date().nullable().optional(),
           signedAt: z.date().nullable().optional(),
           notes: z.string().nullable().optional(),
+          // IMP-CLI-05: set (string) or clear (null) the linked delivery project.
+          projectId: z.string().nullable().optional(),
         })
         // CON-01: endDate must not precede startDate when both are supplied.
         .refine((d) => !(d.startDate && d.endDate) || d.endDate >= d.startDate, {
@@ -286,6 +327,8 @@ export const clientsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      // IMP-CLI-05: validate a newly-set project link (null = clear, skip check).
+      if (data.projectId) await assertProjectExists(ctx.db, data.projectId);
       // CON-02: stamp signedAt the first time the EDIT FORM marks a contract SIGNED
       // — the inline status dropdown (setContractStatus) already did; now both agree.
       if (data.status === 'SIGNED' && data.signedAt === undefined) {
@@ -338,6 +381,64 @@ export const clientsRouter = router({
         message: `deleted contract "${contract.title}"`,
       });
       return contract;
+    }),
+
+  // IMP-CLI-05: draft an invoice straight from a contract's value — carrying its
+  // client, linked project and currency through as a single line item. Mirrors
+  // finance.createInvoice (server-derived money, annually-reset INV number) so
+  // the generated row is indistinguishable from a hand-keyed one.
+  generateInvoiceFromContract: adminProcedure
+    .input(
+      z.object({
+        contractId: z.string(),
+        dueInDays: z.number().int().positive().max(365).default(30),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const contract = await ctx.db.contract.findUnique({ where: { id: input.contractId } });
+      if (!contract) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contract not found' });
+
+      const amount = round2(contract.value != null ? Number(contract.value) : 0);
+      if (amount <= 0) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Set a contract value before generating an invoice.',
+        });
+      }
+
+      // FIN-09: scope the sequence to THIS year's invoices so it resets each Jan.
+      const year = new Date().getFullYear();
+      const count = await ctx.db.invoice.count({
+        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
+      });
+      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
+      const dueDate = new Date(Date.now() + input.dueInDays * 24 * 60 * 60 * 1000);
+
+      const invoice = await ctx.db.invoice.create({
+        data: {
+          invoiceNumber,
+          clientId: contract.clientId,
+          projectId: contract.projectId,
+          items: [{ description: contract.title, quantity: 1, rate: amount, amount }],
+          subtotal: amount,
+          tax: 0,
+          total: amount,
+          currency: contract.currency,
+          status: 'DRAFT',
+          dueDate,
+          notes: `Generated from contract "${contract.title}"`,
+        },
+        include: { client: { select: { name: true } } },
+      });
+
+      logActivity(ctx.db, ctx.session.user.id, {
+        type: 'invoice_created',
+        message: `created invoice ${invoice.invoiceNumber} from contract "${contract.title}" for ${invoice.client.name}`,
+        entityType: 'Invoice',
+        entityId: invoice.id,
+      });
+
+      return invoice;
     }),
 
   delete: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
