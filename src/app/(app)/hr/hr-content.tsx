@@ -407,6 +407,15 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
       setShowCreate(false);
     },
   });
+  // IMP-HR-03: withdraw your own pending request.
+  const { data: session } = useSession();
+  const currentUserId = session?.user?.id;
+  const cancelLeave = trpc.team.cancelLeaveRequest.useMutation({
+    onSuccess: () => {
+      utils.team.getLeaveRequests.invalidate();
+      utils.team.getHrOverview.invalidate();
+    },
+  });
 
   const [leaveType, setLeaveType] = useState<'VACATION' | 'SICK' | 'REMOTE'>('VACATION');
   const [startDate, setStartDate] = useState('');
@@ -588,7 +597,13 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
                       className="absolute left-0 top-0 w-full border-b border-border/60 last:border-b-0"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
-                      <LeaveRow lr={lr} isAdmin={isAdmin} onUpdateStatus={handleUpdateStatus} />
+                      <LeaveRow
+                        lr={lr}
+                        isAdmin={isAdmin}
+                        currentUserId={currentUserId}
+                        onUpdateStatus={handleUpdateStatus}
+                        onCancel={(id) => cancelLeave.mutate({ id })}
+                      />
                     </div>
                   );
                 })}
@@ -607,11 +622,15 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
 const LeaveRow = memo(function LeaveRow({
   lr,
   isAdmin,
+  currentUserId,
   onUpdateStatus,
+  onCancel,
 }: {
   lr: LeaveRequest;
   isAdmin: boolean;
+  currentUserId?: string;
   onUpdateStatus: (id: string, status: 'APPROVED' | 'REJECTED') => void;
+  onCancel: (id: string) => void;
 }) {
   const sc = statusConfig[lr.status] || statusConfig.PENDING;
   const tc = typeConfig[lr.type] || typeConfig.VACATION;
@@ -649,22 +668,37 @@ const LeaveRow = memo(function LeaveRow({
       <span className={cn('rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0', sc.bg)}>
         {sc.label}
       </span>
-      {isAdmin && lr.status === 'PENDING' && (
+      {lr.status === 'PENDING' && (
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={() => onUpdateStatus(lr.id, 'APPROVED')}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10 transition-colors"
-            title="Approve"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => onUpdateStatus(lr.id, 'REJECTED')}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10 transition-colors"
-            title="Reject"
-          >
-            <XCircle className="h-4 w-4" />
-          </button>
+          {/* HR-01: a reviewer can't decide their OWN request — only others'. */}
+          {isAdmin && lr.user.id !== currentUserId && (
+            <>
+              <button
+                onClick={() => onUpdateStatus(lr.id, 'APPROVED')}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10 transition-colors"
+                title="Approve"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => onUpdateStatus(lr.id, 'REJECTED')}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10 transition-colors"
+                title="Reject"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            </>
+          )}
+          {/* IMP-HR-03: withdraw your OWN pending request. */}
+          {lr.user.id === currentUserId && (
+            <button
+              onClick={() => onCancel(lr.id)}
+              className="rounded-lg px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 transition-colors"
+              title="Withdraw my request"
+            >
+              Withdraw
+            </button>
+          )}
         </div>
       )}
     </div>

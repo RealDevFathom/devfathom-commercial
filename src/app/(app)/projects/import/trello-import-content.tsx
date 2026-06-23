@@ -38,6 +38,9 @@ export function TrelloImportContent() {
     columnsCreated: number;
     tasksCreated: number;
     labelsCreated: number;
+    // IMP-TRELLO-04: partial-failure / skipped-card reporting.
+    skippedCount?: number;
+    skipped?: Array<{ name: string; reason: string }>;
   } | null>(null);
 
   const { data: projects } = trpc.projects.getAll.useQuery();
@@ -328,6 +331,26 @@ export function TrelloImportContent() {
             has been imported with {importResult.columnsCreated} columns,{' '}
             {importResult.tasksCreated} tasks, and {importResult.labelsCreated} labels.
           </p>
+          {/* IMP-TRELLO-04: surface what was skipped instead of dropping silently. */}
+          {!!importResult.skippedCount && importResult.skippedCount > 0 && (
+            <div className="mt-4 w-full max-w-sm rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-left">
+              <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                {importResult.skippedCount} card{importResult.skippedCount === 1 ? '' : 's'} skipped
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {(importResult.skipped ?? []).slice(0, 8).map((s, i) => (
+                  <li key={i} className="text-[11px] text-muted-foreground">
+                    <span className="text-foreground/80">{s.name || 'Untitled'}</span> — {s.reason}
+                  </li>
+                ))}
+                {importResult.skippedCount > 8 && (
+                  <li className="text-[11px] text-muted-foreground">
+                    …and {importResult.skippedCount - 8} more.
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
           <button
             onClick={() => router.push(`/projects`)}
             className="mt-8 rounded-xl bg-primary px-8 py-3 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
