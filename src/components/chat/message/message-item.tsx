@@ -15,9 +15,11 @@ import { FileText, Download } from 'lucide-react';
 
 import type { ChatMessage } from '@/lib/chat/contract';
 import { cn } from '@/lib/utils';
+import { trpc } from '@/lib/trpc';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { MessageContent } from './message-content';
+import { VoiceMessage } from './voice-message';
 import { MessageActions } from './message-actions';
 import { ReactionBar } from './reaction-bar';
 import { MessageEditor } from './message-editor';
@@ -63,6 +65,12 @@ export function MessageItem({
   const myId = session?.user?.id ?? '';
   const [editing, setEditing] = React.useState(false);
   const [threadOpen, setThreadOpen] = React.useState(false);
+  // RT-02: lazily load this message's edit history only when the user opens it.
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const editHistory = trpc.chat.getMessageEditHistory.useQuery(
+    { messageId: message.id },
+    { enabled: historyOpen }
+  );
 
   const date = new Date(message.createdAt);
   const mentionsMe = !!myId && message.mentionIds.includes(myId);
@@ -132,22 +140,54 @@ export function MessageItem({
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <span className="ml-1 inline-block cursor-default text-[10px] text-muted-foreground" />
+                    <button
+                      type="button"
+                      onClick={() => setHistoryOpen((v) => !v)}
+                      className="ml-1 inline-block cursor-pointer text-[10px] text-muted-foreground hover:text-foreground hover:underline"
+                    />
                   }
                 >
                   (edited)
                 </TooltipTrigger>
                 {message.editedAt && (
                   <TooltipContent>
-                    Edited {format(new Date(message.editedAt), 'MMM d, h:mm a')}
+                    Edited {format(new Date(message.editedAt), 'MMM d, h:mm a')} · click for history
                   </TooltipContent>
                 )}
               </Tooltip>
             )}
 
+            {/* RT-02: edit history — prior versions of this message, newest first. */}
+            {historyOpen && (
+              <div className="mt-1.5 rounded-lg border border-border/60 bg-secondary/40 p-2.5 text-xs">
+                <p className="mb-1.5 font-semibold text-muted-foreground">Edit history</p>
+                {editHistory.isLoading ? (
+                  <p className="text-muted-foreground">Loading…</p>
+                ) : !editHistory.data || editHistory.data.edits.length === 0 ? (
+                  <p className="text-muted-foreground">No prior versions recorded.</p>
+                ) : (
+                  <ol className="space-y-1.5">
+                    {editHistory.data.edits.map((h) => (
+                      <li key={h.id} className="border-l-2 border-border pl-2">
+                        <p className="text-[10px] text-muted-foreground">
+                          {format(new Date(h.editedAt), 'MMM d, h:mm a')}
+                        </p>
+                        <p className="whitespace-pre-wrap break-words text-foreground/80">
+                          {h.previousContent || <span className="italic">(empty)</span>}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+
             {message.attachments.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-2">
                 {message.attachments.map((att) => {
+                  if (att.type?.startsWith('audio/')) {
+                    return <VoiceMessage key={att.id} attachment={att} />;
+                  }
                   const isImage = !!att.type && att.type.startsWith('image/');
                   if (isImage) {
                     return (

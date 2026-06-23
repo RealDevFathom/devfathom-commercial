@@ -128,6 +128,25 @@ export const chatRouter = router({
       };
     }),
 
+  // RT-02: prior-version snapshots for a message, newest-first. Channel-membership
+  // gated, so only people who can see the message can read its edit history.
+  getMessageEditHistory: protectedProcedure
+    .input(z.object({ messageId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const msg = await ctx.db.message.findUnique({
+        where: { id: input.messageId },
+        select: { channelId: true, content: true, editedAt: true },
+      });
+      if (!msg) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
+      await assertChannelMember(ctx, msg.channelId);
+      const edits = await ctx.db.messageEdit.findMany({
+        where: { messageId: input.messageId },
+        select: { id: true, previousContent: true, editedAt: true },
+        orderBy: { editedAt: 'desc' },
+      });
+      return { current: msg.content, currentEditedAt: msg.editedAt, edits };
+    }),
+
   searchMessages: protectedProcedure
     .input(z.object({ query: z.string().min(1), channelId: z.string().optional() }))
     .query(async ({ ctx, input }) => {
@@ -351,7 +370,8 @@ export const chatRouter = router({
       const me = ctx.session.user.id;
       const existing = await ctx.db.message.findUnique({
         where: { id: input.messageId },
-        select: { senderId: true, channelId: true, deletedAt: true },
+        // RT-02: also grab the current content so we can snapshot it before overwrite.
+        select: { senderId: true, channelId: true, deletedAt: true, content: true, contentJson: true },
       });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
       if (existing.senderId !== me)
@@ -382,6 +402,14 @@ export const chatRouter = router({
 
       await ctx.db.$transaction([
         ctx.db.messageMention.deleteMany({ where: { messageId: input.messageId } }),
+        // RT-02: snapshot the pre-edit content so the edit history is reconstructable.
+        ctx.db.messageEdit.create({
+          data: {
+            messageId: input.messageId,
+            previousContent: existing.content,
+            previousContentJson: existing.contentJson ?? undefined,
+          },
+        }),
         ctx.db.message.update({
           where: { id: input.messageId },
           data: {
