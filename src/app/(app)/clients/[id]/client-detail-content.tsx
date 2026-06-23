@@ -27,6 +27,8 @@ import {
   ExternalLink,
   Upload,
   CheckCircle2,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -76,6 +78,31 @@ const CONTRACT_STATUSES = ['DRAFT', 'SENT', 'SIGNED', 'EXPIRED', 'TERMINATED'] a
 function formatContractValue(value: number | null, currency: string): string | null {
   if (value == null) return null;
   return currency === 'PKR' ? `Rs ${value.toLocaleString()}` : `$${value.toLocaleString()}`;
+}
+
+// IMP-CLI-04: derive the expiry / renewal chip for a contract row. Mirrors the
+// server sweep (clients.sweepExpiredContracts): only live agreements lapse, so
+// DRAFT and TERMINATED rows get no chip. Returns:
+//   • 'expired'  — status is EXPIRED, or a still-in-force row is past its endDate
+//   • 'expiring' — a still-in-force row whose endDate is within the next 30 days
+//   • null       — nothing to flag
+type ContractExpiry = { tone: 'expired' | 'expiring'; label: string };
+function contractExpiry(
+  status: string,
+  endDate: Date | string | null | undefined,
+  now: number = Date.now()
+): ContractExpiry | null {
+  // An already-swept contract always shows the red chip, even without a date.
+  if (status === 'EXPIRED') return { tone: 'expired', label: 'Expired' };
+  // Only SENT/SIGNED contracts are "in force" and worth chasing for renewal.
+  if (status !== 'SENT' && status !== 'SIGNED') return null;
+  if (!endDate) return null;
+  const end = new Date(endDate).getTime();
+  if (Number.isNaN(end)) return null;
+  if (end < now) return { tone: 'expired', label: 'Expired' };
+  const days = Math.ceil((end - now) / (24 * 60 * 60 * 1000));
+  if (days <= 30) return { tone: 'expiring', label: `Expires in ${days} day${days === 1 ? '' : 's'}` };
+  return null;
 }
 
 export function ClientDetailContent({ clientId }: { clientId: string }) {
@@ -1143,6 +1170,23 @@ function ClientContractsTab({
     onSuccess: () => invalidate(),
   });
 
+  // IMP-CLI-04: on-demand expiry sweep (the action a cron would run). Flips
+  // lapsed SENT/SIGNED contracts to EXPIRED, refreshes the list, and surfaces the
+  // count briefly. Errors stay inline next to the button.
+  const [sweepResult, setSweepResult] = useState<number | null>(null);
+  const sweepExpired = trpc.clients.sweepExpiredContracts.useMutation({
+    onSuccess: (res) => {
+      setSweepResult(res.expired);
+      invalidate();
+      window.setTimeout(() => setSweepResult(null), 5000);
+    },
+  });
+
+  // IMP-CLI-04: renewal heads-up derived client-side from each row's endDate.
+  const expiringSoon = contracts.filter(
+    (c) => contractExpiry(c.status, c.endDate)?.tone === 'expiring'
+  ).length;
+
   const isSaving = addContract.isPending || updateContract.isPending;
   // Surface a save failure inline so the form stays open and the user can retry.
   const saveError = (editingId ? updateContract.error : addContract.error)?.message;
@@ -1229,20 +1273,49 @@ function ClientContractsTab({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {contracts.length} contract{contracts.length !== 1 ? 's' : ''} for {clientName}
+          {expiringSoon > 0 && (
+            <span className="ml-2 text-amber-500">
+              · {expiringSoon} expiring soon
+            </span>
+          )}
         </p>
         {!showForm && (
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New Contract
-          </button>
+          <div className="flex items-center gap-2">
+            {/* IMP-CLI-04: on-demand expiry sweep (admin-only tab). */}
+            <button
+              onClick={() => sweepExpired.mutate()}
+              disabled={sweepExpired.isPending}
+              title="Mark lapsed contracts as expired"
+              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
+            >
+              {sweepExpired.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Check expiries
+              {sweepResult !== null && (
+                <span className="text-primary">
+                  ({sweepResult} expired)
+                </span>
+              )}
+            </button>
+            <button
+              onClick={openCreate}
+              className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New Contract
+            </button>
+          </div>
         )}
       </div>
+      {sweepExpired.error && (
+        <p className="text-xs text-red-500">{sweepExpired.error.message}</p>
+      )}
 
       {/* IMP-CLI-05: per-client total contracted value, grouped by currency. */}
       {contractedValue && contractedValue.length > 0 && (
@@ -1508,6 +1581,24 @@ function ClientContractsTab({
                                 </option>
                               ))}
                             </select>
+                            {/* IMP-CLI-04: expiry / renewal indicator. */}
+                            {(() => {
+                              const chip = contractExpiry(c.status, c.endDate);
+                              if (!chip) return null;
+                              return (
+                                <span
+                                  className={cn(
+                                    'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium',
+                                    chip.tone === 'expired'
+                                      ? 'bg-red-500/10 text-red-500'
+                                      : 'bg-amber-500/10 text-amber-500'
+                                  )}
+                                >
+                                  <AlertTriangle className="h-3 w-3" />
+                                  {chip.label}
+                                </span>
+                              );
+                            })()}
                           </div>
                           {setContractStatus.error && setContractStatus.variables?.id === c.id && (
                             <p className="mt-1 text-xs text-red-500">

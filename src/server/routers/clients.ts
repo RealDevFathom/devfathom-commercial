@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
+import { notify } from '@/lib/notifications';
 import { optionalWebsiteUrl } from '@/lib/validators';
 
 // Contract `value` shares the Decimal(12,2) money columns used across finance, so
@@ -149,6 +150,82 @@ export const clientsRouter = router({
           count: r._count._all,
         }))
         .sort((a, b) => b.total - a.total);
+    }),
+
+  // IMP-CLI-04 — contract expiry / renewal reminders.
+  //
+  // sweepExpiredContracts is the action a scheduled job (cron) calls: flip every
+  // still-in-force contract whose end date has passed to EXPIRED. Only SENT and
+  // SIGNED are touched — DRAFT (never executed), TERMINATED (ended deliberately)
+  // and already-EXPIRED rows are deliberately left alone. Best-effort alerts the
+  // admins of what lapsed; a notification hiccup never fails the sweep.
+  sweepExpiredContracts: adminProcedure.mutation(async ({ ctx }) => {
+    const now = new Date();
+    // Snapshot the affected rows first — updateMany returns only a count, and we
+    // want titles/clients for the activity log + admin alert below.
+    const due = await ctx.db.contract.findMany({
+      where: { status: { in: ['SENT', 'SIGNED'] }, endDate: { lt: now } },
+      select: { id: true, title: true, client: { select: { id: true, name: true } } },
+    });
+    if (due.length === 0) return { expired: 0 };
+
+    await ctx.db.contract.updateMany({
+      where: { id: { in: due.map((c) => c.id) } },
+      data: { status: 'EXPIRED' },
+    });
+
+    logActivity(ctx.db, ctx.session.user.id, {
+      type: 'contract_updated',
+      message: `expired ${due.length} contract${due.length === 1 ? '' : 's'} past their end date`,
+    });
+
+    // Best-effort: alert the admins which contracts lapsed. `contract_*` types
+    // route through the IMP-AUTH-04 'client' notification category (see
+    // categoryForType). Guard the lookup so a DB hiccup can't fail the sweep.
+    try {
+      const admins = await ctx.db.user.findMany({
+        where: { role: 'ADMIN', status: { not: 'INACTIVE' } },
+        select: { id: true },
+      });
+      const single = due.length === 1;
+      notify(
+        ctx.db,
+        admins.map((a) => a.id),
+        {
+          type: 'contract_expired',
+          title: single ? 'Contract expired' : 'Contracts expired',
+          message: single
+            ? `Contract "${due[0].title}" for ${due[0].client.name} has reached its end date and was marked expired.`
+            : `${due.length} contracts have passed their end date and were marked expired.`,
+          entityType: 'Contract',
+          entityId: single ? due[0].id : undefined,
+        }
+      );
+    } catch (err) {
+      console.error('[clients.sweepExpiredContracts] admin notification failed', err);
+    }
+
+    return { expired: due.length };
+  }),
+
+  // getExpiringContracts — renewal reminders. Contracts still in force
+  // (SENT/SIGNED) whose end date falls within the next `withinDays`, soonest
+  // first, each carrying its client {id,name}. Exposed for a future cross-client
+  // "expiring soon" dashboard; the per-client Contracts tab derives its row chips
+  // from each contract's endDate directly.
+  getExpiringContracts: adminProcedure
+    .input(
+      z.object({ withinDays: z.number().int().positive().max(365).optional() }).optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const withinDays = input?.withinDays ?? 30;
+      const now = new Date();
+      const until = new Date(now.getTime() + withinDays * 24 * 60 * 60 * 1000);
+      return ctx.db.contract.findMany({
+        where: { status: { in: ['SENT', 'SIGNED'] }, endDate: { gte: now, lte: until } },
+        orderBy: { endDate: 'asc' },
+        include: { client: { select: { id: true, name: true } } },
+      });
     }),
 
   create: adminProcedure
