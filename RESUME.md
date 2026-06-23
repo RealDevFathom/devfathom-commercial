@@ -7,18 +7,26 @@
 ## Where it stands (UPDATED 2026-06-23 — user authorized "EVERYTHING" = tiers a+b+c)
 - **Bugs: 53/53 DONE.** AUTH-01 (#27) UNBLOCKED & closed (commit `365ea6c`): session revocation via
   `User.tokenVersion`, validated on a local disposable Postgres. The bug program is complete.
-- **Enhancements: 51 implemented / 3 partial / 9 todo / 7 Big Bets.** Implemented this session:
-  TRELLO-01, RT-01, RT-05, FIN-03, REST-01, PROJ-08, PROJ-09, IMP-AUTH-01, CLI-05, AUTH-04, DASH-02.
+- **Enhancements: 58 implemented / 3 partial / 4 todo / 5 Big Bets.** Implemented across the two
+  "everything" sessions: TRELLO-01, RT-01/02/05, FIN-03/04, REST-01, PROJ-01/06/08/09, IMP-AUTH-01,
+  CLI-04/05, AUTH-04, DASH-02, NOTE-02, HR-04. Schema (validated on local PG, db-push-deployed):
+  User.tokenVersion/passwordChangedAt/preferences/notificationPrefs, PasswordResetToken, Column.wipLimit,
+  Contract.projectId, Task.parentId + TaskBlocker, Payment, MessageEdit, ReviewCycle+Review, NoteMention.
   Partial: IMP-AUTH-03 (sign-out-everywhere + revoke done; active-sessions list needs a session store),
-  IMP-PROJ-05 (labels done+committed; board-rename + file-delete done IN-TREE but uncommitted — stuck
-  in the project-detail-content.tsx redesign blob), IMP-PROJ-07 (WIP limits done; board templates pending).
-  Schema columns shipped & validated on local PG: User.tokenVersion/passwordChangedAt/preferences/
-  notificationPrefs, PasswordResetToken, Column.wipLimit, Contract.projectId(+Project.contracts).
-  Session commits: 24787df→(latest). REMAINING TODO (9): relational-schema features PROJ-06
-  (Task.parentId self-rel + TaskBlocker + cycle prevention), FIN-04 (Payment model + overdue auto),
-  RT-02 (MessageEdit model), HR-04 (review-cycle models), NOTE-02 (note @mentions); plus TRELLO-02
-  (map cover/customfields — may need Task cols), CLI-04 (contract expiry reminders, schema-free),
-  AI-02 (citations — entangled w/ assistant context.ts WIP), PLAT-02/PLAT-03 (infra, needs deploy).
+  IMP-PROJ-05 (labels committed; board-rename + file-delete done IN-TREE, stuck in the
+  project-detail-content.tsx redesign blob), IMP-PROJ-07 (WIP limits done; board templates pending).
+  **REMAINING — 5 Big Bets** (each warrants focused context; some need schema + the proven local-PG loop):
+  FIN-01 invoice edit+PDF+email (touches the WIP invoices-tab.tsx; FIN-04 worked around it with a
+  separate panel — same trick or accept the WIP), PROJ-01-style done; NOTE-01 note versioning (add
+  NoteRevision model), HR-01 leave balances+calendar (add accrual/balance model), AUTH-02 2FA (User
+  TOTP fields + recovery-code model — security-critical, review carefully), REST-03 webhooks (Webhook/
+  Subscription/Delivery models + signed outbound events from finance/projects emit points).
+  **4 todo:** TRELLO-02 (map cover/customfields/dueComplete — likely needs Task cols), AI-02 (citations —
+  entangled w/ the untracked assistant src/lib/ai/context.ts WIP; decide whether to commit that foundation
+  or do audit-viewer surfacing only), PLAT-02 Vercel Blob + PLAT-03 observability (need a deploy — deliver
+  code path + doc). **RECONCILE GOTCHA (fixed):** file-enhancements.ts task.update now uses select:{id}
+  so client-vs-Neon column drift (P2022) can't break the board sync; keep any new shared-DB script ops
+  scoped to columns that exist on Neon (the generated client is ahead of Neon until each migration deploys).
 - **Build + `src/` typecheck GREEN** at every step. **Keystone NEVER modified** (`src/lib/abac/**`,
   `src/lib/authz.ts`). New bulk mutations + auth use the keystone's object-level guards (add-only).
 - Session commits: `24787df 5ce253f d39fcbb 0ef4219 365ea6c b3e15c8 9b654ba` (+ reconciles).
