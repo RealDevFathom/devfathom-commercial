@@ -10,6 +10,7 @@ import {
   Filter,
   Loader2,
   RotateCw,
+  Download,
   ScrollText,
   Search,
   ShieldAlert,
@@ -142,17 +143,53 @@ export function AuditContent() {
             Every action across the workspace — who did what, when, and from where.
           </p>
         </div>
-        <button
-          onClick={() => {
-            utils.audit.stats.invalidate();
-            utils.audit.filters.invalidate();
-            refetch();
-          }}
-          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        >
-          <RotateCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* IMP-PLAT-04: export the loaded (filtered) audit rows to CSV. */}
+          <button
+            onClick={() => {
+              const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+              const header = ['Time', 'Actor', 'Email', 'Action', 'Operation', 'Category', 'Target', 'Outcome'];
+              const csv = [
+                header,
+                ...rows.map((r) => [
+                  new Date(r.createdAt).toISOString(),
+                  r.actorName ?? '',
+                  r.actorEmail ?? '',
+                  r.action,
+                  r.operation,
+                  r.category,
+                  r.targetLabel ?? '',
+                  r.outcome,
+                ]),
+              ]
+                .map((row) => row.map(esc).join(','))
+                .join('\r\n');
+              const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+            disabled={rows.length === 0}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
+            title="Export the loaded audit rows to CSV"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export
+          </button>
+          <button
+            onClick={() => {
+              utils.audit.stats.invalidate();
+              utils.audit.filters.invalidate();
+              refetch();
+            }}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <RotateCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stat strip */}

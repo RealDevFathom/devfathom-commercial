@@ -162,12 +162,30 @@ export const notesRouter = router({
         // Outgoing forward-links and incoming backlinks
         linksFrom: {
           include: {
-            toNote: { select: { id: true, title: true, authorId: true, visibility: true } },
+            // IMP-NOTE-04: include the viewer's own share row so SHARED links can
+            // be resolved against their actual access instead of being dropped.
+            toNote: {
+              select: {
+                id: true,
+                title: true,
+                authorId: true,
+                visibility: true,
+                shares: { where: { userId }, select: { userId: true } },
+              },
+            },
           },
         },
         linksTo: {
           include: {
-            fromNote: { select: { id: true, title: true, authorId: true, visibility: true } },
+            fromNote: {
+              select: {
+                id: true,
+                title: true,
+                authorId: true,
+                visibility: true,
+                shares: { where: { userId }, select: { userId: true } },
+              },
+            },
           },
         },
       },
@@ -190,7 +208,9 @@ export const notesRouter = router({
       const f = l.fromNote;
       if (f.authorId === userId) return true;
       if (f.visibility === 'TEAM') return true;
-      // Skip SHARED backlinks we can't independently verify here
+      // IMP-NOTE-04: resolve SHARED backlinks against the viewer's actual shares
+      // (the share row was included above) instead of dropping legitimate links.
+      if (f.visibility === 'SHARED' && f.shares.length > 0) return true;
       return false;
     });
     // Same visibility filter for OUTGOING links: a user can craft a noteLink to
@@ -199,6 +219,7 @@ export const notesRouter = router({
       const t = l.toNote;
       if (t.authorId === userId) return true;
       if (t.visibility === 'TEAM') return true;
+      if (t.visibility === 'SHARED' && t.shares.length > 0) return true;
       return false;
     });
 
