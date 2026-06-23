@@ -41,6 +41,9 @@ export const projectsRouter = router({
             user: { select: { id: true, name: true, avatar: true, title: true } },
           },
         },
+        // Milestone completion + due dates power the list's progress bars and
+        // deadline-urgency signals (computed client-side; cheap, few per project).
+        milestones: { select: { completedAt: true, dueDate: true } },
         _count: { select: { boards: true, milestones: true, files: true } },
       },
       orderBy: { updatedAt: 'desc' },
@@ -509,6 +512,27 @@ export const projectsRouter = router({
           message: 'Session expired. Please log out and log back in.',
         });
 
+      // PROJ-05: assignees must exist AND be members of this column's project —
+      // setColumnDefaultAssignees already enforces this, but createTask/
+      // updateTaskAssignees did not, so an arbitrary or non-member id could be
+      // assigned (and emailed) or trigger a raw FK 500.
+      if (input.assigneeIds.length > 0) {
+        const col = await ctx.db.column.findUnique({
+          where: { id: input.columnId },
+          select: { board: { select: { projectId: true } } },
+        });
+        const uniqueAssignees = [...new Set(input.assigneeIds)];
+        const memberCount = await ctx.db.projectMember.count({
+          where: { projectId: col!.board.projectId, userId: { in: uniqueAssignees } },
+        });
+        if (memberCount !== uniqueAssignees.length) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'All assignees must be members of the project.',
+          });
+        }
+      }
+
       const maxOrder = await ctx.db.task.aggregate({
         _max: { order: true },
         where: { columnId: input.columnId },
@@ -635,45 +659,47 @@ export const projectsRouter = router({
       const isSameColumn = sourceColumnId === input.targetColumnId;
 
       await ctx.db.$transaction(async (tx) => {
-        if (isSameColumn) {
-          // Reorder within same column
-          const oldOrder = task.order;
-          const newOrder = input.newOrder;
+        // PROJ-02: rebuild a contiguous 0..n order from the actual ordered list
+        // rather than trusting `order` to be gap-free. Trello-imported boards (and
+        // any column that has had a task deleted) can carry gaps, which broke the
+        // previous range-arithmetic — a drag silently no-op'd or moved the wrong
+        // slot. This also makes the client-sent index (PROJ-01) authoritative.
+        const sourceList = await tx.task.findMany({
+          where: { columnId: sourceColumnId },
+          orderBy: { order: 'asc' },
+          select: { id: true },
+        });
+        const sourceIds = sourceList.map((t) => t.id).filter((id) => id !== input.taskId);
 
-          if (oldOrder < newOrder) {
-            await tx.task.updateMany({
-              where: { columnId: sourceColumnId, order: { gt: oldOrder, lte: newOrder } },
-              data: { order: { decrement: 1 } },
-            });
-          } else {
-            await tx.task.updateMany({
-              where: { columnId: sourceColumnId, order: { gte: newOrder, lt: oldOrder } },
-              data: { order: { increment: 1 } },
-            });
+        if (isSameColumn) {
+          const index = Math.max(0, Math.min(input.newOrder, sourceIds.length));
+          sourceIds.splice(index, 0, input.taskId);
+          for (let i = 0; i < sourceIds.length; i++) {
+            await tx.task.update({ where: { id: sourceIds[i] }, data: { order: i } });
           }
         } else {
-          // Moving to different column
-          // Close gap in source column
-          await tx.task.updateMany({
-            where: { columnId: sourceColumnId, order: { gt: task.order } },
-            data: { order: { decrement: 1 } },
+          // Renumber the source column with the moved task removed.
+          for (let i = 0; i < sourceIds.length; i++) {
+            await tx.task.update({ where: { id: sourceIds[i] }, data: { order: i } });
+          }
+          // Insert the moved task into the target column at the requested index.
+          const targetList = await tx.task.findMany({
+            where: { columnId: input.targetColumnId },
+            orderBy: { order: 'asc' },
+            select: { id: true },
           });
-          // Make room in target column
-          await tx.task.updateMany({
-            where: { columnId: input.targetColumnId, order: { gte: input.newOrder } },
-            data: { order: { increment: 1 } },
+          const targetIds = targetList.map((t) => t.id);
+          const index = Math.max(0, Math.min(input.newOrder, targetIds.length));
+          targetIds.splice(index, 0, input.taskId);
+          await tx.task.update({
+            where: { id: input.taskId },
+            data: { columnId: input.targetColumnId },
           });
-        }
+          for (let i = 0; i < targetIds.length; i++) {
+            await tx.task.update({ where: { id: targetIds[i] }, data: { order: i } });
+          }
 
-        // Move the task
-        await tx.task.update({
-          where: { id: input.taskId },
-          data: { columnId: input.targetColumnId, order: input.newOrder },
-        });
-
-        // Auto-assign default assignees of the target column (additive).
-        // Only runs when actually crossing columns, not when reordering within the same column.
-        if (!isSameColumn) {
+          // Auto-assign the target column's default assignees (additive).
           const defaults = await tx.columnDefaultAssignee.findMany({
             where: { columnId: input.targetColumnId },
             select: { userId: true },
@@ -687,7 +713,10 @@ export const projectsRouter = router({
         }
       });
 
-      // Log completion when a task enters the Done column (and wasn't already there)
+      // Log completion when a task enters a "done" column (and wasn't already in
+      // one). PROJ-07: match the same heuristic the board preview uses, not just a
+      // column named exactly "Done" (covers Shipped/Complete/Closed/imported).
+      const DONE_RE = /^(done|complete|completed|shipped|closed)$/i;
       const targetColumn = await ctx.db.column.findUnique({
         where: { id: input.targetColumnId },
         select: {
@@ -695,7 +724,7 @@ export const projectsRouter = router({
           board: { select: { project: { select: { id: true, name: true } } } },
         },
       });
-      if (targetColumn?.name === 'Done' && task.column.name !== 'Done') {
+      if (targetColumn && DONE_RE.test(targetColumn.name) && !DONE_RE.test(task.column.name)) {
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'task_completed',
           message: `completed task "${task.title}" in ${targetColumn.board.project.name}`,
@@ -894,6 +923,20 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertTaskAccess(ctx, input.taskId);
+      // PROJ-06: a reply's parent must belong to the SAME task, else a parentId
+      // from another task threads an orphaned reply across tasks.
+      if (input.parentId) {
+        const parent = await ctx.db.taskComment.findUnique({
+          where: { id: input.parentId },
+          select: { taskId: true },
+        });
+        if (!parent || parent.taskId !== input.taskId) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Reply target does not belong to this task.',
+          });
+        }
+      }
       return ctx.db.taskComment.create({
         data: {
           content: input.content,
@@ -937,6 +980,25 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertTaskAccess(ctx, input.taskId);
+      const uniqueAssignees = [...new Set(input.assigneeIds)];
+
+      // PROJ-05: assignees must be members of this task's project (and exist).
+      if (uniqueAssignees.length > 0) {
+        const t = await ctx.db.task.findUnique({
+          where: { id: input.taskId },
+          select: { column: { select: { board: { select: { projectId: true } } } } },
+        });
+        const memberCount = await ctx.db.projectMember.count({
+          where: { projectId: t!.column.board.projectId, userId: { in: uniqueAssignees } },
+        });
+        if (memberCount !== uniqueAssignees.length) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'All assignees must be members of the project.',
+          });
+        }
+      }
+
       // Capture who was already assigned so we only email the *newly* added.
       const existing = await ctx.db.taskAssignee.findMany({
         where: { taskId: input.taskId },
@@ -945,14 +1007,15 @@ export const projectsRouter = router({
       const existingIds = new Set(existing.map((e) => e.userId));
 
       await ctx.db.taskAssignee.deleteMany({ where: { taskId: input.taskId } });
-      if (input.assigneeIds.length > 0) {
+      if (uniqueAssignees.length > 0) {
         await ctx.db.taskAssignee.createMany({
-          data: input.assigneeIds.map((userId) => ({ taskId: input.taskId, userId })),
+          data: uniqueAssignees.map((userId) => ({ taskId: input.taskId, userId })),
+          skipDuplicates: true,
         });
       }
 
       // Email teammates newly assigned — never the actor, never re-notify.
-      const added = input.assigneeIds.filter(
+      const added = uniqueAssignees.filter(
         (id) => !existingIds.has(id) && id !== ctx.session.user.id
       );
       if (added.length > 0) {
@@ -1044,6 +1107,43 @@ export const projectsRouter = router({
       if (!milestone) throw new TRPCError({ code: 'NOT_FOUND' });
       await assertProjectAccess(ctx, milestone.projectId);
       return ctx.db.milestone.delete({ where: { id: input.id } });
+    }),
+
+  // ============ PROJECT FILES ============
+
+  /**
+   * Attach an already-uploaded file (blob persisted via /api/upload) to a project.
+   * Any project member or admin may add files.
+   */
+  addFile: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        name: z.string().min(1),
+        url: z.string().min(1),
+        type: z.string().optional(),
+        size: z.number().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
+      const file = await ctx.db.projectFile.create({
+        data: {
+          name: input.name,
+          url: input.url,
+          type: input.type,
+          size: input.size,
+          projectId: input.projectId,
+          uploadedById: ctx.session.user.id,
+        },
+      });
+      logActivity(ctx.db, ctx.session.user.id, {
+        type: 'project_file_added',
+        message: `uploaded ${file.name}`,
+        entityType: 'Project',
+        entityId: input.projectId,
+      });
+      return file;
     }),
 
   // ============ LABELS ============

@@ -448,11 +448,19 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                           <div className="flex items-center gap-0.5">
                             {deletingColumnId === column.id ? (
                               <div className="flex items-center gap-1">
+                                {/* PROJ-03: name the task count so cascade deletion is never silent. */}
                                 <button
                                   onClick={() => deleteColumn.mutate({ id: column.id })}
+                                  title={
+                                    column.tasks.length > 0
+                                      ? `Permanently deletes this column and its ${column.tasks.length} task(s), including their comments, checklists and attachments.`
+                                      : 'Delete this empty column'
+                                  }
                                   className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600"
                                 >
-                                  Delete
+                                  {column.tasks.length > 0
+                                    ? `Delete ${column.tasks.length} task${column.tasks.length === 1 ? '' : 's'}`
+                                    : 'Delete'}
                                 </button>
                                 <button
                                   onClick={() => setDeletingColumnId(null)}

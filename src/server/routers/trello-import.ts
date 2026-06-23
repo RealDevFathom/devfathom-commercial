@@ -145,19 +145,26 @@ export const trelloImportRouter = router({
           commentMap.set(cardId, existing);
         }
 
-        // 4. Create tasks from cards
+        // 4. Create tasks from cards.
+        // PROJ-02: assign a per-COLUMN running order (0..n). A single global
+        // counter produced gapped orders within a column, which broke moveTask's
+        // ordering. `tasksCreated` is kept only for the import count.
         let tasksCreated = 0;
+        const columnOrder = new Map<string, number>();
         for (const card of cards) {
           const columnId = card.closed ? archivedColumnId : listIdMap.get(card.idList);
 
           if (!columnId) continue;
+
+          const orderInColumn = columnOrder.get(columnId) ?? 0;
+          columnOrder.set(columnId, orderInColumn + 1);
 
           const task = await tx.task.create({
             data: {
               title: card.name,
               description: card.desc || null,
               columnId,
-              order: tasksCreated,
+              order: orderInColumn,
               priority: 'MEDIUM',
               dueDate: card.due ? new Date(card.due) : null,
               createdById: ctx.session.user.id,
