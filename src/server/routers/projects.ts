@@ -403,6 +403,14 @@ export const projectsRouter = router({
                   checklists: {
                     include: { items: { select: { completed: true } } },
                   },
+                  // IMP-PROJ-06: each blocker's blocking-task column name so the
+                  // card can show a "blocked" badge when any blocker is still
+                  // open (its blocking task isn't in a done column).
+                  blockedBy: {
+                    select: {
+                      blockingTask: { select: { column: { select: { name: true } } } },
+                    },
+                  },
                   _count: { select: { comments: true, attachments: true, checklists: true } },
                 },
               },
@@ -808,6 +816,150 @@ export const projectsRouter = router({
       return { success: true };
     }),
 
+  // ============ SUBTASKS & DEPENDENCIES (IMP-PROJ-06) ============
+
+  // Set or clear a task's parent (the subtask relationship).
+  // Validates: both tasks exist, live on the SAME board, parentId !== taskId,
+  // and the proposed parent is NOT one of the task's own descendants (which
+  // would create a subtask cycle). Access-checks both tasks.
+  setTaskParent: protectedProcedure
+    .input(z.object({ taskId: z.string(), parentId: z.string().nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertTaskAccess(ctx, input.taskId);
+
+      // Clearing the parent — no further validation needed.
+      if (input.parentId === null) {
+        await ctx.db.task.update({ where: { id: input.taskId }, data: { parentId: null } });
+        return { success: true };
+      }
+
+      if (input.parentId === input.taskId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'A task cannot be its own parent.' });
+      }
+
+      await assertTaskAccess(ctx, input.parentId);
+
+      const [task, parent] = await Promise.all([
+        ctx.db.task.findUnique({
+          where: { id: input.taskId },
+          select: { column: { select: { boardId: true } } },
+        }),
+        ctx.db.task.findUnique({
+          where: { id: input.parentId },
+          select: { column: { select: { boardId: true } } },
+        }),
+      ]);
+      if (!task || !parent) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found.' });
+      if (task.column.boardId !== parent.column.boardId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A subtask must be on the same board as its parent.',
+        });
+      }
+
+      // Cycle guard: walk UP the ancestry chain from the proposed parent. Each
+      // task has at most one parent, so this is a linear walk; if it ever reaches
+      // the task itself, the proposed parent is one of the task's descendants.
+      let cursor: string | null = input.parentId;
+      const seen = new Set<string>();
+      while (cursor) {
+        if (cursor === input.taskId) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'That task is a subtask of this one — it cannot also be its parent.',
+          });
+        }
+        if (seen.has(cursor)) break; // defensive: bail on any pre-existing loop
+        seen.add(cursor);
+        const ancestor: { parentId: string | null } | null = await ctx.db.task.findUnique({
+          where: { id: cursor },
+          select: { parentId: true },
+        });
+        cursor = ancestor?.parentId ?? null;
+      }
+
+      await ctx.db.task.update({
+        where: { id: input.taskId },
+        data: { parentId: input.parentId },
+      });
+      return { success: true };
+    }),
+
+  // Add a "blocked-by" dependency edge: blockingTask blocks blockedTask.
+  // Rejects self-block, duplicates, and any edge that would close a cycle in the
+  // blocking graph. Access-checks both tasks.
+  addBlocker: protectedProcedure
+    .input(z.object({ blockedTaskId: z.string(), blockingTaskId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.blockedTaskId === input.blockingTaskId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'A task cannot block itself.' });
+      }
+      await assertTaskAccess(ctx, input.blockedTaskId);
+      await assertTaskAccess(ctx, input.blockingTaskId);
+
+      // Cycle guard: the new edge is blockingTask → blockedTask in the "blocks"
+      // direction. It would close a loop iff blockedTask can ALREADY reach
+      // blockingTask by following existing "blocks" edges (i.e. blockedTask
+      // transitively blocks blockingTask). DFS forward from blockedTask: from a
+      // node X, the tasks X blocks are the blockedTaskIds of edges whose
+      // blockingTaskId === X.
+      const visited = new Set<string>();
+      let frontier = [input.blockedTaskId];
+      while (frontier.length > 0) {
+        const edges = await ctx.db.taskBlocker.findMany({
+          where: { blockingTaskId: { in: frontier } },
+          select: { blockedTaskId: true },
+        });
+        const next: string[] = [];
+        for (const edge of edges) {
+          if (edge.blockedTaskId === input.blockingTaskId) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'That dependency would create a dependency cycle.',
+            });
+          }
+          if (!visited.has(edge.blockedTaskId)) {
+            visited.add(edge.blockedTaskId);
+            next.push(edge.blockedTaskId);
+          }
+        }
+        frontier = next;
+      }
+
+      // Duplicate edges are guarded by the unique [blockedTaskId, blockingTaskId];
+      // pre-check so we can surface a friendly message instead of a raw 500.
+      const existing = await ctx.db.taskBlocker.findUnique({
+        where: {
+          blockedTaskId_blockingTaskId: {
+            blockedTaskId: input.blockedTaskId,
+            blockingTaskId: input.blockingTaskId,
+          },
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'That dependency already exists.' });
+      }
+
+      return ctx.db.taskBlocker.create({
+        data: { blockedTaskId: input.blockedTaskId, blockingTaskId: input.blockingTaskId },
+      });
+    }),
+
+  // Remove a dependency edge by id; access-checks via the blocked task's project.
+  removeBlocker: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const edge = await ctx.db.taskBlocker.findUnique({
+        where: { id: input.id },
+        select: { blockedTaskId: true },
+      });
+      if (!edge) throw new TRPCError({ code: 'NOT_FOUND', message: 'Dependency not found.' });
+      await assertTaskAccess(ctx, edge.blockedTaskId);
+      await ctx.db.taskBlocker.delete({ where: { id: input.id } });
+      return { success: true };
+    }),
+
   // ============ BOARD MUTATIONS ============
 
   createBoard: protectedProcedure
@@ -968,6 +1120,35 @@ export const projectsRouter = router({
           createdBy: { select: { id: true, name: true, avatar: true } },
           assignees: {
             include: { user: { select: { id: true, name: true, avatar: true, title: true } } },
+          },
+          // IMP-PROJ-06: subtasks + parent + dependency edges.
+          parent: { select: { id: true, title: true } },
+          subtasks: {
+            orderBy: { order: 'asc' },
+            select: {
+              id: true,
+              title: true,
+              // Column name lets the sheet infer a "done" subtask (see DONE_RE).
+              column: { select: { id: true, name: true } },
+            },
+          },
+          // Tasks that block THIS one ("Blocked by"). Edge id is needed to remove it.
+          blockedBy: {
+            select: {
+              id: true,
+              blockingTask: {
+                select: { id: true, title: true, column: { select: { name: true } } },
+              },
+            },
+          },
+          // Tasks THIS one blocks ("Blocking").
+          blocking: {
+            select: {
+              id: true,
+              blockedTask: {
+                select: { id: true, title: true, column: { select: { name: true } } },
+              },
+            },
           },
           labels: { include: { label: true } },
           checklists: {

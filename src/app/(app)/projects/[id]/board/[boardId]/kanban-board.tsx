@@ -31,6 +31,7 @@ import {
   ListChecks,
   Check,
   Gauge,
+  Ban,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -52,11 +53,18 @@ const priorityColors: Record<string, string> = {
 // filtered result when a filter is active.
 const INITIAL_VISIBLE = 20;
 
+// IMP-PROJ-06: mirrors the server's done-column heuristic (projects.moveTask).
+// A blocker is "still open" when its blocking task isn't in a done column.
+const DONE_COLUMN_RE = /^(done|complete|completed|shipped|closed)$/i;
+
 type TaskLabel = { label: { id: string; name: string; color: string } };
 type TaskAssignee = { user: { id: string; name: string; avatar: string | null } };
 // Board cards only need checklist completion counts — getBoardWithTasks selects items.completed only.
 type ChecklistItem = { completed: boolean };
 type TaskChecklist = { id: string; name: string; items: ChecklistItem[] };
+// IMP-PROJ-06: each blocker carries only its blocking task's column name, enough
+// to decide whether the dependency is still open.
+type TaskBlocker = { blockingTask: { column: { name: string } } };
 type TaskData = {
   id: string;
   title: string;
@@ -68,6 +76,7 @@ type TaskData = {
   labels: TaskLabel[];
   assignees: TaskAssignee[];
   checklists: TaskChecklist[];
+  blockedBy: TaskBlocker[];
   _count: { comments: number; attachments: number; checklists: number };
 };
 
@@ -1081,6 +1090,11 @@ const TaskCard = memo(function TaskCard({ task }: { task: TaskData }) {
       )
     : 0;
 
+  // IMP-PROJ-06: blocked when any blocker's blocking task is NOT in a done column.
+  const isBlocked = task.blockedBy.some(
+    (b) => !DONE_COLUMN_RE.test(b.blockingTask.column.name)
+  );
+
   return (
     <>
       {task.labels.length > 0 && (
@@ -1142,6 +1156,16 @@ const TaskCard = memo(function TaskCard({ task }: { task: TaskData }) {
             <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
               <Paperclip className="h-3 w-3" />
               {task._count.attachments}
+            </span>
+          )}
+
+          {isBlocked && (
+            <span
+              className="flex items-center gap-1 text-[11px] font-medium text-red-500"
+              title="Blocked by an unfinished task"
+            >
+              <Ban className="h-3 w-3" />
+              Blocked
             </span>
           )}
         </div>

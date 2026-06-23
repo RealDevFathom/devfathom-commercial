@@ -20,6 +20,9 @@ import {
   Loader2,
   Pencil,
   Clock,
+  ListTree,
+  Link2,
+  Ban,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -31,6 +34,13 @@ import type { AppRouter } from '@/server/routers/_app';
 
 type TaskDetailData = NonNullable<inferRouterOutputs<AppRouter>['projects']['getTaskDetail']>;
 type TaskComment = TaskDetailData['comments'][number];
+
+// IMP-PROJ-06: mirrors the server's done-column heuristic (projects.moveTask) so
+// completed subtasks / satisfied blockers can be shown as done.
+const DONE_COLUMN_RE = /^(done|complete|completed|shipped|closed)$/i;
+
+// A lightweight {id,title} candidate for the subtask/blocker pickers.
+type PickerTask = { id: string; title: string };
 
 const priorities = [
   { value: 'URGENT', label: 'Urgent', color: 'text-red-500', bg: 'bg-red-500' },
@@ -620,6 +630,369 @@ function LabelRow({
   );
 }
 
+// IMP-PROJ-06: a search-and-pick panel over the board's tasks, shared by the
+// subtask and blocker "add" affordances.
+function TaskSelectPanel({
+  candidates,
+  onPick,
+  onClose,
+  placeholder,
+}: {
+  candidates: PickerTask[];
+  onPick: (taskId: string) => void;
+  onClose: () => void;
+  placeholder?: string;
+}) {
+  const [q, setQ] = useState('');
+  const filtered = candidates.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="rounded-xl border border-border bg-card p-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={placeholder ?? 'Search tasks…'}
+          className="flex-1 rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+        />
+        <button
+          onClick={onClose}
+          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
+          aria-label="Close picker"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-48 space-y-0.5 overflow-y-auto">
+        {filtered.length === 0 ? (
+          <p className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+            No matching tasks.
+          </p>
+        ) : (
+          filtered.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => onPick(t.id)}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-secondary"
+            >
+              <span className="truncate">{t.title}</span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// IMP-PROJ-06: subtasks — link an existing board task (or create-and-link a new
+// one) as a child, surface the parent relationship, and unlink children.
+function SubtasksSection({
+  task,
+  boardTasks,
+  onMutated,
+}: {
+  task: TaskDetailData;
+  boardTasks: PickerTask[];
+  onMutated: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+
+  const setParent = trpc.projects.setTaskParent.useMutation({
+    onSuccess: () => {
+      setError(null);
+      onMutated();
+    },
+    onError: (e) => setError(e.message),
+  });
+  const createTask = trpc.projects.createTask.useMutation();
+
+  // Candidates: any board task that isn't this task or already one of its subtasks.
+  const subtaskIds = new Set(task.subtasks.map((s) => s.id));
+  const candidates = boardTasks.filter((t) => t.id !== task.id && !subtaskIds.has(t.id));
+
+  // Bonus: create a fresh task in this task's column and link it as a subtask.
+  const handleCreateLink = async () => {
+    const title = newTitle.trim();
+    if (!title) return;
+    try {
+      const created = await createTask.mutateAsync({ title, columnId: task.column.id });
+      await setParent.mutateAsync({ taskId: created.id, parentId: task.id });
+      setNewTitle('');
+      onMutated();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not create subtask.');
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <ListTree className="h-3 w-3" /> Subtasks
+          {task.subtasks.length > 0 ? ` (${task.subtasks.length})` : ''}
+        </h4>
+        <button
+          onClick={() => {
+            setPicking((p) => !p);
+            setError(null);
+          }}
+          className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+        >
+          <Plus className="h-3 w-3" />
+          {picking ? 'Close' : 'Add'}
+        </button>
+      </div>
+
+      {/* This task is itself a subtask of another — show + allow detach. */}
+      {task.parent && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg bg-secondary/40 px-3 py-1.5 text-xs">
+          <ListTree className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <span className="text-muted-foreground">Subtask of</span>
+          <span className="flex-1 truncate font-medium text-foreground">{task.parent.title}</span>
+          <button
+            onClick={() => setParent.mutate({ taskId: task.id, parentId: null })}
+            className="shrink-0 text-muted-foreground hover:text-red-500"
+            title="Detach from parent"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Child subtasks */}
+      {task.subtasks.length > 0 && (
+        <div className="space-y-1 mb-2">
+          {task.subtasks.map((s) => {
+            const done = DONE_COLUMN_RE.test(s.column.name);
+            return (
+              <div
+                key={s.id}
+                className="group/sub flex items-center gap-2 rounded-lg border border-border/60 bg-secondary/30 px-3 py-1.5"
+              >
+                {done ? (
+                  <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                ) : (
+                  <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                )}
+                <span
+                  className={cn(
+                    'flex-1 truncate text-sm',
+                    done ? 'text-muted-foreground line-through' : 'text-foreground'
+                  )}
+                >
+                  {s.title}
+                </span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">{s.column.name}</span>
+                <button
+                  onClick={() => setParent.mutate({ taskId: s.id, parentId: null })}
+                  className="shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-muted-foreground hover:text-red-500"
+                  title="Unlink subtask"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {error && <p className="mb-2 text-[11px] font-medium text-red-500">{error}</p>}
+
+      {picking && (
+        <div className="space-y-2">
+          <TaskSelectPanel
+            candidates={candidates}
+            onPick={(pickedId) => {
+              setParent.mutate({ taskId: pickedId, parentId: task.id });
+              setPicking(false);
+            }}
+            onClose={() => setPicking(false)}
+            placeholder="Link an existing task…"
+          />
+          <div className="flex items-center gap-2">
+            <input
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateLink();
+              }}
+              placeholder="Or create a new subtask…"
+              className="flex-1 rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+            />
+            <button
+              onClick={handleCreateLink}
+              disabled={!newTitle.trim() || createTask.isPending || setParent.isPending}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-primary disabled:opacity-30"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// IMP-PROJ-06: task dependencies — "Blocked by" + "Blocking" edges, add a blocker
+// by picking another board task, remove edges. Cycle/duplicate rejections from
+// the server surface inline.
+function DependenciesSection({
+  task,
+  boardTasks,
+  onMutated,
+}: {
+  task: TaskDetailData;
+  boardTasks: PickerTask[];
+  onMutated: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+
+  const addBlocker = trpc.projects.addBlocker.useMutation({
+    onSuccess: () => {
+      setError(null);
+      setPicking(false);
+      onMutated();
+    },
+    onError: (e) => setError(e.message),
+  });
+  const removeBlocker = trpc.projects.removeBlocker.useMutation({ onSuccess: onMutated });
+
+  // Candidates: any board task that isn't this task or already blocking it.
+  const blockerIds = new Set(task.blockedBy.map((b) => b.blockingTask.id));
+  const candidates = boardTasks.filter((t) => t.id !== task.id && !blockerIds.has(t.id));
+
+  const openBlockerCount = task.blockedBy.filter(
+    (b) => !DONE_COLUMN_RE.test(b.blockingTask.column.name)
+  ).length;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <Link2 className="h-3 w-3" /> Dependencies
+        </h4>
+        <button
+          onClick={() => {
+            setPicking((p) => !p);
+            setError(null);
+          }}
+          className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+        >
+          <Plus className="h-3 w-3" />
+          {picking ? 'Close' : 'Add blocker'}
+        </button>
+      </div>
+
+      {openBlockerCount > 0 && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-1.5 text-xs">
+          <Ban className="h-3.5 w-3.5 shrink-0 text-red-500" />
+          <span className="font-medium text-red-500">
+            Blocked by {openBlockerCount} unfinished task{openBlockerCount === 1 ? '' : 's'}.
+          </span>
+        </div>
+      )}
+
+      {picking && (
+        <div className="mb-2">
+          <TaskSelectPanel
+            candidates={candidates}
+            onPick={(pickedId) =>
+              addBlocker.mutate({ blockedTaskId: task.id, blockingTaskId: pickedId })
+            }
+            onClose={() => setPicking(false)}
+            placeholder="Blocked by which task?"
+          />
+        </div>
+      )}
+
+      {error && <p className="mb-2 text-[11px] font-medium text-red-500">{error}</p>}
+
+      <div className="space-y-3">
+        {/* Blocked by */}
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            Blocked by
+          </p>
+          {task.blockedBy.length === 0 ? (
+            <p className="text-xs text-muted-foreground/60">Nothing is blocking this task.</p>
+          ) : (
+            <div className="space-y-1">
+              {task.blockedBy.map((edge) => {
+                const done = DONE_COLUMN_RE.test(edge.blockingTask.column.name);
+                return (
+                  <div
+                    key={edge.id}
+                    className="group/dep flex items-center gap-2 rounded-lg border border-border/60 bg-secondary/30 px-3 py-1.5"
+                  >
+                    {done ? (
+                      <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                    ) : (
+                      <Ban className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                    )}
+                    <span
+                      className={cn(
+                        'flex-1 truncate text-sm',
+                        done ? 'text-muted-foreground line-through' : 'text-foreground'
+                      )}
+                    >
+                      {edge.blockingTask.title}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {edge.blockingTask.column.name}
+                    </span>
+                    <button
+                      onClick={() => removeBlocker.mutate({ id: edge.id })}
+                      className="shrink-0 opacity-0 transition-opacity group-hover/dep:opacity-100 text-muted-foreground hover:text-red-500"
+                      title="Remove dependency"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Blocking */}
+        {task.blocking.length > 0 && (
+          <div>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              Blocking
+            </p>
+            <div className="space-y-1">
+              {task.blocking.map((edge) => (
+                <div
+                  key={edge.id}
+                  className="group/dep flex items-center gap-2 rounded-lg border border-border/60 bg-secondary/30 px-3 py-1.5"
+                >
+                  <Link2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1 truncate text-sm text-foreground">
+                    {edge.blockedTask.title}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {edge.blockedTask.column.name}
+                  </span>
+                  <button
+                    onClick={() => removeBlocker.mutate({ id: edge.id })}
+                    className="shrink-0 opacity-0 transition-opacity group-hover/dep:opacity-100 text-muted-foreground hover:text-red-500"
+                    title="Remove dependency"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TaskDetailSheet({
   taskId,
   boardId,
@@ -793,6 +1166,19 @@ export function TaskDetailSheet({
     { enabled: !!taskBoardId }
   );
   const { data: teamMembers } = trpc.team.getRoster.useQuery();
+
+  // IMP-PROJ-06: the board's tasks power the subtask/blocker pickers. Shares the
+  // same query key as the kanban board, so this is normally a cache hit.
+  const { data: boardForPickers } = trpc.projects.getBoardWithTasks.useQuery(
+    { boardId },
+    { enabled: !!boardId }
+  );
+  const boardTasks = useMemo<PickerTask[]>(() => {
+    if (!boardForPickers) return [];
+    return boardForPickers.columns.flatMap((c) =>
+      c.tasks.map((t) => ({ id: t.id, title: t.title }))
+    );
+  }, [boardForPickers]);
 
   const [showAssigneePicker, setShowAssigneePicker] = useState(false);
   const [showPriorityMenu, setShowPriorityMenu] = useState(false);
@@ -1277,6 +1663,12 @@ export function TaskDetailSheet({
               checklists={task.checklists}
               onMutated={() => utils.projects.getTaskDetail.invalidate({ id: taskId })}
             />
+
+            {/* Subtasks (IMP-PROJ-06) */}
+            <SubtasksSection task={task} boardTasks={boardTasks} onMutated={invalidateAll} />
+
+            {/* Dependencies (IMP-PROJ-06) */}
+            <DependenciesSection task={task} boardTasks={boardTasks} onMutated={invalidateAll} />
 
             {/* Activity timeline (PROJ-10) */}
             <TaskActivityTimeline taskId={taskId} />
