@@ -98,7 +98,7 @@
     "tier": "medium",
     "title": "Bulk task actions (multi-select move/label/assign/delete)",
     "value": "Manage big boards without one-at-a-time clicks",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Multi-select tasks; bulk move/label/assign/delete",
       "Single confirmation; access-checked"
@@ -110,7 +110,7 @@
     "tier": "medium",
     "title": "Pagination / lazy-load on large boards",
     "value": "Large boards load fast",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "getBoardWithTasks paginates/lazy-loads tasks per column",
       "Initial paint is bounded regardless of board size"
@@ -730,7 +730,7 @@
     "tier": "medium",
     "title": "Rate limiting + per-token usage metrics",
     "value": "Abuse protection + operator visibility",
-    "status": "partial",
+    "status": "implemented",
     "related": [
       "REST-04"
     ],

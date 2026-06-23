@@ -5,9 +5,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 44 — issue closed, card → Done.
-- **Partial** (core delivered; remainder tracked): 2 — card → In Progress.
-- **To build** (Quick Win / Medium): 15 — card → To Do.
+- **Implemented** (delivered during QA remediation): 47 — issue closed, card → Done.
+- **Partial** (core delivered; remainder tracked): 1 — card → In Progress.
+- **To build** (Quick Win / Medium): 13 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 9 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
@@ -28,8 +28,8 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-PROJ-05 | quick-win | projects | Board rename/description + label edit/delete + project-file delete | [#60](https://github.com/WhatTheStack1/DevFathom-Hub/issues/60) | `cmqqe82tu000asstwkcz540nw` | Partial |
 | IMP-PROJ-06 | medium | projects | Subtasks / dependencies / blockers | [#61](https://github.com/WhatTheStack1/DevFathom-Hub/issues/61) | `cmqqe8377000bsstw5bj6n1qt` | Planned (greenlight) |
 | IMP-PROJ-07 | medium | projects | Board/column templates + WIP limits | [#62](https://github.com/WhatTheStack1/DevFathom-Hub/issues/62) | `cmqqe83qz000csstw9s4bryb5` | To build |
-| IMP-PROJ-08 | medium | projects | Bulk task actions (multi-select move/label/assign/delete) | [#63](https://github.com/WhatTheStack1/DevFathom-Hub/issues/63) | `cmqqe8468000dsstwqgga78fk` | To build |
-| IMP-PROJ-09 | medium | projects | Pagination / lazy-load on large boards | [#64](https://github.com/WhatTheStack1/DevFathom-Hub/issues/64) | `cmqqe84jj000esstwp7dve8rc` | To build |
+| IMP-PROJ-08 | medium | projects | Bulk task actions (multi-select move/label/assign/delete) | [#63](https://github.com/WhatTheStack1/DevFathom-Hub/issues/63) | `cmqqe8468000dsstwqgga78fk` | Implemented |
+| IMP-PROJ-09 | medium | projects | Pagination / lazy-load on large boards | [#64](https://github.com/WhatTheStack1/DevFathom-Hub/issues/64) | `cmqqe84jj000esstwp7dve8rc` | Implemented |
 | IMP-PROJ-10 | quick-win | projects | Task activity timeline in the detail sheet | [#65](https://github.com/WhatTheStack1/DevFathom-Hub/issues/65) | `cmqqe84ww000fsstwtf8glhxk` | Implemented |
 | IMP-PROJ-11 | quick-win | projects | Generalized done detection (shared heuristic) | [#66](https://github.com/WhatTheStack1/DevFathom-Hub/issues/66) | `cmqqe85bx000gsstwvazf1i0j` | Implemented |
 | IMP-CLI-01 | medium | clients | Full contact CRUD UI (add/edit/delete/primary/phone) | [#67](https://github.com/WhatTheStack1/DevFathom-Hub/issues/67) | `cmqqe85p7000hsstwylfesd5m` | Implemented |
@@ -78,7 +78,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-RT-04 | quick-win | chat | Mention-on-edit + stable ordering + scoped read receipts | [#110](https://github.com/WhatTheStack1/DevFathom-Hub/issues/110) | `cmqqe8lsd001osstwxq6vev24` | Implemented |
 | IMP-RT-05 | medium | upload | Authenticated/signed attachment delivery (per-channel) | [#111](https://github.com/WhatTheStack1/DevFathom-Hub/issues/111) | `cmqqe8m5q001psstw3r97w28t` | Implemented |
 | IMP-RT-06 | quick-win | meetings | Robust call exit handling | [#112](https://github.com/WhatTheStack1/DevFathom-Hub/issues/112) | `cmqqe8mir001qsstwza933bl8` | Implemented |
-| IMP-REST-01 | medium | platform | Rate limiting + per-token usage metrics | [#113](https://github.com/WhatTheStack1/DevFathom-Hub/issues/113) | `cmqqe8mvi001rsstwn73ear5h` | Partial |
+| IMP-REST-01 | medium | platform | Rate limiting + per-token usage metrics | [#113](https://github.com/WhatTheStack1/DevFathom-Hub/issues/113) | `cmqqe8mvi001rsstwn73ear5h` | Implemented |
 | IMP-REST-02 | quick-win | platform | Pagination cursors + consistent list envelopes | [#114](https://github.com/WhatTheStack1/DevFathom-Hub/issues/114) | `cmqqe8n8b001ssstwx2pl4xpl` | Implemented |
 | IMP-REST-03 | big-bet | platform | Webhooks / events | [#115](https://github.com/WhatTheStack1/DevFathom-Hub/issues/115) | `cmqqe8nle001tsstw2y18ohyy` | Planned (greenlight) |
 | IMP-REST-04 | quick-win | platform | Scope hygiene + audit completeness | [#116](https://github.com/WhatTheStack1/DevFathom-Hub/issues/116) | `cmqqe8nyf001usstwrextegug` | Implemented |
