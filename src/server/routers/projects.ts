@@ -27,6 +27,19 @@ function taskUrl(projectId: string, boardId: string, taskId: string): string {
   return `${appUrl()}/projects/${projectId}/board/${boardId}?task=${taskId}`;
 }
 
+// IMP-PROJ-01: TimeEntry.hours is Decimal(5,2) — Postgres accepts at most 999.99
+// with two decimal places. Bound + refine the input here so an oversized or
+// over-precise value fails as a clean validation error instead of a raw DB 500.
+const hoursInput = z
+  .number()
+  .positive('Hours must be greater than 0')
+  .max(999.99, 'Hours must be 999.99 or less')
+  .refine((n) => Number(n.toFixed(2)) === n, 'Hours can have at most two decimal places');
+
+// Prisma returns Decimal; rollups are computed as Number and rounded back to the
+// same 2-decimal precision the column stores.
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 export const projectsRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
@@ -1687,5 +1700,174 @@ export const projectsRouter = router({
         take: 30,
         include: { user: { select: { id: true, name: true, avatar: true } } },
       });
+    }),
+
+  // ============ TIME TRACKING (IMP-PROJ-01) ============
+  //
+  // Per-task / per-project time logging, scoped to project members. Entries roll
+  // up per task / project / user (getTimeRollup) — the totals a finance/billing
+  // flow reads. hours is Decimal(5,2); see `hoursInput` for the validation bound.
+
+  // Log time against a project (optionally a specific task on it). The entry's
+  // userId is always the caller; access requires project membership (or admin).
+  logTime: protectedProcedure
+    .input(
+      z.object({
+        taskId: z.string().optional(),
+        projectId: z.string(),
+        hours: hoursInput,
+        description: z.string().optional(),
+        date: z.date(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // If a task is named, derive + validate its project so the entry's taskId
+      // and projectId can never drift apart.
+      if (input.taskId) {
+        const t = await ctx.db.task.findUnique({
+          where: { id: input.taskId },
+          select: { column: { select: { board: { select: { projectId: true } } } } },
+        });
+        if (!t) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found.' });
+        if (t.column.board.projectId !== input.projectId) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'That task does not belong to the given project.',
+          });
+        }
+      }
+      // Member-or-admin on the project gates both project- and task-level logs.
+      await assertProjectAccess(ctx, input.projectId);
+
+      return ctx.db.timeEntry.create({
+        data: {
+          userId: ctx.session.user.id,
+          taskId: input.taskId ?? null,
+          projectId: input.projectId,
+          hours: input.hours,
+          description: input.description ?? null,
+          date: input.date,
+        },
+      });
+    }),
+
+  // Edit a time entry — only its owner (or an admin) may do so.
+  updateTimeEntry: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        hours: hoursInput.optional(),
+        description: z.string().nullable().optional(),
+        date: z.date().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const entry = await ctx.db.timeEntry.findUnique({
+        where: { id: input.id },
+        select: { userId: true, projectId: true },
+      });
+      if (!entry) throw new TRPCError({ code: 'NOT_FOUND', message: 'Time entry not found.' });
+      await assertProjectAccess(ctx, entry.projectId);
+      if (entry.userId !== ctx.session.user.id && ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only edit your own time entries.',
+        });
+      }
+      const { id, ...data } = input;
+      return ctx.db.timeEntry.update({ where: { id }, data });
+    }),
+
+  // Delete a time entry — only its owner (or an admin) may do so.
+  deleteTimeEntry: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const entry = await ctx.db.timeEntry.findUnique({
+        where: { id: input.id },
+        select: { userId: true, projectId: true },
+      });
+      if (!entry) throw new TRPCError({ code: 'NOT_FOUND', message: 'Time entry not found.' });
+      await assertProjectAccess(ctx, entry.projectId);
+      if (entry.userId !== ctx.session.user.id && ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only delete your own time entries.',
+        });
+      }
+      await ctx.db.timeEntry.delete({ where: { id: input.id } });
+      return { success: true };
+    }),
+
+  // All time entries logged against a task (newest first), with the logger's id +
+  // name for display. Access-checked via the task's project.
+  listTaskTime: protectedProcedure
+    .input(z.object({ taskId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertTaskAccess(ctx, input.taskId);
+      return ctx.db.timeEntry.findMany({
+        where: { taskId: input.taskId },
+        orderBy: { date: 'desc' },
+        include: { user: { select: { id: true, name: true, avatar: true } } },
+      });
+    }),
+
+  // Rolls up logged time for a project: the grand total plus per-user and
+  // per-task breakdowns. This is the hook a finance/billing flow reads — the
+  // returned totals are the hours a project (or a teammate) can be billed for.
+  getTimeRollup: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
+
+      const where = { projectId: input.projectId };
+      const [total, byUserGroups, byTaskGroups] = await Promise.all([
+        ctx.db.timeEntry.aggregate({ where, _sum: { hours: true }, _count: true }),
+        ctx.db.timeEntry.groupBy({ by: ['userId'], where, _sum: { hours: true }, _count: true }),
+        ctx.db.timeEntry.groupBy({ by: ['taskId'], where, _sum: { hours: true }, _count: true }),
+      ]);
+
+      // Resolve display names for the grouped ids (empty `in: []` returns []).
+      const userIds = byUserGroups.map((g) => g.userId);
+      const taskIds = byTaskGroups
+        .map((g) => g.taskId)
+        .filter((id): id is string => id !== null);
+      const [users, tasks] = await Promise.all([
+        ctx.db.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, name: true, avatar: true },
+        }),
+        ctx.db.task.findMany({
+          where: { id: { in: taskIds } },
+          select: { id: true, title: true },
+        }),
+      ]);
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      const taskMap = new Map(tasks.map((t) => [t.id, t]));
+
+      return {
+        projectId: input.projectId,
+        totalHours: round2(Number(total._sum.hours ?? 0)),
+        entryCount: total._count,
+        byUser: byUserGroups
+          .map((g) => ({
+            userId: g.userId,
+            name: userMap.get(g.userId)?.name ?? 'Unknown user',
+            avatar: userMap.get(g.userId)?.avatar ?? null,
+            hours: round2(Number(g._sum.hours ?? 0)),
+            entries: g._count,
+          }))
+          .sort((a, b) => b.hours - a.hours),
+        byTask: byTaskGroups
+          .map((g) => ({
+            taskId: g.taskId,
+            // taskId is nullable: project-level logs, or a task deleted later.
+            title: g.taskId
+              ? (taskMap.get(g.taskId)?.title ?? 'Deleted task')
+              : 'Project-level (no task)',
+            hours: round2(Number(g._sum.hours ?? 0)),
+            entries: g._count,
+          }))
+          .sort((a, b) => b.hours - a.hours),
+      };
     }),
 });

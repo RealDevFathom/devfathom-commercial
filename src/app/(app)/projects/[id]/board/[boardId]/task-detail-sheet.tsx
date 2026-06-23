@@ -20,6 +20,7 @@ import {
   Loader2,
   Pencil,
   Clock,
+  Timer,
   ListTree,
   Link2,
   Ban,
@@ -993,6 +994,267 @@ function DependenciesSection({
   );
 }
 
+// IMP-PROJ-01: time tracking — log hours against the task, see who logged what,
+// owner/admin can edit or delete their entries. Hours are Decimal(5,2) on the
+// server (validated there); we convert with Number() for display + the total.
+type TimeEntryData = inferRouterOutputs<AppRouter>['projects']['listTaskTime'][number];
+
+function TimeEntryRow({
+  entry,
+  canModify,
+  onUpdate,
+  onDelete,
+  isBusy,
+}: {
+  entry: TimeEntryData;
+  canModify: boolean;
+  onUpdate: (data: { hours: number; description: string | null; date: Date }) => void;
+  onDelete: () => void;
+  isBusy: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [hours, setHours] = useState('');
+  const [description, setDescription] = useState('');
+  const [date, setDate] = useState('');
+
+  const beginEdit = () => {
+    setHours(String(Number(entry.hours)));
+    setDescription(entry.description ?? '');
+    setDate(format(new Date(entry.date), 'yyyy-MM-dd'));
+    setEditing(true);
+  };
+  const save = () => {
+    const h = Number(hours);
+    if (!hours || Number.isNaN(h) || h <= 0) return;
+    onUpdate({ hours: h, description: description.trim() || null, date: new Date(date) });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="space-y-2 rounded-lg border border-primary/20 bg-secondary/30 p-2">
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            step="0.25"
+            min="0"
+            value={hours}
+            onChange={(e) => setHours(e.target.value)}
+            className="w-20 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+          />
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+          />
+        </div>
+        <input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          placeholder="Description (optional)"
+          className="w-full rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={save}
+            disabled={!hours || isBusy}
+            className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+          >
+            Save
+          </button>
+          <button
+            onClick={() => setEditing(false)}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group/te flex items-center gap-2 rounded-lg border border-border/60 bg-secondary/30 px-3 py-1.5">
+      <Avatar className="h-5 w-5 shrink-0">
+        <AvatarImage src={entry.user.avatar ?? undefined} />
+        <AvatarFallback className="text-[8px] bg-muted font-medium">
+          {entry.user.name[0]}
+        </AvatarFallback>
+      </Avatar>
+      <span className="shrink-0 text-xs font-medium text-foreground">{entry.user.name}</span>
+      <span className="shrink-0 text-xs font-semibold text-primary">{Number(entry.hours)}h</span>
+      <span className="shrink-0 text-[10px] text-muted-foreground">
+        {format(new Date(entry.date), 'MMM d')}
+      </span>
+      {entry.description && (
+        <span
+          className="flex-1 truncate text-[11px] text-muted-foreground"
+          title={entry.description}
+        >
+          {entry.description}
+        </span>
+      )}
+      {canModify && (
+        <div className="ml-auto flex shrink-0 gap-0.5 opacity-0 group-hover/te:opacity-100 transition-opacity">
+          <button
+            onClick={beginEdit}
+            className="text-muted-foreground/60 hover:text-foreground"
+            title="Edit time entry"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+          <button
+            onClick={onDelete}
+            disabled={isBusy}
+            className="text-muted-foreground/60 hover:text-red-500 disabled:opacity-40"
+            title="Delete time entry"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimeSection({
+  taskId,
+  projectId,
+  currentUserId,
+  isAdmin,
+  onMutated,
+}: {
+  taskId: string;
+  projectId: string;
+  currentUserId?: string;
+  isAdmin?: boolean;
+  onMutated: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const { data: entries } = trpc.projects.listTaskTime.useQuery({ taskId });
+
+  const [hours, setHours] = useState('');
+  const [description, setDescription] = useState('');
+  const [date, setDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [error, setError] = useState<string | null>(null);
+
+  const invalidate = () => {
+    utils.projects.listTaskTime.invalidate({ taskId });
+    onMutated();
+  };
+  const logTime = trpc.projects.logTime.useMutation({
+    onSuccess: () => {
+      setHours('');
+      setDescription('');
+      setError(null);
+      invalidate();
+    },
+    onError: (e) => setError(e.message),
+  });
+  const updateEntry = trpc.projects.updateTimeEntry.useMutation({
+    onSuccess: invalidate,
+    onError: (e) => setError(e.message),
+  });
+  const deleteEntry = trpc.projects.deleteTimeEntry.useMutation({ onSuccess: invalidate });
+
+  const total = useMemo(
+    () => (entries ?? []).reduce((sum, e) => sum + Number(e.hours), 0),
+    [entries]
+  );
+  const totalDisplay = Math.round(total * 100) / 100;
+
+  const submit = () => {
+    const h = Number(hours);
+    if (!hours || Number.isNaN(h) || h <= 0) {
+      setError('Enter a positive number of hours.');
+      return;
+    }
+    logTime.mutate({
+      taskId,
+      projectId,
+      hours: h,
+      description: description.trim() || undefined,
+      date: new Date(date),
+    });
+  };
+
+  return (
+    <div>
+      <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1.5">
+        <Timer className="h-3 w-3" /> Time
+        {totalDisplay > 0 && (
+          <span className="ml-1 font-semibold normal-case tracking-normal text-foreground/80">
+            · {totalDisplay}h logged
+          </span>
+        )}
+      </h4>
+
+      {entries && entries.length > 0 ? (
+        <div className="space-y-1 mb-3">
+          {entries.map((entry) => (
+            <TimeEntryRow
+              key={entry.id}
+              entry={entry}
+              canModify={entry.user.id === currentUserId || !!isAdmin}
+              onUpdate={(data) => updateEntry.mutate({ id: entry.id, ...data })}
+              onDelete={() => deleteEntry.mutate({ id: entry.id })}
+              isBusy={updateEntry.isPending || deleteEntry.isPending}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="mb-3 text-xs text-muted-foreground">No time logged yet.</p>
+      )}
+
+      {error && <p className="mb-2 text-[11px] font-medium text-red-500">{error}</p>}
+
+      {/* Compact log-time form */}
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          step="0.25"
+          min="0"
+          value={hours}
+          onChange={(e) => setHours(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+          }}
+          placeholder="Hrs"
+          className="w-16 rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+        />
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="rounded-lg border border-border bg-secondary/50 px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+        />
+        <input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+          }}
+          placeholder="What did you work on? (optional)"
+          className="flex-1 rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+        />
+        <button
+          onClick={submit}
+          disabled={!hours || logTime.isPending}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-primary disabled:opacity-30"
+          title="Log time"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function TaskDetailSheet({
   taskId,
   boardId,
@@ -1662,6 +1924,15 @@ export function TaskDetailSheet({
               taskId={taskId}
               checklists={task.checklists}
               onMutated={() => utils.projects.getTaskDetail.invalidate({ id: taskId })}
+            />
+
+            {/* Time tracking (IMP-PROJ-01) */}
+            <TimeSection
+              taskId={taskId}
+              projectId={task.column.board.projectId}
+              currentUserId={currentUserId}
+              isAdmin={isAdmin}
+              onMutated={invalidateAll}
             />
 
             {/* Subtasks (IMP-PROJ-06) */}
