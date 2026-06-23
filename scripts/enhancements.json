@@ -1,0 +1,897 @@
+[
+  {
+    "id": "IMP-PROJ-01",
+    "module": "projects",
+    "tier": "big-bet",
+    "title": "Time tracking (wire the modeled TimeEntry)",
+    "value": "Billing, utilization, project profitability",
+    "status": "planned",
+    "acceptance": [
+      "TimeEntry has tRPC create/list/update/delete + UI on the task/project",
+      "Entries roll up per task/project/user and feed finance billing",
+      "Decimal(5,2) hours validated; entries scoped to project members"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-02",
+    "module": "projects",
+    "tier": "medium",
+    "title": "Checklist management (create/rename/reorder/delete)",
+    "value": "Core kanban capability; today read-only",
+    "status": "todo",
+    "acceptance": [
+      "Add/rename/reorder/delete checklists and items from the detail sheet",
+      "Access-checked via assertTaskAccess",
+      "Optimistic UI consistent with toggleChecklistItem"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-03",
+    "module": "projects",
+    "tier": "medium",
+    "title": "Task attachments — render + add/delete",
+    "value": "Specs/designs live on cards",
+    "status": "implemented",
+    "related": [
+      "PROJ-04"
+    ],
+    "acceptance": [
+      "Attachments listed in the detail sheet with open/download",
+      "Upload via /api/upload; delete removes the row",
+      "Access-checked"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-04",
+    "module": "projects",
+    "tier": "quick-win",
+    "title": "Comment edit/delete",
+    "value": "Fix typos / remove mistakes",
+    "status": "todo",
+    "acceptance": [
+      "updateComment/deleteComment mutations (author or admin)",
+      "UI edit/delete affordances on a comment",
+      "Threaded replies handled"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-05",
+    "module": "projects",
+    "tier": "quick-win",
+    "title": "Board rename/description + label edit/delete + project-file delete",
+    "value": "Avoid permanently-mislabeled boards / accumulating labels & files",
+    "status": "todo",
+    "acceptance": [
+      "updateBoard (name/description)",
+      "label rename/recolor/delete",
+      "project-file delete; all access-checked"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-06",
+    "module": "projects",
+    "tier": "medium",
+    "title": "Subtasks / dependencies / blockers",
+    "value": "Real delivery planning beyond a flat board",
+    "status": "planned",
+    "acceptance": [
+      "Parent-child task relation + blocked-by relation",
+      "UI to link/unlink; cycle prevention",
+      "Board shows blocked state"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-07",
+    "module": "projects",
+    "tier": "medium",
+    "title": "Board/column templates + WIP limits",
+    "value": "Faster setup, flow control",
+    "status": "todo",
+    "acceptance": [
+      "Create a board from a template; per-column WIP limit",
+      "WIP limit warns/blocks on exceed"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-08",
+    "module": "projects",
+    "tier": "medium",
+    "title": "Bulk task actions (multi-select move/label/assign/delete)",
+    "value": "Manage big boards without one-at-a-time clicks",
+    "status": "todo",
+    "acceptance": [
+      "Multi-select tasks; bulk move/label/assign/delete",
+      "Single confirmation; access-checked"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-09",
+    "module": "projects",
+    "tier": "medium",
+    "title": "Pagination / lazy-load on large boards",
+    "value": "Large boards load fast",
+    "status": "todo",
+    "acceptance": [
+      "getBoardWithTasks paginates/lazy-loads tasks per column",
+      "Initial paint is bounded regardless of board size"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-10",
+    "module": "projects",
+    "tier": "quick-win",
+    "title": "Task activity timeline in the detail sheet",
+    "value": "Surface task_created/task_completed already logged",
+    "status": "todo",
+    "acceptance": [
+      "Detail sheet shows the task's activity rows in time order"
+    ]
+  },
+  {
+    "id": "IMP-PROJ-11",
+    "module": "projects",
+    "tier": "quick-win",
+    "title": "Generalized done detection (shared heuristic)",
+    "value": "Consistent completion logging/UI",
+    "status": "implemented",
+    "related": [
+      "PROJ-07"
+    ],
+    "acceptance": [
+      "Completion logging + board preview use the same done heuristic"
+    ]
+  },
+  {
+    "id": "IMP-CLI-01",
+    "module": "clients",
+    "tier": "medium",
+    "title": "Full contact CRUD UI (add/edit/delete/primary/phone)",
+    "value": "A usable CRM contact book",
+    "status": "todo",
+    "acceptance": [
+      "Contacts tab can add/edit/delete and set primary + phone",
+      "updateContact mutation; single primary enforced"
+    ]
+  },
+  {
+    "id": "IMP-CLI-02",
+    "module": "clients",
+    "tier": "medium",
+    "title": "Client activity timeline",
+    "value": "Account context before a call",
+    "status": "todo",
+    "acceptance": [
+      "Per-client history of project/invoice/contract/note events",
+      "Scoped to admin/finance visibility"
+    ]
+  },
+  {
+    "id": "IMP-CLI-03",
+    "module": "clients",
+    "tier": "quick-win",
+    "title": "Client status workflow + logo upload",
+    "value": "PROSPECT→ACTIVE conversion + polish",
+    "status": "todo",
+    "acceptance": [
+      "Status selector in edit UI (ACTIVE/INACTIVE/PROSPECT)",
+      "Logo upload via /api/upload sets Client.logo"
+    ]
+  },
+  {
+    "id": "IMP-CLI-04",
+    "module": "clients",
+    "tier": "medium",
+    "title": "Contract expiry/renewal reminders",
+    "value": "Prevent lapsed agreements",
+    "status": "todo",
+    "acceptance": [
+      "Auto-flag/notify on upcoming endDate; auto-EXPIRED past end",
+      "Uses notify() email infra; admin recipients"
+    ]
+  },
+  {
+    "id": "IMP-CLI-05",
+    "module": "clients",
+    "tier": "medium",
+    "title": "Contract ↔ project/invoice linkage + value rollup",
+    "value": "Connect sales→delivery→billing",
+    "status": "todo",
+    "acceptance": [
+      "Contract links to a project; generate invoice from contract value",
+      "Per-client total contracted value rollup"
+    ]
+  },
+  {
+    "id": "IMP-CLI-06",
+    "module": "clients",
+    "tier": "quick-win",
+    "title": "Friendly delete-guards & inline validation errors",
+    "value": "No silent failures",
+    "status": "implemented",
+    "related": [
+      "CLI-01",
+      "UX-01"
+    ],
+    "acceptance": [
+      "Delete with invoices → friendly error; forms render mutation errors"
+    ]
+  },
+  {
+    "id": "IMP-CLI-07",
+    "module": "clients",
+    "tier": "quick-win",
+    "title": "Contract status state-machine + date/signedAt validation",
+    "value": "Trustworthy contract lifecycle",
+    "status": "implemented",
+    "related": [
+      "CON-01",
+      "CON-02"
+    ],
+    "acceptance": [
+      "endDate>=startDate; signedAt stamped consistently"
+    ]
+  },
+  {
+    "id": "IMP-CLI-08",
+    "module": "clients",
+    "tier": "quick-win",
+    "title": "Role-aware fetching & richer search",
+    "value": "No wasted finance loads for non-admins; better search",
+    "status": "todo",
+    "acceptance": [
+      "getById skips invoices/contracts for non-admins",
+      "List search also matches contact/industry"
+    ]
+  },
+  {
+    "id": "IMP-TRELLO-01",
+    "module": "trello",
+    "tier": "medium",
+    "title": "Import into a brand-new project + lead-only gate",
+    "value": "Matches the common flow; tightens who can bulk-mutate",
+    "status": "todo",
+    "acceptance": [
+      "Import can create a new project",
+      "Only project lead/admin may import into an existing project"
+    ]
+  },
+  {
+    "id": "IMP-TRELLO-02",
+    "module": "trello",
+    "tier": "medium",
+    "title": "Map more card data (cover/custom fields/due-complete)",
+    "value": "Higher-fidelity import",
+    "status": "todo",
+    "acceptance": [
+      "Cover image, custom fields, dueComplete are mapped"
+    ]
+  },
+  {
+    "id": "IMP-TRELLO-03",
+    "module": "trello",
+    "tier": "quick-win",
+    "title": "Robust dates + per-column order normalization",
+    "value": "Import doesn't crash; moves work after import",
+    "status": "implemented",
+    "related": [
+      "TRELLO-01",
+      "PROJ-02"
+    ],
+    "acceptance": [
+      "Malformed dates tolerated; per-column 0..n order"
+    ]
+  },
+  {
+    "id": "IMP-TRELLO-04",
+    "module": "trello",
+    "tier": "quick-win",
+    "title": "Partial-failure / skipped-card reporting",
+    "value": "Operators see what was skipped",
+    "status": "todo",
+    "acceptance": [
+      "Import result reports skipped lists/cards + reasons"
+    ]
+  },
+  {
+    "id": "IMP-TRELLO-05",
+    "module": "trello",
+    "tier": "quick-win",
+    "title": "Dedup when trello.id is absent",
+    "value": "Prevent duplicate imports",
+    "status": "implemented",
+    "acceptance": [
+      "Re-import without trello.id no longer duplicates cards"
+    ],
+    "related": []
+  },
+  {
+    "id": "IMP-FIN-01",
+    "module": "finance",
+    "tier": "medium",
+    "title": "Invoice edit + PDF/print + send-by-email",
+    "value": "Invoices that are actually sendable",
+    "status": "planned",
+    "acceptance": [
+      "Full invoice edit recomputes totals server-side",
+      "PDF/print view; send to client contact via notify()"
+    ]
+  },
+  {
+    "id": "IMP-FIN-02",
+    "module": "finance",
+    "tier": "medium",
+    "title": "Per-currency reporting & FX",
+    "value": "First-class multi-currency",
+    "status": "partial",
+    "related": [
+      "FIN-02"
+    ],
+    "acceptance": [
+      "Per-currency aggregates (done) + optional FX table convert-to-base",
+      "Reports can show converted ≈base alongside per-currency"
+    ]
+  },
+  {
+    "id": "IMP-FIN-03",
+    "module": "finance",
+    "tier": "medium",
+    "title": "Recurring-expense posting + budgets vs actuals",
+    "value": "Real burn/runway and project margin",
+    "status": "partial",
+    "related": [
+      "FIN-05"
+    ],
+    "acceptance": [
+      "Auto-post due RecurringExpense rows as transactions",
+      "Compare spend against Project.budget"
+    ]
+  },
+  {
+    "id": "IMP-FIN-04",
+    "module": "finance",
+    "tier": "medium",
+    "title": "Payments / partial payments & overdue automation",
+    "value": "Accurate AR",
+    "status": "todo",
+    "acceptance": [
+      "Model partial payments against an invoice",
+      "Auto-flip OVERDUE past dueDate (not display-only)"
+    ]
+  },
+  {
+    "id": "IMP-FIN-05",
+    "module": "finance",
+    "tier": "quick-win",
+    "title": "Decimal-safe math + bounded date windows",
+    "value": "Trustworthy figures",
+    "status": "implemented",
+    "related": [
+      "FIN-04",
+      "FIN-08",
+      "FIN-09"
+    ],
+    "acceptance": [
+      "Rounded profit/margin; bounded period windows"
+    ]
+  },
+  {
+    "id": "IMP-FIN-06",
+    "module": "finance",
+    "tier": "quick-win",
+    "title": "Finance export (CSV) + date-range filters",
+    "value": "Standard for any finance view",
+    "status": "todo",
+    "acceptance": [
+      "Export transactions/invoices to CSV; date-range filter on the views"
+    ]
+  },
+  {
+    "id": "IMP-NOTE-01",
+    "module": "notes",
+    "tier": "big-bet",
+    "title": "Version history / restore",
+    "value": "Recover from mistakes/abuse; audit changes",
+    "status": "planned",
+    "acceptance": [
+      "Note revisions stored on edit; diff + restore",
+      "Bounded retention"
+    ]
+  },
+  {
+    "id": "IMP-NOTE-02",
+    "module": "notes",
+    "tier": "medium",
+    "title": "People @mentions + notifications in notes",
+    "value": "Collaboration loop",
+    "status": "todo",
+    "acceptance": [
+      "@mention people in a note; notify() + bell on mention",
+      "Mentions scoped to note visibility"
+    ]
+  },
+  {
+    "id": "IMP-NOTE-03",
+    "module": "notes",
+    "tier": "quick-win",
+    "title": "Author-only visibility control",
+    "value": "Clear sharing model",
+    "status": "implemented",
+    "related": [
+      "NOTE-01"
+    ],
+    "acceptance": [
+      "Only author/admin changes visibility/links"
+    ]
+  },
+  {
+    "id": "IMP-NOTE-04",
+    "module": "notes",
+    "tier": "medium",
+    "title": "Resolve shared-with-me backlinks instead of hiding",
+    "value": "Legit shared links don't vanish",
+    "status": "todo",
+    "acceptance": [
+      "getById resolves SHARED backlinks against the viewer's shares"
+    ]
+  },
+  {
+    "id": "IMP-NOTE-05",
+    "module": "notes",
+    "tier": "quick-win",
+    "title": "Allow-list link protocols in the editor",
+    "value": "Cheap defense-in-depth",
+    "status": "implemented",
+    "acceptance": [
+      "Tiptap Link restricted to http/https/mailto"
+    ],
+    "related": []
+  },
+  {
+    "id": "IMP-DASH-01",
+    "module": "dashboard",
+    "tier": "medium",
+    "title": "Relevance-scoped activity feed",
+    "value": "Trustworthy, relevant dashboard",
+    "status": "implemented",
+    "related": [
+      "DASH-01"
+    ],
+    "acceptance": [
+      "Feed scoped to the viewer's visibility"
+    ]
+  },
+  {
+    "id": "IMP-DASH-02",
+    "module": "dashboard",
+    "tier": "medium",
+    "title": "Customizable widgets + graceful empty states",
+    "value": "Personal relevance",
+    "status": "todo",
+    "acceptance": [
+      "Users choose/arrange cards; empty states render cleanly"
+    ]
+  },
+  {
+    "id": "IMP-DASH-03",
+    "module": "dashboard",
+    "tier": "quick-win",
+    "title": "Personal my-time-off / pending-leave widget",
+    "value": "Replace leaked company-wide count with own",
+    "status": "implemented",
+    "related": [
+      "DASH-02"
+    ],
+    "acceptance": [
+      "Non-admins see their own pending leave"
+    ]
+  },
+  {
+    "id": "IMP-HR-01",
+    "module": "team",
+    "tier": "big-bet",
+    "title": "Leave balances + team calendar + overlap detection",
+    "value": "Real people-ops",
+    "status": "planned",
+    "acceptance": [
+      "Accrual/balance model; team calendar view; overlap guard (done)"
+    ]
+  },
+  {
+    "id": "IMP-HR-02",
+    "module": "team",
+    "tier": "medium",
+    "title": "Off-boarding automation",
+    "value": "Security + process hygiene",
+    "status": "todo",
+    "acceptance": [
+      "Resignation approval deactivates account + revokes sessions on lastWorkingDay",
+      "Pairs with AUTH-01 tokenVersion"
+    ]
+  },
+  {
+    "id": "IMP-HR-03",
+    "module": "team",
+    "tier": "quick-win",
+    "title": "Self-service leave edit/cancel",
+    "value": "Withdraw/edit a pending leave",
+    "status": "todo",
+    "acceptance": [
+      "Owner can edit/cancel a PENDING leave; not after decided"
+    ]
+  },
+  {
+    "id": "IMP-HR-04",
+    "module": "team",
+    "tier": "medium",
+    "title": "Performance review workflow",
+    "value": "A review process, not a notes table",
+    "status": "todo",
+    "acceptance": [
+      "Review cycles + ratings; HR can participate; configurable subject visibility"
+    ]
+  },
+  {
+    "id": "IMP-HR-05",
+    "module": "team",
+    "tier": "quick-win",
+    "title": "Separation-of-duties on approvals",
+    "value": "Trustworthy approvals",
+    "status": "implemented",
+    "related": [
+      "HR-01"
+    ],
+    "acceptance": [
+      "No self-approval; PENDING-only decisions"
+    ]
+  },
+  {
+    "id": "IMP-HR-06",
+    "module": "team",
+    "tier": "quick-win",
+    "title": "Directory privacy controls",
+    "value": "Respect contact-field privacy",
+    "status": "todo",
+    "acceptance": [
+      "Restrict email/phone/bio to HR/Admin or make opt-in"
+    ]
+  },
+  {
+    "id": "IMP-HR-07",
+    "module": "team",
+    "tier": "quick-win",
+    "title": "Include ON_LEAVE staff in people search",
+    "value": "Don't drop on-leave members",
+    "status": "implemented",
+    "acceptance": [
+      "Team search includes ON_LEAVE (still-active) members"
+    ],
+    "related": []
+  },
+  {
+    "id": "IMP-AUTH-01",
+    "module": "auth",
+    "tier": "medium",
+    "title": "Self-service password reset (forgot password)",
+    "value": "Table-stakes account recovery",
+    "status": "planned",
+    "acceptance": [
+      "Reset link via invite-token infra; single-use, expiring",
+      "Sets a new policy-valid password"
+    ]
+  },
+  {
+    "id": "IMP-AUTH-02",
+    "module": "auth",
+    "tier": "big-bet",
+    "title": "2FA / MFA",
+    "value": "Materially raises account security",
+    "status": "planned",
+    "acceptance": [
+      "TOTP enrol/verify; recovery codes; enforced for admins"
+    ]
+  },
+  {
+    "id": "IMP-AUTH-03",
+    "module": "auth",
+    "tier": "medium",
+    "title": "Session management + revoke-on-password-change",
+    "value": "Control after compromise",
+    "status": "planned",
+    "related": [
+      "AUTH-01"
+    ],
+    "acceptance": [
+      "Active-sessions list + sign-out-everywhere",
+      "Password change revokes other sessions (needs tokenVersion migration)"
+    ]
+  },
+  {
+    "id": "IMP-AUTH-04",
+    "module": "auth",
+    "tier": "medium",
+    "title": "Notification preferences",
+    "value": "Reduce noise; respect prefs",
+    "status": "todo",
+    "acceptance": [
+      "Per-user per-type/channel opt-out honored by notify()"
+    ]
+  },
+  {
+    "id": "IMP-AUTH-05",
+    "module": "auth",
+    "tier": "quick-win",
+    "title": "Live password-policy checklist on the change form",
+    "value": "Client/server agree",
+    "status": "implemented",
+    "acceptance": [
+      "Settings change form shows the shared passwordRules checklist"
+    ],
+    "related": []
+  },
+  {
+    "id": "IMP-AUTH-06",
+    "module": "auth",
+    "tier": "quick-win",
+    "title": "Edge token verification + consistent page-auth guard",
+    "value": "Clean redirects everywhere",
+    "status": "implemented",
+    "related": [
+      "AUTH-02",
+      "SEC-03"
+    ],
+    "acceptance": [
+      "Shared server-side page guard; precise proxy static match"
+    ]
+  },
+  {
+    "id": "IMP-RT-01",
+    "module": "meetings",
+    "tier": "medium",
+    "title": "Attendance reporting & summaries",
+    "value": "Actionable attendance data",
+    "status": "todo",
+    "acceptance": [
+      "Per-meeting and per-person attendance % view from the logs"
+    ]
+  },
+  {
+    "id": "IMP-RT-02",
+    "module": "chat",
+    "tier": "medium",
+    "title": "Message edit history / delete-for-everyone clarity + threads polish",
+    "value": "Slack-grade affordances",
+    "status": "todo",
+    "acceptance": [
+      "Edit history view; clear delete-for-everyone; thread polish"
+    ]
+  },
+  {
+    "id": "IMP-RT-03",
+    "module": "chat",
+    "tier": "medium",
+    "title": "Realtime membership revocation + short token TTL",
+    "value": "Immediate cut-off on removal",
+    "status": "implemented",
+    "related": [
+      "RT-02"
+    ],
+    "acceptance": [
+      "Membership-changed event + re-auth; short TTL"
+    ]
+  },
+  {
+    "id": "IMP-RT-04",
+    "module": "chat",
+    "tier": "quick-win",
+    "title": "Mention-on-edit + stable ordering + scoped read receipts",
+    "value": "Correct chat behavior",
+    "status": "implemented",
+    "related": [
+      "RT-04",
+      "RT-08",
+      "RT-09"
+    ],
+    "acceptance": [
+      "Edit notifies new mentions; id tiebreak; receipts scoped to self"
+    ]
+  },
+  {
+    "id": "IMP-RT-05",
+    "module": "upload",
+    "tier": "medium",
+    "title": "Authenticated/signed attachment delivery (per-channel)",
+    "value": "Private files truly private",
+    "status": "partial",
+    "related": [
+      "RT-05"
+    ],
+    "acceptance": [
+      "Session-gated delivery (done) + per-channel membership check / signed URLs"
+    ]
+  },
+  {
+    "id": "IMP-RT-06",
+    "module": "meetings",
+    "tier": "quick-win",
+    "title": "Robust call exit handling",
+    "value": "Accurate attendance/duration",
+    "status": "implemented",
+    "related": [
+      "RT-03",
+      "RT-06"
+    ],
+    "acceptance": [
+      "logLeave on nav/unload; atomic attendance insert"
+    ]
+  },
+  {
+    "id": "IMP-REST-01",
+    "module": "platform",
+    "tier": "medium",
+    "title": "Rate limiting + per-token usage metrics",
+    "value": "Abuse protection + operator visibility",
+    "status": "partial",
+    "related": [
+      "REST-04"
+    ],
+    "acceptance": [
+      "Rate limiting (done) + per-token quotas + usage view in token UI"
+    ]
+  },
+  {
+    "id": "IMP-REST-02",
+    "module": "platform",
+    "tier": "quick-win",
+    "title": "Pagination cursors + consistent list envelopes",
+    "value": "Predictable API",
+    "status": "partial",
+    "related": [
+      "REST-06"
+    ],
+    "acceptance": [
+      "Standard limit/cursor + response envelope across list endpoints"
+    ]
+  },
+  {
+    "id": "IMP-REST-03",
+    "module": "platform",
+    "tier": "big-bet",
+    "title": "Webhooks / events",
+    "value": "Real integrations for an agent-operable API",
+    "status": "planned",
+    "acceptance": [
+      "Outbound events (invoice.paid, task.created) with subscriptions + signing"
+    ]
+  },
+  {
+    "id": "IMP-REST-04",
+    "module": "platform",
+    "tier": "quick-win",
+    "title": "Scope hygiene + audit completeness",
+    "value": "Tight, audited API",
+    "status": "implemented",
+    "related": [
+      "REST-01",
+      "REST-02"
+    ],
+    "acceptance": [
+      "Finance not under clients:read; /spec audited"
+    ]
+  },
+  {
+    "id": "IMP-REST-05",
+    "module": "platform",
+    "tier": "quick-win",
+    "title": "Consistent 400/404 on bad input",
+    "value": "Actionable errors, not 500s",
+    "status": "implemented",
+    "related": [
+      "REST-05",
+      "REST-07"
+    ],
+    "acceptance": [
+      "Clean JSON-parse + FK validation across writes"
+    ]
+  },
+  {
+    "id": "IMP-AI-01",
+    "module": "ai",
+    "tier": "medium",
+    "title": "Authorization & isolation tests in the eval",
+    "value": "Protect the security model as tools grow",
+    "status": "implemented",
+    "related": [
+      "AI-02"
+    ],
+    "acceptance": [
+      "Cross-user isolation cases; documented construction-level guard"
+    ]
+  },
+  {
+    "id": "IMP-AI-02",
+    "module": "ai",
+    "tier": "medium",
+    "title": "Streaming citations / why + action audit surfacing",
+    "value": "Trust + traceability",
+    "status": "todo",
+    "acceptance": [
+      "Show which records an answer used; link assistant writes into audit/activity views"
+    ]
+  },
+  {
+    "id": "IMP-AI-03",
+    "module": "ai",
+    "tier": "quick-win",
+    "title": "Groq-schema discipline lint",
+    "value": "Prevent whole-request 400s",
+    "status": "partial",
+    "related": [
+      "AI-01"
+    ],
+    "acceptance": [
+      "resetMemberPassword fixed (done) + a guard/test that no tool schema emits format/pattern/allOf"
+    ]
+  },
+  {
+    "id": "IMP-AI-04",
+    "module": "ai",
+    "tier": "quick-win",
+    "title": "Parity fixes with the app",
+    "value": "Assistant and UI agree",
+    "status": "implemented",
+    "related": [
+      "AI-03"
+    ],
+    "acceptance": [
+      "pendingLeaves/getTeamMember scoped consistently"
+    ]
+  },
+  {
+    "id": "IMP-PLAT-01",
+    "module": "platform",
+    "tier": "quick-win",
+    "title": "Tighten CSP & image origins",
+    "value": "Smaller attack surface",
+    "status": "implemented",
+    "related": [
+      "SEC-01",
+      "SEC-02"
+    ],
+    "acceptance": [
+      "connect-src/img-src tightened; toward nonce-based scripts"
+    ]
+  },
+  {
+    "id": "IMP-PLAT-02",
+    "module": "platform",
+    "tier": "medium",
+    "title": "Production file storage (Vercel Blob)",
+    "value": "Scalable, access-controlled storage",
+    "status": "todo",
+    "acceptance": [
+      "Uploads go to Vercel Blob with access control; replaces local FS"
+    ]
+  },
+  {
+    "id": "IMP-PLAT-03",
+    "module": "platform",
+    "tier": "medium",
+    "title": "Observability (error tracking + request metrics)",
+    "value": "See production 500s/abuse",
+    "status": "todo",
+    "acceptance": [
+      "Error tracking + request metrics wired; the flagged 500 paths are visible"
+    ]
+  },
+  {
+    "id": "IMP-PLAT-04",
+    "module": "platform",
+    "tier": "medium",
+    "title": "Audit log export + retention policy",
+    "value": "Compliance",
+    "status": "todo",
+    "acceptance": [
+      "CSV/JSON export of audit logs; documented immutability/retention"
+    ]
+  }
+]

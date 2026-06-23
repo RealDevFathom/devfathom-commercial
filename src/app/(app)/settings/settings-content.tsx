@@ -38,6 +38,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 
 function formatDay(d: Date | string) {
   return new Date(d).toLocaleDateString(undefined, {
@@ -388,8 +389,10 @@ function PasswordSection() {
       setError('Passwords do not match');
       return;
     }
-    if (newPw.length < 8) {
-      setError('Password must be at least 8 characters');
+    // IMP-AUTH-05: enforce the SHARED policy client-side (matches the server +
+    // the invite flow), not just a length check, so the two can't drift.
+    if (!passwordMeetsPolicy(newPw)) {
+      setError('Password does not meet all the requirements below.');
       return;
     }
     changePassword.mutate({ currentPassword: current, newPassword: newPw });
@@ -449,6 +452,26 @@ function PasswordSection() {
             />
           </div>
         </div>
+        {/* IMP-AUTH-05: live password-policy checklist (shared passwordRules). */}
+        {newPw.length > 0 && (
+          <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
+            {passwordRules.map((rule) => {
+              const ok = rule.test(newPw);
+              return (
+                <li
+                  key={rule.id}
+                  className={cn(
+                    'flex items-center gap-1.5 text-[11px]',
+                    ok ? 'text-emerald-500' : 'text-muted-foreground'
+                  )}
+                >
+                  <Check className={cn('h-3 w-3', ok ? 'opacity-100' : 'opacity-30')} />
+                  {rule.label}
+                </li>
+              );
+            })}
+          </ul>
+        )}
         <div className="flex justify-end">
           <button
             onClick={handleSubmit}

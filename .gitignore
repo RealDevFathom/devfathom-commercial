@@ -47,3 +47,6 @@ next-env.d.ts
 
 # RT-05: authenticated local upload storage (dev)
 private-uploads/
+
+# Enhancement filing temp body files
+scripts/.enh-*.md

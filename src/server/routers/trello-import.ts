@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc';
 import { assertProjectAccess } from '../authz';
@@ -52,17 +53,29 @@ export const trelloImportRouter = router({
 
       const trello = parsed.data;
 
-      // Check for duplicate import
-      if (trello.id) {
-        const existing = await ctx.db.board.findUnique({
-          where: { trelloBoardId: trello.id },
+      // IMP-TRELLO-05: dedup even when the export has no `trello.id`. Without an
+      // id we derive a stable synthetic key from the export's shape (name + list
+      // names + card count), so re-importing the SAME export is still caught as a
+      // duplicate rather than silently creating a second copy.
+      const boardKey =
+        trello.id ||
+        `local:${createHash('sha256')
+          .update(
+            JSON.stringify({
+              name: trello.name,
+              lists: trello.lists.map((l) => l.name),
+              cards: trello.cards.length,
+            })
+          )
+          .digest('hex')
+          .slice(0, 40)}`;
+
+      const existing = await ctx.db.board.findUnique({ where: { trelloBoardId: boardKey } });
+      if (existing) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `This board has already been imported as "${existing.name}". Delete the existing board first to re-import.`,
         });
-        if (existing) {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: `This board has already been imported as "${existing.name}". Delete the existing board first to re-import.`,
-          });
-        }
       }
 
       // Filter lists
@@ -87,7 +100,7 @@ export const trelloImportRouter = router({
             name: trello.name,
             description: trello.desc || null,
             projectId: input.projectId,
-            trelloBoardId: trello.id || null,
+            trelloBoardId: boardKey,
           },
         });
 

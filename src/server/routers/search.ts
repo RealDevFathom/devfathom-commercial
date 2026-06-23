@@ -106,7 +106,9 @@ export const searchRouter = router({
         ctx.db.user.findMany({
           where: {
             OR: [{ name: insensitive }, { email: insensitive }, { title: insensitive }],
-            status: 'ACTIVE',
+            // IMP-HR-07: include ON_LEAVE (still-active) members; only laid-off /
+            // deactivated (INACTIVE) people are excluded from search.
+            status: { not: 'INACTIVE' },
           },
           select: { id: true, name: true, title: true, avatar: true },
           take: 6,

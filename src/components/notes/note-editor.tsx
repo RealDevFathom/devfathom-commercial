@@ -65,7 +65,13 @@ export function NoteEditor({
         heading: { levels: [1, 2, 3] },
         codeBlock: { HTMLAttributes: { class: 'note-codeblock' } },
       }),
-      Link.configure({ openOnClick: false, autolink: true }),
+      // IMP-NOTE-05: with autolink on, restrict the recognised link protocols to
+      // http/https/mailto (cheap defense-in-depth against javascript:/data: URLs).
+      Link.configure({
+        openOnClick: false,
+        autolink: true,
+        protocols: ['http', 'https', 'mailto'],
+      }),
       Table.configure({ resizable: false }),
       TableRow,
       TableHeader,
