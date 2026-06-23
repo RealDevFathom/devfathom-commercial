@@ -61,6 +61,15 @@ function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// Allowed invoice status transitions (FIN-06) — mirrors the tRPC mutation.
+const INVOICE_TRANSITIONS: Record<string, string[]> = {
+  DRAFT: ['SENT', 'CANCELLED'],
+  SENT: ['PAID', 'OVERDUE', 'CANCELLED', 'DRAFT'],
+  OVERDUE: ['PAID', 'CANCELLED', 'SENT'],
+  PAID: ['CANCELLED'],
+  CANCELLED: ['DRAFT'],
+};
+
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
   currency === 'PKR' ? `Rs ${amount.toLocaleString()}` : `$${amount.toLocaleString()}`;
@@ -592,9 +601,28 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       const priorStatus = matches[0].status;
 
+      // FIN-06: no-op → don't re-stamp or re-fire side-effects.
+      if (priorStatus === status) {
+        return {
+          invoiceNumber: matches[0].invoiceNumber,
+          status,
+          note: `Invoice ${matches[0].invoiceNumber} is already ${status}; nothing changed.`,
+        };
+      }
+      // FIN-06: enforce the status state-machine.
+      if (!INVOICE_TRANSITIONS[priorStatus]?.includes(status)) {
+        return { error: `Cannot change invoice ${matches[0].invoiceNumber} from ${priorStatus} to ${status}.` };
+      }
+
       const data: Prisma.InvoiceUpdateInput = { status };
       if (status === 'PAID') data.paidAt = now();
       if (status === 'SENT') data.sentAt = now();
+      // Clear stamps when the invoice leaves the corresponding state.
+      if (priorStatus === 'PAID' && status !== 'PAID') data.paidAt = null;
+      if (status === 'DRAFT') {
+        data.sentAt = null;
+        data.paidAt = null;
+      }
 
       const invoice = await db.invoice.update({
         where: { id: matches[0].id },

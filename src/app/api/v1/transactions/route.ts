@@ -3,13 +3,17 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 
+// Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
+const MAX_MONEY = 9_999_999_999.99;
+
 export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   const url = new URL(request.url);
   const type = url.searchParams.get('type'); // INCOME or EXPENSE
   const startDate = url.searchParams.get('startDate');
   const endDate = url.searchParams.get('endDate');
   const category = url.searchParams.get('category');
-  const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+  // REST-06: NaN-safe — a non-numeric ?limit= must not reach Prisma as take:NaN.
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1), 200);
 
   const where: Record<string, unknown> = {};
   if (type) where.type = type;
@@ -23,7 +27,7 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
 
   const transactions = await db.transaction.findMany({
     where,
-    take: Math.min(limit, 200),
+    take: limit,
     orderBy: { date: 'desc' },
     include: {
       project: { select: { id: true, name: true } },
@@ -36,7 +40,8 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
 
 const createTransactionSchema = z.object({
   type: z.enum(['INCOME', 'EXPENSE']),
-  amount: z.number().positive(),
+  // FIN-07: bound money so an overflow value is a clean 400, not a raw DB 500.
+  amount: z.number().positive().max(MAX_MONEY),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   description: z.string().min(1),
   category: z

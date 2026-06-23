@@ -54,12 +54,14 @@ export const dashboardRouter = router({
         ctx.db.transaction.groupBy({
           by: ['currency'],
           _sum: { amount: true },
-          where: { type: 'INCOME', date: { gte: startOfMonth } },
+          // FIN-04: bound the upper end so a future-dated row can't inflate
+          // "this month".
+          where: { type: 'INCOME', date: { gte: startOfMonth, lte: now } },
         }),
         ctx.db.transaction.groupBy({
           by: ['currency'],
           _sum: { amount: true },
-          where: { type: 'EXPENSE', date: { gte: startOfMonth } },
+          where: { type: 'EXPENSE', date: { gte: startOfMonth, lte: now } },
         }),
         ctx.db.invoice.count({
           where: { status: { in: ['SENT', 'OVERDUE'] } },
@@ -194,12 +196,15 @@ export const dashboardRouter = router({
   getRevenueChart: adminProcedure.query(async ({ ctx }) => {
     const months = 6;
 
+    // FIN-03: anchor each month at day 1 — `new Date(); setMonth(m - i)` on the
+    // 29th–31st overflows into the wrong month. And extend endOfMonth to the
+    // final millisecond, otherwise `lte: endOfMonth` (at 00:00 on the last day)
+    // drops every transaction on the month's final day.
+    const now = new Date();
     const monthRanges = [];
     for (let i = months - 1; i >= 0; i--) {
-      const date = new Date();
-      date.setMonth(date.getMonth() - i);
-      const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
-      const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const endOfMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
       monthRanges.push({ startOfMonth, endOfMonth });
     }
 

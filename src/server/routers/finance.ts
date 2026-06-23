@@ -1,11 +1,22 @@
 import { z } from 'zod';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
+import { TRPCError } from '@trpc/server';
 import {
   fromCurrencyGroups,
   diffByCurrency,
+  sumByCurrency,
   currenciesPresent,
+  type CurrencyAmount,
 } from '@/lib/finance/currency';
+
+// Monthly-equivalent multiplier for a recurring expense's billing interval, so an
+// ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
+const RECURRING_MONTHLY_FACTOR: Record<string, number> = {
+  monthly: 1,
+  quarterly: 1 / 3,
+  yearly: 1 / 12,
+};
 
 // Money columns (transaction.amount, invoice totals, etc.) are Decimal(12,2), so the
 // largest value Postgres will accept is 9,999,999,999.99. Bound amounts here so an
@@ -256,9 +267,48 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const data: Record<string, unknown> = { status: input.status };
-      if (input.status === 'PAID') data.paidAt = new Date();
-      if (input.status === 'SENT') data.sentAt = new Date();
+      // FIN-06: enforce a status state-machine, never re-fire side-effects on a
+      // no-op, and clear paidAt/sentAt when the invoice leaves PAID/SENT.
+      const current = await ctx.db.invoice.findUnique({
+        where: { id: input.id },
+        select: { status: true },
+      });
+      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+
+      const prior = current.status;
+      const next = input.status;
+
+      // No-op: don't overwrite paidAt/sentAt or re-emit activity/notifications.
+      if (prior === next) {
+        return ctx.db.invoice.findUniqueOrThrow({
+          where: { id: input.id },
+          include: { client: { select: { name: true } } },
+        });
+      }
+
+      const ALLOWED: Record<string, string[]> = {
+        DRAFT: ['SENT', 'CANCELLED'],
+        SENT: ['PAID', 'OVERDUE', 'CANCELLED', 'DRAFT'],
+        OVERDUE: ['PAID', 'CANCELLED', 'SENT'],
+        PAID: ['CANCELLED'],
+        CANCELLED: ['DRAFT'],
+      };
+      if (!ALLOWED[prior]?.includes(next)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Cannot change an invoice from ${prior} to ${next}.`,
+        });
+      }
+
+      const data: Record<string, unknown> = { status: next };
+      if (next === 'PAID') data.paidAt = new Date();
+      if (next === 'SENT') data.sentAt = new Date();
+      // Clear stamps when the invoice leaves the corresponding state.
+      if (prior === 'PAID' && next !== 'PAID') data.paidAt = null;
+      if (next === 'DRAFT') {
+        data.sentAt = null;
+        data.paidAt = null;
+      }
 
       const invoice = await ctx.db.invoice.update({
         where: { id: input.id },
@@ -266,14 +316,14 @@ export const financeRouter = router({
         include: { client: { select: { name: true } } },
       });
 
-      if (input.status === 'SENT') {
+      if (next === 'SENT') {
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'invoice_sent',
           message: `sent invoice ${invoice.invoiceNumber} to ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
           entityType: 'Invoice',
           entityId: invoice.id,
         });
-      } else if (input.status === 'PAID') {
+      } else if (next === 'PAID') {
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'invoice_paid',
           message: `marked invoice ${invoice.invoiceNumber} as paid ($${Number(invoice.total).toLocaleString()})`,
@@ -357,11 +407,14 @@ export const financeRouter = router({
       yearlyExpenseG,
       paidInvoicesG,
       outstandingInvoicesG,
+      recurring,
     ] = await Promise.all([
-      txGroup({ type: 'INCOME', date: { gte: startOfMonth } }),
-      txGroup({ type: 'EXPENSE', date: { gte: startOfMonth } }),
-      txGroup({ type: 'INCOME', date: { gte: startOfYear } }),
-      txGroup({ type: 'EXPENSE', date: { gte: startOfYear } }),
+      // FIN-04: cap each "this period" window at `now` so future-dated rows can't
+      // inflate it (the bounded P&L would otherwise disagree with these KPIs).
+      txGroup({ type: 'INCOME', date: { gte: startOfMonth, lte: now } }),
+      txGroup({ type: 'EXPENSE', date: { gte: startOfMonth, lte: now } }),
+      txGroup({ type: 'INCOME', date: { gte: startOfYear, lte: now } }),
+      txGroup({ type: 'EXPENSE', date: { gte: startOfYear, lte: now } }),
       ctx.db.invoice.groupBy({
         by: ['currency'],
         _sum: { total: true },
@@ -374,12 +427,37 @@ export const financeRouter = router({
         _count: true,
         where: { status: { in: ['SENT', 'OVERDUE'] } },
       }),
+      ctx.db.recurringExpense.findMany({
+        where: { active: true },
+        select: { amount: true, currency: true, interval: true },
+      }),
     ]);
 
     const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
-    const monthlyExpense = fromCurrencyGroups(monthlyExpenseG, 'amount');
     const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
-    const yearlyExpense = fromCurrencyGroups(yearlyExpenseG, 'amount');
+
+    // FIN-05: recurring expenses are never posted as transactions, so burn and
+    // profit silently omitted them. Fold each active subscription's monthly-
+    // equivalent run-rate (currency-aware) into the monthly/yearly expense.
+    const recurringMonthlyMap = new Map<string, number>();
+    for (const e of recurring) {
+      const factor = RECURRING_MONTHLY_FACTOR[e.interval.toLowerCase()] ?? 1;
+      recurringMonthlyMap.set(
+        e.currency,
+        (recurringMonthlyMap.get(e.currency) ?? 0) + Number(e.amount) * factor
+      );
+    }
+    const recurringMonthly: CurrencyAmount[] = Array.from(recurringMonthlyMap, ([currency, amount]) => ({
+      currency,
+      amount: Math.round(amount * 100) / 100,
+    }));
+    const recurringYearly: CurrencyAmount[] = recurringMonthly.map((r) => ({
+      currency: r.currency,
+      amount: Math.round(r.amount * 12 * 100) / 100,
+    }));
+
+    const monthlyExpense = sumByCurrency(fromCurrencyGroups(monthlyExpenseG, 'amount'), recurringMonthly);
+    const yearlyExpense = sumByCurrency(fromCurrencyGroups(yearlyExpenseG, 'amount'), recurringYearly);
 
     return {
       monthlyIncome,
