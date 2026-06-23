@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
 
 export const GET = withApiAuth('projects:read', async (ctx, request) => {
@@ -36,7 +37,9 @@ const createProjectSchema = z.object({
 });
 
 export const POST = withApiAuth('projects:write', async (ctx, request) => {
-  const body = await request.json();
+  const __j = await readJson(request); // REST-05
+  if (!__j.ok) return __j.response;
+  const body = __j.data;
   const parsed = createProjectSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(

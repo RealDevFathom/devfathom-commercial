@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { readJson } from '@/lib/api-json';
 
 export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -27,7 +28,9 @@ const createSchema = z.object({
 });
 
 export const POST = withApiAuth('meetings:write', async (ctx, request) => {
-  const body = await request.json();
+  const __j = await readJson(request); // REST-05
+  if (!__j.ok) return __j.response;
+  const body = __j.data;
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
@@ -38,6 +41,12 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
 
   const { attendeeIds, startTime, endTime, ...rest } = parsed.data;
   const allAttendees = [...new Set([ctx.userId, ...attendeeIds])];
+
+  // REST-07: validate attendee ids exist before insert (bad id → raw FK 500).
+  const foundAttendees = await db.user.count({ where: { id: { in: allAttendees } } });
+  if (foundAttendees !== allAttendees.length) {
+    return NextResponse.json({ error: 'One or more attendeeIds do not exist.' }, { status: 400 });
+  }
 
   const meeting = await db.meeting.create({
     data: {

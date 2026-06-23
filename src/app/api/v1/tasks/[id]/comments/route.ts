@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { readJson } from '@/lib/api-json';
 import { canAccessProject, projectIdOfTask } from '@/lib/authz';
 
 export const GET = withApiAuth(
@@ -41,7 +42,9 @@ export const POST = withApiAuth(
   'tasks:write',
   async (authCtx, request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
-    const body = await request.json();
+    const __j = await readJson(request); // REST-05
+  if (!__j.ok) return __j.response;
+  const body = __j.data;
     const parsed = createCommentSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateApiRequest } from '@/lib/api-auth';
+import { recordRestAudit } from '@/server/audit';
 
 /**
  * GET /api/v1/spec
@@ -15,11 +16,31 @@ import { authenticateApiRequest } from '@/lib/api-auth';
 export async function GET(request: Request) {
   // Any valid token works — we don't enforce a scope here. The actual
   // endpoint calls the agent makes will still be scope-checked individually.
+  // REST-02: this route bypasses withApiAuth, so record the audit manually —
+  // reads of the full API map (and 401 attempts) must leave an audit trail.
+  const start = Date.now();
   const auth = await authenticateApiRequest(request);
-  if (auth instanceof NextResponse) return auth;
+  if (auth instanceof NextResponse) {
+    recordRestAudit({
+      request,
+      ctx: null,
+      scope: 'spec:read',
+      status: auth.status,
+      durationMs: Date.now() - start,
+    });
+    return auth;
+  }
 
   const baseUrl = new URL(request.url).origin;
   const md = buildSpec(baseUrl);
+
+  recordRestAudit({
+    request,
+    ctx: auth,
+    scope: 'spec:read',
+    status: 200,
+    durationMs: Date.now() - start,
+  });
 
   return new NextResponse(md, {
     status: 200,

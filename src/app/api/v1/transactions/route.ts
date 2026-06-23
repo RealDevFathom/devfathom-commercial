@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { readJson } from '@/lib/api-json';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 const MAX_MONEY = 9_999_999_999.99;
@@ -64,8 +65,9 @@ const createTransactionSchema = z.object({
 });
 
 export const POST = withApiAuth('finance:write', async (_ctx, request) => {
-  const body = await request.json();
-  const parsed = createTransactionSchema.safeParse(body);
+  const json = await readJson(request); // REST-05: malformed JSON → 400, not 500
+  if (!json.ok) return json.response;
+  const parsed = createTransactionSchema.safeParse(json.data);
   if (!parsed.success) {
     return NextResponse.json(
       { error: 'Invalid input', details: parsed.error.issues },
@@ -74,6 +76,15 @@ export const POST = withApiAuth('finance:write', async (_ctx, request) => {
   }
 
   const { date, projectId, clientId, category, ...rest } = parsed.data;
+
+  // REST-07: validate FKs exist before insert (else a bad id is a raw FK 500).
+  if (projectId && !(await db.project.findUnique({ where: { id: projectId }, select: { id: true } }))) {
+    return NextResponse.json({ error: 'projectId does not exist.' }, { status: 400 });
+  }
+  if (clientId && !(await db.client.findUnique({ where: { id: clientId }, select: { id: true } }))) {
+    return NextResponse.json({ error: 'clientId does not exist.' }, { status: 400 });
+  }
+
   const transaction = await db.transaction.create({
     data: {
       ...rest,

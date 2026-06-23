@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { withApiAuth, hasScope } from '@/lib/api-auth';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
+import { readJson } from '@/lib/api-json';
 
 export const GET = withApiAuth('clients:read', async (ctx, request) => {
   // Clients are a finance/admin domain — listing the directory en masse must
@@ -41,8 +42,9 @@ export const POST = withApiAuth('clients:write', async (ctx, request) => {
   if (!isAdmin(ctx.userRole)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  const body = await request.json();
-  const parsed = createClientSchema.safeParse(body);
+  const json = await readJson(request); // REST-05: malformed JSON → 400, not 500
+  if (!json.ok) return json.response;
+  const parsed = createClientSchema.safeParse(json.data);
   if (!parsed.success) {
     return NextResponse.json(
       { error: 'Invalid input', details: parsed.error.issues },

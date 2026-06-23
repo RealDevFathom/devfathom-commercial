@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
+import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
 
 export const GET = withApiAuth(
@@ -28,7 +29,9 @@ export const PATCH = withApiAuth(
   'finance:write',
   async (authCtx, request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
-    const body = await request.json();
+    const __j = await readJson(request); // REST-05
+  if (!__j.ok) return __j.response;
+  const body = __j.data;
     const parsed = updateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(

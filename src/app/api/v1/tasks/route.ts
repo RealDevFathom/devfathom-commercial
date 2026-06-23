@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { canAccessProject } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
+import { readJson } from '@/lib/api-json';
 
 // GET /api/v1/tasks?columnId=&assigneeId=&priority=
 export const GET = withApiAuth('tasks:read', async (ctx, request) => {
@@ -11,7 +12,8 @@ export const GET = withApiAuth('tasks:read', async (ctx, request) => {
   const columnId = url.searchParams.get('columnId');
   const assigneeId = url.searchParams.get('assigneeId');
   const priority = url.searchParams.get('priority');
-  const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+  // REST-06: NaN-safe — `?limit=abc` must not reach Prisma as take:NaN (→ 500).
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1), 100);
 
   const where: Record<string, unknown> = {};
   if (columnId) where.columnId = columnId;
@@ -24,7 +26,7 @@ export const GET = withApiAuth('tasks:read', async (ctx, request) => {
 
   const tasks = await db.task.findMany({
     where,
-    take: Math.min(limit, 100),
+    take: limit,
     orderBy: { createdAt: 'desc' },
     include: {
       column: {
@@ -50,8 +52,10 @@ const createTaskSchema = z.object({
 });
 
 export const POST = withApiAuth('tasks:write', async (ctx, request) => {
-  const body = await request.json();
-  const parsed = createTaskSchema.safeParse(body);
+  // REST-05: malformed JSON → clean 400, not a generic 500.
+  const json = await readJson(request);
+  if (!json.ok) return json.response;
+  const parsed = createTaskSchema.safeParse(json.data);
   if (!parsed.success) {
     return NextResponse.json(
       { error: 'Invalid input', details: parsed.error.issues },
@@ -74,6 +78,21 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
   // Object-level authz: the acting user must be able to access the column's project.
   if (!(await canAccessProject(db, ctx.userId, ctx.userRole, column.board.project.id))) {
     return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
+  }
+
+  // REST-07: validate referenced FKs exist BEFORE the create, so a bad assignee/
+  // label id is a clean 400 instead of a raw Prisma FK violation (500).
+  if (input.assigneeIds.length > 0) {
+    const found = await db.user.count({ where: { id: { in: input.assigneeIds } } });
+    if (found !== new Set(input.assigneeIds).size) {
+      return NextResponse.json({ error: 'One or more assigneeIds do not exist.' }, { status: 400 });
+    }
+  }
+  if (input.labelIds.length > 0) {
+    const found = await db.label.count({ where: { id: { in: input.labelIds } } });
+    if (found !== new Set(input.labelIds).size) {
+      return NextResponse.json({ error: 'One or more labelIds do not exist.' }, { status: 400 });
+    }
   }
 
   const maxOrder = await db.task.aggregate({

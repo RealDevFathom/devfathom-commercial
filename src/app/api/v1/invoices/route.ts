@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
+import { readJson } from '@/lib/api-json';
 
 export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   const url = new URL(request.url);
@@ -56,8 +57,9 @@ const createInvoiceSchema = z.object({
 });
 
 export const POST = withApiAuth('finance:write', async (ctx, request) => {
-  const body = await request.json();
-  const parsed = createInvoiceSchema.safeParse(body);
+  const json = await readJson(request); // REST-05: malformed JSON → 400, not 500
+  if (!json.ok) return json.response;
+  const parsed = createInvoiceSchema.safeParse(json.data);
   if (!parsed.success) {
     return NextResponse.json(
       { error: 'Invalid input', details: parsed.error.issues },
