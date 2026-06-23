@@ -17,12 +17,14 @@ clean build/typecheck + pure-logic dynamic repro tests (no writes to the shared 
 | Phase | Severity | Total | Fixed | Blocked | Remaining |
 |---|---|---|---|---|---|
 | 1 | HIGH | 3 | 3 | 0 | 0 |
-| 2 | MEDIUM | 22 | 21 | 1 (AUTH-01) | 0 |
+| 2 | MEDIUM | 22 | 22 | 0 | 0 |
 | 3 | LOW | 28 | 28 | 0 | 0 |
-| **All** | | **53** | **52** | **1** | **0** |
+| **All** | | **53** | **53** | **0** | **0** |
 
-**52/53 fixed, verified, and reconciled (Done cards = closed GitHub issues = merged commits).
-AUTH-01 is Blocked on a DB migration (escalated; issue #27 open with a documented plan).**
+**53/53 fixed, verified, and reconciled (Done cards = closed GitHub issues = merged commits).
+AUTH-01 unblocked (2026-06-23, commit `365ea6c`): session revocation via `User.tokenVersion`,
+validated against a local disposable Postgres (`db push` clean) — no shared-DB mutation. Ships
+with a `prisma db push` at deploy.**
 Build green; `src/` typecheck clean; ABAC/IDOR/auth keystone re-verified intact after every
 security change (the `src/lib/abac` policy engine and `src/lib/authz.ts` object-guards were never
 modified — all fixes ADD restrictions).
@@ -100,13 +102,13 @@ Commits: `18adfe4` (FIN-03..07, REST-01), `559a2ff` (DASH-01), `6cfce8f` (NOTE-0
 | PROJ-05 | Fixed | #24 | 1 | `createTask`/`updateTaskAssignees` validate assignees are project members (skipDuplicates). |
 | CLI-01 | Fixed | #25 | 1 | `clients.delete` pre-counts invoices → friendly BAD_REQUEST; UI renders the error. |
 | AI-01 | Fixed | #26 | 1 | `resetMemberPassword` schema `z.string().min(8)`; full policy enforced in `execute`. |
-| AUTH-01 | **Blocked** | #27 | 0 | Needs a `passwordChangedAt`/`tokenVersion` column + migration — see plan below. |
+| AUTH-01 | Fixed | #27 | 1 | `User.tokenVersion` revokes other sessions on password change / admin reset / lay-off; `signOutEverywhere`; jwt() revalidation + page guard enforce it. Validated on local Postgres. |
 
-### AUTH-01 — Blocked (needs DB migration) — implementation plan
-The fix (revoke other sessions on password change) requires schema + migration that this engagement
-forbids against the shared remote Neon DB, and no local Postgres was available to verify a migration.
-Wiring a column-read into the live JWT path would break login on the un-migrated shared DB. **Ticket left
-in In Progress; GitHub issue open with a blocked comment; escalated to CTO.** Ready-to-apply plan:
+### AUTH-01 — RESOLVED 2026-06-23 (commit `365ea6c`)
+Implemented exactly per the plan below, using `tokenVersion` (and `passwordChangedAt` for audit). A
+**local disposable Postgres** (`127.0.0.1:5433`, never shared Neon) made it possible to validate the
+`db push` cleanly — the only thing that had blocked it. Deploy applies it via `prisma db push`. Original
+ready-to-apply plan (now done):
 1. `User` model: add `passwordChangedAt DateTime @default(now())` (and/or `tokenVersion Int @default(0)`).
 2. Migration: `prisma migrate dev -n auth01_session_revocation` (backfills existing rows via the default).
 3. Sign-in (`auth.ts` `authorize`): stamp `passwordChangedAt`/`tokenVersion` into the JWT.
