@@ -30,6 +30,12 @@ const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX
 // caller-supplied subtotal/total are never trusted (FIN-01).
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
+// invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
+// so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
+// never leaves a fully-paid invoice a hair short of PAID.
+const PAYMENT_EPSILON = 0.005;
+
 // A recurring expense's stored nextDueDate doesn't advance on its own, so once a
 // due date passes it goes stale (e.g. seeded "May 1" still showing in June). Roll
 // it forward by its interval until it lands today or later so the UI always shows
@@ -168,27 +174,41 @@ export const financeRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      return ctx.db.invoice.findMany({
+      const invoices = await ctx.db.invoice.findMany({
         include: {
           client: { select: { id: true, name: true, logo: true } },
           project: { select: { id: true, name: true } },
+          // IMP-FIN-04: ship the payments alongside each invoice so the list can
+          // show paid/balance without an N+1 of per-row fetches.
+          payments: { orderBy: { paidAt: 'desc' } },
         },
         orderBy: { createdAt: 'desc' },
         take: input?.limit ? Math.min(input.limit, 1000) : undefined,
         ...(input?.cursor && { cursor: { id: input.cursor }, skip: 1 }),
+      });
+
+      // Derive paid/balance server-side (round2) so the client never re-sums money.
+      return invoices.map((inv) => {
+        const amountPaid = round2(inv.payments.reduce((s, p) => s + Number(p.amount), 0));
+        return { ...inv, amountPaid, balance: round2(Number(inv.total) - amountPaid) };
       });
     }),
 
   getInvoiceById: adminProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      return ctx.db.invoice.findUnique({
+      const invoice = await ctx.db.invoice.findUnique({
         where: { id: input.id },
         include: {
           client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
           project: { select: { id: true, name: true } },
+          // IMP-FIN-04: payments + computed paid/balance for the invoice detail view.
+          payments: { orderBy: { paidAt: 'desc' } },
         },
       });
+      if (!invoice) return null;
+      const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
+      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
     }),
 
   createInvoice: adminProcedure
@@ -338,6 +358,147 @@ export const financeRouter = router({
 
       return invoice;
     }),
+
+  // IMP-FIN-04: record a (partial) payment against an invoice. The payment's
+  // currency is inherited from the invoice (never caller-supplied). We re-sum every
+  // payment for the invoice inside the transaction and flip it to PAID the moment
+  // the balance is covered; a payment that doesn't cover the total leaves the status
+  // untouched (still SENT/OVERDUE). Overpayment beyond a half-cent is rejected.
+  addPayment: adminProcedure
+    .input(
+      z.object({
+        invoiceId: z.string(),
+        amount: positiveMoney(),
+        method: z.string().max(100).optional(),
+        note: z.string().max(1000).optional(),
+        paidAt: z.date().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const invoice = await tx.invoice.findUnique({
+          where: { id: input.invoiceId },
+          select: { id: true, status: true, total: true, currency: true },
+        });
+        if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+
+        // A DRAFT isn't owed yet, and a PAID/CANCELLED invoice shouldn't accrue more
+        // payments — reject each as a clean validation error rather than a DB write.
+        if (invoice.status === 'DRAFT') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Send the invoice before recording a payment.',
+          });
+        }
+        if (invoice.status === 'PAID') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This invoice is already paid in full.',
+          });
+        }
+        if (invoice.status === 'CANCELLED') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot record a payment against a cancelled invoice.',
+          });
+        }
+
+        const total = round2(Number(invoice.total));
+        const prior = await tx.payment.aggregate({
+          where: { invoiceId: invoice.id },
+          _sum: { amount: true },
+        });
+        const alreadyPaid = round2(Number(prior._sum.amount ?? 0));
+        const newPaid = round2(alreadyPaid + input.amount);
+
+        // Reject overpayment beyond a half-cent rounding tolerance.
+        if (newPaid > total + PAYMENT_EPSILON) {
+          const balance = round2(total - alreadyPaid);
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Payment exceeds the outstanding balance of ${balance.toFixed(2)}.`,
+          });
+        }
+
+        const payment = await tx.payment.create({
+          data: {
+            invoiceId: invoice.id,
+            amount: input.amount,
+            currency: invoice.currency,
+            method: input.method?.trim() || null,
+            note: input.note?.trim() || null,
+            ...(input.paidAt && { paidAt: input.paidAt }),
+          },
+        });
+
+        // Balance covered → mark PAID (the DRAFT/PAID guards above mean we only ever
+        // flip from SENT/OVERDUE here). Otherwise leave the status as-is.
+        const fullyPaid = newPaid >= total - PAYMENT_EPSILON;
+        if (fullyPaid) {
+          await tx.invoice.update({
+            where: { id: invoice.id },
+            data: { status: 'PAID', paidAt: new Date() },
+          });
+        }
+
+        return {
+          payment,
+          amountPaid: newPaid,
+          balance: round2(total - newPaid),
+          status: fullyPaid ? ('PAID' as const) : invoice.status,
+        };
+      });
+    }),
+
+  // IMP-FIN-04: remove a payment and recompute. If deleting it drops a PAID invoice
+  // back below its total, revert the invoice to SENT and clear paidAt so it re-enters
+  // the outstanding pipeline.
+  deletePayment: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const payment = await tx.payment.findUnique({
+          where: { id: input.id },
+          select: { id: true, invoiceId: true },
+        });
+        if (!payment) throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
+
+        await tx.payment.delete({ where: { id: payment.id } });
+
+        const invoice = await tx.invoice.findUnique({
+          where: { id: payment.invoiceId },
+          select: { id: true, status: true, total: true },
+        });
+        if (!invoice) return { invoiceId: payment.invoiceId, amountPaid: 0, balance: 0 };
+
+        const total = round2(Number(invoice.total));
+        const agg = await tx.payment.aggregate({
+          where: { invoiceId: invoice.id },
+          _sum: { amount: true },
+        });
+        const amountPaid = round2(Number(agg._sum.amount ?? 0));
+
+        if (invoice.status === 'PAID' && amountPaid < total - PAYMENT_EPSILON) {
+          await tx.invoice.update({
+            where: { id: invoice.id },
+            data: { status: 'SENT', paidAt: null },
+          });
+        }
+
+        return { invoiceId: invoice.id, amountPaid, balance: round2(total - amountPaid) };
+      });
+    }),
+
+  // IMP-FIN-04: flip every SENT invoice whose due date has passed to OVERDUE. This is
+  // the action a nightly cron would call; exposed here for an operator button. Returns
+  // how many invoices were flagged.
+  markOverdueInvoices: adminProcedure.mutation(async ({ ctx }) => {
+    const result = await ctx.db.invoice.updateMany({
+      where: { status: 'SENT', dueDate: { lt: new Date() } },
+      data: { status: 'OVERDUE' },
+    });
+    return { count: result.count };
+  }),
 
   getRecurringExpenses: adminProcedure.query(async ({ ctx }) => {
     const expenses = await ctx.db.recurringExpense.findMany({

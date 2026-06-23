@@ -16,6 +16,9 @@ import {
   Receipt,
   Pencil,
   RefreshCw,
+  AlertTriangle,
+  ChevronDown,
+  Wallet,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -23,7 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
-import { moneyListLabel, baseEquivalentLabel } from '@/lib/finance/currency';
+import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
 
 // P&L report pulls in recharts; it is tab-gated, so load it lazily (client-only)
@@ -135,8 +138,10 @@ export function FinanceContent() {
         </TabsContent>
 
         {/* INVOICES */}
-        <TabsContent value="invoices">
+        <TabsContent value="invoices" className="space-y-6">
           <InvoicesTab />
+          {/* IMP-FIN-04: partial payments + overdue automation. */}
+          <InvoicePaymentsPanel />
         </TabsContent>
 
         {/* P&L */}
@@ -958,6 +963,404 @@ function RecurringTab() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/* ============================================
+   IMP-FIN-04: Invoice Payments & Overdue automation
+   ============================================ */
+
+// Mirror the server's half-cent payoff tolerance so the UI's "paid in full" and
+// overpayment hints agree with what the router actually accepts.
+const PAYMENT_EPSILON = 0.005;
+
+// getInvoices now ships payments + computed amountPaid/balance. Money fields stay
+// `unknown` (Decimal over the wire) and are coerced with Number(), matching the
+// transaction views above.
+type PaymentItem = {
+  id: string;
+  amount: unknown;
+  currency: string;
+  method: string | null;
+  note: string | null;
+  paidAt: Date | string;
+};
+
+type PayableInvoice = {
+  id: string;
+  invoiceNumber: string;
+  status: string;
+  currency: string;
+  total: unknown;
+  dueDate: Date | string;
+  amountPaid: number;
+  balance: number;
+  client: { name: string };
+  payments: PaymentItem[];
+};
+
+function InvoicePaymentsPanel() {
+  const utils = trpc.useUtils();
+  const { data: invoices, isLoading } = trpc.finance.getInvoices.useQuery();
+
+  const invalidate = useCallback(() => {
+    utils.finance.getInvoices.invalidate();
+    utils.finance.getFinancialSummary.invalidate();
+  }, [utils]);
+
+  const [overdueMsg, setOverdueMsg] = useState<string | null>(null);
+  const markOverdue = trpc.finance.markOverdueInvoices.useMutation({
+    onSuccess: (r) => {
+      invalidate();
+      setOverdueMsg(
+        r.count > 0
+          ? `Flagged ${r.count} invoice${r.count === 1 ? '' : 's'} as overdue.`
+          : 'No past-due invoices to flag.'
+      );
+    },
+  });
+
+  // Only invoices that can carry a balance — a DRAFT isn't owed yet and CANCELLED is void.
+  const payable = useMemo(
+    () =>
+      (invoices ?? []).filter(
+        (inv) => inv.status === 'SENT' || inv.status === 'OVERDUE' || inv.status === 'PAID'
+      ),
+    [invoices]
+  );
+
+  return (
+    <Card className="border-border/60">
+      <CardContent className="p-0">
+        <div className="flex items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+              <Wallet className="h-4 w-4 text-primary" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">Payments &amp; balances</h3>
+              <p className="text-xs text-muted-foreground">
+                Record payments against sent invoices and track what&apos;s outstanding.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => markOverdue.mutate()}
+            disabled={markOverdue.isPending}
+            className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-50"
+            title="Flag every sent invoice past its due date as overdue"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            {markOverdue.isPending ? 'Flagging…' : 'Flag overdue'}
+          </button>
+        </div>
+
+        {overdueMsg && (
+          <p className="border-b border-border/60 bg-amber-500/10 px-6 py-2.5 text-xs text-amber-600 dark:text-amber-400">
+            {overdueMsg}
+          </p>
+        )}
+
+        {isLoading ? (
+          <div className="space-y-3 p-6">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-14 w-full rounded-xl" />
+            ))}
+          </div>
+        ) : payable.length === 0 ? (
+          <div className="py-14 text-center">
+            <Wallet className="mx-auto h-10 w-10 text-muted-foreground/20" />
+            <p className="mt-3 text-sm text-muted-foreground">No payable invoices</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Send an invoice to start recording payments against it.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/60">
+            {payable.map((inv) => (
+              <InvoicePaymentRow key={inv.id} inv={inv} onInvalidate={invalidate} />
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const InvoicePaymentRow = memo(function InvoicePaymentRow({
+  inv,
+  onInvalidate,
+}: {
+  inv: PayableInvoice;
+  onInvalidate: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const total = Number(inv.total);
+  const isOverdue = inv.status === 'OVERDUE';
+  const isPaid = inv.status === 'PAID';
+  const fullyPaid = inv.balance <= PAYMENT_EPSILON;
+
+  return (
+    <div className={cn('bg-card transition-colors', expanded && 'bg-secondary/20')}>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-4 px-6 py-3.5 text-left transition-colors hover:bg-secondary/30"
+      >
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+            expanded && 'rotate-180'
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-sm font-semibold text-foreground">{inv.invoiceNumber}</p>
+          <p className="truncate text-xs text-muted-foreground">{inv.client.name}</p>
+        </div>
+        <span
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium',
+            isOverdue
+              ? 'bg-red-500/10 text-red-500'
+              : isPaid
+                ? 'bg-emerald-500/10 text-emerald-500'
+                : 'bg-blue-500/10 text-blue-500'
+          )}
+        >
+          {isOverdue && <AlertTriangle className="h-3 w-3" />}
+          {isOverdue ? 'Overdue' : isPaid ? 'Paid' : 'Sent'}
+        </span>
+        <div className="hidden shrink-0 text-right sm:block">
+          <p className="text-xs text-muted-foreground">
+            Paid {moneyLabel(inv.amountPaid, inv.currency)}
+          </p>
+          <p
+            className={cn(
+              'text-sm font-semibold tabular-nums',
+              fullyPaid ? 'text-emerald-500' : isOverdue ? 'text-red-500' : 'text-foreground'
+            )}
+          >
+            {fullyPaid ? 'Paid in full' : `${moneyLabel(inv.balance, inv.currency)} due`}
+          </p>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="space-y-4 border-t border-border/60 px-6 py-4">
+          <div className="grid grid-cols-3 gap-3">
+            <PaymentStat label="Invoice total" value={moneyLabel(total, inv.currency)} />
+            <PaymentStat
+              label="Paid"
+              value={moneyLabel(inv.amountPaid, inv.currency)}
+              tone="emerald"
+            />
+            <PaymentStat
+              label="Balance"
+              value={moneyLabel(inv.balance, inv.currency)}
+              tone={fullyPaid ? 'emerald' : isOverdue ? 'red' : 'default'}
+            />
+          </div>
+
+          {inv.payments.length > 0 ? (
+            <div className="space-y-1.5">
+              {inv.payments.map((p) => (
+                <PaymentLine key={p.id} p={p} onInvalidate={onInvalidate} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">No payments recorded yet.</p>
+          )}
+
+          {!isPaid && (
+            <AddPaymentForm
+              invoiceId={inv.id}
+              currency={inv.currency}
+              balance={inv.balance}
+              onInvalidate={onInvalidate}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function PaymentStat({
+  label,
+  value,
+  tone = 'default',
+}: {
+  label: string;
+  value: string;
+  tone?: 'default' | 'emerald' | 'red';
+}) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-background px-3 py-2">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          'mt-0.5 text-sm font-semibold tabular-nums',
+          tone === 'emerald'
+            ? 'text-emerald-500'
+            : tone === 'red'
+              ? 'text-red-500'
+              : 'text-foreground'
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function PaymentLine({ p, onInvalidate }: { p: PaymentItem; onInvalidate: () => void }) {
+  const deletePayment = trpc.finance.deletePayment.useMutation({ onSuccess: onInvalidate });
+  return (
+    <div className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3 py-2">
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
+        <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-500" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-foreground tabular-nums">
+          {moneyLabel(Number(p.amount), p.currency)}
+          {p.method ? (
+            <span className="ml-2 text-xs font-normal text-muted-foreground">{p.method}</span>
+          ) : null}
+        </p>
+        {p.note && <p className="truncate text-xs text-muted-foreground">{p.note}</p>}
+      </div>
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {format(new Date(p.paidAt), 'MMM d, yyyy')}
+      </span>
+      <button
+        onClick={() => deletePayment.mutate({ id: p.id })}
+        disabled={deletePayment.isPending}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/0 transition-all hover:!bg-red-500/10 hover:!text-red-500 group-hover:text-muted-foreground disabled:opacity-50"
+        title="Delete payment"
+      >
+        {deletePayment.isPending ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="h-3.5 w-3.5" />
+        )}
+      </button>
+    </div>
+  );
+}
+
+function AddPaymentForm({
+  invoiceId,
+  currency,
+  balance,
+  onInvalidate,
+}: {
+  invoiceId: string;
+  currency: string;
+  balance: number;
+  onInvalidate: () => void;
+}) {
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState('');
+  const [note, setNote] = useState('');
+  const [paidAt, setPaidAt] = useState(format(new Date(), 'yyyy-MM-dd'));
+
+  const addPayment = trpc.finance.addPayment.useMutation({
+    onSuccess: () => {
+      onInvalidate();
+      setAmount('');
+      setMethod('');
+      setNote('');
+    },
+  });
+
+  const amountNum = parseFloat(amount);
+  const amountValid = amount !== '' && amountNum > 0 && amountNum <= MAX_MONEY;
+  // Flag overpayment client-side using the same half-cent tolerance the server uses.
+  const overpay = amountValid && amountNum > balance + PAYMENT_EPSILON;
+
+  const submit = () => {
+    if (!amountValid || overpay) return;
+    addPayment.mutate({
+      invoiceId,
+      amount: amountNum,
+      method: method.trim() || undefined,
+      note: note.trim() || undefined,
+      paidAt: paidAt ? new Date(paidAt) : undefined,
+    });
+  };
+
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/[0.02] p-3.5">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
+        <Plus className="h-3.5 w-3.5 text-primary" />
+        Record a payment
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            Amount ({currency}) *
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max={MAX_MONEY}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="0.00"
+            className={cn(
+              'w-full rounded-lg border bg-background px-2.5 py-1.5 text-right text-sm text-foreground focus:outline-none focus:ring-2',
+              overpay
+                ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20'
+                : 'border-border focus:border-primary focus:ring-primary/20'
+            )}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Method</label>
+          <input
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            placeholder="Bank transfer"
+            className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Date</label>
+          <input
+            type="date"
+            value={paidAt}
+            onChange={(e) => setPaidAt(e.target.value)}
+            className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+        </div>
+        <div className="flex items-end">
+          <button
+            onClick={submit}
+            disabled={!amountValid || overpay || addPayment.isPending}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+          >
+            {addPayment.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Add
+          </button>
+        </div>
+      </div>
+      <div className="mt-2">
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Note (optional)"
+          className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+        />
+      </div>
+      {overpay && (
+        <p className="mt-1.5 text-xs text-red-500">
+          Amount exceeds the {moneyLabel(balance, currency)} balance.
+        </p>
+      )}
+      {addPayment.error && (
+        <p className="mt-1.5 text-xs text-red-500">{addPayment.error.message}</p>
+      )}
     </div>
   );
 }
