@@ -39,6 +39,9 @@ export const auditRouter = router({
         source: sourceEnum.optional(),
         outcome: outcomeEnum.optional(),
         action: z.string().optional(),
+        // IMP-AI-02: surface AI-assistant-originated writes as a first-class
+        // view. When true, restrict to rows whose action is `assistant.*`.
+        assistantOnly: z.boolean().optional(),
         targetType: z.string().optional(),
         targetId: z.string().optional(),
         startDate: z.date().optional(),
@@ -56,7 +59,14 @@ export const auditRouter = router({
       if (input.operation) where.operation = input.operation;
       if (input.source) where.source = input.source;
       if (input.outcome) where.outcome = input.outcome;
-      if (input.action) where.action = input.action;
+      // assistantOnly takes precedence over an exact action filter: it surfaces
+      // every AI-assistant-originated write (recorded by the assistant as
+      // `assistant.*`, source=SYSTEM, metadata.via='assistant').
+      if (input.assistantOnly) {
+        where.action = { startsWith: 'assistant.' };
+      } else if (input.action) {
+        where.action = input.action;
+      }
       if (input.targetType) where.targetType = input.targetType;
       if (input.targetId) where.targetId = input.targetId;
 

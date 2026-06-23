@@ -14,6 +14,7 @@ import {
   ScrollText,
   Search,
   ShieldAlert,
+  Sparkles,
   User as UserIcon,
   X,
 } from 'lucide-react';
@@ -70,6 +71,31 @@ function selectClass() {
   return 'rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none';
 }
 
+/**
+ * IMP-AI-02: an AI-assistant-originated write is recorded with an `assistant.`
+ * action prefix and `metadata.via === 'assistant'`. Either marker flags the row
+ * so AI-driven actions are visually distinct in the list and detail sheet.
+ */
+function isAssistantRow(row: AuditEntry): boolean {
+  if (typeof row.action === 'string' && row.action.startsWith('assistant.')) return true;
+  const meta = row.metadata;
+  return (
+    !!meta &&
+    typeof meta === 'object' &&
+    !Array.isArray(meta) &&
+    (meta as Record<string, unknown>).via === 'assistant'
+  );
+}
+
+function AssistantBadge() {
+  return (
+    <Pill className="bg-violet-500/10 text-violet-500">
+      <Sparkles className="mr-1 h-2.5 w-2.5" />
+      Assistant
+    </Pill>
+  );
+}
+
 const EMPTY_FILTERS = {
   search: '',
   category: '',
@@ -79,6 +105,7 @@ const EMPTY_FILTERS = {
   actorId: '',
   startDate: '',
   endDate: '',
+  assistantOnly: '',
 };
 
 export function AuditContent() {
@@ -98,6 +125,7 @@ export function AuditContent() {
       actorId: filters.actorId || undefined,
       startDate: filters.startDate ? new Date(filters.startDate) : undefined,
       endDate: filters.endDate ? new Date(`${filters.endDate}T23:59:59`) : undefined,
+      assistantOnly: filters.assistantOnly ? true : undefined,
       limit: 50,
     }),
     [
@@ -109,6 +137,7 @@ export function AuditContent() {
       filters.actorId,
       filters.startDate,
       filters.endDate,
+      filters.assistantOnly,
     ]
   );
 
@@ -318,6 +347,22 @@ export function AuditContent() {
                 aria-label="To date"
               />
             </div>
+
+            {/* IMP-AI-02: quick-filter to AI-assistant-originated writes only. */}
+            <button
+              type="button"
+              onClick={() => set('assistantOnly', filters.assistantOnly ? '' : '1')}
+              aria-pressed={!!filters.assistantOnly}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors',
+                filters.assistantOnly
+                  ? 'border-violet-500/40 bg-violet-500/10 text-violet-500'
+                  : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
+              )}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Assistant actions
+            </button>
           </div>
         </CardContent>
       </Card>
@@ -402,6 +447,7 @@ function AuditRow({ row, onClick }: { row: AuditEntry; onClick: () => void }) {
 
       {/* Badges */}
       <div className="hidden shrink-0 items-center gap-1.5 sm:flex">
+        {isAssistantRow(row) && <AssistantBadge />}
         <Pill className={operationStyles[row.operation] ?? operationStyles.OTHER}>
           {row.operation}
         </Pill>
@@ -452,8 +498,9 @@ function AuditDetailSheet({ entry, onClose }: { entry: AuditEntry | null; onClos
         {entry && (
           <>
             <SheetHeader className="border-b border-border/60">
-              <SheetTitle className="flex items-center gap-2 font-mono text-sm">
+              <SheetTitle className="flex flex-wrap items-center gap-2 font-mono text-sm">
                 {entry.action}
+                {isAssistantRow(entry) && <AssistantBadge />}
                 <Pill className={operationStyles[entry.operation] ?? operationStyles.OTHER}>
                   {entry.operation}
                 </Pill>
