@@ -5,7 +5,7 @@
     "tier": "big-bet",
     "title": "Time tracking (wire the modeled TimeEntry)",
     "value": "Billing, utilization, project profitability",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "TimeEntry has tRPC create/list/update/delete + UI on the task/project",
       "Entries roll up per task/project/user and feed finance billing",
@@ -183,7 +183,7 @@
     "tier": "medium",
     "title": "Contract expiry/renewal reminders",
     "value": "Prevent lapsed agreements",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Auto-flag/notify on upcoming endDate; auto-EXPIRED past end",
       "Uses notify() email infra; admin recipients"

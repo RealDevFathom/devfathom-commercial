@@ -5,10 +5,10 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 56 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 58 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
-- **To build** (Quick Win / Medium): 5 — card → To Do.
-- **Planned (needs-greenlight)** (Big Bets): 6 — card → To Do / Backlog, STOP for authorization.
+- **To build** (Quick Win / Medium): 4 — card → To Do.
+- **Planned (needs-greenlight)** (Big Bets): 5 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
 - **IMP-PROJ-01** — Time tracking (wire the modeled TimeEntry). Billing, utilization, project profitability. Phased plan + acceptance criteria filed; awaiting authorization.
@@ -21,7 +21,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 
 | IMP-ID | Tier | Module | Title | GitHub | Internal task id | Status |
 |---|---|---|---|---|---|---|
-| IMP-PROJ-01 | big-bet | projects | Time tracking (wire the modeled TimeEntry) | [#56](https://github.com/WhatTheStack1/DevFathom-Hub/issues/56) | `cmqqe812v0006sstwi2fzasqh` | Planned (greenlight) |
+| IMP-PROJ-01 | big-bet | projects | Time tracking (wire the modeled TimeEntry) | [#56](https://github.com/WhatTheStack1/DevFathom-Hub/issues/56) | `cmqqe812v0006sstwi2fzasqh` | Implemented |
 | IMP-PROJ-02 | medium | projects | Checklist management (create/rename/reorder/delete) | [#57](https://github.com/WhatTheStack1/DevFathom-Hub/issues/57) | `cmqqe81jl0007sstwbr4djsza` | Implemented |
 | IMP-PROJ-03 | medium | projects | Task attachments — render + add/delete | [#58](https://github.com/WhatTheStack1/DevFathom-Hub/issues/58) | `cmqqe820g0008sstwnz0ohg16` | Implemented |
 | IMP-PROJ-04 | quick-win | projects | Comment edit/delete | [#59](https://github.com/WhatTheStack1/DevFathom-Hub/issues/59) | `cmqqe82dv0009sstwroj70f4n` | Implemented |
@@ -35,7 +35,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-CLI-01 | medium | clients | Full contact CRUD UI (add/edit/delete/primary/phone) | [#67](https://github.com/WhatTheStack1/DevFathom-Hub/issues/67) | `cmqqe85p7000hsstwylfesd5m` | Implemented |
 | IMP-CLI-02 | medium | clients | Client activity timeline | [#68](https://github.com/WhatTheStack1/DevFathom-Hub/issues/68) | `cmqqe862a000isstw8kcl39fq` | Implemented |
 | IMP-CLI-03 | quick-win | clients | Client status workflow + logo upload | [#69](https://github.com/WhatTheStack1/DevFathom-Hub/issues/69) | `cmqqe86fb000jsstwd66l7xyc` | Implemented |
-| IMP-CLI-04 | medium | clients | Contract expiry/renewal reminders | [#70](https://github.com/WhatTheStack1/DevFathom-Hub/issues/70) | `cmqqe86u1000ksstwcndpshv6` | To build |
+| IMP-CLI-04 | medium | clients | Contract expiry/renewal reminders | [#70](https://github.com/WhatTheStack1/DevFathom-Hub/issues/70) | `cmqqe86u1000ksstwcndpshv6` | Implemented |
 | IMP-CLI-05 | medium | clients | Contract ↔ project/invoice linkage + value rollup | [#71](https://github.com/WhatTheStack1/DevFathom-Hub/issues/71) | `cmqqe8774000lsstwpnsmhiov` | Implemented |
 | IMP-CLI-06 | quick-win | clients | Friendly delete-guards & inline validation errors | [#72](https://github.com/WhatTheStack1/DevFathom-Hub/issues/72) | `cmqqe87k4000msstw8v2ywv3w` | Implemented |
 | IMP-CLI-07 | quick-win | clients | Contract status state-machine + date/signedAt validation | [#73](https://github.com/WhatTheStack1/DevFathom-Hub/issues/73) | `cmqqe87xg000nsstw7gkhwfz7` | Implemented |
