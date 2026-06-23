@@ -23,6 +23,8 @@ import {
   AlertCircle,
   LogOut,
   Bell,
+  Webhook,
+  ChevronDown,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -39,6 +41,8 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import type {
@@ -135,6 +139,9 @@ export function SettingsContent() {
 
       {/* API Tokens (admin only) */}
       {isAdmin && <ApiTokensSection />}
+
+      {/* Outbound webhooks (admin only, IMP-REST-03) */}
+      {isAdmin && <WebhooksSection />}
 
       {/* Account info */}
       <Card className="border-border/60">
@@ -1124,6 +1131,354 @@ function ApiTokensSection() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/* ============================================================
+   Outbound webhooks (IMP-REST-03) — admin only
+   Mirrors WEBHOOK_EVENTS in src/lib/webhooks.ts, which is server-only
+   (pulls in node:crypto) and therefore can't be imported into this client
+   component. Keep the two lists in sync.
+   ============================================================ */
+const WEBHOOK_EVENT_OPTIONS = [
+  { value: 'invoice.paid', label: 'Invoice paid', desc: 'An invoice is fully paid' },
+  { value: 'task.created', label: 'Task created', desc: 'A new task is created' },
+] as const;
+
+type WebhookListItem = inferRouterOutputs<AppRouter>['webhooks']['list'][number];
+
+function formatDeliveryTime(d: Date | string) {
+  return new Date(d).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function WebhooksSection() {
+  const utils = trpc.useUtils();
+  const { data: webhooks } = trpc.webhooks.list.useQuery();
+
+  const createWebhook = trpc.webhooks.create.useMutation({
+    onSuccess: (result) => {
+      utils.webhooks.list.invalidate();
+      setNewSecret(result.secret);
+      setUrl('');
+      setSelectedEvents([]);
+      setShowCreate(false);
+      setError('');
+    },
+    onError: (e) => setError(e.message),
+  });
+  const updateWebhook = trpc.webhooks.update.useMutation({
+    onSuccess: () => utils.webhooks.list.invalidate(),
+  });
+  const deleteWebhook = trpc.webhooks.delete.useMutation({
+    onSuccess: () => utils.webhooks.list.invalidate(),
+  });
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [url, setUrl] = useState('');
+  const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
+  const [error, setError] = useState('');
+  const [newSecret, setNewSecret] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    if (newSecret) {
+      navigator.clipboard.writeText(newSecret);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const toggleEvent = (value: string) =>
+    setSelectedEvents((prev) =>
+      prev.includes(value) ? prev.filter((e) => e !== value) : [...prev, value]
+    );
+
+  const handleCreate = () => {
+    setError('');
+    if (!url.trim() || selectedEvents.length === 0) return;
+    createWebhook.mutate({
+      url: url.trim(),
+      events: selectedEvents as ('invoice.paid' | 'task.created')[],
+    });
+  };
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-fuchsia-500/10">
+            <Webhook className="h-3.5 w-3.5 text-fuchsia-500" />
+          </div>
+          Webhooks
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Send a signed POST to your endpoint when events happen. Verify each request with the{' '}
+          <code className="rounded bg-secondary px-1 py-0.5 text-[10px]">X-DevFathom-Signature</code>{' '}
+          HMAC-SHA256 header.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Signing secret — shown exactly once after creation */}
+        {newSecret && (
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-foreground">
+                  Webhook created — save the signing secret
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  This is the only time you&apos;ll see it. Use it to verify the{' '}
+                  <code className="text-[10px]">sha256=</code> signature on each delivery.
+                </p>
+              </div>
+              <button
+                onClick={() => setNewSecret(null)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 rounded-lg bg-background border border-border px-3 py-2 text-xs font-mono text-foreground break-all">
+                {newSecret}
+              </code>
+              <button
+                onClick={handleCopy}
+                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-white hover:bg-[#0C2E2C] transition-colors"
+              >
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Webhook list */}
+        {webhooks && webhooks.length > 0 ? (
+          <div className="divide-y divide-border/60">
+            {webhooks.map((w) => (
+              <WebhookRow
+                key={w.id}
+                webhook={w}
+                busy={updateWebhook.isPending || deleteWebhook.isPending}
+                onToggleActive={(active) => updateWebhook.mutate({ id: w.id, active })}
+                onDelete={() => deleteWebhook.mutate({ id: w.id })}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="py-4 text-center text-xs text-muted-foreground">No webhooks yet</p>
+        )}
+
+        {/* Create form */}
+        {showCreate ? (
+          <div className="rounded-xl border border-primary/20 bg-card p-4 space-y-3">
+            {error && (
+              <p className="text-sm text-red-500 rounded-lg bg-red-500/10 px-3 py-2">{error}</p>
+            )}
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1">Endpoint URL</label>
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/webhooks/devfathom"
+                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1.5">Events</label>
+              <div className="flex flex-col gap-1.5">
+                {WEBHOOK_EVENT_OPTIONS.map((evt) => {
+                  const on = selectedEvents.includes(evt.value);
+                  return (
+                    <button
+                      key={evt.value}
+                      onClick={() => toggleEvent(evt.value)}
+                      className={cn(
+                        'flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors',
+                        on
+                          ? 'border-primary/30 bg-primary/5'
+                          : 'border-border bg-background hover:bg-secondary/40'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'flex h-4 w-4 items-center justify-center rounded border',
+                          on ? 'border-primary bg-primary text-white' : 'border-border'
+                        )}
+                      >
+                        {on && <Check className="h-3 w-3" />}
+                      </span>
+                      <span className="flex-1">
+                        <span className="block text-xs font-mono font-medium text-foreground">
+                          {evt.value}
+                        </span>
+                        <span className="block text-[11px] text-muted-foreground">{evt.desc}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowCreate(false);
+                  setUrl('');
+                  setSelectedEvents([]);
+                  setError('');
+                }}
+                className="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={!url.trim() || selectedEvents.length === 0 || createWebhook.isPending}
+                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              >
+                {createWebhook.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Plus className="h-3 w-3" />
+                )}
+                Create Webhook
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" /> New Webhook
+          </button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function WebhookRow({
+  webhook,
+  busy,
+  onToggleActive,
+  onDelete,
+}: {
+  webhook: WebhookListItem;
+  busy: boolean;
+  onToggleActive: (active: boolean) => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const { data: deliveries, isLoading } = trpc.webhooks.recentDeliveries.useQuery(
+    { webhookId: webhook.id },
+    { enabled: open }
+  );
+
+  const latest = webhook.deliveries[0];
+
+  return (
+    <div className="py-3 group">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground hover:text-foreground"
+          title="Recent deliveries"
+        >
+          <ChevronDown
+            className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-foreground truncate font-mono">{webhook.url}</p>
+          <div className="flex items-center gap-1 mt-1 flex-wrap">
+            {webhook.events.map((e) => (
+              <span
+                key={e}
+                className="rounded bg-secondary px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground font-mono"
+              >
+                {e}
+              </span>
+            ))}
+            <span className="text-[10px] text-muted-foreground/70">
+              · {webhook._count.deliveries} deliver
+              {webhook._count.deliveries === 1 ? 'y' : 'ies'}
+            </span>
+            {latest && (
+              <span
+                className={cn(
+                  'text-[10px]',
+                  latest.success ? 'text-emerald-500' : 'text-red-500'
+                )}
+              >
+                · last {latest.success ? 'OK' : 'failed'}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Switch
+            size="sm"
+            checked={webhook.active}
+            disabled={busy}
+            onCheckedChange={(v) => onToggleActive(v)}
+          />
+          <button
+            onClick={onDelete}
+            disabled={busy}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="mt-2 ml-11 rounded-lg border border-border/60 bg-secondary/20 p-2">
+          {isLoading ? (
+            <p className="flex items-center gap-1.5 px-1 py-2 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading deliveries…
+            </p>
+          ) : deliveries && deliveries.length > 0 ? (
+            <div className="divide-y divide-border/40">
+              {deliveries.map((d) => (
+                <div key={d.id} className="flex items-center gap-2 px-1 py-1.5">
+                  <span
+                    className={cn(
+                      'flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
+                      d.success ? 'bg-emerald-500/15 text-emerald-500' : 'bg-red-500/15 text-red-500'
+                    )}
+                  >
+                    {d.success ? <Check className="h-2.5 w-2.5" /> : <X className="h-2.5 w-2.5" />}
+                  </span>
+                  <span className="font-mono text-[10px] text-foreground">{d.event}</span>
+                  <span className="text-[10px] tabular-nums text-muted-foreground">
+                    {d.statusCode ?? '—'}
+                  </span>
+                  {d.error && (
+                    <span className="truncate text-[10px] text-red-500" title={d.error}>
+                      {d.error}
+                    </span>
+                  )}
+                  <span className="ml-auto text-[10px] text-muted-foreground/70">
+                    {formatDeliveryTime(d.attemptedAt)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-1 py-2 text-[11px] text-muted-foreground">No deliveries yet</p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

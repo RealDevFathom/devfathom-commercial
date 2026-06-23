@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { format } from 'date-fns';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
+import { emitEvent } from '@/lib/webhooks';
 import { TRPCError } from '@trpc/server';
 import { sendEmail, templates, appUrl } from '@/lib/email';
 import {
@@ -524,10 +525,18 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.$transaction(async (tx) => {
+      // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
+      let paidEvent: {
+        invoiceId: string;
+        total: number;
+        currency: string;
+        clientId: string;
+      } | null = null;
+
+      const result = await ctx.db.$transaction(async (tx) => {
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
-          select: { id: true, status: true, total: true, currency: true },
+          select: { id: true, status: true, total: true, currency: true, clientId: true },
         });
         if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
 
@@ -588,6 +597,12 @@ export const financeRouter = router({
             where: { id: invoice.id },
             data: { status: 'PAID', paidAt: new Date() },
           });
+          paidEvent = {
+            invoiceId: invoice.id,
+            total,
+            currency: invoice.currency,
+            clientId: invoice.clientId,
+          };
         }
 
         return {
@@ -597,6 +612,13 @@ export const financeRouter = router({
           status: fullyPaid ? ('PAID' as const) : invoice.status,
         };
       });
+
+      // IMP-REST-03: fan out invoice.paid once the invoice has truly flipped to
+      // PAID and the transaction has committed. Fire-and-forget — emitEvent
+      // never throws, so it can't affect the recorded payment.
+      if (paidEvent) emitEvent(ctx.db, 'invoice.paid', paidEvent);
+
+      return result;
     }),
 
   // IMP-FIN-04: remove a payment and recompute. If deleting it drops a PAID invoice

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
 import { logActivity } from '../activity';
+import { emitEvent } from '@/lib/webhooks';
 import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
 import {
@@ -629,6 +630,16 @@ export const projectsRouter = router({
             }),
         });
       }
+
+      // IMP-REST-03: outbound webhook for new tasks. Fire-and-forget — never
+      // blocks or fails the create.
+      emitEvent(ctx.db, 'task.created', {
+        taskId: task.id,
+        title: task.title,
+        columnId: task.columnId,
+        projectId: board.project.id,
+      });
+
       return task;
     }),
 
