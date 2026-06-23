@@ -311,6 +311,11 @@ function CreateClientForm({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
+        {/* UX-01: surface validation/mutation errors (e.g. invalid website URL). */}
+        {createClient.error && (
+          <p className="text-xs text-red-500">{createClient.error.message}</p>
+        )}
+
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}

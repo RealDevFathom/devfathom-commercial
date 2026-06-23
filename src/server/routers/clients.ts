@@ -14,6 +14,16 @@ const contractStatusEnum = z.enum(['DRAFT', 'SENT', 'SIGNED', 'EXPIRED', 'TERMIN
 const currencyEnum = z.enum(['USD', 'PKR']);
 
 export const clientsRouter = router({
+  // CANONICAL CLIENT-DIRECTORY TRUST POLICY (AUTHZ-04). One policy, applied across
+  // tRPC, REST and the AI assistant so the three surfaces no longer disagree:
+  //   • DIRECTORY (client names + basic fields): visible to all authenticated
+  //     employees over the session-auth surfaces (tRPC here, AI globalSearch) —
+  //     employees need to pick a client on projects/finance forms and in search.
+  //   • DETAIL that is finance-sensitive (invoices, contracts, revenue): ADMIN
+  //     only — see getById (strips them for non-admins) + revenueByClient below.
+  //   • REST /api/v1/clients: ADMIN-BOUND TOKENS ONLY — a deliberately stricter
+  //     posture for machine access (a narrow CRM integration token shouldn't
+  //     enumerate the directory), enforced by the isAdmin gate on those routes.
   getAll: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
 
@@ -145,7 +155,10 @@ export const clientsRouter = router({
       z.object({
         clientId: z.string(),
         name: z.string().min(1),
-        email: z.string().optional(),
+        // CLI-02: validate the email when provided (was a bare optional string,
+        // inconsistent with client `create` which uses `.email()`). Empty string
+        // is accepted as "no email".
+        email: z.string().email().or(z.literal('')).optional(),
         phone: z.string().optional(),
         role: z.string().optional(),
         isPrimary: z.boolean().default(false),

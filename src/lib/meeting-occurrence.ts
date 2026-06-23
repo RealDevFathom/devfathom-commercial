@@ -95,12 +95,13 @@ export function findRelevantOccurrence(
       return { start, end };
     }
 
-    // We've crossed past now — pick the closer side
+    // RT-10: we've crossed past now and the next occurrence hasn't started yet.
+    // Keep showing the most recent PAST occurrence until the next one actually
+    // begins — otherwise, in the latter half of the gap, the list jumps to the
+    // next (empty) occurrence and the just-finished occurrence's attendance
+    // disappears early.
     if (start.getTime() > now.getTime()) {
-      if (!prev) return { start, end };
-      const distPrev = now.getTime() - prev.end.getTime();
-      const distNext = start.getTime() - now.getTime();
-      return distPrev <= distNext ? prev : { start, end };
+      return prev ?? { start, end };
     }
 
     prev = { start, end };
