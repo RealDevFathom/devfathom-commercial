@@ -192,7 +192,11 @@ async function main() {
       const existingTask = await prisma.task.findFirst({ where: { column: { boardId: board.id }, title: { endsWith: `(${e.id})` } }, select: { id: true } });
       let taskId: string;
       if (existingTask) {
-        await prisma.task.update({ where: { id: existingTask.id }, data: { title, description: desc, priority: TIER_PRIORITY[e.tier], columnId: targetCol, order: i } });
+        // select:{id} keeps the RETURNING clause to columns that exist on the
+        // SHARED Neon DB. New schema columns (parentId/wipLimit/…) live only in the
+        // generated client until the migration is deployed, so returning full rows
+        // would 500 with P2022 ColumnNotFound. We only need the id (already known).
+        await prisma.task.update({ where: { id: existingTask.id }, data: { title, description: desc, priority: TIER_PRIORITY[e.tier], columnId: targetCol, order: i }, select: { id: true } });
         taskId = existingTask.id;
       } else {
         const t = await prisma.task.create({ data: { title, description: desc, priority: TIER_PRIORITY[e.tier], columnId: targetCol, order: i, createdById: admin.id }, select: { id: true } });

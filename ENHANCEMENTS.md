@@ -5,10 +5,10 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 51 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 55 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
-- **To build** (Quick Win / Medium): 9 — card → To Do.
-- **Planned (needs-greenlight)** (Big Bets): 7 — card → To Do / Backlog, STOP for authorization.
+- **To build** (Quick Win / Medium): 6 — card → To Do.
+- **Planned (needs-greenlight)** (Big Bets): 6 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
 - **IMP-PROJ-01** — Time tracking (wire the modeled TimeEntry). Billing, utilization, project profitability. Phased plan + acceptance criteria filed; awaiting authorization.
@@ -26,7 +26,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-PROJ-03 | medium | projects | Task attachments — render + add/delete | [#58](https://github.com/WhatTheStack1/DevFathom-Hub/issues/58) | `cmqqe820g0008sstwnz0ohg16` | Implemented |
 | IMP-PROJ-04 | quick-win | projects | Comment edit/delete | [#59](https://github.com/WhatTheStack1/DevFathom-Hub/issues/59) | `cmqqe82dv0009sstwroj70f4n` | Implemented |
 | IMP-PROJ-05 | quick-win | projects | Board rename/description + label edit/delete + project-file delete | [#60](https://github.com/WhatTheStack1/DevFathom-Hub/issues/60) | `cmqqe82tu000asstwkcz540nw` | Partial |
-| IMP-PROJ-06 | medium | projects | Subtasks / dependencies / blockers | [#61](https://github.com/WhatTheStack1/DevFathom-Hub/issues/61) | `cmqqe8377000bsstw5bj6n1qt` | Planned (greenlight) |
+| IMP-PROJ-06 | medium | projects | Subtasks / dependencies / blockers | [#61](https://github.com/WhatTheStack1/DevFathom-Hub/issues/61) | `cmqqe8377000bsstw5bj6n1qt` | Implemented |
 | IMP-PROJ-07 | medium | projects | Board/column templates + WIP limits | [#62](https://github.com/WhatTheStack1/DevFathom-Hub/issues/62) | `cmqqe83qz000csstw9s4bryb5` | Partial |
 | IMP-PROJ-08 | medium | projects | Bulk task actions (multi-select move/label/assign/delete) | [#63](https://github.com/WhatTheStack1/DevFathom-Hub/issues/63) | `cmqqe8468000dsstwqgga78fk` | Implemented |
 | IMP-PROJ-09 | medium | projects | Pagination / lazy-load on large boards | [#64](https://github.com/WhatTheStack1/DevFathom-Hub/issues/64) | `cmqqe84jj000esstwp7dve8rc` | Implemented |
@@ -48,11 +48,11 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-FIN-01 | medium | finance | Invoice edit + PDF/print + send-by-email | [#80](https://github.com/WhatTheStack1/DevFathom-Hub/issues/80) | `cmqqe8ahf000usstwhbr9hbbi` | Planned (greenlight) |
 | IMP-FIN-02 | medium | finance | Per-currency reporting & FX | [#81](https://github.com/WhatTheStack1/DevFathom-Hub/issues/81) | `cmqqe8auh000vsstwwpir69l7` | Implemented |
 | IMP-FIN-03 | medium | finance | Recurring-expense posting + budgets vs actuals | [#82](https://github.com/WhatTheStack1/DevFathom-Hub/issues/82) | `cmqqe8b97000wsstw25hqwl45` | Implemented |
-| IMP-FIN-04 | medium | finance | Payments / partial payments & overdue automation | [#83](https://github.com/WhatTheStack1/DevFathom-Hub/issues/83) | `cmqqe8bm9000xsstw0vi5sqq7` | To build |
+| IMP-FIN-04 | medium | finance | Payments / partial payments & overdue automation | [#83](https://github.com/WhatTheStack1/DevFathom-Hub/issues/83) | `cmqqe8bm9000xsstw0vi5sqq7` | Implemented |
 | IMP-FIN-05 | quick-win | finance | Decimal-safe math + bounded date windows | [#84](https://github.com/WhatTheStack1/DevFathom-Hub/issues/84) | `cmqqe8bzc000ysstwabptake0` | Implemented |
 | IMP-FIN-06 | quick-win | finance | Finance export (CSV) + date-range filters | [#85](https://github.com/WhatTheStack1/DevFathom-Hub/issues/85) | `cmqqe8ccc000zsstw781d1fu8` | Implemented |
 | IMP-NOTE-01 | big-bet | notes | Version history / restore | [#86](https://github.com/WhatTheStack1/DevFathom-Hub/issues/86) | `cmqqe8crc0010sstwtojh8xoy` | Planned (greenlight) |
-| IMP-NOTE-02 | medium | notes | People @mentions + notifications in notes | [#87](https://github.com/WhatTheStack1/DevFathom-Hub/issues/87) | `cmqqe8d440011sstwp1ibz4hb` | To build |
+| IMP-NOTE-02 | medium | notes | People @mentions + notifications in notes | [#87](https://github.com/WhatTheStack1/DevFathom-Hub/issues/87) | `cmqqe8d440011sstwp1ibz4hb` | Implemented |
 | IMP-NOTE-03 | quick-win | notes | Author-only visibility control | [#88](https://github.com/WhatTheStack1/DevFathom-Hub/issues/88) | `cmqqe8djo0012sstw6sp86tj4` | Implemented |
 | IMP-NOTE-04 | medium | notes | Resolve shared-with-me backlinks instead of hiding | [#89](https://github.com/WhatTheStack1/DevFathom-Hub/issues/89) | `cmqqe8dxu0013sstw1dnx2tma` | Implemented |
 | IMP-NOTE-05 | quick-win | notes | Allow-list link protocols in the editor | [#90](https://github.com/WhatTheStack1/DevFathom-Hub/issues/90) | `cmqqe8eaw0014sstwamo36yqr` | Implemented |
@@ -62,7 +62,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-HR-01 | big-bet | team | Leave balances + team calendar + overlap detection | [#94](https://github.com/WhatTheStack1/DevFathom-Hub/issues/94) | `cmqqe8fro0018sstwqvud8ijk` | Planned (greenlight) |
 | IMP-HR-02 | medium | team | Off-boarding automation | [#95](https://github.com/WhatTheStack1/DevFathom-Hub/issues/95) | `cmqqe8g5k0019sstwbfzwo4qn` | Implemented |
 | IMP-HR-03 | quick-win | team | Self-service leave edit/cancel | [#96](https://github.com/WhatTheStack1/DevFathom-Hub/issues/96) | `cmqqe8gkk001asstw0jyg41ys` | Implemented |
-| IMP-HR-04 | medium | team | Performance review workflow | [#97](https://github.com/WhatTheStack1/DevFathom-Hub/issues/97) | `cmqqe8gxm001bsstwxng4j3kv` | To build |
+| IMP-HR-04 | medium | team | Performance review workflow | [#97](https://github.com/WhatTheStack1/DevFathom-Hub/issues/97) | `cmqqe8gxm001bsstwxng4j3kv` | Implemented |
 | IMP-HR-05 | quick-win | team | Separation-of-duties on approvals | [#98](https://github.com/WhatTheStack1/DevFathom-Hub/issues/98) | `cmqqe8hao001csstwy1q8vczg` | Implemented |
 | IMP-HR-06 | quick-win | team | Directory privacy controls | [#99](https://github.com/WhatTheStack1/DevFathom-Hub/issues/99) | `cmqqe8hnh001dsstwf8usqz65` | Implemented |
 | IMP-HR-07 | quick-win | team | Include ON_LEAVE staff in people search | [#100](https://github.com/WhatTheStack1/DevFathom-Hub/issues/100) | `cmqqe8i0i001esstwyoj5u4ee` | Implemented |
