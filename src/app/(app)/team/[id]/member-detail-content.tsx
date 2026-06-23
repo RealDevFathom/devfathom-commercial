@@ -32,6 +32,7 @@ import {
   ClipboardList,
   Trash2,
   Send,
+  Gauge,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -66,6 +67,13 @@ const leaveStatusConfig: Record<string, { bg: string; label: string }> = {
   REJECTED: { bg: 'bg-red-500/10 text-red-500', label: 'Rejected' },
 };
 
+// IMP-HR-01: per-type styling for the read-only leave-balances block.
+const leaveTypeBalanceConfig: Record<string, { label: string; tint: string; bar: string }> = {
+  VACATION: { label: 'Vacation', tint: 'bg-blue-500/10 text-blue-500', bar: 'bg-blue-500' },
+  SICK: { label: 'Sick', tint: 'bg-red-500/10 text-red-500', bar: 'bg-red-500' },
+  REMOTE: { label: 'Remote', tint: 'bg-violet-500/10 text-violet-500', bar: 'bg-violet-500' },
+};
+
 const roleBadge: Record<string, { bg: string; label: string }> = {
   ADMIN: { bg: 'bg-primary/10 text-primary', label: 'Admin' },
   HR: { bg: 'bg-indigo-500/10 text-indigo-500', label: 'HR' },
@@ -92,6 +100,7 @@ type RouterOutput = inferRouterOutputs<AppRouter>;
 type Member = NonNullable<RouterOutput['team']['getById']>;
 type PersonalStats = RouterOutput['teamStats']['getForUser'];
 type PerformanceNotes = RouterOutput['team']['listPerformanceNotes'];
+type LeaveBalances = RouterOutput['team']['getLeaveBalances'];
 
 export function MemberDetailContent({ memberId }: { memberId: string }) {
   const { data: session } = useSession();
@@ -107,6 +116,12 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
     { staleTime: 60_000, enabled: canViewPersonal }
   );
   const notesQuery = trpc.team.listPerformanceNotes.useQuery(
+    { userId: memberId },
+    { enabled: canViewPersonal }
+  );
+  // IMP-HR-01: read-only leave balances for the current year. The server forces
+  // a normal employee to their own record, so this is safe under canViewPersonal.
+  const balancesQuery = trpc.team.getLeaveBalances.useQuery(
     { userId: memberId },
     { enabled: canViewPersonal }
   );
@@ -277,6 +292,11 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
           isLoading={statsQuery.isLoading}
           isError={statsQuery.isError}
         />
+      )}
+
+      {/* Leave balances — IMP-HR-01; visible to self or admin */}
+      {canViewPersonal && (
+        <LeaveBalancesBlock data={balancesQuery.data} isLoading={balancesQuery.isLoading} />
       )}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
@@ -837,6 +857,93 @@ function EditMemberForm({
     </Card>
   );
 }
+
+/* ============================================
+   Leave balances block — IMP-HR-01. Read-only entitled / used / remaining
+   per leave type for the current year. Visible to the member or an admin.
+   ============================================ */
+const LeaveBalancesBlock = memo(function LeaveBalancesBlock({
+  data,
+  isLoading,
+}: {
+  data: LeaveBalances | undefined;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <Card className="border-border/60">
+        <CardContent className="p-5">
+          <Skeleton className="mb-4 h-4 w-32" />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-20 w-full" />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!data) return null;
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-500/10">
+            <Gauge className="h-3.5 w-3.5 text-blue-500" />
+          </div>
+          Leave balances · {data.year}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {data.types.map((t) => {
+            const cfg = leaveTypeBalanceConfig[t.type] ?? leaveTypeBalanceConfig.VACATION;
+            const pct =
+              t.entitledDays > 0
+                ? Math.min(100, Math.round((t.usedDays / t.entitledDays) * 100))
+                : 0;
+            const over = t.remaining < 0;
+            return (
+              <div
+                key={t.type}
+                className="rounded-xl border border-border/60 bg-background/50 p-4"
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className={cn('rounded-full px-2.5 py-1 text-[11px] font-medium', cfg.tint)}
+                  >
+                    {cfg.label}
+                  </span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {t.usedDays} / {t.entitledDays}
+                  </span>
+                </div>
+                <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-secondary">
+                  <div
+                    className={cn(
+                      'h-full rounded-full transition-all',
+                      over ? 'bg-red-500' : cfg.bar
+                    )}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <p
+                  className={cn(
+                    'mt-2 text-sm font-semibold tabular-nums',
+                    over ? 'text-red-500' : 'text-foreground'
+                  )}
+                >
+                  {t.remaining} day{Math.abs(t.remaining) === 1 ? '' : 's'} {over ? 'over' : 'left'}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
 
 /* ============================================
    Personal stats block — rendered on a member's profile page.

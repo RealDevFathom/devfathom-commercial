@@ -38,6 +38,18 @@ const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).t
 // How long an invitation link stays valid.
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
+const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
+
+// IMP-HR-01: inclusive whole-day span of a leave request (Jun 3 → Jun 5 = 3 days).
+// Normalize to local midnight so partial-day timestamps don't skew the count.
+function leaveDayCount(start: Date, end: Date): number {
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const s = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+  const e = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime();
+  return Math.max(1, Math.floor((e - s) / MS_PER_DAY) + 1);
+}
+
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db.user.findMany({
@@ -430,6 +442,112 @@ export const teamRouter = router({
       });
 
       return leave;
+    }),
+
+  // IMP-HR-01: set/adjust a member's annual entitlement for one leave type.
+  // Upserts on the (userId, year, type) unique key. HR/Admin only.
+  setLeaveBalance: hrProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        year: z.number().int().min(2000).max(2100),
+        type: z.enum(['VACATION', 'SICK', 'REMOTE']),
+        entitledDays: z.number().int().min(0).max(366),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.leaveBalance.upsert({
+        where: {
+          userId_year_type: { userId: input.userId, year: input.year, type: input.type },
+        },
+        create: {
+          userId: input.userId,
+          year: input.year,
+          type: input.type,
+          entitledDays: input.entitledDays,
+        },
+        update: { entitledDays: input.entitledDays },
+      });
+    }),
+
+  // IMP-HR-01: per-type entitled / used / remaining for one user in one year.
+  // HR/Admin may inspect anyone; a normal employee is forced to their OWN record.
+  // "used" = inclusive day-span of that user's APPROVED leave of that type whose
+  // start falls within the year. Always returns all three types (entitled 0 when
+  // no balance row exists yet) so the UI can render a complete table.
+  getLeaveBalances: protectedProcedure
+    .input(
+      z.object({ userId: z.string().optional(), year: z.number().int().optional() }).optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const isPrivileged = ['ADMIN', 'HR'].includes(ctx.session.user.role);
+      const year = input?.year ?? new Date().getFullYear();
+      // Normal employees can only ever see their own balances.
+      const userId = isPrivileged && input?.userId ? input.userId : ctx.session.user.id;
+
+      const yearStart = new Date(year, 0, 1);
+      const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999);
+
+      const [balances, approved] = await Promise.all([
+        ctx.db.leaveBalance.findMany({ where: { userId, year } }),
+        ctx.db.leaveRequest.findMany({
+          where: {
+            userId,
+            status: 'APPROVED',
+            startDate: { gte: yearStart, lte: yearEnd },
+          },
+          select: { type: true, startDate: true, endDate: true },
+        }),
+      ]);
+
+      const entitledByType: Record<string, number> = {};
+      for (const b of balances) entitledByType[b.type] = b.entitledDays;
+      const usedByType: Record<string, number> = {};
+      for (const r of approved) {
+        usedByType[r.type] = (usedByType[r.type] ?? 0) + leaveDayCount(r.startDate, r.endDate);
+      }
+
+      const types = LEAVE_TYPES.map((type) => {
+        const entitledDays = entitledByType[type] ?? 0;
+        const usedDays = usedByType[type] ?? 0;
+        return { type, entitledDays, usedDays, remaining: entitledDays - usedDays };
+      });
+
+      return { userId, year, types };
+    }),
+
+  // IMP-HR-01: team calendar — APPROVED (optionally also PENDING) leave overlapping
+  // the [startDate, endDate] window, for a "who's off when" view. Readable by any
+  // signed-in member. Overlap math: range starts before the window ends AND ends
+  // after the window starts.
+  getTeamLeaveCalendar: protectedProcedure
+    .input(
+      z.object({
+        startDate: z.date(),
+        endDate: z.date(),
+        includePending: z.boolean().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const statuses: ('APPROVED' | 'PENDING')[] = input.includePending
+        ? ['APPROVED', 'PENDING']
+        : ['APPROVED'];
+      return ctx.db.leaveRequest.findMany({
+        where: {
+          status: { in: statuses },
+          startDate: { lte: input.endDate },
+          endDate: { gte: input.startDate },
+        },
+        select: {
+          id: true,
+          type: true,
+          status: true,
+          startDate: true,
+          endDate: true,
+          user: { select: { id: true, name: true, avatar: true } },
+        },
+        orderBy: { startDate: 'asc' },
+      });
     }),
 
   getNotifications: protectedProcedure.query(async ({ ctx }) => {

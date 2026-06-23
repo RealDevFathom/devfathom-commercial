@@ -16,6 +16,9 @@ import {
   PartyPopper,
   Users,
   LogOut,
+  ChevronLeft,
+  ChevronRight,
+  Save,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -54,6 +57,13 @@ const typeConfig: Record<string, { bg: string; label: string }> = {
   REMOTE: { bg: 'bg-violet-500/10 text-violet-500', label: 'Remote' },
 };
 
+// IMP-HR-01: solid fill colors for balance progress bars + calendar legend dots.
+const typeBarColor: Record<string, string> = {
+  VACATION: 'bg-blue-500',
+  SICK: 'bg-red-500',
+  REMOTE: 'bg-violet-500',
+};
+
 const departmentColors: Record<string, string> = {
   LEADERSHIP: 'bg-primary/10 text-primary',
   ENGINEERING: 'bg-blue-500/10 text-blue-500',
@@ -84,6 +94,8 @@ export function HRContent() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="leave">Leave</TabsTrigger>
+          <TabsTrigger value="balances">Balances</TabsTrigger>
+          <TabsTrigger value="calendar">Calendar</TabsTrigger>
           <TabsTrigger value="resignations">Resignations</TabsTrigger>
         </TabsList>
 
@@ -93,6 +105,14 @@ export function HRContent() {
 
         <TabsContent value="leave">
           <LeaveTab isAdmin={isAdmin} />
+        </TabsContent>
+
+        <TabsContent value="balances">
+          <BalancesTab />
+        </TabsContent>
+
+        <TabsContent value="calendar">
+          <CalendarTab />
         </TabsContent>
 
         <TabsContent value="resignations">
@@ -704,6 +724,345 @@ const LeaveRow = memo(function LeaveRow({
     </div>
   );
 });
+
+/* ============================================================
+   Balances tab — IMP-HR-01. HR/Admin pick a member + year, see
+   entitled / used / remaining per leave type, and edit entitlements.
+   ============================================================ */
+function BalancesTab() {
+  const { data: session } = useSession();
+  const utils = trpc.useUtils();
+  const { data: roster } = trpc.team.getRoster.useQuery();
+  const currentYear = new Date().getFullYear();
+  const [userId, setUserId] = useState(session?.user?.id ?? '');
+  const [year, setYear] = useState(currentYear);
+
+  // Seed the picker with the signed-in user once the session resolves.
+  useEffect(() => {
+    if (!userId && session?.user?.id) setUserId(session.user.id);
+  }, [session?.user?.id, userId]);
+
+  const { data, isLoading } = trpc.team.getLeaveBalances.useQuery(
+    { userId, year },
+    { enabled: !!userId }
+  );
+
+  const setBalance = trpc.team.setLeaveBalance.useMutation({
+    onSuccess: () => {
+      utils.team.getLeaveBalances.invalidate();
+      utils.team.getHrOverview.invalidate();
+    },
+  });
+
+  const yearOptions = [currentYear - 2, currentYear - 1, currentYear, currentYear + 1];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs font-medium text-foreground mb-1">Member</label>
+          <select
+            value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            className="min-w-[14rem] rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+          >
+            {(roster ?? []).map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-foreground mb-1">Year</label>
+          <select
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+            className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+          >
+            {yearOptions.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {isLoading || !data ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i} className="border-border/60">
+              <CardContent className="p-5">
+                <Skeleton className="h-28 w-full" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {data.types.map((t) => (
+            <BalanceCard
+              key={t.type}
+              type={t.type}
+              entitledDays={t.entitledDays}
+              usedDays={t.usedDays}
+              remaining={t.remaining}
+              saving={setBalance.isPending}
+              onSave={(entitledDays) =>
+                setBalance.mutate({ userId, year, type: t.type, entitledDays })
+              }
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BalanceCard({
+  type,
+  entitledDays,
+  usedDays,
+  remaining,
+  saving,
+  onSave,
+}: {
+  type: 'VACATION' | 'SICK' | 'REMOTE';
+  entitledDays: number;
+  usedDays: number;
+  remaining: number;
+  saving: boolean;
+  onSave: (entitledDays: number) => void;
+}) {
+  const tc = typeConfig[type] ?? typeConfig.VACATION;
+  const bar = typeBarColor[type] ?? typeBarColor.VACATION;
+  const [draft, setDraft] = useState(String(entitledDays));
+  // Re-seed the editor whenever the persisted entitlement changes (after a save).
+  useEffect(() => setDraft(String(entitledDays)), [entitledDays]);
+
+  const pct = entitledDays > 0 ? Math.min(100, Math.round((usedDays / entitledDays) * 100)) : 0;
+  const over = remaining < 0;
+  const parsed = Number(draft);
+  const dirty = draft.trim() !== '' && Number.isFinite(parsed) && parsed !== entitledDays;
+
+  return (
+    <Card className="border-border/60">
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className={cn('rounded-full px-2.5 py-1 text-[11px] font-medium', tc.bg)}>
+            {tc.label}
+          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {usedDays} / {entitledDays} used
+          </span>
+        </div>
+
+        <div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className={cn('h-full rounded-full transition-all', over ? 'bg-red-500' : bar)}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p
+            className={cn(
+              'mt-2 text-sm font-semibold tabular-nums',
+              over ? 'text-red-500' : 'text-foreground'
+            )}
+          >
+            {remaining} day{Math.abs(remaining) === 1 ? '' : 's'} {over ? 'over' : 'remaining'}
+          </p>
+        </div>
+
+        <div className="flex items-end gap-2 pt-1">
+          <div className="flex-1">
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+              Entitled days
+            </label>
+            <Input
+              type="number"
+              min={0}
+              max={366}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+          </div>
+          <Button
+            size="sm"
+            disabled={!dirty || saving}
+            onClick={() => {
+              if (dirty) onSave(Math.max(0, Math.min(366, Math.round(parsed))));
+            }}
+          >
+            {saving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            Save
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================================================
+   Calendar tab — IMP-HR-01. Lightweight month grid of who is off
+   when, built from getTeamLeaveCalendar (no calendar library).
+   ============================================================ */
+function CalendarTab() {
+  const [cursor, setCursor] = useState(() => {
+    const n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), 1);
+  });
+  const [includePending, setIncludePending] = useState(false);
+
+  const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 23, 59, 59, 999);
+
+  const { data, isLoading } = trpc.team.getTeamLeaveCalendar.useQuery({
+    startDate: monthStart,
+    endDate: monthEnd,
+    includePending,
+  });
+
+  const daysInMonth = monthEnd.getDate();
+  const leadingBlanks = monthStart.getDay(); // 0 = Sunday
+  const cells: (number | null)[] = [
+    ...Array.from({ length: leadingBlanks }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+
+  const dayMs = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const todayMs = dayMs(new Date());
+
+  const offForDay = (day: number) => {
+    const cellMs = new Date(cursor.getFullYear(), cursor.getMonth(), day).getTime();
+    return (data ?? []).filter(
+      (lr) => cellMs >= dayMs(new Date(lr.startDate)) && cellMs <= dayMs(new Date(lr.endDate))
+    );
+  };
+
+  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            title="Previous month"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="min-w-[10rem] text-center text-sm font-semibold text-foreground">
+            {format(cursor, 'MMMM yyyy')}
+          </span>
+          <button
+            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            title="Next month"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={includePending}
+            onChange={(e) => setIncludePending(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-border accent-primary"
+          />
+          Include pending
+        </label>
+      </div>
+
+      <Card className="border-border/60">
+        <CardContent className="p-4">
+          {isLoading ? (
+            <Skeleton className="h-[26rem] w-full" />
+          ) : (
+            <>
+              <div className="mb-1.5 grid grid-cols-7 gap-1.5">
+                {weekdays.map((w) => (
+                  <div
+                    key={w}
+                    className="text-center text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+                  >
+                    {w}
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7 gap-1.5">
+                {cells.map((day, i) => {
+                  if (day === null)
+                    return <div key={`b-${i}`} className="min-h-[5.5rem] rounded-lg" />;
+                  const off = offForDay(day);
+                  const isToday =
+                    new Date(cursor.getFullYear(), cursor.getMonth(), day).getTime() === todayMs;
+                  return (
+                    <div
+                      key={day}
+                      className={cn(
+                        'flex min-h-[5.5rem] flex-col gap-1 rounded-lg border p-1.5',
+                        isToday ? 'border-primary/40 bg-primary/5' : 'border-border/60'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'text-[11px] font-medium tabular-nums',
+                          isToday ? 'text-primary' : 'text-muted-foreground'
+                        )}
+                      >
+                        {day}
+                      </span>
+                      <div className="flex flex-col gap-0.5 overflow-hidden">
+                        {off.slice(0, 3).map((lr) => {
+                          const tc = typeConfig[lr.type] ?? typeConfig.VACATION;
+                          return (
+                            <Link
+                              key={lr.id}
+                              href={`/team/${lr.user.id}`}
+                              title={`${lr.user.name} · ${tc.label}${lr.status === 'PENDING' ? ' (pending)' : ''}`}
+                              className={cn(
+                                'flex items-center gap-1 truncate rounded px-1 py-0.5 text-[10px] font-medium transition-opacity hover:opacity-80',
+                                tc.bg,
+                                lr.status === 'PENDING' && 'opacity-60'
+                              )}
+                            >
+                              <span className="truncate">{lr.user.name.split(' ')[0]}</span>
+                            </Link>
+                          );
+                        })}
+                        {off.length > 3 && (
+                          <span className="px-1 text-[10px] text-muted-foreground">
+                            +{off.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+        {(['VACATION', 'SICK', 'REMOTE'] as const).map((t) => (
+          <span key={t} className="flex items-center gap-1.5">
+            <span className={cn('h-2.5 w-2.5 rounded-full', typeBarColor[t])} />
+            {typeConfig[t].label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /* ============================================================
    Stat tile — used on the overview grid
