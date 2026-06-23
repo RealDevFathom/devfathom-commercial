@@ -4,6 +4,15 @@ import { assertProjectAccess } from '../authz';
 import { TRPCError } from '@trpc/server';
 import { trelloBoardSchema, trelloColorMap } from '@/types/trello';
 
+// TRELLO-01: a non-parseable date string in a Trello export (`new Date(...)` →
+// Invalid Date) previously crashed the whole transactional import. Parse safely
+// and drop bad values instead.
+function safeDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 export const trelloImportRouter = router({
   importBoard: protectedProcedure
     .input(
@@ -166,7 +175,7 @@ export const trelloImportRouter = router({
               columnId,
               order: orderInColumn,
               priority: 'MEDIUM',
-              dueDate: card.due ? new Date(card.due) : null,
+              dueDate: safeDate(card.due),
               createdById: ctx.session.user.id,
             },
           });
@@ -246,7 +255,8 @@ export const trelloImportRouter = router({
                 content: comment.data.text || '',
                 taskId: task.id,
                 userId,
-                createdAt: new Date(comment.date),
+                // TRELLO-01: fall back to "now" if the comment timestamp is unparseable.
+                createdAt: safeDate(comment.date) ?? new Date(),
               },
             });
           }
