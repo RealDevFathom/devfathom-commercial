@@ -35,8 +35,11 @@ export const dashboardRouter = router({
           },
         },
       }),
+      // DASH-02: non-admins must not receive the company-wide pending-leave count
+      // (it shipped to every client even though only the admin card renders it).
+      // Admins get the company total; everyone else gets their OWN pending count.
       ctx.db.leaveRequest.count({
-        where: { status: 'PENDING' },
+        where: { status: 'PENDING', ...(isAdmin ? {} : { userId }) },
       }),
     ]);
 

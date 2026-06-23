@@ -219,14 +219,45 @@ export const teamRouter = router({
 
   createLeaveRequest: protectedProcedure
     .input(
-      z.object({
-        type: z.enum(['VACATION', 'SICK', 'REMOTE']),
-        startDate: z.date(),
-        endDate: z.date(),
-        reason: z.string().optional(),
-      })
+      z
+        .object({
+          type: z.enum(['VACATION', 'SICK', 'REMOTE']),
+          startDate: z.date(),
+          endDate: z.date(),
+          reason: z.string().optional(),
+        })
+        // HR-02: endDate must not precede startDate.
+        .refine((d) => d.endDate >= d.startDate, {
+          message: 'End date must be on or after the start date.',
+          path: ['endDate'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
+      // HR-02: reject past-dated starts and overlapping requests, which corrupt
+      // the "out today" / team-stats math.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (input.startDate < today) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Leave cannot start in the past.',
+        });
+      }
+      const overlap = await ctx.db.leaveRequest.findFirst({
+        where: {
+          userId: ctx.session.user.id,
+          status: { in: ['PENDING', 'APPROVED'] },
+          startDate: { lte: input.endDate },
+          endDate: { gte: input.startDate },
+        },
+        select: { id: true },
+      });
+      if (overlap) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'You already have a leave request overlapping these dates.',
+        });
+      }
       return ctx.db.leaveRequest.create({
         data: { ...input, userId: ctx.session.user.id },
       });
@@ -402,6 +433,24 @@ export const teamRouter = router({
           true
         >,
       });
+
+      // AUTHZ-02: never strand the workspace without an admin. Block demoting or
+      // deactivating the LAST active admin (mirrors the layOffMember guard) — the
+      // sole remaining admin could otherwise lock everyone out by editing self.
+      const demoting = input.role !== undefined && input.role !== 'ADMIN';
+      const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
+      if ((before as { role?: string } | null)?.role === 'ADMIN' && (demoting || deactivating)) {
+        const otherActiveAdmins = await ctx.db.user.count({
+          where: { id: { not: id }, role: 'ADMIN', status: 'ACTIVE' },
+        });
+        if (otherActiveAdmins === 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot demote or deactivate the last active admin.',
+          });
+        }
+      }
+
       const updated = await ctx.db.user.update({ where: { id }, data });
       annotateAudit(ctx, {
         targetType: 'User',
