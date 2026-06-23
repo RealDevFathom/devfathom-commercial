@@ -660,7 +660,7 @@
     "tier": "medium",
     "title": "Message edit history / delete-for-everyone clarity + threads polish",
     "value": "Slack-grade affordances",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Edit history view; clear delete-for-everyone; thread polish"
     ]

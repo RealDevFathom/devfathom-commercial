@@ -5,9 +5,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 55 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 56 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
-- **To build** (Quick Win / Medium): 6 — card → To Do.
+- **To build** (Quick Win / Medium): 5 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 6 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
@@ -73,7 +73,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-AUTH-05 | quick-win | auth | Live password-policy checklist on the change form | [#105](https://github.com/WhatTheStack1/DevFathom-Hub/issues/105) | `cmqqe8jww001jsstwfb3yyugt` | Implemented |
 | IMP-AUTH-06 | quick-win | auth | Edge token verification + consistent page-auth guard | [#106](https://github.com/WhatTheStack1/DevFathom-Hub/issues/106) | `cmqqe8kal001ksstwi3pq6zhh` | Implemented |
 | IMP-RT-01 | medium | meetings | Attendance reporting & summaries | [#107](https://github.com/WhatTheStack1/DevFathom-Hub/issues/107) | `cmqqe8kni001lsstwk4mjc98c` | Implemented |
-| IMP-RT-02 | medium | chat | Message edit history / delete-for-everyone clarity + threads polish | [#108](https://github.com/WhatTheStack1/DevFathom-Hub/issues/108) | `cmqqe8l1o001msstworqrgs6r` | To build |
+| IMP-RT-02 | medium | chat | Message edit history / delete-for-everyone clarity + threads polish | [#108](https://github.com/WhatTheStack1/DevFathom-Hub/issues/108) | `cmqqe8l1o001msstworqrgs6r` | Implemented |
 | IMP-RT-03 | medium | chat | Realtime membership revocation + short token TTL | [#109](https://github.com/WhatTheStack1/DevFathom-Hub/issues/109) | `cmqqe8lfk001nsstw1f7x4n1q` | Implemented |
 | IMP-RT-04 | quick-win | chat | Mention-on-edit + stable ordering + scoped read receipts | [#110](https://github.com/WhatTheStack1/DevFathom-Hub/issues/110) | `cmqqe8lsd001osstwxq6vev24` | Implemented |
 | IMP-RT-05 | medium | upload | Authenticated/signed attachment delivery (per-channel) | [#111](https://github.com/WhatTheStack1/DevFathom-Hub/issues/111) | `cmqqe8m5q001psstw3r97w28t` | Implemented |
