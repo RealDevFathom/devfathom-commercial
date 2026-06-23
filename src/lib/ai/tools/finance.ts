@@ -519,8 +519,12 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       const invCurrency = currency ?? 'USD';
 
       // Invoice number: INV-<year>-<sequence>. Mirrors the tRPC mutation.
-      const count = await db.invoice.count();
-      const invoiceNumber = `INV-${new Date().getFullYear()}-${String(count + 1).padStart(3, '0')}`;
+      // FIN-09: per-year sequence so it resets to -001 each January.
+      const invYear = new Date().getFullYear();
+      const count = await db.invoice.count({
+        where: { invoiceNumber: { startsWith: `INV-${invYear}-` } },
+      });
+      const invoiceNumber = `INV-${invYear}-${String(count + 1).padStart(3, '0')}`;
 
       const invoice = await db.invoice.create({
         data: {

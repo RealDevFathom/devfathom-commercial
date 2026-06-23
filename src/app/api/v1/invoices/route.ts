@@ -77,8 +77,11 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
   const tax = round2(parsed.data.tax);
   const total = round2(subtotal + tax);
 
-  const count = await db.invoice.count();
+  // FIN-09: per-year sequence — scope the count to this year so it resets to -001.
   const year = new Date().getFullYear();
+  const count = await db.invoice.count({
+    where: { invoiceNumber: { startsWith: `INV-${year}-` } },
+  });
   const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
 
   const invoice = await db.invoice.create({

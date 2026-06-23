@@ -227,9 +227,13 @@ export const financeRouter = router({
       const tax = round2(input.tax ?? 0);
       const total = round2(subtotal + tax);
 
-      // Generate invoice number
-      const count = await ctx.db.invoice.count();
+      // Generate invoice number. FIN-09: scope the count to THIS year's invoices
+      // so the sequence resets to -001 each January (was a global count that never
+      // reset across years).
       const year = new Date().getFullYear();
+      const count = await ctx.db.invoice.count({
+        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
+      });
       const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
 
       const invoice = await ctx.db.invoice.create({
@@ -491,7 +495,8 @@ export const financeRouter = router({
       const groupPromises = [];
       for (let i = input.months - 1; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
+        // FIN-09: include the final millisecond so a 23:59:59.5xx row isn't dropped.
+        const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
         monthRanges.push(date);
         groupPromises.push(
           ctx.db.transaction.groupBy({
@@ -555,8 +560,13 @@ export const financeRouter = router({
             period: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
             income: incomeAmt,
             expense: expenseAmt,
-            profit: incomeAmt - expenseAmt,
-            margin: incomeAmt > 0 ? ((incomeAmt - expenseAmt) / incomeAmt) * 100 : 0,
+            // FIN-08: round to cents / 2-dp so raw JSON doesn't leak float artifacts
+            // (e.g. 0.20000000000000018) from Decimal→Number subtraction.
+            profit: round2(incomeAmt - expenseAmt),
+            margin:
+              incomeAmt > 0
+                ? Math.round(((incomeAmt - expenseAmt) / incomeAmt) * 10000) / 100
+                : 0,
           };
         });
         const categoryBreakdown = categoryGroups
