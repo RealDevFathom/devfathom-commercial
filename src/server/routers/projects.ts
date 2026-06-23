@@ -950,6 +950,44 @@ export const projectsRouter = router({
       });
     }),
 
+  // PROJ-04: task attachments were fetched but never rendered, with no way to
+  // add or remove them. These wire the existing TaskAttachment model + /api/upload
+  // pipeline to the detail sheet.
+  addTaskAttachment: protectedProcedure
+    .input(
+      z.object({
+        taskId: z.string(),
+        name: z.string().min(1),
+        url: z.string().min(1),
+        type: z.string().optional(),
+        size: z.number().int().nonnegative().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertTaskAccess(ctx, input.taskId);
+      return ctx.db.taskAttachment.create({
+        data: {
+          taskId: input.taskId,
+          name: input.name,
+          url: input.url,
+          type: input.type ?? null,
+          size: input.size ?? null,
+        },
+      });
+    }),
+
+  deleteTaskAttachment: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const attachment = await ctx.db.taskAttachment.findUnique({
+        where: { id: input.id },
+        select: { taskId: true },
+      });
+      if (!attachment) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertTaskAccess(ctx, attachment.taskId);
+      return ctx.db.taskAttachment.delete({ where: { id: input.id } });
+    }),
+
   toggleChecklistItem: protectedProcedure
     .input(
       z.object({

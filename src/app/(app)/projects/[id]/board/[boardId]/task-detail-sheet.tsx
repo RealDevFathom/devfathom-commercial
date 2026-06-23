@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useMemo, useState } from 'react';
+import { memo, useMemo, useState, type ChangeEvent } from 'react';
 import {
   X,
   Calendar,
@@ -14,6 +14,9 @@ import {
   Tag,
   Plus,
   Check,
+  Paperclip,
+  Download,
+  Loader2,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -216,6 +219,43 @@ export function TaskDetailSheet({
   const { data: task, isLoading } = trpc.projects.getTaskDetail.useQuery({ id: taskId });
 
   const updateTask = trpc.projects.updateTask.useMutation({ onSuccess: invalidateAll });
+
+  // PROJ-04: task attachments — add (via the /api/upload pipeline) + delete.
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const addAttachment = trpc.projects.addTaskAttachment.useMutation({ onSuccess: invalidateAll });
+  const deleteAttachment = trpc.projects.deleteTaskAttachment.useMutation({
+    onSuccess: invalidateAll,
+  });
+  const handleAttachmentUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingAttachment(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      if (!res.ok) throw new Error('Upload failed');
+      const data = (await res.json()) as {
+        url: string;
+        name: string;
+        size?: number;
+        type?: string;
+      };
+      addAttachment.mutate({
+        taskId,
+        name: data.name,
+        url: data.url,
+        type: data.type,
+        size: data.size,
+      });
+    } catch {
+      // best-effort; the mutation/upload errors surface no destructive state
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
+
   const deleteTask = trpc.projects.deleteTask.useMutation({
     onSuccess: () => {
       utils.projects.getBoardWithTasks.invalidate({ boardId });
@@ -763,6 +803,72 @@ export function TaskDetailSheet({
                     );
                   })}
                 </div>
+              )}
+            </div>
+
+            {/* Attachments (PROJ-04) */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <Paperclip className="h-3 w-3" /> Attachments
+                </h4>
+                <label className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                  {uploadingAttachment ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Plus className="h-3 w-3" />
+                  )}
+                  {uploadingAttachment ? 'Uploading…' : 'Add'}
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={handleAttachmentUpload}
+                    disabled={uploadingAttachment}
+                  />
+                </label>
+              </div>
+              {task.attachments.length > 0 ? (
+                <div className="space-y-1.5">
+                  {task.attachments.map((att) => (
+                    <div
+                      key={att.id}
+                      className="group/att flex items-center gap-2 rounded-lg border border-border/60 bg-secondary/30 px-3 py-2"
+                    >
+                      <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <a
+                        href={att.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 truncate text-xs font-medium text-foreground hover:text-primary hover:underline"
+                        title={att.name}
+                      >
+                        {att.name}
+                      </a>
+                      {typeof att.size === 'number' && (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {(att.size / 1024).toFixed(0)} KB
+                        </span>
+                      )}
+                      <a
+                        href={att.url}
+                        download={att.name}
+                        className="shrink-0 text-muted-foreground hover:text-foreground"
+                        title="Download"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </a>
+                      <button
+                        onClick={() => deleteAttachment.mutate({ id: att.id })}
+                        className="shrink-0 opacity-0 group-hover/att:opacity-100 transition-opacity text-muted-foreground hover:text-red-500"
+                        title="Remove attachment"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No attachments yet.</p>
               )}
             </div>
 
