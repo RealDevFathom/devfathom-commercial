@@ -17,7 +17,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { generateInviteToken } from '@/lib/invite-token';
-import { passwordSchema } from '@/lib/password-policy';
+import { passwordMeetsPolicy } from '@/lib/password-policy';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -942,13 +942,24 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         "Set a new password for another team member (admin password reset). Use for \"reset <name>'s password\", \"set a new password for <name>\". The password is stored hashed and never echoed back. ADMIN only.",
       inputSchema: z.object({
         name: z.string().describe('The member whose password to reset, e.g. "Aisha Khan"'),
-        newPassword: passwordSchema.describe(
-          'At least 8 chars with an uppercase letter, a lowercase letter, and a number'
-        ),
+        // AI-01: a bare min(8) string only — the policy regexes serialize to
+        // `allOf`/`pattern`, which Groq's strict validator 400s (taking the whole
+        // request, and every approval-continuation, down). Enforce the full policy
+        // inside execute via passwordMeetsPolicy() instead. Mirrors inviteMember.
+        newPassword: z
+          .string()
+          .min(8)
+          .describe('At least 8 chars with an uppercase letter, a lowercase letter, and a number'),
       }),
       needsApproval: true,
       execute: async ({ name, newPassword }) => {
         if (!h.isAdmin) return { error: 'Only admins can reset passwords.' };
+        if (!passwordMeetsPolicy(newPassword)) {
+          return {
+            error:
+              'Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.',
+          };
+        }
         const r = await h.resolvePerson(name, { includeInactive: true });
         if (r.kind === 'notfound') return { error: `No team member matches "${name}".` };
         if (r.kind === 'ambiguous')
