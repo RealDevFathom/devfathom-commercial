@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
 import {
   fromCurrencyGroups,
@@ -5,7 +6,63 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 
+// IMP-DASH-02: stable keys for the dashboard widgets a user may hide. The Next
+// Meeting banner, KPI cards, and admin Revenue chart are intentionally NOT
+// toggleable — they stay always-on to avoid edge cases.
+const TOGGLEABLE_WIDGETS = ['myTasks', 'deadlines', 'activity', 'projects'] as const;
+
+/**
+ * Safely coerce a stored `User.preferences` JSON blob into the shape we rely on.
+ * Anything malformed (null, non-object, wrong types) falls back to a sane empty
+ * default so the dashboard never crashes on bad data.
+ */
+function parsePreferences(raw: unknown): { hiddenWidgets: string[] } {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const hidden = (raw as Record<string, unknown>).hiddenWidgets;
+    if (Array.isArray(hidden)) {
+      return { hiddenWidgets: hidden.filter((w): w is string => typeof w === 'string') };
+    }
+  }
+  return { hiddenWidgets: [] };
+}
+
 export const dashboardRouter = router({
+  // IMP-DASH-02: read the caller's dashboard widget preferences.
+  getPreferences: protectedProcedure.query(async ({ ctx }) => {
+    const user = await ctx.db.user.findUnique({
+      where: { id: ctx.session.user.id },
+      select: { preferences: true },
+    });
+    return parsePreferences(user?.preferences);
+  }),
+
+  // IMP-DASH-02: persist which widgets the caller has hidden. We merge into the
+  // existing preferences object so unrelated keys are preserved, and ignore any
+  // unknown widget keys so the stored set stays clean.
+  updatePreferences: protectedProcedure
+    .input(z.object({ hiddenWidgets: z.array(z.string()) }))
+    .mutation(async ({ ctx, input }) => {
+      const hiddenWidgets = input.hiddenWidgets.filter((w) =>
+        (TOGGLEABLE_WIDGETS as readonly string[]).includes(w)
+      );
+
+      const existing = await ctx.db.user.findUnique({
+        where: { id: ctx.session.user.id },
+        select: { preferences: true },
+      });
+      const base =
+        existing?.preferences && typeof existing.preferences === 'object' &&
+        !Array.isArray(existing.preferences)
+          ? (existing.preferences as Record<string, unknown>)
+          : {};
+
+      await ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: { preferences: { ...base, hiddenWidgets } },
+      });
+      return { hiddenWidgets };
+    }),
+
   getStats: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
     const userId = ctx.session.user.id;

@@ -21,6 +21,7 @@ import {
   Plus,
   X,
   Loader2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -881,15 +882,55 @@ function DashboardSkeleton() {
 }
 
 /* ============================================
+   Customizable widgets (IMP-DASH-02)
+   ============================================ */
+// Stable keys must match TOGGLEABLE_WIDGETS in src/server/routers/dashboard.ts.
+// The Next Meeting banner, KPI cards, and admin Revenue chart are always-on.
+const DASHBOARD_WIDGETS = [
+  { key: 'myTasks', label: 'My Tasks' },
+  { key: 'deadlines', label: 'Upcoming Deadlines' },
+  { key: 'activity', label: 'Activity' },
+  { key: 'projects', label: 'Active Projects' },
+] as const;
+
+/* ============================================
    Dashboard main
    ============================================ */
 export function DashboardContent() {
   const { data: session } = useSession();
+  const utils = trpc.useUtils();
   const stats = trpc.dashboard.getStats.useQuery();
   const activity = trpc.dashboard.getRecentActivity.useQuery();
   const deadlines = trpc.dashboard.getUpcomingDeadlines.useQuery();
   const projects = trpc.dashboard.getProjectCards.useQuery();
   const myTasks = trpc.dashboard.getMyTasks.useQuery();
+  const prefs = trpc.dashboard.getPreferences.useQuery();
+
+  const [showCustomize, setShowCustomize] = useState(false);
+
+  // Optimistically flip the checkbox so toggling feels instant; reconcile on
+  // settle. Rollback on error keeps the UI honest if the write fails.
+  const updatePrefs = trpc.dashboard.updatePreferences.useMutation({
+    onMutate: async (next) => {
+      await utils.dashboard.getPreferences.cancel();
+      const prev = utils.dashboard.getPreferences.getData();
+      utils.dashboard.getPreferences.setData(undefined, { hiddenWidgets: next.hiddenWidgets });
+      return { prev };
+    },
+    onError: (_err, _next, context) => {
+      if (context?.prev) utils.dashboard.getPreferences.setData(undefined, context.prev);
+    },
+    onSettled: () => utils.dashboard.getPreferences.invalidate(),
+  });
+
+  const hiddenWidgets = prefs.data?.hiddenWidgets ?? [];
+  const isHidden = (key: string) => hiddenWidgets.includes(key);
+  const toggleWidget = (key: string) => {
+    const next = isHidden(key)
+      ? hiddenWidgets.filter((k) => k !== key)
+      : [...hiddenWidgets, key];
+    updatePrefs.mutate({ hiddenWidgets: next });
+  };
 
   if (stats.isLoading) return <DashboardSkeleton />;
 
@@ -921,6 +962,46 @@ export function DashboardContent() {
           </span>
         </div>
       </div>
+
+      {/* Customize widgets (IMP-DASH-02) */}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setShowCustomize((v) => !v)}
+          aria-expanded={showCustomize}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors',
+            showCustomize
+              ? 'border-primary/30 bg-primary/10 text-primary'
+              : 'border-border bg-card text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" /> Customize
+        </button>
+      </div>
+      {showCustomize && (
+        <Card className="border-border/60">
+          <CardContent className="p-4">
+            <p className="mb-3 text-xs font-medium text-muted-foreground">Show widgets</p>
+            <div className="flex flex-wrap gap-x-6 gap-y-2.5">
+              {DASHBOARD_WIDGETS.map((w) => (
+                <label
+                  key={w.key}
+                  className="flex cursor-pointer items-center gap-2 text-sm text-foreground"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!isHidden(w.key)}
+                    onChange={() => toggleWidget(w.key)}
+                    className="h-4 w-4 rounded border-border text-primary accent-primary focus:ring-2 focus:ring-primary/20"
+                  />
+                  {w.label}
+                </label>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Next Meeting */}
       <NextMeetingBanner />
@@ -988,6 +1069,7 @@ export function DashboardContent() {
       {/* My Tasks + Upcoming Deadlines */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
         {/* My Tasks */}
+        {!isHidden('myTasks') && (
         <Card className="lg:col-span-3 border-border/60">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
@@ -1039,8 +1121,10 @@ export function DashboardContent() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Upcoming Deadlines */}
+        {!isHidden('deadlines') && (
         <Card className="lg:col-span-2 border-border/60">
           <CardHeader className="pb-2">
             <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
@@ -1080,11 +1164,13 @@ export function DashboardContent() {
             </div>
           </CardContent>
         </Card>
+        )}
       </div>
 
       {/* Activity + Active Projects */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
         {/* Recent Activity */}
+        {!isHidden('activity') && (
         <Card className="lg:col-span-2 border-border/60">
           <CardHeader className="pb-2">
             <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
@@ -1127,8 +1213,10 @@ export function DashboardContent() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Active Projects */}
+        {!isHidden('projects') && (
         <div className="lg:col-span-3">
           <h2 className="font-display text-[15px] font-semibold text-foreground mb-4 flex items-center gap-2">
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10">
@@ -1174,6 +1262,7 @@ export function DashboardContent() {
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );
