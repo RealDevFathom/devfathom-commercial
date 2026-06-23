@@ -5,9 +5,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 33 — issue closed, card → Done.
-- **Partial** (core delivered; remainder tracked): 5 — card → In Progress.
-- **To build** (Quick Win / Medium): 23 — card → To Do.
+- **Implemented** (delivered during QA remediation): 39 — issue closed, card → Done.
+- **Partial** (core delivered; remainder tracked): 6 — card → In Progress.
+- **To build** (Quick Win / Medium): 16 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 9 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
@@ -22,7 +22,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-ID | Tier | Module | Title | GitHub | Internal task id | Status |
 |---|---|---|---|---|---|---|
 | IMP-PROJ-01 | big-bet | projects | Time tracking (wire the modeled TimeEntry) | [#56](https://github.com/WhatTheStack1/DevFathom-Hub/issues/56) | `cmqqe812v0006sstwi2fzasqh` | Planned (greenlight) |
-| IMP-PROJ-02 | medium | projects | Checklist management (create/rename/reorder/delete) | [#57](https://github.com/WhatTheStack1/DevFathom-Hub/issues/57) | `cmqqe81jl0007sstwbr4djsza` | To build |
+| IMP-PROJ-02 | medium | projects | Checklist management (create/rename/reorder/delete) | [#57](https://github.com/WhatTheStack1/DevFathom-Hub/issues/57) | `cmqqe81jl0007sstwbr4djsza` | Implemented |
 | IMP-PROJ-03 | medium | projects | Task attachments — render + add/delete | [#58](https://github.com/WhatTheStack1/DevFathom-Hub/issues/58) | `cmqqe820g0008sstwnz0ohg16` | Implemented |
 | IMP-PROJ-04 | quick-win | projects | Comment edit/delete | [#59](https://github.com/WhatTheStack1/DevFathom-Hub/issues/59) | `cmqqe82dv0009sstwroj70f4n` | Implemented |
 | IMP-PROJ-05 | quick-win | projects | Board rename/description + label edit/delete + project-file delete | [#60](https://github.com/WhatTheStack1/DevFathom-Hub/issues/60) | `cmqqe82tu000asstwkcz540nw` | Partial |
@@ -32,8 +32,8 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-PROJ-09 | medium | projects | Pagination / lazy-load on large boards | [#64](https://github.com/WhatTheStack1/DevFathom-Hub/issues/64) | `cmqqe84jj000esstwp7dve8rc` | To build |
 | IMP-PROJ-10 | quick-win | projects | Task activity timeline in the detail sheet | [#65](https://github.com/WhatTheStack1/DevFathom-Hub/issues/65) | `cmqqe84ww000fsstwtf8glhxk` | Implemented |
 | IMP-PROJ-11 | quick-win | projects | Generalized done detection (shared heuristic) | [#66](https://github.com/WhatTheStack1/DevFathom-Hub/issues/66) | `cmqqe85bx000gsstwvazf1i0j` | Implemented |
-| IMP-CLI-01 | medium | clients | Full contact CRUD UI (add/edit/delete/primary/phone) | [#67](https://github.com/WhatTheStack1/DevFathom-Hub/issues/67) | `cmqqe85p7000hsstwylfesd5m` | To build |
-| IMP-CLI-02 | medium | clients | Client activity timeline | [#68](https://github.com/WhatTheStack1/DevFathom-Hub/issues/68) | `cmqqe862a000isstw8kcl39fq` | To build |
+| IMP-CLI-01 | medium | clients | Full contact CRUD UI (add/edit/delete/primary/phone) | [#67](https://github.com/WhatTheStack1/DevFathom-Hub/issues/67) | `cmqqe85p7000hsstwylfesd5m` | Implemented |
+| IMP-CLI-02 | medium | clients | Client activity timeline | [#68](https://github.com/WhatTheStack1/DevFathom-Hub/issues/68) | `cmqqe862a000isstw8kcl39fq` | Implemented |
 | IMP-CLI-03 | quick-win | clients | Client status workflow + logo upload | [#69](https://github.com/WhatTheStack1/DevFathom-Hub/issues/69) | `cmqqe86fb000jsstwd66l7xyc` | Implemented |
 | IMP-CLI-04 | medium | clients | Contract expiry/renewal reminders | [#70](https://github.com/WhatTheStack1/DevFathom-Hub/issues/70) | `cmqqe86u1000ksstwcndpshv6` | To build |
 | IMP-CLI-05 | medium | clients | Contract ↔ project/invoice linkage + value rollup | [#71](https://github.com/WhatTheStack1/DevFathom-Hub/issues/71) | `cmqqe8774000lsstwpnsmhiov` | To build |
@@ -54,13 +54,13 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-NOTE-01 | big-bet | notes | Version history / restore | [#86](https://github.com/WhatTheStack1/DevFathom-Hub/issues/86) | `cmqqe8crc0010sstwtojh8xoy` | Planned (greenlight) |
 | IMP-NOTE-02 | medium | notes | People @mentions + notifications in notes | [#87](https://github.com/WhatTheStack1/DevFathom-Hub/issues/87) | `cmqqe8d440011sstwp1ibz4hb` | To build |
 | IMP-NOTE-03 | quick-win | notes | Author-only visibility control | [#88](https://github.com/WhatTheStack1/DevFathom-Hub/issues/88) | `cmqqe8djo0012sstw6sp86tj4` | Implemented |
-| IMP-NOTE-04 | medium | notes | Resolve shared-with-me backlinks instead of hiding | [#89](https://github.com/WhatTheStack1/DevFathom-Hub/issues/89) | `cmqqe8dxu0013sstw1dnx2tma` | To build |
+| IMP-NOTE-04 | medium | notes | Resolve shared-with-me backlinks instead of hiding | [#89](https://github.com/WhatTheStack1/DevFathom-Hub/issues/89) | `cmqqe8dxu0013sstw1dnx2tma` | Implemented |
 | IMP-NOTE-05 | quick-win | notes | Allow-list link protocols in the editor | [#90](https://github.com/WhatTheStack1/DevFathom-Hub/issues/90) | `cmqqe8eaw0014sstwamo36yqr` | Implemented |
 | IMP-DASH-01 | medium | dashboard | Relevance-scoped activity feed | [#91](https://github.com/WhatTheStack1/DevFathom-Hub/issues/91) | `cmqqe8eno0015sstwpy1dvbg0` | Implemented |
 | IMP-DASH-02 | medium | dashboard | Customizable widgets + graceful empty states | [#92](https://github.com/WhatTheStack1/DevFathom-Hub/issues/92) | `cmqqe8f1a0016sstwrytsfv2p` | To build |
 | IMP-DASH-03 | quick-win | dashboard | Personal my-time-off / pending-leave widget | [#93](https://github.com/WhatTheStack1/DevFathom-Hub/issues/93) | `cmqqe8fec0017sstw0ecskjud` | Implemented |
 | IMP-HR-01 | big-bet | team | Leave balances + team calendar + overlap detection | [#94](https://github.com/WhatTheStack1/DevFathom-Hub/issues/94) | `cmqqe8fro0018sstwqvud8ijk` | Planned (greenlight) |
-| IMP-HR-02 | medium | team | Off-boarding automation | [#95](https://github.com/WhatTheStack1/DevFathom-Hub/issues/95) | `cmqqe8g5k0019sstwbfzwo4qn` | To build |
+| IMP-HR-02 | medium | team | Off-boarding automation | [#95](https://github.com/WhatTheStack1/DevFathom-Hub/issues/95) | `cmqqe8g5k0019sstwbfzwo4qn` | Implemented |
 | IMP-HR-03 | quick-win | team | Self-service leave edit/cancel | [#96](https://github.com/WhatTheStack1/DevFathom-Hub/issues/96) | `cmqqe8gkk001asstw0jyg41ys` | Implemented |
 | IMP-HR-04 | medium | team | Performance review workflow | [#97](https://github.com/WhatTheStack1/DevFathom-Hub/issues/97) | `cmqqe8gxm001bsstwxng4j3kv` | To build |
 | IMP-HR-05 | quick-win | team | Separation-of-duties on approvals | [#98](https://github.com/WhatTheStack1/DevFathom-Hub/issues/98) | `cmqqe8hao001csstwy1q8vczg` | Implemented |
@@ -72,7 +72,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-AUTH-04 | medium | auth | Notification preferences | [#104](https://github.com/WhatTheStack1/DevFathom-Hub/issues/104) | `cmqqe8jjt001isstw34mou5s9` | To build |
 | IMP-AUTH-05 | quick-win | auth | Live password-policy checklist on the change form | [#105](https://github.com/WhatTheStack1/DevFathom-Hub/issues/105) | `cmqqe8jww001jsstwfb3yyugt` | Implemented |
 | IMP-AUTH-06 | quick-win | auth | Edge token verification + consistent page-auth guard | [#106](https://github.com/WhatTheStack1/DevFathom-Hub/issues/106) | `cmqqe8kal001ksstwi3pq6zhh` | Implemented |
-| IMP-RT-01 | medium | meetings | Attendance reporting & summaries | [#107](https://github.com/WhatTheStack1/DevFathom-Hub/issues/107) | `cmqqe8kni001lsstwk4mjc98c` | To build |
+| IMP-RT-01 | medium | meetings | Attendance reporting & summaries | [#107](https://github.com/WhatTheStack1/DevFathom-Hub/issues/107) | `cmqqe8kni001lsstwk4mjc98c` | Partial |
 | IMP-RT-02 | medium | chat | Message edit history / delete-for-everyone clarity + threads polish | [#108](https://github.com/WhatTheStack1/DevFathom-Hub/issues/108) | `cmqqe8l1o001msstworqrgs6r` | To build |
 | IMP-RT-03 | medium | chat | Realtime membership revocation + short token TTL | [#109](https://github.com/WhatTheStack1/DevFathom-Hub/issues/109) | `cmqqe8lfk001nsstw1f7x4n1q` | Implemented |
 | IMP-RT-04 | quick-win | chat | Mention-on-edit + stable ordering + scoped read receipts | [#110](https://github.com/WhatTheStack1/DevFathom-Hub/issues/110) | `cmqqe8lsd001osstwxq6vev24` | Implemented |
@@ -90,6 +90,6 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-PLAT-01 | quick-win | platform | Tighten CSP & image origins | [#122](https://github.com/WhatTheStack1/DevFathom-Hub/issues/122) | `cmqqe8q5l0020sstwyasjnmse` | Implemented |
 | IMP-PLAT-02 | medium | platform | Production file storage (Vercel Blob) | [#123](https://github.com/WhatTheStack1/DevFathom-Hub/issues/123) | `cmqqe8ql50021sstwrabhqlpn` | To build |
 | IMP-PLAT-03 | medium | platform | Observability (error tracking + request metrics) | [#124](https://github.com/WhatTheStack1/DevFathom-Hub/issues/124) | `cmqqe8qy80022sstwab6i8t7i` | To build |
-| IMP-PLAT-04 | medium | platform | Audit log export + retention policy | [#125](https://github.com/WhatTheStack1/DevFathom-Hub/issues/125) | `cmqqe8rb80023sstwsu377an4` | To build |
+| IMP-PLAT-04 | medium | platform | Audit log export + retention policy | [#125](https://github.com/WhatTheStack1/DevFathom-Hub/issues/125) | `cmqqe8rb80023sstwsu377an4` | Implemented |
 
 _Each item carries acceptance criteria in its issue/task body (the BA's "what it should do") so QA can verify._

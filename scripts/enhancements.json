@@ -18,7 +18,7 @@
     "tier": "medium",
     "title": "Checklist management (create/rename/reorder/delete)",
     "value": "Core kanban capability; today read-only",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Add/rename/reorder/delete checklists and items from the detail sheet",
       "Access-checked via assertTaskAccess",
@@ -147,7 +147,7 @@
     "tier": "medium",
     "title": "Full contact CRUD UI (add/edit/delete/primary/phone)",
     "value": "A usable CRM contact book",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Contacts tab can add/edit/delete and set primary + phone",
       "updateContact mutation; single primary enforced"
@@ -159,7 +159,7 @@
     "tier": "medium",
     "title": "Client activity timeline",
     "value": "Account context before a call",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Per-client history of project/invoice/contract/note events",
       "Scoped to admin/finance visibility"
@@ -429,7 +429,7 @@
     "tier": "medium",
     "title": "Resolve shared-with-me backlinks instead of hiding",
     "value": "Legit shared links don't vanish",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "getById resolves SHARED backlinks against the viewer's shares"
     ]
@@ -502,7 +502,7 @@
     "tier": "medium",
     "title": "Off-boarding automation",
     "value": "Security + process hygiene",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Resignation approval deactivates account + revokes sessions on lastWorkingDay",
       "Pairs with AUTH-01 tokenVersion"
@@ -649,7 +649,7 @@
     "tier": "medium",
     "title": "Attendance reporting & summaries",
     "value": "Actionable attendance data",
-    "status": "todo",
+    "status": "partial",
     "acceptance": [
       "Per-meeting and per-person attendance % view from the logs"
     ]
@@ -889,7 +889,7 @@
     "tier": "medium",
     "title": "Audit log export + retention policy",
     "value": "Compliance",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "CSV/JSON export of audit logs; documented immutability/retention"
     ]
