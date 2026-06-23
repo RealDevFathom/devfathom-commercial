@@ -87,8 +87,25 @@ export const dashboardRouter = router({
 
   getRecentActivity: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
+    const userId = ctx.session.user.id;
+    const userSelect = { id: true, name: true, avatar: true, title: true } as const;
 
-    // Hide finance-related activity from non-admins. Contracts are admin-only too.
+    if (isAdmin) {
+      return ctx.db.activity.findMany({
+        take: 20,
+        orderBy: { createdAt: 'desc' },
+        include: { user: { select: userSelect } },
+      });
+    }
+
+    // DASH-01: the feed must be scoped to what the viewer can actually see —
+    // previously it filtered ONLY finance event types, so SHARED-note titles and
+    // cross-team project/task names were broadcast to every employee.
+    //
+    // Drop finance/CRM types outright, then keep an item only if: the viewer
+    // performed it, OR it is a Note they can access, OR a Project/Task in a
+    // project they belong to. Everything else (others' meetings, DMs, HR, User)
+    // is dropped.
     const financeTypes = [
       'invoice_created',
       'invoice_sent',
@@ -97,18 +114,57 @@ export const dashboardRouter = router({
       'contract_created',
       'contract_updated',
       'contract_deleted',
+      'client_created',
+      'client_deleted',
     ];
 
-    return ctx.db.activity.findMany({
-      where: isAdmin ? {} : { type: { notIn: financeTypes } },
-      take: 20,
+    const recent = await ctx.db.activity.findMany({
+      where: { type: { notIn: financeTypes } },
+      take: 80,
       orderBy: { createdAt: 'desc' },
-      include: {
-        user: {
-          select: { id: true, name: true, avatar: true, title: true },
-        },
-      },
+      include: { user: { select: userSelect } },
     });
+
+    const [memberProjects, accessibleNotes] = await Promise.all([
+      ctx.db.projectMember.findMany({ where: { userId }, select: { projectId: true } }),
+      ctx.db.note.findMany({
+        where: {
+          OR: [{ authorId: userId }, { visibility: 'TEAM' }, { shares: { some: { userId } } }],
+        },
+        select: { id: true },
+      }),
+    ]);
+    const projectIds = new Set(memberProjects.map((m) => m.projectId));
+    const noteIds = new Set(accessibleNotes.map((n) => n.id));
+
+    // Resolve each Task activity to its parent project so we can membership-check.
+    const taskIds = recent
+      .filter((a) => a.entityType === 'Task' && a.entityId)
+      .map((a) => a.entityId as string);
+    const taskProject = new Map<string, string>();
+    if (taskIds.length) {
+      const tasks = await ctx.db.task.findMany({
+        where: { id: { in: taskIds } },
+        select: { id: true, column: { select: { board: { select: { projectId: true } } } } },
+      });
+      for (const t of tasks) taskProject.set(t.id, t.column.board.projectId);
+    }
+
+    return recent
+      .filter((a) => {
+        if (a.userId === userId) return true; // the viewer's own action
+        switch (a.entityType) {
+          case 'Note':
+            return a.entityId ? noteIds.has(a.entityId) : false;
+          case 'Project':
+            return a.entityId ? projectIds.has(a.entityId) : false;
+          case 'Task':
+            return a.entityId ? projectIds.has(taskProject.get(a.entityId) ?? '') : false;
+          default:
+            return false;
+        }
+      })
+      .slice(0, 20);
   }),
 
   getUpcomingDeadlines: protectedProcedure.query(async ({ ctx }) => {
