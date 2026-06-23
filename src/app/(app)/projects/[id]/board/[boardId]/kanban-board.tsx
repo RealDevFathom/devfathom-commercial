@@ -126,6 +126,30 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   const hasFilters =
     searchQuery || filterPriority !== 'ALL' || filterAssignee !== 'ALL' || filterLabel !== 'ALL';
 
+  // Filter tasks within columns. Declared BEFORE handleDragEnd because the drag
+  // handler maps the rendered (filtered) drop position back to a real index.
+  const filteredColumns = useMemo(() => {
+    if (!board) return [];
+    if (!hasFilters) return board.columns;
+
+    return board.columns.map((col) => ({
+      ...col,
+      tasks: col.tasks.filter((task) => {
+        if (
+          deferredSearchQuery &&
+          !task.title.toLowerCase().includes(deferredSearchQuery.toLowerCase())
+        )
+          return false;
+        if (filterPriority !== 'ALL' && task.priority !== filterPriority) return false;
+        if (filterAssignee !== 'ALL' && !task.assignees.some((a) => a.user.id === filterAssignee))
+          return false;
+        if (filterLabel !== 'ALL' && !task.labels.some((l) => l.label.id === filterLabel))
+          return false;
+        return true;
+      }),
+    }));
+  }, [board, deferredSearchQuery, filterPriority, filterAssignee, filterLabel, hasFilters]);
+
   const handleDragEnd = useCallback(
     (result: DropResult) => {
       if (!result.destination || !board) return;
@@ -161,6 +185,16 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
       }
 
       // --- Task reorder / move ---
+      // PROJ-01: the drag indices (source.index / destination.index) are positions
+      // in the RENDERED list, which is `filteredColumns` when a filter is active.
+      // Splicing those indices into the unfiltered `board.columns` moves the wrong
+      // task and persists a wrong order. So we map everything by task id:
+      //   1. remove the dragged task from the real source column by its id;
+      //   2. work in filtered space to find which task the dragged one lands in
+      //      front of (its "follow neighbour"), exactly as the DnD lib intends;
+      //   3. insert before that neighbour's REAL index (or append) and send that
+      //      real index as newOrder. When no filter is active filtered === real,
+      //      so this collapses to the original behaviour.
       const newColumns = board.columns.map((col) => ({
         ...col,
         tasks: [...col.tasks],
@@ -170,8 +204,29 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
       const destCol = newColumns.find((c) => c.id === destination.droppableId);
       if (!sourceCol || !destCol) return;
 
-      const [movedTask] = sourceCol.tasks.splice(source.index, 1);
-      destCol.tasks.splice(destination.index, 0, movedTask);
+      // 1. Remove by id, not by (possibly filtered) index.
+      const srcRealIdx = sourceCol.tasks.findIndex((t) => t.id === draggableId);
+      if (srcRealIdx === -1) return;
+      const [movedTask] = sourceCol.tasks.splice(srcRealIdx, 1);
+
+      // 2. Determine the follow-neighbour in filtered space (post-removal list).
+      const filteredSource =
+        filteredColumns.find((c) => c.id === source.droppableId)?.tasks ?? sourceCol.tasks;
+      const filteredDestBase =
+        source.droppableId === destination.droppableId
+          ? filteredSource
+          : filteredColumns.find((c) => c.id === destination.droppableId)?.tasks ?? destCol.tasks;
+      const filteredDestAfterRemoval = filteredDestBase.filter((t) => t.id !== draggableId);
+      const followNeighbour = filteredDestAfterRemoval[destination.index] ?? null;
+
+      // 3. Translate that to a real insertion index in the unfiltered dest column.
+      const destRealIdx = followNeighbour
+        ? (() => {
+            const i = destCol.tasks.findIndex((t) => t.id === followNeighbour.id);
+            return i === -1 ? destCol.tasks.length : i;
+          })()
+        : destCol.tasks.length;
+      destCol.tasks.splice(destRealIdx, 0, movedTask);
 
       const previous = board;
       utils.projects.getBoardWithTasks.setData(
@@ -186,7 +241,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         {
           taskId: draggableId,
           targetColumnId: destination.droppableId,
-          newOrder: destination.index,
+          newOrder: destRealIdx,
         },
         {
           onError: () => {
@@ -195,7 +250,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         }
       );
     },
-    [board, boardId, moveTask, reorderColumns, utils.projects.getBoardWithTasks]
+    [board, boardId, filteredColumns, moveTask, reorderColumns, utils.projects.getBoardWithTasks]
   );
 
   const handleAddTask = useCallback(
@@ -226,29 +281,6 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
   const allLabels = useMemo(() => {
     return board?.labels ?? [];
   }, [board]);
-
-  // Filter tasks within columns
-  const filteredColumns = useMemo(() => {
-    if (!board) return [];
-    if (!hasFilters) return board.columns;
-
-    return board.columns.map((col) => ({
-      ...col,
-      tasks: col.tasks.filter((task) => {
-        if (
-          deferredSearchQuery &&
-          !task.title.toLowerCase().includes(deferredSearchQuery.toLowerCase())
-        )
-          return false;
-        if (filterPriority !== 'ALL' && task.priority !== filterPriority) return false;
-        if (filterAssignee !== 'ALL' && !task.assignees.some((a) => a.user.id === filterAssignee))
-          return false;
-        if (filterLabel !== 'ALL' && !task.labels.some((l) => l.label.id === filterLabel))
-          return false;
-        return true;
-      }),
-    }));
-  }, [board, deferredSearchQuery, filterPriority, filterAssignee, filterLabel, hasFilters]);
 
   if (isLoading) return <BoardSkeleton />;
   if (!board) return null;
