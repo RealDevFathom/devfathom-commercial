@@ -7,11 +7,18 @@
 ## Where it stands (UPDATED 2026-06-23 — user authorized "EVERYTHING" = tiers a+b+c)
 - **Bugs: 53/53 DONE.** AUTH-01 (#27) UNBLOCKED & closed (commit `365ea6c`): session revocation via
   `User.tokenVersion`, validated on a local disposable Postgres. The bug program is complete.
-- **Enhancements: 48 implemented / 2 partial / rest remaining** (milestone "Product Improvements" +
-  internal "Improvements" board). Implemented this session: TRELLO-01, RT-01, RT-05, FIN-03, REST-01,
-  PROJ-08, PROJ-09, IMP-AUTH-01 (password reset). Partial: IMP-AUTH-03 (sign-out-everywhere + revoke
-  done; active-sessions list needs a session store), IMP-PROJ-05 (labels done+committed; board-rename +
-  file-delete done IN-TREE but uncommitted — stuck in the project-detail-content.tsx redesign blob).
+- **Enhancements: 51 implemented / 3 partial / 9 todo / 7 Big Bets.** Implemented this session:
+  TRELLO-01, RT-01, RT-05, FIN-03, REST-01, PROJ-08, PROJ-09, IMP-AUTH-01, CLI-05, AUTH-04, DASH-02.
+  Partial: IMP-AUTH-03 (sign-out-everywhere + revoke done; active-sessions list needs a session store),
+  IMP-PROJ-05 (labels done+committed; board-rename + file-delete done IN-TREE but uncommitted — stuck
+  in the project-detail-content.tsx redesign blob), IMP-PROJ-07 (WIP limits done; board templates pending).
+  Schema columns shipped & validated on local PG: User.tokenVersion/passwordChangedAt/preferences/
+  notificationPrefs, PasswordResetToken, Column.wipLimit, Contract.projectId(+Project.contracts).
+  Session commits: 24787df→(latest). REMAINING TODO (9): relational-schema features PROJ-06
+  (Task.parentId self-rel + TaskBlocker + cycle prevention), FIN-04 (Payment model + overdue auto),
+  RT-02 (MessageEdit model), HR-04 (review-cycle models), NOTE-02 (note @mentions); plus TRELLO-02
+  (map cover/customfields — may need Task cols), CLI-04 (contract expiry reminders, schema-free),
+  AI-02 (citations — entangled w/ assistant context.ts WIP), PLAT-02/PLAT-03 (infra, needs deploy).
 - **Build + `src/` typecheck GREEN** at every step. **Keystone NEVER modified** (`src/lib/abac/**`,
   `src/lib/authz.ts`). New bulk mutations + auth use the keystone's object-level guards (add-only).
 - Session commits: `24787df 5ce253f d39fcbb 0ef4219 365ea6c b3e15c8 9b654ba` (+ reconciles).
