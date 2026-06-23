@@ -633,6 +633,26 @@ export const teamRouter = router({
     return { success: true };
   }),
 
+  // IMP-AUTH-03 (visibility half): the caller's own recent successful sign-ins,
+  // surfaced from the audit trail. Auth is stateless JWT, so there is no
+  // per-session registry to enumerate or revoke individually — these LOGIN rows
+  // (source AUTH / operation LOGIN, written by recordAuthAudit on every
+  // successful sign-in) are the closest thing to a "where am I signed in" view.
+  // "Sign out everywhere" above is the only revocation, since individual JWTs
+  // can't be listed or killed one-by-one.
+  mySignIns: protectedProcedure.query(async ({ ctx }) => {
+    return ctx.db.auditLog.findMany({
+      where: {
+        actorId: ctx.session.user.id,
+        operation: 'LOGIN',
+        outcome: 'SUCCESS',
+      },
+      select: { id: true, createdAt: true, ip: true, userAgent: true },
+      orderBy: { createdAt: 'desc' },
+      take: 15,
+    });
+  }),
+
   // IMP-AUTH-04: read the caller's own notification preferences. Returns the
   // stored sparse blob (or null when never set — the UI treats that as "all ON").
   getNotificationPrefs: protectedProcedure.query(async ({ ctx }) => {

@@ -25,6 +25,7 @@ import {
   Bell,
   Webhook,
   ChevronDown,
+  History,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -81,6 +82,9 @@ export function SettingsContent() {
 
       {/* Two-factor authentication (IMP-AUTH-02) */}
       <TwoFactorSection />
+
+      {/* Recent sign-ins (IMP-AUTH-03 — visibility half) */}
+      <RecentSignInsSection />
 
       {/* Notification preferences (IMP-AUTH-04) */}
       <NotificationsSection />
@@ -528,6 +532,103 @@ function PasswordSection() {
             {signOutEverywhere.isPending ? 'Signing out…' : 'Sign out everywhere'}
           </button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================================================
+   Recent sign-ins (IMP-AUTH-03 — visibility half)
+   Surfaces the caller's own successful LOGIN rows from the audit trail.
+   Auth is stateless JWT, so individual sessions can't be enumerated or
+   revoked one-by-one — "Sign out everywhere" (Password section) is the only
+   kill switch. This card is the matching visibility view.
+   ============================================================ */
+
+// Best-effort, dependency-free user-agent summary. Order matters: Edge and
+// Chrome UAs both contain "Safari", and Edge contains "Chrome", so the more
+// specific brands are checked first. Falls back to a trimmed raw UA so a row
+// never renders blank.
+function parseUserAgent(ua: string | null): string {
+  if (!ua) return 'Unknown device';
+  const browser = /Edg\//.test(ua)
+    ? 'Edge'
+    : /OPR\/|Opera/.test(ua)
+      ? 'Opera'
+      : /Chrome\//.test(ua)
+        ? 'Chrome'
+        : /Firefox\//.test(ua)
+          ? 'Firefox'
+          : /Safari\//.test(ua)
+            ? 'Safari'
+            : null;
+  const os = /Windows/.test(ua)
+    ? 'Windows'
+    : /Mac OS X|Macintosh/.test(ua)
+      ? 'macOS'
+      : /iPhone|iPad|iOS/.test(ua)
+        ? 'iOS'
+        : /Android/.test(ua)
+          ? 'Android'
+          : /Linux/.test(ua)
+            ? 'Linux'
+            : null;
+  if (browser && os) return `${browser} on ${os}`;
+  if (browser) return browser;
+  if (os) return os;
+  return ua.length > 48 ? `${ua.slice(0, 48)}…` : ua;
+}
+
+function RecentSignInsSection() {
+  const { data: signIns, isLoading } = trpc.team.mySignIns.useQuery();
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo-500/10">
+            <History className="h-3.5 w-3.5 text-indigo-500" />
+          </div>
+          Recent sign-ins
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Your latest successful sign-ins. Individual sessions can&apos;t be listed or revoked
+          one-by-one — use{' '}
+          <span className="font-medium text-foreground">Sign out everywhere</span> in the Password
+          section to revoke them all.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading sign-ins…
+          </div>
+        ) : signIns && signIns.length > 0 ? (
+          <div className="divide-y divide-border/60">
+            {signIns.map((s) => (
+              <div key={s.id} className="flex items-center gap-3 py-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary">
+                  <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {parseUserAgent(s.userAgent)}
+                  </p>
+                  <p className="text-[11px] font-mono text-muted-foreground">
+                    {s.ip ?? 'Unknown IP'}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/80">
+                  {formatDeliveryTime(s.createdAt)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="py-4 text-center text-xs text-muted-foreground">
+            No recent sign-ins recorded.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
