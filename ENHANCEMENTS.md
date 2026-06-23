@@ -5,9 +5,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 50 — issue closed, card → Done.
+- **Implemented** (delivered during QA remediation): 51 — issue closed, card → Done.
 - **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
-- **To build** (Quick Win / Medium): 10 — card → To Do.
+- **To build** (Quick Win / Medium): 9 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 7 — card → To Do / Backlog, STOP for authorization.
 
 ## Big Bets — greenlight required (do NOT rush into this branch)
@@ -57,7 +57,7 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-NOTE-04 | medium | notes | Resolve shared-with-me backlinks instead of hiding | [#89](https://github.com/WhatTheStack1/DevFathom-Hub/issues/89) | `cmqqe8dxu0013sstw1dnx2tma` | Implemented |
 | IMP-NOTE-05 | quick-win | notes | Allow-list link protocols in the editor | [#90](https://github.com/WhatTheStack1/DevFathom-Hub/issues/90) | `cmqqe8eaw0014sstwamo36yqr` | Implemented |
 | IMP-DASH-01 | medium | dashboard | Relevance-scoped activity feed | [#91](https://github.com/WhatTheStack1/DevFathom-Hub/issues/91) | `cmqqe8eno0015sstwpy1dvbg0` | Implemented |
-| IMP-DASH-02 | medium | dashboard | Customizable widgets + graceful empty states | [#92](https://github.com/WhatTheStack1/DevFathom-Hub/issues/92) | `cmqqe8f1a0016sstwrytsfv2p` | To build |
+| IMP-DASH-02 | medium | dashboard | Customizable widgets + graceful empty states | [#92](https://github.com/WhatTheStack1/DevFathom-Hub/issues/92) | `cmqqe8f1a0016sstwrytsfv2p` | Implemented |
 | IMP-DASH-03 | quick-win | dashboard | Personal my-time-off / pending-leave widget | [#93](https://github.com/WhatTheStack1/DevFathom-Hub/issues/93) | `cmqqe8fec0017sstw0ecskjud` | Implemented |
 | IMP-HR-01 | big-bet | team | Leave balances + team calendar + overlap detection | [#94](https://github.com/WhatTheStack1/DevFathom-Hub/issues/94) | `cmqqe8fro0018sstwqvud8ijk` | Planned (greenlight) |
 | IMP-HR-02 | medium | team | Off-boarding automation | [#95](https://github.com/WhatTheStack1/DevFathom-Hub/issues/95) | `cmqqe8g5k0019sstwbfzwo4qn` | Implemented |

@@ -466,7 +466,7 @@
     "tier": "medium",
     "title": "Customizable widgets + graceful empty states",
     "value": "Personal relevance",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Users choose/arrange cards; empty states render cleanly"
     ]
