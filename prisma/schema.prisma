@@ -247,6 +247,7 @@ model User {
   noteRevisions       NoteRevision[]   @relation("NoteRevisionEditor")
   leaveBalances       LeaveBalance[]   @relation("UserLeaveBalances")
   recoveryCodes       TwoFactorRecoveryCode[]
+  webhooksCreated     Webhook[]        @relation("WebhookCreator")
   auditLogs         AuditLog[]         @relation("UserAuditLogs")
   resignations      Resignation[]      @relation("UserResignations")
   resignationsReviewed Resignation[]   @relation("ResignationsReviewed")
@@ -1298,6 +1299,40 @@ model LeaveBalance {
   @@unique([userId, year, type])
   @@index([userId])
   @@map("leave_balances")
+}
+
+// IMP-REST-03: outbound webhook subscription. `secret` signs the payload (HMAC).
+model Webhook {
+  id          String   @id @default(cuid())
+  url         String
+  secret      String
+  events      String[] @default([]) // e.g. ["invoice.paid", "task.created"]
+  active      Boolean  @default(true)
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy  User              @relation("WebhookCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@map("webhooks")
+}
+
+// IMP-REST-03: a single delivery attempt for an event → webhook (for observability).
+model WebhookDelivery {
+  id          String   @id @default(cuid())
+  webhookId   String
+  event       String
+  payload     Json
+  statusCode  Int?
+  success     Boolean  @default(false)
+  error       String?
+  attemptedAt DateTime @default(now())
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@map("webhook_deliveries")
 }
 
 // IMP-AUTH-02: single-use TOTP recovery codes. Only the hash is stored.
