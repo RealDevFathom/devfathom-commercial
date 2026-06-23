@@ -149,11 +149,15 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         bio: full.bio,
         skills: full.skills,
         startDate: full.startDate,
-        projects: full.projectMembers.map((m) => ({
-          name: m.project.name,
-          status: m.project.status,
-          role: m.role,
-        })),
+        // AI-03: a colleague's full project-membership roster is over-share for a
+        // non-privileged viewer — gate it to admin/HR/self (like email/phone).
+        projects: privileged
+          ? full.projectMembers.map((m) => ({
+              name: m.project.name,
+              status: m.project.status,
+              role: m.role,
+            }))
+          : undefined,
         tasks: {
           open: open.length,
           overdue: overdue.length,
