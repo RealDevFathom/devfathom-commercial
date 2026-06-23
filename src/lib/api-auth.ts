@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import { NextResponse } from 'next/server';
 import { recordRestAudit } from '@/server/audit';
 import { ACTIVE_STATUSES } from '@/lib/abac';
+import { rateLimit, clientIp } from '@/lib/rate-limit';
 
 export type ApiContext = {
   userId: string;
@@ -110,6 +111,19 @@ export function withApiAuth<T extends unknown[]>(
   return async (request: Request, ...args: T): Promise<Response> => {
     const start = Date.now();
 
+    // REST-04: per-IP flood control BEFORE authentication, so a stream of
+    // invalid tokens can't run an unbounded bcrypt compare per request.
+    const ip = clientIp(request);
+    const ipGate = rateLimit(`api:ip:${ip}`, 120, 60_000);
+    if (!ipGate.ok) {
+      const res = NextResponse.json(
+        { error: 'Too many requests' },
+        { status: 429, headers: { 'Retry-After': String(ipGate.retryAfter) } }
+      );
+      recordRestAudit({ request, ctx: null, scope: requiredScope, status: 429, durationMs: 0 });
+      return res;
+    }
+
     const auth = await authenticateApiRequest(request);
     if (auth instanceof NextResponse) {
       // Authentication failed — record the attempt with no actor.
@@ -121,6 +135,23 @@ export function withApiAuth<T extends unknown[]>(
         durationMs: Date.now() - start,
       });
       return auth;
+    }
+
+    // REST-04: per-token throttle once the caller is identified.
+    const tokenGate = rateLimit(`api:token:${auth.tokenId}`, 240, 60_000);
+    if (!tokenGate.ok) {
+      const res = NextResponse.json(
+        { error: 'Too many requests' },
+        { status: 429, headers: { 'Retry-After': String(tokenGate.retryAfter) } }
+      );
+      recordRestAudit({
+        request,
+        ctx: auth,
+        scope: requiredScope,
+        status: 429,
+        durationMs: Date.now() - start,
+      });
+      return res;
     }
 
     if (!hasScope(auth, requiredScope)) {

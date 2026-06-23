@@ -4,6 +4,7 @@ import { compare } from 'bcryptjs';
 import { db } from '@/lib/db';
 import { z } from 'zod';
 import { ipFromHeaders, recordAuthAudit } from '@/server/audit';
+import { rateLimit } from '@/lib/rate-limit';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -68,6 +69,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         const { email, password } = parsed.data;
+
+        // REST-04: throttle login attempts BEFORE the bcrypt compare — per IP
+        // (broad) and per account — so an unthrottled flood can neither brute-
+        // force a password nor burn CPU on prefix-matching bcrypt compares.
+        const ipGate = rateLimit(`login:ip:${ip ?? 'unknown'}`, 30, 5 * 60_000);
+        const acctGate = rateLimit(`login:acct:${email.toLowerCase()}`, 10, 5 * 60_000);
+        if (!ipGate.ok || !acctGate.ok) {
+          recordAuthAudit({
+            type: 'LOGIN_FAILED',
+            email,
+            ip,
+            userAgent,
+            reason: 'Rate limited',
+          });
+          return null;
+        }
 
         const user = await db.user.findUnique({
           where: { email },
