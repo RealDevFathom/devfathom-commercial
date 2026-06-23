@@ -35,7 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import { NotesContent } from '@/app/(app)/notes/notes-content';
 import { uploadAttachment } from '@/lib/chat/upload-client';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -413,6 +413,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
           )}
           <TabsTrigger value="notes">Notes</TabsTrigger>
           <TabsTrigger value="contacts">Contacts ({client.contacts.length})</TabsTrigger>
+          <TabsTrigger value="activity">Activity</TabsTrigger>
         </TabsList>
 
         {/* OVERVIEW */}
@@ -587,58 +588,226 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
 
         {/* CONTACTS */}
         <TabsContent value="contacts">
-          {client.contacts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-20">
-              <User className="h-12 w-12 text-muted-foreground/20" />
-              <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
-                No contacts
-              </h3>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {client.contacts.map((contact) => (
-                <Card key={contact.id} className="border-border/60">
-                  <CardContent className="p-5">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary font-semibold text-sm">
-                        {contact.name
-                          .split(' ')
-                          .map((n) => n[0])
-                          .join('')
-                          .slice(0, 2)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">{contact.name}</p>
-                        {contact.role && (
-                          <p className="text-xs text-muted-foreground">{contact.role}</p>
-                        )}
-                      </div>
-                      {contact.isPrimary && (
-                        <span className="ml-auto rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                          Primary
-                        </span>
-                      )}
-                    </div>
-                    {contact.email && (
-                      <p className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1">
-                        <Mail className="h-3 w-3" />
-                        {contact.email}
-                      </p>
-                    )}
-                    {contact.phone && (
-                      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                        <Phone className="h-3 w-3" />
-                        {contact.phone}
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+          <ContactsTab clientId={clientId} contacts={client.contacts} />
+        </TabsContent>
+
+        {/* IMP-CLI-02: client activity timeline */}
+        <TabsContent value="activity">
+          <ClientActivityTab clientId={clientId} />
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/* ============================================
+   IMP-CLI-01: Contacts tab — full CRUD (add/edit/delete/set-primary)
+   ============================================ */
+type ClientContact = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+  isPrimary: boolean;
+};
+
+function ContactForm({
+  initial,
+  onSubmit,
+  onCancel,
+  pending,
+}: {
+  initial?: ClientContact;
+  onSubmit: (d: { name: string; email: string; phone: string; role: string; isPrimary: boolean }) => void;
+  onCancel: () => void;
+  pending: boolean;
+}) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [email, setEmail] = useState(initial?.email ?? '');
+  const [phone, setPhone] = useState(initial?.phone ?? '');
+  const [role, setRole] = useState(initial?.role ?? '');
+  const [isPrimary, setIsPrimary] = useState(initial?.isPrimary ?? false);
+  const inp =
+    'w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+  return (
+    <Card className="border-primary/20">
+      <CardContent className="p-4 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name *" className={inp} />
+          <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" className={inp} />
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={inp} />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" className={inp} />
+        </div>
+        <label className="flex items-center gap-2 text-xs text-foreground">
+          <input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
+          Primary contact
+        </label>
+        <div className="flex justify-end gap-2">
+          <button onClick={onCancel} className="rounded-xl px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+            Cancel
+          </button>
+          <button
+            onClick={() => name.trim() && onSubmit({ name: name.trim(), email: email.trim(), phone: phone.trim(), role: role.trim(), isPrimary })}
+            disabled={!name.trim() || pending}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40"
+          >
+            {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Save
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ContactsTab({ clientId, contacts }: { clientId: string; contacts: ClientContact[] }) {
+  const utils = trpc.useUtils();
+  const invalidate = () => utils.clients.getById.invalidate({ id: clientId });
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const addContact = trpc.clients.addContact.useMutation({
+    onSuccess: () => {
+      invalidate();
+      setShowAdd(false);
+    },
+  });
+  const updateContact = trpc.clients.updateContact.useMutation({
+    onSuccess: () => {
+      invalidate();
+      setEditingId(null);
+    },
+  });
+  const deleteContact = trpc.clients.deleteContact.useMutation({ onSuccess: invalidate });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        {!showAdd && (
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Contact
+          </button>
+        )}
+      </div>
+      {showAdd && (
+        <ContactForm
+          onSubmit={(d) => addContact.mutate({ clientId, ...d })}
+          onCancel={() => setShowAdd(false)}
+          pending={addContact.isPending}
+        />
+      )}
+      {contacts.length === 0 && !showAdd ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-16">
+          <User className="h-10 w-10 text-muted-foreground/20" />
+          <p className="mt-3 text-sm text-muted-foreground">No contacts yet</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {contacts.map((contact) =>
+            editingId === contact.id ? (
+              <ContactForm
+                key={contact.id}
+                initial={contact}
+                onSubmit={(d) => updateContact.mutate({ id: contact.id, ...d })}
+                onCancel={() => setEditingId(null)}
+                pending={updateContact.isPending}
+              />
+            ) : (
+              <Card key={contact.id} className="group/contact border-border/60">
+                <CardContent className="p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary font-semibold text-sm">
+                      {contact.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground truncate">{contact.name}</p>
+                      {contact.role && <p className="text-xs text-muted-foreground truncate">{contact.role}</p>}
+                    </div>
+                    {contact.isPrimary && (
+                      <span className="ml-auto rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary shrink-0">
+                        Primary
+                      </span>
+                    )}
+                  </div>
+                  {contact.email && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1">
+                      <Mail className="h-3 w-3" /> {contact.email}
+                    </p>
+                  )}
+                  {contact.phone && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                      <Phone className="h-3 w-3" /> {contact.phone}
+                    </p>
+                  )}
+                  <div className="mt-3 flex items-center gap-1 opacity-0 group-hover/contact:opacity-100 transition-opacity">
+                    {!contact.isPrimary && (
+                      <button
+                        onClick={() => updateContact.mutate({ id: contact.id, isPrimary: true })}
+                        className="rounded-md px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-primary"
+                      >
+                        Set primary
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setEditingId(contact.id)}
+                      className="ml-auto text-muted-foreground/60 hover:text-foreground"
+                      title="Edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => deleteContact.mutate({ id: contact.id })}
+                      className="text-muted-foreground/60 hover:text-red-500"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================
+   IMP-CLI-02: Client activity timeline tab
+   ============================================ */
+function ClientActivityTab({ clientId }: { clientId: string }) {
+  const { data, isLoading } = trpc.clients.getActivity.useQuery({ id: clientId });
+  if (isLoading) {
+    return <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>;
+  }
+  if (!data || data.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-16">
+        <ClockIcon className="h-10 w-10 text-muted-foreground/20" />
+        <p className="mt-3 text-sm text-muted-foreground">No activity yet</p>
+      </div>
+    );
+  }
+  return (
+    <Card className="border-border/60">
+      <CardContent className="p-0 divide-y divide-border/60">
+        {data.map((a) => (
+          <div key={a.id} className="flex items-center gap-3 px-5 py-3">
+            <div className="h-2 w-2 rounded-full bg-primary/50 shrink-0" />
+            <p className="flex-1 text-sm text-muted-foreground">
+              <span className="font-medium text-foreground/80">{a.user?.name ?? 'Someone'}</span> {a.message}
+            </p>
+            <span className="text-xs text-muted-foreground/50 shrink-0">
+              {formatDistanceToNow(new Date(a.createdAt), { addSuffix: true })}
+            </span>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
