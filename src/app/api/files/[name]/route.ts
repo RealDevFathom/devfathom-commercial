@@ -4,12 +4,14 @@
 // ZERO authorization — anyone who obtained the URL (a since-removed member, a
 // referer/log leak, link sharing) could fetch private-DM voice notes/files
 // forever. This route requires a valid session before streaming the bytes, so a
-// stale URL no longer leaks to anonymous or signed-out users. (Per-channel
-// membership enforcement / signed URLs are the linked production enhancement.)
+// stale URL no longer leaks to anonymous or signed-out users. IMP-RT-05 adds
+// per-channel membership enforcement for chat attachments below; signed-URL
+// delivery against object storage remains the linked production enhancement.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { auth } from '@/lib/auth';
+import { db } from '@/lib/db';
 
 // Kept OUTSIDE public/ so the platform never serves these statically.
 const UPLOAD_DIR = join(process.cwd(), 'private-uploads');
@@ -41,6 +43,31 @@ export async function GET(_request: Request, ctx: { params: Promise<{ name: stri
   // Defense-in-depth against path traversal — only a bare filename is valid.
   if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
     return new Response('Bad request', { status: 400 });
+  }
+
+  // IMP-RT-05: per-channel membership enforcement. If this file is a chat
+  // attachment, only members of its channel may fetch it — a stale URL no longer
+  // leaks a private-channel/DM file to any signed-in user. Non-chat uploads
+  // (project files, avatars, client logos) keep the session-only gate; they have
+  // their own visibility model and aren't in this ticket's scope.
+  const attachment = await db.messageAttachment.findFirst({
+    where: { url: '/api/files/' + name },
+    select: { message: { select: { channelId: true } } },
+  });
+  if (attachment) {
+    const member = await db.channelMember.findUnique({
+      where: {
+        channelId_userId: {
+          channelId: attachment.message.channelId,
+          userId: session.user.id,
+        },
+      },
+      select: { id: true },
+    });
+    if (!member) {
+      // 404 (not 403) so non-members can't even confirm the file exists.
+      return new Response('Not found', { status: 404 });
+    }
   }
 
   const ext = (name.split('.').pop() ?? '').toLowerCase();

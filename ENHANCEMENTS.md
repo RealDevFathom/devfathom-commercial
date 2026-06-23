@@ -5,8 +5,8 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 40 — issue closed, card → Done.
-- **Partial** (core delivered; remainder tracked): 6 — card → In Progress.
+- **Implemented** (delivered during QA remediation): 44 — issue closed, card → Done.
+- **Partial** (core delivered; remainder tracked): 2 — card → In Progress.
 - **To build** (Quick Win / Medium): 15 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 9 — card → To Do / Backlog, STOP for authorization.
 
@@ -40,14 +40,14 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-CLI-06 | quick-win | clients | Friendly delete-guards & inline validation errors | [#72](https://github.com/WhatTheStack1/DevFathom-Hub/issues/72) | `cmqqe87k4000msstw8v2ywv3w` | Implemented |
 | IMP-CLI-07 | quick-win | clients | Contract status state-machine + date/signedAt validation | [#73](https://github.com/WhatTheStack1/DevFathom-Hub/issues/73) | `cmqqe87xg000nsstw7gkhwfz7` | Implemented |
 | IMP-CLI-08 | quick-win | clients | Role-aware fetching & richer search | [#74](https://github.com/WhatTheStack1/DevFathom-Hub/issues/74) | `cmqqe88a8000osstw9g6316al` | Implemented |
-| IMP-TRELLO-01 | medium | trello | Import into a brand-new project + lead-only gate | [#75](https://github.com/WhatTheStack1/DevFathom-Hub/issues/75) | `cmqqe88o4000psstwqjia7pdu` | Partial |
+| IMP-TRELLO-01 | medium | trello | Import into a brand-new project + lead-only gate | [#75](https://github.com/WhatTheStack1/DevFathom-Hub/issues/75) | `cmqqe88o4000psstwqjia7pdu` | Implemented |
 | IMP-TRELLO-02 | medium | trello | Map more card data (cover/custom fields/due-complete) | [#76](https://github.com/WhatTheStack1/DevFathom-Hub/issues/76) | `cmqqe891i000qsstwwt3iprxj` | To build |
 | IMP-TRELLO-03 | quick-win | trello | Robust dates + per-column order normalization | [#77](https://github.com/WhatTheStack1/DevFathom-Hub/issues/77) | `cmqqe89ei000rsstwcjm5c1xh` | Implemented |
 | IMP-TRELLO-04 | quick-win | trello | Partial-failure / skipped-card reporting | [#78](https://github.com/WhatTheStack1/DevFathom-Hub/issues/78) | `cmqqe89ra000ssstwda9nzbs9` | Implemented |
 | IMP-TRELLO-05 | quick-win | trello | Dedup when trello.id is absent | [#79](https://github.com/WhatTheStack1/DevFathom-Hub/issues/79) | `cmqqe8a44000tsstwxcwmnips` | Implemented |
 | IMP-FIN-01 | medium | finance | Invoice edit + PDF/print + send-by-email | [#80](https://github.com/WhatTheStack1/DevFathom-Hub/issues/80) | `cmqqe8ahf000usstwhbr9hbbi` | Planned (greenlight) |
 | IMP-FIN-02 | medium | finance | Per-currency reporting & FX | [#81](https://github.com/WhatTheStack1/DevFathom-Hub/issues/81) | `cmqqe8auh000vsstwwpir69l7` | Implemented |
-| IMP-FIN-03 | medium | finance | Recurring-expense posting + budgets vs actuals | [#82](https://github.com/WhatTheStack1/DevFathom-Hub/issues/82) | `cmqqe8b97000wsstw25hqwl45` | Partial |
+| IMP-FIN-03 | medium | finance | Recurring-expense posting + budgets vs actuals | [#82](https://github.com/WhatTheStack1/DevFathom-Hub/issues/82) | `cmqqe8b97000wsstw25hqwl45` | Implemented |
 | IMP-FIN-04 | medium | finance | Payments / partial payments & overdue automation | [#83](https://github.com/WhatTheStack1/DevFathom-Hub/issues/83) | `cmqqe8bm9000xsstw0vi5sqq7` | To build |
 | IMP-FIN-05 | quick-win | finance | Decimal-safe math + bounded date windows | [#84](https://github.com/WhatTheStack1/DevFathom-Hub/issues/84) | `cmqqe8bzc000ysstwabptake0` | Implemented |
 | IMP-FIN-06 | quick-win | finance | Finance export (CSV) + date-range filters | [#85](https://github.com/WhatTheStack1/DevFathom-Hub/issues/85) | `cmqqe8ccc000zsstw781d1fu8` | Implemented |
@@ -72,11 +72,11 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-AUTH-04 | medium | auth | Notification preferences | [#104](https://github.com/WhatTheStack1/DevFathom-Hub/issues/104) | `cmqqe8jjt001isstw34mou5s9` | To build |
 | IMP-AUTH-05 | quick-win | auth | Live password-policy checklist on the change form | [#105](https://github.com/WhatTheStack1/DevFathom-Hub/issues/105) | `cmqqe8jww001jsstwfb3yyugt` | Implemented |
 | IMP-AUTH-06 | quick-win | auth | Edge token verification + consistent page-auth guard | [#106](https://github.com/WhatTheStack1/DevFathom-Hub/issues/106) | `cmqqe8kal001ksstwi3pq6zhh` | Implemented |
-| IMP-RT-01 | medium | meetings | Attendance reporting & summaries | [#107](https://github.com/WhatTheStack1/DevFathom-Hub/issues/107) | `cmqqe8kni001lsstwk4mjc98c` | Partial |
+| IMP-RT-01 | medium | meetings | Attendance reporting & summaries | [#107](https://github.com/WhatTheStack1/DevFathom-Hub/issues/107) | `cmqqe8kni001lsstwk4mjc98c` | Implemented |
 | IMP-RT-02 | medium | chat | Message edit history / delete-for-everyone clarity + threads polish | [#108](https://github.com/WhatTheStack1/DevFathom-Hub/issues/108) | `cmqqe8l1o001msstworqrgs6r` | To build |
 | IMP-RT-03 | medium | chat | Realtime membership revocation + short token TTL | [#109](https://github.com/WhatTheStack1/DevFathom-Hub/issues/109) | `cmqqe8lfk001nsstw1f7x4n1q` | Implemented |
 | IMP-RT-04 | quick-win | chat | Mention-on-edit + stable ordering + scoped read receipts | [#110](https://github.com/WhatTheStack1/DevFathom-Hub/issues/110) | `cmqqe8lsd001osstwxq6vev24` | Implemented |
-| IMP-RT-05 | medium | upload | Authenticated/signed attachment delivery (per-channel) | [#111](https://github.com/WhatTheStack1/DevFathom-Hub/issues/111) | `cmqqe8m5q001psstw3r97w28t` | Partial |
+| IMP-RT-05 | medium | upload | Authenticated/signed attachment delivery (per-channel) | [#111](https://github.com/WhatTheStack1/DevFathom-Hub/issues/111) | `cmqqe8m5q001psstw3r97w28t` | Implemented |
 | IMP-RT-06 | quick-win | meetings | Robust call exit handling | [#112](https://github.com/WhatTheStack1/DevFathom-Hub/issues/112) | `cmqqe8mir001qsstwza933bl8` | Implemented |
 | IMP-REST-01 | medium | platform | Rate limiting + per-token usage metrics | [#113](https://github.com/WhatTheStack1/DevFathom-Hub/issues/113) | `cmqqe8mvi001rsstwn73ear5h` | Partial |
 | IMP-REST-02 | quick-win | platform | Pagination cursors + consistent list envelopes | [#114](https://github.com/WhatTheStack1/DevFathom-Hub/issues/114) | `cmqqe8n8b001ssstwx2pl4xpl` | Implemented |

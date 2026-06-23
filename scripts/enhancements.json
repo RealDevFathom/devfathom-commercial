@@ -249,7 +249,7 @@
     "tier": "medium",
     "title": "Import into a brand-new project + lead-only gate",
     "value": "Matches the common flow; tightens who can bulk-mutate",
-    "status": "partial",
+    "status": "implemented",
     "acceptance": [
       "Import can create a new project",
       "Only project lead/admin may import into an existing project"
@@ -337,7 +337,7 @@
     "tier": "medium",
     "title": "Recurring-expense posting + budgets vs actuals",
     "value": "Real burn/runway and project margin",
-    "status": "partial",
+    "status": "implemented",
     "related": [
       "FIN-05"
     ],
@@ -649,7 +649,7 @@
     "tier": "medium",
     "title": "Attendance reporting & summaries",
     "value": "Actionable attendance data",
-    "status": "partial",
+    "status": "implemented",
     "acceptance": [
       "Per-meeting and per-person attendance % view from the logs"
     ]
@@ -701,7 +701,7 @@
     "tier": "medium",
     "title": "Authenticated/signed attachment delivery (per-channel)",
     "value": "Private files truly private",
-    "status": "partial",
+    "status": "implemented",
     "related": [
       "RT-05"
     ],

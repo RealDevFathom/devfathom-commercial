@@ -31,7 +31,10 @@ export function TrelloImportContent() {
   const [trelloData, setTrelloData] = useState<TrelloBoard | null>(null);
   const [memberMapping, setMemberMapping] = useState<Record<string, string>>({});
   const [includeArchived, setIncludeArchived] = useState(false);
+  // IMP-TRELLO-01: import into an existing project or spin up a brand-new one.
+  const [targetMode, setTargetMode] = useState<'existing' | 'new'>('existing');
   const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [newProjectName, setNewProjectName] = useState('');
   const [importResult, setImportResult] = useState<{
     boardId: string;
     boardName: string;
@@ -101,15 +104,20 @@ export function TrelloImportContent() {
     };
   }, [trelloData]);
 
+  const canImport =
+    !!trelloData && (targetMode === 'existing' ? !!selectedProjectId : true);
+
   const handleImport = () => {
-    if (!trelloData || !selectedProjectId) return;
+    if (!trelloData || !canImport) return;
     setStep('importing');
     setError('');
     importMutation.mutate({
       trelloJson: trelloData,
-      projectId: selectedProjectId,
       memberMapping,
       includeArchived,
+      ...(targetMode === 'existing'
+        ? { projectId: selectedProjectId }
+        : { newProjectName: newProjectName.trim() || trelloData.name }),
     });
   };
 
@@ -233,23 +241,56 @@ export function TrelloImportContent() {
             </CardContent>
           </Card>
 
-          {/* Target project */}
+          {/* Target project — existing or brand-new (IMP-TRELLO-01) */}
           <div>
             <label className="block text-sm font-medium text-foreground mb-2">
               Import to Project
             </label>
-            <select
-              value={selectedProjectId}
-              onChange={(e) => setSelectedProjectId(e.target.value)}
-              className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-            >
-              <option value="">Select a project...</option>
-              {projects?.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
+            <div className="mb-3 inline-flex rounded-xl border border-border bg-card p-1">
+              {(['existing', 'new'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setTargetMode(mode)}
+                  className={cn(
+                    'rounded-lg px-4 py-1.5 text-sm font-medium transition-colors',
+                    targetMode === mode
+                      ? 'bg-primary text-white'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {mode === 'existing' ? 'Existing project' : 'New project'}
+                </button>
               ))}
-            </select>
+            </div>
+            {targetMode === 'existing' ? (
+              <select
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              >
+                <option value="">Select a project...</option>
+                {projects?.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder={trelloData.name}
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  A new project is created with you as its lead. Leave blank to use the board
+                  name &quot;{trelloData.name}&quot;.
+                </p>
+              </>
+            )}
           </div>
 
           {/* Member mapping */}
@@ -296,7 +337,7 @@ export function TrelloImportContent() {
           {/* Import button */}
           <button
             onClick={handleImport}
-            disabled={!selectedProjectId}
+            disabled={!canImport}
             className="w-full flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
           >
             Import Board

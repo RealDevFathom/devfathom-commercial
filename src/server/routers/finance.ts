@@ -393,6 +393,84 @@ export const financeRouter = router({
       });
     }),
 
+  // IMP-FIN-03: post every recurring expense that has come due as a real EXPENSE
+  // transaction (one per elapsed billing cycle), then persist the advanced
+  // nextDueDate so a re-run never double-posts the same cycle. This is the
+  // mechanism a production cron would invoke; here it's an operator-triggered
+  // mutation. Per-expense cycle count is capped so a long-stale row can't post
+  // hundreds of rows in one go.
+  postDueRecurringExpenses: adminProcedure.mutation(async ({ ctx }) => {
+    const now = new Date();
+    const expenses = await ctx.db.recurringExpense.findMany({ where: { active: true } });
+    let posted = 0;
+    const details: Array<{ id: string; name: string; cycles: number }> = [];
+
+    for (const exp of expenses) {
+      const stepMonths = INTERVAL_MONTHS[exp.interval.toLowerCase()] ?? 1;
+      const anchorDay = new Date(exp.nextDueDate).getDate();
+      const due = new Date(exp.nextDueDate);
+      const toPost: Date[] = [];
+      for (let i = 0; due <= now && i < 36; i++) {
+        toPost.push(new Date(due));
+        due.setDate(anchorDay);
+        due.setMonth(due.getMonth() + stepMonths);
+      }
+      if (toPost.length === 0) continue;
+
+      await ctx.db.$transaction([
+        ctx.db.transaction.createMany({
+          data: toPost.map((d) => ({
+            type: 'EXPENSE' as const,
+            amount: exp.amount,
+            currency: exp.currency,
+            category: exp.category,
+            description: `${exp.name}${exp.vendorName ? ` — ${exp.vendorName}` : ''} (recurring)`,
+            date: d,
+          })),
+        }),
+        ctx.db.recurringExpense.update({ where: { id: exp.id }, data: { nextDueDate: due } }),
+      ]);
+      posted += toPost.length;
+      details.push({ id: exp.id, name: exp.name, cycles: toPost.length });
+    }
+
+    return { posted, details };
+  }),
+
+  // IMP-FIN-03: spend-against-budget rollup. For each project carrying a budget,
+  // total its posted EXPENSE transactions (kept per-currency, since budgets are a
+  // single Decimal and projects may transact in more than one currency).
+  getBudgetVsActuals: adminProcedure.query(async ({ ctx }) => {
+    const projects = await ctx.db.project.findMany({
+      where: { budget: { not: null } },
+      select: { id: true, name: true, budget: true },
+    });
+    if (projects.length === 0) return [];
+
+    const grouped = await ctx.db.transaction.groupBy({
+      by: ['projectId', 'currency'],
+      _sum: { amount: true },
+      where: { type: 'EXPENSE', projectId: { in: projects.map((p) => p.id) } },
+    });
+
+    return projects.map((p) => {
+      const spent = grouped
+        .filter((g) => g.projectId === p.id)
+        .map((g) => ({ currency: g.currency, amount: round2(Number(g._sum.amount ?? 0)) }));
+      const budget = round2(Number(p.budget));
+      const totalSpent = round2(spent.reduce((s, g) => s + g.amount, 0));
+      return {
+        projectId: p.id,
+        name: p.name,
+        budget,
+        spent,
+        totalSpent,
+        pct: budget > 0 ? Math.round((totalSpent / budget) * 100) : 0,
+        overBudget: totalSpent > budget,
+      };
+    });
+  }),
+
   getFinancialSummary: adminProcedure.query(async ({ ctx }) => {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);

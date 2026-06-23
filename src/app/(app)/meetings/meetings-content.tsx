@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, memo } from 'react';
+import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
   Video,
@@ -646,14 +647,16 @@ const MeetingCard = memo(function MeetingCard({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <p
+            <Link
+              href={`/meetings/${meeting.id}`}
               className={cn(
-                'text-sm font-semibold truncate',
+                'text-sm font-semibold truncate hover:underline',
                 isPast ? 'text-muted-foreground' : 'text-foreground'
               )}
+              title="View meeting & attendance report"
             >
               {meeting.title}
-            </p>
+            </Link>
             {meeting.recurrence && (
               <span className="rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-500 shrink-0 flex items-center gap-0.5">
                 <RefreshCw className="h-2.5 w-2.5" />
@@ -720,6 +723,24 @@ const MeetingCard = memo(function MeetingCard({
             </div>
           )}
         </div>
+
+        {/* Join call — opens the in-app JaaS video room. Shown for attendees of
+            a meeting that hasn't ended, independent of any external location. */}
+        {(() => {
+          const isAttendee = meeting.attendees.some((a) => a.user.id === currentUserId);
+          const hasEnded = now >= end.getTime();
+          if (!isAttendee || hasEnded) return null;
+          return (
+            <Link
+              href={`/meetings/${meeting.id}/call`}
+              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary shrink-0"
+              title="Join in-app video call"
+            >
+              <Video className="h-3.5 w-3.5" />
+              Join call
+            </Link>
+          );
+        })()}
 
         {/* Join button — shown for attendees if the meeting hasn't ended */}
         {(() => {

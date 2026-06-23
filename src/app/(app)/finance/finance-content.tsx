@@ -698,6 +698,22 @@ function RecurringTab() {
       setShowAdd(false);
     },
   });
+  // IMP-FIN-03: post any due cycles as real EXPENSE transactions, and show how
+  // each budgeted project's spend tracks against its budget.
+  const [postResult, setPostResult] = useState<string | null>(null);
+  const postDue = trpc.finance.postDueRecurringExpenses.useMutation({
+    onSuccess: (r) => {
+      utils.finance.getRecurringExpenses.invalidate();
+      utils.finance.getBudgetVsActuals.invalidate();
+      utils.finance.getTransactions.invalidate();
+      setPostResult(
+        r.posted > 0
+          ? `Posted ${r.posted} transaction${r.posted === 1 ? '' : 's'} from due cycles.`
+          : 'Nothing due — all subscriptions are up to date.'
+      );
+    },
+  });
+  const budgetQ = trpc.finance.getBudgetVsActuals.useQuery();
 
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
@@ -722,13 +738,61 @@ function RecurringTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{data?.length ?? 0} active subscriptions</p>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-        >
-          <Plus className="h-3.5 w-3.5" /> Add Recurring
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => postDue.mutate()}
+            disabled={postDue.isPending}
+            className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-50"
+            title="Post any due billing cycles as expense transactions"
+          >
+            {postDue.isPending ? 'Posting…' : 'Post due cycles'}
+          </button>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Recurring
+          </button>
+        </div>
       </div>
+
+      {postResult && (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
+          {postResult}
+        </p>
+      )}
+
+      {/* IMP-FIN-03: budget vs. actuals rollup for budgeted projects. */}
+      {budgetQ.data && budgetQ.data.length > 0 && (
+        <Card className="border-border/60">
+          <CardContent className="p-5 space-y-3">
+            <h3 className="text-sm font-semibold text-foreground">Budget vs. spend</h3>
+            <div className="space-y-3">
+              {budgetQ.data.map((b) => (
+                <div key={b.projectId}>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="truncate font-medium text-foreground">{b.name}</span>
+                    <span
+                      className={cn(
+                        'tabular-nums',
+                        b.overBudget ? 'text-red-500 font-semibold' : 'text-muted-foreground'
+                      )}
+                    >
+                      {b.totalSpent.toLocaleString()} / {b.budget.toLocaleString()} ({b.pct}%)
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className={cn('h-full rounded-full', b.overBudget ? 'bg-red-500' : 'bg-primary')}
+                      style={{ width: `${Math.min(100, b.pct)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {showAdd && (
         <Card className="border-primary/20">
