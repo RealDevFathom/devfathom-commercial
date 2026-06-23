@@ -73,7 +73,7 @@
     "tier": "medium",
     "title": "Subtasks / dependencies / blockers",
     "value": "Real delivery planning beyond a flat board",
-    "status": "planned",
+    "status": "implemented",
     "acceptance": [
       "Parent-child task relation + blocked-by relation",
       "UI to link/unlink; cycle prevention",
@@ -352,7 +352,7 @@
     "tier": "medium",
     "title": "Payments / partial payments & overdue automation",
     "value": "Accurate AR",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Model partial payments against an invoice",
       "Auto-flip OVERDUE past dueDate (not display-only)"
@@ -403,7 +403,7 @@
     "tier": "medium",
     "title": "People @mentions + notifications in notes",
     "value": "Collaboration loop",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "@mention people in a note; notify() + bell on mention",
       "Mentions scoped to note visibility"
@@ -525,7 +525,7 @@
     "tier": "medium",
     "title": "Performance review workflow",
     "value": "A review process, not a notes table",
-    "status": "todo",
+    "status": "implemented",
     "acceptance": [
       "Review cycles + ratings; HR can participate; configurable subject visibility"
     ]
