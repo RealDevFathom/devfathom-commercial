@@ -14,6 +14,7 @@ import { teamStatsRouter } from './team-stats';
 import { invitationsRouter } from './invitations';
 import { auditRouter } from './audit';
 import { resignationsRouter } from './resignations';
+import { passwordResetRouter } from './password-reset';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -31,6 +32,7 @@ export const appRouter = router({
   invitations: invitationsRouter,
   audit: auditRouter,
   resignations: resignationsRouter,
+  passwordReset: passwordResetRouter,
 });
 
 export type AppRouter = typeof appRouter;
