@@ -178,6 +178,64 @@ function canEdit(
 }
 
 /**
+ * IMP-NOTE-01: keep at most this many revisions per note. After each new snapshot
+ * is inserted we prune anything beyond the most-recent N, so history stays bounded.
+ */
+const REVISION_RETENTION = 50;
+
+/**
+ * IMP-NOTE-01: snapshot a note's CURRENT (about-to-be-replaced) title/content into
+ * a NoteRevision, then prune older snapshots past REVISION_RETENTION. Always run
+ * inside the caller's transaction so the snapshot and the update commit atomically.
+ */
+async function snapshotAndPrune(
+  tx: Prisma.TransactionClient,
+  current: { id: string; title: string; contentJson: Prisma.JsonValue; contentText: string },
+  editedById: string
+) {
+  await tx.noteRevision.create({
+    data: {
+      noteId: current.id,
+      title: current.title,
+      // Note.contentJson is a non-nullable Json column, so this is always a value.
+      contentJson: current.contentJson as Prisma.InputJsonValue,
+      contentText: current.contentText,
+      editedById,
+    },
+  });
+  const stale = await tx.noteRevision.findMany({
+    where: { noteId: current.id },
+    orderBy: { createdAt: 'desc' },
+    skip: REVISION_RETENTION,
+    select: { id: true },
+  });
+  if (stale.length > 0) {
+    await tx.noteRevision.deleteMany({ where: { id: { in: stale.map((r) => r.id) } } });
+  }
+}
+
+/**
+ * IMP-NOTE-01: load a note and assert the caller may VIEW it — the same gate used
+ * by `getById` (author OR TEAM OR a SHARED viewer on the share list). Returns the
+ * note (with shares) so callers can reuse it. Throws NOT_FOUND / FORBIDDEN.
+ */
+async function loadViewableNote(tx: Prisma.TransactionClient, noteId: string, userId: string) {
+  const note = await tx.note.findUnique({
+    where: { id: noteId },
+    include: { shares: true },
+  });
+  if (!note) throw new TRPCError({ code: 'NOT_FOUND' });
+  const isAuthor = note.authorId === userId;
+  const isTeam = note.visibility === 'TEAM';
+  const isSharedWithMe =
+    note.visibility === 'SHARED' && note.shares.some((s) => s.userId === userId);
+  if (!isAuthor && !isTeam && !isSharedWithMe) {
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  }
+  return note;
+}
+
+/**
  * Shared list-row projection so `list` and `notesMentioningMe` return the exact
  * same shape — and therefore the same inferred client type, letting the UI
  * render both with one row component.
@@ -544,8 +602,24 @@ export const notesRouter = router({
       const toAdd = targets.filter((id) => !existingSet.has(id));
       const toRemove = existingMentionIds.filter((id) => !targetSet.has(id));
 
+      // IMP-NOTE-01: decide whether this save changes the note's actual content,
+      // so we only snapshot real edits — a pure visibility/project/client save (or
+      // a no-op re-save of identical content) doesn't create history noise.
+      const titleChanged = input.title !== undefined && input.title !== existing.title;
+      const contentChanged =
+        input.contentJson !== undefined &&
+        JSON.stringify(input.contentJson) !== JSON.stringify(existing.contentJson);
+      const shouldSnapshot = titleChanged || contentChanged;
+
       // Apply update + resync backlinks + mentions atomically
       const updated = await ctx.db.$transaction(async (tx) => {
+        // IMP-NOTE-01: snapshot the CURRENT content BEFORE it's overwritten, so
+        // this edit is diffable and restorable. Runs in the same transaction as
+        // the update, then prunes to the most recent REVISION_RETENTION.
+        if (shouldSnapshot) {
+          await snapshotAndPrune(tx, existing, userId);
+        }
+
         const note = await tx.note.update({ where: { id: input.id }, data });
 
         if (linkedIds !== null) {
@@ -591,6 +665,140 @@ export const notesRouter = router({
       }
 
       return updated;
+    }),
+
+  /**
+   * IMP-NOTE-01: list a note's version history, newest first. Access-checked with
+   * the same visibility gate as `getById` — anyone who can see the note can see
+   * who edited it and when (not the full content; that's `getRevision`).
+   */
+  getNoteRevisions: protectedProcedure
+    .input(z.object({ noteId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      await loadViewableNote(ctx.db, input.noteId, userId);
+      return ctx.db.noteRevision.findMany({
+        where: { noteId: input.noteId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          title: true,
+          createdAt: true,
+          editedBy: { select: { id: true, name: true } },
+        },
+      });
+    }),
+
+  /**
+   * IMP-NOTE-01: full content of a single revision, for the read-only preview.
+   * Access-checked via the revision's parent note (same visibility gate).
+   */
+  getRevision: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const rev = await ctx.db.noteRevision.findUnique({
+        where: { id: input.id },
+        include: { editedBy: { select: { id: true, name: true } } },
+      });
+      if (!rev) throw new TRPCError({ code: 'NOT_FOUND' });
+      await loadViewableNote(ctx.db, rev.noteId, userId);
+      return rev;
+    }),
+
+  /**
+   * IMP-NOTE-01: restore a note to a previous revision. Author/admin only (the
+   * same gate as deleting or changing visibility). The CURRENT content is itself
+   * snapshotted first, so a restore is undoable. Re-derives @mentions + backlinks
+   * from the restored content so the note's derived tables stay consistent; no
+   * mention notifications are sent on restore (we don't re-ping people for old
+   * content).
+   */
+  restoreRevision: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+
+      const rev = await ctx.db.noteRevision.findUnique({ where: { id: input.id } });
+      if (!rev) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const note = await ctx.db.note.findUnique({
+        where: { id: rev.noteId },
+        include: { shares: true, mentions: true },
+      });
+      if (!note) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (note.authorId !== userId && ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the note author can restore a previous version.',
+        });
+      }
+
+      // Re-derive @mentions for the restored content, scoped to the note's
+      // current visibility/shares (mirrors `update`). The author is always
+      // dropped inside computeMentionTargets.
+      const team = await ctx.db.user.findMany({
+        select: { id: true, name: true, email: true },
+      });
+      const targets = computeMentionTargets({
+        contentText: rev.contentText,
+        contentJson: rev.contentJson,
+        visibility: note.visibility,
+        authorId: note.authorId,
+        shareUserIds: note.shares.map((s) => s.userId),
+        team,
+      });
+      const targetSet = new Set(targets);
+      const existingMentionIds = note.mentions.map((m) => m.userId);
+      const existingSet = new Set(existingMentionIds);
+      const toAdd = targets.filter((id) => !existingSet.has(id));
+      const toRemove = existingMentionIds.filter((id) => !targetSet.has(id));
+      const linkedIds = extractLinkedNoteIds(rev.contentJson);
+
+      return ctx.db.$transaction(async (tx) => {
+        // Snapshot the CURRENT content first so the restore is itself undoable.
+        await snapshotAndPrune(tx, note, userId);
+
+        const next = await tx.note.update({
+          where: { id: note.id },
+          data: {
+            title: rev.title,
+            contentJson: rev.contentJson as Prisma.InputJsonValue,
+            contentText: rev.contentText,
+          },
+        });
+
+        // Resync backlinks from the restored content.
+        await tx.noteLink.deleteMany({ where: { fromNoteId: note.id } });
+        if (linkedIds.length > 0) {
+          const validIds = await tx.note.findMany({
+            where: { id: { in: linkedIds.filter((id) => id !== note.id) } },
+            select: { id: true },
+          });
+          if (validIds.length > 0) {
+            await tx.noteLink.createMany({
+              data: validIds.map((v) => ({ fromNoteId: note.id, toNoteId: v.id })),
+              skipDuplicates: true,
+            });
+          }
+        }
+
+        // Resync mentions to match the restored content.
+        if (toRemove.length > 0) {
+          await tx.noteMention.deleteMany({
+            where: { noteId: note.id, userId: { in: toRemove } },
+          });
+        }
+        if (toAdd.length > 0) {
+          await tx.noteMention.createMany({
+            data: toAdd.map((uid) => ({ noteId: note.id, userId: uid })),
+            skipDuplicates: true,
+          });
+        }
+
+        return next;
+      });
     }),
 
   delete: protectedProcedure

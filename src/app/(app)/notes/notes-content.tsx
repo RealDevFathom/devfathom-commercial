@@ -22,6 +22,9 @@ import {
   Save,
   Pencil,
   AtSign,
+  History,
+  RotateCcw,
+  Clock,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -349,11 +352,14 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const [draftTitle, setDraftTitle] = useState('');
   const [draftContent, setDraftContent] = useState<unknown>(null);
   const [showSharePanel, setShowSharePanel] = useState(false);
+  // IMP-NOTE-01: toggles the version-history panel.
+  const [showHistory, setShowHistory] = useState(false);
 
   // Reset to view mode whenever a different note is loaded
   useEffect(() => {
     setMode('view');
     setShowSharePanel(false);
+    setShowHistory(false);
   }, [noteId]);
 
   // Disable refetch-on-focus while editing so the server state can't stomp
@@ -391,6 +397,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
     if (!note) return;
     setDraftTitle(note.title);
     setDraftContent(note.contentJson);
+    setShowHistory(false);
     setMode('edit');
   };
 
@@ -473,6 +480,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const vc = visibilityConfig[note.visibility as Visibility];
   const VIcon = vc.icon;
   const isAuthor = note.authorId === userId;
+  const isAdmin = session?.user?.role === 'ADMIN';
   const isEditing = mode === 'edit';
 
   // Editor key:
@@ -542,6 +550,24 @@ function NoteDetail({ noteId }: { noteId: string }) {
             )
           )}
 
+          {/* IMP-NOTE-01: version history — available to anyone who can view the
+              note (restore is gated to author/admin inside the panel). */}
+          {!isEditing && (
+            <button
+              onClick={() => setShowHistory((v) => !v)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                showHistory
+                  ? 'border-primary/30 bg-primary/10 text-primary'
+                  : 'border-border bg-card text-muted-foreground hover:text-foreground'
+              )}
+              title="View version history"
+            >
+              <History className="h-3.5 w-3.5" />
+              History
+            </button>
+          )}
+
           {isAuthor ? (
             <>
               <select
@@ -607,6 +633,16 @@ function NoteDetail({ noteId }: { noteId: string }) {
             shares={note.shares}
             authorId={note.authorId}
             onClose={() => setShowSharePanel(false)}
+          />
+        )}
+
+        {/* IMP-NOTE-01: version history — list past snapshots, preview one, and
+            (author/admin) restore it. */}
+        {showHistory && (
+          <HistoryPanel
+            noteId={noteId}
+            canRestore={isAuthor || isAdmin}
+            onClose={() => setShowHistory(false)}
           />
         )}
 
@@ -915,6 +951,173 @@ function SharePanel({
             <Check className="h-3 w-3 text-emerald-500" /> Changes saved automatically
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================
+   IMP-NOTE-01: Version history panel
+
+   Left  — the list of snapshots (newest first), each labelled with its title,
+           timestamp and editor.
+   Right — a read-only preview of the selected snapshot (full Tiptap render), with
+           a "Restore this version" action for the author/admin. Restoring first
+           snapshots the CURRENT content (server-side), so it is itself undoable.
+   ============================================ */
+function HistoryPanel({
+  noteId,
+  canRestore,
+  onClose,
+}: {
+  noteId: string;
+  canRestore: boolean;
+  onClose: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const { data: session } = useSession();
+  const userId = session?.user?.id;
+
+  const revisionsQuery = trpc.notes.getNoteRevisions.useQuery({ noteId });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const revisionQuery = trpc.notes.getRevision.useQuery(
+    { id: selectedId ?? '' },
+    { enabled: !!selectedId }
+  );
+
+  const restore = trpc.notes.restoreRevision.useMutation({
+    onSuccess: () => {
+      utils.notes.getById.invalidate({ id: noteId });
+      utils.notes.list.invalidate();
+      utils.notes.notesMentioningMe.invalidate();
+      utils.notes.getNoteRevisions.invalidate({ noteId });
+      setSelectedId(null);
+      onClose();
+    },
+  });
+
+  const revisions = revisionsQuery.data ?? [];
+  const editorLabel = (editedBy: { id: string; name: string } | null) =>
+    editedBy ? ` · ${editedBy.id === userId ? 'You' : editedBy.name}` : '';
+
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/[0.02] p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Version history</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            A snapshot is saved before each content change. The most recent 50 are kept.
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-muted-foreground hover:text-foreground"
+          aria-label="Close history panel"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+        {/* Revision list */}
+        <div>
+          {revisionsQuery.isLoading ? (
+            <div className="flex items-center justify-center py-4 text-xs text-muted-foreground">
+              <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Loading…
+            </div>
+          ) : revisions.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted-foreground">
+              No earlier versions yet. Your next edit will create one.
+            </p>
+          ) : (
+            <div className="max-h-72 space-y-1 overflow-y-auto pr-0.5">
+              {revisions.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => setSelectedId(r.id)}
+                  className={cn(
+                    'block w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                    selectedId === r.id
+                      ? 'border-primary/40 bg-primary/5'
+                      : 'border-border/60 bg-card hover:border-border'
+                  )}
+                >
+                  <p className="text-xs font-medium text-foreground truncate">
+                    {r.title || 'Untitled'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {format(new Date(r.createdAt), 'MMM d, yyyy h:mm a')}
+                    {editorLabel(r.editedBy)}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Selected revision preview */}
+        <div className="min-w-0 rounded-lg border border-border/60 bg-card p-3">
+          {!selectedId ? (
+            <div className="flex h-full min-h-32 flex-col items-center justify-center text-center">
+              <Clock className="h-6 w-6 text-muted-foreground/30" />
+              <p className="mt-2 text-xs text-muted-foreground">
+                Select a version on the left to preview it here.
+              </p>
+            </div>
+          ) : revisionQuery.isLoading ? (
+            <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
+              <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Loading version…
+            </div>
+          ) : revisionQuery.data ? (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-display text-base font-bold text-foreground truncate">
+                    {revisionQuery.data.title || 'Untitled'}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {format(new Date(revisionQuery.data.createdAt), 'MMM d, yyyy h:mm a')}
+                    {editorLabel(revisionQuery.data.editedBy)}
+                  </p>
+                </div>
+                {canRestore && (
+                  <button
+                    onClick={() => {
+                      if (
+                        confirm(
+                          'Restore this version? The current content is saved to history first, so you can undo this.'
+                        )
+                      ) {
+                        restore.mutate({ id: revisionQuery.data!.id });
+                      }
+                    }}
+                    disabled={restore.isPending}
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
+                    title="Restore this version"
+                  >
+                    {restore.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    )}
+                    Restore this version
+                  </button>
+                )}
+              </div>
+              {/* Full read-only render of the snapshot. */}
+              <div className="max-h-80 overflow-y-auto rounded-lg border border-border/40 bg-background px-1">
+                <NoteEditor
+                  key={revisionQuery.data.id}
+                  initialContent={revisionQuery.data.contentJson}
+                  editable={false}
+                />
+              </div>
+            </div>
+          ) : (
+            <p className="py-8 text-center text-xs text-muted-foreground">Version not found.</p>
+          )}
+        </div>
       </div>
     </div>
   );
