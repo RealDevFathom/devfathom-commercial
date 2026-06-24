@@ -60,7 +60,7 @@
     "tier": "quick-win",
     "title": "Board rename/description + label edit/delete + project-file delete",
     "value": "Avoid permanently-mislabeled boards / accumulating labels & files",
-    "status": "partial",
+    "status": "implemented",
     "acceptance": [
       "updateBoard (name/description)",
       "label rename/recolor/delete",
@@ -86,7 +86,7 @@
     "tier": "medium",
     "title": "Board/column templates + WIP limits",
     "value": "Faster setup, flow control",
-    "status": "partial",
+    "status": "implemented",
     "acceptance": [
       "Create a board from a template; per-column WIP limit",
       "WIP limit warns/blocks on exceed"

@@ -5,8 +5,8 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 - **Internal** — Project "QA Remediation — June 2026" › board "Improvements" (Backlog/To Do/In Progress/In Review/Done).
 
 ## Totals (70 items)
-- **Implemented** (delivered during QA remediation): 65 — issue closed, card → Done.
-- **Partial** (core delivered; remainder tracked): 3 — card → In Progress.
+- **Implemented** (delivered during QA remediation): 67 — issue closed, card → Done.
+- **Partial** (core delivered; remainder tracked): 1 — card → In Progress.
 - **To build** (Quick Win / Medium): 2 — card → To Do.
 - **Planned (needs-greenlight)** (Big Bets): 0 — card → To Do / Backlog, STOP for authorization.
 
@@ -25,9 +25,9 @@ Every item in [`/IMPROVEMENTS.md`](./IMPROVEMENTS.md) filed in **both trackers**
 | IMP-PROJ-02 | medium | projects | Checklist management (create/rename/reorder/delete) | [#57](https://github.com/WhatTheStack1/DevFathom-Hub/issues/57) | `cmqqe81jl0007sstwbr4djsza` | Implemented |
 | IMP-PROJ-03 | medium | projects | Task attachments — render + add/delete | [#58](https://github.com/WhatTheStack1/DevFathom-Hub/issues/58) | `cmqqe820g0008sstwnz0ohg16` | Implemented |
 | IMP-PROJ-04 | quick-win | projects | Comment edit/delete | [#59](https://github.com/WhatTheStack1/DevFathom-Hub/issues/59) | `cmqqe82dv0009sstwroj70f4n` | Implemented |
-| IMP-PROJ-05 | quick-win | projects | Board rename/description + label edit/delete + project-file delete | [#60](https://github.com/WhatTheStack1/DevFathom-Hub/issues/60) | `cmqqe82tu000asstwkcz540nw` | Partial |
+| IMP-PROJ-05 | quick-win | projects | Board rename/description + label edit/delete + project-file delete | [#60](https://github.com/WhatTheStack1/DevFathom-Hub/issues/60) | `cmqqe82tu000asstwkcz540nw` | Implemented |
 | IMP-PROJ-06 | medium | projects | Subtasks / dependencies / blockers | [#61](https://github.com/WhatTheStack1/DevFathom-Hub/issues/61) | `cmqqe8377000bsstw5bj6n1qt` | Implemented |
-| IMP-PROJ-07 | medium | projects | Board/column templates + WIP limits | [#62](https://github.com/WhatTheStack1/DevFathom-Hub/issues/62) | `cmqqe83qz000csstw9s4bryb5` | Partial |
+| IMP-PROJ-07 | medium | projects | Board/column templates + WIP limits | [#62](https://github.com/WhatTheStack1/DevFathom-Hub/issues/62) | `cmqqe83qz000csstw9s4bryb5` | Implemented |
 | IMP-PROJ-08 | medium | projects | Bulk task actions (multi-select move/label/assign/delete) | [#63](https://github.com/WhatTheStack1/DevFathom-Hub/issues/63) | `cmqqe8468000dsstwqgga78fk` | Implemented |
 | IMP-PROJ-09 | medium | projects | Pagination / lazy-load on large boards | [#64](https://github.com/WhatTheStack1/DevFathom-Hub/issues/64) | `cmqqe84jj000esstwp7dve8rc` | Implemented |
 | IMP-PROJ-10 | quick-win | projects | Task activity timeline in the detail sheet | [#65](https://github.com/WhatTheStack1/DevFathom-Hub/issues/65) | `cmqqe84ww000fsstwtf8glhxk` | Implemented |
