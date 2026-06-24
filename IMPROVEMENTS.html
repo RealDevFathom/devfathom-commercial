@@ -1,0 +1,1603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DevFathom — Product Improvements Roadmap</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+:root {
+  --bg: #07071a;
+  --surface: #0d0d26;
+  --card: #121232;
+  --card-hover: #181844;
+  --border: rgba(120, 130, 200, 0.12);
+  --border-hover: rgba(120, 130, 200, 0.25);
+  --text: #dde0ff;
+  --text-muted: #8888bb;
+  --text-dim: #5555aa;
+  --qw: #10b981;
+  --med: #3b82f6;
+  --bet: #8b5cf6;
+  --miss-border: #f97316;
+  --enh-border: #06b6d4;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+/* ─── Layout ─── */
+.page-wrap {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ─── Sidebar Nav ─── */
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 24px 0;
+  z-index: 100;
+}
+.sidebar-logo {
+  padding: 0 20px 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.sidebar-logo span {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.nav-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 4px 20px 8px;
+}
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  transition: all 0.15s;
+}
+.nav-link:hover, .nav-link.active {
+  color: var(--text);
+  background: rgba(99, 102, 241, 0.08);
+  border-left-color: #6366f1;
+}
+.nav-link .nav-icon { font-size: 14px; }
+
+/* ─── Main Content ─── */
+.main-content {
+  flex: 1;
+  padding: 48px 56px;
+  max-width: 1200px;
+  overflow-x: hidden;
+}
+
+/* ─── Hero ─── */
+.hero-section {
+  margin-bottom: 64px;
+  padding: 56px 0 48px;
+  border-bottom: 1px solid var(--border);
+}
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  padding: 4px 12px;
+  border-radius: 999px;
+  margin-bottom: 20px;
+}
+.hero-title {
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  background: linear-gradient(135deg, #dde0ff 0%, #a5b4fc 50%, #818cf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 20px;
+}
+.hero-lead {
+  font-size: 17px;
+  color: var(--text-muted);
+  max-width: 680px;
+  line-height: 1.7;
+  margin-bottom: 40px;
+}
+.hero-stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 28px;
+  min-width: 120px;
+  text-align: center;
+}
+.stat-num {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+.stat-num.stat-qw { color: var(--qw); }
+.stat-num.stat-med { color: var(--med); }
+.stat-num.stat-bet { color: var(--bet); }
+.stat-num.stat-total { color: #a5b4fc; }
+.stat-lbl {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ─── Top Recommendations ─── */
+.top-recs { margin-bottom: 64px; }
+.rec-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 24px;
+}
+.rec-card {
+  display: flex;
+  gap: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.rec-card:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+  transform: translateX(4px);
+}
+.rec-num {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.rec-body { flex: 1; }
+.rec-body .badge { margin-bottom: 8px; }
+.rec-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+.rec-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* ─── Module Sections ─── */
+.module {
+  margin-bottom: 72px;
+  padding-top: 8px;
+}
+.module-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.module-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+.module-name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  flex: 1;
+}
+.module-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+/* ─── Feature Groups ─── */
+.feature-group { margin-bottom: 28px; }
+.group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  padding: 0 0 0 10px;
+}
+.miss-label { color: #f97316; border-left: 3px solid #f97316; }
+.enh-label { color: #06b6d4; border-left: 3px solid #06b6d4; }
+
+/* ─── Cards Grid ─── */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  border-left-width: 3px;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.card:hover {
+  background: var(--card-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+.card-miss { border-left-color: var(--miss-border); }
+.card-enh { border-left-color: var(--enh-border); }
+
+.card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.badge-qw { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+.badge-med { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+.badge-bet { background: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); }
+
+.type-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.miss-tag { background: rgba(249, 115, 22, 0.12); color: #fb923c; }
+.enh-tag { background: rgba(6, 182, 212, 0.12); color: #22d3ee; }
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+.card-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+.card-meta { border-top: 1px solid var(--border); padding-top: 10px; }
+.card-value, .card-rationale {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.card-value strong { color: #a5b4fc; }
+.card-rationale strong { color: #f9a8d4; }
+
+/* ─── Module-specific accent colors via data-key ─── */
+[data-key="top"] .module-name { color: #f9a8d4; }
+[data-key="projects"] .module-name { color: #a5b4fc; }
+[data-key="clients"] .module-name { color: #67e8f9; }
+[data-key="trello"] .module-name { color: #6ee7b7; }
+[data-key="finance"] .module-name { color: #fcd34d; }
+[data-key="notes"] .module-name { color: #f9a8d4; }
+[data-key="dashboard"] .module-name { color: #7dd3fc; }
+[data-key="hr"] .module-name { color: #fdba74; }
+[data-key="auth"] .module-name { color: #c4b5fd; }
+[data-key="chat"] .module-name { color: #d8b4fe; }
+[data-key="rest"] .module-name { color: #86efac; }
+[data-key="ai"] .module-name { color: #f0abfc; }
+[data-key="platform"] .module-name { color: #a5f3fc; }
+
+/* ─── Intro wrap ─── */
+.intro-wrap { margin-bottom: 32px; }
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 999px; }
+
+/* ─── Responsive ─── */
+@media (max-width: 900px) {
+  .sidebar { display: none; }
+  .main-content { padding: 32px 24px; }
+  .cards-grid { grid-template-columns: 1fr; }
+}
+
+/* Active nav highlighting via JS */
+.nav-link.active {
+  color: var(--text);
+  background: rgba(99, 102, 241, 0.08);
+  border-left-color: #6366f1;
+}
+  </style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span>DevFathom Roadmap</span></div>
+    <div class="nav-section-label">Overview</div>
+    <a href="#top" class="nav-link"><span class="nav-icon">⭐</span> Top 5 Priorities</a>
+    <div class="nav-section-label" style="margin-top:12px">Modules</div>
+    <a href="#projects" class="nav-link"><span class="nav-icon">📋</span> Projects &amp; Kanban</a>
+    <a href="#clients" class="nav-link"><span class="nav-icon">🏢</span> Clients / CRM</a>
+    <a href="#trello" class="nav-link"><span class="nav-icon">🔄</span> Trello Import</a>
+    <a href="#finance" class="nav-link"><span class="nav-icon">💰</span> Finance</a>
+    <a href="#notes" class="nav-link"><span class="nav-icon">📝</span> Notes</a>
+    <a href="#dashboard" class="nav-link"><span class="nav-icon">🏠</span> Dashboard</a>
+    <a href="#hr" class="nav-link"><span class="nav-icon">👥</span> Team / HR</a>
+    <a href="#auth" class="nav-link"><span class="nav-icon">🔐</span> Settings / Auth</a>
+    <a href="#chat" class="nav-link"><span class="nav-icon">💬</span> Chat &amp; Video</a>
+    <a href="#rest" class="nav-link"><span class="nav-icon">🔌</span> REST API</a>
+    <a href="#ai" class="nav-link"><span class="nav-icon">🤖</span> AI Assistant</a>
+    <a href="#platform" class="nav-link"><span class="nav-icon">🏗️</span> Platform</a>
+  </nav>
+
+  <main class="main-content">
+
+    <div class="intro-wrap">
+      <section class="hero-section">
+        <div class="hero-badge">Product Roadmap 2026</div>
+        <h1 class="hero-title">DevFathom Improvements</h1>
+        <p class="hero-lead">A product-strategy companion to the bug report. Bugs are "works but wrong"; this is "works but incomplete." DevFathom is already an unusually complete internal ops platform (projects + kanban, CRM, finance, HR, notes, realtime chat, video, LLM operator, public API). The biggest leverage now is <strong>closing half-built loops</strong>, lifecycle automation, and self-service trust features.</p>
+        <div class="hero-stats">
+          <div class="stat-card"><div class="stat-num stat-qw">~30</div><div class="stat-lbl">Quick Wins</div></div>
+          <div class="stat-card"><div class="stat-num stat-med">~25</div><div class="stat-lbl">Medium Tasks</div></div>
+          <div class="stat-card"><div class="stat-num stat-bet">~8</div><div class="stat-lbl">Big Bets</div></div>
+          <div class="stat-card"><div class="stat-num stat-total">12</div><div class="stat-lbl">Modules</div></div>
+        </div>
+      </section>
+
+      <section class="module top-recs" id="top" data-key="top">
+        <div class="module-head">
+          <span class="module-icon">🏆</span>
+          <h2 class="module-name">Top 5 Recommendations</h2>
+          <span class="module-pill">5 picks</span>
+        </div>
+        <ol class="rec-list">
+          <li class="rec-card">
+            <div class="rec-num">1</div>
+            <div class="rec-body">
+              <span class="badge badge-med">Medium</span>
+              <h4 class="rec-title">Close the Modeled-but-Unwired Loops</h4>
+              <p class="rec-desc">Time tracking, task checklists/attachments, contact CRUD, and client status/logo are all fully modeled in the database — users just hit dead ends in the UI. High perceived-completeness ROI for days of work.</p>
+            </div>
+          </li>
+          <li class="rec-card">
+            <div class="rec-num">2</div>
+            <div class="rec-body">
+              <span class="badge badge-med">Medium</span>
+              <h4 class="rec-title">Financial Correctness as a Feature</h4>
+              <p class="rec-desc">Per-currency reporting, server-derived invoice totals, and an invoice edit + PDF path turn finance from "looks right" into "trustworthy." Pairs with FIN-01/FIN-02 bug fixes.</p>
+            </div>
+          </li>
+          <li class="rec-card">
+            <div class="rec-num">3</div>
+            <div class="rec-body">
+              <span class="badge badge-bet">Big Bet</span>
+              <h4 class="rec-title">HR People-Ops Depth</h4>
+              <p class="rec-desc">Leave balances, team calendar, and off-boarding automation is the difference between "a leave table" and "an HR product." Without these, the HR module is decorative.</p>
+            </div>
+          </li>
+          <li class="rec-card">
+            <div class="rec-num">4</div>
+            <div class="rec-body">
+              <span class="badge badge-bet">Big Bet</span>
+              <h4 class="rec-title">Account Trust &amp; Recovery</h4>
+              <p class="rec-desc">Self-service password reset, 2FA, and session management ("sign out everywhere"). A platform holding finance + HR data should not lack these. Password reset alone is Medium effort.</p>
+            </div>
+          </li>
+          <li class="rec-card">
+            <div class="rec-num">5</div>
+            <div class="rec-body">
+              <span class="badge badge-med">Medium</span>
+              <h4 class="rec-title">Relevance-Scoped Activity Feed</h4>
+              <p class="rec-desc">The dashboard's most-viewed widget shows every company event to every user. Scoping it to the viewer's own projects, tasks, and mentions fixes DASH-01 and makes the dashboard genuinely useful.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+    </div>
+
+    <section class="module" id="projects" data-key="projects">
+      <div class="module-head">
+        <span class="module-icon">📋</span>
+        <h2 class="module-name">Projects &amp; Kanban</h2>
+        <span class="module-pill">11 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-bet">Big Bet</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Time Tracking</h4>
+            <p class="card-desc">TimeEntry is fully modeled (Decimal(5,2), task/project links) but has zero routers or UI — the schema investment is completely stranded.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Billing, utilization, and project profitability against client/project links already in finance.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> The schema investment is completely stranded, and finance already has the client/project links to bill against.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Checklist Management</h4>
+            <p class="card-desc">Only toggleChecklistItem exists — no create, rename, reorder, or delete for checklists or items. They appear only if imported from Trello, then render read-only.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Core kanban capability — checklists are visible dead-ends today.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Task Attachments</h4>
+            <p class="card-desc">No render path and no add/delete UI (PROJ-04). Attachment data is modeled and counted but entirely unusable.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Specs and designs live on cards; the feature is blocked until attachments work.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Comment Edit / Delete</h4>
+            <p class="card-desc">No updateComment or deleteComment — all comments are permanent. Table-stakes for any collaborative tool.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Fix typos, remove mistakes, and moderate content.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Board Rename, Label Edit/Delete, Project-File Delete</h4>
+            <p class="card-desc">create/delete exist but no updateBoard, no label remove/recolor, and no file delete. Misnamed boards and accumulated labels/files are permanent.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Avoid permanently-mislabeled boards and accumulating cruft.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Subtasks, Dependencies, and Blockers</h4>
+            <p class="card-desc">No parent-child or blocking relations between tasks. Delivery planning is limited to a flat board.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Real delivery planning beyond a flat board.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Board/Column Templates and WIP Limits</h4>
+            <p class="card-desc">Default columns are hardcoded; every project starts with the same empty structure. WIP limits would help teams control flow.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Faster project setup and flow control.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> Teams recreate the same structure each project — templates eliminate this friction.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Bulk Task Actions</h4>
+            <p class="card-desc">Multi-select move, label, assign, and delete across tasks. Currently every action is one task at a time.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Manage large boards without exhausting click sequences.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Pagination / Lazy-Load on Large Boards</h4>
+            <p class="card-desc">getBoardWithTasks loads every task with all relations in a single query — large boards will become visibly slow.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Sustained performance as boards grow in real use.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Task Activity Timeline in Detail Sheet</h4>
+            <p class="card-desc">Surface the task_created and task_completed activity events already being logged — they're invisible in the UI.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Instant context on task history without leaving the card.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Generalized "Done" Detection</h4>
+            <p class="card-desc">Drive completion logging from the same column-name heuristic the UI uses for visual "done" state (relates to PROJ-07).</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Consistent done/not-done state between the board display and activity log.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="clients" data-key="clients">
+      <div class="module-head">
+        <span class="module-icon">🏢</span>
+        <h2 class="module-name">Clients / CRM &amp; Contracts</h2>
+        <span class="module-pill">8 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Full Contact CRUD</h4>
+            <p class="card-desc">Add/edit/delete contacts, set primary, and capture phone. The create form omits phone and allows only one primary — and updateContact doesn't exist yet (CLI-02).</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> A usable CRM contact book that agents and admins can actually maintain.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Client Activity Timeline</h4>
+            <p class="card-desc">No per-client history of projects, invoices, contracts, or notes events. Account context is invisible before a client call.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Account context at a glance before any call or proposal.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Client Status Selector and Logo Upload</h4>
+            <p class="card-desc">The status field (ACTIVE/INACTIVE/PROSPECT) has no selector in the edit UI, so PROSPECT→ACTIVE conversion is unreachable. Client.logo is modeled and shown but never settable.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Basic CRM lifecycle management and visual polish.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Contract Expiry / Renewal Reminders</h4>
+            <p class="card-desc">endDate and an EXPIRED status exist, but nothing auto-flags or notifies when expiry approaches. The notify() email infra already exists and could drive this easily.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Prevent lapsed agreements — high leverage against the existing notification infrastructure.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> The notify() email infra already exists, making this a wire-up rather than a build.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Contract ↔ Project/Invoice Linkage and Value Rollup</h4>
+            <p class="card-desc">Contracts attach to a client only — no tie to the governed project, no generate-invoice-from-contract, and no "total contracted value" view per client.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Connects the full sales → delivery → billing chain in one place.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Friendly Delete Guards and Inline Validation</h4>
+            <p class="card-desc">Mutation errors are swallowed silently (CLI-01 + UX-01) — surface them as the Projects forms already do.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Users understand why an action failed instead of wondering if it worked.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Contract Status State-Machine and Date Validation</h4>
+            <p class="card-desc">Any status → any status is currently allowed (e.g. TERMINATED→DRAFT). CON-01/CON-02 add dueDate/signedAt validation.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Trustworthy contract lifecycle that can't be put into impossible states.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Role-Aware Fetching and Richer Search</h4>
+            <p class="card-desc">getById loads invoices/contracts then discards them for non-admins; list search matches name only. Extend search to contact name and industry.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Faster lookups and less wasted DB work for non-admin roles.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="trello" data-key="trello">
+      <div class="module-head">
+        <span class="module-icon">🔄</span>
+        <h2 class="module-name">Trello Import</h2>
+        <span class="module-pill">5 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Import into a New Project with Lead-Only Gate</h4>
+            <p class="card-desc">Any project member can currently import into a pre-existing project. The expected flow is "import as a new project," and bulk-import should require lead access.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Matches user expectation and prevents unauthorized board mutations.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Map More Card Data</h4>
+            <p class="card-desc">Cover images, custom fields, and due-complete state are dropped on import — only name/desc/due/labels/members/checklists/attachments/comments map.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Higher fidelity import reduces manual cleanup after migration.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Robust Dates and Per-Column Order</h4>
+            <p class="card-desc">Fixes TRELLO-01 (invalid date handling) and PROJ-02 (per-column sort order after import).</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Imported boards look correct immediately, not after manual sort fixes.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Partial-Failure / Skipped-Card Reporting</h4>
+            <p class="card-desc">Import is all-or-nothing behind a generic spinner — report what was skipped (unmapped lists, invalid dates) in the result.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Users know what didn't import rather than hunting for missing cards.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Dedup When trello.id Is Absent</h4>
+            <p class="card-desc">Dedup is skipped entirely without a Trello card ID, allowing duplicate imports of the same board.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Re-running an import doesn't double every card.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="finance" data-key="finance">
+      <div class="module-head">
+        <span class="module-icon">💰</span>
+        <h2 class="module-name">Finance</h2>
+        <span class="module-pill">6 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-bet">Big Bet → Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Invoice Edit, PDF/Print, and Email Delivery</h4>
+            <p class="card-desc">There is no full invoice edit (only status changes) and no PDF/print or client-delivery path. Server-side total recompute (FIN-01) belongs here too.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Invoices that are actually sendable to clients — the current module is internal-only.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Per-Currency Reporting and FX</h4>
+            <p class="card-desc">First-class multi-currency reporting — group by currency or convert — turns FIN-02 from a bug-fix into a genuine feature. PKR and USD are currently blended.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Accurate financial reporting across currencies without manual spreadsheet work.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Recurring-Expense Auto-Posting and Budget vs Actuals</h4>
+            <p class="card-desc">Auto-post due RecurringExpense rows as transactions (fixes FIN-05) and compare against Project.budget to show burn/runway.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Real burn rate, runway visibility, and project margin without manual entry.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Partial Payments, AR Aging, and Overdue Automation</h4>
+            <p class="card-desc">Model partial payments and auto-flip invoices to OVERDUE past dueDate (currently display-only). Include AR aging view.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Accurate accounts-receivable — the current state understates overdue balances.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Decimal-Safe Math and Bounded Date Windows</h4>
+            <p class="card-desc">Harden FIN-04 (floating-point), FIN-08, and FIN-09 by computing in integer cents internally and bounding all date windows to the current date.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Correct totals and no future transactions leaking into reports.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Finance CSV Export and Date-Range Filters</h4>
+            <p class="card-desc">Standard capability for any finance view — export filtered transactions and add proper date-range controls.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Accountants can take data out without needing DB access.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="notes" data-key="notes">
+      <div class="module-head">
+        <span class="module-icon">📝</span>
+        <h2 class="module-name">Notes</h2>
+        <span class="module-pill">5 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-bet">Big Bet</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Version History / Restore</h4>
+            <p class="card-desc">No revisioning — a TEAM/EDIT collaborator can overwrite or erase content irreversibly. Collaborative editing plus NOTE-01 makes accidental loss easy.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Recover from mistakes or abuse; audit who changed what and when.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> Collaborative editing plus NOTE-01 make content loss easy — without history, there is no recovery path.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">People @Mentions and Notifications</h4>
+            <p class="card-desc">Notes support [[note-links]] only, no people-mentions or notification triggers. Chat already has this capability to copy from.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Close the collaboration loop — mention a teammate to pull them into a document.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Author-Only Visibility Control</h4>
+            <p class="card-desc">Implements NOTE-01 — let note authors control who can see private notes, clarifying the current ambiguous sharing model.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Authors can keep drafts and sensitive notes private.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Resolve Shared-With-Me Links</h4>
+            <p class="card-desc">getById drops SHARED backlinks it "can't independently verify," so legitimate shared-link notes vanish from the UI.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Notes shared with you actually show up instead of silently disappearing.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Allow-List Link Protocols in Editor</h4>
+            <p class="card-desc">Tiptap Link has autolink:true and no protocols allow-list — restrict to http/https/mailto as cheap defense-in-depth.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Prevents javascript: and other unsafe protocol links from appearing in notes.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="dashboard" data-key="dashboard">
+      <div class="module-head">
+        <span class="module-icon">🏠</span>
+        <h2 class="module-name">Dashboard</h2>
+        <span class="module-pill">3 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Relevance-Scoped Activity Feed</h4>
+            <p class="card-desc">Fixes DASH-01 — every employee sees every company event, making the feed noise for non-admins. Scope it to the viewer's own projects, tasks, and mentions.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> The dashboard's most-viewed widget becomes trustworthy and relevant to each user.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Customizable Widgets and Graceful Empty States</h4>
+            <p class="card-desc">Let users choose and arrange which cards appear (my tasks, deadlines, leave, meetings). Current layout is fixed and shows empty states poorly.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Personal relevance — the dashboard shows what each user actually cares about.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Personal Time-Off / Pending Leave Widget</h4>
+            <p class="card-desc">Replace the leaked company-wide pendingLeaves count (DASH-02) with the viewing user's own leave status and balance.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Employees see their own leave at a glance; company-wide data is no longer exposed to non-HR users.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="hr" data-key="hr">
+      <div class="module-head">
+        <span class="module-icon">👥</span>
+        <h2 class="module-name">Team / HR</h2>
+        <span class="module-pill">7 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-bet">Big Bet</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Leave Balances, Team Calendar, and Overlap Detection</h4>
+            <p class="card-desc">No accrual/balance model, no calendar view, and no overlap guard (HR-02). Without these, the leave table is a fraction of what an HR module needs.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Real people-ops — employees see remaining days; managers prevent over-booking.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> The current leave table records requests but can't answer "how many days do I have left?" or "is the team over-extended?"</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Off-Boarding Automation</h4>
+            <p class="card-desc">Resignation approval records lastWorkingDay but never deactivates the account or revokes sessions — a security and process gap.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Security and process hygiene — pairs with AUTH-01 token-version mechanism for force-logout.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> Pairs with AUTH-01's token-version mechanism for force-logout.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Self-Service Leave Edit and Cancel</h4>
+            <p class="card-desc">Employees can create pending leave requests but cannot withdraw or edit them — only an HR/Admin can remove a bad request.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Reduces HR admin burden for trivial corrections employees can self-serve.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Performance Review Workflow</h4>
+            <p class="card-desc">PerformanceNote is admin-write/admin-or-self-read only. HR can't participate, and there's no review cycle, ratings, or configurable subject visibility.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Turns a notes table into an actual review process with HR involvement.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Separation of Duties on Approvals</h4>
+            <p class="card-desc">Implements HR-01 — block self-approval and enforce PENDING-only transition so managers can't approve their own leave.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Trustworthy approval records that pass a basic governance audit.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Directory Privacy Controls</h4>
+            <p class="card-desc">team.getAll returns email, phone, and bio to every authenticated user. Restrict contact fields to HR/Admin or make them opt-in.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> PII protection — employees control who can see their contact details.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Include ON_LEAVE Staff in People Search</h4>
+            <p class="card-desc">Team search filters status:'ACTIVE', invisibly dropping on-leave members from results and assignment dropdowns.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> On-leave team members remain discoverable and assignable during their leave period.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="auth" data-key="auth">
+      <div class="module-head">
+        <span class="module-icon">🔐</span>
+        <h2 class="module-name">Settings / Profile / Auth</h2>
+        <span class="module-pill">6 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-bet">Big Bet → Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Self-Service Password Reset</h4>
+            <p class="card-desc">Only logged-in password change and admin reset exist. A locked-out user has no recovery path. The invite-token infrastructure can be reused for secure reset links.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Table-stakes recovery flow that reduces admin load.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> The invite-token infra can be reused for reset links — most of the plumbing already exists.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-bet">Big Bet</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Two-Factor Authentication (2FA / MFA)</h4>
+            <p class="card-desc">No second factor on a system holding admin, finance, and HR data. A single compromised password is the only barrier.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Materially raises account security for the most sensitive platform in the company.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Session Management — Sign Out Everywhere</h4>
+            <p class="card-desc">Implements AUTH-01 — let users see active sessions and revoke them, including auto-revocation when password changes.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> User control after a suspected compromise; compliance requirement for finance + HR systems.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Per-User Notification Preferences</h4>
+            <p class="card-desc">notify() always sends email — no per-user channel or type opt-out. High-volume events create noise with no escape hatch.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Reduces noise and respects user communication preferences.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Live Password-Policy Checklist on Change Form</h4>
+            <p class="card-desc">password-policy.ts exposes passwordRules but the settings form only checks length &lt; 8 client-side. Reuse the shared checklist — the invite flow already does this.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Client and server agree on the same rules; users see feedback as they type.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Edge Token Verification and Consistent Page-Auth Guard</h4>
+            <p class="card-desc">Implements AUTH-02/SEC-03 — verify the JWT in middleware and add a shared server-side auth guard so non-finance pages redirect cleanly too.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Consistent auth experience across all routes, not just the finance module.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="chat" data-key="chat">
+      <div class="module-head">
+        <span class="module-icon">💬</span>
+        <h2 class="module-name">Realtime Chat &amp; Video</h2>
+        <span class="module-pill">6 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Attendance Reporting and Meeting Summaries</h4>
+            <p class="card-desc">Attendance is logged per-occurrence with joinedAt/leftAt but there is no report, percentage view, or per-person summary. The data is captured but invisible.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Makes attendance data actionable — surfaces RT-01/RT-03 data quality and enables manager reviews.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Message Edit History and Delete-for-Everyone</h4>
+            <p class="card-desc">Standard chat affordances needed to complete the Slack-grade goal — edit history with change indicators and full delete capability.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Standard collaborative chat capability that users expect from a modern messaging system.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Realtime Membership Revocation and Short Token TTL</h4>
+            <p class="card-desc">Implements RT-02 — emit a leave/remove event so the UI updates live when someone is removed from a channel. Shorten chat token TTL.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Security and correctness — removed members currently hold valid tokens until expiry.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Mention Notifications, Ordering &amp; Read Receipts</h4>
+            <p class="card-desc">Three related Quick Wins: notify on mention-added-by-edit (RT-04), stabilize client ordering (RT-08), and scope read receipts to the recipient only (RT-09).</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Chat feels polished and secure — read receipts don't broadcast to the channel.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Authenticated / Signed Attachment Delivery</h4>
+            <p class="card-desc">Implements RT-05 — file attachments are on a public bucket path with no auth check or signed URL. Required before production scale.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Private files stay private — a must-have before relying on cloud storage in production.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Robust Call Exit Handling</h4>
+            <p class="card-desc">logLeave on pagehide and route-change (RT-03); upsert attendance to eliminate the race condition (RT-06).</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Attendance records are complete even when users navigate away or close the tab.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="rest" data-key="rest">
+      <div class="module-head">
+        <span class="module-icon">🔌</span>
+        <h2 class="module-name">Public REST API</h2>
+        <span class="module-pill">5 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Rate Limiting and Per-Token Usage Metrics</h4>
+            <p class="card-desc">Implements REST-04 — add per-token quotas and a usage view in the token management UI. No abuse protection currently exists.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Abuse protection and operator visibility for an LLM-operable API.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Cursor Pagination and Consistent List Envelopes</h4>
+            <p class="card-desc">Standardize limit/cursor handling and response shapes across all list endpoints. Fixes REST-06 where some lists are unbounded.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Integrators and LLM agents get predictable, pageable results from every endpoint.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-bet">Big Bet</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Outbound Webhooks / Events</h4>
+            <p class="card-desc">For an "agent-operable" API, outbound events (invoice.paid, task.created) unlock real integrations and automation.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Third-party tools and agents can react to DevFathom state changes without polling.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Scope Hygiene and Audit Completeness</h4>
+            <p class="card-desc">Fix REST-01 (finance data gated under clients:read scope) and REST-02 (the /spec endpoint bypasses audit logging). Align published spec with actual response shapes.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Correct access control and complete audit trail for every API operation.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Consistent 400/404 on Bad Input</h4>
+            <p class="card-desc">REST-05 and REST-07 — clean JSON-parse errors and FK validation so integrators get actionable errors instead of opaque 500s.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Integrators can diagnose problems from error messages, not server logs.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="ai" data-key="ai">
+      <div class="module-head">
+        <span class="module-icon">🤖</span>
+        <h2 class="module-name">AI Assistant</h2>
+        <span class="module-pill">4 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Authorization and Isolation Tests in the Eval</h4>
+            <p class="card-desc">The eval proves tool routing but not the in-execute guards or cross-user data isolation (AI-02). A regression here would silently expose another user's data.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Security model protected against regressions as the tool library grows.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Streaming Citations and Action Audit Surfacing</h4>
+            <p class="card-desc">Show which records the assistant used to answer a query, and link assistant writes into the audit/activity log.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Trust and traceability for an operator bot — users can verify what the AI read and wrote.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label enh-label">Enhancements to Existing Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Groq Schema Discipline Lint</h4>
+            <p class="card-desc">Fix AI-01 (pattern/allOf in resetMemberPassword tool schema) and add a guard that no tool schema emits format/pattern/allOf keywords — Groq rejects these with a whole-request 400.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Prevents silent tool failures that break the entire assistant request.</p>
+              <p class="card-rationale"><strong>Rationale:</strong> Groq rejects format/pattern/allOf at the schema level — one bad tool crashes all 96.</p>
+            </div>
+          </div>
+
+          <div class="card card-enh">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag enh-tag">Enhancement</span>
+            </div>
+            <h4 class="card-title">Assistant Parity with App</h4>
+            <p class="card-desc">Scope pendingLeaves and getTeamMember consistently with the underlying tRPC routers (AI-03/DASH-02) so the assistant and UI return the same data.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Users get consistent answers from the assistant and the UI — trust depends on agreement.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="module" id="platform" data-key="platform">
+      <div class="module-head">
+        <span class="module-icon">🏗️</span>
+        <h2 class="module-name">Platform / Cross-Cutting</h2>
+        <span class="module-pill">4 features</span>
+      </div>
+
+      <div class="feature-group">
+        <h3 class="group-label miss-label">Missing / Incomplete Features</h3>
+        <div class="cards-grid">
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-qw">Quick Win</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Tighten CSP and Image Origins</h4>
+            <p class="card-desc">SEC-01 (drop ws:/wss: and stale socket origin from connect-src) and SEC-02 (restrict img-src). Move toward the nonce-based script policy the config already comments aspire to.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Defense-in-depth — removes unnecessary browser attack surface opened by overly-permissive CSP.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Production File Storage</h4>
+            <p class="card-desc">The upload route is explicitly marked "DEV STORAGE ONLY (local FS)" — wire Vercel Blob with access control before production scale.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> File uploads survive deploys and scale beyond a single server's disk.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Observability (Error Tracking + Request Metrics)</h4>
+            <p class="card-desc">With no rate limiting and several "generic 500" paths, add error tracking and request metrics so production failures become visible before users report them.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> The 500s flagged in REST-05/06/07 and RT-06 become visible in production instead of silent.</p>
+            </div>
+          </div>
+
+          <div class="card card-miss">
+            <div class="card-top">
+              <span class="badge badge-med">Medium</span>
+              <span class="type-tag miss-tag">Missing</span>
+            </div>
+            <h4 class="card-title">Audit Log Export and Retention Policy</h4>
+            <p class="card-desc">The audit log viewer is read-only; add CSV/JSON export and document immutability/retention guarantees for compliance use.</p>
+            <div class="card-meta">
+              <p class="card-value"><strong>Value:</strong> Compliance evidence that can be extracted and presented to auditors.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+const sections = document.querySelectorAll('[data-key]');
+const navLinks = document.querySelectorAll('.nav-link');
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      navLinks.forEach(l => l.classList.remove('active'));
+      const key = e.target.getAttribute('data-key') || e.target.id;
+      const link = document.querySelector('.nav-link[href="#' + key + '"]');
+      if (link) link.classList.add('active');
+    }
+  });
+}, { threshold: 0.15 });
+sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

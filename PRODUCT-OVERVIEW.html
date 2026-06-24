@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DevFathom Hub — Internal Operations Platform</title>
+<meta name="description" content="DevFathom Hub: the internal operations platform DevFathom builds and runs the company on." />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --abyss: #0C2E2C;
+    --abyss-deep: #08221F;
+    --brass: #BC8850;
+    --brass-ink: #8A6233;
+    --paper: #F7F5EF;
+    --paper-white: #FDFCF8;
+    --ink: #161A19;
+    --slate: #6E7570;
+    --line: #E9E3D6;
+    --card: #FFFFFF;
+    --brass-tint: rgba(188,136,80,0.13);
+    --abyss-tint: rgba(12,46,44,0.07);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper-white);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    font-size: 17px;
+  }
+  a { color: var(--abyss); text-decoration: none; }
+  a:hover { color: var(--brass-ink); text-decoration: underline; }
+
+  .display { font-family: "Oxanium", "IBM Plex Sans", sans-serif; }
+
+  /* Header */
+  header.site {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(253,252,248,0.86);
+    backdrop-filter: saturate(180%) blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar {
+    max-width: 940px; margin: 0 auto; padding: 12px 24px;
+    display: flex; align-items: center; gap: 13px; flex-wrap: wrap;
+  }
+  .brandlock { display: flex; align-items: center; gap: 11px; }
+  .markicon { width: 30px; height: 30px; display: block; }
+  .wordmark {
+    font-family: "Oxanium", sans-serif; font-weight: 600; font-size: 18px;
+    letter-spacing: -0.01em; color: var(--ink);
+  }
+  .wordmark .suffix { color: var(--slate); font-weight: 500; }
+  .tag {
+    font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--brass-ink); background: var(--brass-tint);
+    padding: 3px 10px; border-radius: 999px; font-weight: 600;
+    border: 1px solid rgba(188,136,80,0.25);
+  }
+  nav.tabs { margin-left: auto; display: flex; gap: 4px; }
+  nav.tabs button {
+    font-family: "IBM Plex Sans", sans-serif; font-size: 14px; font-weight: 600;
+    color: var(--slate); background: transparent;
+    border: 0; padding: 8px 14px; border-radius: 9px; cursor: pointer;
+    transition: all .15s ease;
+  }
+  nav.tabs button:hover { color: var(--ink); background: var(--abyss-tint); }
+  nav.tabs button.active { color: var(--abyss); background: var(--abyss-tint); box-shadow: inset 0 -2px 0 var(--brass); }
+
+  /* Layout */
+  main { max-width: 940px; margin: 0 auto; padding: 40px 24px 110px; }
+  .panel { display: none; }
+  .panel.active { display: block; animation: fade .25s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px);} to {opacity:1; transform:none;} }
+
+  /* Hero */
+  .hero {
+    position: relative; overflow: hidden;
+    background: radial-gradient(120% 140% at 50% -20%, #14403c 0%, var(--abyss) 45%, var(--abyss-deep) 100%);
+    border-radius: 22px; padding: 56px 32px 52px; text-align: center;
+    margin: 18px 0 40px;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .hero .glow {
+    position: absolute; left: 50%; top: -90px; transform: translateX(-50%);
+    width: 460px; height: 280px; border-radius: 999px;
+    background: rgba(188,136,80,0.20); filter: blur(110px); pointer-events: none;
+  }
+  .hero .heromark { width: 76px; height: 86px; margin: 0 auto 22px; display: block; position: relative; }
+  .hero h1 {
+    font-family: "Oxanium", sans-serif; font-weight: 700;
+    font-size: 44px; line-height: 1.08; letter-spacing: -0.035em;
+    color: var(--paper); margin: 0 0 14px; position: relative;
+  }
+  .hero .lede {
+    color: rgba(247,245,239,0.74); font-size: 19px; margin: 0 auto; max-width: 600px;
+    position: relative;
+  }
+  .hero .pill {
+    display: inline-block; margin-bottom: 22px; position: relative;
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 600;
+    color: var(--brass); border: 1px solid rgba(188,136,80,0.4);
+    padding: 4px 12px; border-radius: 999px;
+  }
+
+  h1.page { font-family: "Oxanium", sans-serif; font-size: 38px; line-height: 1.12; margin: 6px 0 10px; letter-spacing: -0.03em; }
+  .lede { font-size: 20px; color: var(--slate); margin: 0 0 10px; max-width: 680px; }
+  h2 {
+    font-family: "Oxanium", sans-serif; font-weight: 600;
+    font-size: 25px; margin: 54px 0 14px; padding-top: 30px;
+    border-top: 1px solid var(--line); letter-spacing: -0.02em;
+  }
+  .panel#overview h2:first-of-type { border-top: 0; padding-top: 0; margin-top: 44px; }
+  h3 { font-family: "Oxanium", sans-serif; font-weight: 600; font-size: 19px; margin: 30px 0 8px; letter-spacing: -0.01em; }
+  p { margin: 14px 0; }
+  ul, ol { margin: 14px 0; padding-left: 22px; }
+  li { margin: 7px 0; }
+  li::marker { color: var(--brass); }
+  .eyebrow {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--brass-ink); font-weight: 600; margin: 0 0 6px;
+  }
+
+  .note {
+    background: var(--paper); border: 1px solid var(--line);
+    border-left: 3px solid var(--brass);
+    padding: 16px 20px; border-radius: 12px; margin: 28px 0;
+  }
+  .closing { margin-top: 54px; padding-top: 30px; border-top: 1px solid var(--line); font-size: 18px; }
+
+  code {
+    background: var(--paper); border: 1px solid var(--line);
+    padding: 1px 6px; border-radius: 5px; font-size: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 24px 0; }
+  .card {
+    border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+    background: var(--card); transition: border-color .15s ease, transform .15s ease;
+  }
+  .card:hover { border-color: rgba(188,136,80,0.45); transform: translateY(-1px); }
+  .card h4 { font-family: "Oxanium", sans-serif; margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; font-size: 15px; color: var(--slate); }
+
+  .toc {
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: 14px; padding: 16px 22px; margin: 24px 0 8px;
+  }
+  .toc strong { font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--brass-ink); }
+  .toc ul { columns: 2; margin: 10px 0 0; padding-left: 18px; font-size: 15px; }
+
+  .step { border-left: 2px solid var(--brass-tint); padding: 2px 0 2px 20px; margin: 18px 0; }
+  .step h4 { font-family: "Oxanium", sans-serif; margin: 0 0 4px; font-size: 17px; }
+
+  footer {
+    max-width: 940px; margin: 0 auto; padding: 28px 24px 64px;
+    border-top: 1px solid var(--line); color: var(--slate); font-size: 14px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  footer .markicon { width: 24px; height: 24px; }
+  footer .tagline { font-family: "Oxanium", sans-serif; color: var(--ink); }
+  footer .conf { margin-left: auto; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); }
+
+  /* ===== Agreement gate ===== */
+  .gate-open { overflow: hidden; }
+  .gate {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 22px;
+    background: rgba(8,34,31,0.55); backdrop-filter: blur(7px) saturate(140%);
+  }
+  body:not(.gate-open) .gate { display: none; }
+  .gate-card {
+    width: 100%; max-width: 640px; max-height: calc(100vh - 44px);
+    background: var(--paper-white); border-radius: 18px; overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 30px 80px rgba(8,34,31,0.45);
+  }
+  .gate-head { background: var(--abyss); color: var(--paper); padding: 20px 26px; display: flex; align-items: center; gap: 13px; }
+  .gate-head .markicon { width: 30px; height: 30px; flex-shrink: 0; }
+  .gate-head h2 { font-family: "Oxanium", sans-serif; margin: 0; font-size: 18px; color: var(--paper); border: 0; padding: 0; letter-spacing: -0.01em; }
+  .gate-head .sub { font-size: 12px; color: rgba(247,245,239,0.66); margin-top: 2px; }
+  .gate-body { padding: 22px 26px; overflow-y: auto; font-size: 14.5px; line-height: 1.62; }
+  .gate-body h3 { font-family: "Oxanium", sans-serif; font-size: 15px; margin: 16px 0 4px; }
+  .gate-body p { margin: 8px 0; }
+  .gate-body .lead { color: var(--ink); }
+  .gate-foot { border-top: 1px solid var(--line); padding: 16px 26px 20px; background: var(--paper); }
+  .gate-sign { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .gate-sign input[type=text] {
+    flex: 1; min-width: 200px; font: inherit; font-size: 15px;
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink);
+  }
+  .gate-sign input[type=text]:focus { outline: none; border-color: var(--brass); box-shadow: 0 0 0 3px var(--brass-tint); }
+  .gate-sign .date { font-size: 13px; color: var(--slate); }
+  .gate-check { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--ink); margin-bottom: 14px; cursor: pointer; }
+  .gate-check input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--abyss); flex-shrink: 0; }
+  .gate-actions { display: flex; gap: 10px; align-items: center; }
+  .btn { font: inherit; font-weight: 600; font-size: 15px; border-radius: 11px; padding: 11px 20px; cursor: pointer; border: 1px solid transparent; }
+  .btn-primary { background: var(--abyss); color: var(--paper); }
+  .btn-primary:hover:not(:disabled) { background: #0a2624; }
+  .btn-primary:disabled { opacity: 0.42; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--slate); border-color: var(--line); }
+  .btn-ghost:hover { color: var(--ink); }
+  .gate-note { font-size: 11.5px; color: var(--slate); margin-top: 12px; }
+
+  @media (max-width: 640px) {
+    main { padding: 28px 18px 80px; }
+    .hero { padding: 44px 22px 40px; }
+    .hero h1 { font-size: 34px; }
+    h1.page { font-size: 30px; }
+    .grid { grid-template-columns: 1fr; }
+    .toc ul { columns: 1; }
+    nav.tabs { width: 100%; order: 3; overflow-x: auto; }
+    .bar { padding: 11px 16px; }
+    footer { flex-wrap: wrap; }
+    footer .conf { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body class="gate-open">
+
+<!-- ===== Confidentiality & Non-Replication gate ===== -->
+<div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+  <div class="gate-card" id="gate-card">
+    <div class="gate-head">
+      <svg class="markicon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="#0C2E2C"/>
+        <svg x="15" y="12" width="34" height="40" viewBox="34 33 148 166" fill="none">
+          <path d="M116 57 L155 97 L110 137 L75 175" fill="none" stroke="#F7F5EF" stroke-width="22" stroke-linejoin="round" stroke-linecap="round"/>
+          <rect x="98" y="39" width="38" height="36" rx="12" fill="#F7F5EF"/>
+          <rect x="135" y="77" width="41" height="41" rx="13" fill="#F7F5EF"/>
+          <rect x="90" y="118" width="41" height="38" rx="13" fill="#F7F5EF"/>
+          <rect x="56" y="156" width="37" height="37" rx="12" fill="#F7F5EF"/>
+          <rect x="40" y="81" width="35" height="34" rx="11" fill="#BC8850"/>
+        </svg>
+      </svg>
+      <div>
+        <h2 id="gate-title">Confidentiality &amp; Non-Replication Agreement</h2>
+        <div class="sub">Please read and accept before continuing.</div>
+      </div>
+    </div>
+    <div class="gate-body">
+      <p class="lead">This Agreement is between you, the person accessing this material (&ldquo;you&rdquo; or the &ldquo;Recipient&rdquo;), and <strong>Saad Ajmal</strong>, the original creator and owner of DevFathom Hub (the &ldquo;Owner&rdquo;). By signing below, by continuing past this screen, or by accessing or using DevFathom Hub, you agree to be bound by it.</p>
+
+      <h3>1. Confidential information</h3>
+      <p>The materials made available to you here, and everything you see or learn while accessing or using DevFathom Hub, including its features, design, workflows, structure, and underlying ideas (the &ldquo;Confidential Information&rdquo;), are the confidential and proprietary property of the Owner. You will keep the Confidential Information strictly confidential and will not disclose it to any third party without the Owner&rsquo;s prior written permission.</p>
+
+      <h3>2. Ownership</h3>
+      <p>DevFathom Hub, together with its concept, design, and implementation, is and remains the exclusive property of the Owner, Saad Ajmal. Nothing here transfers any ownership, license, or right to you, other than a limited, revocable right to view this material.</p>
+
+      <h3>3. Non-replication and non-compete</h3>
+      <p>You agree that you will not, directly or indirectly, and whether alone or with or through any other person or company, build, develop, reproduce, copy, commission, distribute, market, or sell any product or service that is the same as or substantially similar to DevFathom Hub, in whole or in any material part, anywhere in the market, without the prior written permission of Saad Ajmal.</p>
+
+      <h3>4. No reverse engineering</h3>
+      <p>You will not reverse engineer, decompile, or otherwise attempt to derive the source code, structure, or methods of DevFathom Hub.</p>
+
+      <h3>5. Use of DevFathom Hub</h3>
+      <p>The same obligations apply whenever you access or use DevFathom Hub itself, not only to this overview. Your continued use of DevFathom Hub is your ongoing acceptance of this Agreement.</p>
+
+      <h3>6. Term and remedies</h3>
+      <p>These obligations continue indefinitely and survive the end of your access to this material or to DevFathom Hub. You acknowledge that a breach may cause the Owner harm that money alone cannot fully remedy, and that the Owner may seek injunctive relief in addition to any other remedy available at law.</p>
+
+      <h3>7. Governing law</h3>
+      <p>This Agreement is governed by the laws of the jurisdiction in which the Owner maintains his principal place of residence or business, without regard to its conflict of law rules.</p>
+
+      <p style="color:var(--slate);font-size:13px;margin-top:14px;">If you do not agree, please close this page and do not access or use DevFathom Hub.</p>
+    </div>
+    <div class="gate-foot">
+      <div class="gate-sign">
+        <input type="text" id="gate-name" placeholder="Type your full legal name to sign" autocomplete="name" />
+        <span class="date">Date: <span id="gate-date"></span></span>
+      </div>
+      <label class="gate-check">
+        <input type="checkbox" id="gate-agree" />
+        <span>I have read and agree to the Confidentiality &amp; Non-Replication Agreement above, and I understand it binds me both now and while using DevFathom Hub.</span>
+      </label>
+      <div class="gate-actions">
+        <button class="btn btn-primary" id="gate-accept" disabled>Agree and continue</button>
+        <button class="btn btn-ghost" id="gate-decline">Decline</button>
+      </div>
+      <p class="gate-note">By clicking &ldquo;Agree and continue&rdquo; you adopt your typed name as your electronic signature for this Agreement.</p>
+    </div>
+  </div>
+
+  <div class="gate-card" id="gate-declined" style="display:none">
+    <div class="gate-head">
+      <div><h2>Access not granted</h2><div class="sub">You declined the agreement.</div></div>
+    </div>
+    <div class="gate-body">
+      <p>You need to accept the Confidentiality &amp; Non-Replication Agreement to view this material or use DevFathom Hub. If you reached this screen by mistake, you can review the agreement again.</p>
+    </div>
+    <div class="gate-foot">
+      <button class="btn btn-primary" id="gate-back">Review the agreement</button>
+    </div>
+  </div>
+</div>
+
+<header class="site">
+  <div class="bar">
+    <span class="brandlock">
+      <svg class="markicon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="DevFathom">
+        <rect width="64" height="64" rx="14" fill="#0C2E2C"/>
+        <svg x="15" y="12" width="34" height="40" viewBox="34 33 148 166" fill="none">
+          <path d="M116 57 L155 97 L110 137 L75 175" fill="none" stroke="#F7F5EF" stroke-width="22" stroke-linejoin="round" stroke-linecap="round"/>
+          <rect x="98" y="39" width="38" height="36" rx="12" fill="#F7F5EF"/>
+          <rect x="135" y="77" width="41" height="41" rx="13" fill="#F7F5EF"/>
+          <rect x="90" y="118" width="41" height="38" rx="13" fill="#F7F5EF"/>
+          <rect x="56" y="156" width="37" height="37" rx="12" fill="#F7F5EF"/>
+          <rect x="40" y="81" width="35" height="34" rx="11" fill="#BC8850"/>
+        </svg>
+      </svg>
+      <span class="wordmark">DevFathom <span class="suffix">Hub</span></span>
+    </span>
+    <span class="tag">Internal</span>
+    <nav class="tabs" id="tabs">
+      <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="details">Full Details</button>
+      <button data-tab="guide">Product Guide</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ OVERVIEW ============ -->
+<section class="panel active" id="overview">
+
+  <div class="hero">
+    <span class="glow"></span>
+    <svg class="heromark" viewBox="34 33 148 166" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M116 57 L155 97 L110 137 L75 175" fill="none" stroke="#F7F5EF" stroke-width="22" stroke-linejoin="round" stroke-linecap="round"/>
+      <rect x="98" y="39" width="38" height="36" rx="12" fill="#F7F5EF"/>
+      <rect x="135" y="77" width="41" height="41" rx="13" fill="#F7F5EF"/>
+      <rect x="90" y="118" width="41" height="38" rx="13" fill="#F7F5EF"/>
+      <rect x="56" y="156" width="37" height="37" rx="12" fill="#F7F5EF"/>
+      <rect x="40" y="81" width="35" height="34" rx="11" fill="#BC8850"/>
+    </svg>
+    <span class="pill">Internal · DevFathom</span>
+    <h1>DevFathom Hub</h1>
+    <p class="lede">The internal operations platform we built and run the company on.</p>
+  </div>
+
+  <p>DevFathom Hub is the in-house tool that DevFathom runs day to day. It is not a product we sell. It is the system the whole team works inside, built so we never have to stitch together a dozen separate tools to run the business. It pulls projects, clients, money, people, meetings, chat, and documents into one app, and then puts an AI assistant on top of all of it that can actually do the work, not just answer questions.</p>
+
+  <p>Everything in the Hub is permission aware from the ground up, so every feature respects who you are and what you are allowed to see.</p>
+
+  <div class="note">This page is an internal overview of the Hub. Everything described here is what the team uses internally at DevFathom. Use the tabs above to jump between the short overview, the full feature detail, and the how-to guide.</div>
+
+  <h2>What lives inside</h2>
+  <div class="grid">
+    <div class="card"><h4>Projects and tasks</h4><p>Kanban boards, custom columns, subtasks, blockers, checklists, time tracking, and Trello import.</p></div>
+    <div class="card"><h4>Clients and contracts</h4><p>Client directory, contacts, contract lifecycle, and invoices generated straight from a contract.</p></div>
+    <div class="card"><h4>Finance</h4><p>Transactions, invoices, payments, recurring expenses, budgets, multi currency, and profit and loss reporting.</p></div>
+    <div class="card"><h4>People and HR</h4><p>Roster, leave, resignations, lay-off flow, performance notes, and review cycles.</p></div>
+    <div class="card"><h4>Meetings and video</h4><p>Scheduling, per occurrence attendance, and in-app video calls.</p></div>
+    <div class="card"><h4>Chat</h4><p>Channels, DMs, threads, reactions, voice messages, and live realtime updates.</p></div>
+    <div class="card"><h4>Notes</h4><p>Rich notes with sharing, full revision history, linking, and mentions.</p></div>
+    <div class="card"><h4>AI assistant</h4><p>A full operator with around ninety six tools that reads and acts across every domain, inside the same permissions.</p></div>
+  </div>
+
+  <h2>The idea in one line</h2>
+  <p class="closing">DevFathom Hub is the single operating system we run DevFathom on. Projects, clients, money, people, meetings, chat, and notes all live in one place, everything is permission aware down to the individual record, and there is an AI operator sitting on top that can actually run the business with the team instead of just talking about it.</p>
+</section>
+
+<!-- ============ FULL DETAILS ============ -->
+<section class="panel" id="details">
+  <p class="eyebrow">Full reference</p>
+  <h1 class="page">Full feature detail</h1>
+  <p class="lede">Everything the Hub does today, area by area, in depth.</p>
+
+  <div class="toc">
+    <strong>Jump to</strong>
+    <ul>
+      <li><a href="#d-projects">Projects and work</a></li>
+      <li><a href="#d-clients">Clients and CRM</a></li>
+      <li><a href="#d-finance">Finance</a></li>
+      <li><a href="#d-people">People and HR</a></li>
+      <li><a href="#d-meetings">Meetings and video</a></li>
+      <li><a href="#d-chat">Chat</a></li>
+      <li><a href="#d-notes">Notes</a></li>
+      <li><a href="#d-ai">AI assistant</a></li>
+      <li><a href="#d-dash">Dashboard and search</a></li>
+      <li><a href="#d-security">Auth and security</a></li>
+      <li><a href="#d-api">Settings and API</a></li>
+    </ul>
+  </div>
+
+  <h2 id="d-projects">Projects and work management</h2>
+  <p>This is the heart of the Hub and it leans heavily into a Trello style way of working, then goes further than Trello in the places that matter for delivery work.</p>
+  <h3>Projects</h3>
+  <p>Every project carries a status, a type, a priority, and a set of members. Membership is role based, so the same person can be an owner on one project and a contributor on another. Projects hold milestones, files, and their own board, so the project page is the one place you go to see scope, who is on it, and where the work stands.</p>
+  <h3>Boards and columns</h3>
+  <p>Each project gets a kanban board. Columns are fully editable: you can create them, rename them, reorder them, and delete them. A column can carry default assignees, so any card that lands in that column is automatically handed to the right people without anyone remembering to assign it. New boards can start from a column template instead of a blank slate, which keeps everyone's workflow shaped the same way.</p>
+  <h3>Tasks</h3>
+  <p>Tasks are the working unit and they are deep. A task can have multiple assignees, labels, a priority, and a due date. Tasks relate to each other in two ways: a parent and subtask relationship for breaking work down, and blockers for marking that one task cannot move until another is finished. Inside a task you get threaded comments, multiple checklists each with their own items, file attachments, and a complete activity feed that records who changed what and when.</p>
+  <h3>Time tracking</h3>
+  <p>You can log time against a task, edit or delete those entries, list them, and see a rollup of total time logged. That feeds the picture of how much effort a task or project actually took, separate from the estimate.</p>
+  <h3>Bulk actions and import</h3>
+  <p>The board supports bulk moves and bulk deletes, so cleaning up or re-staging a batch of cards is one action rather than twenty. And if work already lives in Trello, the importer brings a board straight in, creates the project for you in the process, and reports how many cards came across so you know the import was complete.</p>
+
+  <h2 id="d-clients">Clients and the CRM side</h2>
+  <p>The client area is the relationship and commercial record for everyone we work with.</p>
+  <ul>
+    <li><strong>Directory.</strong> Every client has a status, a set of contacts, and a per client activity history so you can see the full timeline of interactions in one place.</li>
+    <li><strong>Contacts.</strong> A client can hold as many contacts as you need. Each is editable, and email is validated on the way in so the directory stays clean.</li>
+    <li><strong>Contracts.</strong> Contracts live per client with their own status and lifecycle. The Hub tracks the total contracted value, automatically sweeps contracts that have expired, and surfaces the ones that are about to expire so renewals do not slip.</li>
+    <li><strong>Contract to invoice.</strong> You can generate an invoice directly from a contract, so the commercial agreement flows into finance without anyone re-keying numbers.</li>
+    <li><strong>Privacy.</strong> The directory redacts personal information based on who is looking, so sensitive contact detail is only visible to the roles that should see it.</li>
+  </ul>
+
+  <h2 id="d-finance">Finance</h2>
+  <p>Finance is one of the deepest parts of the Hub, and it is where data integrity has had the most attention.</p>
+  <h3>Transactions</h3>
+  <p>Income and expense transactions are first class, with categories and full create, edit, and delete. Filtered views can be exported to a spreadsheet, so you can pull exactly the slice you are looking at.</p>
+  <h3>Invoices and payments</h3>
+  <p>Invoices carry line items and a status. You can send an invoice by email, record one or more payments against it, and delete a payment if something was logged in error. Invoices that pass their due date are marked overdue automatically rather than waiting for someone to notice.</p>
+  <h3>Recurring expenses and budgets</h3>
+  <p>Recurring expenses can be defined once and then posted automatically as each cycle comes due, so the books reflect them without manual entry. On top of that, the Hub tracks budget versus actuals so you can see where spend is landing against plan.</p>
+  <h3>Reporting and currency</h3>
+  <p>There is a financial summary, a profit and loss report, and a revenue chart. Everything is multi currency aware, and aggregation shows a USD base equivalent so totals still make sense when the underlying records are in different currencies.</p>
+
+  <h2 id="d-people">People, HR, and reviews</h2>
+  <h3>Roster and leave</h3>
+  <p>The team area holds a roster and an individual profile for every member. Leave is handled end to end: people file leave requests, balances are tracked per person, HR or admins approve or update the status, requests can be cancelled, and a team leave calendar shows who is out and when so planning around absence is easy.</p>
+  <h3>Resignation and off-boarding</h3>
+  <p>Resignation is self service. A person submits a resignation, can withdraw it while it is pending, and HR or an admin reviews it. Approving a resignation triggers off-boarding, which deactivates the account so access ends cleanly.</p>
+  <h3>Lay-off</h3>
+  <p>For a company initiated separation there is a dedicated lay-off flow. It records a reason, sends an email to the affected person, and if they later try to sign in they get a clear suspended login message rather than a confusing error.</p>
+  <h3>Performance</h3>
+  <p>Managers can keep performance notes on team members, kept private to the right roles. Formal performance reviews are built around review cycles: you open a cycle, collect reviews, submit them, and close or reopen the cycle as needed. Each person can see the reviews assigned to them. There is also an HR overview console and per person and team statistics.</p>
+
+  <h2 id="d-meetings">Meetings and video</h2>
+  <ul>
+    <li><strong>Scheduling.</strong> Meetings have an upcoming view and full detail pages, so you can see what is coming and the record of past sessions.</li>
+    <li><strong>Attendance.</strong> Attendance is tracked correctly per occurrence for recurring meetings rather than relying on a single stale join timestamp, and there is an attendance report on top of it.</li>
+    <li><strong>Video calls.</strong> Meetings include a real in-app video call experience. The system issues the call securely and logs joins and leaves, so the attendance record and the actual call are tied together rather than guessed at.</li>
+  </ul>
+
+  <h2 id="d-chat">Chat</h2>
+  <p>The messaging side is built to feel like a proper Slack grade tool, not a bolt-on.</p>
+  <ul>
+    <li><strong>Spaces.</strong> Public and private channels, direct messages, channel browsing, and joining.</li>
+    <li><strong>Messages.</strong> Send, edit, and delete, with full edit history preserved.</li>
+    <li><strong>Interaction.</strong> Reactions, threads, pins, saved messages, and mentions with proper mention targets.</li>
+    <li><strong>Management.</strong> Read state, per channel mute, membership management, archiving, and creating channels or DMs on the fly.</li>
+    <li><strong>Attachments and voice.</strong> File attachments on messages, plus voice messages you can record and play back right in the conversation.</li>
+    <li><strong>Search and realtime.</strong> Search across the workspace, and the whole thing runs live so messages and presence update in realtime.</li>
+  </ul>
+
+  <h2 id="d-notes">Notes and documents</h2>
+  <ul>
+    <li>Rich notes with visibility controls and sharing to specific people, each with view or edit permission.</li>
+    <li>Full revision history, with the ability to view any past revision and restore it.</li>
+    <li>Linking notes to each other, and mentioning people inside a note, including a dedicated view of the notes that mention you.</li>
+    <li>Search across all notes you can see.</li>
+  </ul>
+
+  <h2 id="d-ai">The AI assistant</h2>
+  <p>This is the piece that ties everything together. The Hub ships an in-app assistant that is a full operator over the product, not a chatbot off to the side. It carries roughly ninety six tools spanning every domain in the app: projects and tasks, clients, finance, meetings, notes, people, resignations, chat, and insights.</p>
+  <p>It reads across the business and it also acts. The important part is that every action it takes runs through the same permission engine a human would hit, so it can never do something the current user could not do themselves. Writes that matter, like creating records or running a lay-off, are gated behind an approval step, so a person confirms before anything happens. Because it is wired into the real data, you can ask it about the pipeline, the finances, or the team and have it actually go and do the follow-up work rather than hand you a paragraph.</p>
+
+  <h2 id="d-dash">Dashboard, search, and notifications</h2>
+  <ul>
+    <li>A configurable dashboard with stats, recent activity, upcoming deadlines, project cards, your own tasks, and a revenue chart, with preferences you control.</li>
+    <li>Global search across the app.</li>
+    <li>An in-app notification system with per user preferences, plus email notifications for the events that matter, routed through a single send choke point so messaging stays consistent.</li>
+  </ul>
+
+  <h2 id="d-security">Accounts, auth, and security</h2>
+  <ul>
+    <li><strong>Sign in and invites.</strong> Email and password sign in. Adding a member sends an email invitation, and that person onboards themselves through an invite link and sets their own password against a live strength checklist. No admin ever sets someone else's password.</li>
+    <li><strong>Recovery.</strong> Self service password reset by email.</li>
+    <li><strong>Two factor.</strong> Authenticator app based two factor, with enrollment, confirmation, recovery codes, and the option to disable it.</li>
+    <li><strong>Session security.</strong> Sign out everywhere, a view of your recent sign-ins, and a revocation check so a deactivated user is actually locked out rather than coasting on a live session.</li>
+    <li><strong>Audit log.</strong> An admin audit log records granular actions across the system, with a viewer and filtering, so there is a real trail of who did what.</li>
+    <li><strong>Access control.</strong> Underneath all of it is a full attribute based access control engine. Roles like Admin, HR, and Member, plus user states like active, on leave, and suspended, decide what each person can see and do, and every resource scoped action is guarded at the object level. This is the same engine the AI assistant and the internal API both run through.</li>
+  </ul>
+
+  <h2 id="d-api">Settings and integrations</h2>
+  <ul>
+    <li>A settings area covering profile, password, notification preferences, two factor, API tokens, and webhooks.</li>
+    <li>Outbound webhooks you can create, with delivery history, so other internal systems can react to events in the Hub.</li>
+    <li>An internal API that exposes clients, projects, tasks, boards, meetings, finance, invoices, transactions, and team. It is built to be driven by our own scripts and automation, it tracks usage per token, and it ships its own docs page. So the Hub is operable by the team in the browser, by the built-in assistant, and by internal automation, all hitting the same permission rules.</li>
+  </ul>
+</section>
+
+<!-- ============ PRODUCT GUIDE ============ -->
+<section class="panel" id="guide">
+  <p class="eyebrow">How to use it</p>
+  <h1 class="page">Product guide</h1>
+  <p class="lede">A practical walkthrough for getting around the Hub and doing the everyday things.</p>
+
+  <div class="toc">
+    <strong>In this guide</strong>
+    <ul>
+      <li><a href="#g-start">Getting in</a></li>
+      <li><a href="#g-dash">Your dashboard</a></li>
+      <li><a href="#g-projects">Running a project</a></li>
+      <li><a href="#g-tasks">Working a task</a></li>
+      <li><a href="#g-clients">Clients and contracts</a></li>
+      <li><a href="#g-finance">Finance workflows</a></li>
+      <li><a href="#g-people">Leave and people</a></li>
+      <li><a href="#g-meet">Meetings and calls</a></li>
+      <li><a href="#g-chat">Chat</a></li>
+      <li><a href="#g-ai">Using the assistant</a></li>
+      <li><a href="#g-account">Your account and security</a></li>
+    </ul>
+  </div>
+
+  <h2 id="g-start">Getting in</h2>
+  <div class="step"><h4>1. Accept your invite</h4><p>You join through an email invitation. Open the invite link, set your own password against the live strength checklist, and you are in. An admin never sets your password for you.</p></div>
+  <div class="step"><h4>2. Turn on two factor</h4><p>Head to Settings and enroll in two factor with your authenticator app. Save the recovery codes somewhere safe in case you lose your device.</p></div>
+  <div class="step"><h4>3. Forgot your password later?</h4><p>Use the self service reset on the login screen. A reset link comes to your email.</p></div>
+
+  <h2 id="g-dash">Your dashboard</h2>
+  <p>The dashboard is your landing pad. It shows stats, recent activity, upcoming deadlines, the project cards you care about, the tasks assigned to you, and a revenue chart. You can adjust your preferences so it surfaces what is relevant to your role. Use global search at any time to jump straight to a project, client, note, or message.</p>
+
+  <h2 id="g-projects">Running a project</h2>
+  <div class="step"><h4>Create the project</h4><p>Set its type, priority, and status, then add members. Give each member the right role for that project.</p></div>
+  <div class="step"><h4>Shape the board</h4><p>Start from a column template or build columns yourself. Reorder them to match your flow, and set default assignees on a column so cards that land there are picked up automatically.</p></div>
+  <div class="step"><h4>Add structure</h4><p>Create milestones for the big checkpoints and attach project files so everything lives in one place.</p></div>
+  <div class="step"><h4>Coming from Trello?</h4><p>Use the importer. Point it at your Trello board and it will create the project and pull the cards across, then tell you how many came in.</p></div>
+
+  <h2 id="g-tasks">Working a task</h2>
+  <div class="step"><h4>Open and assign</h4><p>Add one or more assignees, a priority, labels, and a due date. Break big work down with subtasks, and use a blocker if the task is waiting on another.</p></div>
+  <div class="step"><h4>Track the detail</h4><p>Use checklists for the small steps, drop comments to discuss, and attach files. The activity feed records every change automatically.</p></div>
+  <div class="step"><h4>Log your time</h4><p>Record time against the task as you work. You can edit entries later, and the rollup shows the total effort spent.</p></div>
+  <div class="step"><h4>Move work along</h4><p>Drag cards between columns, or select a batch and use bulk move or bulk delete to re-stage several at once.</p></div>
+
+  <h2 id="g-clients">Clients and contracts</h2>
+  <div class="step"><h4>Add a client</h4><p>Create the client, set its status, and add contacts. Emails are validated as you enter them.</p></div>
+  <div class="step"><h4>Track contracts</h4><p>Add contracts under the client. The Hub tracks contracted value and flags contracts that are expiring so you can act on renewals in time.</p></div>
+  <div class="step"><h4>Bill from a contract</h4><p>Generate an invoice directly from the contract instead of re-entering the numbers in finance.</p></div>
+
+  <h2 id="g-finance">Finance workflows</h2>
+  <div class="step"><h4>Log transactions</h4><p>Record income and expenses with categories. Filter to the view you want, then export to a spreadsheet when you need it.</p></div>
+  <div class="step"><h4>Invoice and collect</h4><p>Create an invoice with line items, send it by email, and record payments as they come in. Overdue invoices are flagged automatically.</p></div>
+  <div class="step"><h4>Automate the recurring stuff</h4><p>Define recurring expenses once and let the Hub post each due cycle. Watch budget versus actuals to stay on plan.</p></div>
+  <div class="step"><h4>Read the numbers</h4><p>Use the financial summary, the profit and loss report, and the revenue chart. Totals roll up to a USD base equivalent across currencies.</p></div>
+
+  <h2 id="g-people">Leave and people</h2>
+  <div class="step"><h4>Request leave</h4><p>File a leave request from your team area. Check the team leave calendar to see who else is out before you plan.</p></div>
+  <div class="step"><h4>Approvals (HR and admins)</h4><p>Review and approve or update leave status, and set per person balances.</p></div>
+  <div class="step"><h4>Resigning</h4><p>Submit a resignation yourself, and withdraw it while it is still pending. Once HR or an admin approves it, off-boarding deactivates the account.</p></div>
+  <div class="step"><h4>Reviews</h4><p>HR opens a review cycle, reviews are collected and submitted, and you can see the reviews assigned to you.</p></div>
+
+  <h2 id="g-meet">Meetings and calls</h2>
+  <div class="step"><h4>Schedule</h4><p>Create a meeting and find it in the upcoming view. Open its detail page for everything tied to it.</p></div>
+  <div class="step"><h4>Join the call</h4><p>Start or join the in-app video call from the meeting. Your join and leave are logged, and attendance is recorded per occurrence for recurring meetings.</p></div>
+
+  <h2 id="g-chat">Chat</h2>
+  <div class="step"><h4>Find your spaces</h4><p>Browse and join channels, or start a direct message. Create a channel or DM whenever you need one.</p></div>
+  <div class="step"><h4>Talk</h4><p>Reply in threads, react, pin the important messages, and save the ones you want to find later. Attach files, or record a voice message. Mute channels that are noisy.</p></div>
+  <div class="step"><h4>Find things</h4><p>Search across the workspace to track down an old message. Everything updates live as people post.</p></div>
+
+  <h2 id="g-ai">Using the assistant</h2>
+  <p>Open the assistant from anywhere in the Hub. Ask it about your work in plain language, for example what is overdue, how revenue is tracking this quarter, or who is out next week. It can also do things: create a task, draft an invoice, schedule a meeting, and so on.</p>
+  <p>Two things to know. First, it can only do what you could do yourself, because it runs inside the same permissions you have. Second, anything that changes real data pauses for your approval, so you confirm before it commits. Read the proposed action, then approve or cancel.</p>
+
+  <h2 id="g-account">Your account and security</h2>
+  <ul>
+    <li>Update your profile and change your password in Settings.</li>
+    <li>Manage notification preferences so you only get pinged about what matters.</li>
+    <li>Use sign out everywhere if you ever lose a device, and check your recent sign-ins for anything unfamiliar.</li>
+    <li>If you build internal automation, create API tokens and set up webhooks from Settings. Token usage is tracked per token.</li>
+  </ul>
+
+  <p class="closing">That is the whole loop. Plan the work on a board, track the money and the clients, run your people processes, meet and talk in the same place, and lean on the assistant to move faster. If something is unclear, the assistant is usually the quickest way to find it.</p>
+</section>
+
+</main>
+
+<footer>
+  <svg class="markicon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <rect width="64" height="64" rx="14" fill="#0C2E2C"/>
+    <svg x="15" y="12" width="34" height="40" viewBox="34 33 148 166" fill="none">
+      <path d="M116 57 L155 97 L110 137 L75 175" fill="none" stroke="#F7F5EF" stroke-width="22" stroke-linejoin="round" stroke-linecap="round"/>
+      <rect x="98" y="39" width="38" height="36" rx="12" fill="#F7F5EF"/>
+      <rect x="135" y="77" width="41" height="41" rx="13" fill="#F7F5EF"/>
+      <rect x="90" y="118" width="41" height="38" rx="13" fill="#F7F5EF"/>
+      <rect x="56" y="156" width="37" height="37" rx="12" fill="#F7F5EF"/>
+      <rect x="40" y="81" width="35" height="34" rx="11" fill="#BC8850"/>
+    </svg>
+  </svg>
+  <span class="tagline">DevFathom · Depth in everything we build.</span>
+  <span class="conf">Internal · Confidential</span>
+</footer>
+
+<script>
+  const tabs = document.querySelectorAll('#tabs button');
+  const panels = document.querySelectorAll('.panel');
+  function activate(name) {
+    tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    panels.forEach(p => p.classList.toggle('active', p.id === name));
+    if (history.replaceState) history.replaceState(null, '', '#' + name);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  tabs.forEach(b => b.addEventListener('click', () => activate(b.dataset.tab)));
+  const start = (location.hash || '').replace('#','');
+  if (['overview','details','guide'].includes(start)) activate(start);
+
+  // ===== Agreement gate =====
+  (function () {
+    const KEY = 'df_nda_accepted_v1';
+    const nameEl = document.getElementById('gate-name');
+    const chk = document.getElementById('gate-agree');
+    const accept = document.getElementById('gate-accept');
+    const dateEl = document.getElementById('gate-date');
+    const today = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    if (dateEl) dateEl.textContent = today;
+
+    // Skip if this browser already accepted.
+    try { if (localStorage.getItem(KEY)) { document.body.classList.remove('gate-open'); return; } } catch (e) {}
+
+    function refresh() { accept.disabled = !(chk.checked && nameEl.value.trim().length >= 2); }
+    nameEl.addEventListener('input', refresh);
+    chk.addEventListener('change', refresh);
+    accept.addEventListener('click', function () {
+      const rec = { name: nameEl.value.trim(), date: today, acceptedAt: new Date().toISOString(), agreement: 'Confidentiality & Non-Replication Agreement v1' };
+      try { localStorage.setItem(KEY, JSON.stringify(rec)); } catch (e) {}
+      document.body.classList.remove('gate-open');
+    });
+
+    const card = document.getElementById('gate-card');
+    const declined = document.getElementById('gate-declined');
+    document.getElementById('gate-decline').addEventListener('click', function () {
+      card.style.display = 'none'; declined.style.display = 'flex';
+    });
+    document.getElementById('gate-back').addEventListener('click', function () {
+      declined.style.display = 'none'; card.style.display = 'flex';
+    });
+  })();
+</script>
+</body>
+</html>

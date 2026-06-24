@@ -1,6 +1,7 @@
 'use client';
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { FileText, Plus, ChevronDown, X, Loader2 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Card, CardContent } from '@/components/ui/card';
@@ -172,7 +173,38 @@ const InvoiceRow = memo(function InvoiceRow({
   onUpdateStatus: (id: string, status: InvoiceStatus) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const config = statusConfig[inv.status] || statusConfig.DRAFT;
+
+  // Anchor the menu to the button's viewport rect and render it in a portal, so it
+  // escapes the virtualizer's per-row transform stacking contexts (which otherwise
+  // let sibling rows paint over it) and the Card's `overflow-hidden`.
+  const openMenu = useCallback(() => {
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const MENU_HEIGHT = 160; // ~5 status rows
+    const below = rect.bottom + 4;
+    const openUp = below + MENU_HEIGHT > window.innerHeight;
+    setMenuPos({
+      top: openUp ? rect.top - MENU_HEIGHT - 4 : below,
+      left: rect.left + rect.width / 2,
+    });
+    setMenuOpen(true);
+  }, []);
+
+  // The menu is viewport-fixed, so dismiss it when the page scrolls or resizes
+  // rather than letting it detach from the button.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [menuOpen]);
 
   return (
     <div className="grid grid-cols-12 gap-4 items-center px-6 py-3.5 border-b border-border/60 bg-card hover:bg-secondary/30 transition-colors">
@@ -190,9 +222,10 @@ const InvoiceRow = memo(function InvoiceRow({
           ${Number(inv.total).toLocaleString()}
         </p>
       </div>
-      <div className="col-span-2 flex justify-center relative">
+      <div className="col-span-2 flex justify-center">
         <button
-          onClick={() => setMenuOpen((o) => !o)}
+          ref={btnRef}
+          onClick={() => (menuOpen ? setMenuOpen(false) : openMenu())}
           className={cn(
             'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium',
             config.bg
@@ -201,40 +234,46 @@ const InvoiceRow = memo(function InvoiceRow({
           {config.label}
           <ChevronDown className="h-3 w-3" />
         </button>
-        {menuOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-            <div className="absolute top-full z-20 mt-1 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10 w-32">
-              {INVOICE_STATUSES.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => {
-                    onUpdateStatus(inv.id, s);
-                    setMenuOpen(false);
-                  }}
-                  className={cn(
-                    'flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary',
-                    inv.status === s && 'bg-secondary font-medium'
-                  )}
-                >
-                  <div
+        {menuOpen &&
+          menuPos &&
+          createPortal(
+            <>
+              <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
+              <div
+                className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
+                style={{ top: menuPos.top, left: menuPos.left }}
+              >
+                {INVOICE_STATUSES.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => {
+                      onUpdateStatus(inv.id, s);
+                      setMenuOpen(false);
+                    }}
                     className={cn(
-                      'h-1.5 w-1.5 rounded-full',
-                      s === 'PAID'
-                        ? 'bg-emerald-500'
-                        : s === 'OVERDUE'
-                          ? 'bg-red-500'
-                          : s === 'SENT'
-                            ? 'bg-blue-500'
-                            : 'bg-muted-foreground'
+                      'flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary',
+                      inv.status === s && 'bg-secondary font-medium'
                     )}
-                  />
-                  {statusConfig[s].label}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+                  >
+                    <div
+                      className={cn(
+                        'h-1.5 w-1.5 rounded-full',
+                        s === 'PAID'
+                          ? 'bg-emerald-500'
+                          : s === 'OVERDUE'
+                            ? 'bg-red-500'
+                            : s === 'SENT'
+                              ? 'bg-blue-500'
+                              : 'bg-muted-foreground'
+                      )}
+                    />
+                    {statusConfig[s].label}
+                  </button>
+                ))}
+              </div>
+            </>,
+            document.body
+          )}
       </div>
       <div className="col-span-2 text-right">
         <p

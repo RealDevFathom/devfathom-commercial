@@ -103,6 +103,7 @@ export function toChatMessage(m: MessageRow, currentUserId: string): ChatMessage
           url: a.url,
           type: a.type,
           size: a.size,
+          duration: a.duration,
         })),
     mentionIds: m.mentions.map((x) => x.userId),
     replyCount: m._count.replies,

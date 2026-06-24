@@ -5,7 +5,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Link } from '@tiptap/extension-link';
 import { useSession } from 'next-auth/react';
-import { Paperclip, Send, X, Loader2, FileText } from 'lucide-react';
+import { Paperclip, Send, X, Loader2, FileText, Mic } from 'lucide-react';
 import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
 import { useChatTyping } from '@/lib/ably';
@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { createMentionExtension, ChatMentionPluginKey } from './mention-extension';
 import { ComposerToolbar } from './composer-toolbar';
 import { EmojiPicker } from './emoji-picker';
+import { VoiceRecorder } from './voice-recorder';
 
 export interface MessageComposerProps {
   channelId: string;
@@ -66,6 +67,7 @@ export function MessageComposer({
   const [attachments, setAttachments] = useState<SendAttachmentInput[]>([]);
   const [uploadingCount, setUploadingCount] = useState(0);
   const [isEmpty, setIsEmpty] = useState(true);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Refs let the editor's stable keydown/update handlers always see fresh logic.
@@ -100,6 +102,7 @@ export function MessageComposer({
           url: a.url,
           type: a.type ?? null,
           size: a.size ?? null,
+          duration: a.duration ?? null,
         })),
         mentionIds: [],
         replyCount: 0,
@@ -286,6 +289,35 @@ export function MessageComposer({
     submitRef.current = handleSubmit;
   }, [handleSubmit]);
 
+  // A voice message is just a normal message carrying a single audio attachment
+  // (and no text), so it reuses the same optimistic send path as everything else.
+  const handleSendVoice = useCallback(
+    (attachment: SendAttachmentInput) =>
+      // Resolve only once the message is actually persisted. The VoiceRecorder
+      // awaits this promise: on success we dismiss it (which revokes the blob),
+      // and on failure it stays mounted so the user can retry the SAME clip.
+      // The hook-level onError already rolls back the optimistic message + toasts.
+      new Promise<void>((resolve, reject) => {
+        sendMessage.mutate(
+          {
+            channelId,
+            content: '',
+            parentId: parentId ?? undefined,
+            attachments: [attachment],
+          },
+          {
+            onSuccess: () => {
+              setVoiceOpen(false);
+              onSent?.();
+              resolve();
+            },
+            onError: (err) => reject(err),
+          }
+        );
+      }),
+    [sendMessage, channelId, parentId, onSent]
+  );
+
   if (!editor) {
     return (
       <div className="flex h-[4.5rem] items-center justify-center rounded-xl border border-border/60 bg-card text-sm text-muted-foreground">
@@ -331,63 +363,79 @@ export function MessageComposer({
         </div>
       )}
 
-      <div className="relative max-h-[40vh] overflow-y-auto">
-        {isEmpty && (
-          <div className="pointer-events-none absolute left-3 top-2.5 select-none text-sm text-muted-foreground/70">
-            {placeholder ?? 'Write a message…'}
+      {voiceOpen ? (
+        <VoiceRecorder onSend={handleSendVoice} onCancel={() => setVoiceOpen(false)} />
+      ) : (
+        <>
+          <div className="relative max-h-[40vh] overflow-y-auto">
+            {isEmpty && (
+              <div className="pointer-events-none absolute left-3 top-2.5 select-none text-sm text-muted-foreground/70">
+                {placeholder ?? 'Write a message…'}
+              </div>
+            )}
+            <EditorContent editor={editor} />
           </div>
-        )}
-        <EditorContent editor={editor} />
-      </div>
 
-      <div className="flex items-center gap-0.5 px-2 pb-1.5 pt-0.5">
-        <ComposerToolbar editor={editor} />
+          <div className="flex items-center gap-0.5 px-2 pb-1.5 pt-0.5">
+            <ComposerToolbar editor={editor} />
 
-        <span className="mx-1 h-4 w-px bg-border" />
+            <span className="mx-1 h-4 w-px bg-border" />
 
-        <EmojiPicker onPick={(emoji) => editor.chain().focus().insertContent(emoji).run()} />
+            <EmojiPicker onPick={(emoji) => editor.chain().focus().insertContent(emoji).run()} />
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className={ICON_BTN}
-          title="Attach a file"
-          aria-label="Attach a file"
-        >
-          <Paperclip className="size-4" />
-        </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className={ICON_BTN}
+              title="Attach a file"
+              aria-label="Attach a file"
+            >
+              <Paperclip className="size-4" />
+            </button>
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            void handleUploads(e.target.files);
-            e.target.value = '';
-          }}
-        />
+            <button
+              type="button"
+              onClick={() => setVoiceOpen(true)}
+              className={ICON_BTN}
+              title="Record a voice message"
+              aria-label="Record a voice message"
+            >
+              <Mic className="size-4" />
+            </button>
 
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={!canSend}
-          title="Send message"
-          aria-label="Send message"
-          className={cn(
-            'ml-auto flex size-8 items-center justify-center rounded-lg transition-colors',
-            canSend
-              ? 'text-muted-foreground hover:bg-[#bc8850]/10 hover:text-[#bc8850] active:text-[#bc8850]'
-              : 'cursor-not-allowed text-muted-foreground/30'
-          )}
-        >
-          {sendMessage.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Send className="size-4" />
-          )}
-        </button>
-      </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                void handleUploads(e.target.files);
+                e.target.value = '';
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSend}
+              title="Send message"
+              aria-label="Send message"
+              className={cn(
+                'ml-auto flex size-8 items-center justify-center rounded-lg transition-colors',
+                canSend
+                  ? 'text-muted-foreground hover:bg-[#bc8850]/10 hover:text-[#bc8850] active:text-[#bc8850]'
+                  : 'cursor-not-allowed text-muted-foreground/30'
+              )}
+            >
+              {sendMessage.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Send className="size-4" />
+              )}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

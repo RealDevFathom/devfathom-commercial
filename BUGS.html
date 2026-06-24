@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevFathom-Hub — QA Defect Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+  // Avoid theme flash: set before paint.
+  (function () {
+    try {
+      var saved = localStorage.getItem('bugs-theme');
+      var t = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
+<style>
+:root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+
+  --bg: #f4f6fb;
+  --bg-glow-1: rgba(99, 102, 241, 0.10);
+  --bg-glow-2: rgba(14, 165, 233, 0.08);
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --surface-3: #f1f5f9;
+  --border: #e6e9ef;
+  --border-strong: #d4dae3;
+  --text: #0f172a;
+  --text-muted: #5a6678;
+  --text-faint: #94a3b8;
+  --accent: #6366f1;
+  --accent-strong: #4f46e5;
+  --accent-soft: rgba(99, 102, 241, 0.10);
+
+  --code-bg: #eef1f7;
+  --code-text: #3f4a63;
+  --code-border: #e0e5ee;
+
+  --crit: #b91c1c;     --crit-bg: rgba(185, 28, 28, 0.10);   --crit-br: rgba(185, 28, 28, 0.22);
+  --high: #dc2626;     --high-bg: rgba(220, 38, 38, 0.10);   --high-br: rgba(220, 38, 38, 0.22);
+  --med:  #c2740a;     --med-bg:  rgba(217, 119, 6, 0.12);   --med-br:  rgba(217, 119, 6, 0.24);
+  --low:  #2563eb;     --low-bg:  rgba(37, 99, 235, 0.10);   --low-br:  rgba(37, 99, 235, 0.20);
+  --ok:   #059669;     --ok-bg:   rgba(5, 150, 105, 0.10);   --ok-br:   rgba(5, 150, 105, 0.22);
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06), 0 2px 4px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 18px 40px rgba(15, 23, 42, 0.10), 0 6px 14px rgba(15, 23, 42, 0.06);
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --maxw: 1180px;
+}
+
+[data-theme="dark"] {
+  --bg: #080b16;
+  --bg-glow-1: rgba(99, 102, 241, 0.16);
+  --bg-glow-2: rgba(14, 165, 233, 0.10);
+  --surface: #111726;
+  --surface-2: #0d1320;
+  --surface-3: #161d2e;
+  --border: #222b3d;
+  --border-strong: #303b52;
+  --text: #e7ecf5;
+  --text-muted: #97a3b6;
+  --text-faint: #64748b;
+  --accent: #818cf8;
+  --accent-strong: #a5b4fc;
+  --accent-soft: rgba(129, 140, 248, 0.14);
+
+  --code-bg: #1a2236;
+  --code-text: #c7d2e4;
+  --code-border: #29334a;
+
+  --crit: #fb7185;     --crit-bg: rgba(251, 113, 133, 0.14); --crit-br: rgba(251, 113, 133, 0.28);
+  --high: #f87171;     --high-bg: rgba(248, 113, 113, 0.14); --high-br: rgba(248, 113, 113, 0.30);
+  --med:  #fbbf24;     --med-bg:  rgba(251, 191, 36, 0.14);  --med-br:  rgba(251, 191, 36, 0.28);
+  --low:  #60a5fa;     --low-bg:  rgba(96, 165, 250, 0.14);  --low-br:  rgba(96, 165, 250, 0.28);
+  --ok:   #34d399;     --ok-bg:   rgba(52, 211, 153, 0.14);  --ok-br:   rgba(52, 211, 153, 0.28);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 22px 48px rgba(0, 0, 0, 0.45);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg);
+  background-image:
+    radial-gradient(1100px 620px at 12% -8%, var(--bg-glow-1), transparent 60%),
+    radial-gradient(900px 560px at 100% 0%, var(--bg-glow-2), transparent 55%);
+  background-attachment: fixed;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: var(--accent-strong); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  background: var(--code-bg);
+  color: var(--code-text);
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  padding: 0.08em 0.38em;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+.bug-body dd code, .bug-cond code { white-space: normal; }
+
+/* ---------- Layout shell ---------- */
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+section { scroll-margin-top: 84px; }
+
+/* ---------- Header ---------- */
+header.topbar {
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-inner {
+  max-width: var(--maxw); margin: 0 auto; padding: 11px 24px;
+  display: flex; align-items: center; gap: 18px;
+}
+.brand { display: flex; align-items: center; gap: 11px; font-weight: 700; letter-spacing: -0.01em; }
+.brand .mark {
+  width: 30px; height: 30px; border-radius: 9px;
+  display: grid; place-items: center;
+  background: linear-gradient(140deg, var(--accent), var(--accent-strong));
+  color: #fff; box-shadow: var(--shadow-sm);
+}
+.brand .mark svg { width: 18px; height: 18px; }
+.brand-text small { display: block; font-weight: 500; font-size: 0.72rem; color: var(--text-muted); letter-spacing: 0.01em; }
+.brand-text span { font-size: 0.95rem; }
+
+nav.sections { margin-left: auto; display: flex; gap: 4px; }
+nav.sections a {
+  color: var(--text-muted); font-size: 0.86rem; font-weight: 500;
+  padding: 7px 12px; border-radius: 8px; transition: all .15s ease;
+}
+nav.sections a:hover { color: var(--text); background: var(--surface-3); text-decoration: none; }
+nav.sections a.active { color: var(--accent-strong); background: var(--accent-soft); }
+
+.theme-toggle {
+  display: grid; place-items: center;
+  width: 38px; height: 38px; border-radius: 10px;
+  border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text-muted); cursor: pointer; transition: all .15s ease; flex: none;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--accent); }
+.theme-toggle svg { width: 18px; height: 18px; }
+.theme-toggle .moon { display: none; }
+[data-theme="dark"] .theme-toggle .sun { display: none; }
+[data-theme="dark"] .theme-toggle .moon { display: block; }
+
+/* ---------- Hero ---------- */
+.hero { padding: 56px 0 8px; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--accent-strong); background: var(--accent-soft);
+  padding: 6px 13px; border-radius: 999px; margin-bottom: 20px;
+}
+.eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
+.hero h1 {
+  font-size: clamp(2rem, 4.4vw, 3.1rem); line-height: 1.08; letter-spacing: -0.03em;
+  margin: 0 0 18px; font-weight: 800;
+}
+.hero h1 .grad {
+  background: linear-gradient(120deg, var(--accent), #0ea5e9 70%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
+.metapill {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  padding: 7px 13px; border-radius: 10px; font-size: 0.84rem; box-shadow: var(--shadow-sm);
+}
+.metapill b { font-weight: 600; }
+.metapill .k { color: var(--text-faint); font-weight: 500; }
+.metapill.ok { border-color: var(--ok-br); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+.metapill.ok svg { width: 15px; height: 15px; }
+.lede { font-size: 1.02rem; color: var(--text-muted); max-width: 78ch; margin: 0 0 6px; }
+.lede b { color: var(--text); font-weight: 600; }
+
+/* ---------- Cards / panels ---------- */
+.panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-md);
+}
+.section-title {
+  display: flex; align-items: baseline; gap: 14px; margin: 0 0 6px;
+  font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;
+}
+.section-title .num {
+  font-size: 0.8rem; font-weight: 700; color: var(--accent-strong);
+  background: var(--accent-soft); border-radius: 7px; padding: 3px 9px; letter-spacing: 0.02em;
+}
+.section-sub { color: var(--text-muted); margin: 0 0 26px; font-size: 0.95rem; }
+.block { margin: 40px 0; }
+
+/* ---------- Verdict ---------- */
+.verdict {
+  display: grid; grid-template-columns: auto 1fr; gap: 22px;
+  padding: 26px 28px; margin: 34px 0 0;
+  border-left: 4px solid var(--ok);
+}
+.verdict .shield {
+  width: 52px; height: 52px; border-radius: 14px; flex: none;
+  display: grid; place-items: center; color: #fff;
+  background: linear-gradient(140deg, var(--ok), #0d9488);
+  box-shadow: var(--shadow-sm);
+}
+.verdict .shield svg { width: 28px; height: 28px; }
+.verdict h3 { margin: 2px 0 10px; font-size: 1.12rem; letter-spacing: -0.01em; }
+.verdict p { margin: 0 0 12px; color: var(--text-muted); }
+.verdict p:last-child { margin-bottom: 0; }
+.verdict b { color: var(--text); font-weight: 600; }
+
+/* ---------- Stats ---------- */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 22px 0; }
+.stat {
+  position: relative; overflow: hidden;
+  padding: 20px; border-radius: var(--radius); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.stat:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+.stat::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--c); }
+.stat .num { font-size: 2.5rem; font-weight: 800; line-height: 1; letter-spacing: -0.03em; color: var(--c); }
+.stat .lbl { margin-top: 8px; font-weight: 600; font-size: 0.95rem; }
+.stat .desc { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+.stat.crit { --c: var(--crit); }
+.stat.high { --c: var(--high); }
+.stat.med  { --c: var(--med); }
+.stat.low  { --c: var(--low); }
+.stat.is-zero .num { color: var(--ok); }
+.stat.is-zero::before { background: var(--ok); }
+.stat .badge-ok {
+  position: absolute; top: 16px; right: 16px; color: var(--ok);
+  background: var(--ok-bg); border-radius: 7px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700;
+}
+
+/* ---------- Distribution bar ---------- */
+.dist { padding: 22px 24px; margin-top: 4px; }
+.dist h4 { margin: 0 0 14px; font-size: 0.95rem; font-weight: 600; color: var(--text-muted); }
+.dist-bar { display: flex; height: 30px; border-radius: 9px; overflow: hidden; box-shadow: var(--shadow-sm); }
+.dist-seg { display: grid; place-items: center; color: #fff; font-size: 0.78rem; font-weight: 700; min-width: 30px; transition: filter .15s ease; }
+.dist-seg:hover { filter: brightness(1.08); }
+.dist-seg.high { background: var(--high); }
+.dist-seg.med  { background: var(--med); }
+.dist-seg.low  { background: var(--low); }
+.dist-legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; font-size: 0.84rem; color: var(--text-muted); }
+.dist-legend .it { display: inline-flex; align-items: center; gap: 7px; }
+.dist-legend .sw { width: 11px; height: 11px; border-radius: 3px; }
+
+/* ---------- Severity badges & chips ---------- */
+.sev-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent;
+}
+.sev-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.sev-crit { color: var(--crit); background: var(--crit-bg); border-color: var(--crit-br); }
+.sev-high { color: var(--high); background: var(--high-bg); border-color: var(--high-br); }
+.sev-med  { color: var(--med);  background: var(--med-bg);  border-color: var(--med-br); }
+.sev-low  { color: var(--low);  background: var(--low-bg);  border-color: var(--low-br); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.76rem; font-weight: 500; color: var(--text-muted);
+  background: var(--surface-3); border: 1px solid var(--border);
+  padding: 4px 10px; border-radius: 8px; white-space: nowrap;
+}
+.chip .chip-k { color: var(--text-faint); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.chip.conf-high { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-br); }
+.chip.conf-med  { color: var(--med); background: var(--med-bg); border-color: var(--med-br); }
+
+/* ---------- Controls ---------- */
+.controls {
+  position: sticky; top: 64px; z-index: 20;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 14px 16px; margin-bottom: 18px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+}
+.search-box { position: relative; flex: 1 1 260px; min-width: 200px; }
+.search-box svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--text-faint); pointer-events: none; }
+.search-box input {
+  width: 100%; padding: 9px 12px 9px 36px; font-family: inherit; font-size: 0.9rem;
+  color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: 10px; outline: none; transition: border-color .15s ease, box-shadow .15s ease;
+}
+.search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search-box input::placeholder { color: var(--text-faint); }
+.filter-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.fchip {
+  font-family: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+  padding: 8px 14px; border-radius: 9px; border: 1px solid var(--border-strong);
+  background: var(--surface-2); color: var(--text-muted); transition: all .14s ease;
+}
+.fchip:hover { color: var(--text); border-color: var(--accent); }
+.fchip.active { color: #fff; border-color: transparent; background: var(--accent); box-shadow: var(--shadow-sm); }
+.fchip.active[data-sev="High"] { background: var(--high); }
+.fchip.active[data-sev="Medium"] { background: var(--med); }
+.fchip.active[data-sev="Low"] { background: var(--low); }
+.result-count { font-size: 0.82rem; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* ---------- Summary table ---------- */
+.table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow-md); }
+table.summary { width: 100%; border-collapse: collapse; background: var(--surface); font-size: 0.88rem; }
+table.summary thead th {
+  position: sticky; top: 0; z-index: 5;
+  text-align: left; font-weight: 600; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); background: var(--surface-2);
+  padding: 13px 16px; border-bottom: 1px solid var(--border-strong); white-space: nowrap;
+}
+table.summary tbody td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.summary tbody tr { transition: background .12s ease; }
+table.summary tbody tr:hover { background: var(--surface-2); }
+table.summary tbody tr:last-child td { border-bottom: none; }
+table.summary .c-id a { font-family: var(--font-mono); font-weight: 600; font-size: 0.82rem; white-space: nowrap; }
+table.summary .c-title { min-width: 320px; color: var(--text); }
+table.summary .c-mod, table.summary .c-type { color: var(--text-muted); white-space: nowrap; font-size: 0.82rem; }
+.empty-row td { text-align: center; color: var(--text-faint); padding: 40px; font-style: italic; }
+
+/* ---------- Bug detail cards ---------- */
+.sev-group { margin-bottom: 14px; }
+.sev-group-head { display: flex; align-items: center; gap: 12px; margin: 30px 0 18px; }
+.sev-group-head h3 { margin: 0; font-size: 1.2rem; letter-spacing: -0.01em; }
+.sev-group-head .rule { flex: 1; height: 1px; background: var(--border); }
+
+.bug {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 4px solid var(--sev, var(--border-strong));
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-sm);
+  padding: 20px 22px; margin-bottom: 16px; scroll-margin-top: 84px;
+  transition: box-shadow .16s ease, transform .16s ease;
+}
+.bug:hover { box-shadow: var(--shadow-md); }
+.bug:target { box-shadow: 0 0 0 2px var(--accent), var(--shadow-md); }
+.bug[data-severity="High"] { --sev: var(--high); }
+.bug[data-severity="Medium"] { --sev: var(--med); }
+.bug[data-severity="Low"] { --sev: var(--low); }
+.bug-head { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-start; justify-content: space-between; }
+.bug-id { display: flex; align-items: center; gap: 11px; flex: 1 1 420px; }
+.bug-id h3 { margin: 0; font-size: 1.04rem; line-height: 1.4; letter-spacing: -0.01em; font-weight: 650; }
+.bug-id .anchor { color: var(--text-faint); opacity: 0; transition: opacity .14s ease; font-weight: 400; }
+.bug:hover .bug-id .anchor { opacity: 1; }
+.bug-meta { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+
+.bug-body { margin: 16px 0 0; display: grid; gap: 12px; }
+.field { display: grid; grid-template-columns: 150px 1fr; gap: 16px; }
+.field dt {
+  font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-faint); padding-top: 2px;
+}
+.field dd { margin: 0; color: var(--text-muted); }
+.field dd b, .field dd strong { color: var(--text); font-weight: 600; }
+.field .verified {
+  display: inline-block; font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--ok); background: var(--ok-bg); border: 1px solid var(--ok-br);
+  padding: 1px 6px; border-radius: 5px; margin-top: 5px; white-space: nowrap;
+}
+
+.bug.low { padding: 16px 20px; }
+.bug.low .bug-id h3 { font-size: 0.98rem; font-weight: 600; }
+.bug-cond { margin: 12px 0 0; color: var(--text-muted); font-size: 0.92rem; }
+.bug-cond strong { color: var(--text); font-weight: 600; }
+
+/* ---------- Coverage ---------- */
+.cov-grid { display: grid; gap: 18px; }
+table.cov { width: 100%; border-collapse: collapse; font-size: 0.86rem; background: var(--surface); }
+table.cov th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 11px 14px; border-bottom: 1px solid var(--border-strong); background: var(--surface-2); }
+table.cov td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.cov tr:last-child td { border-bottom: none; }
+table.cov .route code { font-size: 0.78rem; }
+.tick { color: var(--ok); font-weight: 700; white-space: nowrap; }
+.findings-ids { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+.idtag {
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+  padding: 2px 7px; border-radius: 6px; background: var(--surface-3); border: 1px solid var(--border); color: var(--text-muted);
+}
+.clean-tag { color: var(--ok); background: var(--ok-bg); border: 1px solid var(--ok-br); border-radius: 6px; padding: 2px 8px; font-size: 0.72rem; font-weight: 600; }
+
+.pillwrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.covpill {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+  padding: 7px 12px; border-radius: 9px; font-size: 0.82rem;
+}
+.covpill .tick { font-size: 0.85rem; }
+.covpill.clean { border-color: var(--ok-br); }
+.covpill code { font-size: 0.78rem; }
+.subcap { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); margin: 22px 0 12px; }
+
+.matrix-note {
+  padding: 20px 22px; font-size: 0.92rem; color: var(--text-muted);
+  background: var(--ok-bg); border: 1px solid var(--ok-br); border-radius: var(--radius-sm);
+}
+.matrix-note b { color: var(--text); }
+.matrix-note .enforced { color: var(--ok); font-weight: 700; }
+
+/* ---------- Back to top ---------- */
+.totop {
+  position: fixed; right: 24px; bottom: 24px; z-index: 40;
+  width: 44px; height: 44px; border-radius: 12px; cursor: pointer;
+  display: grid; place-items: center; opacity: 0; pointer-events: none;
+  background: var(--accent); color: #fff; border: none;
+  box-shadow: var(--shadow-lg); transition: opacity .2s ease, transform .2s ease;
+}
+.totop.show { opacity: 1; pointer-events: auto; }
+.totop:hover { transform: translateY(-3px); }
+.totop svg { width: 20px; height: 20px; }
+
+/* ---------- Footer ---------- */
+footer {
+  margin-top: 60px; padding: 30px 0 50px; border-top: 1px solid var(--border);
+  color: var(--text-faint); font-size: 0.84rem; text-align: center;
+}
+footer b { color: var(--text-muted); }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 880px) {
+  nav.sections { display: none; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .field { grid-template-columns: 1fr; gap: 4px; }
+  .field dt { padding-top: 0; }
+  .verdict { grid-template-columns: 1fr; }
+  .controls { top: 60px; }
+}
+@media (max-width: 520px) {
+  .stats { grid-template-columns: 1fr; }
+  .hero { padding: 36px 0 8px; }
+}
+
+/* ---------- Print ---------- */
+@media print {
+  header.topbar, .controls, .totop, .theme-toggle, nav.sections { display: none !important; }
+  body { background: #fff; color: #000; }
+  .panel, .bug, .stat, .table-wrap { box-shadow: none !important; break-inside: avoid; }
+  .bug, .stat { border: 1px solid #ccc; }
+  a { color: #000; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+      </span>
+      <span class="brand-text"><span>DevFathom-Hub</span><small>QA Defect Report</small></span>
+    </div>
+    <nav class="sections">
+      <a href="#overview">Overview</a>
+      <a href="#summary">Summary</a>
+      <a href="#high">High</a>
+      <a href="#medium">Medium</a>
+      <a href="#low">Low</a>
+      <a href="#coverage">Coverage</a>
+    </nav>
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle theme">
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ===================== OVERVIEW ===================== -->
+  <section id="overview" class="hero">
+    <span class="eyebrow"><span class="dot"></span>Full-app QA + BA pass · Verified first-hand</span>
+    <h1>QA Defect Report —<br><span class="grad">DevFathom-Hub</span></h1>
+
+    <div class="hero-meta">
+      <span class="metapill"><span class="k">Date</span><b>2026-06-23</b></span>
+      <span class="metapill"><span class="k">Branch</span><b><code>main</code></b></span>
+      <span class="metapill ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><b><code>bun run build</code> → exit 0 (clean)</b></span>
+      <span class="metapill"><span class="k">Findings</span><b>53 total</b></span>
+    </div>
+
+    <p class="lede"><b>Engagement:</b> Two-lead senior QA + BA full-app pass (QA Lead + Business Analyst, with a 7-specialist team).</p>
+    <p class="lede"><b>Method:</b> Deep static review of every router, REST endpoint, AI tool, auth/ABAC layer, and UI, plus live unauthenticated probes against the running dev server. The DB is a shared remote Neon instance, so authenticated mutation flows were proven from code (file:line) rather than executed against shared data. Every High/Medium headline was re-verified first-hand by the lead.</p>
+
+    <!-- Verdict -->
+    <div class="panel verdict">
+      <div class="shield" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+      </div>
+      <div>
+        <h3>Verdict — the security keystone is strong</h3>
+        <p>Object-level authorization (IDOR/ABAC) has clearly been remediated and is applied <b>consistently</b> across tRPC, the REST <code>/api/v1</code> surface, and all ~96 AI-assistant tools. <b>No Critical and no High <i>authorization</i> defect was found</b> — no cross-tenant IDOR, no privilege escalation, no ABAC bypass on layoff/resignation/role-change, no chat/DM privacy break, and the AI assistant cannot be coaxed into leaking finance or other users' data. Login hardening (timing-oracle defense, status allow-list, ~60s JWT revocation), invite tokens, and security headers are all sound.</p>
+        <p>The real defect concentration is in <b>financial data integrity</b> (caller-trusted invoice totals, mixed-currency summation, unbounded date windows) and <b>functional correctness</b> (kanban drag under filters, video-call attendance, chat edge cases), plus a cluster of <b>information-disclosure / separation-of-duties</b> gaps that are individually low-to-medium but worth closing.</p>
+      </div>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="stats">
+      <div class="stat crit is-zero" data-sev="Critical" tabindex="0" role="button">
+        <span class="badge-ok">NONE</span>
+        <div class="num">0</div>
+        <div class="lbl">Critical</div>
+        <div class="desc">No critical defects</div>
+      </div>
+      <div class="stat high" data-sev="High" tabindex="0" role="button">
+        <div class="num">3</div>
+        <div class="lbl">High</div>
+        <div class="desc">Data integrity &amp; functional</div>
+      </div>
+      <div class="stat med" data-sev="Medium" tabindex="0" role="button">
+        <div class="num">22</div>
+        <div class="lbl">Medium</div>
+        <div class="desc">Security &amp; correctness</div>
+      </div>
+      <div class="stat low" data-sev="Low" tabindex="0" role="button">
+        <div class="num">28</div>
+        <div class="lbl">Low</div>
+        <div class="desc">Hardening &amp; polish</div>
+      </div>
+    </div>
+
+    <!-- Distribution -->
+    <div class="panel dist">
+      <h4>Severity distribution · 53 findings</h4>
+      <div class="dist-bar" role="img" aria-label="3 High, 22 Medium, 28 Low">
+        <div class="dist-seg high" style="width:5.66%" title="High — 3"></div>
+        <div class="dist-seg med" style="width:41.51%" title="Medium — 22">22</div>
+        <div class="dist-seg low" style="width:52.83%" title="Low — 28">28</div>
+      </div>
+      <div class="dist-legend">
+        <span class="it"><span class="sw" style="background:var(--high)"></span>High · 3 (5.7%)</span>
+        <span class="it"><span class="sw" style="background:var(--med)"></span>Medium · 22 (41.5%)</span>
+        <span class="it"><span class="sw" style="background:var(--low)"></span>Low · 28 (52.8%)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== SUMMARY ===================== -->
+  <section id="summary" class="block">
+    <h2 class="section-title">Summary <span class="num">53 findings</span></h2>
+    <p class="section-sub">Sorted by severity. Search by ID, title, module, or type — or filter by severity. Click an ID to jump to its detail.</p>
+
+    <div class="controls">
+      <label class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="text" id="search" placeholder="Search findings…" autocomplete="off" aria-label="Search findings">
+      </label>
+      <div class="filter-chips" id="filters">
+        <button class="fchip active" data-sev="all">All</button>
+        <button class="fchip" data-sev="High">High</button>
+        <button class="fchip" data-sev="Medium">Medium</button>
+        <button class="fchip" data-sev="Low">Low</button>
+      </div>
+      <span class="result-count" id="resultCount">53 of 53</span>
+    </div>
+
+    <div class="table-wrap">
+      <table class="summary" id="summaryTable">
+        <thead>
+          <tr><th>ID</th><th>Title</th><th>Sev</th><th>Module</th><th>Type</th></tr>
+        </thead>
+        <tbody>
+          <tr data-severity="High"><td class="c-id"><a href="#FIN-01">FIN-01</a></td><td class="c-title">Invoice subtotal/tax/total trusted from client, never recomputed</td><td><span class="sev-badge sev-high">High</span></td><td class="c-mod">Finance</td><td class="c-type">Data</td></tr>
+          <tr data-severity="High"><td class="c-id"><a href="#FIN-02">FIN-02</a></td><td class="c-title">Money aggregates sum USD + PKR into one <code>$</code> figure</td><td><span class="sev-badge sev-high">High</span></td><td class="c-mod">Finance/Dashboard</td><td class="c-type">Data</td></tr>
+          <tr data-severity="High"><td class="c-id"><a href="#PROJ-01">PROJ-01</a></td><td class="c-title">Kanban drag-and-drop moves the <b>wrong</b> task when a filter is active</td><td><span class="sev-badge sev-high">High</span></td><td class="c-mod">Projects/Kanban</td><td class="c-type">Functional/Data</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#REST-01">REST-01</a></td><td class="c-title">Full invoice/financial records reachable via <code>clients:read</code> scope</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">REST/Finance</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#FIN-03">FIN-03</a></td><td class="c-title">Revenue chart drops the last day of every month (+ month-overflow)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Dashboard</td><td class="c-type">Functional/Data</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#FIN-04">FIN-04</a></td><td class="c-title">"This month/year" KPIs have no upper date bound (future rows inflate)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Finance/Dashboard</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#FIN-05">FIN-05</a></td><td class="c-title">Recurring expenses excluded from P&amp;L expense/profit</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Finance</td><td class="c-type">Functional</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#FIN-06">FIN-06</a></td><td class="c-title">Invoice status: no transition guard, <code>paidAt</code> never cleared, double-notify</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Finance</td><td class="c-type">Data/Functional</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#FIN-07">FIN-07</a></td><td class="c-title">REST invoice/transaction money fields unvalidated (negatives/overflow → 500)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">REST/Finance</td><td class="c-type">Security/Data</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#DASH-01">DASH-01</a></td><td class="c-title">Activity feed leaks SHARED-note titles + cross-team activity to all staff</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Dashboard/Notes</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#HR-01">HR-01</a></td><td class="c-title">Leave requests can be self-approved &amp; re-decided (no SoD, no PENDING guard)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Team/HR</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#NOTE-01">NOTE-01</a></td><td class="c-title">Non-author editor can change a note's visibility (SHARED→TEAM exposure)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Notes</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#RT-01">RT-01</a></td><td class="c-title">Video-call attendance (<code>logJoin</code>) bypasses the anti-backfill window</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Meetings</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#RT-02">RT-02</a></td><td class="c-title">No realtime revocation on channel removal — ex-member keeps live events</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Realtime/Chat</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#RT-03">RT-03</a></td><td class="c-title"><code>logLeave</code> never fires on SPA nav/tab close → attendance sessions stay open</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Meetings</td><td class="c-type">Functional/Data</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#RT-04">RT-04</a></td><td class="c-title">Editing a message to add an <code>@mention</code> creates no notification</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Chat</td><td class="c-type">Functional</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#RT-05">RT-05</a></td><td class="c-title">Uploaded files (incl. private-DM voice/attachments) world-readable by URL</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Upload</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#REST-04">REST-04</a></td><td class="c-title">No rate limiting anywhere (REST API <b>and</b> login)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Platform</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#PROJ-02">PROJ-02</a></td><td class="c-title"><code>order</code> treated as contiguous index; Trello import gaps break later moves</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Projects/Trello</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#PROJ-03">PROJ-03</a></td><td class="c-title">Deleting a column silently cascade-deletes all its tasks (no count/warning)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Projects/Kanban</td><td class="c-type">Data loss/UX</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#PROJ-04">PROJ-04</a></td><td class="c-title">Task attachments are fetched but never rendered, and cannot be added</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Projects/Kanban</td><td class="c-type">Functional</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#PROJ-05">PROJ-05</a></td><td class="c-title"><code>createTask</code>/<code>updateTaskAssignees</code> accept arbitrary/non-member user IDs</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Projects/Kanban</td><td class="c-type">Data/Authz</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#CLI-01">CLI-01</a></td><td class="c-title">Deleting a client with invoices fails with a raw FK error (no friendly msg)</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Clients</td><td class="c-type">Error handling/UX</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#AI-01">AI-01</a></td><td class="c-title"><code>resetMemberPassword</code> ships a Groq-incompatible <code>pattern</code>/<code>allOf</code> schema</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">AI Assistant</td><td class="c-type">Functional/Availability</td></tr>
+          <tr data-severity="Medium"><td class="c-id"><a href="#AUTH-01">AUTH-01</a></td><td class="c-title">Password change does not revoke other active sessions</td><td><span class="sev-badge sev-med">Medium</span></td><td class="c-mod">Auth/Settings</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#REST-02">REST-02</a></td><td class="c-title"><code>/api/v1/spec</code> bypasses <code>withApiAuth</code> and is never audited</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">REST</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#REST-05">REST-05</a></td><td class="c-title">Malformed JSON body → 500 instead of 400 (all writes)</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">REST</td><td class="c-type">Functional</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#REST-06">REST-06</a></td><td class="c-title">Non-numeric <code>?limit=</code> → 500 on <code>/tasks</code> &amp; <code>/transactions</code> GET</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">REST</td><td class="c-type">Functional</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#REST-07">REST-07</a></td><td class="c-title">Unvalidated foreign keys → 500 instead of 400/404</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">REST</td><td class="c-type">Validation</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#FIN-08">FIN-08</a></td><td class="c-title">Profit/margin computed with JS float arithmetic on Decimals</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Finance</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#FIN-09">FIN-09</a></td><td class="c-title">P&amp;L month-end drops final 999 ms; invoice-number race + cross-year reset</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Finance</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#AUTHZ-02">AUTHZ-02</a></td><td class="c-title"><code>adminUpdateMember</code> has no last-admin guard → admin lockout</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Team</td><td class="c-type">Security/Availability</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#AUTHZ-04">AUTHZ-04</a></td><td class="c-title">Client-directory trust boundary inconsistent across tRPC/REST/AI</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Clients</td><td class="c-type">Security (info)</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#RT-06">RT-06</a></td><td class="c-title">Attendance create is non-atomic → concurrent double-join throws P2002 (500)</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Meetings</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#RT-08">RT-08</a></td><td class="c-title">Client timeline sorts by <code>createdAt</code> only (no id tiebreak) — unstable order</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Realtime</td><td class="c-type">Functional</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#RT-09">RT-09</a></td><td class="c-title"><code>markRead</code> broadcasts every member's <code>lastReadAt</code> to the whole channel</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Chat</td><td class="c-type">Privacy</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#RT-10">RT-10</a></td><td class="c-title">Recurring-meeting list shows the next (empty) occurrence, hiding attendance</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Meetings</td><td class="c-type">Functional</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#PROJ-06">PROJ-06</a></td><td class="c-title"><code>addComment</code> does not verify <code>parentId</code> belongs to the same task</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Projects</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#PROJ-07">PROJ-07</a></td><td class="c-title">Task-completion logged only for a column named exactly <code>"Done"</code></td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Projects</td><td class="c-type">Business logic</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#CON-01">CON-01</a></td><td class="c-title">Contracts/projects/milestones accept <code>endDate</code> before <code>startDate</code></td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Contracts</td><td class="c-type">Validation</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#CON-02">CON-02</a></td><td class="c-title">Contract <code>signedAt</code> auto-stamp inconsistent (status dropdown vs edit form)</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Contracts</td><td class="c-type">Logic</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#TRELLO-01">TRELLO-01</a></td><td class="c-title">Malformed date strings in a Trello export crash the whole import</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Trello import</td><td class="c-type">Robustness</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#CLI-02">CLI-02</a></td><td class="c-title"><code>addContact</code> skips email validation; no contact edit/delete UI at all</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Clients/Contacts</td><td class="c-type">Validation/UI</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#UX-01">UX-01</a></td><td class="c-title">Client create/edit forms swallow validation errors (no feedback)</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Clients</td><td class="c-type">UX</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#HR-02">HR-02</a></td><td class="c-title">Leave requests accept invalid/overlapping/past date ranges</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Team/HR</td><td class="c-type">Validation</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#DASH-02">DASH-02</a></td><td class="c-title"><code>getStats</code> returns company-wide pending-leave count to non-admins</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Dashboard</td><td class="c-type">Info exposure</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#AUTH-02">AUTH-02</a></td><td class="c-title">Edge middleware authorizes on cookie <b>presence</b> only (no signature check)</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Auth</td><td class="c-type">Security (DiD)</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#SEC-01">SEC-01</a></td><td class="c-title">CSP <code>connect-src</code> ends with <code>ws: wss:</code> wildcards + stale <code>localhost:3001</code></td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Platform/Config</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#SEC-02">SEC-02</a></td><td class="c-title"><code>img-src 'self' data: https:</code> allows images from any HTTPS origin</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Platform/Config</td><td class="c-type">Security</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#SEC-03">SEC-03</a></td><td class="c-title">Inconsistent page-level auth — most pages rely on proxy+tRPC, not <code>auth()</code></td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">Auth/UX</td><td class="c-type">UX/Correctness</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#AI-02">AI-02</a></td><td class="c-title">Assistant eval never exercises execute-level guards or resource isolation</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">AI Assistant</td><td class="c-type">Security (test)</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#AI-03">AI-03</a></td><td class="c-title"><code>getDashboardStats.pendingLeaves</code> + <code>getTeamMember</code> over-share (tRPC parity)</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">AI Assistant</td><td class="c-type">Data</td></tr>
+          <tr data-severity="Low"><td class="c-id"><a href="#AI-04">AI-04</a></td><td class="c-title">Approval is a UX confirmation, not the security boundary (record-only)</td><td><span class="sev-badge sev-low">Low</span></td><td class="c-mod">AI Assistant</td><td class="c-type">Security (info)</td></tr>
+          <tr class="empty-row" id="emptyRow" hidden><td colspan="5">No findings match your filter.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===================== HIGH ===================== -->
+  <section id="high" class="block">
+    <div class="sev-group-head">
+      <span class="sev-badge sev-high">High severity</span>
+      <h3>3 findings</h3>
+      <span class="rule"></span>
+    </div>
+
+    <article class="bug" id="FIN-01" data-severity="High">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-high">High</span><h3>FIN-01 — Invoice subtotal/tax/total are trusted from the client and never recomputed <a class="anchor" href="#FIN-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Finance</span><span class="chip"><span class="chip-k">Type</span> Data integrity</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Module</dt><dd>Finance (<code>finance.createInvoice</code> tRPC + REST <code>POST /api/v1/invoices</code>)</dd></div>
+        <div class="field"><dt>Repro</dt><dd>Create an invoice with <code>items:[{description:"Dev work",quantity:100,rate:150,amount:15000}]</code> but <code>subtotal:0, tax:0, total:0</code>. The server stores <code>total=0</code> while the line items represent $15,000 of work.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Server should derive <code>subtotal = Σ(items.amount)</code> and <code>total = subtotal + tax</code> (or reject a mismatch). <b>Actual:</b> the inputs are written verbatim; there is no full invoice-<b>edit</b> mutation (only <code>updateInvoiceStatus</code>), so the wrong total is permanent and flows into <code>totalPaid</code>/<code>totalOutstanding</code> aggregates. Over REST you can even send <code>total:-15000</code>, which <i>decrements</i> the paid/outstanding sums.</dd></div>
+        <div class="field"><dt>Evidence <span class="verified">Verified first-hand</span></dt><dd><code>src/server/routers/finance.ts:201-214</code> writes <code>subtotal: input.subtotal, tax: input.tax, total: input.total</code> with no cross-field <code>.refine</code>. REST is worse — <code>src/app/api/v1/invoices/route.ts:43-48</code> uses bare <code>z.number()</code> for <code>subtotal/tax/total/amount</code> (no <code>.positive()</code>). Note the AI tool <i>does</i> it correctly (<code>src/lib/ai/tools/finance.ts:482-490</code> recomputes with <code>round2</code>), proving the intended behavior.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Recompute <code>amount/subtotal/total</code> server-side from <code>items + tax</code> in <b>both</b> tRPC and REST; ignore client-sent totals (or <code>.refine</code> they match). Add a full invoice-edit path.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="FIN-02" data-severity="High">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-high">High</span><h3>FIN-02 — Every money aggregate sums across currencies (USD + PKR) into one number <a class="anchor" href="#FIN-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Finance/Dashboard</span><span class="chip"><span class="chip-k">Type</span> Data integrity</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Module</dt><dd>Finance + Dashboard (summary, P&amp;L, revenue chart, REST <code>/finance/summary</code>, AI finance tools)</dd></div>
+        <div class="field"><dt>Repro</dt><dd>Record June income of one USD transaction <code>$5,000</code> and one PKR transaction <code>Rs 280,000</code> (≈ $1,000). <code>transaction.aggregate({_sum:{amount}})</code> returns <code>285000</code>; the finance KPI and dashboard render it through a hardcoded <code>$</code> → <b>"$285,000"</b> (true USD-equivalent ≈ $6,000 — overstated ~47×).</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Aggregates should group/convert by currency. <b>Actual:</b> no <code>currency</code> appears in any aggregate <code>where</code>/<code>groupBy</code>. PKR is a first-class currency reachable via the AI assistant and REST (<code>createTransaction</code>/<code>createInvoice</code> accept <code>currency:'PKR'</code> and render <code>Rs …</code>), making this latent-but-reachable, not theoretical.</dd></div>
+        <div class="field"><dt>Evidence <span class="verified">Verified first-hand</span></dt><dd><code>src/server/routers/finance.ts:332-353</code> (summary) and <code>:389-396</code> (P&amp;L); <code>src/server/routers/dashboard.ts:48-59</code>, <code>:200-214</code>; <code>src/app/api/v1/finance/summary/route.ts</code>; <code>src/lib/ai/tools/finance.ts:122-138</code>. UI renders hardcoded <code>$</code>: <code>finance-content.tsx:92</code>, <code>dashboard-content.tsx:932</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd><code>groupBy:['currency']</code> and report per-currency, or filter aggregates to a single currency, or convert via an FX table before summing. Never <code>_sum</code> a mixed-currency column into one scalar.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="PROJ-01" data-severity="High">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-high">High</span><h3>PROJ-01 — Kanban drag-and-drop moves the WRONG task when any board filter is active <a class="anchor" href="#PROJ-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Projects / Kanban</span><span class="chip"><span class="chip-k">Type</span> Functional / Data integrity</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>On a board, apply any filter (search text, priority, assignee, or label) so ≥1 task is hidden. Drag a visible task. A <i>different</i> task is moved and a wrong <code>order</code> is persisted.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>The dragged task should move to the dropped slot. <b>Actual:</b> the rendered drag indices come from the <b>filtered</b> column list, but <code>handleDragEnd</code> splices into the <b>unfiltered</b> <code>board.columns</code> using those indices, so it removes/reinserts the wrong element and mutates with a wrong <code>newOrder</code>. (When no filter is active <code>filteredColumns === board.columns</code>, so indices align and the bug is invisible — masking it in casual testing.)</dd></div>
+        <div class="field"><dt>Evidence <span class="verified">Verified first-hand</span></dt><dd><code>src/app/(app)/projects/[id]/board/[boardId]/kanban-board.tsx:164-189</code> — <code>newColumns</code> is derived from <code>board.columns</code>, then <code>sourceCol.tasks.splice(source.index,1)</code> / <code>destCol.tasks.splice(destination.index,0,…)</code> use filtered indices; <code>moveTask.mutate({ newOrder: destination.index })</code>. Render uses <code>filteredColumns</code> (<code>:372</code>, Draggable <code>index</code> <code>:483-484</code>); <code>filteredColumns</code> returns <code>board.columns</code> only when <code>!hasFilters</code> (<code>:233</code>).</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Disable DnD while a filter is active, or translate the filtered source/destination indices back to real positions in <code>board.columns</code> (locate by <code>draggableId</code>) before splicing/mutating.</dd></div>
+      </dl>
+    </article>
+  </section>
+
+  <!-- ===================== MEDIUM ===================== -->
+  <section id="medium" class="block">
+    <div class="sev-group-head">
+      <span class="sev-badge sev-med">Medium severity</span>
+      <h3>22 findings</h3>
+      <span class="rule"></span>
+    </div>
+
+    <article class="bug" id="REST-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>REST-01 — Full invoice/financial records reachable via a <code>clients:read</code> token <a class="anchor" href="#REST-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> REST / Finance</span><span class="chip"><span class="chip-k">Type</span> Security (scope confinement)</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd><code>GET /api/v1/clients/&lt;id&gt;</code> with a token scoped only to <code>clients:read</code> (no <code>finance:read</code>).</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>A non-finance scope should not return financial data; the system's stated control is that "even a wildcard <code>*</code> token cannot read finance data." <b>Actual:</b> this route declares <code>clients:read</code>, so the admin finance double-gate never runs, and the handler returns every invoice for the client (<code>total/subtotal/tax/currency/status/dueDate/paidAt</code>). The list route similarly leaks an invoice <code>_count</code>. Impact is confined to <b>admin-bound</b> tokens (manual <code>isAdmin</code> gate), so a deliberately-narrow CRM integration token silently carries full finance read.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/app/api/v1/clients/[id]/route.ts:14-21</code> (<code>include: { invoices: … }</code>); <code>src/app/api/v1/clients/route.ts:22</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Drop <code>invoices</code> from the <code>clients:read</code> include, or require <code>hasScope(ctx,'finance:read')</code> before including them.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="FIN-03" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>FIN-03 — Dashboard revenue chart drops the last day of every month (+ month-overflow) <a class="anchor" href="#FIN-03">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Dashboard (<code>getRevenueChart</code>)</span><span class="chip"><span class="chip-k">Type</span> Functional/Data</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>A <code>$5,000</code> income dated <code>2026-05-31 10:00</code> is <b>excluded</b> from the May bar.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd><code>endOfMonth = new Date(y, m+1, 0)</code> is the last day at <code>00:00:00.000</code>, and the query filters <code>date: { lte: endOfMonth }</code>, so anything after midnight on the final day is cut. The P&amp;L report uses <code>…,0,23,59,59</code> and <i>does</i> include it, so the chart and the report disagree on every month's last day. Separately, <code>date.setMonth(date.getMonth()-i)</code> on today's day-of-month overflows on the 29th–31st (e.g. on May 31, stepping back to "Feb" rolls to Mar 3), duplicating/skipping a month.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/server/routers/dashboard.ts:190-215</code>; contrast <code>src/server/routers/finance.ts:386</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Build months with <code>new Date(y, m-i, 1)</code> and set <code>endOfMonth = new Date(y, m+1, 0, 23, 59, 59, 999)</code>.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="FIN-04" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>FIN-04 — "This month / this year" KPIs have no upper date bound <a class="anchor" href="#FIN-04">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Finance / Dashboard</span><span class="chip"><span class="chip-k">Type</span> Data</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Log income of <code>$1,000,000</code> dated <code>2030-01-01</code>. It appears in "Monthly Revenue" and "Net Profit" today.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Should be excluded as a future row. <b>Actual:</b> the aggregates use <code>date: { gte: startOfMonth }</code> / <code>{ gte: startOfYear }</code> with <b>no <code>lte</code></b> (verified first-hand at <code>finance.ts:334,342</code>; <code>dashboard.ts:50</code>). The bounded P&amp;L/chart will then disagree with the KPI.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Add <code>lte: now</code> (or end-of-period) to these aggregates.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="FIN-05" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>FIN-05 — Recurring expenses are excluded from P&amp;L expense and profit <a class="anchor" href="#FIN-05">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Finance</span><span class="chip"><span class="chip-k">Type</span> Functional</span><span class="chip conf-med"><span class="chip-k">Confidence</span> Medium</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>With seeded subscriptions (~$588/mo), monthly burn/expense and profit silently omit them.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Expense/profit should include recurring costs. <b>Actual:</b> every expense figure <code>_sum</code>s the <code>Transaction</code> table only; <code>RecurringExpense</code> rows are never posted as transactions nor summed (<code>getRecurringExpenses</code> only lists them).</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/server/routers/finance.ts:388-396</code>, <code>:419-423</code>; recurring rows only read at <code>:265-281</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Materialize due recurring expenses as transactions on their due date, or add their per-period amount into expense/profit (currency-aware — see FIN-02).</dd></div>
+        <div class="field"><dt>Note</dt><dd>Medium confidence — may be intentional, but it overstates profit.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="FIN-06" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>FIN-06 — Invoice status: no transition guard; <code>paidAt</code>/<code>sentAt</code> never cleared; re-PAID re-fires side-effects <a class="anchor" href="#FIN-06">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Finance (<code>updateInvoiceStatus</code>)</span><span class="chip"><span class="chip-k">Type</span> Data/Functional</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Mark an invoice PAID, then back to DRAFT. It stays <code>DRAFT</code> but keeps a <code>paidAt</code> timestamp. Re-issuing PAID on an already-paid invoice overwrites <code>paidAt</code> and (AI path) re-emits the <code>invoice_paid</code> activity + "Payment received" notification/email.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Illegal transitions should be blocked, <code>paidAt</code>/<code>sentAt</code> cleared when leaving PAID/SENT, and side-effects idempotent. <b>Actual:</b> any status → any status; stamps set but never cleared (verified first-hand at <code>finance.ts:236-238</code>); no <code>priorStatus === status</code> guard (AI <code>finance.ts:603-620</code>). <code>OVERDUE</code> is also only computed at display time, so the stored status used by sums can be stale.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Validate allowed transitions; clear <code>paidAt</code>/<code>sentAt</code> on leaving; skip side-effects when status is unchanged.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="FIN-07" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>FIN-07 — REST invoice/transaction money fields unvalidated (negatives &amp; overflow → raw 500) <a class="anchor" href="#FIN-07">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> REST / Finance</span><span class="chip"><span class="chip-k">Type</span> Security/Data</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd><code>POST /api/v1/invoices</code> with <code>total: 99999999999999</code> → numeric-overflow against <code>Decimal(12,2)</code> → unhandled DB exception → generic 500. <code>total: -500</code> is accepted and decrements paid/outstanding sums.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Expected a clean 400 and rejection of negatives. <b>Actual:</b> bare <code>z.number()</code> (no <code>.nonnegative()/.max()</code>). The tRPC layer correctly uses <code>nonNegativeMoney()</code>; REST does not mirror it.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/app/api/v1/invoices/route.ts:32-49</code>; contrast <code>src/server/routers/finance.ts:8-11</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Apply <code>.nonnegative().max(MAX_MONEY)</code> (and <code>.multipleOf(0.01)</code>) to all REST money fields.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="DASH-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>DASH-01 — Activity feed leaks SHARED-note titles and cross-team activity to every employee <a class="anchor" href="#DASH-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Dashboard / Notes</span><span class="chip"><span class="chip-k">Type</span> Security (info disclosure)</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>User A creates a <code>SHARED</code> note titled "Acme layoff plan" shared only with B. User C (not a recipient) opens <code>/dashboard</code> and sees <code>A created note "Acme layoff plan"</code> / <code>A shared note "…" with 1 member</code>.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>SHARED notes are visible only to author + recipients (correctly enforced in <code>notes.list</code>/<code>getById</code>/<code>search</code>). <b>Actual:</b> the feed is filtered <b>only</b> for finance event types — not by note visibility or project membership — so SHARED-note titles, plus task/project/client names from projects the viewer can't access, are broadcast to all authenticated users. The developer comment intends "team-visible" but the check is <code>visibility !== 'PRIVATE'</code>, which <b>includes</b> SHARED.</dd></div>
+        <div class="field"><dt>Evidence <span class="verified">Verified first-hand</span></dt><dd><code>src/server/routers/notes.ts:260-263</code> (logs title for any non-PRIVATE note), <code>:385</code> (share activity with title); <code>src/server/routers/dashboard.ts:92-93</code> (<code>where: isAdmin ? {} : { type: { notIn: financeTypes } }</code>); rendered for all users (<code>dashboard-content.tsx:888</code>, SSR-prefetched).</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Scope the feed to the viewer's visibility — exclude note activity for notes they can't access (or strip titles) and filter project/task/client activity to their memberships.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="HR-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>HR-01 — Leave requests can be self-approved and re-decided (no separation of duties) <a class="anchor" href="#HR-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Team/HR (<code>updateLeaveStatus</code>)</span><span class="chip"><span class="chip-k">Type</span> Security (SoD)</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>As HR (or admin), submit your own leave request, then <code>team.updateLeaveStatus({ id:&lt;own&gt;, status:'APPROVED' })</code> — it succeeds. You can also flip an already-<code>APPROVED</code> request to <code>REJECTED</code>.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>A reviewer should not approve their <b>own</b> leave, and only <code>PENDING</code> requests should be decidable — exactly how the sibling <code>resignation:review</code> flow works. <b>Actual:</b> only the coarse <code>leave:approve</code> capability (HR/ADMIN) is checked; no owner/PENDING resource conditions. The AI mirror <code>setLeaveStatus</code> filters PENDING but still lacks self-exclusion.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/lib/abac/policies.ts:44</code> (<code>'leave:approve': [isHrOrAdmin]</code> — no attribute conditions); <code>src/server/routers/team.ts:235-246</code>; compare <code>policies.ts:60-66</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Load the request and reject if <code>leave.userId === self</code> or <code>leave.status !== 'PENDING'</code>; ideally add an attribute-conditioned <code>leave:approve</code> policy mirroring <code>resignation:review</code>.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="NOTE-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>NOTE-01 — A non-author editor can change a note's visibility (SHARED→TEAM exposure) <a class="anchor" href="#NOTE-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Notes (<code>notes.update</code>)</span><span class="chip"><span class="chip-k">Type</span> Security (integrity/confidentiality)</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>A shares a <code>SHARED</code> note with B as <code>EDIT</code>. As B: <code>notes.update({ id, visibility:'TEAM' })</code> → the note is now visible company-wide. Or set <code>PRIVATE</code> to lock the author's other collaborators out. Any user can do the same to a <code>TEAM</code> note (TEAM is editable by all).</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Visibility/sharing is the author's prerogative (<code>setShares</code> is author-only). <b>Actual:</b> <code>update</code> gates only on <code>canEdit</code>, which returns true for SHARED+EDIT grantees and <i>anyone</i> on a TEAM note, yet freely writes <code>visibility</code> (and <code>projectId</code>/<code>clientId</code>).</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/server/routers/notes.ts:71-76</code> (<code>canEdit</code>), <code>:294-298</code>; contrast author-only <code>:368</code>. AI mirror identical (<code>src/lib/ai/tools/notes.ts:68-82</code>, <code>:357-359</code>).</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Restrict <code>visibility</code> (and project/client re-attach) to <code>note.authorId === userId</code> (or ADMIN); editors get content/title only.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="RT-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>RT-01 — Video-call attendance (<code>logJoin</code>) bypasses the anti-backfill window <a class="anchor" href="#RT-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Meetings</span><span class="chip"><span class="chip-k">Type</span> Data integrity</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>As an attendee of a 09:00–09:30 standup, open <code>/meetings/&lt;id&gt;/call</code> at 02:00. The conference connects, fires <code>videoConferenceJoined → logJoin</code>, and you are stamped "present" for the resolved occurrence.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd><code>markJoined</code> deliberately refuses attendance outside <code>[start−5min, end]</code> ("prevent retroactive attendance lies"). <b>Actual:</b> <code>logJoin</code> — the <i>primary</i>, auto-fired attendance signal — has <b>no window check</b>, so the strict and lax paths disagree and the lax one is the one users actually hit.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/server/routers/meetings.ts:404-467</code> (<code>logJoin</code>, no guard) vs <code>:261-271</code> (<code>markJoined</code> window check).</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Apply the same <code>[start−5min, end]</code> gate in <code>logJoin</code> (factor into a shared helper).</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="RT-02" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>RT-02 — No realtime revocation when a member leaves/is removed <a class="anchor" href="#RT-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Realtime / Chat</span><span class="chip"><span class="chip-k">Type</span> Security (live data exposure)</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>B is removed from private channel C (or leaves with the tab open). A posts a message; B's still-attached Ably subscription receives it and patches B's cache.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Removal should immediately cut B off. <b>Actual:</b> <code>removeMember</code> is a bare <code>deleteMany</code> with no emit; the Ably token capability is computed only at mint time with no explicit short <code>ttl</code>; the client re-authorizes only when <i>new</i> channels appear, never on removal — so B keeps receiving live messages until a refetch + token renewal (default ~60 min) drops the subscription. (History is correctly blocked by <code>assertChannelMember</code>, so this is a live-stream leak, not history.)</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/server/routers/chat.ts:619-635</code>; <code>src/app/api/ably-token/route.ts:45-57</code>; <code>src/components/chat/realtime-provider.tsx:200-212</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>On <code>removeMember</code>/<code>leaveChannel</code>, emit a <code>user:{id}</code> "membership changed" event so the client refetches channels and calls <code>client.auth.authorize()</code> immediately; use a short token TTL.</dd></div>
+        <div class="field"><dt>Note</dt><dd>High confidence (mechanism confirmed; exact window TTL/refetch-dependent).</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="RT-03" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>RT-03 — <code>logLeave</code> never fires on SPA navigation or tab close → open attendance sessions <a class="anchor" href="#RT-03">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Meetings</span><span class="chip"><span class="chip-k">Type</span> Functional / Data</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Join a call, then leave by clicking another nav link or closing/refreshing the tab (instead of the in-call hang-up). <code>leftAt</code> is never written; the log row stays open indefinitely.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Every join should get a matching <code>leftAt</code>. <b>Actual:</b> <code>logLeave</code> is wired only to Jitsi's <code>videoConferenceLeft</code>/<code>readyToClose</code>; the effect cleanup only <code>dispose()</code>s the iframe and there is no <code>beforeunload</code>/<code>pagehide</code>/<code>visibilitychange</code> handler, so the common exit paths skew any duration/attendance-% math.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/components/meetings/meeting-call.tsx:113-138</code>; <code>logLeave</code> is no-op-safe (<code>src/server/routers/meetings.ts:495-505</code>).</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Call <code>logLeave</code> in the effect cleanup and on <code>pagehide</code>/<code>visibilitychange(hidden)</code> (use <code>navigator.sendBeacon</code>/keepalive for unloads).</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="RT-04" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>RT-04 — Editing a message to add an <code>@mention</code> creates no notification <a class="anchor" href="#RT-04">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Chat</span><span class="chip"><span class="chip-k">Type</span> Functional</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Send "hello", edit to "hello @Bob". Bob's mention row and highlight are created, but he gets no bell/notification.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd><code>sendMessage</code> fires <code>notify()</code> + <code>emitToUser</code> for new mentions; <code>editMessage</code> recomputes and persists <code>validMentions</code> but never notifies.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/server/routers/chat.ts:341-397</code> (no <code>notify</code>/<code>emitToUser</code> after the edit transaction).</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Diff new mentions against the pre-edit set and notify the newly-added ones.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="RT-05" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>RT-05 — Uploaded files (incl. private-DM voice/attachments) are world-readable by URL <a class="anchor" href="#RT-05">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Upload</span><span class="chip"><span class="chip-k">Type</span> Security</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Send a voice message/attachment in a private DM → it lands at <code>public/uploads/&lt;uuid&gt;-&lt;name&gt;</code>, served statically at <code>/uploads/…</code> with no auth. Anyone who obtains the URL (a since-removed member, a referer/log leak, link sharing) can fetch it forever.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Message <i>content</i> is gated by membership, but the underlying <i>file bytes</i> have zero authorization. The UUID prefix prevents enumeration but not post-disclosure access.</dd></div>
+        <div class="field"><dt>Evidence <span class="verified">Verified first-hand</span></dt><dd><code>src/app/api/upload/route.ts:80-89</code> writes to <code>public/uploads</code> and returns <code>/uploads/…</code>; <code>public/uploads/</code> exists and is statically served. (The MIME+extension allowlist is solid against stored-XSS — <code>.html</code>/<code>.svg</code> excluded.)</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Serve attachments through an authenticated route that re-checks <code>assertChannelMember</code>, or use signed short-lived URLs (Vercel Blob with token).</dd></div>
+        <div class="field"><dt>Note</dt><dd>High confidence (severity depends on deployment; prod uses public storage).</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="REST-04" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>REST-04 — No rate limiting anywhere (REST API and login) <a class="anchor" href="#REST-04">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Platform</span><span class="chip"><span class="chip-k">Type</span> Security (DoS / brute-force)</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Any endpoint (and the NextAuth login <code>authorize</code>) can be called in an unbounded loop; invalid-token floods are never throttled.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Expected per-token/per-IP limits returning 429. <b>Actual:</b> none exist (repo-wide grep for <code>rate.?limit|throttle|upstash|429</code> returns nothing; <code>proxy.ts:14-22</code> short-circuits <code>/api/v1</code> with no limiting). Each auth attempt runs a bcrypt <code>compare</code> per prefix-matching candidate, so unthrottled floods are CPU-amplifying.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/proxy.ts:14-22</code>; <code>src/lib/api-auth.ts:55-57</code>; <code>src/lib/auth.ts:89</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Add per-token + per-IP rate limiting (edge middleware / Upstash), and cap login + auth attempts.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="PROJ-02" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>PROJ-02 — <code>order</code> treated as a contiguous index; Trello import writes gapped orders <a class="anchor" href="#PROJ-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Projects/Kanban + Trello import</span><span class="chip"><span class="chip-k">Type</span> Data integrity</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Import a Trello board whose cards interleave across lists, then drag a task one slot in an imported column — the move silently no-ops or misorders.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Import assigns a <b>global</b> running counter as each task's order, so a column can have orders like <code>[2,5,9]</code>. <code>moveTask</code> then does range math (<code>order: { gte: newOrder, lt: oldOrder }</code>) assuming <code>newOrder</code> (a client array index) is comparable to the stored <code>order</code> — <code>gte:1, lt:2</code> matches nothing, so the task doesn't move.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/server/routers/trello-import.ts:155-160</code> (global <code>tasksCreated</code> counter); <code>src/server/routers/projects.ts:646-656</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Normalize <code>order</code> per-column on import (0..n); have <code>moveTask</code> recompute positions from the actual ordered list rather than trusting client indices.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="PROJ-03" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>PROJ-03 — Deleting a column silently cascade-deletes all its tasks <a class="anchor" href="#PROJ-03">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Projects/Kanban</span><span class="chip"><span class="chip-k">Type</span> Data loss / UX</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Click the trash icon on a column with tasks → tiny inline "Delete / No" with no count → all tasks (and their comments/checklists/attachments) are permanently destroyed.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Expected a warning naming the task count or a move-first flow. <b>Actual:</b> <code>Task.column</code> is <code>onDelete: Cascade</code> and the UI shows no count.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>prisma/schema.prisma:472</code>; <code>src/app/(app)/projects/[id]/board/[boardId]/kanban-board.tsx:417-431</code>; <code>src/server/routers/projects.ts:842-847</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Block deletion of non-empty columns, or show "This will delete X tasks" and require explicit confirmation.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="PROJ-04" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>PROJ-04 — Task attachments are fetched but never rendered, and cannot be added <a class="anchor" href="#PROJ-04">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Projects/Kanban</span><span class="chip"><span class="chip-k">Type</span> Functional / Missing UI</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Open a task that has attachments (e.g. imported from Trello). The card shows a paperclip count, but the detail sheet renders no attachments section, so they're unreachable.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd><code>getTaskDetail</code> includes <code>attachments</code> (<code>projects.ts:885</code>) but <code>task-detail-sheet.tsx</code> never references them, and there is no <code>addTaskAttachment</code>/<code>deleteTaskAttachment</code> mutation anywhere.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Render an Attachments section and add upload/delete (reuse the <code>/api/upload</code> pipeline).</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="PROJ-05" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>PROJ-05 — <code>createTask</code> / <code>updateTaskAssignees</code> accept arbitrary user IDs <a class="anchor" href="#PROJ-05">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Projects/Kanban</span><span class="chip"><span class="chip-k">Type</span> Data integrity / Authz consistency</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High / Med</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Call <code>createTask</code>/<code>updateTaskAssignees</code> with a <code>userId</code> that is not a project member (assigned + emailed about a project they're not on) or that doesn't exist (raw Prisma FK 500).</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd><code>setColumnDefaultAssignees</code> validates membership (<code>projects.ts:457-470</code>); <code>createTask</code> (<code>:529-541</code>) and <code>updateTaskAssignees</code> (<code>:950-955</code>) do not — and the latter <code>createMany</code> has no <code>skipDuplicates</code>/validation, so a dup/invalid ID throws.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Validate <code>assigneeIds</code> against <code>ProjectMember</code> before create.</dd></div>
+        <div class="field"><dt>Note</dt><dd>High confidence (FK-500); Medium (non-member assignment).</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="CLI-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>CLI-01 — Deleting a client with invoices fails with a raw FK error <a class="anchor" href="#CLI-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Clients</span><span class="chip"><span class="chip-k">Type</span> Error handling / UX</span><span class="chip conf-high"><span class="chip-k">Confidence</span> High</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>As admin, delete a client that has ≥1 invoice → the page fails with a generic error.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>Expected a clean "Cannot delete: client has invoices" or a defined cascade. <b>Actual:</b> <code>Invoice.clientId</code> is a required relation with <b>no <code>onDelete</code></b> (Prisma default = Restrict; contrast contacts/contracts/transactions which are explicit <code>Cascade</code>), so the delete throws P2003 surfaced as a generic error, and the UI renders no <code>deleteClient.error</code>.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>prisma/schema.prisma:612</code>; <code>src/server/routers/clients.ts:254-267</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Pre-count invoices and return a friendly <code>BAD_REQUEST</code> (or define an explicit referential action); surface the error in the UI.</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="AI-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>AI-01 — <code>resetMemberPassword</code> ships a Groq-incompatible <code>pattern</code>/<code>allOf</code> tool schema <a class="anchor" href="#AI-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> AI Assistant</span><span class="chip"><span class="chip-k">Type</span> Functional (availability)</span><span class="chip conf-med"><span class="chip-k">Confidence</span> Medium</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Admin asks "reset Aisha's password to Hunter2024" → routes to the <code>people</code> domain → <code>resetMemberPassword</code> is offered to Groq with <code>newPassword: passwordSchema</code> (<code>z.string().min(8).regex(...).regex(...).regex(...)</code>).</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>The codebase's own convention is to keep <code>format</code>/<code>pattern</code>/<code>allOf</code> out of schemas sent to Groq (its strict validator 400s the whole request) — <code>inviteMember</code> and client-website tools deliberately drop <code>.email()</code>/<code>.url()</code> and validate in <code>execute</code>. <b>Actual:</b> <code>passwordSchema</code> serializes (zod v4 → JSON Schema, the AI SDK path) to <code>allOf:[{pattern:…},{pattern:…},{pattern:…}]</code>. If Groq rejects <code>pattern</code>/<code>allOf</code> as it does <code>format</code>, the <b>entire request 400s</b>, breaking every admin turn that loads the <code>people</code> domain (lay-off, hire, role change, leave approval) — and, because approval-continuations force the full toolset, potentially the execution of any admin-approved write.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/lib/ai/tools/people.ts:940</code> (<code>newPassword: passwordSchema</code>); <code>src/lib/password-policy.ts:21-26</code>; contrast <code>people.ts:722-737</code>; force-full-toolset <code>src/app/api/assistant/route.ts:64</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Use <code>newPassword: z.string().min(8)</code> and call the exported <code>passwordMeetsPolicy()</code> inside <code>execute</code>.</dd></div>
+        <div class="field"><dt>Note</dt><dd>Medium confidence (pattern emission confirmed; the 400 outcome depends on Groq's handling — verify with one admin people-domain request).</dd></div>
+      </dl>
+    </article>
+
+    <article class="bug" id="AUTH-01" data-severity="Medium">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-med">Medium</span><h3>AUTH-01 — Password change does not revoke other active sessions <a class="anchor" href="#AUTH-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip"><span class="chip-k">Module</span> Auth / Settings</span><span class="chip"><span class="chip-k">Type</span> Security (session mgmt)</span><span class="chip conf-med"><span class="chip-k">Confidence</span> Medium</span></div>
+      </div>
+      <dl class="bug-body">
+        <div class="field"><dt>Repro</dt><dd>Sign in on devices 1 and 2; change password on device 1; device 2 keeps working up to the 8h token lifetime.</dd></div>
+        <div class="field"><dt>Expected vs Actual</dt><dd>A password change should invalidate other sessions. <b>Actual:</b> the JWT revalidation re-reads only <code>role/status/department/title</code>, never a password epoch, so pre-change stateless tokens stay valid.</dd></div>
+        <div class="field"><dt>Evidence</dt><dd><code>src/lib/auth.ts:182-193</code>; <code>src/server/routers/team.ts:338-342</code>.</dd></div>
+        <div class="field"><dt>Suggested fix</dt><dd>Add <code>passwordChangedAt</code>/<code>tokenVersion</code> to <code>User</code>, stamp it into the JWT at sign-in, compare on each <code>jwt()</code> refresh and force logout on mismatch (also enables force-logout on lay-off/reset).</dd></div>
+        <div class="field"><dt>Note</dt><dd>Medium confidence (inherent to JWT, but fixable).</dd></div>
+      </dl>
+    </article>
+  </section>
+
+  <!-- ===================== LOW ===================== -->
+  <section id="low" class="block">
+    <div class="sev-group-head">
+      <span class="sev-badge sev-low">Low severity</span>
+      <h3>28 findings · condensed</h3>
+      <span class="rule"></span>
+    </div>
+
+    <article class="bug low" id="REST-02" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>REST-02 — <code>/api/v1/spec</code> bypasses <code>withApiAuth</code>, never audited <a class="anchor" href="#REST-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">REST · Security</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>src/app/api/v1/spec/route.ts:15-33</code> calls <code>authenticateApiRequest</code> directly with no <code>recordRestAudit</code>, so reads of the full API map and 401 attempts on this path leave no audit trail (405s on other routes are similarly unaudited). <strong>Fix:</strong> wrap with <code>withApiAuth</code> or record manually.</p>
+    </article>
+
+    <article class="bug low" id="REST-05" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>REST-05 — Malformed JSON body → 500 instead of 400 <a class="anchor" href="#REST-05">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">REST · Functional</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>await request.json()</code> throws before Zod and is caught as a generic 500 (no leak, wrong status, pollutes 500 metrics). Affects every write handler. <strong>Fix:</strong> shared <code>parseJson</code> returning 400 on <code>SyntaxError</code>.</p>
+    </article>
+
+    <article class="bug low" id="REST-06" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>REST-06 — <code>?limit=abc</code> → 500 on <code>/tasks</code> &amp; <code>/transactions</code> GET <a class="anchor" href="#REST-06">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">REST · Functional</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>parseInt('abc')→NaN → take:NaN →</code> Prisma error → 500 (clients/projects/invoices/meetings already clamp safely). <code>src/app/api/v1/tasks/route.ts:14,27</code>; <code>transactions/route.ts:12,26</code>. <strong>Fix:</strong> <code>parseInt(x,10)||default</code> + <code>Math.max(...,1)</code>.</p>
+    </article>
+
+    <article class="bug low" id="REST-07" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>REST-07 — Unvalidated FKs → 500 <a class="anchor" href="#REST-07">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">REST · Validation</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>assigneeIds</code>/<code>labelIds</code>/<code>attendeeIds</code>/<code>projectId</code> inserted without existence checks → Prisma FK violation → generic 500. <code>tasks/route.ts:98-105</code>, <code>meetings/route.ts:48</code>, <code>transactions/route.ts:76-79</code>. <strong>Fix:</strong> validate referenced IDs exist (and assignees are project members) → 400/404.</p>
+    </article>
+
+    <article class="bug low" id="FIN-08" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>FIN-08 — Float arithmetic on Decimals <a class="anchor" href="#FIN-08">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Finance · Data</span><span class="chip conf-med">Medium conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>Number(_sum)-Number(_sum)</code> and margin <code>%</code> run in JS float (<code>finance.ts:359-363</code>, <code>ai/tools/finance.ts:146-147</code>) → <code>0.20000000000000018</code> artifacts in raw API/AI JSON (masked by <code>toLocaleString</code> in UI). <strong>Fix:</strong> subtract in <code>Prisma.Decimal</code>/integer cents.</p>
+    </article>
+
+    <article class="bug low" id="FIN-09" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>FIN-09 — Month-end ms + invoice numbering <a class="anchor" href="#FIN-09">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Finance · Data</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">P&amp;L <code>endOfMonth</code> uses <code>…59,59</code> (no ms), dropping a <code>23:59:59.5</code> row (<code>finance.ts:386</code>); <code>INV-${year}-${count+1}</code> from a non-transactional global <code>count()</code> (<code>finance.ts:197-199</code>) can produce duplicate numbers under concurrency and never resets to <code>-001</code> in a new year. <strong>Fix:</strong> <code>…59,999</code> and an atomic per-year sequence.</p>
+    </article>
+
+    <article class="bug low" id="AUTHZ-02" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>AUTHZ-02 — No last-admin guard on <code>adminUpdateMember</code> <a class="anchor" href="#AUTHZ-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Team · Availability</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">Admin-only, so not escalation/IDOR, but the sole remaining admin can demote/deactivate themselves → zero-admin lockout. Guard exists in <code>layOffMember</code> (<code>team.ts:453-462</code>) and the AI <code>updateMember</code>, but not here (<code>team.ts:346-397</code>). <strong>Fix:</strong> mirror the last-admin check.</p>
+    </article>
+
+    <article class="bug low" id="AUTHZ-04" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>AUTHZ-04 — Client-directory trust boundary inconsistent <a class="anchor" href="#AUTHZ-04">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Clients · Security (info)</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">REST treats clients as admin-only (<code>clients/[id]/route.ts:10</code>), tRPC exposes the directory to every employee (<code>clients.ts:16-44</code>, <code>search.ts:72-77</code>), the AI scopes non-admins to project-reachable clients but <code>globalSearch</code> shows all names. <strong>Fix:</strong> pick one policy and apply uniformly.</p>
+    </article>
+
+    <article class="bug low" id="RT-06" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>RT-06 — Non-atomic attendance create → P2002 race <a class="anchor" href="#RT-06">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Meetings · Data</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>findUnique</code>-then-<code>create</code> (not <code>upsert</code>) means a genuine concurrent double-join throws an unhandled unique-constraint 500 (the comment claims a no-op). <code>meetings.ts:275-300,424-444</code>. <strong>Fix:</strong> <code>upsert</code> on the unique key, or catch P2002.</p>
+    </article>
+
+    <article class="bug low" id="RT-08" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>RT-08 — Client message ordering has no id tiebreak <a class="anchor" href="#RT-08">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Realtime · Functional</span><span class="chip conf-med">Medium conf.</span></div>
+      </div>
+      <p class="bug-cond">Server orders <code>[createdAt desc, id desc]</code> (<code>chat.ts:102</code>) but the client re-sorts on <code>createdAt</code> only (<code>message-list.tsx:64-66</code>) → same-ms messages can reshuffle/diverge. <strong>Fix:</strong> add an <code>id</code> tiebreak.</p>
+    </article>
+
+    <article class="bug low" id="RT-09" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>RT-09 — Read receipts broadcast to the whole channel <a class="anchor" href="#RT-09">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Chat · Privacy</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>markRead</code> emits each user's <code>lastReadAt</code> to <code>channel:{id}</code> (<code>chat.ts:472-476</code>) though clients only act on their own → any subscriber can observe everyone's read times. <strong>Fix:</strong> emit to the actor's own <code>user:{id}</code> channel.</p>
+    </article>
+
+    <article class="bug low" id="RT-10" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>RT-10 — Recurring-meeting list hides just-finished occurrence <a class="anchor" href="#RT-10">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Meetings · Functional</span><span class="chip conf-med">Medium conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>findRelevantOccurrence</code> picks the nearest occurrence, so in the latter half of a gap the list shows the next (empty) occurrence and the prior occurrence's attendance disappears early (<code>meeting-occurrence.ts:99-103</code>). <strong>Fix:</strong> prefer the most recent past occurrence until the next starts.</p>
+    </article>
+
+    <article class="bug low" id="PROJ-06" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>PROJ-06 — <code>addComment</code> doesn't verify <code>parentId</code> belongs to the task <a class="anchor" href="#PROJ-06">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Projects · Data</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">Only <code>assertTaskAccess(taskId)</code> runs; a <code>parentId</code> from another task is threaded in, creating an orphaned reply (<code>projects.ts:890-911</code>). <strong>Fix:</strong> assert <code>parent.taskId === input.taskId</code>.</p>
+    </article>
+
+    <article class="bug low" id="PROJ-07" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>PROJ-07 — Completion logged only for a column named exactly <code>"Done"</code> <a class="anchor" href="#PROJ-07">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Projects · Business logic</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">Case-sensitive equality (<code>projects.ts:701</code>) misses "Shipped"/"Complete"/imported lists, while the board preview uses a <code>DONE_RE</code> regex (<code>project-detail-content.tsx:55</code>) — inconsistent. <strong>Fix:</strong> share the heuristic or add a per-column "is done" flag.</p>
+    </article>
+
+    <article class="bug low" id="CON-01" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>CON-01 — <code>endDate</code> before <code>startDate</code> accepted <a class="anchor" href="#CON-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Contracts · Validation</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">No cross-field <code>.refine</code> on contracts (<code>clients.ts:166-205</code>), projects (<code>projects.ts:122-135</code>), or milestones; the UI renders "Dec 1 – Jan 1". <strong>Fix:</strong> <code>.refine(end &gt;= start)</code>.</p>
+    </article>
+
+    <article class="bug low" id="CON-02" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>CON-02 — <code>signedAt</code> auto-stamp inconsistent <a class="anchor" href="#CON-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Contracts · Logic</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">The inline status dropdown stamps <code>signedAt</code> on SIGNED (<code>clients.ts:227-233</code>); the edit form's <code>updateContract</code> doesn't (<code>:207-217</code>). <strong>Fix:</strong> apply the same stamp-on-first-SIGNED logic in both.</p>
+    </article>
+
+    <article class="bug low" id="TRELLO-01" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>TRELLO-01 — Malformed dates crash the whole import <a class="anchor" href="#TRELLO-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Trello import · Robustness</span><span class="chip conf-med">Medium conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>new Date(card.due)</code> / <code>new Date(comment.date)</code> on a non-parseable string → Invalid Date → the entire transactional import fails generically (<code>trello-import.ts:162,242</code>; schema only constrains to <code>string</code>). <strong>Fix:</strong> guard <code>isNaN(d.getTime())</code>.</p>
+    </article>
+
+    <article class="bug low" id="CLI-02" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>CLI-02 — Contact validation gap + no contact CRUD UI <a class="anchor" href="#CLI-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Clients/Contacts · Validation/UI</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>addContact</code> uses <code>email: z.string().optional()</code> while <code>create</code> uses <code>.email()</code> (<code>clients.ts:147</code> vs <code>:98</code>); the Contacts tab only lists — there's no UI to add/edit/remove a contact post-creation and no <code>updateContact</code> mutation at all. <strong>Fix:</strong> align validation; add contact CRUD UI + mutation.</p>
+    </article>
+
+    <article class="bug low" id="UX-01" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>UX-01 — Client forms swallow validation errors <a class="anchor" href="#UX-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Clients · UX</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>optionalWebsiteUrl</code> rejects non-<code>http(s)</code> values (<code>validators.ts:33-39</code>) but neither the create nor edit form renders the mutation error (<code>clients-content.tsx</code>, <code>client-detail-content.tsx</code>) — the form just sits there. <strong>Fix:</strong> render <code>createClient.error</code>/<code>updateClient.error</code> inline.</p>
+    </article>
+
+    <article class="bug low" id="HR-02" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>HR-02 — Leave requests accept invalid/overlapping/past dates <a class="anchor" href="#HR-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Team/HR · Validation</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>createLeaveRequest</code> validates each field independently and passes straight to <code>create</code> (<code>team.ts:220-233</code>) — <code>endDate &lt; startDate</code>, past dates, and duplicate overlaps all pass, corrupting "out today"/team-stats math. <strong>Fix:</strong> <code>.refine(end &gt;= start)</code>, reject past start, check overlaps.</p>
+    </article>
+
+    <article class="bug low" id="DASH-02" data-severity="Low">
+      <span class="alias" id="AI-03" style="display:block;height:0;scroll-margin-top:84px"></span>
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>DASH-02 / AI-03 — <code>getStats</code> returns company-wide pending-leave count to non-admins <a class="anchor" href="#DASH-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Dashboard · Info exposure</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>pendingLeaves</code> is computed unconditionally (<code>dashboard.ts:33-35</code>) though the card only renders for admins; the value still ships to every client. The AI <code>getDashboardStats</code> mirrors this (<code>insights.ts:500</code>), and <code>getTeamMember</code> returns any colleague's full project-membership list (<code>people.ts:110-113</code>). <strong>Fix:</strong> gate/scope server-side. <em>(DASH-02 = AI-03.)</em></p>
+    </article>
+
+    <article class="bug low" id="AUTH-02" data-severity="Low">
+      <span class="alias" id="SEC-03" style="display:block;height:0;scroll-margin-top:84px"></span>
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>AUTH-02 / SEC-03 — Edge middleware authorizes on cookie presence only <a class="anchor" href="#AUTH-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Auth/UX · Security (DiD)</span><span class="chip conf-high">High conf. (behavior)</span></div>
+      </div>
+      <p class="bug-cond"><code>proxy.ts:24-33</code> substring-matches the cookie name without verifying the JWT, and <code>pathname.includes('.')</code> (<code>:19</code>) treats any dotted path as a static asset. Real enforcement is downstream (<code>auth()</code> + tRPC), so this is defense-in-depth, not a direct leak — but a stale/forged cookie passes the edge gate and lands on a broken shell instead of a clean login redirect (most pages, unlike finance/audit-logs/team-stats/hr, don't call <code>auth()</code> at the page level). <strong>Fix:</strong> verify with <code>getToken</code>/<code>auth</code> in middleware; add a shared page-auth guard.</p>
+    </article>
+
+    <article class="bug low" id="SEC-01" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>SEC-01 — CSP <code>connect-src</code> ends with <code>ws: wss:</code> wildcards <a class="anchor" href="#SEC-01">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Platform/Config · Security</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>next.config.ts:33</code> appends blanket <code>ws: wss:</code>, allowing a WebSocket to <i>any</i> host and nullifying the carefully-scoped Ably/8x8 allowlist above it; the <code>socketOrigin</code> (<code>NEXT_PUBLIC_SOCKET_URL</code>) is the stale Socket.IO origin (live header showed <code>http://localhost:3001</code>). <strong>Fix:</strong> drop <code>ws: wss:</code> and the dead socket origin. <em>(Independently flagged by the realtime specialist.)</em></p>
+    </article>
+
+    <article class="bug low" id="SEC-02" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>SEC-02 — <code>img-src 'self' data: https:</code> allows any HTTPS image <a class="anchor" href="#SEC-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">Platform/Config · Security</span><span class="chip conf-med">Medium conf.</span></div>
+      </div>
+      <p class="bug-cond"><code>next.config.ts:31</code> permits images from any origin (tracking-pixel/exfil surface), laxer than the next/image host lock-down. <strong>Fix:</strong> restrict to the app origin + known avatar hosts.</p>
+    </article>
+
+    <article class="bug low" id="AI-02" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>AI-02 — Assistant eval never tests execute-level guards or isolation <a class="anchor" href="#AI-02">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">AI Assistant · Security (test)</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">Employee/HR cases build the toolset with that role's context, so privileged tools aren't even constructed — the <code>forbid</code>/<code>mustNotInclude</code> assertions pass <i>vacuously</i> and the in-<code>execute</code> <code>if (!h.isAdmin) return {error}</code> checks are never exercised; no cross-user IDOR case exists. <code>scripts/assistant-eval.ts:163-186,232</code>. <strong>Fix:</strong> add cases invoking an admin tool's <code>execute</code> under an employee subject (expect <code>{error}</code>) and note/DM/meeting isolation cases.</p>
+    </article>
+
+    <article class="bug low" id="AI-04" data-severity="Low">
+      <div class="bug-head">
+        <div class="bug-id"><span class="sev-badge sev-low">Low</span><h3>AI-04 — Approval is a UX confirmation, not the security boundary <a class="anchor" href="#AI-04">#</a></h3></div>
+        <div class="bug-meta"><span class="chip">AI Assistant · Info</span><span class="chip conf-high">High conf.</span></div>
+      </div>
+      <p class="bug-cond">The client supplies the full message history including approval parts; a forged <code>approved:true</code> with a matching <code>approvalId</code> could skip the user's <i>own</i> confirmation — but every write re-checks authorization in <code>execute</code>, so there is no cross-user/privilege impact. Recorded so the in-<code>execute</code> authz is never relaxed on the assumption the approval gate protects it. <code>route.ts:34</code>.</p>
+    </article>
+  </section>
+
+  <!-- ===================== COVERAGE ===================== -->
+  <section id="coverage" class="block">
+    <h2 class="section-title">Coverage checklist</h2>
+    <p class="section-sub">Every module, page, and endpoint below was exercised (<span class="tick">✓</span> tested). "Findings" lists IDs raised; "clean" means reviewed with no defect (notable correct controls noted).</p>
+
+    <div class="subcap">Pages / routes (<code>src/app</code>)</div>
+    <div class="table-wrap">
+      <table class="cov">
+        <thead><tr><th>Route</th><th>Tested</th><th>Notes / findings</th></tr></thead>
+        <tbody>
+          <tr><td class="route"><code>/login</code>, <code>/</code> redirect</td><td><span class="tick">✓</span></td><td>Live-probed: 307→<code>/login</code>; timing-oracle login verified clean</td></tr>
+          <tr><td class="route"><code>/invite/[token]</code></td><td><span class="tick">✓</span></td><td>256-bit token, SHA-256, single-use, 7-day expiry, no role/email mass-assign — <span class="clean-tag">clean</span></td></tr>
+          <tr><td class="route"><code>/dashboard</code></td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#DASH-01">DASH-01</a><a class="idtag" href="#DASH-02">DASH-02</a><a class="idtag" href="#SEC-03">SEC-03</a></span></td></tr>
+          <tr><td class="route"><code>/projects</code>, <code>/projects/[id]</code>, <code>…/board/[boardId]</code></td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#PROJ-01">PROJ-01</a><a class="idtag" href="#PROJ-07">…07</a></span> (PROJ-01..07)</td></tr>
+          <tr><td class="route"><code>/projects/import</code> (Trello)</td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#PROJ-02">PROJ-02</a><a class="idtag" href="#TRELLO-01">TRELLO-01</a></span> attribution forgery prevented — <span class="clean-tag">clean</span></td></tr>
+          <tr><td class="route"><code>/clients</code>, <code>/clients/[id]</code> (+ contacts, contracts)</td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#CLI-01">CLI-01/02</a><a class="idtag" href="#CON-01">CON-01/02</a><a class="idtag" href="#UX-01">UX-01</a><a class="idtag" href="#AUTHZ-04">AUTHZ-04</a></span></td></tr>
+          <tr><td class="route"><code>/finance</code></td><td><span class="tick">✓</span></td><td>Page hard-gates ADMIN; <span class="findings-ids"><a class="idtag" href="#FIN-01">FIN-01..09</a><a class="idtag" href="#REST-01">REST-01</a></span></td></tr>
+          <tr><td class="route"><code>/hr</code></td><td><span class="tick">✓</span></td><td>Page gates ADMIN/HR; <span class="findings-ids"><a class="idtag" href="#HR-01">HR-01</a><a class="idtag" href="#HR-02">HR-02</a></span></td></tr>
+          <tr><td class="route"><code>/team</code>, <code>/team/[id]</code>, <code>/team/stats</code></td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#AUTHZ-02">AUTHZ-02</a></span> team-stats admin-gated, directory PII note (see Improvements)</td></tr>
+          <tr><td class="route"><code>/meetings</code>, <code>/meetings/[id]/call</code> (video)</td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#RT-01">RT-01</a><a class="idtag" href="#RT-03">RT-03</a><a class="idtag" href="#RT-06">RT-06</a><a class="idtag" href="#RT-10">RT-10</a></span> JaaS minting gated — <span class="clean-tag">clean</span></td></tr>
+          <tr><td class="route"><code>/notes</code>, <code>/notes/[id]</code></td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#NOTE-01">NOTE-01</a></span> Tiptap render XSS-safe — <span class="clean-tag">clean</span></td></tr>
+          <tr><td class="route"><code>/chat</code></td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#RT-02">RT-02</a><a class="idtag" href="#RT-04">RT-04</a><a class="idtag" href="#RT-05">RT-05</a><a class="idtag" href="#RT-08">RT-08</a><a class="idtag" href="#RT-09">RT-09</a></span> channel/DM authz solid — <span class="clean-tag">clean</span></td></tr>
+          <tr><td class="route"><code>/audit-logs</code></td><td><span class="tick">✓</span></td><td>Admin-gated (page + every procedure) — <span class="clean-tag">clean</span></td></tr>
+          <tr><td class="route"><code>/settings</code></td><td><span class="tick">✓</span></td><td><span class="findings-ids"><a class="idtag" href="#AUTH-01">AUTH-01</a></span> <code>updateProfile</code> whitelist (no self-escalation) — <span class="clean-tag">clean</span></td></tr>
+          <tr><td class="route"><code>/api-docs</code>, <code>/brand</code></td><td><span class="tick">✓</span></td><td><code>/brand</code> public by design; spec auth-gated (<a class="idtag" href="#REST-02">REST-02</a>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="subcap">tRPC routers (<code>src/server/routers</code>)</div>
+    <div class="pillwrap">
+      <span class="covpill"><span class="tick">✓</span> dashboard</span>
+      <span class="covpill"><span class="tick">✓</span> projects</span>
+      <span class="covpill"><span class="tick">✓</span> finance</span>
+      <span class="covpill"><span class="tick">✓</span> clients</span>
+      <span class="covpill"><span class="tick">✓</span> chat</span>
+      <span class="covpill"><span class="tick">✓</span> chat-helpers</span>
+      <span class="covpill"><span class="tick">✓</span> team</span>
+      <span class="covpill"><span class="tick">✓</span> team-stats</span>
+      <span class="covpill clean"><span class="tick">✓</span> resignations <span class="clean-tag">clean</span></span>
+      <span class="covpill clean"><span class="tick">✓</span> invitations <span class="clean-tag">clean</span></span>
+      <span class="covpill"><span class="tick">✓</span> notes</span>
+      <span class="covpill"><span class="tick">✓</span> meetings</span>
+      <span class="covpill clean"><span class="tick">✓</span> audit <span class="clean-tag">clean</span></span>
+      <span class="covpill clean"><span class="tick">✓</span> api-tokens <span class="clean-tag">clean</span></span>
+      <span class="covpill clean"><span class="tick">✓</span> search <span class="clean-tag">clean</span></span>
+      <span class="covpill"><span class="tick">✓</span> trello-import</span>
+    </div>
+
+    <div class="subcap">REST API (<code>src/app/api/v1</code>)</div>
+    <div class="pillwrap">
+      <span class="covpill"><span class="tick">✓</span> spec</span>
+      <span class="covpill"><span class="tick">✓</span> tasks (+<code>[id]</code>,<code>/comments</code>)</span>
+      <span class="covpill"><span class="tick">✓</span> boards/[id]</span>
+      <span class="covpill"><span class="tick">✓</span> projects (+<code>[id]</code>)</span>
+      <span class="covpill"><span class="tick">✓</span> clients (+<code>[id]</code>)</span>
+      <span class="covpill"><span class="tick">✓</span> team</span>
+      <span class="covpill"><span class="tick">✓</span> meetings</span>
+      <span class="covpill"><span class="tick">✓</span> invoices (+<code>[id]</code>)</span>
+      <span class="covpill"><span class="tick">✓</span> transactions (+<code>[id]</code>)</span>
+      <span class="covpill"><span class="tick">✓</span> finance/summary</span>
+    </div>
+    <p class="section-sub" style="margin-top:12px">Every route mapped to scope; finance double-gate verified live; object-scoping verified clean except <a class="idtag" href="#REST-01">REST-01</a>.</p>
+
+    <div class="subcap">Cross-cutting</div>
+    <div class="pillwrap">
+      <span class="covpill"><span class="tick">✓</span> Auth/session (<code>auth.ts</code>, <code>proxy.ts</code>)</span>
+      <span class="covpill"><span class="tick">✓</span> ABAC engine + policies</span>
+      <span class="covpill"><span class="tick">✓</span> object-level <code>authz.ts</code></span>
+      <span class="covpill"><span class="tick">✓</span> AI assistant (route + 10 tool domains + prompt + context + eval)</span>
+      <span class="covpill"><span class="tick">✓</span> realtime (Ably token, emit)</span>
+      <span class="covpill"><span class="tick">✓</span> upload</span>
+      <span class="covpill"><span class="tick">✓</span> security headers/CSP</span>
+      <span class="covpill"><span class="tick">✓</span> build health</span>
+      <span class="covpill"><span class="tick">✓</span> rate limiting (absent — <a class="idtag" href="#REST-04">REST-04</a>)</span>
+    </div>
+
+    <div class="subcap">Authorization matrix (verified)</div>
+    <div class="matrix-note">
+      <b>Finance read</b> (EMPLOYEE/HR ❌, ADMIN ✓) · <b>layoff</b> (HR not vs admin, last-admin protected) · <b>setRole</b> (ADMIN only) · <b>resignation review</b> (not own, HR not vs admin, PENDING) · <b>channel/DM</b> (member-only, no admin DM bypass) · <b>project/task/board/column</b> (member; manage=LEAD/ADMIN) · <b>notifications/profile</b> (self-only) — <span class="enforced">all enforced</span>. The one separation-of-duties gap is <b>leave approval</b> (<a class="idtag" href="#HR-01">HR-01</a>); the one feed-level leak is <b>activity feed</b> (<a class="idtag" href="#DASH-01">DASH-01</a>).
+    </div>
+  </section>
+
+  <footer>
+    <p><b>DevFathom-Hub — QA Defect Report</b> · 53 findings (0 Critical · 3 High · 22 Medium · 28 Low)</p>
+    <p>Two-lead senior QA + BA full-app pass · Branch <code>main</code> · <code>bun run build</code> → exit 0 · 2026-06-23</p>
+  </footer>
+
+</main>
+
+<button class="totop" id="toTop" aria-label="Back to top" title="Back to top">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+</button>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Theme toggle ---------- */
+  var root = document.documentElement;
+  var toggle = document.getElementById('themeToggle');
+  toggle.addEventListener('click', function () {
+    var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('bugs-theme', next); } catch (e) {}
+  });
+
+  /* ---------- Filtering + search ---------- */
+  var search = document.getElementById('search');
+  var filterWrap = document.getElementById('filters');
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#summaryTable tbody tr[data-severity]'));
+  var emptyRow = document.getElementById('emptyRow');
+  var countEl = document.getElementById('resultCount');
+  var activeSev = 'all';
+
+  function applyFilter() {
+    var q = (search.value || '').trim().toLowerCase();
+    var visible = 0;
+    rows.forEach(function (tr) {
+      var matchSev = activeSev === 'all' || tr.getAttribute('data-severity') === activeSev;
+      var matchText = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
+      var show = matchSev && matchText;
+      tr.hidden = !show;
+      if (show) visible++;
+    });
+    if (emptyRow) emptyRow.hidden = visible !== 0;
+    countEl.textContent = visible + ' of ' + rows.length;
+  }
+
+  search.addEventListener('input', applyFilter);
+
+  filterWrap.addEventListener('click', function (e) {
+    var btn = e.target.closest('.fchip');
+    if (!btn) return;
+    activeSev = btn.getAttribute('data-sev');
+    filterWrap.querySelectorAll('.fchip').forEach(function (b) { b.classList.toggle('active', b === btn); });
+    applyFilter();
+  });
+
+  /* ---------- Stat cards → filter ---------- */
+  document.querySelectorAll('.stat[data-sev]').forEach(function (card) {
+    function trigger() {
+      var sev = card.getAttribute('data-sev');
+      if (sev === 'Critical') return;
+      activeSev = sev;
+      filterWrap.querySelectorAll('.fchip').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-sev') === sev);
+      });
+      applyFilter();
+      document.getElementById('summary').scrollIntoView({ behavior: 'smooth' });
+    }
+    card.addEventListener('click', trigger);
+    card.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); trigger(); } });
+  });
+
+  /* ---------- Back to top ---------- */
+  var toTop = document.getElementById('toTop');
+  window.addEventListener('scroll', function () {
+    toTop.classList.toggle('show', window.scrollY > 600);
+  }, { passive: true });
+  toTop.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+
+  /* ---------- Scrollspy for section nav ---------- */
+  var navLinks = Array.prototype.slice.call(document.querySelectorAll('nav.sections a'));
+  var sections = navLinks.map(function (a) { return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
+  if ('IntersectionObserver' in window && sections.length) {
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) {
+          navLinks.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + en.target.id);
+          });
+        }
+      });
+    }, { rootMargin: '-45% 0px -50% 0px' });
+    sections.forEach(function (s) { spy.observe(s); });
+  }
+})();
+</script>
+
+</body>
+</html>

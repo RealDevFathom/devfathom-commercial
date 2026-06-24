@@ -1,0 +1,763 @@
+[
+  {
+    "id": "FIN-01", "severity": "HIGH", "module": "Finance", "moduleLabel": "finance",
+    "type": "Data", "typeLabel": "data", "role": "ADMIN (finance.createInvoice) / finance:write REST token (admin-bound)",
+    "summary": "Invoice subtotal/tax/total trusted from client, never recomputed",
+    "preconditions": "An ADMIN session (or a finance:write df_ token bound to an admin) and at least one Client to invoice.",
+    "steps": [
+      "Call finance.createInvoice (or POST /api/v1/invoices) with items:[{description:'Dev work',quantity:100,rate:150,amount:15000}] but subtotal:0, tax:0, total:0.",
+      "Observe the persisted invoice.",
+      "Open the finance summary / dashboard KPIs (totalPaid / totalOutstanding) and note the invoice contributes total=0.",
+      "Over REST, repeat with total:-15000 and observe paid/outstanding sums DECREASE."
+    ],
+    "expected": "Server derives subtotal = sum(items.amount) and total = subtotal + tax (or rejects a mismatch); negative totals impossible.",
+    "actual": "Inputs are written verbatim; total=0 stored while line items represent $15,000. There is no full invoice-EDIT mutation (only updateInvoiceStatus), so the wrong total is permanent and flows into totalPaid/totalOutstanding. Over REST a negative total decrements the books.",
+    "evidence": "src/server/routers/finance.ts:201-214 writes subtotal: input.subtotal, tax: input.tax, total: input.total with no cross-field .refine. REST is worse: src/app/api/v1/invoices/route.ts:43-48 uses bare z.number() for subtotal/tax/total/amount (no .positive()). The AI tool does it correctly (recomputes with round2) at src/lib/ai/tools/finance.ts:482-490 — proving intended behavior.",
+    "fix": "Recompute amount/subtotal/total server-side from items + tax in BOTH tRPC and REST; ignore client-sent totals (or .refine they match). Add a full invoice-edit path. (Verified first-hand.)"
+  },
+  {
+    "id": "FIN-02", "severity": "HIGH", "module": "Finance/Dashboard", "moduleLabel": "finance",
+    "type": "Data", "typeLabel": "data", "role": "ADMIN",
+    "summary": "Money aggregates sum USD + PKR into one $ figure",
+    "preconditions": "Finance data containing more than one currency (USD and PKR). PKR is reachable via the AI assistant and REST createTransaction/createInvoice.",
+    "steps": [
+      "Record June income of one USD transaction $5,000 and one PKR transaction Rs 280,000 (~$1,000).",
+      "Open the Finance KPIs and the Dashboard revenue tile."
+    ],
+    "expected": "Aggregates group/convert by currency; mixed currencies are never summed into one scalar.",
+    "actual": "transaction.aggregate({_sum:{amount}}) returns 285000; the finance KPI and dashboard render it through a hardcoded $ -> '$285,000'. True USD-equivalent ~ $6,000 — overstated ~47x.",
+    "evidence": "No 'currency' appears in any aggregate where/groupBy. src/server/routers/finance.ts:332-353 (summary) and :389-396 (P&L); src/server/routers/dashboard.ts:48-59, :200-214; src/app/api/v1/finance/summary/route.ts; src/lib/ai/tools/finance.ts:122-138. UI renders hardcoded $: finance-content.tsx:92, dashboard-content.tsx:932.",
+    "fix": "groupBy:['currency'] and report per-currency, or filter aggregates to a single currency, or convert via an FX table before summing. Never _sum a mixed-currency column into one scalar. (Verified first-hand.)"
+  },
+  {
+    "id": "PROJ-01", "severity": "HIGH", "module": "Projects/Kanban", "moduleLabel": "projects",
+    "type": "Functional/Data", "typeLabel": "functional", "role": "Any project member (e.g. EMPLOYEE on the project)",
+    "summary": "Kanban drag-and-drop moves the wrong task when a filter is active",
+    "preconditions": "A board with multiple tasks and at least one task that will be hidden by a filter.",
+    "steps": [
+      "Open a board and apply any filter (search text, priority, assignee, or label) so >=1 task is hidden.",
+      "Drag a visible task to a new slot within or between columns.",
+      "Observe a DIFFERENT task is moved and a wrong order is persisted."
+    ],
+    "expected": "The dragged task moves to the dropped slot.",
+    "actual": "Rendered drag indices come from the FILTERED column list, but handleDragEnd splices into the UNFILTERED board.columns using those indices, so it removes/reinserts the wrong element and mutates with a wrong newOrder. With no filter active filteredColumns === board.columns so indices align and the bug is invisible — masking it in casual testing.",
+    "evidence": "src/app/(app)/projects/[id]/board/[boardId]/kanban-board.tsx:164-189 — newColumns derived from board.columns, then sourceCol.tasks.splice(source.index,1) / destCol.tasks.splice(destination.index,0,...) use filtered indices; moveTask.mutate({ newOrder: destination.index }). Render uses filteredColumns (:372, Draggable index :483-484); filteredColumns returns board.columns only when !hasFilters (:233).",
+    "fix": "Disable DnD while a filter is active, or translate the filtered source/destination indices back to real positions in board.columns (locate by draggableId) before splicing/mutating. (Verified first-hand.)"
+  },
+  {
+    "id": "REST-01", "severity": "MEDIUM", "module": "REST/Finance", "moduleLabel": "rest-api",
+    "type": "Security", "typeLabel": "security", "role": "REST df_ token scoped clients:read, bound to an ADMIN user",
+    "summary": "Full invoice/financial records reachable via a clients:read token",
+    "preconditions": "A df_ token issued with only clients:read (no finance:read), bound to an admin user; a client that has invoices.",
+    "steps": [
+      "curl -H 'Authorization: Bearer df_<clients-read-token>' https://<host>/api/v1/clients/<clientId>",
+      "Observe every invoice for the client is returned (total/subtotal/tax/currency/status/dueDate/paidAt)."
+    ],
+    "expected": "A non-finance scope must not return financial data; even a wildcard * token cannot read finance data (the stated control).",
+    "actual": "The route declares clients:read, so the admin finance double-gate never runs, and the handler returns every invoice for the client. The list route similarly leaks an invoice _count. Impact confined to admin-bound tokens (manual isAdmin gate), so a deliberately-narrow CRM integration token silently carries full finance read.",
+    "evidence": "src/app/api/v1/clients/[id]/route.ts:14-21 (include: { invoices: ... }); src/app/api/v1/clients/route.ts:22.",
+    "fix": "Drop invoices from the clients:read include, or require hasScope(ctx,'finance:read') before including them."
+  },
+  {
+    "id": "FIN-03", "severity": "MEDIUM", "module": "Dashboard", "moduleLabel": "dashboard",
+    "type": "Functional/Data", "typeLabel": "functional", "role": "ADMIN",
+    "summary": "Revenue chart drops the last day of every month (+ month-overflow)",
+    "preconditions": "An income transaction dated on the last day of a month, after midnight.",
+    "steps": [
+      "Create an income transaction of $5,000 dated 2026-05-31 10:00.",
+      "Open the dashboard revenue chart and inspect the May bar.",
+      "Separately, view the chart on the 29th-31st of a month and compare month labels."
+    ],
+    "expected": "The May 31 income is included in the May bar; month buckets are correct.",
+    "actual": "endOfMonth = new Date(y, m+1, 0) is the last day at 00:00:00.000 and the query filters date: { lte: endOfMonth }, so anything after midnight on the final day is cut. The P&L report uses ...,0,23,59,59 and DOES include it, so chart and report disagree on every month's last day. Separately, date.setMonth(date.getMonth()-i) on today's day-of-month overflows on the 29th-31st (e.g. May 31 stepping back to 'Feb' rolls to Mar 3), duplicating/skipping a month.",
+    "evidence": "src/server/routers/dashboard.ts:190-215; contrast src/server/routers/finance.ts:386.",
+    "fix": "Build months with new Date(y, m-i, 1) and set endOfMonth = new Date(y, m+1, 0, 23, 59, 59, 999)."
+  },
+  {
+    "id": "FIN-04", "severity": "MEDIUM", "module": "Finance/Dashboard", "moduleLabel": "finance",
+    "type": "Data", "typeLabel": "data", "role": "ADMIN",
+    "summary": "This month/year KPIs have no upper date bound (future rows inflate)",
+    "preconditions": "Ability to log a transaction with a future date (no max date validation).",
+    "steps": [
+      "Log income of $1,000,000 dated 2030-01-01.",
+      "Open the Finance summary / Dashboard stats and view 'Monthly Revenue' and 'Net Profit'."
+    ],
+    "expected": "Future-dated rows are excluded from this-month/this-year figures.",
+    "actual": "The aggregates use date: { gte: startOfMonth } / { gte: startOfYear } with NO lte, so future rows are counted. The bounded P&L/chart then disagree with the KPI.",
+    "evidence": "src/server/routers/finance.ts:334,342; src/server/routers/dashboard.ts:50. (Verified first-hand.)",
+    "fix": "Add lte: now (or end-of-period) to these aggregates."
+  },
+  {
+    "id": "FIN-05", "severity": "MEDIUM", "module": "Finance", "moduleLabel": "finance",
+    "type": "Functional", "typeLabel": "functional", "role": "ADMIN",
+    "summary": "Recurring expenses excluded from P&L expense/profit",
+    "preconditions": "RecurringExpense rows exist (seeded subscriptions ~$588/mo).",
+    "steps": [
+      "View the P&L report / finance summary monthly expense and profit.",
+      "Compare against the recurring expenses list."
+    ],
+    "expected": "Expense/profit include recurring costs.",
+    "actual": "Every expense figure _sums the Transaction table only; RecurringExpense rows are never posted as transactions nor summed (getRecurringExpenses only lists them), so monthly burn/profit silently omit ~$588/mo and overstate profit.",
+    "evidence": "src/server/routers/finance.ts:388-396, :419-423; recurring rows only read at :265-281.",
+    "fix": "Materialize due recurring expenses as transactions on their due date, or add their per-period amount into expense/profit (currency-aware — see FIN-02)."
+  },
+  {
+    "id": "FIN-06", "severity": "MEDIUM", "module": "Finance", "moduleLabel": "finance",
+    "type": "Data/Functional", "typeLabel": "data", "role": "ADMIN (updateInvoiceStatus tRPC + REST + AI)",
+    "summary": "Invoice status: no transition guard, paidAt never cleared, double-notify",
+    "preconditions": "An existing invoice.",
+    "steps": [
+      "Mark an invoice PAID, then change it back to DRAFT.",
+      "Observe it stays DRAFT but keeps a paidAt timestamp.",
+      "Re-issue PAID on an already-paid invoice and observe paidAt overwritten and (AI path) a second invoice_paid activity + 'Payment received' notification/email."
+    ],
+    "expected": "Illegal transitions blocked; paidAt/sentAt cleared when leaving PAID/SENT; side-effects idempotent.",
+    "actual": "Any status -> any status; paidAt/sentAt set but never cleared; no priorStatus === status guard. OVERDUE is only computed at display time, so the stored status used by sums can be stale.",
+    "evidence": "src/server/routers/finance.ts:236-238 (sets but never clears); AI src/lib/ai/tools/finance.ts:603-620 (unconditional notify on PAID). (Verified first-hand.)",
+    "fix": "Validate allowed transitions; clear paidAt/sentAt on leaving; skip side-effects when status is unchanged."
+  },
+  {
+    "id": "FIN-07", "severity": "MEDIUM", "module": "REST/Finance", "moduleLabel": "rest-api",
+    "type": "Security/Data", "typeLabel": "security", "role": "finance:write REST token (admin-bound)",
+    "summary": "REST invoice/transaction money fields unvalidated (negatives & overflow -> 500)",
+    "preconditions": "A finance:write df_ token bound to an admin.",
+    "steps": [
+      "POST /api/v1/invoices with total: 99999999999999 -> numeric overflow against Decimal(12,2).",
+      "POST /api/v1/invoices with total: -500."
+    ],
+    "expected": "A clean 400 and rejection of negatives.",
+    "actual": "Bare z.number() (no .nonnegative()/.max()). Overflow -> unhandled DB exception -> generic 500; -500 is accepted and decrements paid/outstanding sums. The tRPC layer correctly uses nonNegativeMoney(); REST does not mirror it.",
+    "evidence": "src/app/api/v1/invoices/route.ts:32-49; contrast src/server/routers/finance.ts:8-11.",
+    "fix": "Apply .nonnegative().max(MAX_MONEY) (and .multipleOf(0.01)) to all REST money fields."
+  },
+  {
+    "id": "DASH-01", "severity": "MEDIUM", "module": "Dashboard/Notes", "moduleLabel": "dashboard",
+    "type": "Security", "typeLabel": "security", "role": "Any employee (viewer); note authored by any user",
+    "summary": "Activity feed leaks SHARED-note titles + cross-team activity to all staff",
+    "preconditions": "Three users A, B, C. A creates a SHARED note shared only with B. C is neither recipient nor on the related project.",
+    "steps": [
+      "As A, create a SHARED note titled 'Acme layoff plan' shared only with B.",
+      "As C, open /dashboard (or call dashboard.getRecentActivity).",
+      "Observe C sees: A created note 'Acme layoff plan' / A shared note '...' with 1 member."
+    ],
+    "expected": "SHARED notes are visible only to author + recipients (enforced in notes.list/getById/search).",
+    "actual": "The feed is filtered ONLY for finance event types — not by note visibility or project membership — so SHARED-note titles, plus task/project/client names from projects the viewer cannot access, are broadcast to all authenticated users. The developer comment intends 'team-visible' but the check is visibility !== 'PRIVATE', which INCLUDES SHARED.",
+    "evidence": "src/server/routers/notes.ts:260-263 (logs title for any non-PRIVATE note), :385 (share activity with title); src/server/routers/dashboard.ts:92-93 (where: isAdmin ? {} : { type: { notIn: financeTypes } }); rendered for all users (dashboard-content.tsx:888, SSR-prefetched). (Verified first-hand.)",
+    "fix": "Scope the feed to the viewer's visibility — exclude note activity for notes they cannot access (or strip titles) and filter project/task/client activity to their memberships."
+  },
+  {
+    "id": "HR-01", "severity": "MEDIUM", "module": "Team/HR", "moduleLabel": "team-hr",
+    "type": "Security", "typeLabel": "security", "role": "HR or ADMIN (leave:approve holder)",
+    "summary": "Leave requests can be self-approved and re-decided (no separation of duties)",
+    "preconditions": "An HR (or admin) account that can submit a leave request.",
+    "steps": [
+      "As HR, submit your own leave request (team.createLeaveRequest).",
+      "Call team.updateLeaveStatus({ id: <own>, status: 'APPROVED' }) — it succeeds.",
+      "Call it again on an already-APPROVED request to flip it to REJECTED."
+    ],
+    "expected": "A reviewer cannot approve their OWN leave, and only PENDING requests are decidable (as resignation:review enforces).",
+    "actual": "Only the coarse leave:approve capability (HR/ADMIN) is checked; no owner/PENDING resource conditions. The AI mirror setLeaveStatus filters PENDING but still lacks self-exclusion.",
+    "evidence": "src/lib/abac/policies.ts:44 ('leave:approve': [isHrOrAdmin] — no attribute conditions); src/server/routers/team.ts:235-246; compare policies.ts:60-66.",
+    "fix": "Load the request and reject if leave.userId === self or leave.status !== 'PENDING'; ideally add an attribute-conditioned leave:approve policy mirroring resignation:review."
+  },
+  {
+    "id": "NOTE-01", "severity": "MEDIUM", "module": "Notes", "moduleLabel": "notes",
+    "type": "Security", "typeLabel": "security", "role": "Any user with EDIT on a SHARED note, or any user on a TEAM note",
+    "summary": "Non-author editor can change a note's visibility (SHARED->TEAM exposure)",
+    "preconditions": "User A owns a SHARED note shared with user B as EDIT (or any TEAM note).",
+    "steps": [
+      "As B, call notes.update({ id, visibility: 'TEAM' }) — the note becomes visible company-wide.",
+      "Or set visibility: 'PRIVATE' to lock the author's other collaborators out.",
+      "Any user can do the same to a TEAM note (TEAM is editable by all)."
+    ],
+    "expected": "Visibility/sharing is the author's prerogative (setShares is author-only).",
+    "actual": "update gates only on canEdit, which returns true for SHARED+EDIT grantees and anyone on a TEAM note, yet freely writes visibility (and projectId/clientId).",
+    "evidence": "src/server/routers/notes.ts:71-76 (canEdit), :294-298; contrast author-only :368. AI mirror identical (src/lib/ai/tools/notes.ts:68-82, :357-359).",
+    "fix": "Restrict visibility (and project/client re-attach) to note.authorId === userId (or ADMIN); editors get content/title only."
+  },
+  {
+    "id": "RT-01", "severity": "MEDIUM", "module": "Meetings", "moduleLabel": "meetings",
+    "type": "Data", "typeLabel": "data", "role": "Meeting attendee (any employee)",
+    "summary": "Video-call attendance (logJoin) bypasses the anti-backfill window",
+    "preconditions": "A recurring meeting (e.g. 09:00-09:30 standup) on which you are an attendee.",
+    "steps": [
+      "At 02:00 (outside the live window) open /meetings/<id>/call.",
+      "The conference connects and fires videoConferenceJoined -> logJoin.",
+      "Observe an attendance log row stamps you 'present' for the resolved occurrence."
+    ],
+    "expected": "markJoined refuses attendance outside [start-5min, end] to prevent retroactive attendance lies; the call path should too.",
+    "actual": "logJoin — the primary, auto-fired attendance signal — has NO window check, so the strict and lax paths disagree and the lax one is the one users actually hit.",
+    "evidence": "src/server/routers/meetings.ts:404-467 (logJoin, no guard) vs :261-271 (markJoined window check).",
+    "fix": "Apply the same [start-5min, end] gate in logJoin (factor into a shared helper)."
+  },
+  {
+    "id": "RT-02", "severity": "MEDIUM", "module": "Realtime/Chat", "moduleLabel": "realtime",
+    "type": "Security", "typeLabel": "security", "role": "Channel member B removed by an admin/owner; A and B are employees",
+    "summary": "No realtime revocation on channel removal — ex-member keeps live events",
+    "preconditions": "Users A and B both members of private channel C; B has it open.",
+    "steps": [
+      "An admin/owner calls removeMember({ channelId: C, userId: B }) (or B leaveChannels with the tab open).",
+      "A posts a message in C.",
+      "B's still-attached Ably subscription receives it and patches B's cache."
+    ],
+    "expected": "Removal immediately cuts B off from live events.",
+    "actual": "removeMember is a bare deleteMany with no emit; the Ably token capability is computed only at mint time with no short ttl; the client re-authorizes only when NEW channels appear, never on removal — so B keeps receiving live messages until a refetch + token renewal (default ~60 min) drops the subscription. History is correctly blocked by assertChannelMember, so this is a live-stream leak, not history.",
+    "evidence": "src/server/routers/chat.ts:619-635; src/app/api/ably-token/route.ts:45-57; src/components/chat/realtime-provider.tsx:200-212.",
+    "fix": "On removeMember/leaveChannel emit a user:{id} 'membership changed' event so the client refetches channels and calls client.auth.authorize() immediately; use a short token TTL."
+  },
+  {
+    "id": "RT-03", "severity": "MEDIUM", "module": "Meetings", "moduleLabel": "meetings",
+    "type": "Functional/Data", "typeLabel": "functional", "role": "Meeting attendee",
+    "summary": "logLeave never fires on SPA nav/tab close -> attendance sessions stay open",
+    "preconditions": "An in-progress meeting call you have joined.",
+    "steps": [
+      "Join a call (logJoin stamps the row).",
+      "Leave by clicking another nav link in the app, or by closing/refreshing the tab (instead of the in-call hang-up).",
+      "Inspect the attendance log: leftAt is never written; the row stays open indefinitely."
+    ],
+    "expected": "Every join gets a matching leftAt.",
+    "actual": "logLeave is wired only to Jitsi's videoConferenceLeft/readyToClose; the effect cleanup only dispose()s the iframe and there is no beforeunload/pagehide/visibilitychange handler, so the common exit paths skew any duration/attendance-% math.",
+    "evidence": "src/components/meetings/meeting-call.tsx:113-138; logLeave is no-op-safe (src/server/routers/meetings.ts:495-505).",
+    "fix": "Call logLeave in the effect cleanup and on pagehide/visibilitychange(hidden) (use navigator.sendBeacon/keepalive for unloads)."
+  },
+  {
+    "id": "RT-04", "severity": "MEDIUM", "module": "Chat", "moduleLabel": "chat",
+    "type": "Functional", "typeLabel": "functional", "role": "Any chat user",
+    "summary": "Editing a message to add an @mention creates no notification",
+    "preconditions": "A channel with at least two members.",
+    "steps": [
+      "Send 'hello' in a channel.",
+      "Edit it to 'hello @Bob'.",
+      "Observe Bob's mention row and highlight are created, but he gets no bell/notification."
+    ],
+    "expected": "sendMessage fires notify() + emitToUser for new mentions; editMessage should too.",
+    "actual": "editMessage recomputes and persists validMentions but never calls notify/emitToUser, so mentions introduced by an edit are silently un-notified.",
+    "evidence": "src/server/routers/chat.ts:341-397 (no notify/emitToUser after the edit transaction).",
+    "fix": "Diff new mentions against the pre-edit set and notify the newly-added ones (guard against re-notifying existing mentions)."
+  },
+  {
+    "id": "RT-05", "severity": "MEDIUM", "module": "Upload", "moduleLabel": "upload",
+    "type": "Security", "typeLabel": "security", "role": "Any DM participant; then any party with the URL (incl. unauthenticated)",
+    "summary": "Uploaded files (incl. private-DM voice/attachments) world-readable by URL",
+    "preconditions": "A private DM in which you can send an attachment/voice message.",
+    "steps": [
+      "Send a voice message/attachment in a private DM.",
+      "Note the returned URL /uploads/<uuid>-<name>.",
+      "Fetch that URL with no authentication (or as a removed member) — the file bytes are served."
+    ],
+    "expected": "File bytes are gated by channel membership like the message content.",
+    "actual": "Files land at public/uploads/<uuid>-<name>, served statically with no auth. The UUID prefix prevents enumeration but not post-disclosure access (a removed member, a referer/log leak, link sharing). The MIME+extension allowlist is solid against stored-XSS (.html/.svg excluded).",
+    "evidence": "src/app/api/upload/route.ts:80-89 writes to public/uploads and returns /uploads/...; public/uploads/ exists and is statically served. (Verified first-hand.)",
+    "fix": "Serve attachments through an authenticated route that re-checks assertChannelMember, or use signed short-lived URLs (Vercel Blob with token). Severity depends on deployment (prod uses public storage)."
+  },
+  {
+    "id": "REST-04", "severity": "MEDIUM", "module": "Platform", "moduleLabel": "platform",
+    "type": "Security", "typeLabel": "security", "role": "Any (unauthenticated for login; any token for REST)",
+    "summary": "No rate limiting anywhere (REST API and login)",
+    "preconditions": "Network access to the app.",
+    "steps": [
+      "Call any /api/v1 endpoint, or the NextAuth login authorize, in an unbounded loop.",
+      "Flood with invalid df_ tokens.",
+      "Observe no throttling / no 429."
+    ],
+    "expected": "Per-token/per-IP limits returning 429; capped login attempts.",
+    "actual": "None exist (repo-wide grep for rate.?limit|throttle|upstash|429 returns nothing; proxy.ts:14-22 short-circuits /api/v1 with no limiting). Each auth attempt runs a bcrypt compare per prefix-matching candidate, so unthrottled floods are CPU-amplifying.",
+    "evidence": "src/proxy.ts:14-22; src/lib/api-auth.ts:55-57; src/lib/auth.ts:89. (Verified first-hand: grep returns nothing.)",
+    "fix": "Add per-token + per-IP rate limiting (edge middleware / Upstash), and cap login + auth attempts."
+  },
+  {
+    "id": "PROJ-02", "severity": "MEDIUM", "module": "Projects/Trello", "moduleLabel": "projects",
+    "type": "Data", "typeLabel": "data", "role": "Project member",
+    "summary": "order treated as contiguous index; Trello import writes gapped orders",
+    "preconditions": "A board imported from Trello whose cards interleave across lists.",
+    "steps": [
+      "Import a Trello board whose cards are distributed across multiple lists.",
+      "In an imported column, drag a task one slot down.",
+      "Observe the move silently no-ops or misorders."
+    ],
+    "expected": "Per-column order is 0..n and a one-slot move works.",
+    "actual": "Import assigns a GLOBAL running counter as each task's order, so a column can have orders like [2,5,9]. moveTask then does range math (order: { gte: newOrder, lt: oldOrder }) assuming newOrder (a client array index) is comparable to stored order — gte:1, lt:2 matches nothing, so the task doesn't move.",
+    "evidence": "src/server/routers/trello-import.ts:155-160 (global tasksCreated counter); src/server/routers/projects.ts:646-656.",
+    "fix": "Normalize order per-column on import (0..n); have moveTask recompute positions from the actual ordered list rather than trusting client indices."
+  },
+  {
+    "id": "PROJ-03", "severity": "MEDIUM", "module": "Projects/Kanban", "moduleLabel": "projects",
+    "type": "Data loss / UX", "typeLabel": "data", "role": "Project LEAD/ADMIN (column delete = manage)",
+    "summary": "Deleting a column silently cascade-deletes all its tasks (no count/warning)",
+    "preconditions": "A column containing tasks (with comments/checklists/attachments).",
+    "steps": [
+      "Click the trash icon on a column with tasks.",
+      "Confirm via the tiny inline 'Delete / No'.",
+      "Observe all tasks (and their comments/checklists/attachments) are permanently destroyed."
+    ],
+    "expected": "A warning naming the task count, or a move-first flow.",
+    "actual": "Task.column is onDelete: Cascade and the UI shows no count; the only hint is the card-count badge.",
+    "evidence": "prisma/schema.prisma:472; src/app/(app)/projects/[id]/board/[boardId]/kanban-board.tsx:417-431; src/server/routers/projects.ts:842-847.",
+    "fix": "Block deletion of non-empty columns, or show 'This will delete X tasks' and require explicit confirmation."
+  },
+  {
+    "id": "PROJ-04", "severity": "MEDIUM", "module": "Projects/Kanban", "moduleLabel": "projects",
+    "type": "Functional", "typeLabel": "functional", "role": "Any project member",
+    "summary": "Task attachments are fetched but never rendered, and cannot be added",
+    "preconditions": "A task that has attachments (e.g. imported from Trello).",
+    "steps": [
+      "Open a task whose card shows a paperclip attachment count.",
+      "Open the task detail sheet.",
+      "Observe there is no attachments section, and no way to add an attachment."
+    ],
+    "expected": "Attachments are visible/openable, and can be added/removed.",
+    "actual": "getTaskDetail includes attachments but task-detail-sheet.tsx never references them, and there is no addTaskAttachment/deleteTaskAttachment mutation anywhere — the data is invisible and unreachable.",
+    "evidence": "getTaskDetail includes attachments at src/server/routers/projects.ts:885; task-detail-sheet.tsx renders labels/assignees/checklists/comments but not attachments.",
+    "fix": "Render an Attachments section and add upload/delete mutations (reuse the /api/upload pipeline)."
+  },
+  {
+    "id": "PROJ-05", "severity": "MEDIUM", "module": "Projects/Kanban", "moduleLabel": "projects",
+    "type": "Data/Authz", "typeLabel": "data", "role": "Project member (creating/assigning tasks)",
+    "summary": "createTask/updateTaskAssignees accept arbitrary user IDs",
+    "preconditions": "A project you can access.",
+    "steps": [
+      "Call createTask/updateTaskAssignees with a userId that is not a project member.",
+      "Or pass a userId that does not exist."
+    ],
+    "expected": "Rejected (setColumnDefaultAssignees validates membership).",
+    "actual": "createTask and updateTaskAssignees do not validate membership; a non-member is assigned and emailed about a project they aren't on, and an invalid ID raises a raw Prisma FK 500. updateTaskAssignees uses createMany with no skipDuplicates/validation, so a dup/invalid ID throws.",
+    "evidence": "setColumnDefaultAssignees validates membership (src/server/routers/projects.ts:457-470); createTask (:529-541) and updateTaskAssignees (:950-955) do not.",
+    "fix": "Validate assigneeIds against ProjectMember (mirroring setColumnDefaultAssignees) before create."
+  },
+  {
+    "id": "CLI-01", "severity": "MEDIUM", "module": "Clients", "moduleLabel": "clients",
+    "type": "Error handling / UX", "typeLabel": "ux", "role": "ADMIN",
+    "summary": "Deleting a client with invoices fails with a raw FK error",
+    "preconditions": "A client that has at least one invoice.",
+    "steps": [
+      "As admin, open a client that has >=1 invoice.",
+      "Click Delete and confirm.",
+      "Observe the page fails with a generic error."
+    ],
+    "expected": "A clean 'Cannot delete: client has invoices', or a defined cascade.",
+    "actual": "Invoice.clientId is a required relation with NO onDelete (Prisma default = Restrict; contrast contacts/contracts/transactions which are explicit Cascade), so the delete throws P2003 surfaced as a generic error; the UI renders no deleteClient.error.",
+    "evidence": "prisma/schema.prisma:612; src/server/routers/clients.ts:254-267.",
+    "fix": "Pre-count invoices and return a friendly BAD_REQUEST (or define an explicit referential action); surface the error in the UI."
+  },
+  {
+    "id": "AI-01", "severity": "MEDIUM", "module": "AI Assistant", "moduleLabel": "ai-assistant",
+    "type": "Functional / Availability", "typeLabel": "functional", "role": "ADMIN (assistant, people domain)",
+    "summary": "resetMemberPassword ships a Groq-incompatible pattern/allOf schema",
+    "preconditions": "An admin assistant session that routes to the people tool domain.",
+    "steps": [
+      "Admin asks the assistant: 'reset Aisha's password to Hunter2024'.",
+      "The people domain loads; resetMemberPassword is offered to Groq with newPassword: passwordSchema.",
+      "Observe (if Groq rejects pattern/allOf like it does format) the entire request 400s."
+    ],
+    "expected": "No format/pattern/allOf in schemas sent to Groq (the project's own convention — inviteMember and client-website tools drop .email()/.url() and validate in execute).",
+    "actual": "passwordSchema (z.string().min(8).regex().regex().regex()) serializes to allOf:[{pattern:...},{pattern:...},{pattern:...}]. If Groq rejects pattern/allOf, the WHOLE request 400s, breaking every admin turn that loads the people domain (lay-off, hire, role change, leave approval) — and approval-continuations force the full toolset, so potentially any admin-approved write.",
+    "evidence": "src/lib/ai/tools/people.ts:940 (newPassword: passwordSchema); src/lib/password-policy.ts:21-26; contrast people.ts:722-737; force-full-toolset src/app/api/assistant/route.ts:64.",
+    "fix": "Use newPassword: z.string().min(8) and call the exported passwordMeetsPolicy() inside execute. (Confidence Medium: pattern emission confirmed; the 400 outcome depends on Groq — verify with one admin people-domain request.)"
+  },
+  {
+    "id": "AUTH-01", "severity": "MEDIUM", "module": "Auth/Settings", "moduleLabel": "auth",
+    "type": "Security", "typeLabel": "security", "role": "Any user (two devices)",
+    "summary": "Password change does not revoke other active sessions",
+    "preconditions": "The same account signed in on two devices.",
+    "steps": [
+      "Sign in on device 1 and device 2.",
+      "Change your password on device 1 (team.changePassword).",
+      "Observe device 2's session keeps working for up to the 8h token lifetime."
+    ],
+    "expected": "A password change invalidates other sessions.",
+    "actual": "The JWT revalidation re-reads only role/status/department/title, never a password epoch, so pre-change stateless tokens stay valid.",
+    "evidence": "src/lib/auth.ts:182-193; src/server/routers/team.ts:338-342.",
+    "fix": "Add passwordChangedAt/tokenVersion to User, stamp it into the JWT at sign-in, compare on each jwt() refresh and force logout on mismatch (also enables force-logout on lay-off/reset). (Confidence Medium — inherent to JWT, but fixable.)"
+  },
+  {
+    "id": "REST-02", "severity": "LOW", "module": "REST", "moduleLabel": "rest-api",
+    "type": "Security", "typeLabel": "security", "role": "Any valid df_ token",
+    "summary": "/api/v1/spec bypasses withApiAuth and is never audited",
+    "preconditions": "Any valid token.",
+    "steps": [
+      "curl -H 'Authorization: Bearer df_<any>' https://<host>/api/v1/spec",
+      "Inspect the audit log — neither the read of the full API map nor 401 attempts on this path appear."
+    ],
+    "expected": "Every /api/v1 path is audited, including auth failures.",
+    "actual": "The route calls authenticateApiRequest directly with no recordRestAudit, so reads of the full API map and 401 attempts leave no audit trail (405s on other routes are similarly unaudited).",
+    "evidence": "src/app/api/v1/spec/route.ts:15-33 (no withApiAuth, no recordRestAudit).",
+    "fix": "Wrap with withApiAuth or call recordRestAudit manually for both success and the auth-fail early return."
+  },
+  {
+    "id": "REST-05", "severity": "LOW", "module": "REST", "moduleLabel": "rest-api",
+    "type": "Functional", "typeLabel": "functional", "role": "df_ token with a write scope",
+    "summary": "Malformed JSON body -> 500 instead of 400 (all writes)",
+    "preconditions": "A token with a write scope.",
+    "steps": [
+      "curl -X POST -H 'Authorization: Bearer df_<tasks-write>' -H 'Content-Type: application/json' --data-raw 'not-json' https://<host>/api/v1/tasks"
+    ],
+    "expected": "400 Bad Request.",
+    "actual": "await request.json() throws before Zod and is caught as a generic 500 (no leak, wrong status, pollutes 500 metrics/audit). Affects every write handler.",
+    "evidence": "e.g. src/app/api/v1/tasks/route.ts:53 with the catch at src/lib/api-auth.ts:171-184.",
+    "fix": "Wrap request.json() in a shared parseJson helper returning 400 on SyntaxError."
+  },
+  {
+    "id": "REST-06", "severity": "LOW", "module": "REST", "moduleLabel": "rest-api",
+    "type": "Functional", "typeLabel": "functional", "role": "df_ token with a read scope",
+    "summary": "Non-numeric ?limit= -> 500 on /tasks & /transactions GET",
+    "preconditions": "A token with tasks:read or finance:read.",
+    "steps": [
+      "curl -H 'Authorization: Bearer df_<tasks-read>' 'https://<host>/api/v1/tasks?limit=abc'"
+    ],
+    "expected": "A clamped default.",
+    "actual": "parseInt('abc')->NaN, Math.min(NaN,100)->NaN, take:NaN -> Prisma validation error -> caught -> 500. clients/projects/invoices/meetings already clamp safely; tasks & transactions use the old pattern.",
+    "evidence": "src/app/api/v1/tasks/route.ts:14,27; src/app/api/v1/transactions/route.ts:12,26. Compare src/app/api/v1/clients/route.ts:17.",
+    "fix": "Apply parseInt(x,10) || <default> + Math.max(...,1) clamp used in the standardized routes."
+  },
+  {
+    "id": "REST-07", "severity": "LOW", "module": "REST", "moduleLabel": "rest-api",
+    "type": "Validation", "typeLabel": "functional", "role": "df_ token with a write scope",
+    "summary": "Unvalidated foreign keys -> 500 instead of 400/404",
+    "preconditions": "A token with a write scope and a valid columnId.",
+    "steps": [
+      "curl -X POST -H 'Authorization: Bearer df_<tasks-write>' -H 'Content-Type: application/json' -d '{\"title\":\"x\",\"columnId\":\"<valid>\",\"assigneeIds\":[\"does-not-exist\"]}' https://<host>/api/v1/tasks"
+    ],
+    "expected": "A clean 400/404.",
+    "actual": "Bad/nonexistent related IDs (assigneeIds/labelIds on tasks; attendeeIds on meetings; projectId/clientId on transactions/invoices) are inserted without existence checks, causing a Prisma FK violation -> generic 500. Tasks can also be assigned to non-members.",
+    "evidence": "src/app/api/v1/tasks/route.ts:98-105; src/app/api/v1/meetings/route.ts:48; src/app/api/v1/transactions/route.ts:76-79.",
+    "fix": "Validate referenced IDs exist (and assignees are project members) before insert; return 400/404."
+  },
+  {
+    "id": "FIN-08", "severity": "LOW", "module": "Finance", "moduleLabel": "finance",
+    "type": "Data", "typeLabel": "data", "role": "ADMIN",
+    "summary": "Profit/margin computed with JS float arithmetic on Decimals",
+    "preconditions": "Finance data where income/expense have fractional parts.",
+    "steps": [
+      "Set income 1000.10 and expense 999.90.",
+      "Read the raw API/AI JSON profit/margin (not the toLocaleString UI)."
+    ],
+    "expected": "profit 0.20.",
+    "actual": "Sums are exact Decimal, but Number(_sum)-Number(_sum) and (income-expense)/income*100 run in JS float, giving 0.20000000000000018; margin compounds it. Masked by toLocaleString in the UI but leaks in raw API/AI JSON.",
+    "evidence": "src/server/routers/finance.ts:359-363; src/lib/ai/tools/finance.ts:146-147.",
+    "fix": "Do subtraction/margin in Prisma.Decimal (or integer cents) before the final Number()."
+  },
+  {
+    "id": "FIN-09", "severity": "LOW", "module": "Finance", "moduleLabel": "finance",
+    "type": "Data", "typeLabel": "data", "role": "ADMIN",
+    "summary": "P&L month-end drops final 999 ms; invoice-number race + cross-year reset",
+    "preconditions": "Concurrent invoice creation; a transaction at 23:59:59.5xx on month-end.",
+    "steps": [
+      "Create a transaction dated 2026-05-31 23:59:59.500 and view the P&L month bucket.",
+      "Create two invoices concurrently and observe a possible duplicate invoice number; create the first invoice of a new year and observe it is not -001."
+    ],
+    "expected": "Month-end inclusive to the ms; unique sequential per-year invoice numbers.",
+    "actual": "P&L endOfMonth uses ...59,59 (no ms), dropping a 23:59:59.5 row. INV-${year}-${count+1} from a non-transactional global count() can produce duplicate numbers under concurrency and never resets to -001 in a new year (count is across all years).",
+    "evidence": "src/server/routers/finance.ts:386 (no ms); src/server/routers/finance.ts:197-199 (global count).",
+    "fix": "Use ...59,999 and an atomic per-year sequence/counter for invoice numbers."
+  },
+  {
+    "id": "AUTHZ-02", "severity": "LOW", "module": "Team", "moduleLabel": "team-hr",
+    "type": "Security / Availability", "typeLabel": "security", "role": "ADMIN (the last remaining admin)",
+    "summary": "adminUpdateMember has no last-admin guard -> admin lockout",
+    "preconditions": "You are the only remaining active ADMIN.",
+    "steps": [
+      "Call team.adminUpdateMember({ id: <self or last admin>, role: 'EMPLOYEE' }) — or { status: 'INACTIVE' }.",
+      "Observe it succeeds, leaving the workspace with zero active admins."
+    ],
+    "expected": "The same last-active-admin guard layOffMember enforces.",
+    "actual": "Admin-only, so not escalation/IDOR — an availability/consistency gap: adminUpdateMember applies the Zod input straight to user.update with no admin-count check. The guard exists in layOffMember and the AI updateMember tool, but not here.",
+    "evidence": "src/server/routers/team.ts:346-397; guard only at team.ts:453-462 (layOffMember).",
+    "fix": "Mirror the layOffMember last-admin check whenever role moves away from ADMIN or status becomes INACTIVE."
+  },
+  {
+    "id": "AUTHZ-04", "severity": "LOW", "module": "Clients", "moduleLabel": "clients",
+    "type": "Security (info)", "typeLabel": "security", "role": "EMPLOYEE (tRPC) vs admin token (REST)",
+    "summary": "Client-directory trust boundary inconsistent across tRPC/REST/AI",
+    "preconditions": "An employee web session and a REST token.",
+    "steps": [
+      "As an employee, call trpc clients.getAll / search — full client directory (name/industry/location/status) is returned.",
+      "Via REST, GET /api/v1/clients as a non-admin token — 403.",
+      "Via the assistant, listClients (non-admin) is project-scoped but globalSearch shows all client names."
+    ],
+    "expected": "One consistent policy for who may enumerate clients.",
+    "actual": "REST treats clients as admin-only (clients/[id]/route.ts:10), tRPC exposes the directory to every employee (clients.ts:16-44, search.ts:72-77), and the AI scopes non-admins to project-reachable clients but globalSearch shows all names. The three surfaces disagree.",
+    "evidence": "src/app/api/v1/clients/[id]/route.ts:10; src/server/routers/clients.ts:16-44; src/server/routers/search.ts:72-77; src/lib/ai/tools/clients.ts:35-47; src/lib/ai/tools/insights.ts:222-228.",
+    "fix": "Pick one policy and apply uniformly (likely align tRPC/search with the assistant's project-scoped visibility, or relax the REST gate)."
+  },
+  {
+    "id": "RT-06", "severity": "LOW", "module": "Meetings", "moduleLabel": "meetings",
+    "type": "Data", "typeLabel": "data", "role": "Meeting attendee (concurrent join)",
+    "summary": "Attendance create is non-atomic -> concurrent double-join throws P2002 (500)",
+    "preconditions": "Two near-simultaneous joins for the same (meeting,user,occurrence) — e.g. StrictMode double-invoke, or markJoined firing alongside logJoin.",
+    "steps": [
+      "Trigger two concurrent joins for the same occurrence.",
+      "Observe the second create hits the unique constraint and throws an unhandled P2002 (500)."
+    ],
+    "expected": "Double-join is a no-op (as the comment claims).",
+    "actual": "The code does findUnique-then-create (not upsert), so a genuine race surfaces a 500 instead of a no-op.",
+    "evidence": "src/server/routers/meetings.ts:275-300 (markJoined), :424-444 (logJoin).",
+    "fix": "Use a real upsert on the meetingId_userId_occurrenceStart unique key, or wrap create in a try/catch that swallows P2002."
+  },
+  {
+    "id": "RT-08", "severity": "LOW", "module": "Realtime", "moduleLabel": "realtime",
+    "type": "Functional", "typeLabel": "functional", "role": "Any chat user",
+    "summary": "Client timeline sorts by createdAt only (no id tiebreak) — unstable order",
+    "preconditions": "Multiple messages created within the same millisecond (e.g. a burst).",
+    "steps": [
+      "Send several messages rapidly so some share a createdAt millisecond.",
+      "Observe client order may not match the server and can reshuffle across re-renders."
+    ],
+    "expected": "Client order mirrors the server's stable [createdAt desc, id desc].",
+    "actual": "The client re-sort uses only new Date(a.createdAt)-new Date(b.createdAt); same-ms messages are unstable.",
+    "evidence": "Server: src/server/routers/chat.ts:102 ([createdAt desc, id desc]); client: src/components/chat/message/message-list.tsx:64-66.",
+    "fix": "Add an id tiebreak to the client comparator to mirror the server."
+  },
+  {
+    "id": "RT-09", "severity": "LOW", "module": "Chat", "moduleLabel": "chat",
+    "type": "Privacy", "typeLabel": "security", "role": "Channel member (custom Ably client)",
+    "summary": "markRead broadcasts every member's lastReadAt to the whole channel",
+    "preconditions": "A channel you are a member of and an Ably subscription.",
+    "steps": [
+      "Subscribe to channel:<id> via a custom Ably client.",
+      "Observe each member's lastReadAt read-receipt event is delivered to the whole channel."
+    ],
+    "expected": "Per-user read state stays private (the client only acts on its own).",
+    "actual": "markRead emits each user's lastReadAt to channel:{id}; anyone subscribed can observe everyone's read times even though onRead returns for who !== myId.",
+    "evidence": "src/server/routers/chat.ts:472-476.",
+    "fix": "If per-user read state isn't a product feature, emit read updates to the actor's own user:{id} channel instead of the shared channel."
+  },
+  {
+    "id": "RT-10", "severity": "LOW", "module": "Meetings", "moduleLabel": "meetings",
+    "type": "Functional", "typeLabel": "functional", "role": "Meeting attendee/viewer",
+    "summary": "Recurring-meeting list shows the next (empty) occurrence, hiding attendance",
+    "preconditions": "A recurring meeting viewed in the latter half of the gap between occurrences.",
+    "steps": [
+      "View the meetings list when 'now' is closer to the next occurrence than to the previous one's end.",
+      "Observe the just-finished occurrence's attendance disappears from the list before the next meeting starts."
+    ],
+    "expected": "Attendance for the most recent past occurrence remains until the next actually starts.",
+    "actual": "findRelevantOccurrence picks the nearest occurrence, so in the latter half of a gap the list shows the next (empty) occurrence and the prior occurrence's attendance disappears early.",
+    "evidence": "src/lib/meeting-occurrence.ts:99-103; src/server/routers/meetings.ts:99-104, :535-560.",
+    "fix": "For attendance display, prefer the most recent past occurrence until the next one actually starts."
+  },
+  {
+    "id": "PROJ-06", "severity": "LOW", "module": "Projects", "moduleLabel": "projects",
+    "type": "Data", "typeLabel": "data", "role": "Project member",
+    "summary": "addComment does not verify parentId belongs to the same task",
+    "preconditions": "A task you can access and a comment id from a different task.",
+    "steps": [
+      "Call addComment with a taskId you can access but a parentId of a comment on a different task/project.",
+      "Observe a reply row is created threaded under the foreign comment."
+    ],
+    "expected": "Rejected when parent.taskId !== input.taskId.",
+    "actual": "Only assertTaskAccess(taskId) runs; parentId is passed straight through, creating an orphaned reply that pollutes data.",
+    "evidence": "src/server/routers/projects.ts:890-911.",
+    "fix": "Look up the parent and assert parent.taskId === input.taskId."
+  },
+  {
+    "id": "PROJ-07", "severity": "LOW", "module": "Projects", "moduleLabel": "projects",
+    "type": "Business logic", "typeLabel": "functional", "role": "Project member moving a task",
+    "summary": "Task-completion logged only for a column named exactly 'Done'",
+    "preconditions": "A board whose final column is not literally named 'Done' (e.g. 'Shipped', or an imported 'Complete' list).",
+    "steps": [
+      "Rename the final column to 'Shipped' (or import a Trello board with a 'Complete' list).",
+      "Move a task into it.",
+      "Observe no task_completed activity is recorded."
+    ],
+    "expected": "Completion is recorded for the final/done column.",
+    "actual": "The check is an exact case-sensitive string match (name === 'Done'), while the board preview uses a DONE_RE regex — inconsistent.",
+    "evidence": "src/server/routers/projects.ts:701; contrast src/app/(app)/projects/[id]/project-detail-content.tsx:55.",
+    "fix": "Use the same done-detection heuristic (regex / last-column) as the UI, or a per-column 'is done' flag."
+  },
+  {
+    "id": "CON-01", "severity": "LOW", "module": "Contracts", "moduleLabel": "contracts",
+    "type": "Validation", "typeLabel": "functional", "role": "ADMIN (contracts are admin-only)",
+    "summary": "Contracts/projects/milestones accept endDate before startDate",
+    "preconditions": "Admin creating/editing a contract.",
+    "steps": [
+      "Create/edit a contract with Start = 2026-12-01 and End = 2026-01-01.",
+      "Observe it saves and the list renders 'Dec 1, 2026 - Jan 1, 2026'."
+    ],
+    "expected": "A validation error.",
+    "actual": "No cross-field .refine on contracts, projects, or milestones; the inverted range is saved as-is.",
+    "evidence": "src/server/routers/clients.ts:166-179 (addContract), :192-205 (updateContract); src/server/routers/projects.ts:122-135 (project dates).",
+    "fix": "Add a Zod .refine(d => !d.startDate || !d.endDate || d.endDate >= d.startDate)."
+  },
+  {
+    "id": "CON-02", "severity": "LOW", "module": "Contracts", "moduleLabel": "contracts",
+    "type": "Logic", "typeLabel": "functional", "role": "ADMIN",
+    "summary": "Contract signedAt auto-stamp inconsistent (status dropdown vs edit form)",
+    "preconditions": "A DRAFT contract.",
+    "steps": [
+      "Edit a DRAFT contract, set Status = SIGNED via the edit form (leave Signed Date blank), save.",
+      "Observe signedAt is NOT stamped (the inline status dropdown does stamp it)."
+    ],
+    "expected": "signedAt is stamped on first SIGNED, like the inline status dropdown does.",
+    "actual": "setContractStatus stamps signedAt; updateContract writes the raw payload only and never sets signedAt.",
+    "evidence": "src/server/routers/clients.ts:227-233 (setContractStatus) vs :207-217 (updateContract).",
+    "fix": "Apply the same stamp-on-first-SIGNED logic in updateContract."
+  },
+  {
+    "id": "TRELLO-01", "severity": "LOW", "module": "Trello import", "moduleLabel": "trello-import",
+    "type": "Robustness", "typeLabel": "functional", "role": "Project member importing",
+    "summary": "Malformed date strings in a Trello export crash the whole import",
+    "preconditions": "A Trello JSON export where a card 'due' or a comment 'date' is a non-parseable string.",
+    "steps": [
+      "Import a Trello JSON with an invalid date string.",
+      "Observe the entire transactional import fails with a generic 'Internal server error'."
+    ],
+    "expected": "The card imports with a null/skipped date.",
+    "actual": "new Date(badString) -> Invalid Date -> the whole transactional import fails; the schema only constrains these to string, not a valid datetime.",
+    "evidence": "src/server/routers/trello-import.ts:162 (card.due), :242 (comment.date).",
+    "fix": "Guard with const d = new Date(x); isNaN(d.getTime()) ? null : d (and skip/clamp invalid comment dates)."
+  },
+  {
+    "id": "CLI-02", "severity": "LOW", "module": "Clients/Contacts", "moduleLabel": "clients",
+    "type": "Validation / UI", "typeLabel": "functional", "role": "ADMIN",
+    "summary": "addContact skips email validation; no contact edit/delete UI at all",
+    "preconditions": "A client.",
+    "steps": [
+      "Call addContact with email='not-an-email' — it is accepted (create enforces .email()).",
+      "After creating a contact, try to edit or remove it in the UI — there is no control."
+    ],
+    "expected": "Consistent email validation; full contact CRUD UI.",
+    "actual": "addContact uses email: z.string().optional() while create uses .email() — inconsistent. addContact/deleteContact exist but have no UI (the Contacts tab only lists), and there is no updateContact mutation at all.",
+    "evidence": "src/server/routers/clients.ts:147 vs :98; UI src/app/(app)/clients/[id]/client-detail-content.tsx:514-564.",
+    "fix": "Align email validation; add contact CRUD UI + an updateContact mutation."
+  },
+  {
+    "id": "UX-01", "severity": "LOW", "module": "Clients", "moduleLabel": "clients",
+    "type": "UX", "typeLabel": "ux", "role": "ADMIN",
+    "summary": "Client create/edit forms swallow validation errors (no feedback)",
+    "preconditions": "A client create/edit form.",
+    "steps": [
+      "Enter a website not starting with http(s):// and submit.",
+      "Observe the mutation fails server-side but the form shows no error and just sits there."
+    ],
+    "expected": "The validation error is shown inline (as the Projects forms do).",
+    "actual": "optionalWebsiteUrl rejects non-http(s) values but neither CreateClientForm nor the edit card renders createClient.error/updateClient.error.",
+    "evidence": "src/lib/validators.ts:33-39; src/app/(app)/clients/clients-content.tsx:201-339; src/app/(app)/clients/[id]/client-detail-content.tsx:248-327.",
+    "fix": "Render the mutation error inline."
+  },
+  {
+    "id": "HR-02", "severity": "LOW", "module": "Team/HR", "moduleLabel": "team-hr",
+    "type": "Validation", "typeLabel": "functional", "role": "Any employee (creating a leave request)",
+    "summary": "Leave requests accept invalid/overlapping/past date ranges",
+    "preconditions": "Any active employee.",
+    "steps": [
+      "Call team.createLeaveRequest({ type:'VACATION', startDate: 2026-07-10, endDate: 2026-07-01 }) — succeeds (end before start).",
+      "Submit past-dated and fully-overlapping duplicate requests — also accepted."
+    ],
+    "expected": "endDate >= startDate; reject past ranges; ideally block overlaps / check a balance.",
+    "actual": "Input is passed straight to create with no cross-field checks, corrupting the HR 'out today' and team-stats math.",
+    "evidence": "src/server/routers/team.ts:220-233.",
+    "fix": "Add a Zod .refine(endDate >= startDate), reject startDate < today, and query overlapping requests of the same user/status."
+  },
+  {
+    "id": "DASH-02", "severity": "LOW", "module": "Dashboard", "moduleLabel": "dashboard",
+    "type": "Info exposure", "typeLabel": "security", "role": "Any employee",
+    "summary": "getStats returns company-wide pending-leave count to non-admins",
+    "preconditions": "An employee session.",
+    "steps": [
+      "As an employee, call dashboard.getStats.",
+      "Observe pendingLeaves is the unfiltered company-wide count, even though the card only renders for admins."
+    ],
+    "expected": "pendingLeaves is gated/scoped server-side (like the revenue block).",
+    "actual": "pendingLeaves is computed unconditionally and shipped to every client; the AI getDashboardStats mirrors this, and getTeamMember returns any colleague's full project-membership list.",
+    "evidence": "src/server/routers/dashboard.ts:33-35; AI src/lib/ai/tools/insights.ts:500; src/lib/ai/tools/people.ts:110-113.",
+    "fix": "Compute pendingLeaves only when isAdmin (or scope to the requester), like the revenue/expenses block."
+  },
+  {
+    "id": "AUTH-02", "severity": "LOW", "module": "Auth", "moduleLabel": "auth",
+    "type": "Security (DiD)", "typeLabel": "security", "role": "Anyone (forged/expired cookie)",
+    "summary": "Edge middleware authorizes on cookie presence only (no signature check)",
+    "preconditions": "Ability to send an arbitrary Cookie header.",
+    "steps": [
+      "Send a request with header Cookie: authjs.session-token=anything.",
+      "Observe proxy.ts lets it through the edge gate without verifying the JWT (real enforcement is downstream in auth()/tRPC)."
+    ],
+    "expected": "The middleware treats unverified cookies as unauthenticated.",
+    "actual": "It only substring-matches the cookie name; a forged/expired cookie passes the edge gate but is rejected at the data layer. It also does no role-based route protection (those rely on per-page redirect()). pathname.includes('.') also treats any dotted path as a static asset.",
+    "evidence": "src/proxy.ts:24-33; :19. (Verified first-hand.)",
+    "fix": "Verify the token with NextAuth getToken/auth in middleware rather than substring-matching the cookie. (Defense-in-depth; not a direct data leak — downstream guards hold.)"
+  },
+  {
+    "id": "SEC-01", "severity": "LOW", "module": "Platform/Config", "moduleLabel": "platform",
+    "type": "Security", "typeLabel": "security", "role": "N/A (config / browser CSP)",
+    "summary": "CSP connect-src ends with ws: wss: wildcards + stale localhost:3001",
+    "preconditions": "None (inspect response headers).",
+    "steps": [
+      "Request any page and inspect the Content-Security-Policy header's connect-src.",
+      "Observe it ends with blanket 'ws: wss:' and includes the stale socketOrigin."
+    ],
+    "expected": "Websockets restricted to the explicit Ably/8x8 hosts.",
+    "actual": "The trailing 'ws: wss:' allows a WebSocket to ANY host, nullifying the scoped Ably/8x8 allowlist above it; socketOrigin (NEXT_PUBLIC_SOCKET_URL) is the stale Socket.IO origin (live header showed http://localhost:3001).",
+    "evidence": "next.config.ts:33. (Verified first-hand via live response header.)",
+    "fix": "Drop 'ws: wss:' and the dead socket origin; rely on the explicit ablyOrigins/jaasConnect entries."
+  },
+  {
+    "id": "SEC-02", "severity": "LOW", "module": "Platform/Config", "moduleLabel": "platform",
+    "type": "Security", "typeLabel": "security", "role": "N/A (config)",
+    "summary": "img-src 'self' data: https: allows images from any HTTPS origin",
+    "preconditions": "None.",
+    "steps": [
+      "Inspect the CSP img-src directive.",
+      "Observe any https image URL is loadable."
+    ],
+    "expected": "Images restricted to the app origin + known avatar hosts.",
+    "actual": "img-src permits images from any origin (tracking-pixel/exfil surface), laxer than the next/image host lock-down.",
+    "evidence": "next.config.ts:31.",
+    "fix": "Restrict img-src to the app origin + known avatar hosts."
+  },
+  {
+    "id": "SEC-03", "severity": "LOW", "module": "Auth/UX", "moduleLabel": "auth",
+    "type": "UX / Correctness", "typeLabel": "ux", "role": "Stale-session user",
+    "summary": "Inconsistent page-level auth — most pages rely on proxy+tRPC, not auth()",
+    "preconditions": "A stale/invalid but present session cookie.",
+    "steps": [
+      "With a stale/forged session cookie, navigate to /dashboard (and most non-admin pages).",
+      "Observe the page shell renders and tRPC prefetches fail UNAUTHORIZED — a broken/empty page instead of a clean login redirect."
+    ],
+    "expected": "Consistent server-side page auth — a clean redirect to /login.",
+    "actual": "finance/audit-logs/team-stats/hr hard-gate via auth()+redirect, but /dashboard and most pages rely on the proxy cookie-presence check + tRPC, so a stale cookie lands on a broken shell. No data leak (tRPC enforces), but inconsistent UX.",
+    "evidence": "src/app/(app)/dashboard/page.tsx (no auth()); contrast src/app/(app)/finance/page.tsx:10-15. (Verified first-hand.)",
+    "fix": "Add a shared server-side page-auth guard so non-finance pages also redirect cleanly on no/invalid session."
+  },
+  {
+    "id": "AI-02", "severity": "LOW", "module": "AI Assistant", "moduleLabel": "ai-assistant",
+    "type": "Security (test)", "typeLabel": "security", "role": "N/A (eval harness)",
+    "summary": "Assistant eval never exercises execute-level guards or resource isolation",
+    "preconditions": "Review of scripts/assistant-eval.ts.",
+    "steps": [
+      "Read the employee/HR security cases: tools are built with that role's context, so privileged tools aren't even constructed.",
+      "Note the forbid/mustNotInclude assertions pass vacuously; no cross-user IDOR case exists."
+    ],
+    "expected": "At least one case proving an admin-gated tool refuses when its execute is reached in a non-admin context, and note/DM/meeting isolation cases.",
+    "actual": "Only routing and 'not offered' are gated; the in-execute if(!h.isAdmin) return {error} checks are never tested, and resetMemberPassword's schema path (AI-01) is unexercised.",
+    "evidence": "scripts/assistant-eval.ts:163-186, 232.",
+    "fix": "Add cases that invoke an admin tool's execute under an employee subject (expect {error}), read a PRIVATE/SHARED note and a non-member channel as an employee (expect no leak), and load resetMemberPassword."
+  },
+  {
+    "id": "AI-03", "severity": "LOW", "module": "AI Assistant", "moduleLabel": "ai-assistant",
+    "type": "Data", "typeLabel": "data", "role": "Any employee (assistant)",
+    "summary": "getDashboardStats.pendingLeaves + getTeamMember over-share (tRPC parity)",
+    "preconditions": "An employee assistant session.",
+    "steps": [
+      "Ask the assistant for dashboard stats — pendingLeaves is the company-wide PENDING count.",
+      "Ask about a colleague — getTeamMember returns their complete projectMembers list."
+    ],
+    "expected": "Employee figures are their own / scoped; colleague project membership is scoped.",
+    "actual": "pendingLeaves counts all PENDING company-wide for every role; getTeamMember returns the target's complete projectMembers list to any viewer. Both faithfully mirror the tRPC surfaces (dashboard.getStats:33-35, team.getById:175-177) — a pre-existing app-wide behavior, NOT an assistant-specific escalation.",
+    "evidence": "src/lib/ai/tools/insights.ts:500; src/lib/ai/tools/people.ts:110-113, :152-156.",
+    "fix": "If undesired, scope pendingLeaves to isAdminOrHr (else self) and the returned project list to the viewer's own projects — fixing router and tool together to keep parity."
+  },
+  {
+    "id": "AI-04", "severity": "LOW", "module": "AI Assistant", "moduleLabel": "ai-assistant",
+    "type": "Security (info)", "typeLabel": "security", "role": "Any authenticated assistant user",
+    "summary": "Approval is a UX confirmation, not the security boundary (record-only)",
+    "preconditions": "Understanding of the approval flow.",
+    "steps": [
+      "Note the client supplies the full messages history including tool-approval-response parts.",
+      "A crafted request could forge/replay an approved:true part with a matching approvalId."
+    ],
+    "expected": "The approval gate is not relied upon as the authorization boundary.",
+    "actual": "Not exploitable for escalation — every write execute independently re-checks authorization (h.isAdmin/h.can/object guards) and all writes set needsApproval:true. A forged approval can at most let the acting user skip their own confirmation for an action they are already entitled to perform; fabricated tool results yield fake (not real) data. Recorded so the in-execute authz is never relaxed.",
+    "evidence": "src/app/api/assistant/route.ts:34.",
+    "fix": "Keep the in-execute authorization checks authoritative; never relax them on the assumption the approval gate protects them."
+  }
+]

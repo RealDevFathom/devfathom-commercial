@@ -2,35 +2,77 @@
 
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
+import {
+  DefaultChatTransport,
+  lastAssistantMessageIsCompleteWithToolCalls,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+} from 'ai';
 import { Sparkles, ArrowUp, Check, X, Loader2, Wrench, Square } from 'lucide-react';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { useAssistant } from '@/lib/assistant-store';
 import { cn } from '@/lib/utils';
 import { AssistantMarkdown } from './markdown';
 
+// Friendly labels for the read-tool status chips ("Reading the team…"). Write
+// tools use the approval-card titles in describeAction() instead. Unknown tools
+// fall back to a humanized form of the tool name.
 const TOOL_LABELS: Record<string, string> = {
+  // People / HR
   listTeam: 'the team',
   getTeamMember: 'profile',
+  getLeaveOverview: 'time off',
+  getHrOverview: 'the HR overview',
+  listPerformanceNotes: 'performance notes',
+  // Tasks
   searchTasks: 'tasks',
   listMyTasks: 'your tasks',
   findOverdueTasks: 'overdue tasks',
+  getTaskDetail: 'the task',
+  // Projects
   listProjects: 'projects',
   getProject: 'project',
   findProjectsBehindSchedule: 'projects behind',
+  // Clients
   listClients: 'clients',
   getClient: 'client',
-  listMeetings: 'the schedule',
-  getLeaveOverview: 'time off',
+  // Finance
+  getFinanceSummary: 'finance',
+  getPnlReport: 'the P&L',
+  listInvoices: 'invoices',
+  getInvoice: 'the invoice',
+  listTransactions: 'transactions',
+  listRecurringExpenses: 'recurring expenses',
+  // Chat
+  listChannels: 'your channels',
+  searchMessages: 'messages',
+  getChannelMessages: 'the channel',
+  // Notes
   searchNotes: 'notes',
+  getNote: 'the note',
+  // Meetings
+  listMeetings: 'the schedule',
+  getMeeting: 'the meeting',
+  // Resignations
+  getMyResignation: 'your resignation',
+  listResignations: 'resignations',
+  // Insights
   getRecentActivity: 'recent activity',
   getOverview: 'your briefing',
-  getFinanceSummary: 'finance',
-  listInvoices: 'invoices',
-  createTask: 'task',
-  createClient: 'client',
-  setTeamMemberStatus: 'member status',
+  globalSearch: 'the hub',
+  getTeamWorkload: 'team workload',
+  findPeopleBySkill: 'people by skill',
+  getDashboardStats: 'the dashboard',
+  searchAuditLog: 'the audit trail',
 };
+
+// Split a camelCase tool name into lowercase words, e.g. "getTeamMember" → "team member".
+function humanizeTool(name: string): string {
+  return name
+    .replace(/^(get|list|find|search|global)/, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .trim()
+    .toLowerCase();
+}
 
 const SUGGESTIONS = [
   'Brief me on my day',
@@ -45,8 +87,14 @@ export function AssistantPanel() {
 
   const { messages, sendMessage, status, stop, addToolApprovalResponse } = useChat({
     transport: new DefaultChatTransport({ api: '/api/assistant' }),
-    // After a tool result / approval response, automatically continue the run.
-    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    // Auto-continue the run after EITHER tool results OR an approval response.
+    // The approval case is essential: when the user approves a write, its tool
+    // part is in state 'approval-responded', which lastAssistantMessageIsComplete-
+    // WithToolCalls does NOT recognise — so without the approval helper the
+    // approval is never sent to the server and the write silently never runs.
+    sendAutomaticallyWhen: (opts) =>
+      lastAssistantMessageIsCompleteWithApprovalResponses(opts) ||
+      lastAssistantMessageIsCompleteWithToolCalls(opts),
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -249,8 +297,10 @@ function ToolPart({
   part: AnyPart;
   onApprove: (approvalId: string, approved: boolean) => void;
 }) {
-  const label = TOOL_LABELS[toolName] ?? toolName;
-  const isWrite = !/^(list|find|get)/.test(toolName);
+  const label = TOOL_LABELS[toolName] ?? humanizeTool(toolName);
+  // Read tools start with a read verb; everything else changes data (and is
+  // approval-gated). Keep this in sync with the tool naming convention.
+  const isWrite = !/^(list|find|get|search|global)/.test(toolName);
 
   if (part.state === 'approval-requested' && part.approval) {
     return (
@@ -358,17 +408,60 @@ function ApprovalCard({
           onClick={() => onApprove(approvalId, true)}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-[#0C2E2C]"
         >
-          <Check className="h-3.5 w-3.5" /> Approve
+          <Check className="h-3.5 w-3.5" /> Confirm &amp; run
         </button>
         <button
           onClick={() => onApprove(approvalId, false)}
           className="flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          Deny
+          Cancel
         </button>
       </div>
     </div>
   );
+}
+
+// Nicer titles where the camelCase→words derivation reads awkwardly. Everything
+// else derives its title generically, so new tools need no entry here.
+const ACTION_TITLES: Record<string, string> = {
+  layOffMember: 'Lay off member',
+  setMemberStatus: 'Change member status',
+  setLeaveStatus: 'Review leave request',
+  reviewResignation: 'Review resignation',
+  updateInvoiceStatus: 'Update invoice status',
+  setTaskAssignees: 'Set task assignees',
+  setNoteShares: 'Share note',
+  markJoined: 'Mark attendance',
+  toggleChecklistItem: 'Toggle checklist item',
+};
+
+// Field key → human label. Unmapped keys are title-cased from the key.
+const FIELD_LABELS: Record<string, string> = {
+  name: 'Name', title: 'Title', reason: 'Reason', status: 'Status', priority: 'Priority',
+  dueDate: 'Due', startDate: 'Start', endDate: 'End', startTime: 'Start', endTime: 'End',
+  columnName: 'Column', column: 'Column', description: 'Notes', content: 'Content',
+  message: 'Message', projectName: 'Project', clientName: 'Client', channelName: 'Channel',
+  email: 'Email', role: 'Role', department: 'Department', visibility: 'Visibility',
+  amount: 'Amount', type: 'Type', invoiceNumber: 'Invoice', decision: 'Decision',
+  lastWorkingDay: 'Last day', proposedLastDay: 'Proposed last day', recurrence: 'Repeats',
+  location: 'Location', note: 'Note', person: 'Person', assignee: 'Assignee',
+  assignees: 'Assignees', members: 'Members', skills: 'Skills', category: 'Category',
+  newName: 'New name', text: 'Text', label: 'Label', milestoneName: 'Milestone',
+};
+
+const spaceCamel = (s: string) =>
+  s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
+const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+function formatValue(v: unknown): string {
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '—';
+    if (v.every((x) => typeof x === 'string' || typeof x === 'number')) return v.join(', ');
+    return `${v.length} item${v.length === 1 ? '' : 's'}`;
+  }
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  const s = String(v);
+  return s.length > 160 ? `${s.slice(0, 160)}…` : s;
 }
 
 function describeAction(
@@ -376,48 +469,16 @@ function describeAction(
   input: unknown
 ): { title: string; fields: [string, string][] } {
   const o = (input ?? {}) as Record<string, unknown>;
-  const row = (label: string, value: unknown): [string, string] | null =>
-    value === undefined || value === null || value === '' ? null : [label, String(value)];
-  const clean = (rows: ([string, string] | null)[]) =>
-    rows.filter((r): r is [string, string] => !!r);
+  const title = ACTION_TITLES[toolName] ?? capitalize(spaceCamel(toolName));
 
-  if (toolName === 'createTask') {
-    return {
-      title: 'Create task',
-      fields: clean([
-        row('Title', o.title),
-        row('Priority', o.priority ?? 'MEDIUM'),
-        row('Column', o.columnName),
-        row('Due', o.dueDate),
-        row('Notes', o.description),
-      ]),
-    };
+  const fields: [string, string][] = [];
+  for (const [k, v] of Object.entries(o)) {
+    if (v === undefined || v === null || v === '') continue;
+    // Don't surface raw record ids in the approval card — they're for chaining.
+    if (/(^id$|Id$|Ids$)/.test(k)) continue;
+    fields.push([FIELD_LABELS[k] ?? capitalize(spaceCamel(k)), formatValue(v)]);
   }
-  if (toolName === 'createClient') {
-    return {
-      title: 'Add client',
-      fields: clean([
-        row('Name', o.name),
-        row('Industry', o.industry),
-        row('Location', o.location),
-        row('Website', o.website),
-        row('Notes', o.notes),
-      ]),
-    };
-  }
-  if (toolName === 'setTeamMemberStatus') {
-    const action =
-      o.status === 'INACTIVE'
-        ? 'Deactivate member'
-        : o.status === 'ACTIVE'
-          ? 'Reactivate member'
-          : 'Set member status';
-    return {
-      title: action,
-      fields: clean([row('Member', o.name ?? o.userId), row('Status', o.status)]),
-    };
-  }
-  return { title: toolName, fields: clean(Object.entries(o).map(([k, v]) => row(k, v))) };
+  return { title, fields };
 }
 
 function Thinking() {

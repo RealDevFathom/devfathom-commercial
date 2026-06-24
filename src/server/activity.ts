@@ -12,6 +12,7 @@ export type ActivityType =
   | 'project_deleted'
   | 'project_member_added'
   | 'project_member_removed'
+  | 'project_file_added'
   | 'task_created'
   | 'task_completed'
   | 'task_assigned'
@@ -19,6 +20,9 @@ export type ActivityType =
   | 'note_shared'
   | 'client_created'
   | 'client_deleted'
+  | 'contract_created'
+  | 'contract_updated'
+  | 'contract_deleted'
   | 'invoice_created'
   | 'invoice_sent'
   | 'invoice_paid'
@@ -28,7 +32,15 @@ export type ActivityType =
 export interface LogActivityArgs {
   type: ActivityType;
   message: string;
-  entityType?: 'Project' | 'Task' | 'Note' | 'Client' | 'Invoice' | 'Meeting' | 'User';
+  entityType?:
+    | 'Project'
+    | 'Task'
+    | 'Note'
+    | 'Client'
+    | 'Contract'
+    | 'Invoice'
+    | 'Meeting'
+    | 'User';
   entityId?: string;
   metadata?: Record<string, unknown>;
 }
