@@ -6,6 +6,7 @@ import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { PageTransition } from '@/components/motion/page-transition';
 import { useAssistant } from '@/lib/assistant-store';
+import { LegalGate } from '@/components/legal/legal-gate';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
 // chunk; only fetched once the user first opens the assistant.
@@ -24,6 +25,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden">
+      {/* One-time legal agreement; blocks the app until accepted per account. */}
+      <LegalGate />
+
       {/* Desktop sidebar */}
       <div className="hidden lg:block">
         <Sidebar />
