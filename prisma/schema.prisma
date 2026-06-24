@@ -251,6 +251,8 @@ model User {
   auditLogs         AuditLog[]         @relation("UserAuditLogs")
   resignations      Resignation[]      @relation("UserResignations")
   resignationsReviewed Resignation[]   @relation("ResignationsReviewed")
+  // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
+  mailboxes         Mailbox[]
 
   @@map("users")
 }
@@ -1391,4 +1393,64 @@ model NoteLink {
   @@unique([fromNoteId, toNoteId])
   @@index([toNoteId])
   @@map("note_links")
+}
+
+// ===========================================================================
+// EMAIL INTEGRATION — unified inbox over a Mailbox abstraction with per-provider
+// adapters. GMAIL/OUTLOOK are implemented now; HOSTED (@domain) is reserved for
+// a future self-hosted mailbox and must plug in WITHOUT touching the router/UI.
+// ===========================================================================
+
+enum MailboxType {
+  GMAIL
+  OUTLOOK
+  HOSTED // reserved — not implemented
+}
+
+// A connected email account. `credentials` holds the AES-256-GCM ciphertext of
+// the OAuth refresh token (NEVER plaintext, NEVER sent to the client). Decryption
+// happens server-side only, in the adapter layer.
+model Mailbox {
+  id           String      @id @default(cuid())
+  userId       String
+  type         MailboxType
+  emailAddress String
+  displayName  String?
+  credentials  String // AES-256-GCM ciphertext of the OAuth refresh token
+  status       String      @default("active")
+  lastSyncedAt DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages EmailMessage[]
+
+  @@index([userId])
+  @@map("mailboxes")
+}
+
+// A synced message belonging to a Mailbox. Provider-agnostic shape; bodies are
+// backfilled lazily on first open to keep the initial inbox paint fast.
+model EmailMessage {
+  id               String   @id @default(cuid())
+  mailboxId        String
+  providerMessageId String
+  threadId         String?
+  fromAddr         String
+  toAddrs          Json
+  ccAddrs          Json?
+  subject          String?
+  snippet          String?
+  bodyHtml         String?
+  bodyText         String?
+  isRead           Boolean  @default(false)
+  hasAttachments   Boolean  @default(false)
+  sentAt           DateTime
+  createdAt        DateTime @default(now())
+
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+
+  @@unique([mailboxId, providerMessageId])
+  @@index([mailboxId, sentAt])
+  @@map("email_messages")
 }

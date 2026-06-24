@@ -18,6 +18,7 @@ import { passwordResetRouter } from './password-reset';
 import { reviewsRouter } from './reviews';
 import { twoFactorRouter } from './two-factor';
 import { webhooksRouter } from './webhooks';
+import { emailRouter } from './email';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -39,6 +40,7 @@ export const appRouter = router({
   reviews: reviewsRouter,
   twoFactor: twoFactorRouter,
   webhooks: webhooksRouter,
+  email: emailRouter,
 });
 
 export type AppRouter = typeof appRouter;
