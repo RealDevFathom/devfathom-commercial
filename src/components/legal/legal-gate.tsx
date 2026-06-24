@@ -6,6 +6,13 @@ import { FathomMark } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import {
+  AGREEMENT_TITLE,
+  AGREEMENT_PREAMBLE,
+  AGREEMENT_CLAUSES,
+  AGREEMENT_SIGNATURE_NOTE,
+  OWNER,
+} from '@/lib/legal-agreement';
 
 /**
  * One-time Confidentiality & Non-Replication Agreement.
@@ -13,8 +20,10 @@ import { trpc } from '@/lib/trpc';
  * Mounted once inside the authenticated AppShell. On first use, any account that
  * has not yet accepted the current agreement version sees this full-screen,
  * non-dismissible overlay and must sign (typed name) + agree before reaching the
- * app. Acceptance is persisted server-side per account (legal.accept), so it
- * shows exactly once per user and never again — across devices and sessions.
+ * app. Acceptance is persisted server-side per account (legal.accept) and logged
+ * to the audit trail, so it shows exactly once per user — across devices and
+ * sessions. The agreement text comes from the same shared source the server
+ * hashes, so what is shown is exactly what is recorded as accepted.
  */
 export function LegalGate() {
   const { data: session } = useSession();
@@ -48,74 +57,25 @@ export function LegalGate() {
         <div className="flex items-center gap-3 bg-[#0C2E2C] px-6 py-5 text-[#F7F5EF]">
           <FathomMark className="h-8 w-8" variant="brand" />
           <div>
-            <h2 className="font-display text-lg font-semibold tracking-tight">
-              Confidentiality &amp; Non-Replication Agreement
-            </h2>
+            <h2 className="font-display text-lg font-semibold tracking-tight">{AGREEMENT_TITLE}</h2>
             <p className="text-xs text-[#F7F5EF]/65">
-              Please read and accept to continue to DevFathom Hub.
+              {OWNER.legalName} · please read and accept to continue to {OWNER.product}.
             </p>
           </div>
         </div>
 
         {/* Agreement body (scrollable) */}
         <div className="space-y-3 overflow-y-auto px-6 py-5 text-sm leading-relaxed text-foreground">
-          <p>
-            This Agreement is between you, the person accessing and using DevFathom Hub
-            (&ldquo;you&rdquo; or the &ldquo;Recipient&rdquo;), and <strong>Saad Ajmal</strong>, the
-            original creator and owner of DevFathom Hub (the &ldquo;Owner&rdquo;). By signing below
-            and continuing, you agree to be bound by it.
-          </p>
+          <p>{AGREEMENT_PREAMBLE}</p>
 
-          <div>
-            <h3 className="font-display text-[15px] font-semibold">1. Confidential information</h3>
-            <p className="text-muted-foreground">
-              Everything you see or learn while accessing or using DevFathom Hub, including its
-              features, design, workflows, structure, and underlying ideas (the &ldquo;Confidential
-              Information&rdquo;), is the confidential and proprietary property of the Owner. You will
-              keep it strictly confidential and will not disclose it to any third party without the
-              Owner&rsquo;s prior written permission.
-            </p>
-          </div>
-
-          <div>
-            <h3 className="font-display text-[15px] font-semibold">2. Ownership</h3>
-            <p className="text-muted-foreground">
-              DevFathom Hub, together with its concept, design, and implementation, is and remains
-              the exclusive property of the Owner, Saad Ajmal. Nothing here transfers any ownership,
-              license, or right to you, other than a limited, revocable right to use it.
-            </p>
-          </div>
-
-          <div>
-            <h3 className="font-display text-[15px] font-semibold">3. Non-replication and non-compete</h3>
-            <p className="text-muted-foreground">
-              You agree that you will not, directly or indirectly, and whether alone or with or
-              through any other person or company, build, develop, reproduce, copy, commission,
-              distribute, market, or sell any product or service that is the same as or substantially
-              similar to DevFathom Hub, in whole or in any material part, anywhere in the market,
-              without the prior written permission of Saad Ajmal.
-            </p>
-          </div>
-
-          <div>
-            <h3 className="font-display text-[15px] font-semibold">4. No reverse engineering</h3>
-            <p className="text-muted-foreground">
-              You will not reverse engineer, decompile, or otherwise attempt to derive the source
-              code, structure, or methods of DevFathom Hub.
-            </p>
-          </div>
-
-          <div>
-            <h3 className="font-display text-[15px] font-semibold">5. Term and remedies</h3>
-            <p className="text-muted-foreground">
-              These obligations continue indefinitely and survive the end of your access to DevFathom
-              Hub, and they apply each time you access or use it. You acknowledge that a breach may
-              cause the Owner harm that money alone cannot fully remedy, and that the Owner may seek
-              injunctive relief in addition to any other remedy available at law. This Agreement is
-              governed by the laws of the jurisdiction in which the Owner maintains his principal
-              place of residence or business.
-            </p>
-          </div>
+          {AGREEMENT_CLAUSES.map((clause, i) => (
+            <div key={clause.heading}>
+              <h3 className="font-display text-[15px] font-semibold">
+                {i + 1}. {clause.heading}
+              </h3>
+              <p className="text-muted-foreground">{clause.body}</p>
+            </div>
+          ))}
         </div>
 
         {/* Sign + accept */}
@@ -142,21 +102,16 @@ export function LegalGate() {
             />
             <span>
               I have read and agree to this Agreement, and I understand it binds me each time I access
-              or use DevFathom Hub.
+              or use {OWNER.product}.
             </span>
           </label>
 
-          {accept.error && (
-            <p className="mb-2 text-xs text-destructive">{accept.error.message}</p>
-          )}
+          {accept.error && <p className="mb-2 text-xs text-destructive">{accept.error.message}</p>}
 
           <Button onClick={() => accept.mutate({ name: name.trim() })} disabled={!canSubmit}>
             {accept.isPending ? 'Saving…' : 'Agree and continue'}
           </Button>
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            By clicking &ldquo;Agree and continue&rdquo; you adopt your typed name as your electronic
-            signature for this Agreement.
-          </p>
+          <p className="mt-2 text-[11px] text-muted-foreground">{AGREEMENT_SIGNATURE_NOTE}</p>
         </div>
       </div>
     </div>

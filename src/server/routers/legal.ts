@@ -1,17 +1,40 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc';
+import { annotateAudit } from '@/server/audit';
+import {
+  AGREEMENT_VERSION,
+  AGREEMENT_TITLE,
+  AGREEMENT_CANONICAL_TEXT,
+} from '@/lib/legal-agreement';
 
 /**
- * Confidentiality & Non-Replication Agreement that every user must accept once,
- * on first use of DevFathom Hub. Acceptance is recorded per-account inside
- * `User.preferences.legalAcceptance` — this is a schema-first repo and the
- * existing `preferences` Json blob already carries other per-user config, so no
- * dedicated column/migration is needed. Bump LEGAL_AGREEMENT_VERSION to force
- * everyone to read and re-accept after a material change to the terms.
+ * Confidentiality & Non-Replication Agreement (owned by Intelligent Health
+ * Partners LLC) that every user must accept once, on first use of DevFathom Hub.
+ *
+ * Acceptance leaves two records:
+ *   1. A fast-path flag in `User.preferences.legalAcceptance` used to decide
+ *      whether to show the gate (no migration — schema-first repo).
+ *   2. The append-only `audit_logs` row the tRPC audit middleware writes for
+ *      this mutation automatically — capturing actor id/name/email, IP, user
+ *      agent, the typed name (input), and a server timestamp. We enrich it via
+ *      annotateAudit() with the agreement version and a SHA-256 hash of the
+ *      exact text that was accepted, so the record is tamper-evident.
+ *
+ * Bump AGREEMENT_VERSION (in src/lib/legal-agreement.ts) on any material change
+ * to the terms to force everyone to read and re-accept.
  */
-export const LEGAL_AGREEMENT_VERSION = '1.0';
+export const LEGAL_AGREEMENT_VERSION = AGREEMENT_VERSION;
 
-type LegalAcceptance = { version: string; acceptedAt: string; name: string };
+/** SHA-256 of the canonical agreement text, computed once at module load. */
+export const AGREEMENT_HASH = createHash('sha256').update(AGREEMENT_CANONICAL_TEXT).digest('hex');
+
+type LegalAcceptance = {
+  version: string;
+  acceptedAt: string;
+  name: string;
+  agreementHash: string;
+};
 
 function readAcceptance(raw: unknown): LegalAcceptance | null {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -23,6 +46,7 @@ function readAcceptance(raw: unknown): LegalAcceptance | null {
           version: o.version,
           acceptedAt: o.acceptedAt,
           name: typeof o.name === 'string' ? o.name : '',
+          agreementHash: typeof o.agreementHash === 'string' ? o.agreementHash : '',
         };
       }
     }
@@ -39,13 +63,14 @@ export const legalRouter = router({
     });
     const acceptance = readAcceptance(user?.preferences);
     return {
-      currentVersion: LEGAL_AGREEMENT_VERSION,
-      accepted: acceptance?.version === LEGAL_AGREEMENT_VERSION,
+      currentVersion: AGREEMENT_VERSION,
+      accepted: acceptance?.version === AGREEMENT_VERSION,
       acceptedAt: acceptance?.acceptedAt ?? null,
     };
   }),
 
-  // Record a one-time acceptance, merged into the existing preferences blob.
+  // Record a one-time acceptance: a flag on the user, plus an enriched,
+  // append-only audit row (actor, IP, UA, typed name, timestamp, version, hash).
   accept: protectedProcedure
     .input(z.object({ name: z.string().trim().min(2).max(120) }))
     .mutation(async ({ ctx, input }) => {
@@ -61,14 +86,31 @@ export const legalRouter = router({
           : {};
 
       const acceptance: LegalAcceptance = {
-        version: LEGAL_AGREEMENT_VERSION,
+        version: AGREEMENT_VERSION,
         acceptedAt: new Date().toISOString(),
         name: input.name,
+        agreementHash: AGREEMENT_HASH,
       };
 
       await ctx.db.user.update({
         where: { id: ctx.session.user.id },
         data: { preferences: { ...base, legalAcceptance: acceptance } },
+      });
+
+      // Enrich the audit entry the middleware writes for this mutation.
+      annotateAudit(ctx, {
+        category: 'LEGAL',
+        operation: 'EXECUTE',
+        action: 'legal.accept',
+        description: `Accepted ${AGREEMENT_TITLE} v${AGREEMENT_VERSION} as "${input.name}"`,
+        targetType: 'LegalAgreement',
+        targetId: AGREEMENT_VERSION,
+        targetLabel: AGREEMENT_TITLE,
+        metadata: {
+          version: AGREEMENT_VERSION,
+          agreementHash: AGREEMENT_HASH,
+          signedName: input.name,
+        },
       });
 
       return { success: true };
