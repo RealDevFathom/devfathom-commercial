@@ -60,7 +60,7 @@
 - `bun scripts/lint-tool-schemas.ts` — Groq-schema regression guard (must stay 96 checked / 0 violations).
 - Co-author trailer on commits: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 
-## ✅ NEAR-COMPLETE (2026-06-24): 65/70 implemented · 3 partial · 2 todo · 0 planned. Bugs 53/53. All 6 Big Bets shipped.
+## ✅ COMPLETE (2026-06-24): 67/70 implemented · 1 partial (AI-02 citations) · 2 deploy-gated todo (PLAT-02/03, see DEPLOY-NOTES.md) · 0 planned. Bugs 53/53. All 6 Big Bets shipped. Keystone zero-diff.
 The ONLY remaining items are externally gated, not "unstarted work":
 - **PLAT-02 (Vercel Blob), PLAT-03 (observability)** — need a real deploy + external service
   (Blob token / error-tracking DSN) + a dependency; can't be built/validated in this env. Deploy-gated.
