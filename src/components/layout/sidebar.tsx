@@ -21,6 +21,7 @@ import {
   BarChart3,
   ScrollText,
   ClipboardList,
+  Mail,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -42,6 +43,7 @@ const navigation: NavItem[] = [
   { label: 'Projects', href: '/projects', icon: FolderKanban },
   { label: 'Clients', href: '/clients', icon: Briefcase },
   { label: 'Notes', href: '/notes', icon: StickyNote },
+  { label: 'Email', href: '/email', icon: Mail },
   { label: 'Finance', href: '/finance', icon: DollarSign, adminOnly: true },
   { label: 'Meetings', href: '/meetings', icon: Video },
   { label: 'Chat', href: '/chat', icon: MessageSquare },
