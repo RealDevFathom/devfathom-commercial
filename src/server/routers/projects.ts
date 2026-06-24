@@ -993,23 +993,32 @@ export const projectsRouter = router({
         name: z.string().min(1, 'Board name is required'),
         description: z.string().optional(),
         createDefaultColumns: z.boolean().default(true),
+        // IMP-PROJ-07: start a board from a named column template.
+        template: z.enum(['kanban', 'scrum', 'simple', 'bugtracker']).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
+      // IMP-PROJ-07: per-template column sets. Falls back to the kanban default.
+      const BOARD_TEMPLATES: Record<string, string[]> = {
+        kanban: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'],
+        scrum: ['Backlog', 'Sprint Backlog', 'In Progress', 'Review', 'Done'],
+        simple: ['To Do', 'Doing', 'Done'],
+        bugtracker: ['Reported', 'Triaged', 'In Progress', 'Testing', 'Closed'],
+      };
+      const columnNames = input.template
+        ? BOARD_TEMPLATES[input.template]
+        : ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'];
+      const wantColumns = input.template ? true : input.createDefaultColumns;
       return ctx.db.board.create({
         data: {
           name: input.name,
           description: input.description,
           projectId: input.projectId,
-          columns: input.createDefaultColumns
-            ? {
-                create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map(
-                  (name, order) => ({ name, order })
-                ),
-              }
+          columns: wantColumns
+            ? { create: columnNames.map((name, order) => ({ name, order })) }
             : undefined,
-          labels: input.createDefaultColumns
+          labels: wantColumns
             ? {
                 create: [
                   { name: 'Bug', color: '#EF4444' },
