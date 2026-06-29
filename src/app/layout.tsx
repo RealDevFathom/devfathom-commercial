@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Oxanium, IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
+import { Analytics } from '@vercel/analytics/next';
 
 // IBM Plex Sans — body & UI workhorse (legible long-form).
 const plexSans = IBM_Plex_Sans({
@@ -90,6 +91,7 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         <Providers>{children}</Providers>
+        <Analytics />
       </body>
     </html>
   );

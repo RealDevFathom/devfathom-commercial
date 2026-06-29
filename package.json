@@ -49,6 +49,7 @@
     "@trpc/next": "^11.16.0",
     "@trpc/react-query": "^11.16.0",
     "@trpc/server": "^11.16.0",
+    "@vercel/analytics": "^2.0.1",
     "ably": "^2.22.1",
     "ai": "^6.0.207",
     "bcryptjs": "^3.0.3",
