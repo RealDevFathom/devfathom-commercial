@@ -2,19 +2,22 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
-@custom-variant dark (&:is(.dark *));
+/* Dark theme is driven by `data-theme="dark"` on <html> (next-themes,
+   attribute="data-theme"). The `dark:` utility variant follows it. */
+@custom-variant dark (&:is([data-theme='dark'] *));
 
-/* ============================================
-   DEVFATHOM — Theme tokens
-   Brand: Abyss deep teal #0C2E2C · warm Paper #F7F5EF
-          single Brass accent #BC8850 · Ink #161A19
-   Type:  Oxanium (display/logo) · IBM Plex Sans (UI)
-   Tone:  understated, serious, quietly confident.
-          Whitespace over decoration; no gradients/glow;
-          hairline borders; brass earns its place (used rarely).
-   ============================================ */
+/* ============================================================
+   DEVFATHOM — "The Sounding" / Fathom design system
+   Canonical tokens (BRAND.md · devfathom-tokens.css).
+   Abyss deep-teal primary · warm Paper neutrals · single muted
+   Brass accent · Ink text. Oxanium (display) · IBM Plex Sans (UI)
+   · IBM Plex Mono (data). Whitespace, hairlines, no gradients;
+   brass earns its place.
+   ============================================================ */
 
 @theme inline {
+  /* shadcn semantic names — kept so every existing component works.
+     They resolve to the canonical aliases defined in :root below. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
@@ -54,157 +57,352 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
-  /* DevFathom brand ramp — Abyss teal primary (the helm) +
-     a single sparing Brass accent. */
-  --color-brand: #123a38; /* abyss-700 */
-  --color-brand-dark: #0c2e2c; /* abyss-800 */
-  --color-brand-light: #245c57; /* abyss-500 */
-  --color-brass: #bc8850; /* the one warm accent */
-  --color-seafoam: #bc8850; /* legacy alias → brass */
-  /* Radii — small & architectural (2–18px). Brand is not pill-shaped. */
-  --radius-sm: calc(var(--radius) * 0.4);
-  --radius-md: calc(var(--radius) * 0.6);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.2);
-  --radius-2xl: calc(var(--radius) * 1.4);
-  --radius-3xl: calc(var(--radius) * 1.6);
-  --radius-4xl: calc(var(--radius) * 1.8);
+
+  /* --- Canonical numbered scales (utilities: bg-abyss-700, text-brass-500…) --- */
+  --color-abyss-900: var(--abyss-900);
+  --color-abyss-800: var(--abyss-800);
+  --color-abyss-700: var(--abyss-700);
+  --color-abyss-600: var(--abyss-600);
+  --color-abyss-500: var(--abyss-500);
+  --color-abyss-400: var(--abyss-400);
+  --color-abyss-300: var(--abyss-300);
+  --color-abyss-200: var(--abyss-200);
+  --color-abyss-100: var(--abyss-100);
+  --color-brass-700: var(--brass-700);
+  --color-brass-600: var(--brass-600);
+  --color-brass-500: var(--brass-500);
+  --color-brass-400: var(--brass-400);
+  --color-brass-300: var(--brass-300);
+  --color-brass-100: var(--brass-100);
+  --color-paper-white: var(--paper-white);
+  --color-paper-50: var(--paper-50);
+  --color-paper-100: var(--paper-100);
+  --color-paper-200: var(--paper-200);
+  --color-paper-300: var(--paper-300);
+  --color-slate-700: var(--slate-700);
+  --color-slate-600: var(--slate-600);
+  --color-slate-500: var(--slate-500);
+  --color-slate-400: var(--slate-400);
+  --color-slate-300: var(--slate-300);
+
+  /* --- Canonical semantic aliases (utilities: bg-surface-sunken…) --- */
+  --color-surface-page: var(--surface-page);
+  --color-surface-card: var(--surface-card);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-inverse: var(--surface-inverse);
+  --color-text-strong: var(--text-strong);
+  --color-text-body: var(--text-body);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-text-inverse: var(--text-inverse);
+  --color-text-on-accent: var(--text-on-accent);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  /* Brand brass accent (responds to data-accent). Distinct from shadcn
+     --accent (a neutral hover wash). */
+  --color-accent-brand: var(--accent-brand);
+  --color-accent-brand-hover: var(--accent-brand-hover);
+  --color-brass: var(--accent-brand); /* legacy alias → brand accent */
+  --color-seafoam: var(--accent-brand); /* legacy alias */
+  --color-brand: var(--abyss-700);
+  --color-brand-dark: var(--abyss-800);
+  --color-brand-light: var(--abyss-500);
+  --color-primary-hover: var(--primary-hover);
+
+  /* Radii — small & architectural (2–16px). Not pill-shaped. */
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-2xl: calc(var(--radius-lg) * 1.4);
+  --radius-3xl: calc(var(--radius-lg) * 1.6);
+  --radius-4xl: calc(var(--radius-lg) * 1.8);
+
+  /* Soft, low, cool shadows */
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  /* Motion eases */
+  --ease-standard: var(--ease-standard);
+  --ease-out: var(--ease-out);
 }
 
-/* ============================================
-   DEVFATHOM — LIGHT THEME (default)
-   Warm Paper canvas, white cards, deep Abyss helm
-   ============================================ */
+/* ============================================================
+   LIGHT THEME (default) — warm Paper canvas, deep Abyss helm
+   ============================================================ */
 :root {
-  /* Core — warm Paper, editorial and never clinical */
-  --background: #f7f5ef; /* paper-50 */
-  --foreground: #161a19; /* ink-900 */
+  /* Numbered scales — single source of truth */
+  --abyss-900: #08221f;
+  --abyss-800: #0c2e2c;
+  --abyss-700: #123a38;
+  --abyss-600: #1a4b47;
+  --abyss-500: #245c57;
+  --abyss-400: #3c7a74;
+  --abyss-300: #6aa39c;
+  --abyss-200: #a8cbc6;
+  --abyss-100: #d6e6e3;
 
-  /* Cards — warm white lifted off the paper */
-  --card: #fdfcf8; /* paper-white */
-  --card-foreground: #161a19;
-  --popover: #fdfcf8;
-  --popover-foreground: #161a19;
+  --brass-700: #8a5e32;
+  --brass-600: #a6743f;
+  --brass-500: #bc8850;
+  --brass-400: #cfa372;
+  --brass-300: #e2c49e;
+  --brass-100: #f1e4d2;
 
-  /* Primary — deep Abyss teal (the helm) */
-  --primary: #123a38; /* abyss-700 */
-  --primary-foreground: #f7f5ef;
+  --paper-white: #fdfcf8;
+  --paper-50: #f7f5ef;
+  --paper-100: #efebe1;
+  --paper-200: #e3ddd0;
+  --paper-300: #d2cbbb;
 
-  /* Secondary */
-  --secondary: #efebe1; /* paper-100 */
-  --secondary-foreground: #3b423f; /* slate-700 */
+  --ink-900: #161a19;
+  --slate-700: #3b423f;
+  --slate-600: #545b58;
+  --slate-500: #6e7570;
+  --slate-400: #939a94;
+  --slate-300: #bac0ba;
 
-  /* Muted */
-  --muted: #efebe1; /* paper-100 */
-  --muted-foreground: #6e7570; /* slate-500 */
+  --green-600: #3e6b52;
+  --green-100: #dde8e0;
+  --amber-600: #9c7a3a;
+  --amber-100: #eee5cf;
+  --red-600: #9a4a40;
+  --red-100: #eddad6;
 
-  /* Accent — subtle paper wash for hovers (UI semantic, not the brand accent) */
-  --accent: #efebe1; /* paper-100 */
-  --accent-foreground: #161a19;
+  /* Canonical semantic aliases */
+  --surface-page: var(--paper-50);
+  --surface-card: var(--paper-white);
+  --surface-sunken: var(--paper-100);
+  --surface-raised: var(--paper-white);
+  --surface-inverse: var(--abyss-800);
 
-  /* Semantic — desaturated, restrained (never consumer-app loud) */
-  --destructive: #9a4a40; /* red-600 */
-  --success: #3e6b52; /* green-600 */
-  --success-foreground: #fdfcf8;
-  --warning: #9c7a3a; /* amber-600 */
-  --warning-foreground: #fdfcf8;
+  --text-strong: var(--ink-900);
+  --text-body: var(--slate-700);
+  --text-muted: var(--slate-500);
+  --text-faint: var(--slate-400);
+  --text-inverse: var(--paper-50);
+  --text-on-accent: var(--abyss-900);
+  --text-link: var(--abyss-600);
 
-  /* Borders & inputs — warm hairlines */
-  --border: #e3ddd0; /* paper-200 / border-subtle */
-  --input: #e3ddd0;
-  --ring: #bc8850; /* brass focus ring */
+  --border-subtle: var(--paper-200);
+  --border-default: var(--paper-300);
+  --border-strong: var(--slate-400);
 
-  /* Radius — 10px is the largest common value */
-  --radius: 0.625rem;
+  /* Brand brass accent (data-accent="quiet" default) */
+  --accent-brand: var(--brass-500);
+  --accent-brand-hover: var(--brass-600);
+  --accent-quiet: var(--brass-100);
+
+  /* shadcn semantic names → mapped to canonical aliases */
+  --background: var(--surface-page);
+  --foreground: var(--text-strong);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-strong);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-strong);
+  --primary: var(--abyss-700);
+  --primary-foreground: var(--paper-50);
+  --primary-hover: var(--abyss-800);
+  --primary-quiet: var(--abyss-100);
+  --secondary: var(--paper-100);
+  --secondary-foreground: var(--slate-700);
+  --muted: var(--paper-100);
+  --muted-foreground: var(--slate-500);
+  /* shadcn --accent = neutral hover wash (NOT the brand brass) */
+  --accent: var(--paper-100);
+  --accent-foreground: var(--ink-900);
+
+  --destructive: var(--red-600);
+  --success: var(--green-600);
+  --success-foreground: var(--paper-white);
+  --warning: var(--amber-600);
+  --warning-foreground: var(--paper-white);
+
+  --border: var(--border-subtle);
+  --input: var(--border-subtle);
+  --ring: var(--accent-brand);
+
+  /* Radius — 10px is the largest common card value */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 16px;
+  --radius: var(--radius-lg);
 
   /* Charts — abyss · slate · brass · green · abyss-mid */
-  --chart-1: #123a38;
-  --chart-2: #6e7570;
-  --chart-3: #bc8850;
-  --chart-4: #3e6b52;
-  --chart-5: #245c57;
+  --chart-1: var(--abyss-700);
+  --chart-2: var(--slate-500);
+  --chart-3: var(--brass-500);
+  --chart-4: var(--green-600);
+  --chart-5: var(--abyss-500);
 
-  /* Grid line (login / decorative surfaces) */
   --grid-line: rgba(22, 26, 25, 0.04);
 
   /* Sidebar — fixed dark Abyss command surface (both themes) */
-  --sidebar: #0c2e2c; /* abyss-800 */
-  --sidebar-foreground: #a8cbc6; /* abyss-200 */
-  --sidebar-primary: #bc8850; /* brass — active accent */
-  --sidebar-primary-foreground: #08221f;
-  --sidebar-accent: #123a38; /* abyss-700 — hover/active bg */
-  --sidebar-accent-foreground: #f7f5ef;
+  --sidebar: var(--abyss-800);
+  --sidebar-foreground: var(--abyss-200);
+  --sidebar-primary: var(--brass-500); /* brass — active accent */
+  --sidebar-primary-foreground: var(--abyss-900);
+  --sidebar-accent: var(--abyss-700); /* hover/active bg */
+  --sidebar-accent-foreground: var(--paper-50);
   --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #bc8850;
+  --sidebar-ring: var(--brass-500);
+
+  /* Typography */
+  --font-display: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-logo: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Canonical display type scale (used by components/headings explicitly;
+     Tailwind's text-* numeric scale is intentionally left untouched). */
+  --type-display-xs: 1.375rem; /* 22 */
+  --type-display-sm: 1.75rem; /* 28 */
+  --type-display-md: 2.25rem; /* 36 */
+  --type-display-lg: 2.875rem; /* 46 */
+  --type-display-xl: 3.75rem; /* 60 */
+
+  --leading-tight: 1.08;
+  --leading-snug: 1.22;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+  --tracking-tight: -0.02em;
+  --tracking-snug: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+  --tracking-caps: 0.14em; /* eyebrows */
+
+  /* Soft, low, cool shadows (rgba abyss-900) */
+  --shadow-xs: 0 1px 2px rgba(8, 34, 31, 0.06);
+  --shadow-sm: 0 1px 2px rgba(8, 34, 31, 0.05), 0 2px 6px rgba(8, 34, 31, 0.05);
+  --shadow-md: 0 2px 4px rgba(8, 34, 31, 0.05), 0 8px 20px rgba(8, 34, 31, 0.08);
+  --shadow-lg: 0 4px 8px rgba(8, 34, 31, 0.06), 0 18px 40px rgba(8, 34, 31, 0.12);
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.4, 0.1, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 360ms;
+
+  color-scheme: light;
 }
 
-/* ============================================
-   DEVFATHOM — DARK THEME (available via toggle)
-   Deep Abyss canvas, lifted teal, brass accent
-   ============================================ */
-.dark {
-  /* Core — deep Abyss near-black */
-  --background: #08221f; /* abyss-900 */
-  --foreground: #eef1ea;
+/* ============================================================
+   DARK THEME — deep Abyss canvas; primary inverts to light teal
+   ============================================================ */
+[data-theme='dark'] {
+  --surface-page: #07201d;
+  --surface-card: #0c2e2c;
+  --surface-sunken: #051512;
+  --surface-raised: #103734;
+  --surface-inverse: #d6e6e3;
 
-  /* Cards — lifted Abyss surface */
-  --card: #0c2e2c; /* abyss-800 */
-  --card-foreground: #eef1ea;
-  --popover: #0c2e2c;
-  --popover-foreground: #eef1ea;
+  --text-strong: #fbfaf6;
+  --text-body: #c6d8d4;
+  --text-muted: #8fb1ab;
+  --text-faint: #5e827c;
+  --text-inverse: #08221f;
+  --text-on-accent: #08221f;
+  --text-link: var(--abyss-200);
 
-  /* Primary — lifted teal reads on abyss */
-  --primary: #3c7a74; /* abyss-400 */
-  --primary-foreground: #f7f5ef;
+  --border-subtle: #103734;
+  --border-default: #1a4b47;
+  --border-strong: #2c605a;
 
-  /* Secondary */
-  --secondary: #123a38; /* abyss-700 */
-  --secondary-foreground: #eef1ea;
+  /* Brass lightens in dark */
+  --accent-brand: #cfa372;
+  --accent-brand-hover: #e2c49e;
+  --accent-quiet: #1e3b1f;
 
-  /* Muted */
+  --background: var(--surface-page);
+  --foreground: var(--text-strong);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-strong);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-strong);
+
+  /* Primary inverts to light teal with dark text */
+  --primary: #b8d4cf;
+  --primary-foreground: #08221f;
+  --primary-hover: #a8cbc6;
+  --primary-quiet: #103734;
+
+  --secondary: #123a38;
+  --secondary-foreground: var(--text-strong);
   --muted: #123a38;
-  --muted-foreground: #a8cbc6; /* abyss-200 */
-
-  /* Accent — abyss-tinted hover */
+  --muted-foreground: #a8cbc6;
   --accent: #123a38;
-  --accent-foreground: #d6e6e3; /* abyss-100 */
+  --accent-foreground: #d6e6e3;
 
-  /* Semantic — desaturated, lifted for dark */
-  --destructive: #c98b82;
-  --success: #7faf93;
+  --destructive: #d28c82;
+  --success: #84b69a;
   --success-foreground: #08221f;
-  --warning: #cdab6e;
+  --warning: #d6b374;
   --warning-foreground: #1e1604;
 
-  /* Borders & inputs */
-  --border: #16403d;
-  --input: #16403d;
-  --ring: #bc8850;
+  --border: var(--border-subtle);
+  --input: var(--border-subtle);
+  --ring: var(--accent-brand);
 
-  /* Charts */
   --chart-1: #6aa39c;
   --chart-2: #a8cbc6;
-  --chart-3: #cfa372; /* brass-400 */
-  --chart-4: #7faf93;
+  --chart-3: #cfa372;
+  --chart-4: #84b69a;
   --chart-5: #3c7a74;
 
-  /* Grid line */
   --grid-line: rgba(214, 230, 227, 0.05);
 
-  /* Sidebar — deepest abyss */
   --sidebar: #08221f;
   --sidebar-foreground: #a8cbc6;
-  --sidebar-primary: #bc8850;
+  --sidebar-primary: #cfa372;
   --sidebar-primary-foreground: #08221f;
   --sidebar-accent: #123a38;
   --sidebar-accent-foreground: #f1ece1;
   --sidebar-border: #16403d;
-  --sidebar-ring: #bc8850;
+  --sidebar-ring: #cfa372;
+
+  color-scheme: dark;
 }
 
-/* ============================================
+/* ============================================================
+   CONFIGURABLE SURFACE ATTRIBUTES (data-* toggles)
+   data-theme handled above. data-layout / data-icons are
+   structural (handled in components).
+   ============================================================ */
+
+/* Density — rescales Tailwind's entire spacing scale via --spacing. */
+[data-density='compact'] {
+  --spacing: 0.22rem; /* default 0.25rem */
+}
+
+/* Type scale — scales rem-based sizing from the root. */
+[data-type='lg'] {
+  font-size: 112.5%; /* 16 → 18 */
+}
+
+/* Accent intensity — "bold" lets brass run a touch warmer/stronger. */
+[data-accent='bold'] {
+  --accent-brand: var(--brass-600);
+  --accent-brand-hover: var(--brass-700);
+  --ring: var(--brass-600);
+}
+[data-theme='dark'][data-accent='bold'] {
+  --accent-brand: #e2c49e;
+  --accent-brand-hover: #f1e4d2;
+  --ring: #e2c49e;
+}
+
+/* ============================================================
    BASE STYLES
-   ============================================ */
+   ============================================================ */
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -218,14 +416,18 @@
 
   body {
     @apply bg-background text-foreground;
-    font-size: 15px;
+    font-size: 0.9375rem; /* 15px, scales with data-type */
     line-height: 1.65;
     letter-spacing: -0.01em;
   }
 
+  [data-density='compact'] body {
+    line-height: 1.55;
+  }
+
   ::selection {
-    background: #e2c49e; /* brass-300 */
-    color: #08221f; /* abyss-900 */
+    background: var(--brass-300);
+    color: var(--abyss-900);
   }
 
   h1,
@@ -261,9 +463,44 @@
   }
 }
 
-/* ============================================
+/* ============================================================
+   BRAND UTILITIES — eyebrow, stat figures, data text
+   ============================================================ */
+@layer components {
+  /* Mono uppercase eyebrow/label — "mono carries the data". */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    font-size: 0.6875rem; /* ~11px */
+    line-height: 1.2;
+    color: var(--text-muted);
+  }
+  .eyebrow-accent {
+    color: var(--accent-brand);
+  }
+
+  /* Big stat figure — Oxanium, tabular, tight. */
+  .stat-figure {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: var(--tracking-tight);
+    color: var(--text-strong);
+    line-height: 1.05;
+  }
+
+  /* Inline data/metadata in mono. */
+  .data-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ============================================================
    SCROLLBAR
-   ============================================ */
+   ============================================================ */
 @layer base {
   ::-webkit-scrollbar {
     width: 6px;
@@ -284,9 +521,9 @@
   }
 }
 
-/* ============================================
+/* ============================================================
    MOTION — calm expo ease (pairs with GSAP / Motion)
-   ============================================ */
+   ============================================================ */
 @layer utilities {
   .animate-fade-in {
     animation: fade-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -296,14 +533,13 @@
     animation: slide-up 340ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* Brand accent on display text — solid Brass (no gradients per brand).
-     This is the single warm "accent moment" on a view. */
+  /* Brand accent on display text — solid Brass (no gradients per brand). */
   .text-gradient {
-    color: var(--color-brass);
+    color: var(--accent-brand);
   }
 
-  /* No glow in the brand — these resolve to soft, low, cool-toned shadows
-     (kept as classes so existing call sites stay valid). */
+  /* No glow in the brand — soft, low, cool shadows (classes kept for
+     existing call sites). */
   .glow-brand {
     box-shadow:
       0 1px 2px rgba(8, 34, 31, 0.05),
@@ -314,6 +550,11 @@
     box-shadow:
       0 4px 8px rgba(8, 34, 31, 0.06),
       0 18px 40px rgba(8, 34, 31, 0.12);
+  }
+
+  /* Brass inset active bar (left-rail active item, etc.). */
+  .accent-bar-l {
+    box-shadow: inset 2px 0 0 0 var(--accent-brand);
   }
 
   /* Decorative grid (login, brand surfaces) */
@@ -357,12 +598,10 @@
   }
 }
 
-/* ============================================
+/* ============================================================
    NOTE EDITOR — Tiptap prose styles
-   ============================================ */
+   ============================================================ */
 .note-prose {
-  /* Break long unbroken strings (tokens, URLs) instead of letting them
-     stretch the container and push UI off-screen. */
   overflow-wrap: anywhere;
   word-break: break-word;
   min-width: 0;
@@ -420,7 +659,6 @@
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
-  /* Inline code wraps so long tokens don't overflow the line */
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -438,7 +676,6 @@
 .note-prose pre code {
   background: transparent;
   padding: 0;
-  /* Code INSIDE a pre block doesn't wrap — the pre scrolls horizontally */
   overflow-wrap: normal;
   word-break: normal;
   white-space: pre;
@@ -458,7 +695,7 @@
   align-items: center;
   gap: 0.25rem;
   background: rgba(188, 136, 80, 0.14);
-  color: #a6743f; /* brass-600 */
+  color: #a6743f;
   border-radius: 6px;
   padding: 0.05rem 0.4rem;
   font-weight: 500;
@@ -497,7 +734,7 @@
   pointer-events: none;
 }
 .note-prose ::selection {
-  background: #e2c49e; /* brass-300 */
+  background: #e2c49e;
   color: #08221f;
 }
 .note-prose:focus {

@@ -1,11 +1,7 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
-
-const AppProviders = dynamic(() =>
-  import('@/components/app-providers').then((module) => module.AppProviders)
-);
+import { AppProviders } from '@/components/app-providers';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
