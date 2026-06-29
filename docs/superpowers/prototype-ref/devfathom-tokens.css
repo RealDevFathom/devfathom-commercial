@@ -1,0 +1,161 @@
+/* ============================================================
+   DevFathom Design System — tokens
+   "The Sounding" · Fathom palette. Drop-in CSS custom properties
+   (light + dark). Fonts via Google Fonts; self-host the woff2s
+   later for production if desired.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Oxanium:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* --- Abyss · deep teal primary scale --- */
+  --abyss-900: #08221F;
+  --abyss-800: #0C2E2C;
+  --abyss-700: #123A38;
+  --abyss-600: #1A4B47;
+  --abyss-500: #245C57;
+  --abyss-400: #3C7A74;
+  --abyss-300: #6AA39C;
+  --abyss-200: #A8CBC6;
+  --abyss-100: #D6E6E3;
+
+  /* --- Brass · accent scale (warm, muted) --- */
+  --brass-700: #8A5E32;
+  --brass-600: #A6743F;
+  --brass-500: #BC8850;   /* primary accent */
+  --brass-400: #CFA372;
+  --brass-300: #E2C49E;
+  --brass-100: #F1E4D2;
+
+  /* --- Paper · warm neutral surfaces --- */
+  --paper-white: #FDFCF8;
+  --paper-50:    #F7F5EF;
+  --paper-100:   #EFEBE1;
+  --paper-200:   #E3DDD0;
+  --paper-300:   #D2CBBB;
+
+  /* --- Ink / slate · warm-grey text & lines --- */
+  --ink-900:   #161A19;
+  --slate-700: #3B423F;
+  --slate-600: #545B58;
+  --slate-500: #6E7570;
+  --slate-400: #939A94;
+  --slate-300: #BAC0BA;
+
+  /* --- Semantic status (desaturated, restrained) --- */
+  --green-600: #3E6B52;  --green-100: #DDE8E0;
+  --amber-600: #9C7A3A;  --amber-100: #EEE5CF;
+  --red-600:   #9A4A40;  --red-100:   #EDDAD6;
+
+  /* --- Semantic aliases — reach for these in product code --- */
+  --surface-page:    var(--paper-50);
+  --surface-card:    var(--paper-white);
+  --surface-sunken:  var(--paper-100);
+  --surface-raised:  var(--paper-white);
+  --surface-inverse: var(--abyss-800);
+  --surface-accent:  var(--brass-500);
+
+  --text-strong:    var(--ink-900);
+  --text-body:      var(--slate-700);
+  --text-muted:     var(--slate-500);
+  --text-faint:     var(--slate-400);
+  --text-inverse:   var(--paper-50);
+  --text-on-accent: var(--abyss-900);
+  --text-link:      var(--abyss-600);
+
+  --border-subtle:  var(--paper-200);
+  --border-default: var(--paper-300);
+  --border-strong:  var(--slate-400);
+  --border-inverse: var(--abyss-600);
+
+  --accent:        var(--brass-500);
+  --accent-hover:  var(--brass-600);
+  --accent-quiet:  var(--brass-100);
+
+  --primary:       var(--abyss-700);
+  --primary-hover: var(--abyss-800);
+  --primary-quiet: var(--abyss-100);
+
+  --focus-ring: var(--brass-500);
+
+  --status-success-fg: var(--green-600);  --status-success-bg: var(--green-100);
+  --status-warning-fg: var(--amber-600);  --status-warning-bg: var(--amber-100);
+  --status-danger-fg:  var(--red-600);    --status-danger-bg:  var(--red-100);
+
+  /* --- Type families --- */
+  --font-display: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-logo:    'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-body:    'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:    'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* --- Weights --- */
+  --weight-light: 300; --weight-regular: 400; --weight-medium: 500;
+  --weight-semibold: 600; --weight-bold: 700;
+
+  /* --- Type scale --- */
+  --text-xs: 0.75rem; --text-sm: 0.875rem; --text-base: 1rem; --text-md: 1.125rem;
+  --text-lg: 1.375rem; --text-xl: 1.75rem; --text-2xl: 2.25rem; --text-3xl: 2.875rem;
+  --text-4xl: 3.75rem; --text-5xl: 4.75rem;
+
+  /* --- Line heights --- */
+  --leading-tight: 1.08; --leading-snug: 1.22; --leading-normal: 1.5; --leading-relaxed: 1.65;
+
+  /* --- Letter spacing --- */
+  --tracking-tight: -0.02em; --tracking-snug: -0.01em; --tracking-normal: 0;
+  --tracking-wide: 0.04em; --tracking-caps: 0.14em;
+
+  /* --- Spacing (8px grid) --- */
+  --space-0: 0; --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem;
+  --space-5: 1.5rem; --space-6: 2rem; --space-7: 3rem; --space-8: 4rem; --space-9: 6rem; --space-10: 8rem;
+
+  --container-sm: 38rem; --container-md: 60rem; --container-lg: 76rem; --container-xl: 90rem;
+  --page-pad: clamp(1.25rem, 5vw, 4rem);
+
+  /* --- Radii --- */
+  --radius-none: 0; --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px;
+  --radius-lg: 10px; --radius-xl: 16px; --radius-pill: 999px;
+
+  /* --- Borders --- */
+  --border-hair: 1px; --border-thick: 1.5px;
+
+  /* --- Shadows (soft, low, cool) --- */
+  --shadow-none: none;
+  --shadow-xs: 0 1px 2px rgba(8, 34, 31, 0.06);
+  --shadow-sm: 0 1px 2px rgba(8, 34, 31, 0.05), 0 2px 6px rgba(8, 34, 31, 0.05);
+  --shadow-md: 0 2px 4px rgba(8, 34, 31, 0.05), 0 8px 20px rgba(8, 34, 31, 0.08);
+  --shadow-lg: 0 4px 8px rgba(8, 34, 31, 0.06), 0 18px 40px rgba(8, 34, 31, 0.12);
+  --shadow-focus: 0 0 0 3px rgba(188, 136, 80, 0.35);
+
+  /* --- Motion --- */
+  --ease-standard: cubic-bezier(0.4, 0.1, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms; --duration-base: 200ms; --duration-slow: 360ms;
+}
+
+/* ============================================================
+   Dark theme
+   ============================================================ */
+[data-theme="dark"] {
+  --surface-page:   #07201D;
+  --surface-card:   #0C2E2C;
+  --surface-sunken: #051512;
+  --surface-raised: #103734;
+
+  --text-strong: #FBFAF6;
+  --text-body:   #C6D8D4;
+  --text-muted:  #8FB1AB;
+  --text-faint:  #5E827C;
+
+  --border-subtle:  #103734;
+  --border-default: #1A4B47;
+  --border-strong:  #2C605A;
+
+  --accent:       #CFA372;   /* brass lightens in dark */
+  --accent-hover: #E2C49E;
+  --primary:      #B8D4CF;   /* primary inverts to light teal */
+  --primary-hover:#A8CBC6;
+
+  --status-success-fg: #84B69A; --status-success-bg: #13302A;
+  --status-warning-fg: #D6B374; --status-warning-bg: #322914;
+  --status-danger-fg:  #D28C82; --status-danger-bg:  #331F1C;
+}
