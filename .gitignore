@@ -52,3 +52,6 @@ private-uploads/
 scripts/.enh-*.md
 scripts/.enh-gh-map.json
 scripts/.enh-internal-map.json
+
+# Playwright MCP scratch (screenshots saved to docs/ instead)
+.playwright-mcp/
