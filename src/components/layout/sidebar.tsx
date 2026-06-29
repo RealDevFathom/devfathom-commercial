@@ -28,37 +28,47 @@ import { easeOutExpo } from '@/lib/motion';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { FathomMark } from '@/components/brand/logo';
+import { usePreferences } from '@/components/preferences-provider';
+
+type NavGroup = 'Workspace' | 'Firm';
 
 interface NavItem {
   label: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
+  group: NavGroup;
   adminOnly?: boolean;
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
 }
 
+// Grouped to match the prototype's WORKSPACE / FIRM rail. Order defines the
+// numbered index (recomputed after RBAC filtering so numbers stay contiguous).
 const navigation: NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Projects', href: '/projects', icon: FolderKanban },
-  { label: 'Clients', href: '/clients', icon: Briefcase },
-  { label: 'Notes', href: '/notes', icon: StickyNote },
-  { label: 'Email', href: '/email', icon: Mail },
-  { label: 'Finance', href: '/finance', icon: DollarSign, adminOnly: true },
-  { label: 'Meetings', href: '/meetings', icon: Video },
-  { label: 'Chat', href: '/chat', icon: MessageSquare },
-  { label: 'Team', href: '/team', icon: Users },
-  { label: 'Reviews', href: '/reviews', icon: ClipboardList },
-  { label: 'Insights', href: '/team/stats', icon: BarChart3, adminOnly: true },
-  { label: 'HR', href: '/hr', icon: UserCog, hrAccess: true },
-  { label: 'Audit Log', href: '/audit-logs', icon: ScrollText, adminOnly: true },
-  { label: 'Settings', href: '/settings', icon: Settings },
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'Workspace' },
+  { label: 'Projects', href: '/projects', icon: FolderKanban, group: 'Workspace' },
+  { label: 'Clients', href: '/clients', icon: Briefcase, group: 'Workspace' },
+  { label: 'Notes', href: '/notes', icon: StickyNote, group: 'Workspace' },
+  { label: 'Email', href: '/email', icon: Mail, group: 'Workspace' },
+  { label: 'Meetings', href: '/meetings', icon: Video, group: 'Workspace' },
+  { label: 'Chat', href: '/chat', icon: MessageSquare, group: 'Workspace' },
+  { label: 'Finance', href: '/finance', icon: DollarSign, adminOnly: true, group: 'Firm' },
+  { label: 'Team', href: '/team', icon: Users, group: 'Firm' },
+  { label: 'Reviews', href: '/reviews', icon: ClipboardList, group: 'Firm' },
+  { label: 'Insights', href: '/team/stats', icon: BarChart3, adminOnly: true, group: 'Firm' },
+  { label: 'HR', href: '/hr', icon: UserCog, hrAccess: true, group: 'Firm' },
+  { label: 'Audit Log', href: '/audit-logs', icon: ScrollText, adminOnly: true, group: 'Firm' },
+  { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
 ];
+
+const GROUP_ORDER: NavGroup[] = ['Workspace', 'Firm'];
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
   const { data: session } = useSession();
+  const { icons } = usePreferences();
+  const numbered = icons !== 'architectural';
   const isAdmin = session?.user?.role === 'ADMIN';
   const isHr = session?.user?.role === 'HR';
 
@@ -68,14 +78,24 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
     return true;
   });
 
-  const getInitials = (name: string) => {
-    return name
+  // Contiguous numeric index across the (filtered) rail — 01, 02, …
+  const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
+
+  // Longest-matching href wins so /team/stats highlights Insights, not Team.
+  const matchingHrefs = filteredNav
+    .map((i) => i.href)
+    .filter((href) => pathname === href || pathname.startsWith(href + '/'));
+  const bestMatch = matchingHrefs.reduce((best, href) => (href.length > best.length ? href : best), '');
+
+  const getInitials = (name: string) =>
+    name
       .split(' ')
       .map((n) => n[0])
       .join('')
       .toUpperCase()
       .slice(0, 2);
-  };
+
+  let renderIndex = 0;
 
   return (
     <aside
@@ -86,7 +106,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         collapsed ? 'w-16' : 'w-60'
       )}
     >
-      {/* Logo */}
+      {/* Wordmark */}
       <div
         className={cn(
           'flex h-16 items-center border-b border-sidebar-border px-4',
@@ -96,10 +116,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         <FathomMark className="h-8 w-8 shrink-0" variant="white" />
         {!collapsed && (
           <div className="flex flex-col overflow-hidden animate-fade-in">
-            <span className="font-display text-sm font-semibold text-sidebar-accent-foreground tracking-tight">
+            <span className="font-display text-sm font-semibold tracking-tight text-sidebar-accent-foreground">
               DevFathom
             </span>
-            <span className="text-[10px] text-sidebar-foreground/50 uppercase tracking-[0.18em]">
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/50">
               Company hub
             </span>
           </div>
@@ -107,73 +127,93 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-4">
-        {filteredNav.map((item, i) => {
-          // Pick the longest-matching nav href so that on /team/stats only
-          // Insights highlights (not also Team, whose href /team is a prefix).
-          const matchingHrefs = filteredNav
-            .map((i) => i.href)
-            .filter((href) => pathname === href || pathname.startsWith(href + '/'));
-          const bestMatch = matchingHrefs.reduce(
-            (best, href) => (href.length > best.length ? href : best),
-            ''
-          );
-          const isActive = item.href === bestMatch;
-          const Icon = item.icon;
-
-          const link = (
-            <Link
-              href={item.href}
-              onClick={onNavigate}
-              className={cn(
-                'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-150',
-                isActive
-                  ? 'text-sidebar-accent-foreground'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-accent-foreground'
-              )}
-            >
-              {isActive && (
-                <m.span
-                  layoutId="sidebar-active"
-                  className="absolute inset-0 rounded-lg bg-sidebar-accent shadow-sm"
-                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                />
-              )}
-              <Icon
-                className={cn(
-                  'relative z-10 h-[18px] w-[18px] shrink-0 transition-colors',
-                  isActive
-                    ? 'text-sidebar-primary'
-                    : 'text-sidebar-foreground/60 group-hover:text-sidebar-foreground'
-                )}
-              />
-              {!collapsed && <span className="relative z-10 truncate">{item.label}</span>}
-              {isActive && !collapsed && (
-                <span className="relative z-10 ml-auto h-1.5 w-1.5 rounded-full bg-sidebar-primary" />
-              )}
-            </Link>
-          );
-
-          const entry = collapsed ? (
-            <Tooltip>
-              <TooltipTrigger render={link} />
-              <TooltipContent side="right" className="font-medium">
-                {item.label}
-              </TooltipContent>
-            </Tooltip>
-          ) : (
-            link
-          );
-
+      <nav className="flex-1 space-y-5 overflow-y-auto px-2 py-4">
+        {GROUP_ORDER.map((group) => {
+          const items = filteredNav.filter((i) => i.group === group);
+          if (items.length === 0) return null;
           return (
-            <m.div
-              key={item.href}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.04 * i + 0.05, duration: 0.4, ease: easeOutExpo }}
-            >
-              {entry}
-            </m.div>
+            <div key={group} className="space-y-1">
+              {!collapsed && (
+                <p className="px-3 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+                  {group}
+                </p>
+              )}
+              {items.map((item) => {
+                const isActive = item.href === bestMatch;
+                const Icon = item.icon;
+                const num = indexByHref.get(item.href) ?? 0;
+                const animIndex = renderIndex++;
+
+                const link = (
+                  <Link
+                    href={item.href}
+                    onClick={onNavigate}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cn(
+                      'group relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150',
+                      collapsed && 'justify-center px-0',
+                      isActive
+                        ? 'text-sidebar-accent-foreground'
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-accent-foreground'
+                    )}
+                  >
+                    {isActive && (
+                      <m.span
+                        layoutId="sidebar-active"
+                        className="absolute inset-0 rounded-md bg-sidebar-accent shadow-sm"
+                        style={{ boxShadow: 'inset 2px 0 0 0 var(--sidebar-primary)' }}
+                        transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                      />
+                    )}
+                    {/* Index (numeric) or architectural icon */}
+                    {numbered ? (
+                      <span
+                        className={cn(
+                          'relative z-10 w-5 shrink-0 text-center font-mono text-[11px] tabular-nums transition-colors',
+                          isActive
+                            ? 'text-sidebar-primary'
+                            : 'text-sidebar-foreground/45 group-hover:text-sidebar-foreground/70'
+                        )}
+                      >
+                        {String(num).padStart(2, '0')}
+                      </span>
+                    ) : (
+                      <Icon
+                        className={cn(
+                          'relative z-10 h-[18px] w-[18px] shrink-0 transition-colors',
+                          isActive
+                            ? 'text-sidebar-primary'
+                            : 'text-sidebar-foreground/60 group-hover:text-sidebar-foreground'
+                        )}
+                      />
+                    )}
+                    {!collapsed && <span className="relative z-10 truncate">{item.label}</span>}
+                  </Link>
+                );
+
+                const entry = collapsed ? (
+                  <Tooltip>
+                    <TooltipTrigger render={link} />
+                    <TooltipContent side="right" className="font-medium">
+                      {item.label}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  link
+                );
+
+                return (
+                  <m.div
+                    key={item.href}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.03 * animIndex + 0.05, duration: 0.4, ease: easeOutExpo }}
+                  >
+                    {entry}
+                  </m.div>
+                );
+              })}
+            </div>
           );
         })}
       </nav>
@@ -181,21 +221,19 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
       {/* Collapse toggle */}
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="mx-2 mb-2 flex items-center justify-center rounded-lg p-2 text-sidebar-foreground/50 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
+        className="mx-2 mb-2 flex items-center justify-center rounded-md p-2 text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
         aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
       </button>
 
-      {/* User section */}
-      <div
-        className={cn('border-t border-sidebar-border p-3', collapsed ? 'flex justify-center' : '')}
-      >
+      {/* User chip */}
+      <div className={cn('border-t border-sidebar-border p-3', collapsed ? 'flex justify-center' : '')}>
         {session?.user && (
           <div className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}>
-            <Avatar className="h-8 w-8 shrink-0">
+            <Avatar className="h-8 w-8 shrink-0 rounded-md">
               <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
-              <AvatarFallback className="bg-sidebar-primary/20 text-sidebar-primary text-xs font-medium">
+              <AvatarFallback className="rounded-md bg-sidebar-primary/20 text-xs font-medium text-sidebar-primary">
                 {getInitials(session.user.name)}
               </AvatarFallback>
             </Avatar>
@@ -204,7 +242,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
                 <span className="truncate text-sm font-medium text-sidebar-accent-foreground">
                   {session.user.name}
                 </span>
-                <span className="truncate text-xs text-sidebar-foreground/50">
+                <span className="truncate font-mono text-[11px] text-sidebar-foreground/50">
                   {session.user.title}
                 </span>
               </div>

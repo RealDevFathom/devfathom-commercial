@@ -9,7 +9,7 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground [a]:hover:bg-primary/80',
+        default: 'bg-primary text-primary-foreground [a]:hover:bg-primary-hover',
         secondary: 'bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80',
         destructive:
           'bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20',
@@ -17,9 +17,15 @@ const badgeVariants = cva(
         ghost: 'hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50',
         link: 'text-primary underline-offset-4 hover:underline',
       },
+      // Mono uppercase data look — "mono carries the data". Pairs with any variant.
+      mono: {
+        true: 'font-mono text-[0.625rem] font-semibold tracking-wide uppercase',
+        false: '',
+      },
     },
     defaultVariants: {
       variant: 'default',
+      mono: false,
     },
   }
 );
@@ -27,6 +33,7 @@ const badgeVariants = cva(
 function Badge({
   className,
   variant = 'default',
+  mono = false,
   render,
   ...props
 }: useRender.ComponentProps<'span'> & VariantProps<typeof badgeVariants>) {
@@ -34,7 +41,7 @@ function Badge({
     defaultTagName: 'span',
     props: mergeProps<'span'>(
       {
-        className: cn(badgeVariants({ variant }), className),
+        className: cn(badgeVariants({ variant, mono }), className),
       },
       props
     ),
