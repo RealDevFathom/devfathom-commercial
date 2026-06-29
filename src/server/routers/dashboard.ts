@@ -63,6 +63,45 @@ export const dashboardRouter = router({
       return { hiddenWidgets };
     }),
 
+  // "The Sounding" design revamp (spec §6): best-effort persistence of the five
+  // configurable surface toggles into the shared User.preferences blob under an
+  // `appearance` key, so prefs follow the account. localStorage remains the
+  // client-side source of truth (the PreferencesProvider applies them pre-paint);
+  // this write is a non-blocking mirror. Stored alongside `hiddenWidgets`; the
+  // base-merge here and in updatePreferences keeps the two independent.
+  updateAppearance: protectedProcedure
+    .input(
+      z.object({
+        density: z.enum(['default', 'compact']).optional(),
+        type: z.enum(['default', 'lg']).optional(),
+        accent: z.enum(['quiet', 'bold']).optional(),
+        layout: z.enum(['rail', 'top']).optional(),
+        icons: z.enum(['numeric', 'architectural']).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.user.findUnique({
+        where: { id: ctx.session.user.id },
+        select: { preferences: true },
+      });
+      const base =
+        existing?.preferences && typeof existing.preferences === 'object' &&
+        !Array.isArray(existing.preferences)
+          ? (existing.preferences as Record<string, unknown>)
+          : {};
+      const currentAppearance =
+        base.appearance && typeof base.appearance === 'object' && !Array.isArray(base.appearance)
+          ? (base.appearance as Record<string, unknown>)
+          : {};
+
+      const appearance = { ...currentAppearance, ...input };
+      await ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: { preferences: { ...base, appearance } },
+      });
+      return { appearance };
+    }),
+
   getStats: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
     const userId = ctx.session.user.id;

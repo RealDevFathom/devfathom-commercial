@@ -45,6 +45,14 @@ import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
+import {
+  usePreferences,
+  type Density,
+  type TypeScale,
+  type Accent,
+  type Layout,
+  type Icons,
+} from '@/components/preferences-provider';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import type {
   NotificationPrefs,
@@ -62,7 +70,6 @@ function formatDay(d: Date | string) {
 
 export function SettingsContent() {
   const { data: session } = useSession();
-  const { theme, setTheme } = useTheme();
   const isAdmin = session?.user?.role === 'ADMIN';
 
   return (
@@ -90,56 +97,7 @@ export function SettingsContent() {
       <NotificationsSection />
 
       {/* Appearance */}
-      <Card className="border-border/60">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-violet-500/10">
-              <Palette className="h-3.5 w-3.5 text-violet-500" />
-            </div>
-            Appearance
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-3">Theme</label>
-            <div className="flex gap-3">
-              {(
-                [
-                  { value: 'light', label: 'Light', icon: Sun },
-                  { value: 'dark', label: 'Dark', icon: Moon },
-                  { value: 'system', label: 'System', icon: Monitor },
-                ] as const
-              ).map((t) => (
-                <button
-                  key={t.value}
-                  onClick={() => setTheme(t.value)}
-                  className={cn(
-                    'flex flex-1 flex-col items-center gap-2 rounded-xl border p-4 transition-all',
-                    theme === t.value
-                      ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
-                      : 'border-border bg-card hover:border-border hover:bg-secondary/30'
-                  )}
-                >
-                  <t.icon
-                    className={cn(
-                      'h-5 w-5',
-                      theme === t.value ? 'text-primary' : 'text-muted-foreground'
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      'text-xs font-medium',
-                      theme === t.value ? 'text-foreground' : 'text-muted-foreground'
-                    )}
-                  >
-                    {t.label}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <AppearanceSection />
 
       {/* API Tokens (admin only) */}
       {isAdmin && <ApiTokensSection />}
@@ -185,6 +143,199 @@ export function SettingsContent() {
       {/* Leave the company */}
       <ResignationSection />
     </div>
+  );
+}
+
+/* ============================================================
+   Appearance — "The Sounding" design revamp (spec §6)
+   Theme (next-themes) + the five configurable surface toggles
+   (density / type / accent / layout / icons via usePreferences).
+   ============================================================ */
+type SegmentOption<T extends string> = {
+  value: T;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+};
+
+function SegmentedControl<T extends string>({
+  value,
+  options,
+  onChange,
+  'aria-label': ariaLabel,
+}: {
+  value: T;
+  options: ReadonlyArray<SegmentOption<T>>;
+  onChange: (value: T) => void;
+  'aria-label'?: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="inline-flex flex-wrap gap-0.5 rounded-xl border border-border bg-background p-0.5"
+    >
+      {options.map((opt) => {
+        const active = value === opt.value;
+        const Icon = opt.icon;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(opt.value)}
+            className={cn(
+              'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+              active
+                ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {Icon && <Icon className="h-3.5 w-3.5" />}
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PreferenceRow({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-foreground">{label}</p>
+        {description && <p className="text-[11px] text-muted-foreground">{description}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function AppearanceSection() {
+  const { theme, setTheme } = useTheme();
+  const { density, type, accent, layout, icons, setPreference } = usePreferences();
+  // Best-effort, non-blocking mirror to the user record so prefs follow the
+  // account. localStorage (via PreferencesProvider) is the source of truth, so
+  // we deliberately neither await nor surface errors from this write.
+  const persist = trpc.dashboard.updateAppearance.useMutation();
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-violet-500/10">
+            <Palette className="h-3.5 w-3.5 text-violet-500" />
+          </div>
+          Appearance
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Personalize the workspace. Changes apply instantly and are remembered on this device.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <PreferenceRow label="Theme" description="Light or dark surfaces.">
+          <SegmentedControl
+            aria-label="Theme"
+            value={theme === 'dark' ? 'dark' : 'light'}
+            options={[
+              { value: 'light', label: 'Light', icon: Sun },
+              { value: 'dark', label: 'Dark', icon: Moon },
+            ]}
+            onChange={(v) => setTheme(v)}
+          />
+        </PreferenceRow>
+
+        <PreferenceRow
+          label="Density"
+          description="Comfortable spacing or a tighter, compact layout."
+        >
+          <SegmentedControl<Density>
+            aria-label="Density"
+            value={density}
+            options={[
+              { value: 'default', label: 'Default' },
+              { value: 'compact', label: 'Compact' },
+            ]}
+            onChange={(v) => {
+              setPreference('density', v);
+              persist.mutate({ density: v });
+            }}
+          />
+        </PreferenceRow>
+
+        <PreferenceRow label="Type scale" description="Overall text size across the app.">
+          <SegmentedControl<TypeScale>
+            aria-label="Type scale"
+            value={type}
+            options={[
+              { value: 'default', label: 'Default' },
+              { value: 'lg', label: 'Large' },
+            ]}
+            onChange={(v) => {
+              setPreference('type', v);
+              persist.mutate({ type: v });
+            }}
+          />
+        </PreferenceRow>
+
+        <PreferenceRow label="Accent" description="How much brass the interface uses.">
+          <SegmentedControl<Accent>
+            aria-label="Accent"
+            value={accent}
+            options={[
+              { value: 'quiet', label: 'Quiet' },
+              { value: 'bold', label: 'Bold' },
+            ]}
+            onChange={(v) => {
+              setPreference('accent', v);
+              persist.mutate({ accent: v });
+            }}
+          />
+        </PreferenceRow>
+
+        <PreferenceRow
+          label="Navigation layout"
+          description="A left side rail or a top navigation bar."
+        >
+          <SegmentedControl<Layout>
+            aria-label="Navigation layout"
+            value={layout}
+            options={[
+              { value: 'rail', label: 'Side rail' },
+              { value: 'top', label: 'Top nav' },
+            ]}
+            onChange={(v) => {
+              setPreference('layout', v);
+              persist.mutate({ layout: v });
+            }}
+          />
+        </PreferenceRow>
+
+        <PreferenceRow label="Nav icons" description="Numbered indices or architectural icons.">
+          <SegmentedControl<Icons>
+            aria-label="Nav icons"
+            value={icons}
+            options={[
+              { value: 'numeric', label: 'Numbered' },
+              { value: 'architectural', label: 'Icons' },
+            ]}
+            onChange={(v) => {
+              setPreference('icons', v);
+              persist.mutate({ icons: v });
+            }}
+          />
+        </PreferenceRow>
+      </CardContent>
+    </Card>
   );
 }
 

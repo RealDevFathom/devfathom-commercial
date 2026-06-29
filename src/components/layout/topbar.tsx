@@ -183,10 +183,10 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* Search */}
           <button
             onClick={() => setCommandOpen(true)}
-            className="hidden sm:flex h-9 w-64 items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 text-sm text-muted-foreground transition-colors hover:bg-muted"
+            className="hidden sm:flex h-9 w-72 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 text-sm text-muted-foreground transition-colors hover:bg-muted"
           >
             <Search className="h-4 w-4" />
-            <span className="flex-1 text-left">Search...</span>
+            <span className="flex-1 text-left">Search the firm, or ask</span>
             <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
               <span className="text-xs">⌘</span>K
             </kbd>

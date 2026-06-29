@@ -27,6 +27,13 @@ const oxanium = Oxanium({
   display: 'swap',
 });
 
+// FOUC guard for the five configurable surface toggles (see
+// preferences-provider.tsx). Runs synchronously in <head> before the body
+// paints, mirroring localStorage `devfathom-prefs` onto <html> data-* so the
+// CSS in globals.css applies pre-hydration. data-theme is handled separately by
+// next-themes. SSR-safe (try/catch); sets attributes only — no user data.
+const PREFERENCES_FOUC_SCRIPT = `(function(){try{var d=document.documentElement;var allow={density:['default','compact'],type:['default','lg'],accent:['quiet','bold'],layout:['rail','top'],icons:['numeric','architectural']};var def={density:'default',type:'default',accent:'quiet',layout:'rail',icons:'numeric'};var raw=localStorage.getItem('devfathom-prefs');var p=raw?JSON.parse(raw):{};Object.keys(allow).forEach(function(k){var v=p&&p[k];if(allow[k].indexOf(v)===-1)v=def[k];d.setAttribute('data-'+k,v);});}catch(e){}})();`;
+
 const description =
   'The DevFathom company hub — projects, finance, clients, people, and real-time collaboration in one calm, unified workspace for the team that designs, builds, and advises.';
 
@@ -88,6 +95,12 @@ export default function RootLayout({
       className={`${plexSans.variable} ${plexMono.variable} ${oxanium.variable} h-full`}
       suppressHydrationWarning
     >
+      <head>
+        {/* Apply persisted surface preferences pre-paint to avoid FOUC. This is
+            the ONLY dangerouslySetInnerHTML in the app — it sets <html> data-*
+            attributes only, from an allow-list, with no user-controlled data. */}
+        <script dangerouslySetInnerHTML={{ __html: PREFERENCES_FOUC_SCRIPT }} />
+      </head>
       <body className="min-h-full">
         <Providers>{children}</Providers>
       </body>
