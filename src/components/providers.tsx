@@ -12,7 +12,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <SessionProvider>
       <ThemeProvider
-        attribute="class"
+        attribute="data-theme"
         defaultTheme="light"
         enableSystem={false}
         disableTransitionOnChange
