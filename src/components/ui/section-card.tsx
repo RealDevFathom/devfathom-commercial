@@ -31,7 +31,7 @@ function SectionCard({
     <div
       data-slot="section-card"
       className={cn(
-        'rounded-lg border border-border-subtle bg-card p-5 text-card-foreground shadow-none',
+        'min-w-0 rounded-lg border border-border-subtle bg-card p-5 text-card-foreground shadow-none',
         className
       )}
       {...props}

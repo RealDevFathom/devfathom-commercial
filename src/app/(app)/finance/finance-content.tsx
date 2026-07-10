@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PageHeader } from '@/components/ui/page-header';
+import { Stat } from '@/components/ui/stat';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -68,57 +70,49 @@ export function FinanceContent() {
   const transactions = trpc.finance.getTransactions.useQuery({});
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <div>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">Finance</h1>
-        <p className="text-muted-foreground mt-1.5 text-[15px]">
-          Income, expenses, invoices, and financial reports.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="FIRM"
+        heading="Finance"
+        description="Income, expenses, invoices, and financial reports."
+      />
 
       {/* KPI Summary */}
       {summary.isLoading ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i} className="border-border/60">
-              <CardContent className="p-6">
-                <Skeleton className="h-4 w-24 mb-3" />
-                <Skeleton className="h-9 w-28" />
-              </CardContent>
-            </Card>
+            <div key={i} className="bg-card p-5">
+              <Skeleton className="h-4 w-24 mb-3" />
+              <Skeleton className="h-9 w-28" />
+            </div>
           ))}
         </div>
       ) : (
         summary.data && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle sm:grid-cols-2 lg:grid-cols-4">
             <FinanceKPI
               title="Monthly Revenue"
               value={moneyListLabel(summary.data.monthlyIncome)}
               subtitle={baseEquivalentLabel(summary.data.monthlyIncome) ?? undefined}
               icon={TrendingUp}
-              accent="emerald"
             />
             <FinanceKPI
               title="Monthly Expenses"
               value={moneyListLabel(summary.data.monthlyExpense)}
               subtitle={baseEquivalentLabel(summary.data.monthlyExpense) ?? undefined}
               icon={TrendingDown}
-              accent="red"
             />
             <FinanceKPI
               title="Net Profit"
               value={moneyListLabel(summary.data.monthlyProfit)}
               subtitle={baseEquivalentLabel(summary.data.monthlyProfit) ?? undefined}
               icon={DollarSign}
-              accent={summary.data.monthlyProfit.some((p) => p.amount < 0) ? 'red' : 'emerald'}
             />
             <FinanceKPI
               title="Outstanding"
               value={moneyListLabel(summary.data.totalOutstanding)}
               subtitle={`${summary.data.outstandingCount} invoices`}
               icon={FileText}
-              accent="amber"
             />
           </div>
         )
@@ -166,39 +160,23 @@ function FinanceKPI({
   value,
   subtitle,
   icon: Icon,
-  accent,
 }: {
   title: string;
   value: string;
   subtitle?: string;
   icon: React.ComponentType<{ className?: string }>;
-  accent: 'emerald' | 'red' | 'amber' | 'blue';
 }) {
-  const colors = {
-    emerald: 'bg-emerald-500/10 text-emerald-500',
-    red: 'bg-red-500/10 text-red-500',
-    amber: 'bg-amber-500/10 text-amber-500',
-    blue: 'bg-blue-500/10 text-blue-500',
-  };
   return (
-    <Card className="border-border/60">
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-[13px] font-medium text-muted-foreground">{title}</p>
-            <p className="font-display text-2xl font-bold tracking-tight text-foreground mt-1">
-              {value}
-            </p>
-            {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
-          </div>
-          <div
-            className={cn('flex h-10 w-10 items-center justify-center rounded-xl', colors[accent])}
-          >
-            <Icon className="h-5 w-5" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="relative bg-card p-5">
+      <Icon aria-hidden className="absolute right-5 top-5 h-4 w-4 text-text-muted" />
+      <Stat
+        className="pr-8"
+        label={title}
+        value={value}
+        valueClassName="break-words text-[clamp(1.5rem,7vw,2rem)]"
+        sub={subtitle}
+      />
+    </div>
   );
 }
 

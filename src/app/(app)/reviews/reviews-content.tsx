@@ -15,6 +15,7 @@ import {
   Inbox,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -54,19 +55,16 @@ export function ReviewsContent() {
   const isManager = session?.user?.role === 'ADMIN' || session?.user?.role === 'HR';
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-            Performance Reviews
-          </h1>
-          <p className="text-muted-foreground mt-1.5 text-[15px]">
-            {isManager
-              ? 'Run review cycles, assign reviewers, and complete your own reviews.'
-              : 'Reviews assigned to you and feedback shared about your work.'}
-          </p>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="FIRM"
+        heading="Performance Reviews"
+        description={
+          isManager
+            ? 'Run review cycles, assign reviewers, and complete your own reviews.'
+            : 'Reviews assigned to you and feedback shared about your work.'
+        }
+      />
 
       {isManager ? (
         <Tabs defaultValue="cycles" className="space-y-6">
@@ -124,10 +122,7 @@ function CyclesList({
 
   const setStatus = (cycle: Cycle) => {
     const mut = cycle.status === 'OPEN' ? toggle : reopen;
-    mut.mutate(
-      { id: cycle.id },
-      { onSuccess: () => utils.reviews.listCycles.invalidate() }
-    );
+    mut.mutate({ id: cycle.id }, { onSuccess: () => utils.reviews.listCycles.invalidate() });
   };
 
   return (
@@ -426,7 +421,11 @@ function AssignReviewerForm({ cycleId }: { cycleId: string }) {
             onClick={() => canSubmit && add.mutate({ cycleId, subjectId, reviewerId })}
             disabled={!canSubmit}
           >
-            {add.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {add.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
             Assign
           </Button>
         </div>
@@ -553,14 +552,16 @@ function ReviewFeedbackRow({
   return (
     <div className="px-6 py-4 space-y-2">
       <div className="flex items-center gap-3">
-        <PersonChip name={who.name} avatar={who.avatar} sub={`${relation === 'by' ? 'by' : 'of'} · ${review.cycle.name}`} />
+        <PersonChip
+          name={who.name}
+          avatar={who.avatar}
+          sub={`${relation === 'by' ? 'by' : 'of'} · ${review.cycle.name}`}
+        />
         <div className="ml-auto">{review.rating != null && <Stars value={review.rating} />}</div>
       </div>
       {(review.strengths || review.improvements || review.comments) && (
         <div className="space-y-2 pl-12 text-sm text-foreground/90">
-          {review.strengths && (
-            <FeedbackBlock label="Strengths" body={review.strengths} />
-          )}
+          {review.strengths && <FeedbackBlock label="Strengths" body={review.strengths} />}
           {review.improvements && (
             <FeedbackBlock label="Areas to improve" body={review.improvements} />
           )}
@@ -582,13 +583,7 @@ function FeedbackBlock({ label, body }: { label: string; body: string }) {
   );
 }
 
-function FillReviewDialog({
-  target,
-  onClose,
-}: {
-  target: ReviewRow | null;
-  onClose: () => void;
-}) {
+function FillReviewDialog({ target, onClose }: { target: ReviewRow | null; onClose: () => void }) {
   const utils = trpc.useUtils();
   const [rating, setRating] = useState(0);
   const [strengths, setStrengths] = useState('');
@@ -762,15 +757,7 @@ function StarPicker({ value, onChange }: { value: number; onChange: (v: number) 
   );
 }
 
-function PersonChip({
-  name,
-  avatar,
-  sub,
-}: {
-  name: string;
-  avatar: string | null;
-  sub?: string;
-}) {
+function PersonChip({ name, avatar, sub }: { name: string; avatar: string | null; sub?: string }) {
   return (
     <div className="flex items-center gap-2.5 min-w-0">
       <Avatar className="h-8 w-8 shrink-0">

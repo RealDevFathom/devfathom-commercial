@@ -21,6 +21,7 @@ import {
   Save,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -80,15 +81,12 @@ export function HRContent() {
   const isReviewer = isAdmin || session?.user?.role === 'HR';
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">HR</h1>
-          <p className="text-muted-foreground mt-1.5 text-[15px]">
-            Leave, headcount, and people operations.
-          </p>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="PEOPLE OPS"
+        heading="HR"
+        description="Leave, headcount, and people operations."
+      />
 
       <Tabs defaultValue="overview" className="space-y-6">
         <TabsList>
@@ -1152,9 +1150,7 @@ function ResignationsTab({ isReviewer }: { isReviewer: boolean }) {
           </div>
           Resignations
         </CardTitle>
-        <p className="text-xs text-muted-foreground mt-1">
-          Pending requests awaiting your review.
-        </p>
+        <p className="text-xs text-muted-foreground mt-1">Pending requests awaiting your review.</p>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -1301,11 +1297,7 @@ function ReviewResignationDialog({
               isApprove ? 'text-emerald-600 dark:text-emerald-500' : 'text-destructive'
             )}
           >
-            {isApprove ? (
-              <CheckCircle2 className="h-4 w-4" />
-            ) : (
-              <XCircle className="h-4 w-4" />
-            )}
+            {isApprove ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
             {isApprove ? 'Approve' : 'Decline'} resignation
           </DialogTitle>
           <DialogDescription>

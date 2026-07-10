@@ -28,6 +28,7 @@ import {
   History,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import { Switch } from '@/components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -73,13 +74,12 @@ export function SettingsContent() {
   const isAdmin = session?.user?.role === 'ADMIN';
 
   return (
-    <div className="max-w-2xl space-y-6 animate-fade-in">
-      <div>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">Settings</h1>
-        <p className="text-muted-foreground mt-1.5 text-[15px]">
-          Manage your profile, security, and preferences.
-        </p>
-      </div>
+    <div className="max-w-2xl space-y-6">
+      <PageHeader
+        eyebrow="WORKSPACE"
+        heading="Settings"
+        description="Manage your profile, security, and preferences."
+      />
 
       {/* Profile */}
       <ProfileSection />
@@ -672,7 +672,8 @@ function PasswordSection() {
           <div>
             <p className="text-xs font-medium text-foreground">Sign out everywhere</p>
             <p className="text-[11px] text-muted-foreground">
-              Revoke all sessions on every device. Use this if you suspect your account is compromised.
+              Revoke all sessions on every device. Use this if you suspect your account is
+              compromised.
             </p>
           </div>
           <button
@@ -744,9 +745,8 @@ function RecentSignInsSection() {
         </CardTitle>
         <p className="text-xs text-muted-foreground mt-1">
           Your latest successful sign-ins. Individual sessions can&apos;t be listed or revoked
-          one-by-one — use{' '}
-          <span className="font-medium text-foreground">Sign out everywhere</span> in the Password
-          section to revoke them all.
+          one-by-one — use <span className="font-medium text-foreground">Sign out everywhere</span>{' '}
+          in the Password section to revoke them all.
         </p>
       </CardHeader>
       <CardContent>
@@ -827,8 +827,7 @@ function NotificationsSection() {
   });
 
   // Unset / non-false = enabled (notify() defaults everything ON).
-  const isOn = (cat: NotificationCategory, ch: NotificationChannel) =>
-    prefs?.[cat]?.[ch] !== false;
+  const isOn = (cat: NotificationCategory, ch: NotificationChannel) => prefs?.[cat]?.[ch] !== false;
 
   const toggle = (cat: NotificationCategory, ch: NotificationChannel, value: boolean) => {
     // Build a full explicit matrix from current state, then flip one cell, so
@@ -953,7 +952,9 @@ function TwoFactorSection() {
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
-        {error && <p className="text-sm text-red-500 rounded-lg bg-red-500/10 px-3 py-2">{error}</p>}
+        {error && (
+          <p className="text-sm text-red-500 rounded-lg bg-red-500/10 px-3 py-2">{error}</p>
+        )}
 
         {/* One-time recovery codes after enabling — shown once. */}
         {recoveryCodes && (
@@ -964,7 +965,10 @@ function TwoFactorSection() {
             </p>
             <div className="grid grid-cols-2 gap-1.5 font-mono text-xs">
               {recoveryCodes.map((c) => (
-                <code key={c} className="rounded bg-background border border-border px-2 py-1 text-foreground">
+                <code
+                  key={c}
+                  className="rounded bg-background border border-border px-2 py-1 text-foreground"
+                >
                   {c}
                 </code>
               ))}
@@ -998,7 +1002,10 @@ function TwoFactorSection() {
                 >
                   Disable
                 </button>
-                <button onClick={() => setDisableOpen(false)} className="text-xs text-muted-foreground hover:text-foreground">
+                <button
+                  onClick={() => setDisableOpen(false)}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                >
                   Cancel
                 </button>
               </div>
@@ -1018,7 +1025,9 @@ function TwoFactorSection() {
               then enter the 6-digit code to confirm.
             </p>
             <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">Setup key</p>
+              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                Setup key
+              </p>
               <code className="block break-all rounded-lg bg-background border border-border px-3 py-2 text-xs font-mono text-foreground">
                 {enrolling.secret}
               </code>
@@ -1044,7 +1053,10 @@ function TwoFactorSection() {
               >
                 {confirm.isPending ? 'Verifying…' : 'Verify & enable'}
               </button>
-              <button onClick={() => setEnrolling(null)} className="text-xs text-muted-foreground hover:text-foreground">
+              <button
+                onClick={() => setEnrolling(null)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
                 Cancel
               </button>
             </div>
@@ -1233,11 +1245,16 @@ function ApiTokensSection() {
                         <span className="text-red-500"> · {usage[t.id].failure} failed</span>
                       )}
                       {usage[t.id].last7d > 0 && (
-                        <span className="text-muted-foreground/70"> · {usage[t.id].last7d} in 7d</span>
+                        <span className="text-muted-foreground/70">
+                          {' '}
+                          · {usage[t.id].last7d} in 7d
+                        </span>
                       )}
                     </p>
                   ) : (
-                    <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground/60">0 req</p>
+                    <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground/60">
+                      0 req
+                    </p>
                   )}
                 </div>
                 <button
@@ -1470,7 +1487,9 @@ function WebhooksSection() {
         </CardTitle>
         <p className="text-xs text-muted-foreground mt-1">
           Send a signed POST to your endpoint when events happen. Verify each request with the{' '}
-          <code className="rounded bg-secondary px-1 py-0.5 text-[10px]">X-DevFathom-Signature</code>{' '}
+          <code className="rounded bg-secondary px-1 py-0.5 text-[10px]">
+            X-DevFathom-Signature
+          </code>{' '}
           HMAC-SHA256 header.
         </p>
       </CardHeader>
@@ -1644,9 +1663,7 @@ function WebhookRow({
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground hover:text-foreground"
           title="Recent deliveries"
         >
-          <ChevronDown
-            className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')}
-          />
+          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
         </button>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-foreground truncate font-mono">{webhook.url}</p>
@@ -1665,10 +1682,7 @@ function WebhookRow({
             </span>
             {latest && (
               <span
-                className={cn(
-                  'text-[10px]',
-                  latest.success ? 'text-emerald-500' : 'text-red-500'
-                )}
+                className={cn('text-[10px]', latest.success ? 'text-emerald-500' : 'text-red-500')}
               >
                 · last {latest.success ? 'OK' : 'failed'}
               </span>
@@ -1705,7 +1719,9 @@ function WebhookRow({
                   <span
                     className={cn(
                       'flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
-                      d.success ? 'bg-emerald-500/15 text-emerald-500' : 'bg-red-500/15 text-red-500'
+                      d.success
+                        ? 'bg-emerald-500/15 text-emerald-500'
+                        : 'bg-red-500/15 text-red-500'
                     )}
                   >
                     {d.success ? <Check className="h-2.5 w-2.5" /> : <X className="h-2.5 w-2.5" />}
@@ -1764,8 +1780,7 @@ function ResignationSection() {
           Leave the company
         </CardTitle>
         <p className="text-xs text-muted-foreground mt-1">
-          Submitting a resignation sends a request to HR for review. It is not final until
-          approved.
+          Submitting a resignation sends a request to HR for review. It is not final until approved.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1774,9 +1789,7 @@ function ResignationSection() {
             <div className="flex items-start gap-2">
               <AlertCircle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-foreground">
-                  Resignation pending review
-                </p>
+                <p className="text-sm font-semibold text-foreground">Resignation pending review</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Proposed last working day: {formatDay(latest.proposedLastDay)}. HR will be in
                   touch.

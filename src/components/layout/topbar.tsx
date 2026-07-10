@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import {
@@ -53,22 +54,35 @@ const CommandList = dynamic(() => import('@/components/ui/command').then((m) => 
 const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/projects': 'Projects',
+  '/projects/import': 'Import',
   '/clients': 'Clients',
   '/notes': 'Notes',
+  '/email': 'Email',
   '/finance': 'Finance',
   '/meetings': 'Meetings',
   '/chat': 'Chat',
   '/team': 'Team',
+  '/team/stats': 'Insights',
   '/hr': 'HR & Leave',
+  '/reviews': 'Reviews',
+  '/audit-logs': 'Audit Log',
+  '/api-docs': 'API Access',
   '/settings': 'Settings',
 };
+
+const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
+
+function isLinkableBreadcrumb(href: string) {
+  return href in routeLabels || linkableDetailRoute.test(href);
+}
+
+const subscribeToHydration = () => () => {};
 
 export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
   // Mount the (lazily-imported) palette once it has first been opened, then
   // keep it mounted so cmdk's chunk is fetched only on first ⌘K.
   const [commandLoaded, setCommandLoaded] = useState(false);
-  if (commandOpen && !commandLoaded) setCommandLoaded(true);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const pathname = usePathname();
@@ -79,11 +93,11 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   // Detail pages register their loaded entity name here (id segment -> name),
   // so e.g. /team/<id> shows "Saad Ajmal" instead of the raw id.
   const breadcrumbLabels = useBreadcrumbStore((s) => s.labels);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false
+  );
 
   // Debounce search input
   useEffect(() => {
@@ -91,13 +105,16 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  // Reset search when palette closes
-  useEffect(() => {
-    if (!commandOpen) {
+  const handleCommandOpenChange = useCallback((open: boolean) => {
+    if (open) {
+      setCommandLoaded(true);
+      setCommandOpen(true);
+    } else {
+      setCommandOpen(false);
       setSearchInput('');
       setDebouncedSearch('');
     }
-  }, [commandOpen]);
+  }, []);
 
   const searchQuery = trpc.search.global.useQuery(
     { query: debouncedSearch },
@@ -105,7 +122,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   );
 
   const goTo = (href: string) => {
-    setCommandOpen(false);
+    handleCommandOpenChange(false);
     router.push(href);
   };
 
@@ -114,16 +131,16 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
     const down = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setCommandOpen((open) => !open);
+        handleCommandOpenChange(!commandOpen);
       }
     };
     document.addEventListener('keydown', down);
     return () => document.removeEventListener('keydown', down);
-  }, []);
+  }, [commandOpen, handleCommandOpenChange]);
 
   const getBreadcrumbs = useCallback(() => {
     const segments = pathname.split('/').filter(Boolean);
-    const crumbs: { label: string; href: string }[] = [];
+    const crumbs: { label: string; href: string; linkable: boolean }[] = [];
 
     let path = '';
     for (const segment of segments) {
@@ -132,7 +149,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
         routeLabels[path] ||
         breadcrumbLabels[segment] ||
         segment.charAt(0).toUpperCase() + segment.slice(1);
-      crumbs.push({ label, href: path });
+      crumbs.push({ label, href: path, linkable: isLinkableBreadcrumb(path) });
     }
 
     return crumbs;
@@ -150,44 +167,67 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border/60 bg-background/90 backdrop-blur-xl px-4 sm:px-6">
+      <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border-subtle bg-background/95 px-4 backdrop-blur-xl sm:px-6">
         {/* Mobile menu button */}
         {onMenuClick && (
           <button
             onClick={onMenuClick}
-            className="flex lg:hidden h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
             aria-label="Open menu"
           >
             <Menu className="h-5 w-5" />
           </button>
         )}
 
+        <div className="hidden items-center gap-3 border-r border-border-default pr-4 sm:flex">
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+            Hub
+          </span>
+          <span aria-hidden className="size-1 rounded-full bg-accent-brand" />
+        </div>
+
         {/* Breadcrumbs */}
-        <nav className="flex items-center gap-1 text-sm">
+        <nav
+          aria-label="Breadcrumb"
+          className="flex min-w-0 items-center gap-1 overflow-hidden text-sm"
+        >
           {breadcrumbs.map((crumb, i) => (
-            <div key={crumb.href} className="flex items-center gap-1">
-              {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />}
-              <span
-                className={cn(
-                  'font-medium',
-                  i === breadcrumbs.length - 1 ? 'text-foreground' : 'text-muted-foreground'
-                )}
-              >
-                {crumb.label}
-              </span>
+            <div key={crumb.href} className="flex min-w-0 items-center gap-1">
+              {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
+              {i === breadcrumbs.length - 1 || !crumb.linkable ? (
+                <span
+                  className={cn(
+                    'truncate',
+                    i === breadcrumbs.length - 1
+                      ? 'font-medium text-foreground'
+                      : 'text-muted-foreground'
+                  )}
+                  aria-current={i === breadcrumbs.length - 1 ? 'page' : undefined}
+                >
+                  {crumb.label}
+                </span>
+              ) : (
+                <Link
+                  href={crumb.href}
+                  className="truncate text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {crumb.label}
+                </Link>
+              )}
             </div>
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* Search */}
           <button
-            onClick={() => setCommandOpen(true)}
-            className="hidden sm:flex h-9 w-72 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 text-sm text-muted-foreground transition-colors hover:bg-muted"
+            onClick={() => handleCommandOpenChange(true)}
+            className="flex h-9 w-9 items-center justify-center gap-2 rounded-md border border-border-default bg-card text-sm text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-52 sm:justify-start sm:px-3 xl:w-72"
+            aria-label="Search company hub"
           >
             <Search className="h-4 w-4" />
-            <span className="flex-1 text-left">Search the firm, or ask</span>
-            <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+            <span className="hidden flex-1 text-left sm:block">Search company hub</span>
+            <kbd className="pointer-events-none hidden h-5 select-none items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground lg:inline-flex">
               <span className="text-xs">⌘</span>K
             </kbd>
           </button>
@@ -195,10 +235,10 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* AI assistant */}
           <button
             onClick={() => openAssistant(true)}
-            className="flex h-9 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 text-primary transition-colors hover:bg-primary/15"
+            className="flex h-9 items-center gap-1.5 rounded-md border border-border-default bg-card px-2.5 text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Open AI assistant"
           >
-            <Sparkles className="h-[18px] w-[18px]" />
+            <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
             <span className="hidden text-xs font-medium sm:inline">Ask AI</span>
           </button>
 
@@ -206,8 +246,8 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {mounted && (
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              aria-label="Toggle theme"
+              className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
             >
               {theme === 'dark' ? (
                 <Sun className="h-[18px] w-[18px]" />
@@ -223,13 +263,19 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* User dropdown */}
           {session?.user && (
             <DropdownMenu>
-              <DropdownMenuTrigger className="flex items-center gap-2 rounded-lg p-1.5 transition-colors hover:bg-muted">
+              <DropdownMenuTrigger
+                aria-label="Open account menu"
+                className="flex items-center gap-2 rounded-md p-1 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 <Avatar className="h-7 w-7">
                   <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
                   <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
                     {getInitials(session.user.name)}
                   </AvatarFallback>
                 </Avatar>
+                <span className="hidden max-w-28 truncate pr-1 text-xs font-medium xl:block">
+                  {session.user.name}
+                </span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <div className="px-2 py-2">
@@ -237,7 +283,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
                   <p className="text-xs text-muted-foreground">{session.user.email}</p>
                 </div>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push('/settings')}>
                   <User className="mr-2 h-4 w-4" />
                   Profile
                 </DropdownMenuItem>
@@ -259,7 +305,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
       {commandLoaded && (
         <CommandDialog
           open={commandOpen}
-          onOpenChange={setCommandOpen}
+          onOpenChange={handleCommandOpenChange}
           commandProps={{ shouldFilter: false }}
         >
           <CommandInput
@@ -429,7 +475,9 @@ function NotificationBell() {
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="relative flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="relative flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+        aria-expanded={open}
       >
         <Bell className="h-[18px] w-[18px]" />
         {unreadCount > 0 && (
@@ -442,7 +490,7 @@ function NotificationBell() {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-border bg-card shadow-2xl shadow-black/10">
+          <div className="absolute right-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-border-default bg-card shadow-lg">
             <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
               <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
               {unreadCount > 0 && (

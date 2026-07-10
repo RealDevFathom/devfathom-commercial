@@ -184,7 +184,7 @@ export function MeetingCall({ meetingId }: { meetingId: string }) {
   }, [meetingId, router, utils, getCallToken, logJoin, logLeave]);
 
   return (
-    <div className="flex h-[calc(100vh-2rem)] min-h-[480px] flex-col overflow-hidden rounded-2xl border border-border bg-card sm:h-[calc(100vh-3rem)]">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden border border-border bg-card">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-border/60 px-4 py-3">
         <Link

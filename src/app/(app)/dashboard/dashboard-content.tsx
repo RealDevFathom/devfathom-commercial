@@ -4,8 +4,6 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
-  TrendingUp,
-  TrendingDown,
   FolderKanban,
   CheckCircle2,
   FileText,
@@ -27,6 +25,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TimePicker } from '@/components/ui/time-picker';
+import { PageHeader } from '@/components/ui/page-header';
+import { Stat } from '@/components/ui/stat';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
@@ -498,13 +498,6 @@ function pad(n: number) {
 /* ============================================
    KPI Card
    ============================================ */
-const KPI_ICON_BG: Record<string, string> = {
-  orange: 'bg-primary/10 text-primary',
-  emerald: 'bg-emerald-500/10 text-emerald-500',
-  amber: 'bg-amber-500/10 text-amber-500',
-  blue: 'bg-blue-500/10 text-blue-500',
-};
-
 function KPICard({
   title,
   value,
@@ -512,7 +505,6 @@ function KPICard({
   changeLabel,
   icon: Icon,
   trend,
-  accentColor = 'orange',
 }: {
   title: string;
   value: string;
@@ -520,53 +512,22 @@ function KPICard({
   changeLabel?: string;
   icon: React.ComponentType<{ className?: string }>;
   trend?: 'up' | 'down' | 'neutral';
-  accentColor?: 'orange' | 'emerald' | 'amber' | 'blue';
 }) {
+  const deltaDirection = trend === 'up' ? 'up' : trend === 'down' ? 'down' : 'flat';
+
   return (
-    <Card className="group relative overflow-hidden border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/20">
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-2">
-            <p className="text-[13px] font-medium text-muted-foreground">{title}</p>
-            <p className="font-display text-3xl font-bold tracking-tight text-foreground">
-              {value}
-            </p>
-            {change && (
-              <div className="flex items-center gap-1.5">
-                {trend === 'up' ? (
-                  <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
-                ) : trend === 'down' ? (
-                  <TrendingDown className="h-3.5 w-3.5 text-red-400" />
-                ) : null}
-                <span
-                  className={cn(
-                    'text-xs font-medium',
-                    trend === 'up'
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : trend === 'down'
-                        ? 'text-red-600 dark:text-red-400'
-                        : 'text-muted-foreground'
-                  )}
-                >
-                  {change}
-                </span>
-                {changeLabel && (
-                  <span className="text-xs text-muted-foreground">{changeLabel}</span>
-                )}
-              </div>
-            )}
-          </div>
-          <div
-            className={cn(
-              'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-transform group-hover:scale-105',
-              KPI_ICON_BG[accentColor]
-            )}
-          >
-            <Icon className="h-5 w-5" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="relative bg-card p-5">
+      <Icon aria-hidden className="absolute right-5 top-5 h-4 w-4 text-text-muted" />
+      <Stat
+        className="pr-8"
+        label={title}
+        value={value}
+        valueClassName="break-words text-[clamp(1.5rem,7vw,2rem)]"
+        delta={change}
+        deltaDirection={deltaDirection}
+        sub={changeLabel}
+      />
+    </div>
   );
 }
 
@@ -938,30 +899,29 @@ export function DashboardContent() {
   const greeting = getGreeting();
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header — greeting left, date right */}
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="WORKSPACE"
+        heading={
+          <>
             {greeting}, {session?.user?.name?.split(' ')[0]}
-          </h1>
-          <p className="text-muted-foreground mt-1.5 text-[15px]">
-            Here&apos;s what&apos;s happening across your workspace today.
-          </p>
-        </div>
-
-        <div className="hidden sm:flex items-baseline gap-2 shrink-0">
-          <span className="font-display text-[2rem] font-bold tracking-tight text-primary leading-none">
-            {format(new Date(), 'EEE')}
-          </span>
-          <span className="font-display text-[2rem] font-bold tracking-tight text-foreground leading-none">
-            {format(new Date(), 'd')}
-          </span>
-          <span className="text-sm text-muted-foreground/60 ml-0.5">
-            {format(new Date(), 'MMM yyyy')}
-          </span>
-        </div>
-      </div>
+          </>
+        }
+        description="Here's what's happening across your workspace today."
+        actions={
+          <div className="hidden sm:flex items-baseline gap-2 shrink-0">
+            <span className="font-display text-[2rem] font-bold tracking-tight text-primary leading-none">
+              {format(new Date(), 'EEE')}
+            </span>
+            <span className="font-display text-[2rem] font-bold tracking-tight text-foreground leading-none">
+              {format(new Date(), 'd')}
+            </span>
+            <span className="text-sm text-muted-foreground/60 ml-0.5">
+              {format(new Date(), 'MMM yyyy')}
+            </span>
+          </div>
+        }
+      />
 
       {/* Customize widgets (IMP-DASH-02) */}
       <div className="flex justify-end">
@@ -1007,7 +967,12 @@ export function DashboardContent() {
       <NextMeetingBanner />
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div
+        className={cn(
+          'grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle',
+          isAdmin ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'
+        )}
+      >
         {isAdmin && (
           <KPICard
             title="Revenue This Month"
@@ -1016,7 +981,6 @@ export function DashboardContent() {
             changeLabel="vs last month"
             icon={DollarSign}
             trend="up"
-            accentColor="orange"
           />
         )}
         <KPICard
@@ -1025,7 +989,6 @@ export function DashboardContent() {
           change="2 new this quarter"
           icon={FolderKanban}
           trend="up"
-          accentColor="blue"
         />
         <KPICard
           title="Tasks Completed"
@@ -1033,7 +996,6 @@ export function DashboardContent() {
           changeLabel="this week"
           icon={CheckCircle2}
           trend="neutral"
-          accentColor="emerald"
         />
         {isAdmin ? (
           <KPICard
@@ -1051,14 +1013,12 @@ export function DashboardContent() {
                 ? 'down'
                 : 'up'
             }
-            accentColor="amber"
           />
         ) : (
           <KPICard
             title="Pending Leaves"
             value={String(stats.data?.pendingLeaves ?? 0)}
             icon={Clock}
-            accentColor="amber"
           />
         )}
       </div>

@@ -6,7 +6,9 @@
 
 import Link from 'next/link';
 import { ArrowLeft, Video, Calendar, MapPin, Repeat, Users } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
@@ -61,32 +63,32 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const report = reportQ.data;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
-      <div>
+    <div className="max-w-3xl mx-auto space-y-6">
+      <div className="space-y-4">
         <Link
           href="/meetings"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Meetings
         </Link>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-              {meeting.title}
-            </h1>
-            {meeting.description && (
-              <p className="text-muted-foreground mt-1.5 text-[15px]">{meeting.description}</p>
-            )}
-          </div>
-          <Link
-            href={`/meetings/${meetingId}/call`}
-            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-          >
-            <Video className="h-4 w-4" />
-            Join call
-          </Link>
-        </div>
+        <PageHeader
+          eyebrow="WORKSPACE"
+          heading={meeting.title}
+          description={meeting.description ?? undefined}
+          className="mb-0"
+          actions={
+            <Button
+              size="lg"
+              className="h-10 px-4"
+              nativeButton={false}
+              render={<Link href={`/meetings/${meetingId}/call`} />}
+            >
+              <Video className="h-4 w-4" />
+              Join call
+            </Button>
+          }
+        />
       </div>
 
       {/* Meeting meta */}

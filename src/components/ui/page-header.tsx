@@ -10,6 +10,8 @@ interface PageHeaderProps extends Omit<React.ComponentProps<'div'>, 'title'> {
   eyebrowMuted?: boolean;
   /** Oxanium display heading — the page title. */
   heading: React.ReactNode;
+  /** Optional visual shown beside the title block (for example, an entity avatar). */
+  media?: React.ReactNode;
   /** One-line muted description under the heading. */
   description?: React.ReactNode;
   /** Optional right-aligned actions slot (buttons, filters…). */
@@ -25,6 +27,7 @@ function PageHeader({
   eyebrow,
   eyebrowMuted = false,
   heading,
+  media,
   description,
   actions,
   className,
@@ -33,20 +36,29 @@ function PageHeader({
   return (
     <div
       data-slot="page-header"
-      className={cn('mb-8 flex items-start justify-between gap-6', className)}
+      className={cn(
+        'mb-8 flex flex-col gap-5 border-b border-border-subtle pb-7 sm:flex-row sm:items-start sm:justify-between',
+        className
+      )}
       {...props}
     >
-      <div className="min-w-0 space-y-2">
-        {eyebrow != null ? <Eyebrow accent={!eyebrowMuted}>{eyebrow}</Eyebrow> : null}
-        <h1 className="font-display text-[2.25rem] leading-[1.1] font-semibold tracking-tight text-text-strong">
-          {heading}
-        </h1>
-        {description != null ? (
-          <p className="max-w-2xl text-text-muted">{description}</p>
-        ) : null}
+      <div className="flex min-w-0 items-stretch gap-4">
+        <span aria-hidden className="w-0.5 shrink-0 rounded-full bg-accent-brand" />
+        {media != null ? <div className="shrink-0 self-start">{media}</div> : null}
+        <div className="min-w-0 space-y-2">
+          {eyebrow != null ? <Eyebrow accent={!eyebrowMuted}>{eyebrow}</Eyebrow> : null}
+          <h1 className="font-display text-[clamp(2rem,4vw,2.75rem)] leading-[1.06] font-semibold tracking-[-0.03em] text-text-strong">
+            {heading}
+          </h1>
+          {description != null ? (
+            <p className="max-w-2xl text-[0.9375rem] leading-relaxed text-text-muted">
+              {description}
+            </p>
+          ) : null}
+        </div>
       </div>
       {actions != null ? (
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">{actions}</div>
       ) : null}
     </div>
   );

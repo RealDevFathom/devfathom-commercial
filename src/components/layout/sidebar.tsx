@@ -21,7 +21,6 @@ import {
   BarChart3,
   ScrollText,
   ClipboardList,
-  Mail,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -49,7 +48,7 @@ const navigation: NavItem[] = [
   { label: 'Projects', href: '/projects', icon: FolderKanban, group: 'Workspace' },
   { label: 'Clients', href: '/clients', icon: Briefcase, group: 'Workspace' },
   { label: 'Notes', href: '/notes', icon: StickyNote, group: 'Workspace' },
-  { label: 'Email', href: '/email', icon: Mail, group: 'Workspace' },
+  // Email stays disabled until its OAuth credentials and mailbox schema are deployed.
   { label: 'Meetings', href: '/meetings', icon: Video, group: 'Workspace' },
   { label: 'Chat', href: '/chat', icon: MessageSquare, group: 'Workspace' },
   { label: 'Finance', href: '/finance', icon: DollarSign, adminOnly: true, group: 'Firm' },
@@ -63,29 +62,49 @@ const navigation: NavItem[] = [
 
 const GROUP_ORDER: NavGroup[] = ['Workspace', 'Firm'];
 
-export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
-  const [collapsed, setCollapsed] = useState(false);
+function useVisibleNavigation() {
   const pathname = usePathname();
   const { data: session } = useSession();
-  const { icons } = usePreferences();
-  const numbered = icons !== 'architectural';
   const isAdmin = session?.user?.role === 'ADMIN';
   const isHr = session?.user?.role === 'HR';
 
   const filteredNav = navigation.filter((item) => {
-    if (item.hrAccess) return isAdmin || isHr; // people-ops surfaces (HR console)
+    if (item.hrAccess) return isAdmin || isHr;
     if (item.adminOnly) return isAdmin;
     return true;
   });
 
-  // Contiguous numeric index across the (filtered) rail — 01, 02, …
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
-
-  // Longest-matching href wins so /team/stats highlights Insights, not Team.
   const matchingHrefs = filteredNav
-    .map((i) => i.href)
+    .map((item) => item.href)
     .filter((href) => pathname === href || pathname.startsWith(href + '/'));
-  const bestMatch = matchingHrefs.reduce((best, href) => (href.length > best.length ? href : best), '');
+  const bestMatch = matchingHrefs.reduce(
+    (best, href) => (href.length > best.length ? href : best),
+    ''
+  );
+
+  return { bestMatch, filteredNav, indexByHref };
+}
+
+interface SidebarProps {
+  onNavigate?: () => void;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
+  collapsible?: boolean;
+}
+
+export function Sidebar({
+  onNavigate,
+  collapsed: controlledCollapsed,
+  onCollapsedChange,
+  collapsible = true,
+}: SidebarProps = {}) {
+  const [localCollapsed, setLocalCollapsed] = useState(false);
+  const collapsed = controlledCollapsed ?? localCollapsed;
+  const { data: session } = useSession();
+  const { icons } = usePreferences();
+  const { bestMatch, filteredNav, indexByHref } = useVisibleNavigation();
+  const numbered = icons !== 'architectural';
 
   const getInitials = (name: string) =>
     name
@@ -97,12 +116,19 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
 
   let renderIndex = 0;
 
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    if (controlledCollapsed == null) setLocalCollapsed(next);
+    onCollapsedChange?.(next);
+  };
+
   return (
     <aside
       role="navigation"
       aria-label="Main navigation"
+      data-collapsed={collapsed || undefined}
       className={cn(
-        'fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-sidebar-border bg-sidebar transition-all duration-300 ease-in-out',
+        'fixed left-0 top-0 z-40 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
         collapsed ? 'w-16' : 'w-60'
       )}
     >
@@ -207,7 +233,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
                     key={item.href}
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.03 * animIndex + 0.05, duration: 0.4, ease: easeOutExpo }}
+                    transition={{
+                      delay: 0.03 * animIndex + 0.05,
+                      duration: 0.4,
+                      ease: easeOutExpo,
+                    }}
                   >
                     {entry}
                   </m.div>
@@ -219,16 +249,24 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
       </nav>
 
       {/* Collapse toggle */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="mx-2 mb-2 flex items-center justify-center rounded-md p-2 text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
-        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-      </button>
+      {collapsible && (
+        <button
+          onClick={toggleCollapsed}
+          className={cn(
+            'mx-2 mb-2 flex items-center rounded-md p-2 font-mono text-[10px] uppercase tracking-[0.14em] text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+            collapsed ? 'justify-center' : 'justify-between px-3'
+          )}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {!collapsed && <span>Close rail</span>}
+          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        </button>
+      )}
 
       {/* User chip */}
-      <div className={cn('border-t border-sidebar-border p-3', collapsed ? 'flex justify-center' : '')}>
+      <div
+        className={cn('border-t border-sidebar-border p-3', collapsed ? 'flex justify-center' : '')}
+      >
         {session?.user && (
           <div className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}>
             <Avatar className="h-8 w-8 shrink-0 rounded-md">
@@ -251,5 +289,66 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         )}
       </div>
     </aside>
+  );
+}
+
+export function TopNavigation() {
+  const { icons } = usePreferences();
+  const { bestMatch, filteredNav, indexByHref } = useVisibleNavigation();
+  const numbered = icons !== 'architectural';
+
+  return (
+    <div className="hidden border-b border-border-subtle bg-background lg:block">
+      <nav
+        aria-label="Primary navigation"
+        className="mx-auto flex h-12 w-full max-w-[1440px] items-stretch overflow-x-auto px-[clamp(1.25rem,5vw,4rem)]"
+      >
+        {filteredNav.map((item, index) => {
+          const isActive = item.href === bestMatch;
+          const beginsFirmGroup = item.group === 'Firm' && filteredNav[index - 1]?.group !== 'Firm';
+          const Icon = item.icon;
+          const num = indexByHref.get(item.href) ?? 0;
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'group relative flex shrink-0 items-center gap-2 px-3 text-xs font-medium text-text-muted transition-colors hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                isActive && 'text-text-strong',
+                beginsFirmGroup && 'ml-3 border-l border-border-default pl-5'
+              )}
+            >
+              {numbered ? (
+                <span
+                  className={cn(
+                    'font-mono text-[10px] tabular-nums text-text-faint',
+                    isActive && 'text-accent-brand'
+                  )}
+                >
+                  {String(num).padStart(2, '0')}
+                </span>
+              ) : (
+                <Icon
+                  className={cn(
+                    'h-3.5 w-3.5 text-text-faint group-hover:text-text-muted',
+                    isActive && 'text-accent-brand'
+                  )}
+                />
+              )}
+              <span>{item.label}</span>
+              {isActive && (
+                <m.span
+                  layoutId="topnav-active"
+                  className="absolute inset-x-3 bottom-0 h-0.5 bg-accent-brand"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                />
+              )}
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
   );
 }
