@@ -1,31 +1,19 @@
 'use client';
 
-import { SessionProvider } from 'next-auth/react';
-import { LazyMotion, domMax } from 'motion/react';
-import { ThemeProvider } from 'next-themes';
-import { TRPCProvider } from '@/lib/trpc-provider';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import { Toaster } from '@/components/ui/sonner';
-import { RealtimeProvider } from '@/components/chat/realtime-provider';
+import dynamic from 'next/dynamic';
+import { usePathname } from 'next/navigation';
+
+const AppProviders = dynamic(() =>
+  import('@/components/app-providers').then((module) => module.AppProviders)
+);
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  return (
-    <SessionProvider>
-      <ThemeProvider
-        attribute="class"
-        defaultTheme="light"
-        enableSystem={false}
-        disableTransitionOnChange
-      >
-        <TRPCProvider>
-          <TooltipProvider delay={200}>
-            <LazyMotion features={domMax}>
-              <RealtimeProvider>{children}</RealtimeProvider>
-            </LazyMotion>
-            <Toaster position="top-right" richColors closeButton />
-          </TooltipProvider>
-        </TRPCProvider>
-      </ThemeProvider>
-    </SessionProvider>
-  );
+  const pathname = usePathname();
+
+  // The login page only needs Auth.js' signIn helper. Keeping app-wide
+  // providers out of this route avoids hydrating realtime, TRPC, tooltips,
+  // theming, and Motion before the user can interact with the form.
+  if (pathname === '/login') return <>{children}</>;
+
+  return <AppProviders>{children}</AppProviders>;
 }

@@ -1,66 +1,11 @@
-'use client';
-
-import { useRef } from 'react';
-import { gsap } from 'gsap';
-import { useGSAP } from '@gsap/react';
 import { cn } from '@/lib/utils';
 import { FathomMark } from '@/components/brand/logo';
 
 const HEADLINE = ['Depth in', 'everything', 'we build.'];
 
 export function LoginHero() {
-  const root = useRef<HTMLDivElement>(null);
-
-  useGSAP(
-    () => {
-      if (
-        typeof window !== 'undefined' &&
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      ) {
-        return;
-      }
-
-      // Calm, restrained entrance — confidence, not spectacle.
-      const tl = gsap.timeline({ defaults: { ease: 'expo.out' } });
-      tl.from('[data-hero="mark"]', { scale: 0.85, opacity: 0, duration: 0.9 })
-        .from('[data-hero="word"]', { y: 14, opacity: 0, duration: 0.7 }, '-=0.6')
-        .from('[data-hero="badge"]', { y: -10, opacity: 0, duration: 0.6 }, '<')
-        .from(
-          '[data-hero="line"]',
-          { yPercent: 60, opacity: 0, duration: 0.8, stagger: 0.08 },
-          '-=0.35'
-        )
-        .from('[data-hero="sub"]', { y: 12, opacity: 0, duration: 0.7 }, '-=0.45')
-        .from('[data-hero="status"]', { y: 10, opacity: 0, duration: 0.6 }, '-=0.45');
-
-      // Slow ambient drift — barely-there movement.
-      gsap.to('[data-hero="aurora-1"]', {
-        xPercent: 8,
-        yPercent: -7,
-        scale: 1.08,
-        repeat: -1,
-        yoyo: true,
-        duration: 13,
-        ease: 'sine.inOut',
-      });
-      gsap.to('[data-hero="aurora-2"]', {
-        xPercent: -7,
-        yPercent: 8,
-        scale: 1.06,
-        repeat: -1,
-        yoyo: true,
-        duration: 16,
-        ease: 'sine.inOut',
-      });
-    },
-    { scope: root }
-  );
-
   return (
-    <div
-      ref={root}
-      className="relative hidden w-[46%] overflow-hidden border-r border-white/5 lg:flex"
-    >
+    <div className="animate-fade-in relative hidden w-[46%] overflow-hidden border-r border-white/5 lg:flex">
       {/* Aurora — restrained, deep teal */}
       <div className="pointer-events-none absolute inset-0">
         <div
