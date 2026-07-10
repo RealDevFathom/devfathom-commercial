@@ -101,7 +101,7 @@ export function ChatContent() {
     'flex items-center gap-1.5 rounded-lg border border-border/60 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground';
 
   return (
-    <div className="flex h-[calc(100dvh-4rem)] -m-4 flex-col animate-fade-in sm:h-[calc(100vh-8rem)] sm:-m-6">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Global bar — jump-to + saved live here (workspace-wide, not per channel). */}
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-card px-3 sm:px-4">
         <button

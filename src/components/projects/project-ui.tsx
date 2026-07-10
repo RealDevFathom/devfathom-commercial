@@ -1,39 +1,52 @@
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
+import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
 /**
- * Shared project design language — status colours, progress + deadline helpers,
+ * Shared project design language — status tones, progress + deadline helpers,
  * and the two atoms (StatusBadge, ProgressBar) used by both the Projects list
- * and the project detail page. Single source of truth so a colour tweak lands
- * everywhere.
+ * and the project detail page. Single source of truth so a tone tweak lands
+ * everywhere. All colour comes from the design tokens (no raw hex / palette).
  */
 
-export type StatusStyle = { label: string; dot: string; text: string; bg: string; rail: string };
+export type StatusStyle = {
+  label: string;
+  /** StatusPill tone for the health chip. */
+  tone: StatusTone;
+  dot: string;
+  text: string;
+  bg: string;
+  rail: string;
+};
 
 export const statusConfig: Record<string, StatusStyle> = {
   ACTIVE: {
     label: 'Active',
-    dot: 'bg-emerald-500',
-    text: 'text-emerald-600 dark:text-emerald-400',
-    bg: 'bg-emerald-500/10',
-    rail: 'bg-emerald-500',
+    tone: 'success',
+    dot: 'bg-success',
+    text: 'text-success',
+    bg: 'bg-success/10',
+    rail: 'bg-success',
   },
   IN_DEVELOPMENT: {
     label: 'In Development',
-    dot: 'bg-blue-500',
-    text: 'text-blue-600 dark:text-blue-400',
-    bg: 'bg-blue-500/10',
-    rail: 'bg-blue-500',
+    tone: 'info',
+    dot: 'bg-primary',
+    text: 'text-primary',
+    bg: 'bg-primary/10',
+    rail: 'bg-primary',
   },
   ON_HOLD: {
     label: 'On Hold',
-    dot: 'bg-amber-500',
-    text: 'text-amber-600 dark:text-amber-400',
-    bg: 'bg-amber-500/10',
-    rail: 'bg-amber-500',
+    tone: 'warning',
+    dot: 'bg-warning',
+    text: 'text-warning',
+    bg: 'bg-warning/10',
+    rail: 'bg-warning',
   },
   COMPLETED: {
     label: 'Completed',
+    tone: 'neutral',
     dot: 'bg-muted-foreground',
     text: 'text-muted-foreground',
     bg: 'bg-muted',
@@ -41,10 +54,11 @@ export const statusConfig: Record<string, StatusStyle> = {
   },
   CANCELLED: {
     label: 'Cancelled',
-    dot: 'bg-red-500',
-    text: 'text-red-500',
-    bg: 'bg-red-500/10',
-    rail: 'bg-red-500',
+    tone: 'danger',
+    dot: 'bg-destructive',
+    text: 'text-destructive',
+    bg: 'bg-destructive/10',
+    rail: 'bg-destructive',
   },
 };
 
@@ -74,37 +88,25 @@ export function getDeadline(p: {
   return p.endDate ? new Date(p.endDate) : null;
 }
 
-// Short, urgency-coloured deadline label.
+// Short, urgency-coloured deadline label (tokenised tones).
 export function deadlineMeta(date: Date): { label: string; tone: string } {
   const days = Math.ceil((date.getTime() - Date.now()) / 86_400_000);
-  if (days < 0)
-    return { label: `${Math.abs(days)}d overdue`, tone: 'text-red-600 dark:text-red-400' };
-  if (days === 0) return { label: 'Due today', tone: 'text-red-600 dark:text-red-400' };
-  if (days <= 3) return { label: `Due in ${days}d`, tone: 'text-red-600 dark:text-red-400' };
-  if (days <= 14) return { label: `${days}d left`, tone: 'text-amber-600 dark:text-amber-400' };
-  return { label: format(date, 'MMM d'), tone: 'text-muted-foreground' };
+  if (days < 0) return { label: `${Math.abs(days)}d overdue`, tone: 'text-destructive' };
+  if (days === 0) return { label: 'Due today', tone: 'text-destructive' };
+  if (days <= 3) return { label: `Due in ${days}d`, tone: 'text-destructive' };
+  if (days <= 14) return { label: `${days}d left`, tone: 'text-warning' };
+  return { label: format(date, 'MMM d'), tone: 'text-text-muted' };
 }
 
+/** Health chip — mono uppercase StatusPill mapped from the project status. */
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const s = statusConfig[status] ?? statusConfig.ACTIVE;
-  return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium',
-        s.bg,
-        s.text,
-        className
-      )}
-    >
-      <span className={cn('h-1.5 w-1.5 rounded-full', s.dot)} />
-      {s.label}
-    </span>
-  );
+  return <StatusPill status={status} tone={s.tone} label={s.label} className={className} />;
 }
 
 export function ProgressBar({ pct, className }: { pct: number; className?: string }) {
   return (
-    <div className={cn('h-1.5 overflow-hidden rounded-full bg-muted', className)}>
+    <div className={cn('h-1.5 overflow-hidden rounded-full bg-surface-sunken', className)}>
       <div
         className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
         style={{ width: `${pct}%` }}

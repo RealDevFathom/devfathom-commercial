@@ -16,6 +16,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 // Avatar unused currently but will be used for member mapping enhancement
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -124,22 +125,21 @@ export function TrelloImportContent() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
-      {/* Header */}
-      <div>
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div className="space-y-4">
         <Link
           href="/projects"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Projects
         </Link>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-          Import from Trello
-        </h1>
-        <p className="text-muted-foreground mt-1.5 text-[15px]">
-          Upload your Trello board JSON export to recreate it in DevFathom.
-        </p>
+        <PageHeader
+          eyebrow="WORKSPACE"
+          heading="Import from Trello"
+          description="Upload your Trello board JSON export to recreate it in DevFathom."
+          className="mb-0"
+        />
       </div>
 
       {/* Progress steps */}

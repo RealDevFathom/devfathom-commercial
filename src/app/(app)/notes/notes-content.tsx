@@ -26,8 +26,10 @@ import {
   RotateCcw,
   Clock,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
@@ -130,30 +132,23 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
   };
 
   return (
-    <div className={cn('animate-fade-in', embedded ? 'space-y-4' : 'space-y-6')}>
+    <div className={embedded ? 'space-y-4 animate-fade-in' : 'space-y-6'}>
       {!embedded && (
-        <div className="flex items-end justify-between">
-          <div>
-            <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-              Notes
-            </h1>
-            <p className="text-muted-foreground mt-1.5 text-[15px]">
-              Capture ideas, link them together, share them with the team.
-            </p>
-          </div>
-          <button
-            onClick={handleCreate}
-            disabled={createNote.isPending}
-            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
-          >
-            {createNote.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Plus className="h-4 w-4" />
-            )}
-            New Note
-          </button>
-        </div>
+        <PageHeader
+          eyebrow="WORKSPACE"
+          heading="Notes"
+          description="Capture ideas, link them together, share them with the team."
+          actions={
+            <Button size="lg" onClick={handleCreate} disabled={createNote.isPending}>
+              {createNote.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+              New Note
+            </Button>
+          }
+        />
       )}
 
       {/* minmax(0,1fr) instead of 1fr so the content column can shrink below

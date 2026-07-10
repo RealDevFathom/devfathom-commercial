@@ -130,7 +130,7 @@ export function AssistantPanel() {
             </div>
             <div>
               <p className="font-display text-sm font-semibold leading-none">Assistant</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">DevFathom · Groq</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">DevFathom · Gemini</p>
             </div>
           </div>
           <button

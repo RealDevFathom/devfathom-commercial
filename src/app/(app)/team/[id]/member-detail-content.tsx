@@ -46,6 +46,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
 import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
@@ -136,7 +137,7 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
 
   if (isLoading)
     return (
-      <div className="space-y-6 animate-fade-in">
+      <div className="space-y-6">
         <Skeleton className="h-4 w-28 mb-4" />
         <Skeleton className="h-9 w-48" />
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
@@ -167,38 +168,86 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
     );
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      <div>
         <Link
           href="/team"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="mb-5 inline-flex items-center gap-1.5 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <ArrowLeft className="h-4 w-4" /> Back to Team
         </Link>
 
-        {/* Admin actions */}
-        {isAdmin && memberId !== session?.user?.id && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsEditing(true)}
-              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-            >
-              <Pencil className="h-3.5 w-3.5" /> Edit
-            </button>
-            <button
-              onClick={() => setShowResetPw(!showResetPw)}
-              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-            >
-              <Lock className="h-3.5 w-3.5" /> Reset Password
-            </button>
-            <button
-              onClick={() => setShowLayOff(true)}
-              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-colors"
-            >
-              <UserX className="h-3.5 w-3.5" /> Lay off
-            </button>
-          </div>
-        )}
+        <PageHeader
+          eyebrow="FIRM"
+          className="mb-0"
+          media={
+            <Avatar className="h-16 w-16 sm:h-20 sm:w-20">
+              <AvatarImage src={member.avatar ?? undefined} />
+              <AvatarFallback className="bg-secondary text-xl font-bold text-foreground sm:text-2xl">
+                {member.name
+                  .split(' ')
+                  .map((n) => n[0])
+                  .join('')}
+              </AvatarFallback>
+            </Avatar>
+          }
+          heading={<span className="min-w-0 break-words">{member.name}</span>}
+          description={
+            <span className="block space-y-2">
+              <span className="block text-[0.9375rem] font-medium text-text-strong">
+                {member.title}
+              </span>
+              {(member.email || member.phone) && (
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  {member.email && (
+                    <span className="inline-flex items-center gap-1">
+                      <Mail className="h-3 w-3" />
+                      {member.email}
+                    </span>
+                  )}
+                  {member.phone && (
+                    <span className="inline-flex items-center gap-1">
+                      <Phone className="h-3 w-3" />
+                      {member.phone}
+                    </span>
+                  )}
+                </span>
+              )}
+              {member.bio && <span className="block max-w-xl leading-relaxed">{member.bio}</span>}
+              {member.skills.length > 0 && (
+                <span className="flex flex-wrap gap-1.5 pt-1">
+                  {member.skills.map((skill) => (
+                    <span
+                      key={skill}
+                      className="rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
+                    >
+                      {skill}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </span>
+          }
+          actions={
+            isAdmin && memberId !== session?.user?.id ? (
+              <>
+                <Button variant="outline" size="lg" onClick={() => setIsEditing(true)}>
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="lg"
+                  onClick={() => setShowResetPw(!showResetPw)}
+                >
+                  <Lock className="h-3.5 w-3.5" /> Reset Password
+                </Button>
+                <Button variant="destructive" size="lg" onClick={() => setShowLayOff(true)}>
+                  <UserX className="h-3.5 w-3.5" /> Lay off
+                </Button>
+              </>
+            ) : undefined
+          }
+        />
       </div>
 
       {/* Reset password form */}
@@ -234,56 +283,6 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
           onOpenChange={setShowLayOff}
         />
       )}
-
-      {/* Profile header */}
-      <div className="flex items-start gap-5">
-        <Avatar className="h-20 w-20 shrink-0">
-          <AvatarImage src={member.avatar ?? undefined} />
-          <AvatarFallback className="bg-secondary text-foreground font-bold text-2xl">
-            {member.name
-              .split(' ')
-              .map((n) => n[0])
-              .join('')}
-          </AvatarFallback>
-        </Avatar>
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-            {member.name}
-          </h1>
-          <p className="text-[15px] text-muted-foreground mt-0.5">{member.title}</p>
-          <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground">
-            {member.email && (
-              <span className="flex items-center gap-1">
-                <Mail className="h-3 w-3" />
-                {member.email}
-              </span>
-            )}
-            {member.phone && (
-              <span className="flex items-center gap-1">
-                <Phone className="h-3 w-3" />
-                {member.phone}
-              </span>
-            )}
-          </div>
-          {member.bio && (
-            <p className="text-sm text-muted-foreground mt-3 max-w-xl leading-relaxed">
-              {member.bio}
-            </p>
-          )}
-          {member.skills.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-3">
-              {member.skills.map((s) => (
-                <span
-                  key={s}
-                  className="rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
-                >
-                  {s}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* Personal stats — visible to self or admin */}
       {canViewPersonal && (

@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -58,24 +60,26 @@ export function ClientsContent() {
   }, [clients, search]);
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-            Clients
-          </h1>
-          <p className="text-muted-foreground mt-1.5 text-[15px]">
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="WORKSPACE"
+        heading="Clients"
+        description={
+          <>
             {clients?.length ?? 0} clients &middot; Manage relationships and contacts.
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-        >
-          <Plus className="h-4 w-4" />
-          Add Client
-        </button>
-      </div>
+          </>
+        }
+        actions={
+          <Button
+            size="lg"
+            className="h-10 px-4"
+            onClick={() => setShowCreate(true)}
+          >
+            <Plus className="h-4 w-4" />
+            Add Client
+          </Button>
+        }
+      />
 
       {/* Search */}
       <div className="relative max-w-xs">

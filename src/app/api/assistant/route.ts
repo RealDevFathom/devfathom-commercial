@@ -1,13 +1,13 @@
 import { streamText, convertToModelMessages, stepCountIs, type UIMessage } from 'ai';
-import { groq } from '@ai-sdk/groq';
+import { google } from '@ai-sdk/google';
 import { auth } from '@/lib/auth';
 import { buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 
-// Groq is fast, but allow headroom for multi-step tool runs.
+// Allow headroom for multi-step tool runs.
 export const maxDuration = 60;
 
-const MODEL_ID = process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b';
+const MODEL_ID = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
 
 // The text of the last couple of user messages — used to route which tool
 // domains to load (including the prior turn handles follow-ups like "do it").
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
   );
 
   const result = streamText({
-    model: groq(MODEL_ID),
+    model: google(MODEL_ID),
     system: assistantSystemPrompt(ctx),
     messages: modelMessages,
     // Cost control: send only the tools relevant to what the user is asking
@@ -73,9 +73,6 @@ export async function POST(req: Request) {
     // Operator actions chain resolve → act → confirm; 6 steps covers that while
     // capping the worst-case number of (token-heavy) model round-trips per turn.
     stopWhen: stepCountIs(6),
-    // One tool call per step. Without this, weaker models fire many parallel /
-    // duplicate calls — most fail and get masked as "An error occurred."
-    providerOptions: { groq: { parallelToolCalls: false } },
     onError: ({ error }) => {
       console.error('[assistant] stream error:', error);
     },

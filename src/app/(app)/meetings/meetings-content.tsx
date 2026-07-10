@@ -20,8 +20,10 @@ import {
   UserX,
   ChevronDown,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TimePicker } from '@/components/ui/time-picker';
 import { trpc } from '@/lib/trpc';
@@ -71,24 +73,21 @@ export function MeetingsContent() {
   );
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-            Meetings
-          </h1>
-          <p className="text-muted-foreground mt-1.5 text-[15px]">
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="WORKSPACE"
+        heading="Meetings"
+        description={
+          <>
             {upcoming?.length ?? 0} upcoming &middot; Schedule and manage your meetings.
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-        >
-          <Plus className="h-4 w-4" /> Schedule Meeting
-        </button>
-      </div>
+          </>
+        }
+        actions={
+          <Button size="lg" onClick={() => setShowCreate(true)}>
+            <Plus className="h-4 w-4" /> Schedule Meeting
+          </Button>
+        }
+      />
 
       {/* Create form */}
       {showCreate && (

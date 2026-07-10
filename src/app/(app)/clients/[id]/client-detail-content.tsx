@@ -31,6 +31,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -139,7 +141,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
 
   if (isLoading) {
     return (
-      <div className="space-y-6 animate-fade-in">
+      <div className="space-y-6">
         <Skeleton className="h-4 w-28 mb-4" />
         <Skeleton className="h-9 w-48 mb-2" />
         <Skeleton className="h-5 w-36" />
@@ -183,103 +185,114 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
     .reduce((sum, i) => sum + Number(i.total), 0);
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6">
       <div>
         <Link
           href="/clients"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
+          className="mb-5 inline-flex items-center gap-1.5 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <ArrowLeft className="h-4 w-4" /> Back to Clients
         </Link>
 
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-                {client.name}
-              </h1>
-              <div
+        <PageHeader
+          eyebrow="WORKSPACE"
+          className="mb-0"
+          heading={
+            <span className="flex min-w-0 flex-wrap items-center gap-3">
+              <span className="min-w-0 break-words">{client.name}</span>
+              <span
                 className={cn(
                   'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium',
                   config.bg
                 )}
               >
-                <div className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
+                <span className={cn('h-1.5 w-1.5 rounded-full', config.dot)} aria-hidden />
                 {config.label}
-              </div>
-            </div>
-            <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-              {client.industry && <span>{client.industry}</span>}
-              {client.location && (
-                <span className="flex items-center gap-1">
-                  <MapPin className="h-3 w-3" />
-                  {client.location}
-                </span>
-              )}
-              {client.website && (
-                <a
-                  href={safeHref(client.website)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-primary hover:underline"
-                >
-                  <Globe className="h-3 w-3" />
-                  {client.website.replace(/^https?:\/\//, '')}
-                </a>
-              )}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => {
-                if (!isEditing) {
-                  setEditName(client.name);
-                  setEditWebsite(client.website || '');
-                  setEditIndustry(client.industry || '');
-                  setEditLocation(client.location || '');
-                  setEditNotes(client.notes || '');
-                  setEditStatus(client.status);
-                  setEditLogo(client.logo ?? null);
-                }
-                setIsEditing(!isEditing);
-              }}
-              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              Edit
-            </button>
-            {!showDeleteConfirm ? (
-              <button
-                onClick={() => setShowDeleteConfirm(true)}
-                className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-colors"
+              </span>
+            </span>
+          }
+          description={
+            client.industry || client.location || client.website ? (
+              <span className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                {client.industry && <span>{client.industry}</span>}
+                {client.location && (
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="h-3 w-3" />
+                    {client.location}
+                  </span>
+                )}
+                {client.website && (
+                  <a
+                    href={safeHref(client.website)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <Globe className="h-3 w-3" />
+                    {client.website.replace(/^https?:\/\//, '')}
+                  </a>
+                )}
+              </span>
+            ) : undefined
+          }
+          actions={
+            <>
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => {
+                  if (!isEditing) {
+                    setEditName(client.name);
+                    setEditWebsite(client.website || '');
+                    setEditIndustry(client.industry || '');
+                    setEditLocation(client.location || '');
+                    setEditNotes(client.notes || '');
+                    setEditStatus(client.status);
+                    setEditLogo(client.logo ?? null);
+                  }
+                  setIsEditing(!isEditing);
+                }}
               >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            ) : (
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => deleteClient.mutate({ id: clientId })}
-                  disabled={deleteClient.isPending}
-                  className="rounded-xl bg-red-500 px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
+              </Button>
+              {!showDeleteConfirm ? (
+                <Button
+                  variant="destructive"
+                  size="icon-lg"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  aria-label="Delete client"
+                  title="Delete client"
                 >
-                  {deleteClient.isPending ? 'Deleting...' : 'Confirm Delete'}
-                </button>
-                <button
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="rounded-xl px-2 py-2 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-          </div>
-          {/* CLI-01: surface a friendly delete error (e.g. client has invoices). */}
-          {deleteClient.error && (
-            <p className="mt-2 text-right text-xs text-red-500">{deleteClient.error.message}</p>
-          )}
-        </div>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    variant="destructive"
+                    size="lg"
+                    onClick={() => deleteClient.mutate({ id: clientId })}
+                    disabled={deleteClient.isPending}
+                  >
+                    {deleteClient.isPending ? 'Deleting...' : 'Confirm Delete'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="lg"
+                    onClick={() => setShowDeleteConfirm(false)}
+                  >
+                    Cancel
+                  </Button>
+                </>
+              )}
+            </>
+          }
+        />
+
+        {/* CLI-01: surface a friendly delete error (e.g. client has invoices). */}
+        {deleteClient.error && (
+          <p className="mt-2 text-right text-xs text-red-500">{deleteClient.error.message}</p>
+        )}
       </div>
 
       {/* Edit form */}

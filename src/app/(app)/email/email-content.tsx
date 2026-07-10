@@ -18,6 +18,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
 import { Textarea } from '@/components/ui/textarea';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -138,13 +139,37 @@ export function EmailContent() {
   const mailboxes = mailboxesQuery.data ?? [];
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] flex-col gap-3">
-      {/* Header: accounts + actions */}
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="mr-1 flex items-center gap-2 text-lg font-semibold">
-          <Inbox className="h-5 w-5 text-primary" /> Inbox
-        </h1>
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <PageHeader
+        eyebrow="WORKSPACE"
+        heading="Inbox"
+        className="mb-0 shrink-0 gap-3 pb-3 sm:items-end [&_h1]:text-[1.75rem]"
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refresh.mutate({})}
+              disabled={refresh.isPending}
+            >
+              <RefreshCw className={cn('h-4 w-4', refresh.isPending && 'animate-spin')} />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+            <AddAccountButton
+              providers={providersQuery.data}
+              connecting={connecting}
+              onConnect={startConnect}
+            />
+            <Button size="sm" onClick={() => setComposeOpen(true)}>
+              <PenSquare className="h-4 w-4" />
+              <span className="hidden sm:inline">Compose</span>
+            </Button>
+          </>
+        }
+      />
 
+      {/* Account filters */}
+      <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => setFilter(undefined)}
           className={cn(
@@ -186,27 +211,6 @@ export function EmailContent() {
             </button>
           </span>
         ))}
-
-        <div className="ml-auto flex items-center gap-1.5">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refresh.mutate({})}
-            disabled={refresh.isPending}
-          >
-            <RefreshCw className={cn('h-4 w-4', refresh.isPending && 'animate-spin')} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-          <AddAccountButton
-            providers={providersQuery.data}
-            connecting={connecting}
-            onConnect={startConnect}
-          />
-          <Button size="sm" onClick={() => setComposeOpen(true)}>
-            <PenSquare className="h-4 w-4" />
-            <span className="hidden sm:inline">Compose</span>
-          </Button>
-        </div>
       </div>
 
       {connecting && (
@@ -275,9 +279,9 @@ function EmptyState({
   onConnect: (p: Provider) => void;
 }) {
   return (
-    <div className="flex h-[calc(100vh-9rem)] items-center justify-center p-4">
-      <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
+    <div className="flex h-full min-h-0 items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-lg border border-border-subtle bg-card p-8 text-center">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-md bg-primary/10">
           <Inbox className="h-6 w-6 text-primary" />
         </div>
         <h2 className="mt-4 text-lg font-semibold">Connect your inbox</h2>
@@ -631,10 +635,10 @@ function ComposeDialog({
 // ===========================================================================
 function InboxSkeleton() {
   return (
-    <div className="flex h-[calc(100vh-7rem)] flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <Skeleton className="h-8 w-48" />
       <div className="flex flex-1 gap-3">
-        <div className="w-full space-y-px rounded-xl border border-border p-2 md:w-[380px]">
+        <div className="w-full space-y-px rounded-lg border border-border p-2 md:w-[380px]">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="p-3">
               <Skeleton className="mb-2 h-3.5 w-40" />
@@ -642,7 +646,7 @@ function InboxSkeleton() {
             </div>
           ))}
         </div>
-        <div className="hidden flex-1 rounded-xl border border-border md:block" />
+        <div className="hidden flex-1 rounded-lg border border-border md:block" />
       </div>
     </div>
   );

@@ -28,6 +28,8 @@ import {
   Upload,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -42,7 +44,6 @@ import {
   getProgress,
   getDeadline,
   deadlineMeta,
-  statusConfig,
 } from '@/components/projects/project-ui';
 
 // Shared Paper-theme hover idiom for interactive cards.
@@ -100,7 +101,6 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
   const callerMembership = project.members.find((m) => m.user.id === session?.user?.id);
   const canManage = isAdmin || callerMembership?.role === 'LEAD';
 
-  const rail = (statusConfig[project.status] ?? statusConfig.ACTIVE).rail;
   const progress = getProgress(project);
   const closed = project.status === 'COMPLETED' || project.status === 'CANCELLED';
   const deadline = closed ? null : getDeadline(project);
@@ -115,56 +115,53 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
       : null;
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Back link */}
-      <Link
-        href="/projects"
-        className="inline-flex items-center gap-1.5 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Back to Projects
-      </Link>
+    <div className="space-y-6">
+      <div>
+        <Link
+          href="/projects"
+          className="mb-5 inline-flex items-center gap-1.5 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Projects
+        </Link>
 
-      {/* Header card with status rail */}
-      <Card className="relative border-border/60">
-        <span className={cn('absolute inset-y-0 left-0 w-1', rail)} aria-hidden />
-        <CardContent className="pl-5 sm:pl-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-                  {project.name}
-                </h1>
-                <StatusBadge status={project.status} />
-              </div>
-              <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
-                {project.client ? (
-                  <>
-                    <Building2 className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{project.client.name}</span>
-                    {project.client.website && (
-                      <a
-                        href={safeHref(project.client.website)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label={`Visit ${project.client.name} website`}
-                        className="inline-flex items-center gap-1 rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                    )}
-                  </>
-                ) : project.type === 'INTERNAL' ? (
-                  <span className="inline-flex items-center rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    Internal Product
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex shrink-0 items-center gap-2">
-              <button
+        <PageHeader
+          eyebrow="WORKSPACE"
+          className="mb-0 border-b-0 pb-5"
+          heading={
+            <span className="flex min-w-0 flex-wrap items-center gap-3">
+              <span className="min-w-0 break-words">{project.name}</span>
+              <StatusBadge status={project.status} />
+            </span>
+          }
+          description={
+            project.client ? (
+              <span className="inline-flex max-w-full items-center gap-1.5">
+                <Building2 className="h-4 w-4 shrink-0" />
+                <span className="truncate">{project.client.name}</span>
+                {project.client.website && (
+                  <a
+                    href={safeHref(project.client.website)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Visit ${project.client.name} website`}
+                    className="inline-flex shrink-0 items-center rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
+              </span>
+            ) : project.type === 'INTERNAL' ? (
+              <span className="inline-flex items-center rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                Internal Product
+              </span>
+            ) : undefined
+          }
+          actions={
+            <>
+              <Button
+                variant="outline"
+                size="lg"
                 onClick={() => {
                   setIsEditing(!isEditing);
                   setEditName(project.name);
@@ -179,76 +176,79 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                   setEditTech(project.techStack);
                   setTechInput('');
                 }}
-                className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
               >
                 <Pencil className="h-3.5 w-3.5" />
                 Edit
-              </button>
+              </Button>
               {canManage &&
                 (!showDeleteConfirm ? (
-                  <button
+                  <Button
+                    variant="destructive"
+                    size="icon-lg"
                     onClick={() => setShowDeleteConfirm(true)}
                     aria-label="Delete project"
-                    className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    title="Delete project"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 ) : (
-                  <div className="flex items-center gap-1.5">
-                    <button
+                  <>
+                    <Button
+                      variant="destructive"
+                      size="lg"
                       onClick={() => deleteProject.mutate({ id: projectId })}
                       disabled={deleteProject.isPending}
-                      className="rounded-xl bg-red-500 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-50"
                     >
                       {deleteProject.isPending ? 'Deleting...' : 'Confirm Delete'}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="lg"
                       onClick={() => setShowDeleteConfirm(false)}
-                      className="rounded-xl px-2 py-2 text-xs text-muted-foreground hover:text-foreground"
                     >
                       Cancel
-                    </button>
-                  </div>
+                    </Button>
+                  </>
                 ))}
-            </div>
-          </div>
+            </>
+          }
+        />
 
-          {/* Meta row */}
-          <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2.5 border-t border-border/60 pt-4">
-            {progress && (
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Milestones
-                </span>
-                <ProgressBar pct={progress.pct} className="w-24" />
-                <span className="text-xs font-semibold text-foreground tabular-nums">
-                  {progress.done}/{progress.total} · {progress.pct}%
-                </span>
-              </div>
-            )}
-            {due && (
-              <span
-                className={cn('flex items-center gap-1.5 text-xs font-medium tabular-nums', due.tone)}
-              >
-                <Clock className="h-3.5 w-3.5" />
-                {due.label}
+        {/* At-a-glance project metadata remains part of the detail header. */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5 border-b border-border-subtle pb-6">
+          {progress && (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Milestones
               </span>
-            )}
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
-              <Users className="h-3.5 w-3.5" />
-              {project.members.length} member{project.members.length !== 1 ? 's' : ''}
+              <ProgressBar pct={progress.pct} className="w-24" />
+              <span className="text-xs font-semibold text-foreground tabular-nums">
+                {progress.done}/{progress.total} · {progress.pct}%
+              </span>
+            </div>
+          )}
+          {due && (
+            <span
+              className={cn('flex items-center gap-1.5 text-xs font-medium tabular-nums', due.tone)}
+            >
+              <Clock className="h-3.5 w-3.5" />
+              {due.label}
             </span>
-            {(project.startDate || project.endDate) && (
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
-                <Calendar className="h-3.5 w-3.5" />
-                {project.startDate ? format(new Date(project.startDate), 'MMM d, yyyy') : '—'}
-                {' – '}
-                {project.endDate ? format(new Date(project.endDate), 'MMM d, yyyy') : '—'}
-              </span>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+          )}
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+            <Users className="h-3.5 w-3.5" />
+            {project.members.length} member{project.members.length !== 1 ? 's' : ''}
+          </span>
+          {(project.startDate || project.endDate) && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+              <Calendar className="h-3.5 w-3.5" />
+              {project.startDate ? format(new Date(project.startDate), 'MMM d, yyyy') : '—'}
+              {' – '}
+              {project.endDate ? format(new Date(project.endDate), 'MMM d, yyyy') : '—'}
+            </span>
+          )}
+        </div>
+      </div>
 
       {deleteProject.error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-500">
@@ -1719,7 +1719,7 @@ function EmptyState({
 
 function ProjectDetailSkeleton() {
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6">
       <Skeleton className="h-4 w-28" />
       <Card className="border-border/60">
         <CardContent className="space-y-4">

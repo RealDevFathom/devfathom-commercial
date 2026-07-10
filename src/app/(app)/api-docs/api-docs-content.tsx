@@ -2,6 +2,7 @@ import { headers } from 'next/headers';
 import Link from 'next/link';
 import { Key, Shield, Terminal, FileCode } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 
 export async function ApiDocsContent() {
   let baseUrl = process.env.NEXT_PUBLIC_APP_URL;
@@ -13,17 +14,13 @@ export async function ApiDocsContent() {
   }
 
   return (
-    <div className="max-w-3xl space-y-6 animate-fade-in">
-      {/* Header */}
-      <div>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-          API Access
-        </h1>
-        <p className="text-muted-foreground mt-1.5 text-[15px]">
-          Programmatic access to DevFathom for integrations, automation, and AI assistants like
-          Claude Code.
-        </p>
-      </div>
+    <div className="max-w-3xl space-y-6">
+      <PageHeader
+        className="mb-0"
+        eyebrow="SYSTEM"
+        heading="API Access"
+        description="Programmatic access to DevFathom for integrations, automation, and AI assistants like Claude Code."
+      />
 
       {/* Step 1 — Get a token */}
       <Card className="border-border/60">

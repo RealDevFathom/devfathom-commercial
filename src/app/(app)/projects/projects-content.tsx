@@ -20,6 +20,8 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import {
@@ -123,34 +125,34 @@ export function ProjectsContent() {
     );
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-            Projects
-          </h1>
-          <p className="mt-1.5 text-[15px] text-muted-foreground">
-            Delivery across every client engagement and internal build.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/projects/import"
-            className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-all hover:bg-secondary active:scale-[0.98]"
-          >
-            <Upload className="h-4 w-4" />
-            Import from Trello
-          </Link>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-          >
-            <Plus className="h-4 w-4" />
-            New Project
-          </button>
-        </div>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="WORKSPACE"
+        heading="Projects"
+        description="Delivery across every client engagement and internal build."
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="lg"
+              className="h-10 px-4"
+              nativeButton={false}
+              render={<Link href="/projects/import" />}
+            >
+              <Upload className="h-4 w-4" />
+              Import from Trello
+            </Button>
+            <Button
+              size="lg"
+              className="h-10 px-4"
+              onClick={() => setShowCreateModal(true)}
+            >
+              <Plus className="h-4 w-4" />
+              New Project
+            </Button>
+          </>
+        }
+      />
 
       {/* At-a-glance stats */}
       <div className="flex flex-wrap items-center gap-2">

@@ -24,6 +24,7 @@
     "seed": "bunx tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.89",
     "@ai-sdk/groq": "^3.0.42",
     "@ai-sdk/react": "^3.0.209",
     "@auth/prisma-adapter": "^2.11.1",

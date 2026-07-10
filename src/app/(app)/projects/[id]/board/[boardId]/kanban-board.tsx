@@ -455,7 +455,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
 
   return (
     <>
-      <div className="flex flex-col h-[calc(100vh-8rem)]">
+      <div className="flex h-full min-h-0 flex-col">
         {/* Header */}
         <div className="flex items-center justify-between mb-3 shrink-0">
           <div>

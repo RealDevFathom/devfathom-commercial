@@ -14,8 +14,10 @@ import {
   Check,
   Copy,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -69,23 +71,19 @@ export function TeamContent() {
   }, [team, search, deptFilter]);
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">Team</h1>
-          <p className="text-muted-foreground mt-1.5 text-[15px]">
-            {team?.length ?? 0} team members across {departments.length} departments.
-          </p>
-        </div>
-        {isAdmin && (
-          <button
-            onClick={() => setShowAddMember(true)}
-            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-          >
-            <Plus className="h-4 w-4" /> Add Member
-          </button>
-        )}
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="FIRM"
+        heading="Team"
+        description={`${team?.length ?? 0} team members across ${departments.length} departments.`}
+        actions={
+          isAdmin ? (
+            <Button size="lg" onClick={() => setShowAddMember(true)}>
+              <Plus className="h-4 w-4" /> Add Member
+            </Button>
+          ) : undefined
+        }
+      />
 
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">

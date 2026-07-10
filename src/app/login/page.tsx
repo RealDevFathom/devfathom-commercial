@@ -1,9 +1,7 @@
-import { Suspense } from 'react';
 import type { Metadata } from 'next';
 import { Logo } from '@/components/brand/logo';
 import { LoginForm } from './login-form';
 import { LoginHero } from './login-hero';
-import { Reveal } from '@/components/motion/reveal';
 
 export const metadata: Metadata = {
   title: 'Sign in',
@@ -21,7 +19,7 @@ export default function LoginPage() {
           <div className="absolute -top-32 right-0 h-72 w-72 rounded-full bg-primary/10 blur-[120px]" />
         </div>
 
-        <Reveal delay={0.1} className="relative z-10 w-full max-w-[400px]">
+        <div className="animate-slide-up relative z-10 w-full max-w-[400px]">
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 shadow-2xl shadow-black/40 backdrop-blur-xl">
             {/* Mobile logo */}
             <div className="mb-7 lg:hidden">
@@ -35,29 +33,13 @@ export default function LoginPage() {
               <p className="mt-1.5 text-sm text-[#8A97A1]">Sign in to your DevFathom workspace</p>
             </div>
 
-            <Suspense
-              fallback={
-                <div className="animate-pulse space-y-5">
-                  <div className="space-y-2">
-                    <div className="h-4 w-12 rounded bg-white/5" />
-                    <div className="h-11 rounded-xl bg-white/5" />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="h-4 w-16 rounded bg-white/5" />
-                    <div className="h-11 rounded-xl bg-white/5" />
-                  </div>
-                  <div className="h-11 rounded-xl bg-white/5" />
-                </div>
-              }
-            >
-              <LoginForm />
-            </Suspense>
+            <LoginForm />
           </div>
 
           <p className="mt-6 text-center text-xs text-[#5A6670]">
             Need access? Contact your workspace admin.
           </p>
-        </Reveal>
+        </div>
       </div>
     </div>
   );

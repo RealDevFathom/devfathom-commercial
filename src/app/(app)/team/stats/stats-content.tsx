@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -100,16 +101,12 @@ export function TeamStatsContent() {
       : null;
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <div>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
-          Team Insights
-        </h1>
-        <p className="text-muted-foreground mt-1.5 text-[15px]">
-          How the team is performing this week. Workload, velocity, and pulse in one place.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="FIRM"
+        heading="Team Insights"
+        description="How the team is performing this week. Workload, velocity, and pulse in one place."
+      />
 
       {/* Top KPI strip — team-level totals */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

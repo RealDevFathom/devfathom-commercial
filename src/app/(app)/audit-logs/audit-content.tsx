@@ -20,7 +20,9 @@ import {
 } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 import type { inferRouterOutputs } from '@trpc/server';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Sheet,
@@ -160,66 +162,74 @@ export function AuditContent() {
     setFilters((f) => ({ ...f, [key]: value }));
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <ScrollText className="h-6 w-6 text-primary" />
-            Audit Log
-          </h1>
-          <p className="text-muted-foreground mt-1.5 text-[15px]">
-            Every action across the workspace — who did what, when, and from where.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {/* IMP-PLAT-04: export the loaded (filtered) audit rows to CSV. */}
-          <button
-            onClick={() => {
-              const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-              const header = ['Time', 'Actor', 'Email', 'Action', 'Operation', 'Category', 'Target', 'Outcome'];
-              const csv = [
-                header,
-                ...rows.map((r) => [
-                  new Date(r.createdAt).toISOString(),
-                  r.actorName ?? '',
-                  r.actorEmail ?? '',
-                  r.action,
-                  r.operation,
-                  r.category,
-                  r.targetLabel ?? '',
-                  r.outcome,
-                ]),
-              ]
-                .map((row) => row.map(esc).join(','))
-                .join('\r\n');
-              const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
-              a.click();
-              URL.revokeObjectURL(url);
-            }}
-            disabled={rows.length === 0}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
-            title="Export the loaded audit rows to CSV"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Export
-          </button>
-          <button
-            onClick={() => {
-              utils.audit.stats.invalidate();
-              utils.audit.filters.invalidate();
-              refetch();
-            }}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-          >
-            <RotateCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
-            Refresh
-          </button>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="SYSTEM"
+        heading="Audit Log"
+        description="Every action across the workspace — who did what, when, and from where."
+        actions={
+          <>
+            {/* IMP-PLAT-04: export the loaded (filtered) audit rows to CSV. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+                const header = [
+                  'Time',
+                  'Actor',
+                  'Email',
+                  'Action',
+                  'Operation',
+                  'Category',
+                  'Target',
+                  'Outcome',
+                ];
+                const csv = [
+                  header,
+                  ...rows.map((r) => [
+                    new Date(r.createdAt).toISOString(),
+                    r.actorName ?? '',
+                    r.actorEmail ?? '',
+                    r.action,
+                    r.operation,
+                    r.category,
+                    r.targetLabel ?? '',
+                    r.outcome,
+                  ]),
+                ]
+                  .map((row) => row.map(esc).join(','))
+                  .join('\r\n');
+                const url = URL.createObjectURL(
+                  new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+                );
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              disabled={rows.length === 0}
+              title="Export the loaded audit rows to CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                utils.audit.stats.invalidate();
+                utils.audit.filters.invalidate();
+                refetch();
+              }}
+            >
+              <RotateCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {/* Stat strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:grid-cols-4">
@@ -466,7 +476,9 @@ function AuditRow({ row, onClick }: { row: AuditEntry; onClick: () => void }) {
 
       {/* Time */}
       <div className="hidden w-28 shrink-0 text-right md:block" title={format(created, 'PPpp')}>
-        <p className="text-xs text-foreground">{formatDistanceToNow(created, { addSuffix: true })}</p>
+        <p className="text-xs text-foreground">
+          {formatDistanceToNow(created, { addSuffix: true })}
+        </p>
         <p className="text-[10px] text-muted-foreground">{format(created, 'MMM d, HH:mm')}</p>
       </div>
     </button>
@@ -622,7 +634,9 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   return (
     <div className="flex items-start justify-between gap-3 text-sm">
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className={cn('min-w-0 break-all text-right text-foreground', mono && 'font-mono text-xs')}>
+      <span
+        className={cn('min-w-0 break-all text-right text-foreground', mono && 'font-mono text-xs')}
+      >
         {value}
       </span>
     </div>
