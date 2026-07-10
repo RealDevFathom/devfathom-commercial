@@ -9,34 +9,38 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <div className="relative flex min-h-screen bg-[#06090C] text-[#E6EBEE]">
-      {/* Left panel — animated brand hero (desktop only) */}
+    <div className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]">
+      {/* Blueprint field panel — desktop only */}
       <LoginHero />
 
-      {/* Right panel — login form */}
-      <div className="relative flex flex-1 items-center justify-center p-6 sm:p-8">
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div className="absolute -top-32 right-0 h-72 w-72 rounded-full bg-primary/10 blur-[120px]" />
-        </div>
+      {/* Sign-in sheet */}
+      <div className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10">
+        <div className="w-full max-w-[25rem] animate-slide-up">
+          <div className="mb-8 flex items-center gap-3 lg:hidden">
+            <Logo variant="auto" size="md" textClassName="text-foreground" />
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+              Fieldbook / access
+            </span>
+          </div>
 
-        <div className="animate-slide-up relative z-10 w-full max-w-[400px]">
-          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 shadow-2xl shadow-black/40 backdrop-blur-xl">
+          <div className="border-l-2 border-primary pl-5 sm:pl-6">
             {/* Mobile logo */}
-            <div className="mb-7 lg:hidden">
-              <Logo variant="white" size="md" textClassName="text-white" />
-            </div>
-
-            <div className="mb-7">
-              <h2 className="font-display text-xl font-semibold tracking-tight text-white">
+            <div className="mb-8">
+              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+                Secure workspace access
+              </p>
+              <h2 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
                 Welcome back
               </h2>
-              <p className="mt-1.5 text-sm text-[#8A97A1]">Sign in to your DevFathom workspace</p>
+              <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+                Sign in to pick up the work your team is moving forward.
+              </p>
             </div>
 
             <LoginForm />
           </div>
 
-          <p className="mt-6 text-center text-xs text-[#5A6670]">
+          <p className="mt-8 text-xs text-muted-foreground">
             Need access? Contact your workspace admin.
           </p>
         </div>

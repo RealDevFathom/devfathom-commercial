@@ -516,8 +516,8 @@ function KPICard({
   const deltaDirection = trend === 'up' ? 'up' : trend === 'down' ? 'down' : 'flat';
 
   return (
-    <div className="relative bg-card p-5">
-      <Icon aria-hidden className="absolute right-5 top-5 h-4 w-4 text-text-muted" />
+    <div className="fieldbook-kpi bg-card p-5 pt-6">
+      <Icon aria-hidden className="absolute right-5 top-6 h-4 w-4 text-text-muted" />
       <Stat
         className="pr-8"
         label={title}
@@ -750,8 +750,9 @@ function DeadlineItem({
     project: { id: string; name: string; status: string };
   };
 }) {
+  const [nowMs] = useState(() => Date.now());
   const daysUntil = Math.ceil(
-    (new Date(milestone.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+    (new Date(milestone.dueDate).getTime() - nowMs) / (1000 * 60 * 60 * 24)
   );
   const urgencyConfig =
     daysUntil <= 3
@@ -899,26 +900,28 @@ export function DashboardContent() {
   const greeting = getGreeting();
 
   return (
-    <div className="space-y-6">
+    <div className="fieldbook-dashboard space-y-7">
       <PageHeader
-        eyebrow="WORKSPACE"
+        eyebrow="DESK / TODAY"
         heading={
           <>
             {greeting}, {session?.user?.name?.split(' ')[0]}
           </>
         }
-        description="Here's what's happening across your workspace today."
+        description="Your delivery signals, open work, and next decisions in one place."
         actions={
-          <div className="hidden sm:flex items-baseline gap-2 shrink-0">
-            <span className="font-display text-[2rem] font-bold tracking-tight text-primary leading-none">
-              {format(new Date(), 'EEE')}
+          <div className="hidden shrink-0 border-l border-border-default pl-5 sm:flex sm:flex-col sm:items-end">
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+              Field note / {format(new Date(), 'MMM yyyy')}
             </span>
-            <span className="font-display text-[2rem] font-bold tracking-tight text-foreground leading-none">
-              {format(new Date(), 'd')}
-            </span>
-            <span className="text-sm text-muted-foreground/60 ml-0.5">
-              {format(new Date(), 'MMM yyyy')}
-            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="font-display text-3xl font-semibold tracking-[-0.06em] text-primary leading-none">
+                {format(new Date(), 'EEE')}
+              </span>
+              <span className="font-display text-3xl font-semibold tracking-[-0.06em] text-foreground leading-none">
+                {format(new Date(), 'd')}
+              </span>
+            </div>
           </div>
         }
       />
@@ -930,10 +933,10 @@ export function DashboardContent() {
           onClick={() => setShowCustomize((v) => !v)}
           aria-expanded={showCustomize}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors',
+            'inline-flex min-h-10 items-center gap-1.5 rounded-[3px] border px-3 text-xs font-semibold transition-colors',
             showCustomize
-              ? 'border-primary/30 bg-primary/10 text-primary'
-              : 'border-border bg-card text-muted-foreground hover:text-foreground'
+              ? 'border-primary bg-primary text-primary-foreground'
+              : 'border-border-default bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground'
           )}
         >
           <SlidersHorizontal className="h-3.5 w-3.5" /> Customize
@@ -969,7 +972,7 @@ export function DashboardContent() {
       {/* KPI Cards */}
       <div
         className={cn(
-          'grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle',
+          'grid grid-cols-1 gap-px overflow-hidden rounded-[4px] border border-border-default bg-border-default shadow-[0_12px_24px_-28px_rgba(12,29,48,0.72)]',
           isAdmin ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'
         )}
       >

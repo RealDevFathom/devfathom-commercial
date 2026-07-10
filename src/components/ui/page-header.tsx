@@ -37,17 +37,17 @@ function PageHeader({
     <div
       data-slot="page-header"
       className={cn(
-        'mb-8 flex flex-col gap-5 border-b border-border-subtle pb-7 sm:flex-row sm:items-start sm:justify-between',
+        'fieldbook-page-header mb-10 flex flex-col gap-5 border-b border-border-default pb-7 sm:flex-row sm:items-start sm:justify-between',
         className
       )}
       {...props}
     >
-      <div className="flex min-w-0 items-stretch gap-4">
-        <span aria-hidden className="w-0.5 shrink-0 rounded-full bg-accent-brand" />
+      <div className="flex min-w-0 items-stretch gap-4 sm:gap-5">
+        <span aria-hidden className="fieldbook-page-marker mt-1 shrink-0" />
         {media != null ? <div className="shrink-0 self-start">{media}</div> : null}
         <div className="min-w-0 space-y-2">
           {eyebrow != null ? <Eyebrow accent={!eyebrowMuted}>{eyebrow}</Eyebrow> : null}
-          <h1 className="font-display text-[clamp(2rem,4vw,2.75rem)] leading-[1.06] font-semibold tracking-[-0.03em] text-text-strong">
+          <h1 className="font-display text-[clamp(2.1rem,4vw,3.15rem)] leading-[0.98] font-semibold tracking-[-0.045em] text-text-strong">
             {heading}
           </h1>
           {description != null ? (

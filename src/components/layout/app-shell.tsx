@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
+import { gsap } from 'gsap';
 import { Sidebar, TopNavigation } from './sidebar';
 import { Topbar } from './topbar';
 import { PageTransition } from '@/components/motion/page-transition';
@@ -20,6 +21,7 @@ const AssistantPanel = dynamic(
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
   const { layout } = usePreferences();
   const usesRail = layout !== 'top';
@@ -30,8 +32,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [assistantMounted, setAssistantMounted] = useState(false);
   if (assistantOpen && !assistantMounted) setAssistantMounted(true);
 
+  // The spine is the Fieldbook's single choreographed moment: it redraws on
+  // route changes to keep orientation visible without animating the page chrome.
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const context = gsap.context(() => {
+      gsap.fromTo(
+        '[data-fieldbook-spine-marker]',
+        { scaleY: 0, transformOrigin: 'top center' },
+        { scaleY: 1, duration: 0.46, ease: 'power3.out', overwrite: 'auto' }
+      );
+    }, shellRef);
+    return () => context.revert();
+  }, [pathname]);
+
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
+    <div ref={shellRef} data-fieldbook-shell className="fieldbook-shell flex h-dvh overflow-hidden bg-background">
       {/* Desktop sidebar */}
       {usesRail && (
         <div className="hidden lg:block">
@@ -55,21 +71,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div
         className={cn(
           'flex min-w-0 flex-1 flex-col transition-[padding] duration-300 ease-out',
-          usesRail && (sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60')
+          usesRail && (sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-72')
         )}
       >
         <Topbar onMenuClick={() => setMobileMenuOpen(true)} />
         {!usesRail && <TopNavigation />}
         <main
           data-slot="app-canvas"
-          className="relative min-h-0 flex-1 overflow-y-auto scroll-pt-20"
+          className="fieldbook-canvas relative min-h-0 flex-1 overflow-y-auto scroll-pt-24"
         >
+          <div aria-hidden data-fieldbook-spine className="fieldbook-spine hidden xl:block">
+            <span data-fieldbook-spine-marker className="fieldbook-spine-marker" />
+          </div>
           <PageTransition
             className={cn(
-              'mx-auto w-full',
+              'fieldbook-stage mx-auto w-full',
               immersive
                 ? 'h-full max-w-none overflow-hidden'
-                : 'h-full max-w-[1440px] px-[clamp(1.25rem,5vw,4rem)] py-8 lg:py-10'
+                : 'h-full max-w-[1520px] px-[clamp(1.25rem,5vw,4.75rem)] py-7 lg:py-10'
             )}
           >
             {children}

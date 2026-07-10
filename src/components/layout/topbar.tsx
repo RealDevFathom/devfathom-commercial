@@ -167,7 +167,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border-subtle bg-background/95 px-4 backdrop-blur-xl sm:px-6">
+      <header className="fieldbook-topbar sticky top-0 z-30 flex h-20 items-center gap-3 border-b border-border-default bg-background/92 px-4 backdrop-blur-xl sm:px-7">
         {/* Mobile menu button */}
         {onMenuClick && (
           <button
@@ -179,11 +179,11 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           </button>
         )}
 
-        <div className="hidden items-center gap-3 border-r border-border-default pr-4 sm:flex">
-          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
-            Hub
+        <div className="hidden items-center gap-3 border-r border-border-default pr-5 sm:flex">
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-primary">
+            Fieldbook
           </span>
-          <span aria-hidden className="size-1 rounded-full bg-accent-brand" />
+          <span aria-hidden className="h-1.5 w-1.5 bg-accent-brand" />
         </div>
 
         {/* Breadcrumbs */}
@@ -222,7 +222,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* Search */}
           <button
             onClick={() => handleCommandOpenChange(true)}
-            className="flex h-9 w-9 items-center justify-center gap-2 rounded-md border border-border-default bg-card text-sm text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-52 sm:justify-start sm:px-3 xl:w-72"
+            className="flex h-10 w-10 items-center justify-center gap-2 rounded-[3px] border border-border-default bg-card text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-52 sm:justify-start sm:px-3 xl:w-72"
             aria-label="Search company hub"
           >
             <Search className="h-4 w-4" />
@@ -235,7 +235,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* AI assistant */}
           <button
             onClick={() => openAssistant(true)}
-            className="flex h-9 items-center gap-1.5 rounded-md border border-border-default bg-card px-2.5 text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-10 items-center gap-1.5 rounded-[3px] border border-border-default bg-card px-3 text-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Open AI assistant"
           >
             <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
@@ -246,7 +246,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {mounted && (
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex h-10 w-10 items-center justify-center rounded-[3px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
             >
               {theme === 'dark' ? (

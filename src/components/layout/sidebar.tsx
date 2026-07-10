@@ -128,40 +128,40 @@ export function Sidebar({
       aria-label="Main navigation"
       data-collapsed={collapsed || undefined}
       className={cn(
-        'fixed left-0 top-0 z-40 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
-        collapsed ? 'w-16' : 'w-60'
+        'fieldbook-rail fixed left-0 top-0 z-40 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
+        collapsed ? 'w-16' : 'w-72'
       )}
     >
       {/* Wordmark */}
       <div
         className={cn(
-          'flex h-16 items-center border-b border-sidebar-border px-4',
+          'flex h-20 items-center border-b border-sidebar-border px-5',
           collapsed ? 'justify-center' : 'gap-3'
         )}
       >
-        <FathomMark className="h-8 w-8 shrink-0" variant="white" />
+        <FathomMark className="h-9 w-9 shrink-0" variant="white" />
         {!collapsed && (
           <div className="flex flex-col overflow-hidden animate-fade-in">
-            <span className="font-display text-sm font-semibold tracking-tight text-sidebar-accent-foreground">
+            <span className="font-display text-[15px] font-semibold tracking-[-0.025em] text-sidebar-accent-foreground">
               DevFathom
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/50">
-              Company hub
+            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-sidebar-foreground/55">
+              Fieldbook / 01
             </span>
           </div>
         )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-5 overflow-y-auto px-2 py-4">
+      <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
         {GROUP_ORDER.map((group) => {
           const items = filteredNav.filter((i) => i.group === group);
           if (items.length === 0) return null;
           return (
             <div key={group} className="space-y-1">
               {!collapsed && (
-                <p className="px-3 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
-                  {group}
+                <p className="px-2 pb-2 font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/45">
+                  Runbook / {group}
                 </p>
               )}
               {items.map((item) => {
@@ -176,18 +176,18 @@ export function Sidebar({
                     onClick={onNavigate}
                     aria-current={isActive ? 'page' : undefined}
                     className={cn(
-                      'group relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150',
+                      'group relative flex min-h-11 items-center gap-3 rounded-[3px] px-3 py-2.5 text-sm font-medium transition-colors duration-150',
                       collapsed && 'justify-center px-0',
                       isActive
                         ? 'text-sidebar-accent-foreground'
-                        : 'text-sidebar-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-accent-foreground'
+                        : 'text-sidebar-foreground/85 hover:bg-white/[0.06] hover:text-sidebar-accent-foreground'
                     )}
                   >
                     {isActive && (
                       <m.span
                         layoutId="sidebar-active"
-                        className="absolute inset-0 rounded-md bg-sidebar-accent shadow-sm"
-                        style={{ boxShadow: 'inset 2px 0 0 0 var(--sidebar-primary)' }}
+                        className="absolute inset-0 rounded-[3px] bg-white/[0.1] shadow-sm"
+                        style={{ boxShadow: 'inset 3px 0 0 0 var(--sidebar-primary)' }}
                         transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                       />
                     )}
@@ -195,7 +195,7 @@ export function Sidebar({
                     {numbered ? (
                       <span
                         className={cn(
-                          'relative z-10 w-5 shrink-0 text-center font-mono text-[11px] tabular-nums transition-colors',
+                          'relative z-10 w-5 shrink-0 text-center font-mono text-[10px] tabular-nums transition-colors',
                           isActive
                             ? 'text-sidebar-primary'
                             : 'text-sidebar-foreground/45 group-hover:text-sidebar-foreground/70'
@@ -253,7 +253,7 @@ export function Sidebar({
         <button
           onClick={toggleCollapsed}
           className={cn(
-            'mx-2 mb-2 flex items-center rounded-md p-2 font-mono text-[10px] uppercase tracking-[0.14em] text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+            'mx-3 mb-3 flex min-h-11 items-center rounded-[3px] p-2 font-mono text-[9px] uppercase tracking-[0.16em] text-sidebar-foreground/55 transition-colors hover:bg-white/[0.06] hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
             collapsed ? 'justify-center' : 'justify-between px-3'
           )}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -265,13 +265,13 @@ export function Sidebar({
 
       {/* User chip */}
       <div
-        className={cn('border-t border-sidebar-border p-3', collapsed ? 'flex justify-center' : '')}
+        className={cn('border-t border-sidebar-border p-4', collapsed ? 'flex justify-center' : '')}
       >
         {session?.user && (
           <div className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}>
-            <Avatar className="h-8 w-8 shrink-0 rounded-md">
+            <Avatar className="h-9 w-9 shrink-0 rounded-[3px]">
               <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
-              <AvatarFallback className="rounded-md bg-sidebar-primary/20 text-xs font-medium text-sidebar-primary">
+              <AvatarFallback className="rounded-[3px] bg-sidebar-primary/20 text-xs font-medium text-sidebar-primary">
                 {getInitials(session.user.name)}
               </AvatarFallback>
             </Avatar>

@@ -125,11 +125,11 @@ export function ProjectsContent() {
     );
 
   return (
-    <div className="space-y-5">
+    <div className="fieldbook-projects space-y-7">
       <PageHeader
-        eyebrow="WORKSPACE"
+        eyebrow="DELIVERY / INDEX"
         heading="Projects"
-        description="Delivery across every client engagement and internal build."
+        description="Every active engagement, internal build, and delivery signal in one working index."
         actions={
           <>
             <Button
@@ -164,7 +164,7 @@ export function ProjectsContent() {
       </div>
 
       {/* Toolbar — search, filters, sort, group, view */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+      <div className="fieldbook-filterbar flex flex-col gap-3 p-2 lg:flex-row lg:items-center">
         {/* Search */}
         <div className="relative w-full lg:max-w-xs">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -624,7 +624,7 @@ const ProjectGridCard = memo(function ProjectGridCard({ project }: { project: Pr
       href={`/projects/${project.id}`}
       onMouseEnter={prefetch}
       onFocus={prefetch}
-      className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="group block rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
     >
       <Card className="relative h-full overflow-hidden border-border/60 transition-all duration-200 hover:-translate-y-0.5 hover:border-border hover:shadow-lg hover:shadow-black/5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dark:hover:shadow-black/20">
         <span className={cn('absolute inset-y-0 left-0 w-1', rail)} aria-hidden />
@@ -746,9 +746,9 @@ const ProjectListRow = memo(function ProjectListRow({ project }: { project: Proj
       href={`/projects/${project.id}`}
       onMouseEnter={prefetch}
       onFocus={prefetch}
-      className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="group block rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
     >
-      <div className="relative flex items-center gap-4 overflow-hidden rounded-xl border border-border/60 bg-card p-4 pl-5 transition-all duration-150 hover:border-border hover:bg-accent/40 hover:shadow-md hover:shadow-black/5 motion-reduce:transition-none dark:hover:shadow-black/20">
+      <div className="relative flex items-center gap-4 overflow-hidden rounded-[4px] border border-border-default bg-card p-4 pl-5 transition-all duration-150 hover:border-primary/40 hover:bg-accent/40 hover:shadow-md motion-reduce:transition-none">
         <span className={cn('absolute inset-y-0 left-0 w-1', rail)} aria-hidden />
 
         {/* Name + client */}
@@ -841,7 +841,7 @@ type ProjectData = {
    ============================================ */
 function StatChip({ label, value, dot }: { label: string; value: number; dot?: string }) {
   return (
-    <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card px-2.5 py-1">
+    <div className="inline-flex min-h-8 items-center gap-1.5 rounded-[3px] border border-border-default bg-card px-2.5 py-1">
       {dot && <span className={cn('h-1.5 w-1.5 rounded-full', dot)} />}
       <span className="text-sm font-semibold text-foreground tabular-nums">{value}</span>
       <span className="text-xs text-muted-foreground">{label}</span>

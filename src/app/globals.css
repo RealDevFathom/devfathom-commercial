@@ -7,12 +7,10 @@
 @custom-variant dark (&:is([data-theme='dark'] *));
 
 /* ============================================================
-   DEVFATHOM — "The Sounding" / Fathom design system
-   Canonical tokens (BRAND.md · devfathom-tokens.css).
-   Abyss deep-teal primary · warm Paper neutrals · single muted
-   Brass accent · Ink text. Oxanium (display) · IBM Plex Sans (UI)
-   · IBM Plex Mono (data). Whitespace, hairlines, no gradients;
-   brass earns its place.
+   DEVFATHOM — Fieldbook
+   Blueprint navigation · drafting-paper surfaces · one signal-orange
+   decision color. IBM Plex Sans carries both editorial hierarchy and UI;
+   IBM Plex Mono holds coordinates, dates, and operational metadata.
    ============================================================ */
 
 @theme inline {
@@ -138,63 +136,63 @@
    ============================================================ */
 :root {
   /* Numbered scales — single source of truth */
-  --abyss-900: #08221f;
-  --abyss-800: #0c2e2c;
-  --abyss-700: #123a38;
-  --abyss-600: #1a4b47;
-  --abyss-500: #245c57;
-  --abyss-400: #3c7a74;
-  --abyss-300: #6aa39c;
-  --abyss-200: #a8cbc6;
-  --abyss-100: #d6e6e3;
+  --abyss-900: #0c1d30;
+  --abyss-800: #112b49;
+  --abyss-700: #173f68;
+  --abyss-600: #20578c;
+  --abyss-500: #2e70ad;
+  --abyss-400: #5a98cc;
+  --abyss-300: #91bde0;
+  --abyss-200: #c5dcf0;
+  --abyss-100: #e8f1f8;
 
-  --brass-700: #8a5e32;
-  --brass-600: #a6743f;
-  --brass-500: #bc8850;
-  --brass-400: #cfa372;
-  --brass-300: #e2c49e;
-  --brass-100: #f1e4d2;
+  --brass-700: #a9331e;
+  --brass-600: #c44825;
+  --brass-500: #e25b32;
+  --brass-400: #f58a63;
+  --brass-300: #ffb49b;
+  --brass-100: #ffe3d7;
 
-  --paper-white: #fdfcf8;
-  --paper-50: #f7f5ef;
-  --paper-100: #efebe1;
-  --paper-200: #e3ddd0;
-  --paper-300: #d2cbbb;
+  --paper-white: #fdfdfb;
+  --paper-50: #f4f5f1;
+  --paper-100: #e8ece6;
+  --paper-200: #d9dfd6;
+  --paper-300: #c6d0c7;
 
-  --ink-900: #161a19;
-  --slate-700: #3b423f;
-  --slate-600: #545b58;
-  --slate-500: #6e7570;
-  --slate-400: #939a94;
-  --slate-300: #bac0ba;
+  --ink-900: #18222f;
+  --slate-700: #384553;
+  --slate-600: #556474;
+  --slate-500: #778798;
+  --slate-400: #aab4bf;
+  --slate-300: #d0d7dc;
 
-  --green-600: #3e6b52;
-  --green-100: #dde8e0;
-  --amber-600: #9c7a3a;
-  --amber-100: #eee5cf;
-  --red-600: #9a4a40;
-  --red-100: #eddad6;
+  --green-600: #37705a;
+  --green-100: #d8e9df;
+  --amber-600: #9b6c18;
+  --amber-100: #f3e5bd;
+  --red-600: #b6402a;
+  --red-100: #f4d9d3;
 
   /* Canonical semantic aliases */
   --surface-page: var(--paper-50);
-  --surface-card: var(--paper-white);
+  --surface-card: #fcfcf9;
   --surface-sunken: var(--paper-100);
   --surface-raised: var(--paper-white);
-  --surface-inverse: var(--abyss-800);
+  --surface-inverse: var(--abyss-900);
 
   --text-strong: var(--ink-900);
   --text-body: var(--slate-700);
   --text-muted: var(--slate-500);
   --text-faint: var(--slate-400);
   --text-inverse: var(--paper-50);
-  --text-on-accent: var(--abyss-900);
+  --text-on-accent: var(--paper-white);
   --text-link: var(--abyss-600);
 
   --border-subtle: var(--paper-200);
   --border-default: var(--paper-300);
   --border-strong: var(--slate-400);
 
-  /* Brand brass accent (data-accent="quiet" default) */
+  /* Fieldbook signal: reserved for active routes and decisions. */
   --accent-brand: var(--brass-500);
   --accent-brand-hover: var(--brass-600);
   --accent-quiet: var(--brass-100);
@@ -207,7 +205,7 @@
   --popover: var(--surface-card);
   --popover-foreground: var(--text-strong);
   --primary: var(--abyss-700);
-  --primary-foreground: var(--paper-50);
+  --primary-foreground: var(--paper-white);
   --primary-hover: var(--abyss-800);
   --primary-quiet: var(--abyss-100);
   --secondary: var(--paper-100);
@@ -228,15 +226,15 @@
   --input: var(--border-subtle);
   --ring: var(--accent-brand);
 
-  /* Radius — 10px is the largest common card value */
+  /* Drafting board geometry: deliberate corners, never pill-shaped by default. */
   --radius-xs: 2px;
   --radius-sm: 4px;
   --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 16px;
+  --radius-lg: 4px;
+  --radius-xl: 8px;
   --radius: var(--radius-lg);
 
-  /* Charts — abyss · slate · brass · green · abyss-mid */
+  /* Charts — blueprint · slate · signal · green · blueprint-mid */
   --chart-1: var(--abyss-700);
   --chart-2: var(--slate-500);
   --chart-3: var(--brass-500);
@@ -245,24 +243,23 @@
 
   --grid-line: rgba(22, 26, 25, 0.04);
 
-  /* Sidebar — fixed dark Abyss command surface (both themes) */
-  --sidebar: var(--abyss-800);
+  /* Sidebar — fixed Blueprint runbook surface (both themes) */
+  --sidebar: var(--abyss-900);
   --sidebar-foreground: var(--abyss-200);
   --sidebar-primary: var(--brass-500); /* brass — active accent */
   --sidebar-primary-foreground: var(--abyss-900);
-  --sidebar-accent: var(--abyss-700); /* hover/active bg */
-  --sidebar-accent-foreground: var(--paper-50);
+  --sidebar-accent: var(--abyss-800); /* hover/active bg */
+  --sidebar-accent-foreground: var(--paper-white);
   --sidebar-border: rgba(255, 255, 255, 0.08);
   --sidebar-ring: var(--brass-500);
 
   /* Typography */
-  --font-display: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
-  --font-logo: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-display: var(--font-sans);
+  --font-logo: var(--font-sans);
   --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  /* Canonical display type scale (used by components/headings explicitly;
-     Tailwind's text-* numeric scale is intentionally left untouched). */
+  /* Editorial display scale for page titles and big operational numbers. */
   --type-display-xs: 1.375rem; /* 22 */
   --type-display-sm: 1.75rem; /* 28 */
   --type-display-md: 2.25rem; /* 36 */
@@ -279,11 +276,11 @@
   --tracking-wide: 0.04em;
   --tracking-caps: 0.14em; /* eyebrows */
 
-  /* Soft, low, cool shadows (rgba abyss-900) */
-  --shadow-xs: 0 1px 2px rgba(8, 34, 31, 0.06);
-  --shadow-sm: 0 1px 2px rgba(8, 34, 31, 0.05), 0 2px 6px rgba(8, 34, 31, 0.05);
-  --shadow-md: 0 2px 4px rgba(8, 34, 31, 0.05), 0 8px 20px rgba(8, 34, 31, 0.08);
-  --shadow-lg: 0 4px 8px rgba(8, 34, 31, 0.06), 0 18px 40px rgba(8, 34, 31, 0.12);
+  /* Crisp lift — enough depth to separate paper from the board. */
+  --shadow-xs: 0 1px 2px rgba(12, 29, 48, 0.05);
+  --shadow-sm: 0 4px 10px -9px rgba(12, 29, 48, 0.35);
+  --shadow-md: 0 12px 26px -22px rgba(12, 29, 48, 0.42);
+  --shadow-lg: 0 20px 50px -34px rgba(12, 29, 48, 0.5);
 
   /* Motion */
   --ease-standard: cubic-bezier(0.4, 0.1, 0.2, 1);
@@ -299,28 +296,28 @@
    DARK THEME — deep Abyss canvas; primary inverts to light teal
    ============================================================ */
 [data-theme='dark'] {
-  --surface-page: #07201d;
-  --surface-card: #0c2e2c;
-  --surface-sunken: #051512;
-  --surface-raised: #103734;
-  --surface-inverse: #d6e6e3;
+  --surface-page: #0b1724;
+  --surface-card: #102132;
+  --surface-sunken: #08111c;
+  --surface-raised: #162b3f;
+  --surface-inverse: #e8f1f8;
 
-  --text-strong: #fbfaf6;
-  --text-body: #c6d8d4;
-  --text-muted: #8fb1ab;
-  --text-faint: #5e827c;
-  --text-inverse: #08221f;
-  --text-on-accent: #08221f;
-  --text-link: var(--abyss-200);
+  --text-strong: #f5f7f6;
+  --text-body: #d6dee2;
+  --text-muted: #a3b1bc;
+  --text-faint: #687a88;
+  --text-inverse: #0b1724;
+  --text-on-accent: #0b1724;
+  --text-link: #91bde0;
 
-  --border-subtle: #103734;
-  --border-default: #1a4b47;
-  --border-strong: #2c605a;
+  --border-subtle: #1a3147;
+  --border-default: #27445e;
+  --border-strong: #42647e;
 
-  /* Brass lightens in dark */
-  --accent-brand: #cfa372;
-  --accent-brand-hover: #e2c49e;
-  --accent-quiet: #1e3b1f;
+  /* Signal lightens in the dark without turning into decoration. */
+  --accent-brand: #ff9a76;
+  --accent-brand-hover: #ffb49b;
+  --accent-quiet: #33221f;
 
   --background: var(--surface-page);
   --foreground: var(--text-strong);
@@ -329,45 +326,45 @@
   --popover: var(--surface-card);
   --popover-foreground: var(--text-strong);
 
-  /* Primary inverts to light teal with dark text */
-  --primary: #b8d4cf;
-  --primary-foreground: #08221f;
-  --primary-hover: #a8cbc6;
-  --primary-quiet: #103734;
+  /* Primary inverts to a pale blueprint field with dark text. */
+  --primary: #a9d0f2;
+  --primary-foreground: #0b1724;
+  --primary-hover: #c5dcf0;
+  --primary-quiet: #162b3f;
 
-  --secondary: #123a38;
+  --secondary: #162b3f;
   --secondary-foreground: var(--text-strong);
-  --muted: #123a38;
-  --muted-foreground: #a8cbc6;
-  --accent: #123a38;
-  --accent-foreground: #d6e6e3;
+  --muted: #162b3f;
+  --muted-foreground: #b8c8d2;
+  --accent: #162b3f;
+  --accent-foreground: #e8f1f8;
 
-  --destructive: #d28c82;
-  --success: #84b69a;
-  --success-foreground: #08221f;
-  --warning: #d6b374;
+  --destructive: #f09a8d;
+  --success: #91c9aa;
+  --success-foreground: #0b1724;
+  --warning: #e5bd6c;
   --warning-foreground: #1e1604;
 
   --border: var(--border-subtle);
   --input: var(--border-subtle);
   --ring: var(--accent-brand);
 
-  --chart-1: #6aa39c;
-  --chart-2: #a8cbc6;
-  --chart-3: #cfa372;
-  --chart-4: #84b69a;
-  --chart-5: #3c7a74;
+  --chart-1: #91bde0;
+  --chart-2: #c5dcf0;
+  --chart-3: #ff9a76;
+  --chart-4: #91c9aa;
+  --chart-5: #5a98cc;
 
-  --grid-line: rgba(214, 230, 227, 0.05);
+  --grid-line: rgba(197, 220, 240, 0.05);
 
-  --sidebar: #08221f;
-  --sidebar-foreground: #a8cbc6;
-  --sidebar-primary: #cfa372;
-  --sidebar-primary-foreground: #08221f;
-  --sidebar-accent: #123a38;
-  --sidebar-accent-foreground: #f1ece1;
-  --sidebar-border: #16403d;
-  --sidebar-ring: #cfa372;
+  --sidebar: #081421;
+  --sidebar-foreground: #c5dcf0;
+  --sidebar-primary: #ff9a76;
+  --sidebar-primary-foreground: #0b1724;
+  --sidebar-accent: #112b49;
+  --sidebar-accent-foreground: #f5f7f6;
+  --sidebar-border: #1a3147;
+  --sidebar-ring: #ff9a76;
 
   color-scheme: dark;
 }
@@ -416,9 +413,9 @@
 
   body {
     @apply bg-background text-foreground;
-    font-size: 0.9375rem; /* 15px, scales with data-type */
-    line-height: 1.65;
-    letter-spacing: -0.01em;
+    font-size: 1rem;
+    line-height: 1.6;
+    letter-spacing: -0.006em;
   }
 
   [data-density='compact'] body {
@@ -440,13 +437,13 @@
   }
 
   h1 {
-    @apply text-3xl font-bold;
-    letter-spacing: -0.03em;
+    @apply text-3xl font-semibold;
+    letter-spacing: -0.045em;
   }
 
   h2 {
     @apply text-2xl font-semibold;
-    letter-spacing: -0.022em;
+    letter-spacing: -0.035em;
   }
 
   h3 {
@@ -495,6 +492,118 @@
   .data-mono {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Fieldbook is a working surface: a fine drafting grid sits behind content,
+     while the orange spine marks the current point of attention. */
+  .fieldbook-shell {
+    background: var(--surface-page);
+  }
+
+  .fieldbook-canvas {
+    background-color: var(--surface-page);
+    background-image:
+      linear-gradient(to right, color-mix(in srgb, var(--border-subtle) 52%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in srgb, var(--border-subtle) 52%, transparent) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .fieldbook-stage {
+    isolation: isolate;
+  }
+
+  .fieldbook-stage::before {
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    left: clamp(1.25rem, 5vw, 4.75rem);
+    width: 1px;
+    height: 100%;
+    content: '';
+    background: color-mix(in srgb, var(--border-default) 62%, transparent);
+  }
+
+  .fieldbook-spine {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    bottom: 0;
+    left: 22px;
+    width: 1px;
+    background: color-mix(in srgb, var(--border-strong) 58%, transparent);
+  }
+
+  .fieldbook-spine-marker {
+    display: block;
+    width: 3px;
+    height: 92px;
+    margin-left: -1px;
+    background: var(--accent-brand);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-brand) 12%, transparent);
+  }
+
+  .fieldbook-page-marker {
+    display: grid;
+    grid-template-rows: 8px 1fr;
+    width: 8px;
+    min-height: 72px;
+    gap: 8px;
+  }
+
+  .fieldbook-page-marker::before {
+    width: 8px;
+    height: 8px;
+    content: '';
+    background: var(--accent-brand);
+  }
+
+  .fieldbook-page-marker::after {
+    width: 1px;
+    height: 100%;
+    margin-left: 3px;
+    content: '';
+    background: var(--border-strong);
+  }
+
+  .fieldbook-rail {
+    box-shadow: 14px 0 42px -34px rgba(12, 29, 48, 0.9);
+  }
+
+  .fieldbook-topbar {
+    box-shadow: 0 12px 24px -30px rgba(12, 29, 48, 0.6);
+  }
+
+  .fieldbook-kpi {
+    position: relative;
+  }
+
+  .fieldbook-kpi::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 40px;
+    height: 3px;
+    content: '';
+    background: var(--accent-brand);
+  }
+
+  .fieldbook-filterbar {
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--surface-card) 82%, transparent);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .fieldbook-login-hero {
+    background: var(--sidebar);
+  }
+
+  .fieldbook-login-grid {
+    opacity: 0.42;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 56px 56px;
   }
 }
 

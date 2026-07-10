@@ -12,7 +12,7 @@ function safeCallbackUrl(raw: string | null): string {
 }
 
 const inputClass =
-  'flex h-11 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm text-white placeholder:text-[#5A6670] transition-colors focus:border-[#BC8850] focus:outline-none focus:ring-2 focus:ring-[#BC8850]/30';
+  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 
 export function LoginForm() {
   const router = useRouter();
@@ -86,7 +86,7 @@ export function LoginForm() {
       {error && (
         <div
           role="alert"
-          className="mb-5 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400"
+          className="mb-5 rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           {error}
         </div>
@@ -94,7 +94,7 @@ export function LoginForm() {
 
       <form onSubmit={onSubmit} className="space-y-5">
         <div className="space-y-2">
-          <label htmlFor="email" className="block text-sm font-medium text-[#C2CBD1]">
+          <label htmlFor="email" className="block text-sm font-semibold text-foreground">
             Email
           </label>
           <input
@@ -111,12 +111,12 @@ export function LoginForm() {
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label htmlFor="password" className="block text-sm font-medium text-[#C2CBD1]">
+            <label htmlFor="password" className="block text-sm font-semibold text-foreground">
               Password
             </label>
             <a
               href="/forgot-password"
-              className="text-xs font-medium text-[#8A97A1] underline-offset-4 transition-colors hover:text-[#BC8850] hover:underline"
+              className="text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline"
             >
               Forgot password?
             </a>
@@ -135,7 +135,7 @@ export function LoginForm() {
               type="button"
               onClick={() => setShowPassword((visible) => !visible)}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#5A6670] transition-colors hover:text-white"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted transition-colors hover:text-foreground"
               tabIndex={-1}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -145,7 +145,7 @@ export function LoginForm() {
 
         {twoFactor && (
           <div className="space-y-2">
-            <label htmlFor="totp" className="block text-sm font-medium text-[#C2CBD1]">
+            <label htmlFor="totp" className="block text-sm font-semibold text-foreground">
               Authentication code
             </label>
             <input
@@ -159,7 +159,7 @@ export function LoginForm() {
               required
               className={inputClass}
             />
-            <p className="text-xs text-[#5A6670]">
+            <p className="text-xs text-text-muted">
               Open your authenticator app, or enter one of your recovery codes.
             </p>
           </div>
@@ -168,7 +168,7 @@ export function LoginForm() {
         <button
           type="submit"
           disabled={isSubmitting}
-          className="group flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+          className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(12,29,48,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
         >
           {isSubmitting ? (
             <>

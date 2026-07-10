@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Oxanium, IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
+import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
 
@@ -16,14 +16,6 @@ const plexMono = IBM_Plex_Mono({
   variable: '--font-mono',
   subsets: ['latin'],
   weight: ['400', '500', '600'],
-  display: 'swap',
-});
-
-// Oxanium — the logo face, used for display & headings so brand and
-// product type read as one system.
-const oxanium = Oxanium({
-  variable: '--font-display',
-  subsets: ['latin'],
   display: 'swap',
 });
 
@@ -79,8 +71,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#0C2E2C' },
-    { media: '(prefers-color-scheme: dark)', color: '#08221F' },
+    { media: '(prefers-color-scheme: light)', color: '#F4F5F1' },
+    { media: '(prefers-color-scheme: dark)', color: '#0B1724' },
   ],
 };
 
@@ -92,7 +84,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${plexMono.variable} ${oxanium.variable} h-full`}
+      className={`${plexSans.variable} ${plexMono.variable} h-full`}
       suppressHydrationWarning
     >
       <head>

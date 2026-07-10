@@ -1,73 +1,53 @@
 import { cn } from '@/lib/utils';
 import { FathomMark } from '@/components/brand/logo';
 
-const HEADLINE = ['Depth in', 'everything', 'we build.'];
+const HEADLINE = ['Work with', 'the whole', 'picture.'];
 
 export function LoginHero() {
   return (
-    <div className="animate-fade-in relative hidden w-[46%] overflow-hidden border-r border-white/5 lg:flex">
-      {/* Aurora — restrained, deep teal */}
-      <div className="pointer-events-none absolute inset-0">
-        <div
-          data-hero="aurora-1"
-          className="absolute left-[-12%] top-1/4 h-96 w-96 rounded-full bg-primary/20 blur-[130px]"
-        />
-        <div
-          data-hero="aurora-2"
-          className="absolute bottom-[8%] right-[-6%] h-80 w-80 rounded-full bg-[#BC8850]/12 blur-[130px]"
-        />
-      </div>
-
-      {/* Grid */}
-      <div className="absolute inset-0 bg-grid opacity-60" />
-
-      {/* Watermark mark */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <FathomMark className="h-[440px] w-[440px] opacity-[0.05]" variant="white" />
-      </div>
+    <div className="fieldbook-login-hero animate-fade-in relative hidden min-h-dvh overflow-hidden text-sidebar-accent-foreground lg:flex">
+      <div className="fieldbook-login-grid pointer-events-none absolute inset-0" />
+      <div className="pointer-events-none absolute bottom-[-5rem] right-[-6rem] h-[30rem] w-[30rem] border border-white/15" />
+      <div className="pointer-events-none absolute bottom-[-1rem] right-[-2rem] h-[18rem] w-[18rem] border border-white/10" />
 
       {/* Content */}
-      <div className="relative z-10 flex w-full flex-col justify-between p-12">
+      <div className="relative z-10 flex w-full flex-col justify-between p-12 xl:p-16">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div data-hero="mark">
               <FathomMark className="h-11 w-11" variant="white" />
             </div>
-            <span
-              data-hero="word"
-              className="font-display text-xl font-semibold tracking-tight text-white"
-            >
+            <span data-hero="word" className="font-display text-xl font-semibold tracking-[-0.03em] text-white">
               DevFathom
             </span>
           </div>
-          <span
-            data-hero="badge"
-            className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium text-[#8A97A1]"
-          >
-            v1.0
+          <span data-hero="badge" className="border border-white/20 px-3 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-white/70">
+            Fieldbook / 01
           </span>
         </div>
 
-        <div className="max-w-md">
-          <h1 className="font-display text-[2.7rem] font-bold leading-[1.05] tracking-[-0.03em] text-white xl:text-[3.1rem]">
+        <div className="max-w-lg">
+          <p className="mb-6 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-sidebar-primary">
+            The delivery desk
+          </p>
+          <h1 className="font-display text-[clamp(3rem,5vw,5.5rem)] font-semibold leading-[0.91] tracking-[-0.065em] text-white">
             {HEADLINE.map((line, i) => (
               <span key={i} className="block overflow-hidden">
                 <span
                   data-hero="line"
-                  className={cn('block', i === HEADLINE.length - 1 && 'text-gradient')}
+                  className={cn('block', i === HEADLINE.length - 1 && 'text-sidebar-primary')}
                 >
                   {line}
                 </span>
               </span>
             ))}
           </h1>
-          <p data-hero="sub" className="mt-6 max-w-sm text-base leading-relaxed text-[#8A97A1]">
-            Projects, finance, clients, people, and real-time collaboration — one calm workspace for
-            the team that designs, builds, and advises.
+          <p data-hero="sub" className="mt-7 max-w-sm text-base leading-relaxed text-white/65">
+            Projects, finance, clients, and people — each moving part visible before it becomes a decision.
           </p>
         </div>
 
-        <div data-hero="status" className="flex items-center gap-6 text-sm text-[#5A6670]">
+        <div data-hero="status" className="flex items-center gap-6 text-sm text-white/55">
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
