@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { useTheme } from 'next-themes';
+import { useTheme } from '@/components/theme-provider';
 import Link from 'next/link';
 import {
   User,
@@ -148,7 +148,7 @@ export function SettingsContent() {
 
 /* ============================================================
    Appearance — "The Sounding" design revamp (spec §6)
-   Theme (next-themes) + the five configurable surface toggles
+   Theme (ThemeProvider) + the five configurable surface toggles
    (density / type / accent / layout / icons via usePreferences).
    ============================================================ */
 type SegmentOption<T extends string> = {

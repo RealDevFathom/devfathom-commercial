@@ -18,22 +18,22 @@ const TRAITS = [
 ];
 
 const BRAND_RAMP = [
-  { name: 'Abyss', hex: '#0C2E2C', sub: 'deep teal · primary' },
-  { name: 'Abyss deep', hex: '#08221F', sub: 'pressed · canvas' },
-  { name: 'Brass', hex: '#BC8850', sub: 'the single accent' },
-  { name: 'Paper', hex: '#F7F5EF', sub: 'warm neutral · page' },
+  { name: 'Ink', hex: '#263128', sub: 'deep evergreen · primary' },
+  { name: 'Moss', hex: '#5B6D58', sub: 'quiet secondary depth' },
+  { name: 'Clay', hex: '#B14E32', sub: 'the single decision accent' },
+  { name: 'Linen', hex: '#F7F1E5', sub: 'warm neutral · page' },
 ];
 
 const NEUTRALS = [
-  { name: 'Ink', hex: '#161A19', sub: 'foreground' },
-  { name: 'Slate', hex: '#6E7570', sub: 'muted text' },
-  { name: 'Paper 100', hex: '#EFEBE1', sub: 'sunken / lines' },
-  { name: 'Paper white', hex: '#FDFCF8', sub: 'card surface' },
+  { name: 'Charcoal', hex: '#3F443C', sub: 'foreground support' },
+  { name: 'Stone', hex: '#7A7D73', sub: 'muted text' },
+  { name: 'Oat', hex: '#E8D8C3', sub: 'sunken / lines' },
+  { name: 'Linen white', hex: '#FFFCF6', sub: 'card surface' },
 ];
 
 const STATS: { value: number; decimals?: number; suffix?: string; label: string }[] = [
   { value: 4, label: 'Movements — Sound · Map · Build · Advise' },
-  { value: 3, label: 'Core brand colours — Abyss · Paper · Brass' },
+  { value: 3, label: 'Core brand colours — Ink · Linen · Clay' },
   { value: 2, label: 'Typefaces — Oxanium + IBM Plex' },
   { value: 1.8288, decimals: 4, suffix: ' m', label: 'One fathom, exactly' },
 ];
@@ -129,14 +129,14 @@ export function BrandShowcase() {
                 bg: 'bg-card',
               },
               {
-                label: 'On abyss',
+                label: 'On ink',
                 node: <FathomMark className="h-16 w-16" variant="white" />,
-                bg: 'bg-[#0C2E2C]',
+                bg: 'bg-[#263128]',
               },
               {
                 label: 'On paper',
                 node: <FathomMark className="h-16 w-16" variant="dark" />,
-                bg: 'bg-[#F7F5EF]',
+                bg: 'bg-[#F7F1E5]',
               },
             ].map((m) => (
               <StaggerItem key={m.label}>
@@ -152,12 +152,12 @@ export function BrandShowcase() {
           <p className="mt-6 max-w-2xl text-sm leading-relaxed text-muted-foreground">
             A connected chevron of chunky rounded blocks steps down to the lower-left — forward
             motion descending into depth. A detached node rests in the chevron&apos;s mouth,
-            carrying the single <span className="text-foreground">brass</span> accent.
+            carrying the single <span className="text-foreground">clay</span> accent.
           </p>
         </Section>
 
         {/* 03 — Colour */}
-        <Section label="03 — Colour" title="Abyss, paper, and a little brass">
+        <Section label="03 — Colour" title="Ink, linen, and a little clay">
           <Stagger className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {BRAND_RAMP.map((c) => (
               <Swatch key={c.hex} {...c} />
@@ -222,7 +222,7 @@ export function BrandShowcase() {
             <Magnetic className="inline-block">
               <Link
                 href="/login"
-                className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-[#0C2E2C]"
+                className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
               >
                 Enter the hub <ArrowUpRight className="h-4 w-4" />
               </Link>

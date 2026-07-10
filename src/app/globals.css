@@ -2,13 +2,13 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
-/* Dark theme is driven by `data-theme="dark"` on <html> (next-themes,
-   attribute="data-theme"). The `dark:` utility variant follows it. */
+/* Dark theme is driven by `data-theme="dark"` on <html>. The `dark:` utility
+   variant follows it. */
 @custom-variant dark (&:is([data-theme='dark'] *));
 
 /* ============================================================
    DEVFATHOM — Fieldbook
-   Blueprint navigation · drafting-paper surfaces · one signal-orange
+   Warm ledger navigation · linen surfaces · one deliberate clay
    decision color. IBM Plex Sans carries both editorial hierarchy and UI;
    IBM Plex Mono holds coordinates, dates, and operational metadata.
    ============================================================ */
@@ -120,7 +120,7 @@
   --radius-3xl: calc(var(--radius-lg) * 1.6);
   --radius-4xl: calc(var(--radius-lg) * 1.8);
 
-  /* Soft, low, cool shadows */
+  /* Soft, low, warm shadows */
   --shadow-xs: var(--shadow-xs);
   --shadow-sm: var(--shadow-sm);
   --shadow-md: var(--shadow-md);
@@ -132,50 +132,50 @@
 }
 
 /* ============================================================
-   LIGHT THEME (default) — warm Paper canvas, deep Abyss helm
+   LIGHT THEME (default) — linen canvas, evergreen navigation
    ============================================================ */
 :root {
   /* Numbered scales — single source of truth */
-  --abyss-900: #0c1d30;
-  --abyss-800: #112b49;
-  --abyss-700: #173f68;
-  --abyss-600: #20578c;
-  --abyss-500: #2e70ad;
-  --abyss-400: #5a98cc;
-  --abyss-300: #91bde0;
-  --abyss-200: #c5dcf0;
-  --abyss-100: #e8f1f8;
+  --abyss-900: #263128;
+  --abyss-800: #344238;
+  --abyss-700: #465a4b;
+  --abyss-600: #5b6d58;
+  --abyss-500: #74866e;
+  --abyss-400: #9eae95;
+  --abyss-300: #c5d0bd;
+  --abyss-200: #e0e7da;
+  --abyss-100: #eef2ea;
 
-  --brass-700: #a9331e;
-  --brass-600: #c44825;
-  --brass-500: #e25b32;
-  --brass-400: #f58a63;
-  --brass-300: #ffb49b;
-  --brass-100: #ffe3d7;
+  --brass-700: #82331f;
+  --brass-600: #9e4028;
+  --brass-500: #b14e32;
+  --brass-400: #d27b5d;
+  --brass-300: #e8ad94;
+  --brass-100: #f7dfd5;
 
-  --paper-white: #fdfdfb;
-  --paper-50: #f4f5f1;
-  --paper-100: #e8ece6;
-  --paper-200: #d9dfd6;
-  --paper-300: #c6d0c7;
+  --paper-white: #fffcf6;
+  --paper-50: #f7f1e5;
+  --paper-100: #efe3d2;
+  --paper-200: #e5d3bd;
+  --paper-300: #d8c0a7;
 
-  --ink-900: #18222f;
-  --slate-700: #384553;
-  --slate-600: #556474;
-  --slate-500: #778798;
-  --slate-400: #aab4bf;
-  --slate-300: #d0d7dc;
+  --ink-900: #263128;
+  --slate-700: #3f443c;
+  --slate-600: #5e6259;
+  --slate-500: #7a7d73;
+  --slate-400: #a6a598;
+  --slate-300: #d8d5cc;
 
-  --green-600: #37705a;
-  --green-100: #d8e9df;
-  --amber-600: #9b6c18;
-  --amber-100: #f3e5bd;
-  --red-600: #b6402a;
-  --red-100: #f4d9d3;
+  --green-600: #476a50;
+  --green-100: #cfe0cd;
+  --amber-600: #9a6a1e;
+  --amber-100: #f1dfb6;
+  --red-600: #aa4b43;
+  --red-100: #f2d8d4;
 
   /* Canonical semantic aliases */
   --surface-page: var(--paper-50);
-  --surface-card: #fcfcf9;
+  --surface-card: var(--paper-white);
   --surface-sunken: var(--paper-100);
   --surface-raised: var(--paper-white);
   --surface-inverse: var(--abyss-900);
@@ -192,7 +192,7 @@
   --border-default: var(--paper-300);
   --border-strong: var(--slate-400);
 
-  /* Fieldbook signal: reserved for active routes and decisions. */
+  /* Clay signal: reserved for active routes and decisions. */
   --accent-brand: var(--brass-500);
   --accent-brand-hover: var(--brass-600);
   --accent-quiet: var(--brass-100);
@@ -234,21 +234,21 @@
   --radius-xl: 8px;
   --radius: var(--radius-lg);
 
-  /* Charts — blueprint · slate · signal · green · blueprint-mid */
+  /* Charts — evergreen · stone · clay · green · moss */
   --chart-1: var(--abyss-700);
   --chart-2: var(--slate-500);
   --chart-3: var(--brass-500);
   --chart-4: var(--green-600);
   --chart-5: var(--abyss-500);
 
-  --grid-line: rgba(22, 26, 25, 0.04);
+  --grid-line: rgba(38, 49, 40, 0.04);
 
-  /* Sidebar — fixed Blueprint runbook surface (both themes) */
+  /* Sidebar — fixed evergreen runbook surface (both themes) */
   --sidebar: var(--abyss-900);
   --sidebar-foreground: var(--abyss-200);
-  --sidebar-primary: var(--brass-500); /* brass — active accent */
-  --sidebar-primary-foreground: var(--abyss-900);
-  --sidebar-accent: var(--abyss-800); /* hover/active bg */
+  --sidebar-primary: var(--brass-500); /* clay — active accent */
+  --sidebar-primary-foreground: var(--paper-white);
+  --sidebar-accent: var(--abyss-800); /* hover/active background */
   --sidebar-accent-foreground: var(--paper-white);
   --sidebar-border: rgba(255, 255, 255, 0.08);
   --sidebar-ring: var(--brass-500);
@@ -276,11 +276,11 @@
   --tracking-wide: 0.04em;
   --tracking-caps: 0.14em; /* eyebrows */
 
-  /* Crisp lift — enough depth to separate paper from the board. */
-  --shadow-xs: 0 1px 2px rgba(12, 29, 48, 0.05);
-  --shadow-sm: 0 4px 10px -9px rgba(12, 29, 48, 0.35);
-  --shadow-md: 0 12px 26px -22px rgba(12, 29, 48, 0.42);
-  --shadow-lg: 0 20px 50px -34px rgba(12, 29, 48, 0.5);
+  /* Crisp lift — enough depth to separate linen from the board. */
+  --shadow-xs: 0 1px 2px rgba(38, 49, 40, 0.05);
+  --shadow-sm: 0 4px 10px -9px rgba(38, 49, 40, 0.28);
+  --shadow-md: 0 12px 26px -22px rgba(38, 49, 40, 0.34);
+  --shadow-lg: 0 20px 50px -34px rgba(38, 49, 40, 0.42);
 
   /* Motion */
   --ease-standard: cubic-bezier(0.4, 0.1, 0.2, 1);
@@ -293,31 +293,31 @@
 }
 
 /* ============================================================
-   DARK THEME — deep Abyss canvas; primary inverts to light teal
+   DARK THEME — deep evergreen canvas; clay actions stay high-contrast
    ============================================================ */
 [data-theme='dark'] {
-  --surface-page: #0b1724;
-  --surface-card: #102132;
-  --surface-sunken: #08111c;
-  --surface-raised: #162b3f;
-  --surface-inverse: #e8f1f8;
+  --surface-page: #18211b;
+  --surface-card: #212c23;
+  --surface-sunken: #111812;
+  --surface-raised: #2a382d;
+  --surface-inverse: #f7f1e5;
 
-  --text-strong: #f5f7f6;
-  --text-body: #d6dee2;
-  --text-muted: #a3b1bc;
-  --text-faint: #687a88;
-  --text-inverse: #0b1724;
-  --text-on-accent: #0b1724;
-  --text-link: #91bde0;
+  --text-strong: #f8f3ea;
+  --text-body: #ded8ce;
+  --text-muted: #b4aea3;
+  --text-faint: #7b8277;
+  --text-inverse: #18211b;
+  --text-on-accent: #18211b;
+  --text-link: #e0a37d;
 
-  --border-subtle: #1a3147;
-  --border-default: #27445e;
-  --border-strong: #42647e;
+  --border-subtle: #304031;
+  --border-default: #405343;
+  --border-strong: #64755f;
 
   /* Signal lightens in the dark without turning into decoration. */
-  --accent-brand: #ff9a76;
-  --accent-brand-hover: #ffb49b;
-  --accent-quiet: #33221f;
+  --accent-brand: #e3926f;
+  --accent-brand-hover: #f1b18f;
+  --accent-quiet: #3e2721;
 
   --background: var(--surface-page);
   --foreground: var(--text-strong);
@@ -326,45 +326,45 @@
   --popover: var(--surface-card);
   --popover-foreground: var(--text-strong);
 
-  /* Primary inverts to a pale blueprint field with dark text. */
-  --primary: #a9d0f2;
-  --primary-foreground: #0b1724;
-  --primary-hover: #c5dcf0;
-  --primary-quiet: #162b3f;
+  /* Clay remains dark enough for existing white-label actions. */
+  --primary: #a9462c;
+  --primary-foreground: #fffcf6;
+  --primary-hover: #bd5435;
+  --primary-quiet: #3e2721;
 
-  --secondary: #162b3f;
+  --secondary: #2a382d;
   --secondary-foreground: var(--text-strong);
-  --muted: #162b3f;
-  --muted-foreground: #b8c8d2;
-  --accent: #162b3f;
-  --accent-foreground: #e8f1f8;
+  --muted: #2a382d;
+  --muted-foreground: #c2bbb0;
+  --accent: #2a382d;
+  --accent-foreground: #f7f1e5;
 
-  --destructive: #f09a8d;
-  --success: #91c9aa;
-  --success-foreground: #0b1724;
-  --warning: #e5bd6c;
-  --warning-foreground: #1e1604;
+  --destructive: #ec9e94;
+  --success: #9bc39e;
+  --success-foreground: #18211b;
+  --warning: #e1bc72;
+  --warning-foreground: #2f2107;
 
   --border: var(--border-subtle);
   --input: var(--border-subtle);
   --ring: var(--accent-brand);
 
-  --chart-1: #91bde0;
-  --chart-2: #c5dcf0;
-  --chart-3: #ff9a76;
-  --chart-4: #91c9aa;
-  --chart-5: #5a98cc;
+  --chart-1: #dec2a3;
+  --chart-2: #c1cfba;
+  --chart-3: #e3926f;
+  --chart-4: #9bc39e;
+  --chart-5: #82977b;
 
-  --grid-line: rgba(197, 220, 240, 0.05);
+  --grid-line: rgba(247, 241, 229, 0.05);
 
-  --sidebar: #081421;
-  --sidebar-foreground: #c5dcf0;
-  --sidebar-primary: #ff9a76;
-  --sidebar-primary-foreground: #0b1724;
-  --sidebar-accent: #112b49;
-  --sidebar-accent-foreground: #f5f7f6;
-  --sidebar-border: #1a3147;
-  --sidebar-ring: #ff9a76;
+  --sidebar: #131b15;
+  --sidebar-foreground: #dbe6d5;
+  --sidebar-primary: #e3926f;
+  --sidebar-primary-foreground: #18211b;
+  --sidebar-accent: #26352a;
+  --sidebar-accent-foreground: #f8f3ea;
+  --sidebar-border: #304031;
+  --sidebar-ring: #e3926f;
 
   color-scheme: dark;
 }
@@ -385,16 +385,16 @@
   font-size: 112.5%; /* 16 → 18 */
 }
 
-/* Accent intensity — "bold" lets brass run a touch warmer/stronger. */
+/* Accent intensity — "bold" lets clay run a touch warmer/stronger. */
 [data-accent='bold'] {
   --accent-brand: var(--brass-600);
   --accent-brand-hover: var(--brass-700);
   --ring: var(--brass-600);
 }
 [data-theme='dark'][data-accent='bold'] {
-  --accent-brand: #e2c49e;
-  --accent-brand-hover: #f1e4d2;
-  --ring: #e2c49e;
+  --accent-brand: #e5bf97;
+  --accent-brand-hover: #f0d8b5;
+  --ring: #e5bf97;
 }
 
 /* ============================================================
@@ -803,8 +803,8 @@
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  background: rgba(188, 136, 80, 0.14);
-  color: #a6743f;
+  background: rgba(177, 78, 50, 0.14);
+  color: #9e4028;
   border-radius: 6px;
   padding: 0.05rem 0.4rem;
   font-weight: 500;
@@ -813,7 +813,7 @@
   transition: background 150ms;
 }
 .note-prose a.note-link:hover {
-  background: rgba(188, 136, 80, 0.24);
+  background: rgba(177, 78, 50, 0.24);
 }
 .note-prose table {
   border-collapse: collapse;
@@ -839,12 +839,12 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: rgba(188, 136, 80, 0.12);
+  background: rgba(177, 78, 50, 0.12);
   pointer-events: none;
 }
 .note-prose ::selection {
-  background: #e2c49e;
-  color: #08221f;
+  background: #e8d8c3;
+  color: #263128;
 }
 .note-prose:focus {
   outline: none;

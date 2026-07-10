@@ -2,8 +2,8 @@
 
 import { SessionProvider } from 'next-auth/react';
 import { LazyMotion, domMax } from 'motion/react';
-import { ThemeProvider } from 'next-themes';
 import { PreferencesProvider } from '@/components/preferences-provider';
+import { ThemeProvider } from '@/components/theme-provider';
 import { TRPCProvider } from '@/lib/trpc-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
@@ -12,12 +12,7 @@ import { RealtimeProvider } from '@/components/chat/realtime-provider';
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
     <SessionProvider>
-      <ThemeProvider
-        attribute="data-theme"
-        defaultTheme="light"
-        enableSystem={false}
-        disableTransitionOnChange
-      >
+      <ThemeProvider>
         {/* The five non-theme surface toggles (density/type/accent/layout/icons).
             Lives inside ThemeProvider so theme + prefs coexist on <html>. */}
         <PreferencesProvider>

@@ -7,7 +7,7 @@ import { createContext, useContext, useMemo, useSyncExternalStore } from 'react'
    ("The Sounding" design revamp, spec §6).
 
    These are the *non-theme* surface attributes. `data-theme`
-   (light|dark) is owned by next-themes; this provider owns the
+   (light|dark) is owned by ThemeProvider; this provider owns the
    remaining five, each mirrored to a `data-*` attribute on
    <html> that globals.css reacts to (density/type/accent) or
    that components read (layout/icons).

@@ -20,7 +20,7 @@ const sizeMap = {
    a right-hand tip, then a longer arm stepping down to the lower-left, drawn
    as chunky rounded "bead" segments, with a detached node square resting in
    the chevron's mouth. Reads as forward motion descending into depth — a
-   fathom. The node carries the single brass accent in the full-colour lockup. */
+   fathom. The node carries the single clay accent in the full-colour lockup. */
 
 const MARK_VIEWBOX = '34 33 148 166';
 
@@ -51,7 +51,7 @@ export function FathomMark({
   className?: string;
   variant?: LogoVariant;
 }) {
-  // Full-colour app-icon lockup: Abyss field · Paper mark · Brass node.
+  // Full-colour app-icon lockup: Ink field · Linen mark · Clay node.
   if (variant === 'brand') {
     return (
       <svg
@@ -61,16 +61,16 @@ export function FathomMark({
         className={cn('shrink-0', className)}
         aria-hidden="true"
       >
-        <rect width="64" height="64" rx="14" fill="#0C2E2C" />
+        <rect width="64" height="64" rx="14" fill="#263128" />
         <svg x="15" y="12" width="34" height="40" viewBox={MARK_VIEWBOX} fill="none">
-          <MarkPaths fill="#F7F5EF" nodeFill="#BC8850" />
+          <MarkPaths fill="#F7F1E5" nodeFill="#B14E32" />
         </svg>
       </svg>
     );
   }
 
   // One-colour silhouettes (currentColor / reversed white / ink).
-  const fill = variant === 'white' ? '#FFFFFF' : variant === 'dark' ? '#0C2E2C' : 'currentColor';
+  const fill = variant === 'white' ? '#FFFFFF' : variant === 'dark' ? '#263128' : 'currentColor';
   return (
     <svg
       viewBox={MARK_VIEWBOX}
@@ -103,7 +103,7 @@ export function Logo({
             'font-display font-semibold tracking-tight',
             s.text,
             variant === 'white' && 'text-white',
-            variant === 'dark' && 'text-[#0C2E2C]',
+            variant === 'dark' && 'text-[#263128]',
             (variant === 'brand' || variant === 'auto') && 'text-foreground',
             textClassName
           )}

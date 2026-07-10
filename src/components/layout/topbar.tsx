@@ -23,7 +23,7 @@ import {
   Loader2,
   Sparkles,
 } from 'lucide-react';
-import { useTheme } from 'next-themes';
+import { useTheme } from '@/components/theme-provider';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
 import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
