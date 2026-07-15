@@ -28,8 +28,8 @@ const ABLY_API_KEY = process.env.ABLY_API_KEY;
 // shared across users.
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = await auth();
+export const GET = auth(async (request) => {
+  const session = request.auth;
   if (!session?.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
@@ -66,4 +66,4 @@ export async function GET() {
   });
 
   return Response.json(tokenRequest);
-}
+});
