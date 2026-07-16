@@ -53,6 +53,10 @@ const CommandInput = dynamic(() => import('@/components/ui/command').then((m) =>
 const CommandItem = dynamic(() => import('@/components/ui/command').then((m) => m.CommandItem));
 const CommandList = dynamic(() => import('@/components/ui/command').then((m) => m.CommandList));
 
+// Warm the shared cmdk chunk before the first click. The palette stays lazily
+// rendered, but opening it no longer has to wait on a cold network request.
+const preloadCommandPalette = () => import('@/components/ui/command');
+
 const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/projects': 'Projects',
@@ -82,8 +86,8 @@ const subscribeToHydration = () => () => {};
 
 export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
-  // Mount the (lazily-imported) palette once it has first been opened, then
-  // keep it mounted so cmdk's chunk is fetched only on first ⌘K.
+  // Mount the lazily-rendered palette once it has first been opened, then keep
+  // it mounted so subsequent opens are immediate.
   const [commandLoaded, setCommandLoaded] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -101,14 +105,24 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
     () => false
   );
 
-  // Debounce search input
+  // Warm the palette once the browser has finished the initial render. Pointer
+  // and keyboard intent below also starts this preload for very early opens.
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 200);
+    const timer = window.setTimeout(() => {
+      void preloadCommandPalette();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // Keep requests controlled without making the interface feel sluggish.
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 100);
     return () => clearTimeout(t);
   }, [searchInput]);
 
   const handleCommandOpenChange = useCallback((open: boolean) => {
     if (open) {
+      void preloadCommandPalette();
       setCommandLoaded(true);
       setCommandOpen(true);
     } else {
@@ -249,12 +263,16 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* Search */}
           <button
             onClick={() => handleCommandOpenChange(true)}
+            onPointerEnter={() => void preloadCommandPalette()}
+            onFocus={() => void preloadCommandPalette()}
             className="studio-search"
             aria-label="Search company hub"
           >
-            <Search className="h-4 w-4" />
-            <span className="hidden flex-1 text-left md:block">Start searching here</span>
-            <kbd className="pointer-events-none hidden select-none font-mono text-[10px] text-muted-foreground/70 xl:inline-flex">
+            <Search className="h-4 w-4 shrink-0" />
+            <span className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block">
+              Search workspace
+            </span>
+            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-muted-foreground/70 xl:inline-flex">
               ⌘K
             </kbd>
           </button>
