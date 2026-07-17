@@ -50,6 +50,7 @@ const searching = ref(false);
 const notifications = ref<NotificationItem[]>([]);
 const notificationsOpen = ref(false);
 const accountOpen = ref(false);
+const themeReady = ref(false);
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 const visibleNav = computed(() => getVisibleNavigation(user.value?.role));
@@ -76,6 +77,14 @@ const initials = computed(
       .slice(0, 2) || 'DF'
 );
 const unreadCount = computed(() => notifications.value.filter((item) => !item.isRead).length);
+const isDarkTheme = computed(() => themeReady.value && colorMode.value === 'dark');
+const themeToggleLabel = computed(() =>
+  !themeReady.value
+    ? 'Toggle color theme'
+    : isDarkTheme.value
+      ? 'Use light theme'
+      : 'Use dark theme'
+);
 const groupedSearchResults = computed(() => {
   const groups = new Map<string, SearchResult[]>();
   for (const result of searchResults.value) {
@@ -245,6 +254,7 @@ function relativeTime(value: string) {
 }
 
 onMounted(() => {
+  themeReady.value = true;
   window.addEventListener('keydown', handleShortcut);
   loadNotifications();
 });
@@ -332,10 +342,10 @@ onBeforeUnmount(() => {
 
       <button
         class="studio-icon-button hidden sm:flex"
-        :aria-label="colorMode.value === 'dark' ? 'Use light theme' : 'Use dark theme'"
+        :aria-label="themeToggleLabel"
         @click="colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'"
       >
-        <Sun v-if="colorMode.value === 'dark'" :size="18" />
+        <Sun v-if="isDarkTheme" :size="18" />
         <Moon v-else :size="18" />
       </button>
 
