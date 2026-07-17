@@ -9,12 +9,24 @@ from sqlalchemy import Result, make_url, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from .config import get_settings
+from .config import Settings, get_settings
 
-settings = get_settings()
-engine: AsyncEngine | None = None
 
-if settings.async_database_url:
+def _pool_options(settings: Settings) -> dict[str, Any]:
+    if settings.database_pool_mode == "null":
+        return {"poolclass": NullPool}
+    return {
+        "pool_pre_ping": settings.database_pool_pre_ping,
+        "pool_recycle": settings.database_pool_recycle_seconds,
+        "pool_size": settings.database_pool_size,
+        "max_overflow": settings.database_pool_max_overflow,
+    }
+
+
+def _create_engine(settings: Settings) -> AsyncEngine | None:
+    if not settings.async_database_url:
+        return None
+
     database_url = make_url(settings.async_database_url)
     query = dict(database_url.query)
     ssl_mode = query.pop("sslmode", None)
@@ -27,14 +39,15 @@ if settings.async_database_url:
             ssl_context.verify_mode = ssl.CERT_NONE
         connect_args["ssl"] = ssl_context
     database_url = database_url.set(query=query)
-    engine = create_async_engine(
+    return create_async_engine(
         database_url,
         connect_args=connect_args,
-        # Asyncpg connections are bound to the event loop that created them.
-        # FastAPI TestClient, pytest-asyncio, and serverless invocations may use
-        # different loops in one process, so never retain a connection across them.
-        poolclass=NullPool,
+        **_pool_options(settings),
     )
+
+
+settings = get_settings()
+engine = _create_engine(settings)
 
 
 async def connection() -> AsyncIterator[AsyncConnection]:
