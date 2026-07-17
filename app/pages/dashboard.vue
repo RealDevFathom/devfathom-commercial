@@ -16,59 +16,12 @@ import {
   X,
 } from 'lucide-vue-next';
 import type { Component } from 'vue';
-import type { ApiResponse, DashboardStats } from '~/types/api';
-import type { Meeting } from '~/types/collaboration';
-import type { Project } from '~/types/delivery';
-
-interface ActivityItem {
-  id: string;
-  type: string;
-  message: string;
-  createdAt: string;
-  userName?: string;
-  avatar?: string | null;
-}
-
-interface DashboardDeadline {
-  id: string;
-  name: string;
-  dueDate: string;
-  projectId: string;
-  projectName: string;
-  projectStatus: string;
-}
-
-interface DashboardTask {
-  id: string;
-  title: string;
-  priority: string;
-  dueDate?: string | null;
-  columnName: string;
-  boardId: string;
-  projectId: string;
-  projectName: string;
-}
-
-interface RevenuePoint {
-  month: string;
-  income: number;
-  expense: number;
-  profit: number;
-}
-
-interface RevenueChartData {
-  currencies: string[];
-  byCurrency: Record<string, RevenuePoint[]>;
-}
+import type { DashboardStats } from '~/types/api';
+import type { DashboardTeamPerson, RevenueChartData, RevenuePoint } from '~/types/dashboard';
 
 interface ChartPoint extends RevenuePoint {
   x: number;
   y: number;
-}
-
-interface TeamPerson {
-  id: string;
-  name: string;
 }
 
 interface KpiCard {
@@ -92,14 +45,24 @@ const { request } = useApi();
 const { user } = useAuth();
 const meetingApi = useMeetings();
 const firmApi = useFirm();
+const {
+  data: criticalData,
+  status: criticalStatus,
+  refresh: refreshCritical,
+} = await useDashboardData();
 
-const stats = ref<DashboardStats | null>(null);
-const activity = ref<ActivityItem[]>([]);
-const projects = ref<Project[]>([]);
-const meetings = ref<Meeting[]>([]);
-const deadlines = ref<DashboardDeadline[]>([]);
-const tasks = ref<DashboardTask[]>([]);
-const team = ref<TeamPerson[]>([]);
+const stats = computed(() => criticalData.value?.stats ?? null);
+const activity = computed(() => criticalData.value?.activity ?? []);
+const projects = computed(() => criticalData.value?.projects ?? []);
+const meetings = computed({
+  get: () => criticalData.value?.meetings ?? [],
+  set: (value) => {
+    if (criticalData.value) criticalData.value = { ...criticalData.value, meetings: value };
+  },
+});
+const deadlines = computed(() => criticalData.value?.deadlines ?? []);
+const tasks = computed(() => criticalData.value?.tasks ?? []);
+const team = ref<DashboardTeamPerson[]>([]);
 const revenueChart = ref<RevenueChartData | null>(null);
 const selectedCurrency = ref('');
 const activeChartIndex = ref<number | null>(null);
@@ -107,8 +70,14 @@ const hiddenWidgets = ref<string[]>([]);
 const showCustomize = ref(false);
 const showCreateMeeting = ref(false);
 const creatingMeeting = ref(false);
-const loading = ref(true);
-const error = ref('');
+const loading = computed(() => criticalStatus.value === 'pending' && !criticalData.value);
+const error = computed(() => {
+  const failed = criticalData.value?.failedDatasets.length ?? 0;
+  if (!failed) return '';
+  return failed === 6
+    ? 'Your dashboard could not be refreshed.'
+    : 'Some dashboard sections could not be refreshed.';
+});
 const clock = ref(0);
 const chartContainer = ref<SVGSVGElement | null>(null);
 const chartWidth = ref(720);
@@ -123,70 +92,66 @@ const meetingForm = reactive({
 });
 let timer: ReturnType<typeof setInterval> | undefined;
 let chartResizeObserver: ResizeObserver | undefined;
+let revenueFrame: number | undefined;
+let revenuePaintFrame: number | undefined;
+let revenuePromise: Promise<void> | undefined;
 
-async function loadDashboard() {
-  loading.value = true;
-  error.value = '';
-  try {
-    const [
-      statsResponse,
-      activityResponse,
-      projectResponse,
-      meetingResponse,
-      deadlineResponse,
-      taskResponse,
-    ] = await Promise.all([
-      request<ApiResponse<DashboardStats>>('/api/dashboard/stats'),
-      request<ApiResponse<ActivityItem[]>>('/api/dashboard/activity'),
-      request<ApiResponse<Project[]>>('/api/v1/projects'),
-      meetingApi.upcoming(),
-      request<ApiResponse<DashboardDeadline[]>>('/api/dashboard/deadlines'),
-      request<ApiResponse<DashboardTask[]>>('/api/dashboard/my-tasks'),
-    ]);
-
-    stats.value = statsResponse.data;
-    activity.value = activityResponse.data;
-    projects.value = projectResponse.data.slice(0, 4);
-    meetings.value = meetingResponse;
-    deadlines.value = deadlineResponse.data;
-    tasks.value = taskResponse.data;
-
-    const [preferencesResult, teamResult] = await Promise.allSettled([
-      firmApi.preferences(),
-      firmApi.team(),
-    ]);
-    if (preferencesResult.status === 'fulfilled') {
-      const hidden = preferencesResult.value.preferences.hiddenWidgets;
-      hiddenWidgets.value = Array.isArray(hidden)
-        ? hidden.filter((key): key is string => typeof key === 'string')
-        : [];
-    }
-    if (teamResult.status === 'fulfilled') {
-      team.value = teamResult.value.map((member) => ({ id: member.id, name: member.name }));
-    }
-
-    if (stats.value.isAdmin) {
-      const chartResponse = await request<ApiResponse<RevenueChartData>>(
-        '/api/dashboard/revenue-chart'
-      );
-      revenueChart.value = chartResponse.data;
-      selectedCurrency.value = chartResponse.data.currencies[0] || '';
-    }
-  } catch (caught: unknown) {
-    error.value =
-      caught && typeof caught === 'object' && 'data' in caught
-        ? ((caught as { data?: { detail?: string } }).data?.detail ??
-          'Your dashboard could not be refreshed.')
-        : 'Your dashboard could not be refreshed.';
-  } finally {
-    loading.value = false;
+async function loadOptionalDashboardData() {
+  const [preferencesResult, teamResult] = await Promise.allSettled([
+    firmApi.preferences(),
+    firmApi.team(),
+  ]);
+  if (preferencesResult.status === 'fulfilled') {
+    const hidden = preferencesResult.value.preferences.hiddenWidgets;
+    hiddenWidgets.value = Array.isArray(hidden)
+      ? hidden.filter((key): key is string => typeof key === 'string')
+      : [];
+  }
+  if (teamResult.status === 'fulfilled') {
+    team.value = teamResult.value.map((member) => ({ id: member.id, name: member.name }));
   }
 }
+
+function loadRevenueChart() {
+  if (!stats.value?.isAdmin) {
+    revenueChart.value = null;
+    selectedCurrency.value = '';
+    return Promise.resolve();
+  }
+  if (revenuePromise) return revenuePromise;
+
+  revenuePromise = request<{ data: RevenueChartData }>('/api/dashboard/revenue-chart')
+    .then((chartResponse) => {
+      revenueChart.value = chartResponse.data;
+      selectedCurrency.value = chartResponse.data.currencies[0] || '';
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      revenuePromise = undefined;
+    });
+  return revenuePromise;
+}
+
+function scheduleRevenueChart() {
+  revenueFrame = requestAnimationFrame(() => {
+    revenuePaintFrame = requestAnimationFrame(() => {
+      void loadRevenueChart();
+    });
+  });
+}
+
+async function refreshDashboard() {
+  await refreshCritical();
+  await Promise.allSettled([loadOptionalDashboardData(), loadRevenueChart()]);
+}
+
+defineExpose({ refresh: refreshDashboard });
 
 onMounted(() => {
   clock.value = Date.now();
   timer = setInterval(() => (clock.value = Date.now()), 1000);
-  loadDashboard();
+  void loadOptionalDashboardData();
+  scheduleRevenueChart();
 });
 
 watch(chartContainer, (element) => {
@@ -204,6 +169,8 @@ watch(chartContainer, (element) => {
 
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer);
+  if (revenueFrame !== undefined) cancelAnimationFrame(revenueFrame);
+  if (revenuePaintFrame !== undefined) cancelAnimationFrame(revenuePaintFrame);
   chartResizeObserver?.disconnect();
 });
 watch(selectedCurrency, () => (activeChartIndex.value = null));
