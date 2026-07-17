@@ -48,6 +48,7 @@ const listError = ref('');
 const creating = ref(false);
 const scopeLabels = { all: 'All', mine: 'My notes', shared: 'Shared', mentions: 'Mentions' };
 const visibilityLabels = { PRIVATE: 'Private', SHARED: 'Shared', TEAM: 'Team' } as const;
+useHead(() => ({ title: note.value ? `${note.value.title} · Notes` : 'Note · DevFathom Hub' }));
 
 async function load() {
   loading.value = true;
@@ -64,7 +65,6 @@ async function load() {
       user: s.user,
     }));
     revisions.value = await api.revisions(id.value);
-    useHead({ title: `${value.title} · Notes` });
   } catch (caught: any) {
     error.value = caught?.data?.detail || 'This note could not be opened.';
   } finally {
@@ -205,26 +205,20 @@ async function handleCreate() {
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-6">
-    <header class="flex items-end justify-between gap-4">
-      <div>
-        <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">Notes</h1>
-        <p class="mt-1.5 text-[15px] text-text-muted">
-          Capture ideas, link them together, share them with the team.
-        </p>
-      </div>
-      <button
-        class="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-        :disabled="creating"
-        @click="handleCreate"
-      >
+  <section class="core-route animate-fade-in space-y-6">
+    <PageHeader
+      eyebrow="Knowledge"
+      title="Notes"
+      description="Capture decisions, connect context, and share working knowledge."
+    >
+      <button class="studio-primary-button" :disabled="creating" @click="handleCreate">
         <Loader2 v-if="creating" :size="16" class="animate-spin" />
         <Plus v-else :size="16" /> New Note
       </button>
-    </header>
+    </PageHeader>
 
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
-      <aside class="space-y-3">
+      <aside class="notes-index-panel space-y-3">
         <nav class="flex flex-wrap items-center gap-1.5" aria-label="Note filters">
           <button
             v-for="item in ['all', 'mine', 'shared', 'mentions'] as const"
@@ -331,7 +325,7 @@ async function handleCreate() {
           @action="load"
         />
 
-        <section v-else-if="note" class="rounded-xl border border-border/60 bg-card">
+        <section v-else-if="note" class="note-document">
           <div class="space-y-4 p-5">
             <header class="flex flex-wrap items-start gap-3">
               <input
@@ -609,3 +603,30 @@ async function handleCreate() {
     </div>
   </section>
 </template>
+
+<style scoped>
+.notes-index-panel,
+.note-document {
+  border: 1px solid var(--border-default);
+  border-radius: 24px;
+  background: var(--surface-card);
+  box-shadow: var(--shadow-xs);
+}
+.notes-index-panel {
+  padding: 16px;
+}
+.note-document {
+  overflow: hidden;
+}
+.note-document > div {
+  padding: clamp(20px, 4vw, 36px);
+}
+@media (min-width: 1024px) {
+  .notes-index-panel {
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 120px);
+    overflow: auto;
+  }
+}
+</style>

@@ -4,7 +4,11 @@ import type { Client } from '~/types/crm';
 import type { Project } from '~/types/delivery';
 import type { TeamMember } from '~/types/firm';
 
-const props = defineProps<{ open: boolean; project?: Project | null }>();
+const props = defineProps<{
+  open: boolean;
+  project?: Project | null;
+  presetClientId?: string | null;
+}>();
 const emit = defineEmits<{ close: []; saved: [Project] }>();
 const delivery = useDelivery();
 const crm = useCrm();
@@ -52,7 +56,7 @@ watch(
       description: project?.description || '',
       type: project?.type || 'CLIENT',
       status: project?.status || 'ACTIVE',
-      clientId: project?.clientId || '',
+      clientId: project?.clientId || props.presetClientId || '',
       startDate: project?.startDate?.slice(0, 10) || '',
       endDate: project?.endDate?.slice(0, 10) || '',
       techStack: [...(project?.techStack || [])],

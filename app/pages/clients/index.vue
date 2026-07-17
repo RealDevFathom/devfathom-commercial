@@ -9,6 +9,7 @@ import {
   MapPin,
   Plus,
   Search,
+  Sparkles,
   X,
 } from 'lucide-vue-next';
 import type { Client } from '~/types/crm';
@@ -23,6 +24,8 @@ const formOpen = ref(false);
 const search = ref('');
 const saving = ref(false);
 const actionError = ref('');
+const expiring = ref(0);
+const sweeping = ref(false);
 const form = reactive({
   name: '',
   website: '',
@@ -45,6 +48,7 @@ async function load() {
   error.value = '';
   try {
     clients.value = await crm.listClients();
+    expiring.value = isAdmin.value ? (await crm.expiringContracts(30).catch(() => [])).length : 0;
   } catch (caught: any) {
     error.value =
       caught?.data?.detail ||
@@ -54,6 +58,19 @@ async function load() {
   }
 }
 await load();
+
+async function sweepContracts() {
+  sweeping.value = true;
+  actionError.value = '';
+  try {
+    await crm.sweepExpiredContracts();
+    await load();
+  } catch (caught: any) {
+    actionError.value = caught?.data?.detail || 'Contract statuses could not be refreshed.';
+  } finally {
+    sweeping.value = false;
+  }
+}
 
 const filtered = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -106,23 +123,34 @@ async function createClient() {
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-6">
-    <header class="flex items-end justify-between">
-      <div>
-        <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">Clients</h1>
-        <p class="mt-1.5 text-[15px] text-text-muted">
-          {{ clients.length }} clients · Manage relationships and contacts.
-        </p>
-      </div>
+  <section class="core-route animate-fade-in space-y-6">
+    <PageHeader
+      eyebrow="CRM"
+      title="Clients"
+      :description="`${clients.length} relationships across active, prospect, and archived accounts.`"
+    >
       <button
-        class="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:brightness-90 active:scale-[.98]"
-        @click="formOpen = true"
+        v-if="isAdmin"
+        class="studio-outline-button"
+        :disabled="sweeping"
+        @click="sweepContracts"
       >
+        <Sparkles :size="15" />
+        {{ sweeping ? 'Refreshing…' : `Refresh contracts${expiring ? ` · ${expiring}` : ''}` }}
+      </button>
+      <button class="studio-primary-button" @click="formOpen = true">
         <Plus :size="16" /> Add Client
       </button>
-    </header>
+    </PageHeader>
 
-    <label class="relative block max-w-xs">
+    <p
+      v-if="actionError"
+      class="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-500"
+    >
+      {{ actionError }}
+    </p>
+
+    <label class="route-search relative block max-w-sm">
       <Search :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
       <input
         v-model="search"
@@ -240,7 +268,7 @@ async function createClient() {
         v-for="client in filtered"
         :key="client.id"
         :to="`/clients/${client.id}`"
-        class="group h-full overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+        class="client-card group h-full overflow-hidden bg-card transition-all hover:-translate-y-0.5 hover:shadow-lg"
       >
         <div class="p-6">
           <div class="mb-3 flex items-start justify-between gap-3">
@@ -294,3 +322,23 @@ async function createClient() {
     </div>
   </section>
 </template>
+
+<style scoped>
+.route-search input {
+  border-radius: 14px;
+  background: var(--surface-card);
+}
+.client-card {
+  position: relative;
+  border: 1px solid var(--border-default);
+  border-radius: 24px;
+  box-shadow: var(--shadow-xs);
+}
+.client-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--primary);
+  content: '';
+}
+</style>

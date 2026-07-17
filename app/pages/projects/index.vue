@@ -181,30 +181,21 @@ const groups = computed(() =>
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-5">
-    <header class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-      <div>
-        <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">Projects</h1>
-        <p class="mt-1.5 text-[15px] text-text-muted">
-          Delivery across every client engagement and internal build.
-        </p>
-      </div>
-      <div class="flex items-center gap-2">
-        <NuxtLink
-          to="/projects/import"
-          class="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-all hover:bg-secondary active:scale-[.98]"
-          ><Upload :size="16" /> Import from Trello</NuxtLink
-        >
-        <button
-          class="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:brightness-90 active:scale-[.98]"
-          @click="formOpen = true"
-        >
-          <Plus :size="16" /> New Project
-        </button>
-      </div>
-    </header>
+  <section class="core-route animate-fade-in space-y-6">
+    <PageHeader
+      eyebrow="Delivery"
+      title="Projects"
+      description="Delivery across every client engagement and internal build."
+    >
+      <NuxtLink to="/projects/import" class="studio-outline-button"
+        ><Upload :size="16" /> Import from Trello</NuxtLink
+      >
+      <button class="studio-primary-button" @click="formOpen = true">
+        <Plus :size="16" /> New Project
+      </button>
+    </PageHeader>
 
-    <div class="flex flex-wrap items-center gap-2">
+    <div class="route-metrics flex flex-wrap items-center gap-2">
       <div
         v-for="chip in statChips"
         :key="chip.label"
@@ -216,7 +207,7 @@ const groups = computed(() =>
       </div>
     </div>
 
-    <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
+    <div class="route-command-panel flex flex-col gap-3 lg:flex-row lg:items-center">
       <div class="relative w-full lg:max-w-xs">
         <Search :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" /><input
           v-model="search"
@@ -329,7 +320,7 @@ const groups = computed(() =>
               v-for="project in group.items"
               :key="project.id"
               :to="`/projects/${project.id}`"
-              class="production-grid-card group relative min-h-40 overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+              class="production-grid-card project-card group relative min-h-40 overflow-hidden bg-card transition-all hover:-translate-y-0.5 hover:shadow-lg"
             >
               <span
                 class="absolute inset-y-0 left-0 w-1"
@@ -374,10 +365,10 @@ const groups = computed(() =>
           v-for="project in filtered"
           :key="project.id"
           :to="`/projects/${project.id}`"
-          class="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          class="group block rounded-[24px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <article
-            class="production-grid-card relative h-full overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 transition-all hover:-translate-y-0.5 hover:shadow-lg"
+            class="production-grid-card project-card relative h-full overflow-hidden bg-card transition-all hover:-translate-y-0.5 hover:shadow-lg"
           >
             <span
               class="absolute inset-y-0 left-0 w-1"
@@ -554,5 +545,20 @@ const groups = computed(() =>
 <style scoped>
 .production-grid-card {
   padding: 36px 20px 36px 24px;
+}
+.route-metrics,
+.route-command-panel {
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  padding: 12px;
+  background: var(--surface-card);
+}
+.route-command-panel {
+  padding: 14px;
+}
+.project-card {
+  border: 1px solid var(--border-default);
+  border-radius: 24px;
+  box-shadow: var(--shadow-xs);
 }
 </style>

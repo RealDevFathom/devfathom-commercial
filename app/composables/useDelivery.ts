@@ -2,6 +2,7 @@ import type {
   Board,
   Checklist,
   ChecklistItem,
+  Label,
   Milestone,
   Project,
   ProjectFile,
@@ -29,12 +30,30 @@ export function useDelivery() {
     updateProject: (id: string, body: Record<string, unknown>) =>
       data<Project>(`/api/v1/projects/${id}`, { method: 'PATCH', body }),
     removeProject: (id: string) => request(`/api/v1/projects/${id}`, { method: 'DELETE' }),
+    addProjectMember: (projectId: string, userId: string, role: 'LEAD' | 'MEMBER' = 'MEMBER') =>
+      data(`/api/v1/projects/${projectId}/members`, {
+        method: 'POST',
+        body: { userId, role },
+      }),
+    setProjectMemberRole: (projectId: string, userId: string, role: 'LEAD' | 'MEMBER') =>
+      data(`/api/v1/projects/${projectId}/members/${userId}`, {
+        method: 'PATCH',
+        body: { role },
+      }),
+    removeProjectMember: (projectId: string, userId: string) =>
+      request(`/api/v1/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
 
     getBoard: (id: string) => data<Board>(`/api/v1/boards/${id}`),
     createBoard: (body: Record<string, unknown>) =>
       data<Board>('/api/v1/boards', { method: 'POST', body }),
     updateBoard: (id: string, body: Record<string, unknown>) =>
       data<Board>(`/api/v1/boards/${id}`, { method: 'PATCH', body }),
+    removeBoard: (id: string) => request(`/api/v1/boards/${id}`, { method: 'DELETE' }),
+    reorderColumns: (boardId: string, columnIds: string[]) =>
+      request(`/api/v1/boards/${boardId}/columns/order`, {
+        method: 'PUT',
+        body: { columnIds },
+      }),
     createColumn: (body: Record<string, unknown>) =>
       data('/api/v1/columns', { method: 'POST', body }),
     updateColumn: (id: string, body: Record<string, unknown>) =>
@@ -46,12 +65,35 @@ export function useDelivery() {
         body: { userIds },
       }),
 
+    listLabels: (boardId: string) => data<Label[]>(`/api/v1/boards/${boardId}/labels`),
+    createLabel: (boardId: string, name: string, color: string) =>
+      data<Label>('/api/v1/labels', { method: 'POST', body: { boardId, name, color } }),
+    updateLabel: (id: string, body: { name?: string; color?: string }) =>
+      data<Label>(`/api/v1/labels/${id}`, { method: 'PATCH', body }),
+    removeLabel: (id: string) => request(`/api/v1/labels/${id}`, { method: 'DELETE' }),
+
     getTask: (id: string) => data<Task>(`/api/v1/tasks/${id}`),
     createTask: (body: Record<string, unknown>) =>
       data<Task>('/api/v1/tasks', { method: 'POST', body }),
     updateTask: (id: string, body: Record<string, unknown>) =>
       data<Task>(`/api/v1/tasks/${id}`, { method: 'PATCH', body }),
     removeTask: (id: string) => request(`/api/v1/tasks/${id}`, { method: 'DELETE' }),
+    bulkMoveTasks: (taskIds: string[], targetColumnId: string) =>
+      request('/api/v1/tasks/bulk-move', {
+        method: 'POST',
+        body: { taskIds, targetColumnId },
+      }),
+    bulkDeleteTasks: (taskIds: string[]) =>
+      request('/api/v1/tasks/bulk-delete', { method: 'POST', body: { taskIds } }),
+    setTaskAssignees: (id: string, assigneeIds: string[]) =>
+      request(`/api/v1/tasks/${id}/assignees`, {
+        method: 'PUT',
+        body: { assigneeIds },
+      }),
+    addTaskLabel: (id: string, labelId: string) =>
+      data(`/api/v1/tasks/${id}/labels`, { method: 'POST', body: { labelId } }),
+    removeTaskLabel: (id: string, labelId: string) =>
+      request(`/api/v1/tasks/${id}/labels/${labelId}`, { method: 'DELETE' }),
     moveTask: (id: string, targetColumnId: string, newOrder: number) =>
       request(`/api/v1/tasks/${id}/move`, {
         method: 'POST',
@@ -112,6 +154,8 @@ export function useDelivery() {
       data<TimeRollup>(`/api/v1/projects/${projectId}/time-rollup`),
     addTime: (body: Record<string, unknown>) =>
       data<TimeEntry>('/api/v1/time-entries', { method: 'POST', body }),
+    updateTime: (id: string, body: Record<string, unknown>) =>
+      data<TimeEntry>(`/api/v1/time-entries/${id}`, { method: 'PATCH', body }),
     removeTime: (id: string) => request(`/api/v1/time-entries/${id}`, { method: 'DELETE' }),
 
     importTrello: (body: Record<string, unknown>) =>
