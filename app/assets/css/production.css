@@ -1,11 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Oxanium:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wdth,wght@75..100,400..700&display=swap');
 @import 'tailwindcss';
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -38,348 +38,7 @@
   --radius-3xl: 36px;
 }
 
-/* Exact production shell (commit 3809f18). Kept unlayered so it is the final
-   authority over the earlier migration foundation while pages are ported. */
-:root {
-  --surface-page: #f7f5ef;
-  --surface-card: #fdfcf8;
-  --surface-sunken: #efebe1;
-  --surface-raised: #fdfcf8;
-  --surface-inverse: #0c2e2c;
-  --text-strong: #161a19;
-  --text-body: #3b423f;
-  --text-muted: #6e7570;
-  --text-faint: #939a94;
-  --text-inverse: #f7f5ef;
-  --border-subtle: #e3ddd0;
-  --border-default: #d2cbbb;
-  --border-strong: #939a94;
-  --accent-brand: #bc8850;
-  --accent-brand-hover: #a6743f;
-  --accent-quiet: #f1e4d2;
-  --background: #f7f5ef;
-  --foreground: #161a19;
-  --card: #fdfcf8;
-  --card-foreground: #161a19;
-  --popover: #fdfcf8;
-  --popover-foreground: #161a19;
-  --primary: #123a38;
-  --primary-foreground: #f7f5ef;
-  --primary-hover: #0c2e2c;
-  --secondary: #efebe1;
-  --secondary-foreground: #3b423f;
-  --muted: #efebe1;
-  --muted-foreground: #6e7570;
-  --accent: #efebe1;
-  --accent-foreground: #161a19;
-  --border: #e3ddd0;
-  --input: #e3ddd0;
-  --ring: #bc8850;
-  --success: #3e6b52;
-  --sidebar: #0c2e2c;
-  --sidebar-foreground: #a8cbc6;
-  --sidebar-primary: #bc8850;
-  --sidebar-primary-foreground: #08221f;
-  --sidebar-accent: #123a38;
-  --sidebar-accent-foreground: #f7f5ef;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #bc8850;
-  --font-display: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
-  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 16px;
-  --shadow-xs: 0 1px 2px rgba(8, 34, 31, 0.06);
-  --shadow-sm: 0 1px 2px rgba(8, 34, 31, 0.05), 0 2px 6px rgba(8, 34, 31, 0.05);
-  --shadow-md: 0 2px 4px rgba(8, 34, 31, 0.05), 0 8px 20px rgba(8, 34, 31, 0.08);
-  --shadow-lg: 0 4px 8px rgba(8, 34, 31, 0.06), 0 18px 40px rgba(8, 34, 31, 0.12);
-  --paper: var(--surface-card);
-  --paper-deep: var(--surface-sunken);
-  --linen: var(--surface-page);
-  --linen-2: var(--surface-sunken);
-  --text: var(--text-strong);
-  --forest-950: #08221f;
-  --forest-900: #0c2e2c;
-  --forest-800: #123a38;
-  --forest-700: #1a4b47;
-  --forest-600: #245c57;
-  --clay-700: #8a5e32;
-  --clay-600: #a6743f;
-  --clay-500: #bc8850;
-  --clay-100: #f1e4d2;
-}
-
-.dark,
-[data-theme='dark'] {
-  --surface-page: #08221f;
-  --surface-card: #0c2e2c;
-  --surface-sunken: #123a38;
-  --surface-raised: #103734;
-  --text-strong: #eef1ea;
-  --text-body: #c6d8d4;
-  --text-muted: #a8cbc6;
-  --text-faint: #6aa39c;
-  --border-subtle: #16403d;
-  --border-default: #1a4b47;
-  --border-strong: #2c605a;
-  --accent-brand: #cfa372;
-  --accent-brand-hover: #e2c49e;
-  --accent-quiet: #1e3b1f;
-  --background: #08221f;
-  --foreground: #eef1ea;
-  --card: #0c2e2c;
-  --card-foreground: #eef1ea;
-  --popover: #0c2e2c;
-  --popover-foreground: #eef1ea;
-  --primary: #3c7a74;
-  --primary-foreground: #f7f5ef;
-  --secondary: #123a38;
-  --secondary-foreground: #eef1ea;
-  --muted: #123a38;
-  --muted-foreground: #a8cbc6;
-  --accent: #123a38;
-  --accent-foreground: #d6e6e3;
-  --border: #16403d;
-  --input: #16403d;
-  --ring: #bc8850;
-  --sidebar: #08221f;
-  --sidebar-foreground: #a8cbc6;
-  --sidebar-primary: #bc8850;
-  --sidebar-accent: #123a38;
-  --sidebar-accent-foreground: #f1ece1;
-  --sidebar-border: #16403d;
-}
-
-html,
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-body);
-}
-
-.studio-viewport {
-  padding: 0 !important;
-  background: var(--background) !important;
-}
-
-.studio-shell {
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: var(--background) !important;
-  box-shadow: none !important;
-}
-
-.studio-topbar {
-  border-radius: 0 !important;
-}
-
-.studio-canvas {
-  background: var(--background) !important;
-}
-
-.legacy-topbar-icon,
-.legacy-avatar-button {
-  display: flex;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-  color: var(--muted-foreground);
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.legacy-topbar-icon:hover,
-.legacy-avatar-button:hover {
-  color: var(--foreground);
-  background: var(--muted);
-}
-
-.legacy-topbar-search {
-  display: none;
-  height: 36px;
-  width: 256px;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0 12px;
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--muted) 50%, transparent);
-  transition: background 150ms ease;
-}
-
-.legacy-topbar-search:hover {
-  background: var(--muted);
-}
-
-.legacy-assistant-button {
-  display: flex;
-  height: 36px;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
-  border-radius: 10px;
-  padding: 0 10px;
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  transition: background 150ms ease;
-}
-
-.legacy-assistant-button:hover {
-  background: color-mix(in srgb, var(--primary) 15%, transparent);
-}
-
-.studio-card,
-.studio-panel,
-.studio-project-card,
-.studio-kpi-card {
-  border-radius: 10px;
-  box-shadow: var(--shadow-xs);
-}
-
-.studio-meeting-card {
-  border-radius: 16px;
-  box-shadow: var(--shadow-xs);
-}
-
-.studio-kpi-icon,
-.studio-section-icon {
-  border-radius: 6px;
-}
-
-@media (min-width: 640px) {
-  .legacy-topbar-search {
-    display: flex;
-  }
-}
-
-@media (min-width: 1024px) {
-  .legacy-topbar-icon.lg\:hidden {
-    display: none;
-  }
-}
-
-/* Production parity: the deployed pre-Fieldbook shell (commit 39060df). */
-:root {
-  --abyss-900: #08221f;
-  --abyss-800: #0c2e2c;
-  --abyss-700: #123a38;
-  --abyss-600: #1a4b47;
-  --abyss-500: #245c57;
-  --abyss-300: #6aa39c;
-  --abyss-200: #a8cbc6;
-  --abyss-100: #d6e6e3;
-  --brass-700: #8a5e32;
-  --brass-600: #a6743f;
-  --brass-500: #bc8850;
-  --brass-300: #e2c49e;
-  --brass-100: #f1e4d2;
-  --paper-white: #fdfcf8;
-  --paper-50: #f7f5ef;
-  --paper-100: #efebe1;
-  --paper-200: #e3ddd0;
-  --paper-300: #d2cbbb;
-  --surface-page: var(--paper-50);
-  --surface-card: var(--paper-white);
-  --surface-sunken: var(--paper-100);
-  --surface-raised: var(--paper-white);
-  --surface-inverse: var(--abyss-800);
-  --text-strong: #161a19;
-  --text-body: #3b423f;
-  --text-muted: #6e7570;
-  --text-faint: #939a94;
-  --text-inverse: var(--paper-50);
-  --border-subtle: var(--paper-200);
-  --border-default: var(--paper-300);
-  --border-strong: #939a94;
-  --accent-brand: var(--brass-500);
-  --accent-brand-hover: var(--brass-600);
-  --accent-quiet: var(--brass-100);
-  --background: var(--surface-page);
-  --foreground: var(--text-strong);
-  --card: var(--surface-card);
-  --card-foreground: var(--text-strong);
-  --popover: var(--surface-card);
-  --popover-foreground: var(--text-strong);
-  --primary: var(--abyss-700);
-  --primary-foreground: var(--paper-50);
-  --primary-hover: var(--abyss-800);
-  --secondary: var(--paper-100);
-  --secondary-foreground: var(--text-body);
-  --muted: var(--paper-100);
-  --muted-foreground: var(--text-muted);
-  --accent: var(--paper-100);
-  --accent-foreground: var(--text-strong);
-  --border: var(--border-subtle);
-  --input: var(--border-subtle);
-  --ring: var(--accent-brand);
-  --success: #3e6b52;
-  --sidebar: var(--abyss-800);
-  --sidebar-foreground: var(--abyss-200);
-  --sidebar-primary: var(--brass-500);
-  --sidebar-primary-foreground: var(--abyss-900);
-  --sidebar-accent: var(--abyss-700);
-  --sidebar-accent-foreground: var(--paper-50);
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --font-display: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
-  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --tracking-tight: -0.02em;
-  --tracking-caps: 0.14em;
-  --shadow-xs: 0 1px 2px rgba(8, 34, 31, 0.06);
-  --shadow-sm: 0 1px 2px rgba(8, 34, 31, 0.05), 0 2px 6px rgba(8, 34, 31, 0.05);
-  --shadow-md: 0 2px 4px rgba(8, 34, 31, 0.05), 0 8px 20px rgba(8, 34, 31, 0.08);
-  --shadow-lg: 0 4px 8px rgba(8, 34, 31, 0.06), 0 18px 40px rgba(8, 34, 31, 0.12);
-  --paper: var(--surface-card);
-  --paper-deep: var(--surface-sunken);
-  --linen: var(--surface-page);
-  --linen-2: var(--surface-sunken);
-  --text: var(--text-strong);
-  --forest-950: var(--abyss-900);
-  --forest-900: var(--abyss-800);
-  --forest-800: var(--abyss-700);
-  --forest-700: var(--abyss-600);
-  --forest-600: var(--abyss-500);
-  --clay-700: var(--brass-700);
-  --clay-600: var(--brass-600);
-  --clay-500: var(--brass-500);
-  --clay-100: var(--brass-100);
-}
-
-.dark,
-[data-theme='dark'] {
-  --surface-page: #07201d;
-  --surface-card: #0c2e2c;
-  --surface-sunken: #051512;
-  --surface-raised: #103734;
-  --text-strong: #fbfaf6;
-  --text-body: #c6d8d4;
-  --text-muted: #8fb1ab;
-  --text-faint: #5e827c;
-  --border-subtle: #103734;
-  --border-default: #1a4b47;
-  --border-strong: #2c605a;
-  --accent-brand: #cfa372;
-  --accent-brand-hover: #e2c49e;
-  --accent-quiet: #1e3b1f;
-  --primary: #b8d4cf;
-  --primary-foreground: #08221f;
-  --secondary: #123a38;
-  --muted: #123a38;
-  --success: #84b69a;
-  --sidebar: #08221f;
-  --sidebar-foreground: #a8cbc6;
-  --sidebar-primary: #cfa372;
-  --sidebar-accent: #123a38;
-}
-
+/* White Studio token authority from production commit e33a1c1. */
 :root {
   --surface-page: #f6f6f3;
   --surface-card: #ffffff;
@@ -391,6 +50,7 @@ body {
   --text-muted: #767672;
   --text-faint: #a3a39e;
   --text-inverse: #ffffff;
+  --text-on-accent: #ffffff;
   --border-subtle: #e9e9e5;
   --border-default: #deded9;
   --border-strong: #c7c7c1;
@@ -416,13 +76,17 @@ body {
   --input: var(--border-default);
   --ring: var(--accent-brand);
   --success: #476a50;
-  --shadow-xs: 0 1px 2px rgba(17, 17, 16, 0.035);
-  --shadow-sm: 0 8px 24px -20px rgba(17, 17, 16, 0.22);
-  --shadow-md: 0 18px 42px -30px rgba(17, 17, 16, 0.3);
-  --shadow-lg: 0 32px 80px -44px rgba(17, 17, 16, 0.4);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --tracking-tight: -0.02em;
-  --tracking-caps: 0.14em;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #333330;
+  --sidebar-primary: var(--accent-brand);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f1f1ee;
+  --sidebar-accent-foreground: #111110;
+  --sidebar-border: #e9e9e5;
+  --sidebar-ring: var(--accent-brand);
+  --font-display: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --paper: var(--surface-card);
   --paper-deep: var(--surface-sunken);
   --linen: var(--surface-page);
@@ -437,10 +101,13 @@ body {
   --clay-600: var(--accent-brand-hover);
   --clay-500: var(--accent-brand);
   --clay-100: var(--accent-quiet);
+  --shadow-xs: 0 1px 2px rgba(17, 17, 16, 0.035);
+  --shadow-sm: 0 8px 24px -20px rgba(17, 17, 16, 0.22);
+  --shadow-md: 0 18px 42px -30px rgba(17, 17, 16, 0.3);
+  --shadow-lg: 0 32px 80px -44px rgba(17, 17, 16, 0.4);
 }
-
-.dark,
-[data-theme='dark'] {
+html.dark,
+html[data-theme='dark'] {
   --surface-page: #1c1c1a;
   --surface-card: #242422;
   --surface-sunken: #181817;
@@ -475,8 +142,13 @@ body {
   --input: var(--border-default);
   --ring: var(--accent-brand);
   --success: #9bc39e;
+  --sidebar: #242422;
+  --sidebar-foreground: #dfdfda;
+  --sidebar-primary: var(--accent-brand);
+  --sidebar-accent: #30302d;
+  --sidebar-accent-foreground: #f7f7f4;
+  --sidebar-border: #343431;
 }
-
 @layer base {
   html,
   body,
@@ -999,6 +671,10 @@ body {
   }
 
   @media (min-width: 1024px) {
+    .studio-search {
+      width: 220px;
+    }
+
     .studio-audit-filters {
       grid-template-columns: minmax(220px, 1fr) 150px 150px 130px auto;
     }
@@ -1222,6 +898,12 @@ body {
     }
   }
 
+  @media (min-width: 1280px) {
+    .studio-search {
+      width: 260px;
+    }
+  }
+
   @media (max-width: 767px) {
     .studio-navigation {
       display: none;
@@ -1238,113 +920,4 @@ body {
       transition-duration: 0.01ms !important;
     }
   }
-}
-
-/* Final production token authority. */
-:root {
-  --surface-page: #f7f5ef;
-  --surface-card: #fdfcf8;
-  --surface-sunken: #efebe1;
-  --surface-raised: #fdfcf8;
-  --surface-inverse: #0c2e2c;
-  --text-strong: #161a19;
-  --text-body: #3b423f;
-  --text-muted: #6e7570;
-  --text-faint: #939a94;
-  --text-inverse: #f7f5ef;
-  --border-subtle: #e3ddd0;
-  --border-default: #d2cbbb;
-  --border-strong: #939a94;
-  --accent-brand: #bc8850;
-  --accent-brand-hover: #a6743f;
-  --accent-quiet: #f1e4d2;
-  --background: #f7f5ef;
-  --foreground: #161a19;
-  --card: #fdfcf8;
-  --card-foreground: #161a19;
-  --popover: #fdfcf8;
-  --popover-foreground: #161a19;
-  --primary: #123a38;
-  --primary-foreground: #f7f5ef;
-  --primary-hover: #0c2e2c;
-  --secondary: #efebe1;
-  --secondary-foreground: #3b423f;
-  --muted: #efebe1;
-  --muted-foreground: #6e7570;
-  --accent: #efebe1;
-  --accent-foreground: #161a19;
-  --border: #e3ddd0;
-  --input: #e3ddd0;
-  --ring: #bc8850;
-  --success: #3e6b52;
-  --sidebar: #0c2e2c;
-  --sidebar-foreground: #a8cbc6;
-  --sidebar-primary: #bc8850;
-  --sidebar-primary-foreground: #08221f;
-  --sidebar-accent: #123a38;
-  --sidebar-accent-foreground: #f7f5ef;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #bc8850;
-  --font-display: 'Oxanium', 'IBM Plex Sans', system-ui, sans-serif;
-  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --paper: var(--surface-card);
-  --paper-deep: var(--surface-sunken);
-  --linen: var(--surface-page);
-  --linen-2: var(--surface-sunken);
-  --text: var(--text-strong);
-  --forest-950: #08221f;
-  --forest-900: #0c2e2c;
-  --forest-800: #123a38;
-  --forest-700: #1a4b47;
-  --forest-600: #245c57;
-  --clay-700: #8a5e32;
-  --clay-600: #a6743f;
-  --clay-500: #bc8850;
-  --clay-100: #f1e4d2;
-  --shadow-xs: 0 1px 2px rgba(8, 34, 31, 0.06);
-  --shadow-sm: 0 1px 2px rgba(8, 34, 31, 0.05), 0 2px 6px rgba(8, 34, 31, 0.05);
-  --shadow-md: 0 2px 4px rgba(8, 34, 31, 0.05), 0 8px 20px rgba(8, 34, 31, 0.08);
-  --shadow-lg: 0 4px 8px rgba(8, 34, 31, 0.06), 0 18px 40px rgba(8, 34, 31, 0.12);
-}
-
-.dark,
-[data-theme='dark'] {
-  --surface-page: #08221f;
-  --surface-card: #0c2e2c;
-  --surface-sunken: #123a38;
-  --surface-raised: #103734;
-  --text-strong: #eef1ea;
-  --text-body: #c6d8d4;
-  --text-muted: #a8cbc6;
-  --text-faint: #6aa39c;
-  --border-subtle: #16403d;
-  --border-default: #1a4b47;
-  --border-strong: #2c605a;
-  --accent-brand: #cfa372;
-  --accent-brand-hover: #e2c49e;
-  --accent-quiet: #1e3b1f;
-  --background: #08221f;
-  --foreground: #eef1ea;
-  --card: #0c2e2c;
-  --card-foreground: #eef1ea;
-  --popover: #0c2e2c;
-  --popover-foreground: #eef1ea;
-  --primary: #3c7a74;
-  --primary-foreground: #f7f5ef;
-  --secondary: #123a38;
-  --secondary-foreground: #eef1ea;
-  --muted: #123a38;
-  --muted-foreground: #a8cbc6;
-  --accent: #123a38;
-  --accent-foreground: #d6e6e3;
-  --border: #16403d;
-  --input: #16403d;
-  --ring: #bc8850;
-  --sidebar: #08221f;
-  --sidebar-foreground: #a8cbc6;
-  --sidebar-primary: #bc8850;
-  --sidebar-accent: #123a38;
-  --sidebar-accent-foreground: #f1ece1;
-  --sidebar-border: #16403d;
 }
