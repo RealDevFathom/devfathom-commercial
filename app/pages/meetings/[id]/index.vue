@@ -1,22 +1,34 @@
 <script setup lang="ts">
-import { ArrowLeft, CalendarClock, MapPin, Repeat2, Users, Video } from 'lucide-vue-next';
+import { ArrowLeft, CalendarClock, MapPin, Radio, Repeat2, Users, Video } from 'lucide-vue-next';
 import type { Meeting } from '~/types/collaboration';
+
+interface AttendanceReport {
+  heldOccurrences: number;
+  attendees: {
+    user: { id: string; name: string; avatar?: string | null };
+    attended: number;
+    rate: number;
+    lastJoinedAt?: string | null;
+  }[];
+}
+
 const route = useRoute();
 const api = useMeetings();
+const { user } = useAuth();
 const id = computed(() => String(route.params.id));
 const meeting = ref<Meeting | null>(null);
-const attendance = ref<{
-  heldOccurrences: number;
-  attendees: { user: { id: string; name: string }; attended: number; rate: number }[];
-} | null>(null);
+const attendance = ref<AttendanceReport | null>(null);
 const loading = ref(true);
 const error = ref('');
+const clock = ref(Date.now());
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+
 async function load() {
   loading.value = true;
   error.value = '';
   try {
     meeting.value = await api.get(id.value);
-    attendance.value = await api.attendance(id.value);
+    attendance.value = await api.attendance(id.value).catch(() => null);
     useHead({ title: `${meeting.value.title} · Meetings` });
   } catch (caught: any) {
     error.value = caught?.data?.detail || 'This meeting could not be opened.';
@@ -25,76 +37,138 @@ async function load() {
   }
 }
 await load();
-const date = (v: string) =>
-  new Intl.DateTimeFormat('en', { dateStyle: 'full', timeStyle: 'short' }).format(new Date(v));
+
+onMounted(() => {
+  clock.value = Date.now();
+  clockTimer = setInterval(() => (clock.value = Date.now()), 1000);
+});
+onBeforeUnmount(() => {
+  if (clockTimer) clearInterval(clockTimer);
+});
+
+const countdown = computed(() =>
+  meeting.value ? getMeetingCountdown(meeting.value, clock.value) : null
+);
+const canJoin = computed(
+  () =>
+    Boolean(meeting.value?.attendees.some((attendee) => attendee.user.id === user.value?.id)) &&
+    countdown.value?.phase !== 'ended'
+);
+const dateTime = (value: string) =>
+  new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(
+    new Date(value)
+  );
+const lastJoined = (value?: string | null) =>
+  value
+    ? new Intl.DateTimeFormat('en', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(new Date(value))
+    : '';
+const initials = (name: string) =>
+  name
+    .split(' ')
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
 </script>
+
 <template>
   <section class="meeting-detail animate-fade-in">
-    <NuxtLink class="back" to="/meetings"><ArrowLeft :size="14" /> Back to Meetings</NuxtLink
-    ><DeliveryFieldState
+    <NuxtLink class="back" to="/meetings"><ArrowLeft :size="15" /> Back to Meetings</NuxtLink>
+    <DeliveryFieldState
       v-if="loading || error"
       :loading="loading"
       :error="error"
       action="Try again"
       @action="load"
-    /><template v-else-if="meeting">
+    />
+
+    <template v-else-if="meeting">
       <header class="meeting-head">
-        <div>
+        <div class="title-copy">
+          <div
+            v-if="countdown && countdown.phase !== 'ended'"
+            class="meeting-state"
+            :class="{ live: countdown.phase === 'live' }"
+          >
+            <Radio v-if="countdown.phase === 'live'" :size="13" />
+            <CalendarClock v-else :size="13" />
+            <span>{{ countdown.phase === 'live' ? 'Live now' : 'Upcoming' }}</span>
+            <b data-allow-mismatch="text"
+              >{{ countdown.hours }}:{{ countdown.minutes }}:{{ countdown.seconds }}</b
+            >
+          </div>
           <h1>{{ meeting.title }}</h1>
           <p v-if="meeting.description">{{ meeting.description }}</p>
         </div>
-        <NuxtLink class="join-call" :to="`/meetings/${meeting.id}/call`"
-          ><Video :size="16" /> Join call</NuxtLink
-        >
+        <NuxtLink v-if="canJoin" class="join-call" :to="`/meetings/${meeting.id}/call`">
+          <Video :size="16" /> {{ countdown?.phase === 'live' ? 'Join now' : 'Join call' }}
+        </NuxtLink>
       </header>
-      <section class="appointment">
+
+      <section class="appointment" aria-label="Meeting details">
         <dl>
           <div>
-            <CalendarClock :size="16" /><span
+            <CalendarClock :size="17" />
+            <span
               ><small>When</small
-              ><strong>{{ date(meeting.startTime) }} – {{ date(meeting.endTime) }}</strong></span
+              ><strong
+                >{{ dateTime(meeting.startTime) }} – {{ dateTime(meeting.endTime) }}</strong
+              ></span
             >
           </div>
           <div>
-            <MapPin :size="16" /><span
-              ><small>Where</small><strong>{{ meeting.location || '—' }}</strong></span
+            <MapPin :size="17" />
+            <span
+              ><small>Where</small
+              ><strong>{{ meeting.location || 'No location set' }}</strong></span
             >
           </div>
           <div>
-            <Repeat2 :size="16" /><span
+            <Repeat2 :size="17" />
+            <span
               ><small>Recurrence</small
               ><strong>{{ meeting.recurrence || 'One-time' }}</strong></span
             >
           </div>
         </dl>
       </section>
+
       <section class="attendance">
         <header>
-          <Users :size="16" />
+          <Users :size="17" />
           <h2>Attendance</h2>
-          <span v-if="attendance"
-            >· {{ attendance.heldOccurrences }} occurrence{{
+          <span v-if="attendance">
+            · {{ attendance.heldOccurrences }} occurrence{{
               attendance.heldOccurrences === 1 ? '' : 's'
             }}
-            held</span
-          >
+            held
+          </span>
         </header>
         <div class="attendance-card">
           <article v-for="entry in attendance?.attendees" :key="entry.user.id">
-            <i>{{ entry.user.name.slice(0, 2).toUpperCase() }}</i>
-            <div>
-              <strong>{{ entry.user.name }}</strong
-              ><small
-                >Attended {{ entry.attended }} of {{ attendance?.heldOccurrences || 0 }}</small
-              >
+            <span class="avatar">
+              <img v-if="entry.user.avatar" :src="entry.user.avatar" :alt="entry.user.name" />
+              <template v-else>{{ initials(entry.user.name) }}</template>
+            </span>
+            <div class="person">
+              <strong>{{ entry.user.name }}</strong>
+              <small>
+                Attended {{ entry.attended }} of {{ attendance?.heldOccurrences || 0 }}
+                <template v-if="entry.lastJoinedAt">
+                  · last {{ lastJoined(entry.lastJoinedAt) }}</template
+                >
+              </small>
             </div>
             <div class="rate">
-              <b>{{ Math.round(entry.rate) }}%</b
-              ><progress
-                :value="entry.rate"
-                max="100"
-                :aria-label="`${entry.user.name} attendance rate`"
-              />
+              <b :class="entry.rate >= 75 ? 'good' : entry.rate >= 40 ? 'medium' : 'low'">
+                {{ Math.round(entry.rate) }}%
+              </b>
+              <span><i :style="{ width: `${Math.min(100, entry.rate)}%` }" /></span>
             </div>
           </article>
           <p v-if="!attendance?.attendees.length" class="empty-attendance">
@@ -105,317 +179,68 @@ const date = (v: string) =>
     </template>
   </section>
 </template>
+
 <style scoped>
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 16px;
-  color: var(--muted);
-  font-size: 11px;
-}
-.meeting-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 28px;
-  background: var(--forest-950);
-  color: white;
-}
-.meeting-head span,
-.appointment > span,
-.attendance header span {
-  color: var(--clay-500);
-  font:
-    9px 'IBM Plex Mono',
-    monospace;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-}
-.meeting-head h1 {
-  margin: 3px 0;
-  font-size: clamp(30px, 4vw, 46px);
-}
-.meeting-head p {
-  max-width: 650px;
-  margin: 0;
-  color: #c6cec3;
-  font-size: 12px;
-}
-.meeting-head > div:last-child {
-  display: flex;
-  gap: 8px;
-}
-.meeting-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
-  background: var(--paper);
-  border: 1px solid var(--border);
-  border-top: 0;
-}
-.meeting-grid > main {
-  padding: 26px;
-  border-right: 1px solid var(--border);
-}
-.appointment {
-  padding: 22px;
-  background: var(--linen);
-  border: 1px solid var(--border);
-}
-dl {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  margin: 17px 0 0;
-}
-dl div {
-  padding: 0 18px;
-  border-right: 1px solid var(--border);
-}
-dl div:first-child {
-  padding-left: 0;
-}
-dl div:last-child {
-  border: 0;
-}
-dt {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 10px;
-}
-dd {
-  margin: 8px 0 0;
-  font:
-    600 16px 'Newsreader',
-    serif;
-  text-transform: capitalize;
-}
-dd small {
-  display: block;
-  margin-top: 4px;
-  color: var(--muted);
-  font:
-    10px 'IBM Plex Sans',
-    sans-serif;
-}
-.attendance {
-  margin-top: 22px;
-  border: 1px solid var(--border);
-}
-.attendance header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  border-bottom: 1px solid var(--border);
-}
-.attendance h2 {
-  margin: 3px 0 0;
-  font-size: 22px;
-}
-.attendance header b {
-  color: var(--muted);
-  font:
-    9px 'IBM Plex Mono',
-    monospace;
-  text-transform: uppercase;
-}
-.attendance article {
-  display: grid;
-  grid-template-columns: 1fr 90px minmax(100px, 1fr) 42px;
-  gap: 12px;
-  align-items: center;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 11px;
-}
-.attendance article span {
-  color: var(--muted);
-}
-progress {
-  width: 100%;
-  height: 5px;
-  accent-color: var(--forest-800);
-}
-.meeting-grid > aside > header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 51px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--border);
-  font:
-    9px 'IBM Plex Mono',
-    monospace;
-  text-transform: uppercase;
-}
-.meeting-grid > aside > article {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border);
-}
-.meeting-grid > aside i {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: white;
-  background: var(--forest-800);
-  border-radius: 50%;
-  font:
-    9px 'IBM Plex Mono',
-    monospace;
-}
-.meeting-grid > aside article div {
-  flex: 1;
-}
-.meeting-grid > aside strong,
-.meeting-grid > aside small {
-  display: block;
-  font-size: 11px;
-}
-.meeting-grid > aside small,
-.meeting-grid > aside article > span {
-  color: var(--muted);
-  font-size: 9px;
-}
-.danger {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 18px;
-  padding: 10px;
-  color: var(--clay-600);
-  background: transparent;
-  border: 1px solid var(--clay-100);
-  cursor: pointer;
-}
-@media (max-width: 900px) {
-  .meeting-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .meeting-grid {
-    grid-template-columns: 1fr;
-  }
-  .meeting-grid > main {
-    border: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  dl {
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-  dl div {
-    padding: 0 0 14px;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .attendance article {
-    grid-template-columns: 1fr 70px 42px;
-  }
-  .attendance progress {
-    display: none;
-  }
-}
-/* Production Studio meeting detail */
-.back {
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 600;
-}
-.meeting-head {
-  margin-bottom: 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 24px;
-  padding: 24px;
-  background: var(--surface-card);
-  box-shadow: var(--shadow-xs);
-}
-.meeting-head span {
-  color: var(--accent-brand);
-  font: 600 9px var(--font-mono);
-}
-.meeting-head h1 {
-  color: var(--foreground);
-  font-size: clamp(32px, 5vw, 52px);
-  font-weight: 650;
-  line-height: 1;
-}
-.meeting-head p {
-  color: var(--text-muted);
-  font-size: 14px;
-}
-.meeting-grid > main,
-.meeting-grid > aside {
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 22px;
-  background: var(--surface-card);
-  box-shadow: var(--shadow-xs);
-}
-.appointment,
-.attendance {
-  border-color: var(--border-subtle);
-  background: var(--surface-card);
-}
-.appointment > span,
-.attendance header span {
-  color: var(--accent-brand);
-  font: 600 9px var(--font-mono);
-}
-.attendance h2 {
-  color: var(--foreground);
-  font-size: 18px;
-  font-weight: 650;
-}
-.meeting-grid > aside > header {
-  border-color: var(--border-subtle);
-  background: var(--surface-sunken);
-}
-.meeting-grid > aside > article,
-.attendance article {
-  border-color: var(--border-subtle);
-}
-.meeting-grid > aside i {
-  border-radius: 50%;
-  color: var(--primary-foreground);
-  background: var(--foreground);
-  font-family: var(--font-mono);
-}
-/* Source-parity overrides */
 .meeting-detail {
+  width: 100%;
   max-width: 768px;
   margin: 0 auto;
 }
 .back {
-  margin-bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.back:hover {
+  color: var(--foreground);
 }
 .meeting-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 20px;
-  margin: 0;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  gap: 24px;
+}
+.title-copy {
+  min-width: 0;
+}
+.meeting-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--accent-brand);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.meeting-state b {
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.meeting-state.live {
+  color: #059669;
 }
 .meeting-head h1 {
   margin: 0;
+  color: var(--foreground);
   font-family: var(--font-display);
-  font-size: 24px;
-  line-height: 1.2;
+  font-size: clamp(28px, 5vw, 42px);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
 }
 .meeting-head p {
-  margin: 6px 0 0;
-  font-size: 15px;
+  max-width: 620px;
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.55;
 }
 .join-call {
   display: inline-flex;
@@ -423,26 +248,28 @@ progress {
   flex: none;
   align-items: center;
   gap: 7px;
-  padding: 0 20px;
+  padding: 0 18px;
   color: white;
   background: var(--primary);
   border-radius: 12px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 650;
 }
 .join-call:hover {
-  filter: brightness(0.92);
+  background: var(--primary-hover);
 }
 .appointment {
-  margin-top: 24px;
-  padding: 24px;
+  margin-top: 26px;
+  padding: 22px;
+  background: var(--surface-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs);
 }
 .appointment dl {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  gap: 18px;
   margin: 0;
 }
 .appointment dl > div {
@@ -450,94 +277,109 @@ progress {
   min-width: 0;
   align-items: flex-start;
   gap: 10px;
-  padding: 0;
   color: var(--text-muted);
-  border: 0;
 }
 .appointment dl > div > svg {
   flex: none;
   margin-top: 2px;
 }
-.appointment dl span {
+.appointment span {
   min-width: 0;
 }
-.appointment dl small,
-.appointment dl strong {
+.appointment small,
+.appointment strong {
   display: block;
 }
-.appointment dl small {
+.appointment small {
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.07em;
 }
-.appointment dl strong {
-  margin-top: 2px;
+.appointment strong {
+  margin-top: 4px;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.45;
   text-overflow: ellipsis;
 }
 .attendance {
-  margin-top: 24px;
-  border: 0;
+  margin-top: 26px;
 }
 .attendance > header {
   display: flex;
-  justify-content: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 0 0 12px;
+  margin-bottom: 12px;
   color: var(--text-muted);
-  border: 0;
 }
-.attendance > header h2 {
+.attendance h2 {
   margin: 0;
   color: var(--foreground);
   font-size: 16px;
+  font-weight: 650;
 }
-.attendance > header span {
+.attendance header span {
   color: var(--text-muted);
-  font: 400 12px var(--font-sans);
-  letter-spacing: 0;
-  text-transform: none;
+  font-size: 12px;
 }
 .attendance-card {
   overflow: hidden;
   background: var(--surface-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs);
 }
 .attendance article {
   display: flex;
+  align-items: center;
   gap: 12px;
   padding: 14px 16px;
-  font-size: 13px;
+  border-bottom: 1px solid var(--border-subtle);
 }
-.attendance article > i {
+.attendance article:last-child {
+  border-bottom: 0;
+}
+.avatar {
   display: grid;
   width: 36px;
   height: 36px;
   flex: none;
+  overflow: hidden;
   place-items: center;
   color: var(--foreground);
   background: var(--secondary);
   border-radius: 50%;
-  font: 600 10px var(--font-sans);
+  font-size: 10px;
+  font-weight: 650;
 }
-.attendance article > div:nth-child(2) {
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.person {
   min-width: 0;
   flex: 1;
 }
-.attendance article strong,
-.attendance article small {
+.person strong,
+.person small {
   display: block;
 }
-.attendance article small {
+.person strong {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.person small {
   margin-top: 2px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 .rate {
   width: 128px;
@@ -545,12 +387,30 @@ progress {
 }
 .rate b {
   display: block;
-  margin-bottom: 4px;
-  font-size: 12px;
+  margin-bottom: 5px;
+  font-size: 11px;
 }
-.rate progress {
+.rate > span {
   display: block;
   height: 6px;
+  overflow: hidden;
+  background: var(--secondary);
+  border-radius: 999px;
+}
+.rate i {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  border-radius: inherit;
+}
+.rate .good {
+  color: #10b981;
+}
+.rate .medium {
+  color: #f59e0b;
+}
+.rate .low {
+  color: #ef4444;
 }
 .empty-attendance {
   margin: 0;
@@ -563,19 +423,26 @@ progress {
     align-items: flex-start;
     flex-direction: column;
   }
+  .join-call {
+    width: 100%;
+    justify-content: center;
+  }
   .appointment dl {
     grid-template-columns: 1fr;
   }
   .appointment dl > div {
-    padding-bottom: 12px;
+    padding-bottom: 14px;
     border-bottom: 1px solid var(--border-subtle);
   }
   .appointment dl > div:last-child {
     padding-bottom: 0;
-    border: 0;
+    border-bottom: 0;
   }
   .rate {
-    width: 88px;
+    width: 86px;
+  }
+  .person small {
+    max-width: 180px;
   }
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const props = defineProps<{ open: boolean }>();
-const emit = defineEmits<{ close: []; saved: [] }>();
+const emit = defineEmits<{ close: []; saved: [channelId: string] }>();
 const chat = useChat();
 const name = ref('');
 const description = ref('');
@@ -12,7 +12,7 @@ async function submit() {
   saving.value = true;
   error.value = '';
   try {
-    await chat.createChannel({
+    const channel = await chat.createChannel({
       name: name.value,
       description: description.value || null,
       topic: topic.value || null,
@@ -20,7 +20,7 @@ async function submit() {
       isPrivate: isPrivate.value,
       memberIds: [],
     });
-    emit('saved');
+    emit('saved', channel.id);
     emit('close');
   } catch (caught: any) {
     error.value = caught?.data?.detail || 'The channel could not be opened.';
@@ -58,18 +58,24 @@ form {
 label {
   display: grid;
   gap: 6px;
-  color: var(--muted);
-  font:
-    9px 'IBM Plex Mono',
-    monospace;
-  text-transform: uppercase;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 input,
 textarea {
-  padding: 10px;
-  color: var(--text);
-  background: var(--paper);
+  min-height: 40px;
+  padding: 9px 11px;
+  color: var(--foreground);
+  background: var(--background);
   border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: 0;
+}
+input:focus,
+textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 .check {
   display: flex;
@@ -86,7 +92,7 @@ form div {
   gap: 8px;
 }
 p {
-  color: var(--clay-600);
+  color: #dc2626;
   font-size: 12px;
 }
 </style>
