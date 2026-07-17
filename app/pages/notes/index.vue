@@ -73,26 +73,20 @@ async function handleCreate() {
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-6">
-    <header class="flex items-end justify-between gap-4">
-      <div>
-        <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">Notes</h1>
-        <p class="mt-1.5 text-[15px] text-text-muted">
-          Capture ideas, link them together, share them with the team.
-        </p>
-      </div>
-      <button
-        class="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
-        :disabled="creating"
-        @click="handleCreate"
-      >
+  <section class="core-route animate-fade-in space-y-6">
+    <PageHeader
+      eyebrow="Knowledge"
+      title="Notes"
+      description="Capture decisions, connect context, and share working knowledge."
+    >
+      <button class="studio-primary-button" :disabled="creating" @click="handleCreate">
         <Loader2 v-if="creating" :size="16" class="animate-spin" />
         <Plus v-else :size="16" /> New Note
       </button>
-    </header>
+    </PageHeader>
 
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
-      <aside class="space-y-3">
+      <aside class="notes-index-panel space-y-3">
         <nav class="flex flex-wrap items-center gap-1.5" aria-label="Note filters">
           <button
             v-for="item in ['all', 'mine', 'shared', 'mentions'] as const"
@@ -184,7 +178,7 @@ async function handleCreate() {
         </div>
       </aside>
 
-      <section class="min-w-0 rounded-2xl border border-dashed border-border-subtle bg-card">
+      <section class="note-canvas min-w-0">
         <div class="flex min-h-[520px] flex-col items-center justify-center p-8 text-center">
           <FileText :size="48" class="text-text-faint/20" />
           <h2 class="mt-4 text-lg font-semibold text-foreground">Select a note</h2>
@@ -202,3 +196,29 @@ async function handleCreate() {
     </div>
   </section>
 </template>
+
+<style scoped>
+.notes-index-panel,
+.note-canvas {
+  border: 1px solid var(--border-default);
+  border-radius: 24px;
+  background: var(--surface-card);
+  box-shadow: var(--shadow-xs);
+}
+.notes-index-panel {
+  padding: 16px;
+}
+.note-canvas {
+  overflow: hidden;
+  background: linear-gradient(var(--border-subtle) 1px, transparent 1px), var(--surface-card);
+  background-size: 100% 44px;
+}
+@media (min-width: 1024px) {
+  .notes-index-panel {
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 120px);
+    overflow: auto;
+  }
+}
+</style>

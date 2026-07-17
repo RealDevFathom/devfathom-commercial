@@ -23,18 +23,22 @@ import {
   X,
 } from 'lucide-vue-next';
 import type { NoteSummary } from '~/types/collaboration';
-import type { Client, ClientContact, Contract } from '~/types/crm';
-import type { Project } from '~/types/delivery';
+import type { Client, ClientContact, ClientDocument, Contract } from '~/types/crm';
 
 type DetailTab =
-  'overview' | 'projects' | 'invoices' | 'contracts' | 'notes' | 'contacts' | 'activity';
+  | 'overview'
+  | 'projects'
+  | 'invoices'
+  | 'contracts'
+  | 'documents'
+  | 'notes'
+  | 'contacts'
+  | 'activity';
 
-useHead({ title: 'Client · DevFathom Hub' });
 const route = useRoute();
 const router = useRouter();
 const clientId = String(route.params.id);
 const crm = useCrm();
-const delivery = useDelivery();
 const notesApi = useNotes();
 const { user } = useAuth();
 
@@ -42,7 +46,7 @@ const client = ref<Client | null>(null);
 const activity = ref<Array<Record<string, any>>>([]);
 const contractedValues = ref<Array<{ currency: string; total: number; count: number }>>([]);
 const clientNotes = ref<NoteSummary[]>([]);
-const allProjects = ref<Project[]>([]);
+const documents = ref<ClientDocument[]>([]);
 const loading = ref(true);
 const error = ref('');
 const actionError = ref('');
@@ -51,13 +55,13 @@ const deleting = ref(false);
 const deleteConfirm = ref(false);
 const editing = ref(false);
 const tab = ref<DetailTab>('overview');
-const showProjectLinker = ref(false);
-const selectedProjectId = ref('');
+const projectFormOpen = ref(false);
 const contactFormOpen = ref(false);
 const editingContactId = ref<string | null>(null);
 const contractFormOpen = ref(false);
 const editingContractId = ref<string | null>(null);
 const deletingContractId = ref<string | null>(null);
+const documentFormOpen = ref(false);
 
 const isAdmin = computed(() => user.value?.role === 'ADMIN');
 const projects = computed(() => client.value?.projects || []);
@@ -89,6 +93,10 @@ const contractForm = reactive({
   fileUrl: '',
   notes: '',
 });
+const documentForm = reactive({ name: '', url: '', type: '', size: '' });
+useHead(() => ({
+  title: client.value ? `${client.value.name} · Clients · DevFathom Hub` : 'Client · DevFathom Hub',
+}));
 
 const statusConfig: Record<Client['status'], { label: string; classes: string; dot: string }> = {
   ACTIVE: { label: 'Active', classes: 'bg-emerald-500/10 text-emerald-600', dot: 'bg-emerald-500' },
@@ -116,17 +124,18 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [record, events, totals, notes] = await Promise.all([
+    const [record, events, totals, notes, files] = await Promise.all([
       crm.getClient(clientId),
       crm.activity(clientId).catch(() => []),
       crm.contractedValue(clientId).catch(() => []),
       notesApi.list({ clientId }).catch(() => []),
+      isAdmin.value ? crm.listDocuments(clientId).catch(() => []) : Promise.resolve([]),
     ]);
     client.value = record;
     activity.value = events;
     contractedValues.value = totals;
     clientNotes.value = notes;
-    useHead({ title: `${record.name} · Clients · DevFathom Hub` });
+    documents.value = files;
   } catch (caught: any) {
     error.value = caught?.data?.detail || 'The client record could not be read.';
   } finally {
@@ -182,20 +191,22 @@ async function removeClient() {
   }
 }
 
-async function openProjectLinker() {
-  showProjectLinker.value = true;
-  if (!allProjects.value.length) allProjects.value = await delivery.listProjects();
-}
-
-async function linkProject() {
-  if (!selectedProjectId.value) return;
-  await runAction(() => delivery.updateProject(selectedProjectId.value, { clientId }));
-  selectedProjectId.value = '';
-  showProjectLinker.value = false;
-}
-
-async function unlinkProject(projectId: string) {
-  await runAction(() => delivery.updateProject(projectId, { clientId: null }));
+async function createClientNote() {
+  saving.value = true;
+  actionError.value = '';
+  try {
+    const created = await notesApi.create({
+      title: `Notes for ${client.value?.name || 'client'}`,
+      contentJson: { type: 'doc', content: [] },
+      visibility: 'PRIVATE',
+      clientId,
+    });
+    await router.push(`/notes/${created.id}`);
+  } catch (caught: any) {
+    actionError.value = caught?.data?.detail || 'The client note could not be created.';
+  } finally {
+    saving.value = false;
+  }
 }
 
 function resetContactForm(item?: ClientContact) {
@@ -266,6 +277,20 @@ async function saveContract() {
   editingContractId.value = null;
 }
 
+async function saveDocument() {
+  if (!documentForm.name.trim() || !documentForm.url.trim()) return;
+  await runAction(() =>
+    crm.addDocument(clientId, {
+      name: documentForm.name.trim(),
+      url: documentForm.url.trim(),
+      type: documentForm.type.trim() || null,
+      size: documentForm.size ? Number(documentForm.size) : null,
+    })
+  );
+  Object.assign(documentForm, { name: '', url: '', type: '', size: '' });
+  documentFormOpen.value = false;
+}
+
 async function runAction(fn: () => Promise<unknown>) {
   saving.value = true;
   actionError.value = '';
@@ -316,14 +341,10 @@ const outstanding = computed(() =>
     .filter((item) => ['SENT', 'OVERDUE'].includes(item.status))
     .reduce((sum, item) => sum + Number(item.total || 0), 0)
 );
-const availableProjects = computed(() => {
-  const linked = new Set(projects.value.map((item) => item.id));
-  return allProjects.value.filter((item) => !linked.has(item.id));
-});
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-6">
+  <section class="core-route animate-fade-in space-y-6">
     <DeliveryFieldState
       v-if="loading || error"
       :loading="loading"
@@ -332,17 +353,17 @@ const availableProjects = computed(() => {
       @action="load"
     />
     <template v-else-if="client">
-      <div>
+      <div class="route-hero">
         <NuxtLink
           to="/clients"
           class="mb-4 inline-flex items-center gap-1.5 text-sm text-text-muted transition-colors hover:text-foreground"
         >
           <ArrowLeft :size="16" /> Back to Clients
         </NuxtLink>
-        <header class="flex items-start justify-between">
+        <header class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-3">
-              <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">
+              <h1 class="font-display text-4xl font-semibold tracking-[-0.04em] text-foreground">
                 {{ client.name }}
               </h1>
               <span
@@ -468,7 +489,16 @@ const availableProjects = computed(() => {
           >
             <button
               v-for="item in (isAdmin
-                ? ['overview', 'projects', 'invoices', 'contracts', 'notes', 'contacts', 'activity']
+                ? [
+                    'overview',
+                    'projects',
+                    'invoices',
+                    'contracts',
+                    'documents',
+                    'notes',
+                    'contacts',
+                    'activity',
+                  ]
                 : ['overview', 'projects', 'notes', 'contacts', 'activity']) as DetailTab[]"
               :key="item"
               class="relative inline-flex h-[calc(100%-1px)] items-center justify-center whitespace-nowrap rounded-md border border-transparent px-1.5 py-0.5 text-sm font-medium capitalize text-foreground/60 transition-all hover:text-foreground"
@@ -478,6 +508,7 @@ const availableProjects = computed(() => {
               {{ item }}<template v-if="item === 'projects'"> ({{ projects.length }})</template
               ><template v-else-if="item === 'invoices'"> ({{ invoices.length }})</template
               ><template v-else-if="item === 'contracts'"> ({{ contracts.length }})</template
+              ><template v-else-if="item === 'documents'"> ({{ documents.length }})</template
               ><template v-else-if="item === 'contacts'"> ({{ contacts.length }})</template>
             </button>
           </nav>
@@ -563,35 +594,10 @@ const availableProjects = computed(() => {
 
         <section v-else-if="tab === 'projects'" class="space-y-4">
           <div class="flex justify-end">
-            <button
-              v-if="!showProjectLinker"
-              class="studio-primary-button"
-              @click="openProjectLinker"
-            >
-              <Plus :size="14" /> Link Project
+            <button class="studio-primary-button" @click="projectFormOpen = true">
+              <Plus :size="14" /> New Project
             </button>
           </div>
-          <article
-            v-if="showProjectLinker"
-            class="overflow-hidden rounded-lg border border-primary/20 bg-card py-5"
-          >
-            <div class="flex flex-col gap-3 p-5 sm:flex-row">
-              <select v-model="selectedProjectId" class="field-input flex-1">
-                <option value="">Select a project...</option>
-                <option v-for="item in availableProjects" :key="item.id" :value="item.id">
-                  {{ item.name }}
-                </option></select
-              ><button
-                class="studio-primary-button"
-                :disabled="!selectedProjectId || saving"
-                @click="linkProject"
-              >
-                Link Project</button
-              ><button class="studio-outline-button" @click="showProjectLinker = false">
-                Cancel
-              </button>
-            </div>
-          </article>
           <div v-if="projects.length" class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <article
               v-for="item in projects"
@@ -609,13 +615,7 @@ const availableProjects = computed(() => {
                     <p class="mt-1 text-xs text-text-muted">
                       {{ item.status.replaceAll('_', ' ') }}
                     </p></NuxtLink
-                  ><button
-                    aria-label="Unlink project"
-                    class="rounded-lg p-1.5 text-text-muted hover:bg-red-500/10 hover:text-red-500"
-                    @click="unlinkProject(item.id)"
                   >
-                    <X :size="14" />
-                  </button>
                 </div>
               </div>
             </article>
@@ -898,11 +898,80 @@ const availableProjects = computed(() => {
           </article>
         </section>
 
+        <section v-else-if="tab === 'documents'" class="space-y-4">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <h2 class="text-lg font-semibold text-foreground">Client documents</h2>
+              <p class="mt-1 text-sm text-text-muted">
+                Agreements, references, and external source files.
+              </p>
+            </div>
+            <button class="studio-primary-button" @click="documentFormOpen = true">
+              <Plus :size="14" /> Add Document
+            </button>
+          </div>
+          <form
+            v-if="documentFormOpen"
+            class="studio-section-card studio-form-grid"
+            @submit.prevent="saveDocument"
+          >
+            <label class="field-label"
+              >Name *<input v-model="documentForm.name" class="field-input" required
+            /></label>
+            <label class="field-label"
+              >URL *<input v-model="documentForm.url" class="field-input" type="url" required
+            /></label>
+            <label class="field-label"
+              >Type<input v-model="documentForm.type" class="field-input" placeholder="PDF"
+            /></label>
+            <label class="field-label"
+              >Size in bytes<input
+                v-model="documentForm.size"
+                class="field-input"
+                type="number"
+                min="0"
+            /></label>
+            <div class="col-span-full flex justify-end gap-2">
+              <button type="button" class="studio-outline-button" @click="documentFormOpen = false">
+                Cancel
+              </button>
+              <button class="studio-primary-button" :disabled="saving">Save Document</button>
+            </div>
+          </form>
+          <DeliveryFieldState v-if="!documents.length" empty="No client documents yet." />
+          <article v-else class="studio-section-card p-0">
+            <div class="divide-y divide-border-subtle">
+              <div
+                v-for="item in documents"
+                :key="item.id"
+                class="flex items-center gap-3 px-5 py-4"
+              >
+                <FileText :size="16" class="text-text-muted" />
+                <a
+                  :href="item.url"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="min-w-0 flex-1 truncate text-sm font-semibold text-foreground hover:text-primary"
+                  >{{ item.name }}</a
+                >
+                <span class="text-xs text-text-muted">{{ item.type || 'Reference' }}</span>
+                <button
+                  class="studio-danger-icon"
+                  :aria-label="`Delete ${item.name}`"
+                  @click="runAction(() => crm.removeDocument(item.id))"
+                >
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+            </div>
+          </article>
+        </section>
+
         <section v-else-if="tab === 'notes'" class="space-y-4">
           <div class="flex justify-end">
-            <NuxtLink to="/notes" class="studio-primary-button"
-              ><Plus :size="14" /> New Note</NuxtLink
-            >
+            <button class="studio-primary-button" :disabled="saving" @click="createClientNote">
+              <Plus :size="14" /> New Client Note
+            </button>
           </div>
           <div
             v-if="clientNotes.length"
@@ -1062,11 +1131,24 @@ const availableProjects = computed(() => {
           </article>
         </section>
       </div>
+      <DeliveryProjectForm
+        :open="projectFormOpen"
+        :preset-client-id="clientId"
+        @close="projectFormOpen = false"
+        @saved="load"
+      />
     </template>
   </section>
 </template>
 
 <style scoped>
+.route-hero {
+  border: 1px solid var(--border-default);
+  border-radius: 28px;
+  padding: clamp(22px, 4vw, 36px);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-xs);
+}
 .field-label {
   display: grid;
   gap: 4px;

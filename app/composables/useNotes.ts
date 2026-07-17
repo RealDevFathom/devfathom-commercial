@@ -13,6 +13,8 @@ export function useNotes() {
       title: string;
       contentJson: TiptapNode;
       visibility: NoteSummary['visibility'];
+      projectId?: string;
+      clientId?: string;
     }) => request<Note>('/api/v1/notes', { method: 'POST', body }),
     update: (id: string, body: Record<string, unknown>) =>
       request<Note>(`/api/v1/notes/${id}`, { method: 'PATCH', body }),

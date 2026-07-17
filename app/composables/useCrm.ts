@@ -24,6 +24,7 @@ export function useCrm() {
     removeContact: (id: string) => request(`/api/v1/contacts/${id}`, { method: 'DELETE' }),
     addContract: (clientId: string, body: Record<string, unknown>) =>
       data<Contract>(`/api/v1/clients/${clientId}/contracts`, { method: 'POST', body }),
+    listContracts: (clientId: string) => data<Contract[]>(`/api/v1/clients/${clientId}/contracts`),
     updateContract: (id: string, body: Record<string, unknown>) =>
       data<Contract>(`/api/v1/contracts/${id}`, { method: 'PATCH', body }),
     setContractStatus: (id: string, status: Contract['status']) =>
@@ -31,8 +32,14 @@ export function useCrm() {
     removeContract: (id: string) => request(`/api/v1/contracts/${id}`, { method: 'DELETE' }),
     generateInvoice: (id: string, dueInDays = 30) =>
       data(`/api/v1/contracts/${id}/invoice`, { method: 'POST', body: { dueInDays } }),
+    expiringContracts: (withinDays = 30) =>
+      data<Contract[]>('/api/v1/contracts/expiring', { query: { withinDays } }),
+    sweepExpiredContracts: () =>
+      data<{ updated: number }>('/api/v1/contracts/sweep-expired', { method: 'POST' }),
     addDocument: (clientId: string, body: Record<string, unknown>) =>
       data<ClientDocument>(`/api/v1/clients/${clientId}/documents`, { method: 'POST', body }),
+    listDocuments: (clientId: string) =>
+      data<ClientDocument[]>(`/api/v1/clients/${clientId}/documents`),
     removeDocument: (id: string) => request(`/api/v1/documents/${id}`, { method: 'DELETE' }),
     activity: (clientId: string) =>
       data<Array<Record<string, unknown>>>(`/api/v1/clients/${clientId}/activity`),

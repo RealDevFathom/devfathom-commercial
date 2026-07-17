@@ -123,15 +123,18 @@ function isPast(index: number) {
 </script>
 
 <template>
-  <section class="mx-auto max-w-2xl animate-fade-in space-y-6">
-    <div>
+  <section class="core-route mx-auto max-w-3xl animate-fade-in space-y-6">
+    <div class="import-hero">
       <NuxtLink
         to="/projects"
         class="mb-4 inline-flex items-center gap-1.5 text-sm text-text-muted transition-colors hover:text-foreground"
       >
         <ArrowLeft :size="16" /> Back to Projects
       </NuxtLink>
-      <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">
+      <p class="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">
+        Delivery / Migration
+      </p>
+      <h1 class="font-display text-4xl font-semibold tracking-[-0.04em] text-foreground">
         Import from Trello
       </h1>
       <p class="mt-1.5 text-[15px] text-text-muted">
@@ -350,6 +353,16 @@ function isPast(index: number) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.import-hero {
+  border: 1px solid var(--border-default);
+  border-radius: 28px;
+  padding: clamp(22px, 4vw, 34px);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-xs);
+}
+</style>
 
 <style scoped>
 .studio-input {

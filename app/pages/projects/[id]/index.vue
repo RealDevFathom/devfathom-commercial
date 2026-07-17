@@ -15,10 +15,13 @@ import {
   Pencil,
   Plus,
   Trash2,
+  UserMinus,
+  UserPlus,
   Users,
 } from 'lucide-vue-next';
 import type { NoteSummary } from '~/types/collaboration';
 import type { Milestone, Project, ProjectFile, TimeRollup } from '~/types/delivery';
+import type { TeamMember } from '~/types/firm';
 
 type ProjectTab = 'overview' | 'board' | 'team' | 'milestones' | 'notes' | 'files';
 
@@ -27,6 +30,7 @@ const router = useRouter();
 const projectId = computed(() => String(route.params.id));
 const delivery = useDelivery();
 const notesApi = useNotes();
+const firm = useFirm();
 const project = ref<Project | null>(null);
 const milestones = ref<Milestone[]>([]);
 const files = ref<ProjectFile[]>([]);
@@ -40,10 +44,19 @@ const deleting = ref(false);
 const panel = ref<'board' | 'milestone' | 'file' | null>(null);
 const activeTab = ref<ProjectTab>('overview');
 const saving = ref(false);
+const creatingNote = ref(false);
 const actionError = ref('');
+const teamOpen = ref(false);
+const team = ref<TeamMember[]>([]);
+const memberDraft = ref('');
 const boardForm = reactive({ name: '', description: '', template: 'kanban' });
 const milestoneForm = reactive({ name: '', description: '', dueDate: '' });
 const fileForm = reactive({ name: '', url: '', type: '', size: '' });
+useHead(() => ({
+  title: project.value
+    ? `${project.value.name} · Projects · DevFathom Hub`
+    : 'Project · DevFathom Hub',
+}));
 
 async function load() {
   loading.value = true;
@@ -61,9 +74,8 @@ async function load() {
     files.value = fileList;
     notes.value = noteList;
     rollup.value = time;
-    useHead({ title: `${record.name} · Projects · DevFathom Hub` });
   } catch (caught: any) {
-    error.value = caught?.data?.detail || 'This project could not be loaded.';
+    error.value = caught?.data?.detail || caught?.message || 'This project could not be loaded.';
   } finally {
     loading.value = false;
   }
@@ -148,6 +160,85 @@ async function createFile() {
   }
 }
 
+async function openTeamManager() {
+  teamOpen.value = true;
+  if (!team.value.length) {
+    try {
+      team.value = await firm.team();
+    } catch (caught: any) {
+      actionError.value = caught?.data?.detail || 'The team directory could not be loaded.';
+    }
+  }
+}
+
+async function addMember() {
+  if (!memberDraft.value) return;
+  await runProjectAction(() =>
+    delivery.addProjectMember(projectId.value, memberDraft.value, 'MEMBER')
+  );
+  memberDraft.value = '';
+  teamOpen.value = false;
+}
+
+async function setMemberRole(userId: string, role: 'LEAD' | 'MEMBER') {
+  await runProjectAction(() => delivery.setProjectMemberRole(projectId.value, userId, role));
+}
+
+function onMemberRoleChange(userId: string, event: Event) {
+  void setMemberRole(userId, (event.target as HTMLSelectElement).value as 'LEAD' | 'MEMBER');
+}
+
+async function removeMember(userId: string, name: string) {
+  if (!confirm(`Remove ${name} from this project?`)) return;
+  await runProjectAction(() => delivery.removeProjectMember(projectId.value, userId));
+}
+
+async function removeBoard(id: string, name: string) {
+  if (!confirm(`Delete the “${name}” board and its tasks?`)) return;
+  await runProjectAction(() => delivery.removeBoard(id));
+}
+
+async function removeMilestone(id: string, name: string) {
+  if (!confirm(`Delete the “${name}” milestone?`)) return;
+  await runProjectAction(() => delivery.removeMilestone(id));
+}
+
+async function removeFile(id: string, name: string) {
+  if (!confirm(`Remove “${name}” from this project?`)) return;
+  await runProjectAction(() => delivery.removeFile(id));
+}
+
+async function createProjectNote() {
+  creatingNote.value = true;
+  actionError.value = '';
+  try {
+    const created = await notesApi.create({
+      title: `${project.value?.name || 'Project'} note`,
+      contentJson: { type: 'doc', content: [] },
+      visibility: 'PRIVATE',
+      projectId: projectId.value,
+    });
+    await router.push(`/notes/${created.id}`);
+  } catch (caught: any) {
+    actionError.value = caught?.data?.detail || 'The project note could not be created.';
+  } finally {
+    creatingNote.value = false;
+  }
+}
+
+async function runProjectAction(action: () => Promise<unknown>) {
+  saving.value = true;
+  actionError.value = '';
+  try {
+    await action();
+    await load();
+  } catch (caught: any) {
+    actionError.value = caught?.data?.detail || 'The project change could not be saved.';
+  } finally {
+    saving.value = false;
+  }
+}
+
 const formatDate = (value?: string | null) =>
   value
     ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(
@@ -215,10 +306,14 @@ const statusRail = computed(
       CANCELLED: 'bg-red-500',
     })[project.value?.status || 'ACTIVE']
 );
+const teamCandidates = computed(() => {
+  const current = new Set(project.value?.members.map((member) => member.user.id) || []);
+  return team.value.filter((member) => !current.has(member.id));
+});
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-6">
+  <section class="core-route animate-fade-in space-y-6">
     <DeliveryFieldState
       v-if="loading || error"
       :loading="loading"
@@ -232,13 +327,15 @@ const statusRail = computed(
         class="inline-flex items-center gap-1.5 rounded text-sm text-text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         ><ArrowLeft :size="16" /> Back to Projects</NuxtLink
       >
-      <article class="relative overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+      <article class="route-hero relative overflow-hidden border border-border-subtle bg-card">
         <span class="absolute inset-y-0 left-0 w-1" :class="statusRail" aria-hidden="true" />
         <div class="px-5 pl-6">
           <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-3">
-                <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">
+                <h1
+                  class="font-display text-[clamp(2.2rem,4vw,3.4rem)] font-semibold leading-none tracking-[-0.055em] text-foreground"
+                >
                   {{ project.name }}
                 </h1>
                 <span
@@ -337,10 +434,7 @@ const statusRail = computed(
       </p>
 
       <div class="overflow-x-auto">
-        <nav
-          class="inline-flex h-8 w-fit items-center justify-center rounded-lg bg-muted p-[3px] text-text-muted"
-          aria-label="Project sections"
-        >
+        <nav class="studio-tabs" aria-label="Project sections">
           <button
             v-for="tab in [
               'overview',
@@ -351,8 +445,8 @@ const statusRail = computed(
               'files',
             ] as ProjectTab[]"
             :key="tab"
-            class="relative inline-flex h-[calc(100%-1px)] items-center justify-center whitespace-nowrap rounded-md border border-transparent px-1.5 py-0.5 text-sm font-medium capitalize text-foreground/60 transition-all hover:text-foreground"
-            :class="activeTab === tab ? 'bg-background text-foreground shadow-sm' : ''"
+            class="capitalize"
+            :class="{ active: activeTab === tab }"
             @click="activeTab = tab"
           >
             {{ tab }}
@@ -361,7 +455,7 @@ const statusRail = computed(
       </div>
 
       <div v-if="activeTab === 'overview'" class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <article class="studio-card space-y-5 lg:col-span-2">
+        <article class="studio-section-card route-card space-y-5 lg:col-span-2">
           <h2>Overview</h2>
           <p v-if="project.description" class="text-sm leading-relaxed text-text-muted">
             {{ project.description }}
@@ -403,7 +497,7 @@ const statusRail = computed(
           </div>
         </article>
         <div class="space-y-5">
-          <article class="studio-card space-y-3">
+          <article class="studio-section-card route-card space-y-3">
             <div class="flex items-center justify-between">
               <h2>Team</h2>
               <span class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-text-muted">{{
@@ -463,28 +557,41 @@ const statusRail = computed(
           </button>
         </div>
         <div v-if="project.boards?.length" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <NuxtLink
-            v-for="board in project.boards"
-            :key="board.id"
-            :to="`/projects/${project.id}/board/${board.id}`"
-            class="board-preview group"
-            ><div class="flex items-start justify-between">
-              <div>
+          <article v-for="board in project.boards" :key="board.id" class="board-preview group">
+            <div class="flex items-start justify-between gap-3">
+              <NuxtLink :to="`/projects/${project.id}/board/${board.id}`" class="min-w-0 flex-1">
                 <h3>{{ board.name }}</h3>
                 <p>
                   {{ board.columns.length }} columns ·
                   {{ board.columns.reduce((sum, column) => sum + (column._count?.tasks || 0), 0) }}
                   tasks
                 </p>
+              </NuxtLink>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  class="route-icon-button danger"
+                  :aria-label="`Delete ${board.name}`"
+                  @click="removeBoard(board.id, board.name)"
+                >
+                  <Trash2 :size="14" />
+                </button>
+                <NuxtLink
+                  :to="`/projects/${project.id}/board/${board.id}`"
+                  class="route-icon-button"
+                  :aria-label="`Open ${board.name}`"
+                >
+                  <ArrowRight :size="16" />
+                </NuxtLink>
               </div>
-              <ArrowRight :size="16" class="text-text-faint group-hover:text-primary" />
             </div>
             <div class="mini-board">
               <span v-for="column in board.columns.slice(0, 4)" :key="column.id"
                 ><b>{{ column.name }}</b
                 ><i v-for="task in Math.min(column._count?.tasks || 0, 3)" :key="task"
-              /></span></div
-          ></NuxtLink>
+              /></span>
+            </div>
+          </article>
         </div>
         <DeliveryFieldState
           v-else
@@ -494,12 +601,15 @@ const statusRail = computed(
         />
       </section>
 
-      <section v-else-if="activeTab === 'team'" class="studio-card">
+      <section v-else-if="activeTab === 'team'" class="studio-section-card route-card">
         <div class="mb-5 flex items-center justify-between">
           <div>
             <h2>Project Team</h2>
             <p class="section-copy">People assigned to this project.</p>
           </div>
+          <button class="studio-primary-button" @click="openTeamManager">
+            <UserPlus :size="15" /> Add Member
+          </button>
         </div>
         <div class="divide-y divide-border-subtle">
           <div
@@ -517,15 +627,29 @@ const statusRail = computed(
                 member.user.title || 'Team member'
               }}</small>
             </div>
-            <span
-              class="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-text-muted"
-              >{{ member.role === 'LEAD' ? 'Lead' : 'Member' }}</span
+            <select
+              :value="member.role"
+              class="route-compact-select"
+              :aria-label="`Role for ${member.user.name}`"
+              @change="onMemberRoleChange(member.user.id, $event)"
             >
+              <option value="MEMBER">Member</option>
+              <option value="LEAD">Lead</option>
+            </select>
+            <button
+              type="button"
+              class="route-icon-button danger"
+              :aria-label="`Remove ${member.user.name}`"
+              @click="removeMember(member.user.id, member.user.name)"
+            >
+              <UserMinus :size="15" />
+            </button>
           </div>
         </div>
+        <DeliveryFieldState v-if="!project.members.length" empty="No project members yet." />
       </section>
 
-      <section v-else-if="activeTab === 'milestones'" class="studio-card">
+      <section v-else-if="activeTab === 'milestones'" class="studio-section-card route-card">
         <div class="mb-5 flex items-center justify-between">
           <div>
             <h2>Milestones</h2>
@@ -536,32 +660,42 @@ const statusRail = computed(
           </button>
         </div>
         <div class="divide-y divide-border-subtle">
-          <button
-            v-for="item in milestones"
-            :key="item.id"
-            class="milestone-row"
-            @click="toggleMilestone(item)"
-          >
-            <span class="milestone-check" :class="{ done: item.completedAt }"
-              ><CheckCircle2 :size="17" /></span
-            ><span class="min-w-0 flex-1"
-              ><b>{{ item.name }}</b
-              ><small>{{ item.description || 'No description' }}</small></span
-            ><time>{{ formatDate(item.dueDate) }}</time>
-          </button>
+          <div v-for="item in milestones" :key="item.id" class="milestone-row">
+            <button
+              type="button"
+              class="milestone-main"
+              :aria-label="item.completedAt ? `Reopen ${item.name}` : `Complete ${item.name}`"
+              @click="toggleMilestone(item)"
+            >
+              <span class="milestone-check" :class="{ done: item.completedAt }"
+                ><CheckCircle2 :size="17" /></span
+              ><span class="min-w-0 flex-1"
+                ><b>{{ item.name }}</b
+                ><small>{{ item.description || 'No description' }}</small></span
+              ><time>{{ formatDate(item.dueDate) }}</time>
+            </button>
+            <button
+              type="button"
+              class="route-icon-button danger"
+              :aria-label="`Delete ${item.name}`"
+              @click="removeMilestone(item.id, item.name)"
+            >
+              <Trash2 :size="14" />
+            </button>
+          </div>
         </div>
         <DeliveryFieldState v-if="!milestones.length" empty="No milestones yet." />
       </section>
 
-      <section v-else-if="activeTab === 'notes'" class="studio-card">
+      <section v-else-if="activeTab === 'notes'" class="studio-section-card route-card">
         <div class="mb-5 flex items-center justify-between">
           <div>
             <h2>Notes</h2>
             <p class="section-copy">Project decisions, briefs, and working documents.</p>
           </div>
-          <NuxtLink to="/notes" class="studio-outline-button"
-            ><Plus :size="15" /> New Note</NuxtLink
-          >
+          <button class="studio-primary-button" :disabled="creatingNote" @click="createProjectNote">
+            <Plus :size="15" /> {{ creatingNote ? 'Creating…' : 'New Note' }}
+          </button>
         </div>
         <div class="grid gap-3 sm:grid-cols-2">
           <NuxtLink v-for="note in notes" :key="note.id" :to="`/notes/${note.id}`" class="note-card"
@@ -574,7 +708,7 @@ const statusRail = computed(
         <DeliveryFieldState v-if="!notes.length" empty="No project notes yet." />
       </section>
 
-      <section v-else class="studio-card">
+      <section v-else class="studio-section-card route-card">
         <div class="mb-5 flex items-center justify-between">
           <div>
             <h2>Files</h2>
@@ -585,18 +719,34 @@ const statusRail = computed(
           </button>
         </div>
         <div class="divide-y divide-border-subtle">
-          <a
-            v-for="item in files"
-            :key="item.id"
-            :href="item.url"
-            target="_blank"
-            rel="noreferrer"
-            class="file-row"
-            ><FileText :size="18" /><span
+          <div v-for="item in files" :key="item.id" class="file-row">
+            <FileText :size="18" /><a
+              :href="item.url"
+              target="_blank"
+              rel="noreferrer"
+              class="min-w-0"
               ><b>{{ item.name }}</b
-              ><small>{{ item.type || 'File' }} · {{ formatDate(item.createdAt) }}</small></span
-            ><ExternalLink :size="15"
-          /></a>
+              ><small>{{ item.type || 'File' }} · {{ formatDate(item.createdAt) }}</small></a
+            >
+            <div class="flex items-center gap-1">
+              <a
+                :href="item.url"
+                target="_blank"
+                rel="noreferrer"
+                class="route-icon-button"
+                :aria-label="`Open ${item.name}`"
+                ><ExternalLink :size="15"
+              /></a>
+              <button
+                type="button"
+                class="route-icon-button danger"
+                :aria-label="`Remove ${item.name}`"
+                @click="removeFile(item.id, item.name)"
+              >
+                <Trash2 :size="14" />
+              </button>
+            </div>
+          </div>
         </div>
         <DeliveryFieldState v-if="!files.length" empty="No files uploaded yet." />
       </section>
@@ -644,11 +794,90 @@ const statusRail = computed(
           ><button class="studio-primary-button" :disabled="saving">Upload File</button>
         </form>
       </DeliveryFieldDialog>
+      <DeliveryFieldDialog
+        :open="teamOpen"
+        title="Add project member"
+        description="Choose a teammate. You can promote them to lead after adding."
+        @close="teamOpen = false"
+      >
+        <form class="stack-form" @submit.prevent="addMember">
+          <label
+            >Team member<select v-model="memberDraft" required>
+              <option value="" disabled>Select a teammate</option>
+              <option v-for="member in teamCandidates" :key="member.id" :value="member.id">
+                {{ member.name }} · {{ member.title || member.department }}
+              </option>
+            </select></label
+          >
+          <p v-if="!teamCandidates.length" class="section-copy">
+            Everyone in the team directory is already assigned.
+          </p>
+          <button class="studio-primary-button" :disabled="saving || !memberDraft">
+            <UserPlus :size="15" /> Add Member
+          </button>
+        </form>
+      </DeliveryFieldDialog>
     </template>
   </section>
 </template>
 
 <style scoped>
+.core-route {
+  --route-accent: var(--accent-brand);
+}
+.route-hero {
+  border-radius: 28px;
+  padding: 24px 0;
+  box-shadow: var(--shadow-xs);
+}
+.route-card {
+  padding: 24px;
+}
+.route-card h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.route-card small {
+  color: var(--text-muted);
+}
+.route-card > div.grid > div b {
+  display: block;
+  margin-top: 3px;
+  font-size: 13px;
+}
+.route-icon-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  color: var(--text-muted);
+  background: var(--surface-card);
+  cursor: pointer;
+  transition: 160ms ease;
+}
+.route-icon-button:hover {
+  border-color: var(--border-strong);
+  color: var(--foreground);
+  background: var(--surface-sunken);
+}
+.route-icon-button.danger:hover {
+  border-color: color-mix(in srgb, #ef4444 35%, var(--border-subtle));
+  color: #ef4444;
+  background: color-mix(in srgb, #ef4444 8%, var(--surface-card));
+}
+.route-compact-select {
+  min-height: 34px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 0 28px 0 10px;
+  color: var(--foreground);
+  background: var(--surface-card);
+  font-size: 11px;
+  font-weight: 600;
+}
 .detail-header {
   display: flex;
   align-items: flex-start;
@@ -714,25 +943,6 @@ const statusRail = computed(
   color: var(--foreground);
   background: var(--surface-card);
   box-shadow: var(--shadow-xs);
-}
-.studio-card {
-  border-radius: 12px;
-  padding: 16px;
-  background: var(--surface-card);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
-}
-.studio-card h2 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 650;
-}
-.studio-card small {
-  color: var(--text-muted);
-}
-.studio-card > div.grid > div b {
-  display: block;
-  margin-top: 3px;
-  font-size: 13px;
 }
 .stat-tile {
   display: flex;
@@ -835,9 +1045,20 @@ const statusRail = computed(
   width: 100%;
   align-items: center;
   gap: 12px;
-  border: 0;
   padding: 13px 2px;
   color: var(--foreground);
+  background: transparent;
+  text-align: left;
+}
+.milestone-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  color: inherit;
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -926,6 +1147,12 @@ const statusRail = computed(
   font-size: 12px;
 }
 @media (max-width: 700px) {
+  .route-hero {
+    border-radius: 22px;
+  }
+  .route-card {
+    padding: 18px;
+  }
   .detail-header {
     flex-wrap: wrap;
   }

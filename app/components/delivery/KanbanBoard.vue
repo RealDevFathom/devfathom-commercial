@@ -3,6 +3,8 @@ import {
   Calendar,
   Check,
   CheckSquare,
+  ChevronLeft,
+  ChevronRight,
   GripVertical,
   ListChecks,
   MessageSquare,
@@ -10,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings2,
   Tag,
   Trash2,
   UserPlus,
@@ -44,6 +47,11 @@ const filterLabel = ref('ALL');
 const selectionMode = ref(false);
 const selected = ref<Set<string>>(new Set());
 const bulkBusy = ref(false);
+const bulkTarget = ref('');
+const labelsOpen = ref(false);
+const editingLabelId = ref<string | null>(null);
+const labelForm = reactive({ name: '', color: '#ff684f' });
+const wipDraft = reactive<Record<string, string>>({});
 
 watch(
   () => props.initialTaskId,
@@ -194,15 +202,64 @@ async function saveOwners(columnId: string) {
   ownerPickerColumnId.value = null;
   emit('refresh');
 }
+async function saveWip(columnId: string) {
+  const value = wipDraft[columnId];
+  await delivery.updateColumn(columnId, {
+    wipLimit: value === '' || value == null ? null : Number(value),
+  });
+  emit('refresh');
+}
+async function moveColumn(index: number, offset: number) {
+  const target = index + offset;
+  if (target < 0 || target >= props.board.columns.length) return;
+  const ids = props.board.columns.map((column) => column.id);
+  [ids[index], ids[target]] = [ids[target]!, ids[index]!];
+  await delivery.reorderColumns(props.board.id, ids);
+  emit('refresh');
+}
 async function deleteSelected() {
   bulkBusy.value = true;
   try {
-    await Promise.all([...selected.value].map((id) => delivery.removeTask(id)));
+    await delivery.bulkDeleteTasks([...selected.value]);
     exitSelection();
     emit('refresh');
   } finally {
     bulkBusy.value = false;
   }
+}
+async function moveSelected() {
+  if (!bulkTarget.value) return;
+  bulkBusy.value = true;
+  try {
+    await delivery.bulkMoveTasks([...selected.value], bulkTarget.value);
+    bulkTarget.value = '';
+    exitSelection();
+    emit('refresh');
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+function startLabelEdit(label?: Board['labels'][number]) {
+  editingLabelId.value = label?.id || null;
+  Object.assign(labelForm, { name: label?.name || '', color: label?.color || '#ff684f' });
+}
+async function saveLabel() {
+  if (!labelForm.name.trim()) return;
+  if (editingLabelId.value) {
+    await delivery.updateLabel(editingLabelId.value, {
+      name: labelForm.name.trim(),
+      color: labelForm.color,
+    });
+  } else {
+    await delivery.createLabel(props.board.id, labelForm.name.trim(), labelForm.color);
+  }
+  startLabelEdit();
+  emit('refresh');
+}
+async function removeLabel(id: string) {
+  await delivery.removeLabel(id);
+  if (editingLabelId.value === id) startLabelEdit();
+  emit('refresh');
 }
 function dueLabel(value: string) {
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(
@@ -288,14 +345,50 @@ const priorityClass: Record<string, string> = {
       >
         <ListChecks :size="14" />{{ selectionMode ? 'Done' : 'Select' }}
       </button>
+      <button
+        class="select-button label-button"
+        :class="{ active: labelsOpen }"
+        @click="labelsOpen = !labelsOpen"
+      >
+        <Settings2 :size="14" /> Labels
+      </button>
       <button class="refresh" aria-label="Refresh board" @click="emit('refresh')">
         <RefreshCw :size="14" />
       </button>
     </div>
 
+    <section v-if="labelsOpen" class="label-manager">
+      <header>
+        <div>
+          <strong>Board labels</strong>
+          <small>Reusable signals available to every task on this board.</small>
+        </div>
+        <button aria-label="Close label manager" @click="labelsOpen = false">
+          <X :size="15" />
+        </button>
+      </header>
+      <div class="label-manager-grid">
+        <button
+          v-for="label in board.labels"
+          :key="label.id"
+          class="label-row"
+          @click="startLabelEdit(label)"
+        >
+          <i :style="{ background: label.color }" />
+          <span>{{ label.name }}</span>
+          <Trash2 :size="13" @click.stop="removeLabel(label.id)" />
+        </button>
+        <form class="label-form" @submit.prevent="saveLabel">
+          <input v-model="labelForm.color" type="color" aria-label="Label color" />
+          <input v-model="labelForm.name" placeholder="Label name" required />
+          <button>{{ editingLabelId ? 'Save' : 'Add label' }}</button>
+        </form>
+      </div>
+    </section>
+
     <section class="kanban" aria-label="Kanban board">
       <article
-        v-for="column in filteredColumns"
+        v-for="(column, columnIndex) in filteredColumns"
         :key="column.id"
         class="column"
         @dragover.prevent
@@ -326,6 +419,18 @@ const priorityClass: Record<string, string> = {
                 Delete {{ column.tasks.length ? `${column.tasks.length} tasks` : '' }}</button
               ><button @click="deletingColumnId = null">No</button></template
             ><template v-else
+              ><button
+                title="Move column left"
+                :disabled="columnIndex === 0"
+                @click="moveColumn(columnIndex, -1)"
+              >
+                <ChevronLeft :size="14" /></button
+              ><button
+                title="Move column right"
+                :disabled="columnIndex === filteredColumns.length - 1"
+                @click="moveColumn(columnIndex, 1)"
+              >
+                <ChevronRight :size="14" /></button
               ><button title="Delete column" @click="deletingColumnId = column.id">
                 <Trash2 :size="14" /></button
               ><button title="Add task" @click="newTaskColumn = column.id">
@@ -345,6 +450,15 @@ const priorityClass: Record<string, string> = {
           ><button class="owner-add" @click="openOwners(column)">
             <UserPlus :size="13" />{{ column.defaultAssignees.length ? 'Owners' : 'Set owners' }}
           </button>
+          <label class="wip-control"
+            >WIP<input
+              v-model="wipDraft[column.id]"
+              type="number"
+              min="1"
+              :placeholder="column.wipLimit ? String(column.wipLimit) : '∞'"
+              :aria-label="`WIP limit for ${column.name}`"
+              @change="saveWip(column.id)"
+          /></label>
         </div>
         <div v-if="ownerPickerColumnId === column.id" class="owner-picker">
           <button
@@ -461,11 +575,15 @@ const priorityClass: Record<string, string> = {
     </section>
 
     <div v-if="selected.size" class="bulk-bar">
-      <b>{{ selected.size }} selected</b><span /><button
-        class="danger"
-        :disabled="bulkBusy"
-        @click="deleteSelected"
-      >
+      <b>{{ selected.size }} selected</b><span />
+      <select v-model="bulkTarget" aria-label="Move selected tasks to column">
+        <option value="">Move to…</option>
+        <option v-for="column in board.columns" :key="column.id" :value="column.id">
+          {{ column.name }}
+        </option>
+      </select>
+      <button :disabled="bulkBusy || !bulkTarget" @click="moveSelected">Move</button>
+      <button class="danger" :disabled="bulkBusy" @click="deleteSelected">
         <Trash2 :size="14" />{{ bulkBusy ? 'Deleting…' : 'Delete' }}</button
       ><button aria-label="Clear selection" @click="exitSelection"><X :size="15" /></button>
     </div>
@@ -525,6 +643,87 @@ const priorityClass: Record<string, string> = {
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
+.label-button {
+  margin-left: 0;
+}
+.label-manager {
+  margin-bottom: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  padding: 14px;
+  background: var(--surface-card);
+  box-shadow: var(--shadow-xs);
+}
+.label-manager > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.label-manager strong,
+.label-manager small {
+  display: block;
+}
+.label-manager strong {
+  font-size: 13px;
+}
+.label-manager small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.label-manager > header > button {
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+}
+.label-manager-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.label-row,
+.label-form {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 0 9px;
+  color: var(--foreground);
+  background: var(--surface-sunken);
+  font-size: 11px;
+}
+.label-row i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.label-row svg {
+  color: var(--text-muted);
+}
+.label-form input[type='color'] {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+.label-form input:not([type='color']) {
+  width: 130px;
+  border: 0;
+  color: var(--foreground);
+  background: transparent;
+  outline: 0;
+}
+.label-form button {
+  border: 0;
+  color: white;
+  background: var(--primary);
+  font-size: 10px;
+}
 .refresh {
   width: 32px;
   justify-content: center;
@@ -546,7 +745,11 @@ const priorityClass: Record<string, string> = {
   max-height: calc(100vh - 260px);
   flex: 0 0 288px;
   flex-direction: column;
-  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  padding: 10px;
+  background: var(--surface-card);
+  box-shadow: var(--shadow-xs);
 }
 .column-header {
   display: flex;
@@ -619,6 +822,10 @@ const priorityClass: Record<string, string> = {
   color: var(--foreground);
   background: var(--surface-sunken);
 }
+.column-actions button:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
 .column-actions .delete-confirm {
   color: white;
   background: #ef4444;
@@ -651,6 +858,27 @@ const priorityClass: Record<string, string> = {
   background: transparent;
   font-size: 9px;
   cursor: pointer;
+}
+.wip-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.wip-control input {
+  width: 34px;
+  height: 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  color: var(--foreground);
+  background: var(--surface-sunken);
+  font-size: 9px;
+  text-align: center;
+  outline: 0;
 }
 .owner-picker {
   margin: 0 8px 8px;
@@ -912,6 +1140,15 @@ const priorityClass: Record<string, string> = {
   background: transparent;
   font-size: 11px;
   font-weight: 600;
+}
+.bulk-bar select {
+  min-height: 28px;
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  padding: 0 8px;
+  color: var(--foreground);
+  background: var(--surface-sunken);
+  font-size: 11px;
 }
 .bulk-bar .danger:hover {
   color: #ef4444;

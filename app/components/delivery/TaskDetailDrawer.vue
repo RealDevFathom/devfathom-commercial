@@ -16,10 +16,15 @@ const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
 const comment = ref('');
+const replyToId = ref<string | null>(null);
+const editingCommentId = ref<string | null>(null);
+const commentDraft = ref('');
 const checklistName = ref('');
 const itemText = reactive<Record<string, string>>({});
 const attachment = reactive({ name: '', url: '' });
 const time = reactive({ hours: '', description: '', date: new Date().toISOString().slice(0, 10) });
+const editingTimeId = ref<string | null>(null);
+const timeEdit = reactive({ hours: '', description: '', date: '' });
 const form = reactive({
   title: '',
   description: '',
@@ -86,23 +91,46 @@ async function change(action: () => Promise<unknown>) {
   }
 }
 async function saveTask() {
-  await change(() =>
-    delivery.updateTask(String(props.taskId), {
+  const taskId = String(props.taskId);
+  const currentLabels = new Set(task.value?.labels.map((entry) => entry.label.id) || []);
+  const selectedLabels = new Set(form.labelIds);
+  await change(async () => {
+    await delivery.updateTask(taskId, {
       title: form.title,
       description: form.description || null,
       priority: form.priority,
       dueDate: form.dueDate ? new Date(`${form.dueDate}T12:00:00Z`).toISOString() : null,
       columnId: form.columnId,
-      assigneeIds: form.assigneeIds,
-      labelIds: form.labelIds,
-    })
-  );
+    });
+    await delivery.setTaskAssignees(taskId, form.assigneeIds);
+    await Promise.all([
+      ...[...selectedLabels]
+        .filter((id) => !currentLabels.has(id))
+        .map((id) => delivery.addTaskLabel(taskId, id)),
+      ...[...currentLabels]
+        .filter((id) => !selectedLabels.has(id))
+        .map((id) => delivery.removeTaskLabel(taskId, id)),
+    ]);
+  });
 }
 async function addComment() {
   if (!comment.value.trim()) return;
   const value = comment.value;
   comment.value = '';
-  await change(() => delivery.addComment(String(props.taskId), value));
+  const parentId = replyToId.value || undefined;
+  replyToId.value = null;
+  await change(() => delivery.addComment(String(props.taskId), value, parentId));
+}
+function startCommentEdit(id: string, content: string) {
+  editingCommentId.value = id;
+  commentDraft.value = content;
+}
+async function saveComment(id: string) {
+  if (!commentDraft.value.trim()) return;
+  const value = commentDraft.value.trim();
+  editingCommentId.value = null;
+  commentDraft.value = '';
+  await change(() => delivery.updateComment(id, value));
 }
 async function addChecklist() {
   if (!checklistName.value.trim()) return;
@@ -115,6 +143,14 @@ async function addItem(id: string) {
   const value = itemText[id];
   itemText[id] = '';
   await change(() => delivery.createChecklistItem(id, value));
+}
+function renameChecklist(id: string, event: Event) {
+  const value = (event.target as HTMLInputElement).value.trim();
+  if (value) void change(() => delivery.updateChecklist(id, value));
+}
+function renameChecklistItem(id: string, event: Event) {
+  const text = (event.target as HTMLInputElement).value.trim();
+  if (text) void change(() => delivery.updateChecklistItem(id, { text }));
 }
 async function addAttachment() {
   if (!attachment.name || !attachment.url) return;
@@ -143,6 +179,37 @@ async function addTime() {
   Object.assign(time, { hours: '', description: '', date: new Date().toISOString().slice(0, 10) });
   await change(() => delivery.addTime(body));
 }
+function startTimeEdit(entry: TimeEntry) {
+  editingTimeId.value = entry.id;
+  Object.assign(timeEdit, {
+    hours: String(entry.hours),
+    description: entry.description || '',
+    date: entry.date.slice(0, 10),
+  });
+}
+async function saveTime(id: string) {
+  await change(() =>
+    delivery.updateTime(id, {
+      hours: Number(timeEdit.hours),
+      description: timeEdit.description || null,
+      date: new Date(`${timeEdit.date}T12:00:00Z`).toISOString(),
+    })
+  );
+  editingTimeId.value = null;
+}
+async function removeTask() {
+  if (!task.value || !confirm(`Delete “${task.value.title}”?`)) return;
+  saving.value = true;
+  try {
+    await delivery.removeTask(task.value.id);
+    emit('changed');
+    emit('close');
+  } catch (caught: any) {
+    error.value = caught?.data?.detail || 'The task could not be deleted.';
+  } finally {
+    saving.value = false;
+  }
+}
 function toggleId(list: string[], id: string) {
   const i = list.indexOf(id);
   i >= 0 ? list.splice(i, 1) : list.push(id);
@@ -160,10 +227,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
       <aside class="task-drawer" role="dialog" aria-modal="true" aria-label="Task detail">
         <header>
           <div>
-            <p>Task field note</p>
+            <p>Delivery / Task</p>
             <h2>{{ task?.title || 'Task detail' }}</h2>
           </div>
-          <button aria-label="Close task" @click="emit('close')"><X :size="18" /></button>
+          <div class="drawer-actions">
+            <button v-if="task" class="drawer-delete" aria-label="Delete task" @click="removeTask">
+              <Trash2 :size="16" />
+            </button>
+            <button aria-label="Close task" @click="emit('close')"><X :size="18" /></button>
+          </div>
         </header>
         <DeliveryFieldState
           v-if="loading || error"
@@ -223,14 +295,41 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
               <article v-for="entry in task.comments" :key="entry.id">
                 <span>{{ entry.user?.name.slice(0, 1) }}</span>
                 <div>
-                  <strong>{{ entry.user?.name }}</strong>
-                  <p>{{ entry.content }}</p>
+                  <div class="comment-head">
+                    <strong>{{ entry.user?.name }}</strong>
+                    <span>
+                      <button @click="replyToId = entry.id">Reply</button>
+                      <button @click="startCommentEdit(entry.id, entry.content)">Edit</button>
+                      <button @click="change(() => delivery.removeComment(entry.id))">
+                        Delete
+                      </button>
+                    </span>
+                  </div>
+                  <form
+                    v-if="editingCommentId === entry.id"
+                    class="inline-form"
+                    @submit.prevent="saveComment(entry.id)"
+                  >
+                    <input v-model="commentDraft" autofocus />
+                    <button>Save</button>
+                  </form>
+                  <p v-else>{{ entry.content }}</p>
                   <small>{{ new Date(entry.createdAt).toLocaleString() }}</small>
+                  <div v-for="reply in entry.replies" :key="reply.id" class="comment-reply">
+                    <strong>{{ reply.user?.name }}</strong>
+                    <span>{{ reply.content }}</span>
+                  </div>
                 </div>
               </article>
             </div>
             <form class="inline-form" @submit.prevent="addComment">
-              <input v-model="comment" placeholder="Add a field note" /><button>Add note</button>
+              <input
+                v-model="comment"
+                :placeholder="replyToId ? 'Write a reply…' : 'Add a field note'"
+              /><button>{{ replyToId ? 'Reply' : 'Add note' }}</button>
+              <button v-if="replyToId" type="button" class="cancel" @click="replyToId = null">
+                Cancel
+              </button>
             </form>
           </section>
 
@@ -238,7 +337,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <h3><Check :size="15" />Checklists</h3>
             <article v-for="list in task.checklists" :key="list.id" class="checklist">
               <header>
-                <strong>{{ list.name }}</strong
+                <input
+                  :value="list.name"
+                  class="checklist-name"
+                  aria-label="Checklist name"
+                  @change="renameChecklist(list.id, $event)"
+                />
                 ><button
                   aria-label="Delete checklist"
                   @click="change(() => delivery.removeChecklist(list.id))"
@@ -254,8 +358,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                     change(() =>
                       delivery.updateChecklistItem(item.id, { completed: !item.completed })
                     )
-                  " /><span>{{ item.text }}</span
-                ><button
+                  " /><input
+                  :value="item.text"
+                  class="checklist-item-text"
+                  aria-label="Checklist item"
+                  @change="renameChecklistItem(item.id, $event)" /><button
                   aria-label="Delete item"
                   @click.prevent="change(() => delivery.removeChecklistItem(item.id))"
                 >
@@ -333,9 +440,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
           <section>
             <h3><Clock3 :size="15" />Time ledger</h3>
             <div class="time-row" v-for="entry in timeEntries" :key="entry.id">
-              <span>{{ entry.description || 'Task work' }}</span
-              ><b>{{ entry.hours }}h</b
-              ><small>{{ new Date(entry.date).toLocaleDateString() }}</small>
+              <template v-if="editingTimeId === entry.id">
+                <input v-model="timeEdit.hours" type="number" min=".01" step=".25" />
+                <input v-model="timeEdit.date" type="date" />
+                <input v-model="timeEdit.description" placeholder="Work note" />
+                <button @click="saveTime(entry.id)">Save</button>
+              </template>
+              <template v-else>
+                <span>{{ entry.description || 'Task work' }}</span
+                ><b>{{ entry.hours }}h</b
+                ><small>{{ new Date(entry.date).toLocaleDateString() }}</small>
+                <span class="time-actions">
+                  <button @click="startTimeEdit(entry)">Edit</button>
+                  <button @click="change(() => delivery.removeTime(entry.id))">Delete</button>
+                </span>
+              </template>
             </div>
             <form class="three-form" @submit.prevent="addTime">
               <input
@@ -361,7 +480,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
   position: fixed;
   inset: 0;
   z-index: 75;
-  background: rgba(24, 31, 25, 0.45);
+  background: rgb(17 17 16 / 28%);
   backdrop-filter: blur(2px);
 }
 .task-drawer {
@@ -369,8 +488,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
   inset: 0 0 0 auto;
   width: min(680px, 100%);
   overflow: auto;
-  background: var(--paper);
-  border-left: 1px solid var(--border);
+  background: var(--surface-card);
+  border-left: 1px solid var(--border-default);
   box-shadow: -24px 0 70px rgba(24, 31, 25, 0.2);
 }
 .task-drawer > header {
@@ -381,12 +500,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
   justify-content: space-between;
   align-items: center;
   padding: 21px 24px;
-  background: var(--forest-950);
-  color: #f7f1e5;
+  border-bottom: 1px solid var(--border-default);
+  color: var(--foreground);
+  background: var(--surface-card);
 }
 .task-drawer > header p {
   margin: 0 0 4px;
-  color: #dba189;
+  color: var(--primary);
   font:
     9px 'IBM Plex Mono',
     monospace;
@@ -394,23 +514,36 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 }
 .task-drawer > header h2 {
   margin: 0;
-  font-size: 28px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
 }
 .task-drawer > header button {
   display: grid;
   place-items: center;
   width: 34px;
   height: 34px;
-  color: white;
+  color: var(--text-muted);
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+}
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-drawer > header .drawer-delete:hover {
+  border-color: rgb(239 68 68 / 35%);
+  color: #ef4444;
+  background: rgb(239 68 68 / 8%);
 }
 .drawer-body {
   padding: 22px;
 }
 .drawer-body > section {
   padding: 19px 0;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
 }
 .drawer-body > section:first-child {
   padding-top: 0;
@@ -421,9 +554,8 @@ h3 {
   align-items: center;
   gap: 7px;
   margin: 0 0 13px;
-  font:
-    600 20px 'Newsreader',
-    serif;
+  font-size: 16px;
+  font-weight: 650;
 }
 .task-form,
 .task-form label {
@@ -445,9 +577,10 @@ h3 {
 .three-form input {
   width: 100%;
   padding: 9px;
-  color: var(--text);
-  background: var(--linen);
-  border: 1px solid var(--border);
+  color: var(--foreground);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
 }
 .form-grid {
   display: grid;
@@ -460,10 +593,11 @@ fieldset {
   gap: 6px;
   margin: 6px 0 0;
   padding: 11px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
 }
 legend {
-  color: var(--muted);
+  color: var(--text-muted);
   font:
     9px 'IBM Plex Mono',
     monospace;
@@ -474,15 +608,16 @@ fieldset button {
   align-items: center;
   gap: 5px;
   padding: 6px 8px;
-  color: var(--muted);
-  background: var(--paper);
-  border: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: 9px;
   font-size: 9px;
 }
 fieldset button.chosen {
   color: white;
-  background: var(--forest-800);
-  border-color: var(--forest-800);
+  background: var(--primary);
+  border-color: var(--primary);
 }
 fieldset i {
   width: 8px;
@@ -497,7 +632,7 @@ fieldset i {
   grid-template-columns: 30px 1fr;
   gap: 9px;
   padding: 11px 0;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
 }
 .comments article > span {
   display: grid;
@@ -505,11 +640,42 @@ fieldset i {
   width: 27px;
   height: 27px;
   color: white;
-  background: var(--forest-800);
+  background: var(--foreground);
   border-radius: 50%;
   font-size: 8px;
 }
 .comments strong {
+  font-size: 10px;
+}
+.comment-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.comment-head > span {
+  display: flex;
+  gap: 4px;
+}
+.comment-head button,
+.time-actions button {
+  border: 0;
+  padding: 2px 4px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 8px;
+}
+.comment-head button:hover,
+.time-actions button:hover {
+  color: var(--primary);
+}
+.comment-reply {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  border-left: 2px solid var(--border-default);
+  padding-left: 8px;
+  color: var(--text-muted);
   font-size: 10px;
 }
 .comments p {
@@ -519,7 +685,7 @@ fieldset i {
 }
 .comments small,
 .time-row small {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 9px;
 }
 .inline-form {
@@ -536,26 +702,46 @@ fieldset i {
   gap: 4px;
   padding: 8px 10px;
   color: white;
-  background: var(--forest-800);
+  background: var(--primary);
   border: 0;
   font-size: 9px;
   white-space: nowrap;
 }
+.inline-form .cancel {
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+}
 .checklist {
   margin-bottom: 10px;
   padding: 11px;
-  background: var(--linen);
-  border: 1px solid var(--border);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
 }
 .checklist header {
   display: flex;
   justify-content: space-between;
 }
+.checklist-name,
+.checklist-item-text {
+  width: 100%;
+  border: 0;
+  color: var(--foreground);
+  background: transparent;
+  outline: 0;
+}
+.checklist-name {
+  font-size: 11px;
+  font-weight: 650;
+}
+.checklist-item-text {
+  font-size: 11px;
+}
 .checklist header button,
 .checklist label button,
 .file-row button,
 .dependency button {
-  color: var(--muted);
+  color: var(--text-muted);
   background: transparent;
   border: 0;
 }
@@ -565,7 +751,7 @@ fieldset i {
   gap: 7px;
   align-items: center;
   padding: 7px 0;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
   font-size: 11px;
 }
 .file-row,
@@ -574,7 +760,7 @@ fieldset i {
   grid-template-columns: 20px 1fr auto;
   gap: 7px;
   padding: 10px 2px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
   font-size: 11px;
 }
 .two-form,
@@ -586,19 +772,41 @@ fieldset i {
 }
 .dependency {
   grid-template-columns: 1fr auto;
-  color: var(--clay-600);
+  color: #b54734;
 }
 .subtasks {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 10px;
 }
 .time-row {
   display: grid;
-  grid-template-columns: 1fr auto 90px;
+  grid-template-columns: 1fr auto 90px auto;
   gap: 8px;
   padding: 9px 2px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
   font-size: 11px;
+}
+.time-row > input {
+  min-width: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 6px;
+  color: var(--foreground);
+  background: var(--surface-sunken);
+  font-size: 10px;
+}
+.time-row > button {
+  border: 0;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: white;
+  background: var(--primary);
+  font-size: 9px;
+}
+.time-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
 }
 .three-form {
   grid-template-columns: 90px 130px 1fr auto;
@@ -609,7 +817,8 @@ fieldset i {
   }
   .form-grid,
   .two-form,
-  .three-form {
+  .three-form,
+  .time-row {
     grid-template-columns: 1fr;
   }
   .inline-form {
