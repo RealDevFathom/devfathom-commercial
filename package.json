@@ -15,6 +15,7 @@
     "api:install": "python3 -m venv .venv && .venv/bin/python -m pip install -r backend/requirements.txt",
     "api:test": ".venv/bin/python -m pytest backend/tests",
     "api:docs": ".venv/bin/python -m uvicorn backend.app.main:app --port 8000",
+    "perf:smoke": "bun scripts/performance/perf-smoke.ts",
     "test": "bun test tests && bun run api:test",
     "verify": "bun run format:check && bun run lint && bun run test && bun run build"
   },
