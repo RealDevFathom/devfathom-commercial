@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +12,11 @@ class Settings(BaseSettings):
     environment: str = "development"
     vercel_env: str | None = None
     database_url: str = ""
+    database_pool_mode: Literal["bounded", "null"] = "bounded"
+    database_pool_size: int = Field(default=5, ge=1, le=50)
+    database_pool_max_overflow: int = Field(default=5, ge=0, le=50)
+    database_pool_recycle_seconds: int = Field(default=1800, ge=30, le=86400)
+    database_pool_pre_ping: bool = True
     auth_secret: str = Field(default="dev-only-change-me", min_length=16)
     access_token_minutes: int = 60 * 24 * 7
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
