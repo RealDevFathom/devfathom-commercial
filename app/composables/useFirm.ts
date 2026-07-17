@@ -1,3 +1,4 @@
+import { ref } from 'vue';
 import type {
   ApiTokenRecord,
   AuditLog,
@@ -16,13 +17,76 @@ import type {
   Transaction,
   Webhook,
 } from '~/types/firm';
+
+interface FirmActionOptions<T> {
+  error?: string;
+  success?: string | ((result: T) => string);
+}
+
+export function firmErrorMessage(caught: unknown, fallback: string) {
+  const candidate = caught as {
+    data?: { detail?: unknown };
+    message?: string;
+    statusMessage?: string;
+  };
+  const detail = candidate?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((entry) => {
+        if (typeof entry === 'string') return entry;
+        if (entry && typeof entry === 'object' && 'msg' in entry) return String(entry.msg);
+        return '';
+      })
+      .filter(Boolean);
+    if (messages.length) return messages.join(' ');
+  }
+  if (candidate?.statusMessage?.trim()) return candidate.statusMessage;
+  if (candidate?.message?.trim()) return candidate.message;
+  return fallback;
+}
+
+export function useFirmAction() {
+  const pending = ref('');
+  const error = ref('');
+  const success = ref('');
+
+  function clear() {
+    error.value = '';
+    success.value = '';
+  }
+
+  async function run<T>(
+    busyLabel: string,
+    task: () => Promise<T>,
+    options: FirmActionOptions<T> = {}
+  ): Promise<T | undefined> {
+    if (pending.value) return undefined;
+    pending.value = busyLabel;
+    clear();
+    try {
+      const result = await task();
+      success.value =
+        typeof options.success === 'function' ? options.success(result) : options.success || '';
+      return result;
+    } catch (caught) {
+      error.value = firmErrorMessage(caught, options.error || 'The change could not be saved.');
+      return undefined;
+    } finally {
+      pending.value = '';
+    }
+  }
+
+  return { clear, error, pending, run, success };
+}
+
 export function useFirm() {
   const { request } = useApi();
   const data = async <T>(path: string, options: Parameters<typeof request<T>>[1] = {}) =>
     (await request<DataResponse<T>>(path, options)).data;
   return {
     summary: () => request<{ byCurrency: CurrencySummary[] }>('/api/finance/summary'),
-    transactions: () => data<Transaction[]>('/api/finance/transactions'),
+    transactions: () => data<Transaction[]>('/api/finance/transactions', { query: { limit: 100 } }),
     createTransaction: (body: Record<string, unknown>) =>
       data<Transaction>('/api/finance/transactions', { method: 'POST', body }),
     updateTransaction: (id: string, body: Record<string, unknown>) =>
@@ -36,10 +100,12 @@ export function useFirm() {
       request(`/api/finance/recurring-expenses/${id}`, { method: 'DELETE' }),
     postDueRecurringExpenses: () =>
       request<{ posted: number }>('/api/finance/recurring-expenses/post-due', { method: 'POST' }),
-    invoices: () => data<Invoice[]>('/api/finance/invoices'),
+    invoices: () => data<Invoice[]>('/api/finance/invoices', { query: { limit: 1000 } }),
     invoice: (id: string) => data<Invoice>(`/api/finance/invoices/${id}`),
     createInvoice: (body: Record<string, unknown>) =>
       data<Invoice>('/api/finance/invoices', { method: 'POST', body }),
+    updateInvoice: (id: string, body: Record<string, unknown>) =>
+      data<Invoice>(`/api/finance/invoices/${id}`, { method: 'PATCH', body }),
     updateInvoiceStatus: (id: string, status: string) =>
       data<Invoice>(`/api/finance/invoices/${id}/status`, { method: 'PATCH', body: { status } }),
     addPayment: (id: string, body: Record<string, unknown>) =>
@@ -48,6 +114,8 @@ export function useFirm() {
         { method: 'POST', body }
       ),
     removePayment: (id: string) => request(`/api/finance/payments/${id}`, { method: 'DELETE' }),
+    markOverdueInvoices: () =>
+      request<{ count: number }>('/api/finance/invoices/mark-overdue', { method: 'POST' }),
     team: () => data<TeamMember[]>('/api/team'),
     teamStats: () => data<TeamStatsOverview>('/api/team/stats/overview'),
     member: (id: string) => data<TeamMember>(`/api/team/${id}`),

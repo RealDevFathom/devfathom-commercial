@@ -15,6 +15,13 @@ useHead({ title: 'Reviews · DevFathom Hub' });
 
 const api = useFirm();
 const { user } = useAuth();
+const {
+  pending: actionPending,
+  error: actionError,
+  success: actionSuccess,
+  clear: clearAction,
+  run: runAction,
+} = useFirmAction();
 const manager = computed(() => ['ADMIN', 'HR'].includes(user.value?.role || ''));
 const tab = ref<'cycles' | 'mine'>('cycles');
 const reviews = ref<Review[]>([]);
@@ -23,15 +30,14 @@ const team = ref<TeamMember[]>([]);
 const loading = ref(true);
 const error = ref('');
 const cycleOpen = ref(false);
-const assignOpen = ref(false);
 const reviewOpen = ref<Review | null>(null);
 const selectedCycleId = ref<string | null>(null);
 const cycle = reactive({ name: '', start_date: '', end_date: '' });
 const assignment = reactive({ cycleId: '', subject_id: '', reviewer_id: '' });
 const reviewDraft = reactive({ rating: 3, strengths: '', improvements: '', comments: '' });
 
-async function load() {
-  loading.value = true;
+async function load(showSpinner = true) {
+  if (showSpinner) loading.value = true;
   error.value = '';
   try {
     reviews.value = await api.reviews();
@@ -48,26 +54,85 @@ async function load() {
 await load();
 
 async function createCycle() {
-  await api.createCycle({
-    ...cycle,
-    start_date: new Date(cycle.start_date).toISOString(),
-    end_date: new Date(cycle.end_date).toISOString(),
-  });
+  if (!manager.value) return;
+  const result = await runAction(
+    'Creating review cycle…',
+    async () => {
+      const created = await api.createCycle({
+        ...cycle,
+        start_date: new Date(cycle.start_date).toISOString(),
+        end_date: new Date(cycle.end_date).toISOString(),
+      });
+      await load(false);
+      return created;
+    },
+    { success: 'Review cycle created.', error: 'The review cycle could not be created.' }
+  );
+  if (!result) return;
   cycleOpen.value = false;
-  await load();
+  Object.assign(cycle, { name: '', start_date: '', end_date: '' });
 }
 
 async function submitReview() {
   if (!reviewOpen.value) return;
-  await api.submitReview(reviewOpen.value.id, { ...reviewDraft });
+  const result = await runAction(
+    'Submitting review…',
+    async () => {
+      const submitted = await api.submitReview(reviewOpen.value!.id, { ...reviewDraft });
+      await load(false);
+      return submitted;
+    },
+    { success: 'Review submitted.', error: 'The review could not be submitted.' }
+  );
+  if (!result) return;
   reviewOpen.value = null;
-  await load();
+  Object.assign(reviewDraft, { rating: 3, strengths: '', improvements: '', comments: '' });
 }
 
 async function assignReview() {
-  await api.assignReview(assignment.cycleId, assignment.subject_id, assignment.reviewer_id);
-  assignOpen.value = false;
-  await load();
+  if (!manager.value) return;
+  const result = await runAction(
+    'Assigning reviewer…',
+    async () => {
+      const assigned = await api.assignReview(
+        assignment.cycleId,
+        assignment.subject_id,
+        assignment.reviewer_id
+      );
+      await load(false);
+      return assigned;
+    },
+    { success: 'Reviewer assigned.', error: 'The reviewer could not be assigned.' }
+  );
+  if (!result) return;
+  Object.assign(assignment, { cycleId: assignment.cycleId, subject_id: '', reviewer_id: '' });
+}
+
+async function changeCycle(item: ReviewCycle) {
+  if (!manager.value) return;
+  const action = item.status === 'OPEN' ? 'close' : 'reopen';
+  await runAction(
+    action === 'close' ? 'Closing review cycle…' : 'Reopening review cycle…',
+    async () => {
+      const updated = await api.changeCycle(item.id, action);
+      await load(false);
+      return updated;
+    },
+    {
+      success: action === 'close' ? 'Review cycle closed.' : 'Review cycle reopened.',
+      error: `The review cycle could not be ${action === 'close' ? 'closed' : 'reopened'}.`,
+    }
+  );
+}
+
+function openReview(review: Review) {
+  Object.assign(reviewDraft, {
+    rating: review.rating || 3,
+    strengths: review.strengths || '',
+    improvements: review.improvements || '',
+    comments: review.comments || '',
+  });
+  reviewOpen.value = review;
 }
 
 const date = (value: string) =>
@@ -137,6 +202,14 @@ const initials = (name: string) =>
       </button>
     </nav>
 
+    <FirmActionFeedback
+      :busy="Boolean(actionPending)"
+      :busy-label="actionPending"
+      :error="actionError"
+      :success="actionSuccess"
+      @dismiss="clearAction"
+    />
+
     <DeliveryFieldState
       v-if="loading || error"
       :loading="loading"
@@ -155,7 +228,11 @@ const initials = (name: string) =>
                 : 'No review cycles yet.'
             }}
           </p>
-          <button class="studio-primary-button" @click="cycleOpen = true">
+          <button
+            class="studio-primary-button"
+            :disabled="Boolean(actionPending)"
+            @click="cycleOpen = true"
+          >
             <Plus :size="16" /> New cycle
           </button>
         </div>
@@ -191,9 +268,8 @@ const initials = (name: string) =>
               <div class="flex flex-wrap gap-2">
                 <button
                   class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-secondary hover:text-foreground"
-                  @click="
-                    api.changeCycle(item.id, item.status === 'OPEN' ? 'close' : 'reopen').then(load)
-                  "
+                  :disabled="Boolean(actionPending)"
+                  @click="changeCycle(item)"
                 >
                   <Lock v-if="item.status === 'OPEN'" :size="14" />
                   <Unlock v-else :size="14" />
@@ -250,7 +326,10 @@ const initials = (name: string) =>
                 </option>
               </select></label
             >
-            <button class="studio-primary-button"><Plus :size="15" /> Assign</button>
+            <button class="studio-primary-button" :disabled="Boolean(actionPending)">
+              <Plus :size="15" />
+              {{ actionPending === 'Assigning reviewer…' ? 'Assigning…' : 'Assign' }}
+            </button>
           </div>
         </form>
         <section class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
@@ -330,7 +409,11 @@ const initials = (name: string) =>
                   />
                 </span>
               </div>
-              <button class="studio-primary-button" @click="reviewOpen = review">
+              <button
+                class="studio-primary-button"
+                :disabled="Boolean(actionPending)"
+                @click="openReview(review)"
+              >
                 Fill review
               </button>
             </article>
@@ -430,47 +513,41 @@ const initials = (name: string) =>
       </div>
     </template>
 
-    <DeliveryFieldDialog :open="cycleOpen" title="New review cycle" @close="cycleOpen = false">
+    <DeliveryFieldDialog
+      :open="cycleOpen"
+      title="New review cycle"
+      @close="!actionPending && (cycleOpen = false)"
+    >
       <form class="studio-form-grid" @submit.prevent="createCycle">
+        <FirmActionFeedback
+          :busy="actionPending === 'Creating review cycle…'"
+          :busy-label="actionPending"
+          :error="actionError"
+          @dismiss="clearAction"
+        />
         <label>Name<input v-model="cycle.name" required /></label>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label>Starts<input v-model="cycle.start_date" type="date" required /></label>
           <label>Ends<input v-model="cycle.end_date" type="date" required /></label>
         </div>
-        <button class="studio-primary-button">Create cycle</button>
-      </form>
-    </DeliveryFieldDialog>
-
-    <DeliveryFieldDialog :open="assignOpen" title="Assign review" @close="assignOpen = false">
-      <form class="studio-form-grid" @submit.prevent="assignReview">
-        <label>
-          Subject
-          <select v-model="assignment.subject_id" required>
-            <option value="">Choose member</option>
-            <option v-for="member in team" :key="member.id" :value="member.id">
-              {{ member.name }}
-            </option>
-          </select>
-        </label>
-        <label>
-          Reviewer
-          <select v-model="assignment.reviewer_id" required>
-            <option value="">Choose reviewer</option>
-            <option v-for="member in team" :key="member.id" :value="member.id">
-              {{ member.name }}
-            </option>
-          </select>
-        </label>
-        <button class="studio-primary-button">Assign review</button>
+        <button class="studio-primary-button" :disabled="Boolean(actionPending)">
+          {{ actionPending === 'Creating review cycle…' ? 'Creating…' : 'Create cycle' }}
+        </button>
       </form>
     </DeliveryFieldDialog>
 
     <DeliveryFieldDialog
       :open="!!reviewOpen"
       :title="`Review ${reviewOpen?.subjectName || ''}`"
-      @close="reviewOpen = null"
+      @close="!actionPending && (reviewOpen = null)"
     >
       <form class="studio-form-grid" @submit.prevent="submitReview">
+        <FirmActionFeedback
+          :busy="actionPending === 'Submitting review…'"
+          :busy-label="actionPending"
+          :error="actionError"
+          @dismiss="clearAction"
+        />
         <label>
           Rating
           <select v-model.number="reviewDraft.rating">
@@ -480,7 +557,9 @@ const initials = (name: string) =>
         <label>Strengths<textarea v-model="reviewDraft.strengths" rows="4" /></label>
         <label>Areas to improve<textarea v-model="reviewDraft.improvements" rows="4" /></label>
         <label>Comments<textarea v-model="reviewDraft.comments" rows="4" /></label>
-        <button class="studio-primary-button">Submit review</button>
+        <button class="studio-primary-button" :disabled="Boolean(actionPending)">
+          {{ actionPending === 'Submitting review…' ? 'Submitting…' : 'Submit review' }}
+        </button>
       </form>
     </DeliveryFieldDialog>
   </section>

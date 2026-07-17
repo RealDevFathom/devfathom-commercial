@@ -18,14 +18,28 @@ import {
   WalletCards,
 } from 'lucide-vue-next';
 import type { Component } from 'vue';
-import type { CurrencySummary, Invoice, RecurringExpense, Transaction } from '~/types/firm';
+import type {
+  CurrencySummary,
+  Invoice,
+  InvoiceItem,
+  RecurringExpense,
+  Transaction,
+} from '~/types/firm';
 
 type FinanceTab = 'transactions' | 'invoices' | 'pnl' | 'recurring';
 useHead({ title: 'Finance · DevFathom Hub' });
 const api = useFirm();
 const crm = useCrm();
 const { user } = useAuth();
-const admin = computed(() => user.value?.role === 'ADMIN');
+const allowed = computed(() => user.value?.role === 'ADMIN');
+const admin = allowed;
+const {
+  pending: actionPending,
+  error: actionError,
+  success: actionSuccess,
+  clear: clearAction,
+  run: runAction,
+} = useFirmAction();
 const categoryLabels: Record<string, string> = {
   SALARIES: 'Salaries',
   SUBSCRIPTIONS: 'Subscriptions',
@@ -46,23 +60,20 @@ const invoices = ref<Invoice[]>([]);
 const transactions = ref<Transaction[]>([]);
 const recurring = ref<RecurringExpense[]>([]);
 const clients = ref<{ id: string; name: string }[]>([]);
-const loading = ref(true);
+const loading = ref(allowed.value);
 const error = ref('');
 const form = ref<'invoice' | 'transaction' | 'payment' | null>(null);
 const selectedInvoice = ref<Invoice | null>(null);
 const recurringOpen = ref(false);
-const postResult = ref('');
 const editingTransactionId = ref<string | null>(null);
-const updatingTransaction = ref(false);
+const editingInvoiceId = ref<string | null>(null);
 const invoiceDraft = reactive({
   client_id: '',
   currency: 'USD',
   due_date: '',
   tax: 0,
   notes: '',
-  description: '',
-  quantity: 1,
-  rate: 0,
+  items: [{ description: '', quantity: 1, rate: 0 }] as InvoiceItem[],
 });
 const txDraft = reactive({
   type: 'EXPENSE',
@@ -89,8 +100,12 @@ const recurringDraft = reactive({
   next_due_date: '',
 });
 
-async function load() {
-  loading.value = true;
+async function load(showSpinner = true) {
+  if (!allowed.value) {
+    loading.value = false;
+    return;
+  }
+  if (showSpinner) loading.value = true;
   error.value = '';
   try {
     const [s, i, t, c, r] = await Promise.all([
@@ -105,6 +120,12 @@ async function load() {
     transactions.value = t;
     clients.value = c;
     recurring.value = r;
+    if (
+      s.byCurrency.length &&
+      !s.byCurrency.some((group) => group.currency === pnlCurrency.value)
+    ) {
+      pnlCurrency.value = s.byCurrency[0]!.currency;
+    }
   } catch (caught: any) {
     error.value = caught?.data?.detail || 'The finance workspace is unavailable.';
   } finally {
@@ -184,6 +205,12 @@ const averageMargin = computed(() => {
   const income = Number(selectedSummary.value?.yearly_income || 0);
   return income ? (Number(selectedSummary.value?.yearly_profit || 0) / income) * 100 : 0;
 });
+const invoiceDraftTotal = computed(() =>
+  invoiceDraft.items.reduce(
+    (total, item) => total + Number(item.quantity || 0) * Number(item.rate || 0),
+    0
+  )
+);
 
 function exportTransactions() {
   const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
@@ -241,29 +268,104 @@ const summaryCards = computed<
   },
 ]);
 
-async function createInvoice() {
-  await api.createInvoice({
-    ...invoiceDraft,
-    due_date: new Date(invoiceDraft.due_date).toISOString(),
-    items: [
-      {
-        description: invoiceDraft.description,
-        quantity: invoiceDraft.quantity,
-        rate: invoiceDraft.rate,
-      },
-    ],
+function resetInvoiceDraft() {
+  Object.assign(invoiceDraft, {
+    client_id: '',
+    currency: invoiceDraft.currency,
+    due_date: '',
+    tax: 0,
+    notes: '',
+    items: [{ description: '', quantity: 1, rate: 0 }],
   });
+  editingInvoiceId.value = null;
+}
+
+function openNewInvoice() {
+  resetInvoiceDraft();
+  form.value = 'invoice';
+}
+
+function editInvoice(invoice: Invoice) {
+  editingInvoiceId.value = invoice.id;
+  Object.assign(invoiceDraft, {
+    client_id: invoice.clientId,
+    currency: invoice.currency,
+    due_date: new Date(invoice.dueDate).toISOString().slice(0, 10),
+    tax: Number(invoice.tax),
+    notes: invoice.notes || '',
+    items: invoice.items.map((item) => ({
+      description: item.description,
+      quantity: Number(item.quantity),
+      rate: Number(item.rate),
+    })),
+  });
+  form.value = 'invoice';
+}
+
+function closeInvoiceForm() {
+  if (actionPending.value) return;
   form.value = null;
-  await load();
+  resetInvoiceDraft();
+}
+
+async function saveInvoice() {
+  const editingId = editingInvoiceId.value;
+  const result = await runAction(
+    editingId ? 'Saving invoice…' : 'Creating invoice…',
+    async () => {
+      const mutableFields = {
+        due_date: new Date(invoiceDraft.due_date).toISOString(),
+        tax: invoiceDraft.tax,
+        notes: invoiceDraft.notes || null,
+        items: invoiceDraft.items.map((item) => ({
+          description: item.description.trim(),
+          quantity: Number(item.quantity),
+          rate: Number(item.rate),
+        })),
+      };
+      const saved = editingId
+        ? await api.updateInvoice(editingId, mutableFields)
+        : await api.createInvoice({
+            ...mutableFields,
+            client_id: invoiceDraft.client_id,
+            currency: invoiceDraft.currency,
+          });
+      await load(false);
+      return saved;
+    },
+    {
+      success: editingId ? 'Invoice updated.' : 'Invoice draft created.',
+      error: editingId ? 'The invoice could not be updated.' : 'The invoice could not be created.',
+    }
+  );
+  if (!result) return;
+  form.value = null;
+  resetInvoiceDraft();
 }
 async function createTransaction() {
-  await api.createTransaction({
-    ...txDraft,
-    date: new Date(txDraft.date).toISOString(),
-    category: txDraft.category || null,
-  });
+  const result = await runAction(
+    'Adding transaction…',
+    async () => {
+      const created = await api.createTransaction({
+        ...txDraft,
+        date: new Date(txDraft.date).toISOString(),
+        category: txDraft.category || null,
+      });
+      await load(false);
+      return created;
+    },
+    { success: 'Transaction added.', error: 'The transaction could not be added.' }
+  );
+  if (!result) return;
   form.value = null;
-  await load();
+  Object.assign(txDraft, {
+    type: 'EXPENSE',
+    amount: 0,
+    currency: txDraft.currency,
+    category: '',
+    description: '',
+    date: '',
+  });
 }
 function editTransaction(entry: Transaction) {
   editingTransactionId.value = entry.id;
@@ -274,56 +376,172 @@ function editTransaction(entry: Transaction) {
 }
 async function updateTransaction(entry: Transaction) {
   if (!txEditDraft.description.trim() || !txEditDraft.amount || !txEditDraft.date) return;
-  updatingTransaction.value = true;
-  try {
-    await api.updateTransaction(entry.id, {
-      description: txEditDraft.description.trim(),
-      amount: Number(txEditDraft.amount),
-      date: new Date(txEditDraft.date).toISOString(),
-      category: entry.type === 'EXPENSE' ? txEditDraft.category || null : null,
-    });
-    editingTransactionId.value = null;
-    await load();
-  } finally {
-    updatingTransaction.value = false;
-  }
+  const result = await runAction(
+    'Saving transaction…',
+    async () => {
+      const updated = await api.updateTransaction(entry.id, {
+        description: txEditDraft.description.trim(),
+        amount: Number(txEditDraft.amount),
+        date: new Date(txEditDraft.date).toISOString(),
+        category: entry.type === 'EXPENSE' ? txEditDraft.category || null : null,
+      });
+      await load(false);
+      return updated;
+    },
+    { success: 'Transaction updated.', error: 'The transaction could not be updated.' }
+  );
+  if (result) editingTransactionId.value = null;
 }
 async function addPayment() {
   if (!selectedInvoice.value) return;
-  await api.addPayment(selectedInvoice.value.id, payment);
+  const result = await runAction(
+    'Recording payment…',
+    async () => {
+      const recorded = await api.addPayment(selectedInvoice.value!.id, { ...payment });
+      await load(false);
+      return recorded;
+    },
+    { success: 'Payment recorded.', error: 'The payment could not be recorded.' }
+  );
+  if (!result) return;
   form.value = null;
-  await load();
+  selectedInvoice.value = null;
+  Object.assign(payment, { amount: 0, method: '', note: '' });
+}
+async function openPayments(invoice: Invoice) {
+  const result = await runAction('Loading invoice…', () => api.invoice(invoice.id), {
+    error: 'The invoice details could not be loaded.',
+  });
+  if (!result) return;
+  selectedInvoice.value = result;
+  payment.amount = result.balance;
+  form.value = 'payment';
+}
+
+async function removeInvoicePayment(id: string) {
+  if (!selectedInvoice.value || !confirm('Delete this payment?')) return;
+  const invoiceId = selectedInvoice.value.id;
+  const result = await runAction(
+    'Deleting payment…',
+    async () => {
+      const removed = await api.removePayment(id);
+      const refreshed = await api.invoice(invoiceId);
+      selectedInvoice.value = refreshed;
+      payment.amount = refreshed.balance;
+      await load(false);
+      return removed;
+    },
+    { success: 'Payment deleted.', error: 'The payment could not be deleted.' }
+  );
+  if (!result) return;
+}
+
+async function markOverdue() {
+  await runAction(
+    'Checking overdue invoices…',
+    async () => {
+      const result = await api.markOverdueInvoices();
+      await load(false);
+      return result;
+    },
+    {
+      success: (result) =>
+        result.count
+          ? `Marked ${result.count} invoice${result.count === 1 ? '' : 's'} overdue.`
+          : 'No invoices are newly overdue.',
+      error: 'Overdue invoices could not be checked.',
+    }
+  );
 }
 async function removeTx(id: string) {
   if (confirm('Delete this transaction?')) {
-    await api.removeTransaction(id);
-    await load();
+    await runAction(
+      'Deleting transaction…',
+      async () => {
+        const removed = await api.removeTransaction(id);
+        await load(false);
+        return removed;
+      },
+      { success: 'Transaction deleted.', error: 'The transaction could not be deleted.' }
+    );
   }
 }
 async function setStatus(invoice: Invoice, value: string) {
-  await api.updateInvoiceStatus(invoice.id, value);
-  await load();
+  await runAction(
+    'Updating invoice status…',
+    async () => {
+      const updated = await api.updateInvoiceStatus(invoice.id, value);
+      await load(false);
+      return updated;
+    },
+    {
+      success: `Invoice marked ${value.toLowerCase()}.`,
+      error: 'The invoice status could not be updated.',
+    }
+  );
 }
 async function createRecurring() {
-  await api.createRecurringExpense({
-    ...recurringDraft,
-    next_due_date: new Date(recurringDraft.next_due_date).toISOString(),
-    vendor_name: recurringDraft.vendor_name || null,
-  });
+  const result = await runAction(
+    'Adding recurring expense…',
+    async () => {
+      const created = await api.createRecurringExpense({
+        ...recurringDraft,
+        next_due_date: new Date(recurringDraft.next_due_date).toISOString(),
+        vendor_name: recurringDraft.vendor_name || null,
+      });
+      await load(false);
+      return created;
+    },
+    { success: 'Recurring expense added.', error: 'The recurring expense could not be added.' }
+  );
+  if (!result) return;
   recurringOpen.value = false;
-  await load();
+  Object.assign(recurringDraft, {
+    name: '',
+    vendor_name: '',
+    amount: 0,
+    currency: recurringDraft.currency,
+    category: 'SUBSCRIPTIONS',
+    interval: 'monthly',
+    next_due_date: '',
+  });
 }
 async function removeRecurring(id: string) {
   if (!confirm('Remove this recurring expense?')) return;
-  await api.removeRecurringExpense(id);
-  await load();
+  await runAction(
+    'Removing recurring expense…',
+    async () => {
+      const removed = await api.removeRecurringExpense(id);
+      await load(false);
+      return removed;
+    },
+    { success: 'Recurring expense removed.', error: 'The recurring expense could not be removed.' }
+  );
 }
 async function postDue() {
-  const result = await api.postDueRecurringExpenses();
-  postResult.value = result.posted
-    ? `Posted ${result.posted} transaction${result.posted === 1 ? '' : 's'} from due cycles.`
-    : 'Nothing due — all subscriptions are up to date.';
-  await load();
+  await runAction(
+    'Posting due cycles…',
+    async () => {
+      const result = await api.postDueRecurringExpenses();
+      await load(false);
+      return result;
+    },
+    {
+      success: (result) =>
+        result.posted
+          ? `Posted ${result.posted} transaction${result.posted === 1 ? '' : 's'} from due cycles.`
+          : 'Nothing is due. Recurring expenses are up to date.',
+      error: 'Due recurring expenses could not be posted.',
+    }
+  );
+}
+
+function addInvoiceItem() {
+  invoiceDraft.items.push({ description: '', quantity: 1, rate: 0 });
+}
+
+function removeInvoiceItem(index: number) {
+  if (invoiceDraft.items.length > 1) invoiceDraft.items.splice(index, 1);
 }
 </script>
 
@@ -336,8 +554,18 @@ async function postDue() {
       </p>
     </div>
 
+    <FirmActionFeedback
+      v-if="allowed"
+      :busy="Boolean(actionPending)"
+      :busy-label="actionPending"
+      :error="actionError"
+      :success="actionSuccess"
+      @dismiss="clearAction"
+    />
+
+    <DeliveryFieldState v-if="!allowed" error="Finance is available to administrators only." />
     <DeliveryFieldState
-      v-if="loading || error"
+      v-else-if="loading || error"
       :loading="loading"
       :error="error"
       action="Try again"
@@ -421,7 +649,12 @@ async function postDue() {
             >
               <Download :size="15" /> Export CSV
             </button>
-            <button v-if="admin" class="studio-primary-button" @click="form = 'transaction'">
+            <button
+              v-if="admin"
+              class="studio-primary-button"
+              :disabled="Boolean(actionPending)"
+              @click="form = 'transaction'"
+            >
               <Plus :size="16" /> Add Transaction
             </button>
           </div>
@@ -477,7 +710,9 @@ async function postDue() {
               @click="form = null"
             >
               Cancel</button
-            ><button class="studio-primary-button">Add Transaction</button>
+            ><button class="studio-primary-button" :disabled="Boolean(actionPending)">
+              Add Transaction
+            </button>
           </div>
         </form>
         <div class="overflow-hidden rounded-xl bg-card py-4 text-sm ring-1 ring-foreground/10">
@@ -532,13 +767,13 @@ async function postDue() {
                   <button
                     class="rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
                     :disabled="
-                      updatingTransaction ||
+                      Boolean(actionPending) ||
                       !txEditDraft.description.trim() ||
                       !txEditDraft.amount ||
                       !txEditDraft.date
                     "
                   >
-                    {{ updatingTransaction ? 'Saving…' : 'Save' }}
+                    {{ actionPending === 'Saving transaction…' ? 'Saving…' : 'Save' }}
                   </button>
                 </div>
               </form>
@@ -580,6 +815,7 @@ async function postDue() {
                   v-if="admin"
                   class="flex size-7 shrink-0 items-center justify-center rounded-md text-text-muted/0 transition-all group-hover:text-text-muted hover:!bg-secondary hover:!text-foreground"
                   aria-label="Edit transaction"
+                  :disabled="Boolean(actionPending)"
                   @click="editTransaction(entry)"
                 >
                   <Pencil :size="14" />
@@ -588,6 +824,7 @@ async function postDue() {
                   v-if="admin"
                   class="flex size-7 shrink-0 items-center justify-center rounded-md text-text-muted/0 transition-all group-hover:text-text-muted hover:!bg-red-500/10 hover:!text-red-500"
                   aria-label="Delete transaction"
+                  :disabled="Boolean(actionPending)"
                   @click="removeTx(entry.id)"
                 >
                   <Trash2 :size="14" />
@@ -603,30 +840,51 @@ async function postDue() {
       </section>
 
       <section v-else-if="tab === 'invoices'" class="space-y-4">
-        <header class="flex items-center justify-between">
+        <header class="flex flex-wrap items-center justify-between gap-3">
           <p class="text-sm text-text-muted">{{ invoices.length }} invoices</p>
-          <button v-if="admin" class="studio-primary-button" @click="form = 'invoice'">
-            <FilePlus2 :size="16" /> New Invoice
-          </button>
+          <div v-if="admin" class="flex items-center gap-2">
+            <button
+              class="studio-outline-button"
+              :disabled="Boolean(actionPending)"
+              title="Flag sent invoices that are past their due date"
+              @click="markOverdue"
+            >
+              <RefreshCw :size="15" /> Check overdue
+            </button>
+            <button
+              class="studio-primary-button"
+              :disabled="Boolean(actionPending)"
+              @click="openNewInvoice"
+            >
+              <FilePlus2 :size="16" /> New Invoice
+            </button>
+          </div>
         </header>
         <form
           v-if="form === 'invoice'"
           class="space-y-4 rounded-xl bg-card p-5 ring-1 ring-primary/20"
-          @submit.prevent="createInvoice"
+          @submit.prevent="saveInvoice"
         >
           <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-foreground">New Invoice</h3>
+            <h3 class="text-sm font-semibold text-foreground">
+              {{ editingInvoiceId ? 'Edit Invoice' : 'New Invoice' }}
+            </h3>
             <button
               type="button"
               class="text-text-muted hover:text-foreground"
-              @click="form = null"
+              :disabled="Boolean(actionPending)"
+              @click="closeInvoiceForm"
             >
               ×
             </button>
           </div>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label class="studio-field"
-              >Client *<select v-model="invoiceDraft.client_id" required>
+              >Client *<select
+                v-model="invoiceDraft.client_id"
+                required
+                :disabled="Boolean(editingInvoiceId)"
+              >
                 <option value="">Select...</option>
                 <option v-for="client in clients" :key="client.id" :value="client.id">
                   {{ client.name }}
@@ -634,7 +892,10 @@ async function postDue() {
               </select></label
             >
             <label class="studio-field"
-              >Currency<select v-model="invoiceDraft.currency">
+              >Currency<select
+                v-model="invoiceDraft.currency"
+                :disabled="Boolean(editingInvoiceId)"
+              >
                 <option>USD</option>
                 <option>PKR</option>
               </select></label
@@ -643,44 +904,89 @@ async function postDue() {
               >Due Date *<input v-model="invoiceDraft.due_date" type="date" required
             /></label>
           </div>
-          <div class="grid grid-cols-12 items-end gap-2">
-            <label class="studio-field col-span-6"
-              >Line item<input
-                v-model="invoiceDraft.description"
-                placeholder="Description"
-                required
+          <div class="space-y-2">
+            <div
+              v-for="(item, index) in invoiceDraft.items"
+              :key="index"
+              class="grid grid-cols-1 items-end gap-2 rounded-xl border border-border-subtle p-3 sm:grid-cols-12"
+            >
+              <label class="studio-field sm:col-span-6"
+                >Line item<input v-model="item.description" placeholder="Description" required
+              /></label>
+              <label class="studio-field sm:col-span-2"
+                >Qty<input
+                  v-model.number="item.quantity"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  required
+              /></label>
+              <label class="studio-field sm:col-span-2"
+                >Rate<input
+                  v-model.number="item.rate"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  required
+              /></label>
+              <div
+                class="flex items-center justify-between gap-2 pb-2 sm:col-span-2 sm:justify-end"
+              >
+                <strong class="text-sm tabular-nums">{{
+                  money(Number(item.quantity) * Number(item.rate), invoiceDraft.currency)
+                }}</strong>
+                <button
+                  v-if="invoiceDraft.items.length > 1"
+                  type="button"
+                  class="grid size-7 place-items-center rounded-lg text-text-muted hover:bg-red-500/10 hover:text-red-500"
+                  aria-label="Remove line item"
+                  @click="removeInvoiceItem(index)"
+                >
+                  <Trash2 :size="13" />
+                </button>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-text-muted hover:bg-secondary hover:text-foreground"
+              @click="addInvoiceItem"
+            >
+              <Plus :size="13" /> Add line item
+            </button>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-[1fr_160px]">
+            <label class="studio-field"
+              >Notes<input v-model="invoiceDraft.notes" placeholder="Payment terms, notes..."
             /></label>
-            <label class="studio-field col-span-2"
-              >Qty<input
-                v-model.number="invoiceDraft.quantity"
-                type="number"
-                min="0.01"
-                step="0.01"
-                required
+            <label class="studio-field"
+              >Tax<input v-model.number="invoiceDraft.tax" type="number" min="0" step="0.01"
             /></label>
-            <label class="studio-field col-span-2"
-              >Rate<input
-                v-model.number="invoiceDraft.rate"
-                type="number"
-                min="0.01"
-                step="0.01"
-                required
-            /></label>
-            <strong class="col-span-2 pb-2 text-right text-sm tabular-nums">{{
-              money(invoiceDraft.quantity * invoiceDraft.rate, invoiceDraft.currency)
+          </div>
+          <div class="flex justify-end border-t border-border-subtle pt-3 text-sm">
+            <span class="text-text-muted">Subtotal&nbsp;</span>
+            <strong class="tabular-nums">{{
+              money(invoiceDraftTotal, invoiceDraft.currency)
             }}</strong>
           </div>
-          <label class="studio-field"
-            >Notes<input v-model="invoiceDraft.notes" placeholder="Payment terms, notes..."
-          /></label>
           <div class="flex justify-end gap-2">
             <button
               type="button"
               class="rounded-xl px-4 py-2 text-xs font-medium text-text-muted"
-              @click="form = null"
+              :disabled="Boolean(actionPending)"
+              @click="closeInvoiceForm"
             >
               Cancel</button
-            ><button class="studio-primary-button">Create Invoice</button>
+            ><button class="studio-primary-button" :disabled="Boolean(actionPending)">
+              {{
+                actionPending === 'Saving invoice…'
+                  ? 'Saving…'
+                  : actionPending === 'Creating invoice…'
+                    ? 'Creating…'
+                    : editingInvoiceId
+                      ? 'Save Invoice'
+                      : 'Create Invoice'
+              }}
+            </button>
           </div>
         </form>
         <div class="overflow-x-auto rounded-xl bg-card py-4 ring-1 ring-foreground/10">
@@ -715,6 +1021,7 @@ async function postDue() {
                 <select
                   v-if="admin"
                   :value="invoice.status"
+                  :disabled="Boolean(actionPending)"
                   class="rounded-full border-0 px-2.5 py-1 text-[11px] font-medium outline-none"
                   :class="statusTone(invoice.status)"
                   @change="setStatus(invoice, ($event.target as HTMLSelectElement).value)"
@@ -742,6 +1049,15 @@ async function postDue() {
                   >{{ date(invoice.dueDate) }}</time
                 >
                 <span class="ml-2 flex gap-1">
+                  <button
+                    v-if="admin && ['DRAFT', 'SENT'].includes(invoice.status)"
+                    class="grid size-7 place-items-center rounded-lg text-text-muted hover:bg-muted"
+                    :disabled="Boolean(actionPending)"
+                    aria-label="Edit invoice"
+                    @click="editInvoice(invoice)"
+                  >
+                    <Pencil :size="14" />
+                  </button>
                   <NuxtLink
                     :to="`/finance/invoices/${invoice.id}/print`"
                     class="grid size-7 place-items-center rounded-lg text-text-muted hover:bg-muted"
@@ -749,13 +1065,11 @@ async function postDue() {
                     ><Printer :size="14"
                   /></NuxtLink>
                   <button
-                    v-if="admin && ['SENT', 'OVERDUE'].includes(invoice.status)"
+                    v-if="admin && ['SENT', 'OVERDUE', 'PAID'].includes(invoice.status)"
                     class="grid size-7 place-items-center rounded-lg text-text-muted hover:bg-muted"
-                    @click="
-                      selectedInvoice = invoice;
-                      payment.amount = invoice.balance;
-                      form = 'payment';
-                    "
+                    :disabled="Boolean(actionPending)"
+                    aria-label="Manage payments"
+                    @click="openPayments(invoice)"
                   >
                     <WalletCards :size="14" />
                   </button>
@@ -885,22 +1199,36 @@ async function postDue() {
           </article>
         </div>
       </section>
-      <section v-else class="space-y-4">
+      <section
+        v-else-if="tab === 'pnl'"
+        class="flex min-h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card"
+      >
+        <PieChart :size="40" class="text-text-faint/20" />
+        <h2 class="mt-3 text-sm font-semibold text-foreground">No P&amp;L data yet</h2>
+        <p class="mt-1 max-w-sm text-center text-xs text-text-muted">
+          Add an income or expense transaction to start the report.
+        </p>
+      </section>
+      <section v-else-if="tab === 'recurring'" class="space-y-4">
         <header class="flex flex-wrap items-center justify-between gap-3">
           <p class="text-sm text-text-muted">{{ recurring.length }} active subscriptions</p>
           <div v-if="admin" class="flex items-center gap-2">
-            <button class="studio-outline-button" @click="postDue">Post due cycles</button>
-            <button class="studio-primary-button" @click="recurringOpen = true">
+            <button
+              class="studio-outline-button"
+              :disabled="Boolean(actionPending)"
+              @click="postDue"
+            >
+              Post due cycles
+            </button>
+            <button
+              class="studio-primary-button"
+              :disabled="Boolean(actionPending)"
+              @click="recurringOpen = true"
+            >
               <Plus :size="15" /> Add Recurring
             </button>
           </div>
         </header>
-        <p
-          v-if="postResult"
-          class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-600"
-        >
-          {{ postResult }}
-        </p>
         <div
           v-if="recurring.length"
           class="divide-y divide-border-subtle overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10"
@@ -931,6 +1259,7 @@ async function postDue() {
                 v-if="admin"
                 class="studio-icon-button text-red-500"
                 aria-label="Remove recurring expense"
+                :disabled="Boolean(actionPending)"
                 @click="removeRecurring(entry.id)"
               >
                 <Trash2 :size="14" />
@@ -953,102 +1282,75 @@ async function postDue() {
 
     <DeliveryFieldDialog
       :open="form === 'payment'"
-      :title="
-        form === 'invoice'
-          ? 'New invoice'
-          : form === 'payment'
-            ? 'Record payment'
-            : 'New transaction'
+      title="Payments and balance"
+      @close="
+        if (!actionPending) {
+          form = null;
+          selectedInvoice = null;
+        }
       "
-      @close="form = null"
     >
-      <form v-if="form === 'invoice'" class="studio-form-grid" @submit.prevent="createInvoice">
-        <label
-          >Client<select v-model="invoiceDraft.client_id" required>
-            <option value="">Select client</option>
-            <option v-for="client in clients" :key="client.id" :value="client.id">
-              {{ client.name }}
-            </option>
-          </select></label
-        >
-        <div class="grid grid-cols-2 gap-3">
-          <label
-            >Currency<select v-model="invoiceDraft.currency">
-              <option>USD</option>
-              <option>PKR</option>
-            </select></label
-          ><label>Due date<input v-model="invoiceDraft.due_date" type="date" required /></label>
-        </div>
-        <label>Line item description<input v-model="invoiceDraft.description" required /></label>
-        <div class="grid grid-cols-2 gap-3">
-          <label
-            >Quantity<input
-              v-model.number="invoiceDraft.quantity"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required /></label
-          ><label
-            >Rate<input
-              v-model.number="invoiceDraft.rate"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required
-          /></label>
-        </div>
-        <label
-          >Tax<input v-model.number="invoiceDraft.tax" type="number" min="0" step="0.01" /></label
-        ><button class="studio-primary-button">Create draft</button>
-      </form>
-      <form
-        v-else-if="form === 'transaction'"
-        class="studio-form-grid"
-        @submit.prevent="createTransaction"
-      >
-        <div class="grid grid-cols-2 gap-3">
-          <label
-            >Type<select v-model="txDraft.type">
-              <option>INCOME</option>
-              <option>EXPENSE</option>
-            </select></label
-          ><label
-            >Currency<select v-model="txDraft.currency">
-              <option>USD</option>
-              <option>PKR</option>
-            </select></label
-          >
-        </div>
-        <label>Description<input v-model="txDraft.description" required /></label>
-        <div class="grid grid-cols-2 gap-3">
-          <label
-            >Amount<input
-              v-model.number="txDraft.amount"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required /></label
-          ><label>Date<input v-model="txDraft.date" type="date" required /></label>
-        </div>
-        <label>Category<input v-model="txDraft.category" /></label
-        ><button class="studio-primary-button">Enter transaction</button>
-      </form>
-      <form v-else class="studio-form-grid" @submit.prevent="addPayment">
-        <p v-if="selectedInvoice" class="text-sm text-text-muted">
+      <div v-if="selectedInvoice" class="space-y-5">
+        <FirmActionFeedback
+          :busy="['Recording payment…', 'Deleting payment…'].includes(actionPending)"
+          :busy-label="actionPending"
+          :error="actionError"
+          @dismiss="clearAction"
+        />
+        <p class="text-sm text-text-muted">
           {{ selectedInvoice.invoiceNumber }} ·
           {{ money(selectedInvoice.balance, selectedInvoice.currency) }} due
         </p>
-        <label
-          >Amount<input
-            v-model.number="payment.amount"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required /></label
-        ><label>Method<input v-model="payment.method" /></label
-        ><label>Note<input v-model="payment.note" /></label
-        ><button class="studio-primary-button">Record payment</button>
-      </form>
+        <div
+          v-if="selectedInvoice.payments?.length"
+          class="divide-y divide-border-subtle rounded-xl border border-border-subtle"
+        >
+          <article
+            v-for="entry in selectedInvoice.payments"
+            :key="entry.id"
+            class="flex items-center gap-3 px-3 py-2.5"
+          >
+            <div class="min-w-0 flex-1">
+              <strong class="text-sm tabular-nums">{{
+                money(entry.amount, entry.currency)
+              }}</strong>
+              <p class="truncate text-xs text-text-muted">
+                {{ entry.method || 'Payment' }} · {{ date(entry.paidAt)
+                }}<template v-if="entry.note"> · {{ entry.note }}</template>
+              </p>
+            </div>
+            <button
+              type="button"
+              class="grid size-8 place-items-center rounded-lg text-text-muted hover:bg-red-500/10 hover:text-red-500"
+              :disabled="Boolean(actionPending)"
+              aria-label="Delete payment"
+              @click="removeInvoicePayment(entry.id)"
+            >
+              <Trash2 :size="14" />
+            </button>
+          </article>
+        </div>
+        <DeliveryFieldState v-else empty="No payments recorded." />
+        <form
+          v-if="selectedInvoice.balance > 0 && ['SENT', 'OVERDUE'].includes(selectedInvoice.status)"
+          class="studio-form-grid border-t border-border-subtle pt-4"
+          @submit.prevent="addPayment"
+        >
+          <label
+            >Amount<input
+              v-model.number="payment.amount"
+              type="number"
+              min="0.01"
+              :max="selectedInvoice.balance"
+              step="0.01"
+              required /></label
+          ><label>Method<input v-model="payment.method" /></label
+          ><label>Note<input v-model="payment.note" /></label
+          ><button class="studio-primary-button" :disabled="Boolean(actionPending)">
+            {{ actionPending === 'Recording payment…' ? 'Recording…' : 'Record payment' }}
+          </button>
+        </form>
+      </div>
     </DeliveryFieldDialog>
 
     <DeliveryFieldDialog
@@ -1057,6 +1359,12 @@ async function postDue() {
       @close="recurringOpen = false"
     >
       <form class="studio-form-grid" @submit.prevent="createRecurring">
+        <FirmActionFeedback
+          :busy="actionPending === 'Adding recurring expense…'"
+          :busy-label="actionPending"
+          :error="actionError"
+          @dismiss="clearAction"
+        />
         <div class="grid gap-3 sm:grid-cols-2">
           <label>Name<input v-model="recurringDraft.name" required /></label
           ><label>Vendor<input v-model="recurringDraft.vendor_name" /></label>
@@ -1106,7 +1414,9 @@ async function postDue() {
           >
         </div>
         <label>Next due<input v-model="recurringDraft.next_due_date" type="date" required /></label>
-        <button class="studio-primary-button">Add Recurring</button>
+        <button class="studio-primary-button" :disabled="Boolean(actionPending)">
+          Add Recurring
+        </button>
       </form>
     </DeliveryFieldDialog>
   </section>
