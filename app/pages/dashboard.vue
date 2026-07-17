@@ -11,7 +11,6 @@ import {
   FolderKanban,
   LoaderCircle,
   Plus,
-  SlidersHorizontal,
   TrendingUp,
   Video,
   X,
@@ -220,10 +219,8 @@ const dateParts = computed(() => {
   const current = new Date(clock.value || Date.now());
   return {
     day: String(current.getDate()),
-    weekday: new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(current),
-    monthYear: new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(
-      current
-    ),
+    weekday: new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(current),
+    monthYear: new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(current),
   };
 });
 
@@ -464,14 +461,6 @@ function projectStatus(status: string) {
   return { badge: 'bg-muted text-text-muted', dot: 'bg-text-muted' };
 }
 
-function kpiIconClass(title: string) {
-  if (title === 'Active Projects') return 'bg-blue-500/10 text-blue-500';
-  if (title === 'Tasks Completed') return 'bg-emerald-500/10 text-emerald-500';
-  if (title === 'Outstanding Invoices' || title === 'Pending Leaves')
-    return 'bg-amber-500/10 text-amber-500';
-  return 'bg-primary/10 text-primary';
-}
-
 const chartSeries = computed(() => revenueChart.value?.byCurrency[selectedCurrency.value] || []);
 const chartMaximum = computed(() => {
   const maximum = Math.max(
@@ -573,49 +562,20 @@ const activeChartX = computed(() =>
 </script>
 
 <template>
-  <div class="studio-dashboard space-y-6">
-    <header class="flex items-end justify-between gap-5" aria-labelledby="dashboard-greeting">
-      <div class="min-w-0">
-        <h1
-          id="dashboard-greeting"
-          class="font-display text-2xl font-bold tracking-tight text-foreground"
-        >
-          {{ greeting }}, {{ user?.name?.split(' ')[0] || 'there' }}
-        </h1>
-        <p class="mt-1.5 text-[15px] text-text-muted">
-          Here's what's happening across your workspace today.
-        </p>
-      </div>
-      <div class="hidden shrink-0 items-baseline gap-2 sm:flex">
-        <span class="font-display text-[2rem] font-bold leading-none tracking-tight text-primary">{{
-          dateParts.weekday
-        }}</span>
-        <span
-          class="font-display text-[2rem] font-bold leading-none tracking-tight text-foreground"
-          >{{ dateParts.day }}</span
-        >
-        <span class="ml-0.5 text-sm text-text-muted/60">{{ dateParts.monthYear }}</span>
-      </div>
-    </header>
+  <div class="studio-dashboard space-y-4 sm:space-y-5">
+    <DashboardStudioCommandPanel
+      :greeting="greeting"
+      :first-name="user?.name?.split(' ')[0] || 'there'"
+      :date="dateParts"
+      :arrange-open="showCustomize"
+      @toggle-arrange="showCustomize = !showCustomize"
+    />
 
-    <div class="flex justify-end">
-      <button
-        type="button"
-        class="inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors"
-        :class="
-          showCustomize
-            ? 'border-primary/30 bg-primary/10 text-primary'
-            : 'border-border bg-card text-text-muted hover:text-foreground'
-        "
-        :aria-expanded="showCustomize"
-        @click="showCustomize = !showCustomize"
-      >
-        <SlidersHorizontal :size="14" />
-        <span>Customize</span>
-      </button>
-    </div>
-
-    <section v-if="showCustomize" class="studio-card p-4">
+    <section
+      v-if="showCustomize"
+      id="dashboard-widget-controls"
+      class="studio-card studio-panel p-4"
+    >
       <p class="mb-3 text-xs font-medium text-text-muted">Show widgets</p>
       <div class="flex flex-wrap gap-x-6 gap-y-2.5">
         <label
@@ -801,7 +761,7 @@ const activeChartX = computed(() =>
               <template v-else>Next meeting</template>
               <span
                 v-if="nextMeeting.recurrence"
-                class="ml-1 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-500"
+                class="ml-1 rounded-full bg-[var(--accent-quiet)] px-1.5 py-0.5 text-[10px] font-medium text-accent-brand"
                 >{{ nextMeeting.recurrence }}</span
               >
             </p>
@@ -877,51 +837,15 @@ const activeChartX = computed(() =>
       </section>
 
       <section
-        class="grid grid-cols-1 gap-4"
+        class="studio-kpi-grid grid grid-cols-1 gap-3 sm:gap-4"
         :class="stats?.isAdmin ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'"
       >
-        <article
-          v-for="card in cards"
-          :key="card.title"
-          class="group relative min-h-[168px] overflow-hidden rounded-xl border border-border/60 bg-card px-6 py-10 transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5"
-        >
-          <div class="flex items-start justify-between gap-3" data-slot="stat">
-            <div class="space-y-2">
-              <p class="text-[13px] font-medium text-text-muted">{{ card.title }}</p>
-              <p class="font-display break-words text-3xl font-bold tracking-tight text-foreground">
-                {{ card.value }}
-              </p>
-              <div v-if="card.change" class="flex items-center gap-1.5">
-                <TrendingUp v-if="card.trend === 'up'" :size="14" class="text-emerald-500" />
-                <span
-                  class="text-xs font-medium"
-                  :class="
-                    card.trend === 'down'
-                      ? 'text-red-500'
-                      : card.trend === 'neutral'
-                        ? 'text-text-muted'
-                        : 'text-emerald-600'
-                  "
-                  >{{ card.change }}</span
-                >
-                <span v-if="card.changeLabel" class="text-xs text-text-muted">{{
-                  card.changeLabel
-                }}</span>
-              </div>
-            </div>
-            <div
-              class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-transform group-hover:scale-105"
-              :class="kpiIconClass(card.title)"
-            >
-              <component :is="card.icon" :size="20" />
-            </div>
-          </div>
-        </article>
+        <DashboardKpiCard v-for="card in cards" :key="card.title" :card="card" />
       </section>
 
       <section
         v-if="stats?.isAdmin && revenueChart?.currencies.length"
-        class="studio-card studio-revenue-card overflow-hidden"
+        class="studio-card studio-panel studio-revenue-card overflow-hidden"
       >
         <header class="p-5 pb-2 sm:px-6 sm:pt-6">
           <div class="flex flex-wrap items-center justify-between gap-3">
@@ -948,7 +872,7 @@ const activeChartX = computed(() =>
                 </button>
               </div>
               <span class="flex items-center gap-1.5 text-xs text-text-muted"
-                ><i class="h-2 w-2 rounded-full bg-primary" /> Income</span
+                ><i class="h-2 w-2 rounded-full bg-accent-brand" /> Income</span
               >
               <span class="hidden items-center gap-1.5 text-xs text-text-muted sm:flex"
                 ><i class="h-2 w-2 rounded-full bg-border-strong" /> Expenses</span
@@ -980,8 +904,8 @@ const activeChartX = computed(() =>
           >
             <defs>
               <linearGradient id="studio-income-gradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.22" />
-                <stop offset="100%" stop-color="var(--primary)" stop-opacity="0" />
+                <stop offset="0%" stop-color="var(--accent-brand)" stop-opacity="0.26" />
+                <stop offset="100%" stop-color="var(--accent-brand)" stop-opacity="0" />
               </linearGradient>
             </defs>
             <g v-for="tick in chartTicks" :key="tick.y">
@@ -1015,7 +939,7 @@ const activeChartX = computed(() =>
             <path
               :d="incomePath"
               fill="none"
-              stroke="var(--primary)"
+              stroke="var(--accent-brand)"
               stroke-width="2.5"
               stroke-linecap="round"
               stroke-linejoin="round"
@@ -1053,7 +977,7 @@ const activeChartX = computed(() =>
                 :cx="activeChartX"
                 :cy="activeChartIndex === null ? 0 : incomePoints[activeChartIndex]?.y"
                 r="5"
-                fill="var(--primary)"
+                fill="var(--accent-brand)"
                 stroke="var(--card)"
                 stroke-width="2"
               />
