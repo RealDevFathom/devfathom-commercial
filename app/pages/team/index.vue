@@ -5,6 +5,13 @@ import type { TeamMember } from '~/types/firm';
 useHead({ title: 'Team · DevFathom Hub' });
 const api = useFirm();
 const { user } = useAuth();
+const {
+  pending: actionPending,
+  error: actionError,
+  success: actionSuccess,
+  clear: clearAction,
+  run: runAction,
+} = useFirmAction();
 const members = ref<TeamMember[]>([]);
 const loading = ref(true);
 const error = ref('');
@@ -69,8 +76,33 @@ function relativeTime(value?: string | null) {
 }
 
 async function submitInvite() {
-  const result = await api.invite({ ...invite, skills: [] });
-  inviteSecret.value = `${location.origin}${result.inviteUrl}`;
+  const result = await runAction(
+    'Creating invitation…',
+    () => api.invite({ ...invite, skills: [] }),
+    {
+      success: 'Invitation created. Copy the link before closing.',
+      error: 'The invitation could not be created.',
+    }
+  );
+  if (!result) return;
+  inviteSecret.value = result.inviteUrl.startsWith('http')
+    ? result.inviteUrl
+    : new URL(result.inviteUrl, location.origin).toString();
+}
+
+function closeInvite() {
+  if (actionPending.value) return;
+  inviteOpen.value = false;
+  inviteSecret.value = '';
+  Object.assign(invite, {
+    name: '',
+    email: '',
+    role: 'EMPLOYEE',
+    department: 'ENGINEERING',
+    title: '',
+    phone: '',
+  });
+  clearAction();
 }
 </script>
 
@@ -91,6 +123,14 @@ async function submitInvite() {
         <Plus :size="16" /> Add Member
       </button>
     </div>
+
+    <FirmActionFeedback
+      :busy="Boolean(actionPending)"
+      :busy-label="actionPending"
+      :error="actionError"
+      :success="actionSuccess"
+      @dismiss="clearAction"
+    />
 
     <div class="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
       <label class="relative w-full flex-1 sm:max-w-xs"
@@ -213,16 +253,20 @@ async function submitInvite() {
       :open="inviteOpen"
       title="Invite team member"
       description="The invitation URL is shown once after creation."
-      @close="
-        inviteOpen = false;
-        inviteSecret = '';
-      "
+      @close="closeInvite"
     >
+      <FirmActionFeedback
+        :busy="actionPending === 'Creating invitation…'"
+        :busy-label="actionPending"
+        :error="actionError"
+        :success="actionSuccess"
+        @dismiss="clearAction"
+      />
       <AdminOneShotSecret
         v-if="inviteSecret"
         label="Invitation link"
         :secret="inviteSecret"
-        @dismiss="inviteSecret = ''"
+        @dismiss="closeInvite"
       />
       <form v-else class="studio-form-grid" @submit.prevent="submitInvite">
         <label>Name<input v-model="invite.name" required /></label
@@ -247,7 +291,9 @@ async function submitInvite() {
         </div>
         <label>Title<input v-model="invite.title" required /></label
         ><label>Phone<input v-model="invite.phone" /></label
-        ><button class="studio-primary-button">Create invitation</button>
+        ><button class="studio-primary-button" :disabled="Boolean(actionPending)">
+          {{ actionPending ? 'Creating invitation…' : 'Create invitation' }}
+        </button>
       </form>
     </DeliveryFieldDialog>
   </section>

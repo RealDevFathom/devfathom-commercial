@@ -1,11 +1,38 @@
 <script setup lang="ts">
 import { ArrowLeft, Printer } from 'lucide-vue-next';
+import type { Invoice } from '~/types/firm';
+
 const route = useRoute();
 const api = useFirm();
-const invoice = await api.invoice(String(route.params.id));
-useHead({ title: `${invoice.invoiceNumber} · Invoice` });
+const { user } = useAuth();
+const allowed = computed(() => user.value?.role === 'ADMIN');
+const invoice = ref<Invoice | null>(null);
+const loading = ref(allowed.value);
+const error = ref('');
+
+async function load() {
+  if (!allowed.value) {
+    loading.value = false;
+    return;
+  }
+  loading.value = true;
+  error.value = '';
+  try {
+    invoice.value = await api.invoice(String(route.params.id));
+  } catch (caught) {
+    error.value = firmErrorMessage(caught, 'This invoice is unavailable.');
+  } finally {
+    loading.value = false;
+  }
+}
+
+await load();
+useHead({ title: computed(() => `${invoice.value?.invoiceNumber || 'Invoice'} · DevFathom Hub`) });
 const money = (n: number) =>
-  new Intl.NumberFormat('en', { style: 'currency', currency: invoice.currency }).format(Number(n));
+  new Intl.NumberFormat('en', {
+    style: 'currency',
+    currency: invoice.value?.currency || 'USD',
+  }).format(Number(n));
 const date = (v: string) =>
   new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date(v));
 function printInvoice() {
@@ -28,7 +55,17 @@ function printInvoice() {
       </button>
     </nav>
 
+    <DeliveryFieldState v-if="!allowed" error="Invoices are available to administrators only." />
+    <DeliveryFieldState
+      v-else-if="loading || error"
+      :loading="loading"
+      :error="error"
+      action="Try again"
+      @action="load"
+    />
+
     <article
+      v-else-if="invoice"
       id="invoice-print"
       class="rounded-2xl border border-slate-200 bg-white p-8 text-slate-900 shadow-sm sm:p-10"
     >

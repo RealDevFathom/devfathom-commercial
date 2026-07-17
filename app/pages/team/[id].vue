@@ -38,6 +38,13 @@ interface MemberDetail extends TeamMember {
 const route = useRoute();
 const api = useFirm();
 const { user } = useAuth();
+const {
+  pending: actionPending,
+  error: actionError,
+  success: actionSuccess,
+  clear: clearAction,
+  run: runAction,
+} = useFirmAction();
 const id = String(route.params.id);
 const member = ref<MemberDetail | null>(null);
 const notes = ref<Record<string, any>[]>([]);
@@ -47,7 +54,6 @@ const error = ref('');
 const editing = ref(false);
 const resetOpen = ref(false);
 const layoffOpen = ref(false);
-const resetSuccess = ref(false);
 const temporaryPassword = ref('');
 const layoffReason = ref('');
 const draft = reactive({
@@ -65,11 +71,17 @@ const note = ref('');
 const isAdmin = computed(() => user.value?.role === 'ADMIN');
 const canViewPersonal = computed(() => isAdmin.value || user.value?.id === id);
 
-async function load() {
-  loading.value = true;
+async function load(showSpinner = true) {
+  if (showSpinner) loading.value = true;
   error.value = '';
   try {
-    member.value = (await api.member(id)) as MemberDetail;
+    const record = (await api.member(id)) as Partial<MemberDetail> & TeamMember;
+    member.value = {
+      ...record,
+      projects: record.projects || [],
+      tasks: record.tasks || [],
+      leaveRequests: record.leaveRequests || [],
+    };
     Object.assign(draft, member.value);
     if (canViewPersonal.value) {
       const [noteResult, balanceResult] = await Promise.all([
@@ -102,28 +114,57 @@ const date = (value?: string | null) =>
   value ? new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(value)) : '—';
 
 async function save() {
-  member.value = {
-    ...(member.value as MemberDetail),
-    ...(await api.updateMember(id, { ...draft })),
-  };
+  if (!isAdmin.value) return;
+  const result = await runAction('Saving member…', () => api.updateMember(id, { ...draft }), {
+    success: 'Team member updated.',
+    error: 'The team member could not be updated.',
+  });
+  if (!result) return;
+  member.value = { ...(member.value as MemberDetail), ...result };
   editing.value = false;
 }
 async function addNote() {
-  await api.addPerformanceNote(id, note.value);
+  if (!isAdmin.value || !note.value.trim()) return;
+  const result = await runAction(
+    'Adding performance note…',
+    async () => {
+      const created = await api.addPerformanceNote(id, note.value.trim());
+      await load(false);
+      return created;
+    },
+    { success: 'Performance note added.', error: 'The performance note could not be added.' }
+  );
+  if (!result) return;
   note.value = '';
-  await load();
 }
 async function resetPassword() {
-  await api.adminResetPassword(id, temporaryPassword.value);
+  if (!isAdmin.value || user.value?.id === id) return;
+  const result = await runAction(
+    'Resetting password…',
+    () => api.adminResetPassword(id, temporaryPassword.value),
+    {
+      success: 'Password reset. Share the temporary password through a secure channel.',
+      error: 'The password could not be reset.',
+    }
+  );
+  if (!result) return;
   resetOpen.value = false;
   temporaryPassword.value = '';
-  resetSuccess.value = true;
 }
 async function layoff() {
-  await api.layoff(id, layoffReason.value);
+  if (!isAdmin.value || user.value?.id === id) return;
+  const result = await runAction(
+    'Deactivating member…',
+    async () => {
+      const response = await api.layoff(id, layoffReason.value.trim());
+      await load(false);
+      return response;
+    },
+    { success: 'Member access deactivated.', error: 'The member could not be deactivated.' }
+  );
+  if (!result) return;
   layoffOpen.value = false;
   layoffReason.value = '';
-  await load();
 }
 </script>
 
@@ -138,24 +179,35 @@ async function layoff() {
       <div v-if="member && isAdmin && user?.id !== id" class="flex flex-wrap gap-2">
         <button
           class="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
+          :disabled="Boolean(actionPending)"
           @click="editing = !editing"
         >
           <Pencil :size="14" /> Edit
         </button>
         <button
           class="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-secondary hover:text-foreground"
+          :disabled="Boolean(actionPending)"
           @click="resetOpen = true"
         >
           <KeyRound :size="14" /> Reset Password
         </button>
         <button
           class="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-text-muted transition-colors hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-500"
+          :disabled="Boolean(actionPending)"
           @click="layoffOpen = true"
         >
           <UserMinus :size="14" /> Lay off
         </button>
       </div>
     </div>
+
+    <FirmActionFeedback
+      :busy="Boolean(actionPending)"
+      :busy-label="actionPending"
+      :error="actionError"
+      :success="actionSuccess"
+      @dismiss="clearAction"
+    />
 
     <DeliveryFieldState
       v-if="loading || error"
@@ -197,13 +249,6 @@ async function layoff() {
           </div>
         </div>
       </header>
-
-      <div
-        v-if="resetSuccess"
-        class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600"
-      >
-        Password has been reset successfully.
-      </div>
 
       <form
         v-if="editing && isAdmin"
@@ -256,7 +301,10 @@ async function layoff() {
           >
         </div>
         <label class="studio-field">Bio<textarea v-model="draft.bio" rows="4" /></label>
-        <button class="studio-primary-button"><Save :size="15" /> Save changes</button>
+        <button class="studio-primary-button" :disabled="Boolean(actionPending)">
+          <Save :size="15" />
+          {{ actionPending === 'Saving member…' ? 'Saving…' : 'Save changes' }}
+        </button>
       </form>
 
       <div v-if="canViewPersonal" class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -341,8 +389,9 @@ async function layoff() {
         </div>
       </section>
 
-      <div class="grid gap-5 lg:grid-cols-3">
+      <div class="grid gap-5" :class="canViewPersonal ? 'lg:grid-cols-3' : 'max-w-xl'">
         <section
+          v-if="canViewPersonal"
           class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10 lg:col-span-2"
         >
           <header class="flex items-center gap-2 px-4 pb-2">
@@ -407,7 +456,10 @@ async function layoff() {
               </div>
             </dl>
           </section>
-          <section class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+          <section
+            v-if="canViewPersonal"
+            class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10"
+          >
             <header class="flex items-center gap-2 px-4 pb-2">
               <span class="grid size-6 place-items-center rounded-md bg-primary/10 text-primary"
                 ><CheckSquare :size="14"
@@ -501,7 +553,9 @@ async function layoff() {
             required
             class="min-h-20 flex-1 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-3 text-sm"
             placeholder="Private performance note…"
-          /><button class="studio-primary-button self-end">Add note</button>
+          /><button class="studio-primary-button self-end" :disabled="Boolean(actionPending)">
+            {{ actionPending === 'Adding performance note…' ? 'Adding…' : 'Add note' }}
+          </button>
         </form>
         <article
           v-for="entry in notes"
@@ -521,9 +575,15 @@ async function layoff() {
     <DeliveryFieldDialog
       :open="resetOpen"
       :title="`Reset password for ${member?.name || ''}`"
-      @close="resetOpen = false"
+      @close="!actionPending && (resetOpen = false)"
     >
       <form class="studio-form-grid" @submit.prevent="resetPassword">
+        <FirmActionFeedback
+          :busy="actionPending === 'Resetting password…'"
+          :busy-label="actionPending"
+          :error="actionError"
+          @dismiss="clearAction"
+        />
         <label
           >Temporary password<input
             v-model="temporaryPassword"
@@ -534,18 +594,28 @@ async function layoff() {
         <p class="text-xs text-[var(--text-muted)]">
           Use at least eight characters with uppercase, lowercase, and a number.
         </p>
-        <button class="studio-primary-button">Reset password</button>
+        <button class="studio-primary-button" :disabled="Boolean(actionPending)">
+          {{ actionPending === 'Resetting password…' ? 'Resetting…' : 'Reset password' }}
+        </button>
       </form>
     </DeliveryFieldDialog>
     <DeliveryFieldDialog
       :open="layoffOpen"
       :title="`Lay off ${member?.name || ''}`"
       description="This deactivates access, sends a notice, and keeps the record for audit history."
-      @close="layoffOpen = false"
+      @close="!actionPending && (layoffOpen = false)"
     >
       <form class="studio-form-grid" @submit.prevent="layoff">
+        <FirmActionFeedback
+          :busy="actionPending === 'Deactivating member…'"
+          :busy-label="actionPending"
+          :error="actionError"
+          @dismiss="clearAction"
+        />
         <label>Reason<textarea v-model="layoffReason" rows="4" minlength="3" required /></label
-        ><button class="studio-danger-button">Lay off</button>
+        ><button class="studio-danger-button" :disabled="Boolean(actionPending)">
+          {{ actionPending === 'Deactivating member…' ? 'Deactivating…' : 'Lay off' }}
+        </button>
       </form>
     </DeliveryFieldDialog>
   </section>
