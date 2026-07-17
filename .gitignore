@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/.perf/
 
 # legacy next.js
 /.next/
