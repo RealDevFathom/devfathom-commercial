@@ -7,6 +7,7 @@ import {
   MapPin,
   Pencil,
   Plus,
+  Radio,
   RefreshCw,
   Trash2,
   Users,
@@ -23,6 +24,8 @@ const loading = ref(true);
 const error = ref('');
 const formOpen = ref(false);
 const attendanceOpen = ref<string | null>(null);
+const clock = ref(Date.now());
+let clockTimer: ReturnType<typeof setInterval> | undefined;
 const recurrenceLabels = {
   daily: 'Daily',
   weekly: 'Weekly',
@@ -42,6 +45,21 @@ async function load() {
   }
 }
 await load();
+
+onMounted(() => {
+  clock.value = Date.now();
+  clockTimer = setInterval(() => (clock.value = Date.now()), 1000);
+});
+onBeforeUnmount(() => {
+  if (clockTimer) clearInterval(clockTimer);
+});
+
+const nextMeeting = computed(
+  () => upcoming.value.find((meeting) => new Date(meeting.endTime).getTime() > clock.value) || null
+);
+const nextCountdown = computed(() =>
+  nextMeeting.value ? getMeetingCountdown(nextMeeting.value, clock.value) : null
+);
 
 const pastMeetings = computed(() =>
   meetings.value
@@ -74,8 +92,12 @@ function joinedCount(meeting: Meeting) {
 function canJoin(meeting: Meeting) {
   return (
     meeting.attendees.some((attendee) => attendee.user.id === user.value?.id) &&
-    new Date(meeting.endTime).getTime() > Date.now()
+    new Date(meeting.endTime).getTime() > clock.value
   );
+}
+
+function isLive(meeting: Meeting) {
+  return getMeetingPhase(meeting, clock.value) === 'live';
 }
 
 function joinedByMe(meeting: Meeting) {
@@ -85,14 +107,16 @@ function joinedByMe(meeting: Meeting) {
 }
 
 async function joinExternal(meeting: Meeting) {
-  await api.join(meeting.id).catch(() => undefined);
-  await load();
+  let opened: Window | null = null;
   if (meeting.location) {
     const href = meeting.location.startsWith('http')
       ? meeting.location
       : `https://${meeting.location}`;
-    window.open(href, '_blank', 'noopener,noreferrer');
+    opened = window.open(href, '_blank', 'noopener,noreferrer');
   }
+  await api.join(meeting.id).catch(() => undefined);
+  await load();
+  opened?.focus();
 }
 
 async function removeMeeting(meeting: Meeting) {
@@ -129,6 +153,72 @@ async function removeMeeting(meeting: Meeting) {
     />
 
     <template v-else>
+      <article
+        v-if="nextMeeting && nextCountdown"
+        class="overflow-hidden rounded-2xl border bg-card shadow-[var(--shadow-xs)]"
+        :class="nextCountdown.phase === 'live' ? 'border-emerald-500/35' : 'border-border-subtle'"
+      >
+        <div class="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:p-6">
+          <div
+            class="grid h-12 w-12 shrink-0 place-items-center rounded-xl"
+            :class="
+              nextCountdown.phase === 'live'
+                ? 'bg-emerald-500/10 text-emerald-600'
+                : 'bg-primary/10 text-primary'
+            "
+          >
+            <Radio v-if="nextCountdown.phase === 'live'" :size="21" />
+            <Video v-else :size="21" />
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span
+                class="text-[11px] font-semibold uppercase tracking-[0.12em]"
+                :class="nextCountdown.phase === 'live' ? 'text-emerald-600' : 'text-accent-brand'"
+              >
+                {{ nextCountdown.phase === 'live' ? 'Live now' : 'Up next' }}
+              </span>
+              <span class="text-xs text-text-muted">· {{ dateLabel(nextMeeting.startTime) }}</span>
+            </div>
+            <NuxtLink
+              :to="`/meetings/${nextMeeting.id}`"
+              class="mt-1 block truncate text-lg font-semibold text-foreground hover:text-accent-brand"
+            >
+              {{ nextMeeting.title }}
+            </NuxtLink>
+            <p class="mt-1 truncate text-xs text-text-muted">
+              {{ time(nextMeeting.startTime) }} – {{ time(nextMeeting.endTime) }}
+              <template v-if="nextMeeting.location"> · {{ nextMeeting.location }}</template>
+            </p>
+          </div>
+          <div class="flex items-center justify-between gap-4 sm:justify-end">
+            <div class="shrink-0 text-right" aria-live="polite">
+              <p class="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+                {{ nextCountdown.phase === 'live' ? 'Live for' : 'Starts in' }}
+              </p>
+              <p
+                class="mt-1 font-mono text-xl font-semibold tabular-nums text-foreground"
+                data-allow-mismatch="text"
+              >
+                {{ nextCountdown.hours }}:{{ nextCountdown.minutes }}:{{ nextCountdown.seconds }}
+              </p>
+            </div>
+            <NuxtLink
+              v-if="canJoin(nextMeeting)"
+              :to="`/meetings/${nextMeeting.id}/call`"
+              class="inline-flex min-h-10 items-center gap-1.5 rounded-xl px-4 text-sm font-semibold text-white"
+              :class="
+                nextCountdown.phase === 'live'
+                  ? 'bg-emerald-600 hover:bg-emerald-700'
+                  : 'bg-primary hover:bg-[#0C2E2C]'
+              "
+            >
+              <Video :size="15" /> {{ nextCountdown.phase === 'live' ? 'Join now' : 'Join call' }}
+            </NuxtLink>
+          </div>
+        </div>
+      </article>
+
       <section>
         <h2 class="mb-3 flex items-center gap-2 text-[15px] font-semibold text-foreground">
           <span class="grid h-6 w-6 place-items-center rounded-md bg-primary/10"
@@ -229,7 +319,7 @@ async function removeMeeting(meeting: Meeting) {
                 v-if="canJoin(meeting)"
                 :to="`/meetings/${meeting.id}/call`"
                 class="hidden items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground hover:bg-secondary sm:flex"
-                ><Video :size="14" /> Join call</NuxtLink
+                ><Video :size="14" /> {{ isLive(meeting) ? 'Join now' : 'Join call' }}</NuxtLink
               >
               <button
                 v-if="canJoin(meeting) && meeting.location"
@@ -238,30 +328,68 @@ async function removeMeeting(meeting: Meeting) {
                 :class="
                   joinedByMe(meeting)
                     ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15'
-                    : 'bg-primary text-white hover:bg-[#0C2E2C]'
+                    : isLive(meeting)
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      : 'bg-primary text-white hover:bg-[#0C2E2C]'
                 "
                 @click="joinExternal(meeting)"
               >
                 <Check v-if="joinedByMe(meeting)" :size="14" />
                 <Video v-else :size="14" />
-                {{ joinedByMe(meeting) ? 'Joined · Rejoin' : 'Join' }}
+                {{
+                  joinedByMe(meeting) ? 'Joined · Rejoin' : isLive(meeting) ? 'Join now' : 'Join'
+                }}
               </button>
               <div class="flex items-center gap-0.5">
                 <NuxtLink
                   :to="`/meetings/${meeting.id}`"
-                  class="grid h-8 w-8 place-items-center rounded-lg text-text-muted/0 transition-all group-hover:text-text-muted hover:!bg-secondary hover:!text-foreground"
+                  class="grid h-8 w-8 place-items-center rounded-lg text-text-muted transition-all hover:!bg-secondary hover:!text-foreground sm:text-text-muted/0 sm:group-hover:text-text-muted"
                   title="Edit"
                 >
                   <Pencil :size="14" />
                 </NuxtLink>
                 <button
-                  class="grid h-8 w-8 place-items-center rounded-lg text-text-muted/0 transition-all group-hover:text-text-muted hover:!bg-red-500/10 hover:!text-red-500"
+                  class="grid h-8 w-8 place-items-center rounded-lg text-text-muted transition-all hover:!bg-red-500/10 hover:!text-red-500 sm:text-text-muted/0 sm:group-hover:text-text-muted"
                   title="Delete"
                   @click="removeMeeting(meeting)"
                 >
                   <Trash2 :size="15" />
                 </button>
               </div>
+            </div>
+            <div
+              v-if="canJoin(meeting)"
+              class="flex items-center gap-2 border-t border-border-subtle p-3 sm:hidden"
+            >
+              <NuxtLink
+                :to="`/meetings/${meeting.id}/call`"
+                class="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-card text-xs font-semibold text-foreground"
+              >
+                <Video :size="14" /> {{ isLive(meeting) ? 'Join now' : 'Join call' }}
+              </NuxtLink>
+              <button
+                v-if="meeting.location"
+                type="button"
+                class="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-semibold"
+                :class="
+                  joinedByMe(meeting)
+                    ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                    : isLive(meeting)
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-primary text-white'
+                "
+                @click="joinExternal(meeting)"
+              >
+                <Check v-if="joinedByMe(meeting)" :size="14" />
+                <Video v-else :size="14" />
+                {{
+                  joinedByMe(meeting)
+                    ? 'Rejoin link'
+                    : isLive(meeting)
+                      ? 'Join link now'
+                      : 'Join link'
+                }}
+              </button>
             </div>
             <div
               v-if="attendanceOpen === meeting.id"

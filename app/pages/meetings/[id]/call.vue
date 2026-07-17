@@ -2,16 +2,41 @@
 import { AlertTriangle, ArrowLeft, LoaderCircle, Video } from 'lucide-vue-next';
 const route = useRoute();
 const api = useMeetings();
+const config = useRuntimeConfig();
+const { token: accessToken } = useAuth();
 const id = computed(() => String(route.params.id));
 const meeting = await api.get(id.value);
 useHead({ title: `Call · ${meeting.title}` });
 const loading = ref(true);
 const error = ref('');
 const roomUrl = ref('');
+let joined = false;
+
+async function leaveCall(keepalive = false) {
+  if (!joined) return;
+  joined = false;
+  if (!keepalive) {
+    await api.callLeave(id.value).catch(() => undefined);
+    return;
+  }
+  const base = String(config.public.apiBase || '').replace(/\/$/, '');
+  fetch(`${base}/api/v1/meetings/${id.value}/call/leave`, {
+    method: 'POST',
+    keepalive: true,
+    headers: accessToken.value ? { Authorization: `Bearer ${accessToken.value}` } : {},
+  }).catch(() => undefined);
+}
+
+function handlePageHide() {
+  void leaveCall(true);
+}
+
 onMounted(async () => {
+  window.addEventListener('pagehide', handlePageHide);
   try {
     const token = await api.callToken(id.value);
     await api.callJoin(id.value);
+    joined = true;
     roomUrl.value = `https://8x8.vc/${token.roomName}?jwt=${encodeURIComponent(token.jwt)}`;
   } catch (caught: any) {
     error.value = caught?.data?.detail || 'The secure call room could not be opened.';
@@ -20,7 +45,8 @@ onMounted(async () => {
   }
 });
 onBeforeUnmount(() => {
-  if (roomUrl.value) void api.callLeave(id.value);
+  window.removeEventListener('pagehide', handlePageHide);
+  void leaveCall();
 });
 </script>
 <template>
@@ -51,13 +77,13 @@ onBeforeUnmount(() => {
 <style scoped>
 .call-page {
   display: flex;
-  height: calc(100vh - 2rem);
-  min-height: 480px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   overflow: hidden;
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  border: 0;
 }
 .call-page header {
   display: flex;
@@ -145,11 +171,6 @@ iframe {
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
-}
-@media (min-width: 640px) {
-  .call-page {
-    height: calc(100vh - 3rem);
   }
 }
 </style>

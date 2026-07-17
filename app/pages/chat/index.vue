@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import {
+  ArrowLeft,
   BellOff,
   Bookmark,
   Hash,
+  LoaderCircle,
   LockKeyhole,
   Menu,
   MessageSquare,
+  MessageSquarePlus,
   Paperclip,
   Pin,
   Plus,
@@ -26,7 +29,8 @@ const loadingMessages = ref(false);
 const error = ref('');
 const draft = ref('');
 const channelForm = ref(false);
-const mobileChannels = ref(false);
+const directMessageOpen = ref(false);
+const mobileView = ref<'list' | 'conversation'>('list');
 const threadParent = ref<Message | null>(null);
 const threadReplies = ref<Message[]>([]);
 const threadDraft = ref('');
@@ -37,6 +41,9 @@ const channelFilter = ref('');
 const uploads = ref<UploadedFile[]>([]);
 const uploading = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
+const messagesElement = ref<HTMLElement | null>(null);
+const nextCursor = ref<string | null>(null);
+const loadingOlder = ref(false);
 const { upload } = useUploads();
 const current = computed(() => channels.value.find((c) => c.id === channelId.value) || null);
 const visibleChannels = computed(() => {
@@ -57,26 +64,86 @@ async function loadChannels() {
     loading.value = false;
   }
 }
-async function loadMessages(silent = false) {
-  if (!channelId.value) return;
+
+function sortedMessages(items: Message[]) {
+  const unique = new Map(items.map((message) => [message.id, message]));
+  return [...unique.values()].sort((a, b) => {
+    const difference = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    return difference || a.id.localeCompare(b.id);
+  });
+}
+
+async function loadMessages({ silent = false, reset = true } = {}) {
+  const selectedId = channelId.value;
+  if (!selectedId) return;
   if (!silent) loadingMessages.value = true;
   try {
-    const result = await chat.messages(channelId.value);
-    messages.value = result.items;
-    await chat.read(channelId.value);
+    const result = await chat.messages(
+      selectedId,
+      reset ? undefined : nextCursor.value || undefined
+    );
+    if (channelId.value !== selectedId) return;
+    messages.value = sortedMessages(reset ? result.items : [...result.items, ...messages.value]);
+    nextCursor.value = result.nextCursor || null;
+    await chat.read(selectedId);
+    if (reset) {
+      await nextTick();
+      messagesElement.value?.scrollTo({ top: messagesElement.value.scrollHeight });
+    }
+  } catch (caught: any) {
+    error.value = caught?.data?.detail || 'Messages are unavailable.';
   } finally {
     loadingMessages.value = false;
   }
 }
+
+async function refreshMessages() {
+  const selectedId = channelId.value;
+  if (!selectedId) return;
+  try {
+    const result = await chat.messages(selectedId);
+    if (channelId.value !== selectedId) return;
+    messages.value = sortedMessages([...messages.value, ...result.items]);
+    if (!nextCursor.value) nextCursor.value = result.nextCursor || null;
+    await chat.read(selectedId);
+  } catch {
+    // Realtime refreshes are best effort; the five-second fallback retries.
+  }
+}
+
+async function loadOlder() {
+  const element = messagesElement.value;
+  if (!nextCursor.value || loadingOlder.value) return;
+  const previousHeight = element?.scrollHeight || 0;
+  loadingOlder.value = true;
+  try {
+    await loadMessages({ silent: true, reset: false });
+    await nextTick();
+    if (element) element.scrollTop += element.scrollHeight - previousHeight;
+  } finally {
+    loadingOlder.value = false;
+  }
+}
+
+function handleMessageScroll() {
+  if ((messagesElement.value?.scrollTop || 0) < 80) void loadOlder();
+}
+
+function selectChannel(id: string) {
+  channelId.value = id;
+  mobileView.value = 'conversation';
+}
+
 await loadChannels();
 if (channelId.value) await loadMessages();
 watch(channelId, async () => {
   threadParent.value = null;
   utility.value = 'none';
-  mobileChannels.value = false;
+  messages.value = [];
+  nextCursor.value = null;
   await loadMessages();
 });
-useChatRealtime(channelId, () => loadMessages(true));
+useChatRealtime(channelId, refreshMessages);
 async function send(parentId?: string) {
   const text = parentId ? threadDraft.value : draft.value;
   if (!channelId.value || (!text.trim() && !uploads.value.length)) return;
@@ -87,7 +154,12 @@ async function send(parentId?: string) {
   } else {
     draft.value = '';
     uploads.value = [];
-    await loadMessages();
+    await refreshMessages();
+    await nextTick();
+    messagesElement.value?.scrollTo({
+      top: messagesElement.value.scrollHeight,
+      behavior: 'smooth',
+    });
   }
 }
 async function addFiles(event: Event) {
@@ -112,18 +184,24 @@ async function openThread(message: Message) {
 }
 async function react(message: Message, emoji: string) {
   await chat.react(message.id, emoji);
-  await loadMessages(true);
+  await refreshMessages();
   if (threadParent.value) await openThread(threadParent.value);
 }
 async function pin(message: Message) {
   await chat.pin(message.id);
-  await loadMessages(true);
+  await refreshMessageSurfaces();
 }
 async function save(message: Message) {
   await chat.save(message.id);
-  await loadMessages(true);
+  await refreshMessageSurfaces();
+}
+async function refreshMessageSurfaces() {
+  await refreshMessages();
+  if (threadParent.value) await openThread(threadParent.value);
+  if (utility.value === 'pins' || utility.value === 'saved') await openUtility(utility.value);
 }
 async function openUtility(kind: 'pins' | 'saved') {
+  threadParent.value = null;
   utility.value = kind;
   utilityMessages.value =
     kind === 'pins' && channelId.value ? await chat.pins(channelId.value) : await chat.saved();
@@ -137,6 +215,57 @@ async function toggleMute() {
   await chat.mute(current.value.id, !current.value.muted);
   await loadChannels();
 }
+async function directMessageCreated(id: string) {
+  await loadChannels();
+  selectChannel(id);
+}
+async function channelCreated(id: string) {
+  await loadChannels();
+  selectChannel(id);
+}
+function handleShortcut(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    utility.value = 'search';
+    mobileView.value = 'conversation';
+  }
+}
+onMounted(() => window.addEventListener('keydown', handleShortcut));
+onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut));
+
+function sameDay(first: string, second: string) {
+  return new Date(first).toDateString() === new Date(second).toDateString();
+}
+function showDateDivider(index: number) {
+  const currentMessage = messages.value[index];
+  const previous = messages.value[index - 1];
+  return Boolean(
+    currentMessage && (!previous || !sameDay(currentMessage.createdAt, previous.createdAt))
+  );
+}
+function messageGrouped(index: number) {
+  const currentMessage = messages.value[index];
+  const previous = messages.value[index - 1];
+  return Boolean(
+    currentMessage &&
+    previous &&
+    sameDay(currentMessage.createdAt, previous.createdAt) &&
+    currentMessage.sender.id === previous.sender.id &&
+    !previous.deletedAt &&
+    new Date(currentMessage.createdAt).getTime() - new Date(previous.createdAt).getTime() < 300_000
+  );
+}
+function messageDate(value: string) {
+  const date = new Date(value);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return 'Today';
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return new Intl.DateTimeFormat('en', { weekday: 'long', month: 'short', day: 'numeric' }).format(
+    date
+  );
+}
 const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message' : c.name);
 </script>
 
@@ -147,7 +276,7 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
         class="jump-button"
         @click="
           utility = 'search';
-          mobileChannels = true;
+          mobileView = 'conversation';
         "
       >
         <Search :size="14" /><span>Jump to a channel or person…</span><kbd>⌘K</kbd>
@@ -155,17 +284,25 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
       <button class="saved-button" @click="openUtility('saved')">
         <Bookmark :size="14" /><span>Saved</span>
       </button>
-      <button class="mobile-menu" aria-label="Show channels" @click="mobileChannels = true">
+      <button
+        class="mobile-menu"
+        :aria-label="mobileView === 'list' ? 'Show conversation' : 'Show channels'"
+        @click="mobileView = mobileView === 'list' ? 'conversation' : 'list'"
+      >
         <Menu :size="16" />
       </button>
     </div>
     <div class="chat-shell">
-      <aside class="channels" :class="{ open: mobileChannels }">
+      <aside class="channels" :class="{ 'mobile-active': mobileView === 'list' }">
         <header class="channel-filter">
           <label
             ><Hash :size="12" /><input v-model="channelFilter" placeholder="Filter channels…"
           /></label>
-          <button class="mobile-close" aria-label="Close channels" @click="mobileChannels = false">
+          <button
+            class="mobile-close"
+            aria-label="Show conversation"
+            @click="mobileView = 'conversation'"
+          >
             <X :size="16" />
           </button>
         </header>
@@ -181,7 +318,7 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
             v-for="channel in regularChannels"
             :key="channel.id"
             :class="{ active: channelId === channel.id }"
-            @click="channelId = channel.id"
+            @click="selectChannel(channel.id)"
           >
             <span class="symbol"
               ><LockKeyhole v-if="channel.isPrivate" :size="14" /><Hash v-else :size="14" /></span
@@ -191,12 +328,17 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
           </button>
           <p v-if="!regularChannels.length" class="channel-empty">No channels match.</p>
           <div class="channel-divider" />
-          <div class="section-heading"><span>Direct messages</span></div>
+          <div class="section-heading">
+            <span>Direct messages</span>
+            <button aria-label="New direct message" @click="directMessageOpen = true">
+              <MessageSquarePlus :size="13" />
+            </button>
+          </div>
           <button
             v-for="channel in directChannels"
             :key="channel.id"
             :class="{ active: channelId === channel.id }"
-            @click="channelId = channel.id"
+            @click="selectChannel(channel.id)"
           >
             <span class="symbol"><Users :size="14" /></span
             ><span
@@ -209,9 +351,16 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
           </div>
         </nav>
       </aside>
-      <main class="transcript">
+      <main class="transcript" :class="{ 'mobile-active': mobileView === 'conversation' }">
         <header v-if="current">
           <div class="channel-identity">
+            <button
+              class="conversation-back"
+              aria-label="Back to channels"
+              @click="mobileView = 'list'"
+            >
+              <ArrowLeft :size="16" />
+            </button>
             <span class="identity-icon"
               ><Users v-if="current.isDM" :size="16" /><LockKeyhole
                 v-else-if="current.isPrivate"
@@ -256,17 +405,44 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
           <p>Pick a channel on the left, or press ⌘K to jump to one.</p>
         </div>
         <DeliveryFieldState v-if="loadingMessages" loading />
-        <div v-else class="messages" aria-live="polite">
-          <div class="date-rule"><span>Latest dispatches</span></div>
-          <CollaborationMessageRow
-            v-for="message in messages"
-            :key="message.id"
-            :message="message"
-            @thread="openThread"
-            @react="react"
-            @pin="pin"
-            @save="save"
-          /><DeliveryFieldState v-if="!messages.length" empty="No dispatches have been entered." />
+        <div
+          v-else
+          ref="messagesElement"
+          class="messages"
+          aria-live="polite"
+          role="log"
+          aria-label="Channel messages"
+          @scroll="handleMessageScroll"
+        >
+          <div class="message-stack">
+            <button
+              v-if="nextCursor"
+              class="load-older"
+              :disabled="loadingOlder"
+              @click="loadOlder"
+            >
+              <LoaderCircle v-if="loadingOlder" class="spin" :size="14" />
+              {{ loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages' }}
+            </button>
+            <p v-else-if="messages.length" class="history-start">
+              This is the beginning of the conversation.
+            </p>
+            <template v-for="(message, index) in messages" :key="message.id">
+              <div v-if="showDateDivider(index)" class="date-rule">
+                <span>{{ messageDate(message.createdAt) }}</span>
+              </div>
+              <CollaborationMessageRow
+                :message="message"
+                :grouped="messageGrouped(index)"
+                @thread="openThread"
+                @react="react"
+                @pin="pin"
+                @save="save"
+                @changed="refreshMessageSurfaces"
+              />
+            </template>
+            <DeliveryFieldState v-if="!messages.length" empty="No messages yet. Say hello." />
+          </div>
         </div>
         <form class="composer" @submit.prevent="send()">
           <input ref="fileInput" class="sr-only" type="file" multiple @change="addFiles" />
@@ -284,8 +460,8 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
             :disabled="!current"
             rows="2"
             aria-label="Message"
-            placeholder="Write a dispatch…"
-            @keydown.ctrl.enter.prevent="send()"
+            placeholder="Write a message…"
+            @keydown.enter.exact.prevent="send()"
           /><button
             class="button"
             :disabled="(!draft.trim() && !uploads.length) || uploading"
@@ -293,7 +469,9 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
           >
             <Send :size="16" /></button
           ><small>{{
-            uploads.length ? `${uploads.length} attachment(s) ready` : 'Ctrl + Enter to send'
+            uploads.length
+              ? `${uploads.length} attachment(s) ready`
+              : 'Enter to send · Shift+Enter for a new line'
           }}</small>
         </form>
       </main>
@@ -324,7 +502,8 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
             @thread="() => {}"
             @react="react"
             @pin="pin"
-            @save="save" />
+            @save="save"
+            @changed="refreshMessageSurfaces" />
           <div class="reply-rule">Replies · {{ threadReplies.length }}</div>
           <CollaborationMessageRow
             v-for="reply in threadReplies"
@@ -333,7 +512,8 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
             @thread="() => {}"
             @react="react"
             @pin="pin"
-            @save="save" />
+            @save="save"
+            @changed="refreshMessageSurfaces" />
           <form class="thread-compose" @submit.prevent="send(threadParent.id)">
             <textarea
               v-model="threadDraft"
@@ -358,7 +538,8 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
             @thread="openThread"
             @react="react"
             @pin="pin"
-            @save="save" /><DeliveryFieldState
+            @save="save"
+            @changed="refreshMessageSurfaces" /><DeliveryFieldState
             v-if="utilityMessages.length === 0"
             empty="Nothing is filed here yet."
         /></template>
@@ -367,7 +548,12 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
     <CollaborationChannelForm
       :open="channelForm"
       @close="channelForm = false"
-      @saved="loadChannels"
+      @saved="channelCreated"
+    />
+    <CollaborationDirectMessageDialog
+      :open="directMessageOpen"
+      @close="directMessageOpen = false"
+      @created="directMessageCreated"
     />
   </section>
 </template>
@@ -375,9 +561,10 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
 <style scoped>
 .chat-page {
   display: flex;
-  height: calc(100dvh - 4rem);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
-  margin: -1rem;
   overflow: hidden;
   background: var(--background);
 }
@@ -429,6 +616,7 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
     monospace;
 }
 .chat-shell {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -667,6 +855,41 @@ const channelName = (c: Channel) => (c.isDM ? c.dmPeer?.name || 'Direct message'
 .messages {
   min-height: 0;
   flex: 1;
+  overscroll-behavior: contain;
+}
+.message-stack {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 8px 0 12px;
+}
+.load-older {
+  display: inline-flex;
+  min-height: 30px;
+  align-self: center;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 8px;
+  padding: 0 10px;
+  color: var(--text-muted);
+  background: var(--card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.load-older:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--border);
+}
+.history-start {
+  margin: 0;
+  padding: 3px 16px 9px;
+  color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+  text-align: center;
+  font-size: 10px;
 }
 .date-rule {
   position: sticky;
@@ -797,29 +1020,26 @@ textarea {
   border-radius: 8px;
 }
 .mobile-menu,
-.mobile-close {
+.mobile-close,
+.conversation-back {
   display: none !important;
 }
 @media (max-width: 1050px) {
   .side-panel {
-    position: fixed;
+    position: absolute;
     z-index: 40;
-    top: 76px;
+    top: 0;
+    bottom: 0;
     right: 0;
     width: min(390px, 90vw);
-    height: calc(100vh - 76px);
+    height: 100%;
     box-shadow: 0 18px 60px rgba(0, 0, 0, 0.2);
-  }
-}
-@media (min-width: 640px) {
-  .chat-page {
-    height: calc(100vh - 8rem);
-    margin: -1.5rem;
   }
 }
 @media (max-width: 760px) {
   .mobile-menu,
-  .mobile-close {
+  .mobile-close,
+  .conversation-back {
     display: inline-flex !important;
   }
   .saved-button span,
@@ -830,21 +1050,38 @@ textarea {
     min-width: 0;
     flex: 1;
   }
-  .channels {
-    position: fixed;
-    z-index: 50;
-    inset: 76px auto 0 0;
-    width: min(300px, 90vw);
-    background: var(--card);
-    transform: translateX(-101%);
-    transition: 0.2s;
-    box-shadow: 12px 0 30px rgba(0, 0, 0, 0.14);
+  .chat-shell > .channels,
+  .chat-shell > .transcript {
+    display: none;
   }
-  .channels.open {
-    transform: none;
+  .chat-shell > .channels.mobile-active,
+  .chat-shell > .transcript.mobile-active {
+    display: flex;
+  }
+  .channels {
+    position: static;
+    width: 100%;
+    flex-basis: 100%;
+    background: var(--card);
+    border-right: 0;
   }
   .transcript {
     min-height: 0;
+  }
+  .conversation-back {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+  }
+  .conversation-back:hover {
+    color: var(--foreground);
+    background: var(--muted);
   }
   .channel-identity p,
   .members-button span {
@@ -852,6 +1089,17 @@ textarea {
   }
   .composer small {
     display: none;
+  }
+  .side-panel {
+    width: 100%;
+  }
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

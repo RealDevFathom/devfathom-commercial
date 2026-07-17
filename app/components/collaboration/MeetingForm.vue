@@ -127,19 +127,26 @@ form {
 label {
   display: grid;
   gap: 6px;
-  color: var(--muted);
-  font:
-    9px 'IBM Plex Mono',
-    monospace;
-  text-transform: uppercase;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 input,
 select,
 textarea {
-  padding: 10px;
-  color: var(--text);
-  background: var(--paper);
+  min-height: 40px;
+  padding: 9px 11px;
+  color: var(--foreground);
+  background: var(--background);
   border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: 0;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 .two {
   display: grid;
@@ -148,9 +155,11 @@ textarea {
 }
 .person {
   text-align: left;
-  padding: 8px;
-  background: var(--linen);
-  border: 1px solid var(--border);
+  padding: 9px 10px;
+  color: var(--foreground);
+  background: var(--secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
   cursor: pointer;
 }
 .chips {
@@ -160,9 +169,9 @@ textarea {
 }
 .chips button {
   padding: 5px 8px;
-  color: var(--forest-800);
-  background: var(--linen);
-  border: 1px solid var(--border);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
   border-radius: 15px;
   font-size: 10px;
   cursor: pointer;
@@ -173,7 +182,7 @@ textarea {
   gap: 8px;
 }
 p {
-  color: var(--clay-600);
+  color: #dc2626;
   font-size: 12px;
 }
 @media (max-width: 580px) {

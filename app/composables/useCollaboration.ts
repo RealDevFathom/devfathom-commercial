@@ -2,6 +2,7 @@ import type {
   CollaborationSearch,
   NotificationItem,
   NotificationPreferences,
+  Person,
 } from '~/types/collaboration';
 
 export function useCollaboration() {
@@ -9,6 +10,12 @@ export function useCollaboration() {
   return {
     search: (query: string) =>
       request<CollaborationSearch>('/api/v1/search/collaboration', { query: { query } }),
+    people: async (query: string) => {
+      const results = await request<CollaborationSearch>('/api/v1/search/collaboration', {
+        query: { query },
+      });
+      return results.team as Person[];
+    },
     notifications: (unreadOnly = false) =>
       request<NotificationItem[]>('/api/v1/notifications', { query: { unreadOnly } }),
     markRead: (id: string) => request(`/api/v1/notifications/${id}/read`, { method: 'PATCH' }),
