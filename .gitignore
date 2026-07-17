@@ -13,9 +13,20 @@
 # testing
 /coverage
 
-# next.js
+# legacy next.js
 /.next/
 /out/
+
+# nuxt
+/.nuxt/
+/.output/
+
+# python
+__pycache__/
+*.py[cod]
+/.venv/
+.ruff_cache/
+.pytest_cache/
 
 # production
 /build
@@ -32,6 +43,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the sanitized template (names + placeholders only, no real values) is
+# tracked so onboarding has an accurate reference. Runtime behavior is unchanged;
+# real secrets still live only in `.env` (ignored) and the platform secret store.
+!.env.example
 
 # vercel
 .vercel
