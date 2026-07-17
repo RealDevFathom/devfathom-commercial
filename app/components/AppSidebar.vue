@@ -1,68 +1,24 @@
 <script setup lang="ts">
+import { X } from 'lucide-vue-next';
 import {
-  BarChart3,
-  Briefcase,
-  ChevronLeft,
-  ChevronRight,
-  ClipboardList,
-  DollarSign,
-  FolderKanban,
-  LayoutDashboard,
-  MessageSquare,
-  ScrollText,
-  Settings,
-  StickyNote,
-  UserCog,
-  Users,
-  Video,
-} from 'lucide-vue-next';
-import type { Component } from 'vue';
+  getBestNavigationMatch,
+  getVisibleNavigation,
+  navigationGroups,
+} from '~/components/layout/navigation';
 
-defineProps<{
+const props = defineProps<{
   open?: boolean;
-  collapsed?: boolean;
 }>();
 
 const emit = defineEmits<{
   close: [];
-  'update:collapsed': [value: boolean];
 }>();
-
-interface NavItem {
-  label: string;
-  to: string;
-  icon: Component;
-  roles?: string[];
-}
 
 const route = useRoute();
 const { user } = useAuth();
 
-const navigation: NavItem[] = [
-  { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
-  { label: 'Projects', to: '/projects', icon: FolderKanban },
-  { label: 'Clients', to: '/clients', icon: Briefcase },
-  { label: 'Notes', to: '/notes', icon: StickyNote },
-  { label: 'Finance', to: '/finance', icon: DollarSign, roles: ['ADMIN'] },
-  { label: 'Meetings', to: '/meetings', icon: Video },
-  { label: 'Chat', to: '/chat', icon: MessageSquare },
-  { label: 'Team', to: '/team', icon: Users },
-  { label: 'Reviews', to: '/reviews', icon: ClipboardList },
-  { label: 'Insights', to: '/team/stats', icon: BarChart3, roles: ['ADMIN'] },
-  { label: 'HR', to: '/hr', icon: UserCog, roles: ['ADMIN', 'HR'] },
-  { label: 'Audit Log', to: '/audit-logs', icon: ScrollText, roles: ['ADMIN'] },
-  { label: 'Settings', to: '/settings', icon: Settings },
-];
-
-const visibleNav = computed(() =>
-  navigation.filter((item) => !item.roles || item.roles.includes(user.value?.role || 'EMPLOYEE'))
-);
-const bestMatch = computed(
-  () =>
-    visibleNav.value
-      .filter((item) => route.path === item.to || route.path.startsWith(`${item.to}/`))
-      .sort((a, b) => b.to.length - a.to.length)[0]?.to
-);
+const visibleNav = computed(() => getVisibleNavigation(user.value?.role));
+const bestMatch = computed(() => getBestNavigationMatch(route.path, visibleNav.value));
 const initials = computed(
   () =>
     user.value?.name
@@ -72,107 +28,98 @@ const initials = computed(
       .toUpperCase()
       .slice(0, 2) || 'DF'
 );
+
+function itemsForGroup(group: (typeof navigationGroups)[number]) {
+  return visibleNav.value.filter((item) => item.group === group);
+}
+
+function itemNumber(to: string) {
+  return String(visibleNav.value.findIndex((item) => item.to === to) + 1).padStart(2, '0');
+}
 </script>
 
 <template>
-  <div
-    v-if="open"
+  <button
+    v-if="props.open"
     class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
-    aria-hidden="true"
+    aria-label="Close navigation"
     @click="emit('close')"
   />
 
   <aside
-    class="legacy-sidebar fixed inset-y-0 left-0 z-50 flex -translate-x-full flex-col border-r border-[var(--sidebar-border)] bg-[var(--sidebar)] text-[var(--sidebar-foreground)] transition-[width,transform] duration-300 ease-in-out lg:translate-x-0"
-    :class="[collapsed ? 'w-16' : 'w-60', open ? 'translate-x-0' : '']"
+    class="studio-drawer fixed inset-y-0 left-0 z-50 flex w-[min(20rem,88vw)] -translate-x-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-2xl transition-transform duration-300 ease-out lg:hidden"
+    :class="props.open ? 'translate-x-0' : ''"
+    :aria-hidden="props.open ? undefined : true"
+    :inert="props.open ? undefined : true"
     role="navigation"
     aria-label="Main navigation"
   >
-    <div
-      class="flex h-16 shrink-0 items-center border-b border-[var(--sidebar-border)] px-4"
-      :class="collapsed ? 'justify-center' : 'gap-3'"
-    >
-      <AppLogo :size="32" variant="white" />
-      <div v-if="!collapsed" class="flex min-w-0 flex-col overflow-hidden">
+    <div class="flex h-20 shrink-0 items-center gap-3 border-b border-sidebar-border px-5">
+      <AppLogo :size="36" />
+      <div class="flex min-w-0 flex-col overflow-hidden leading-tight">
         <strong
-          class="block font-display text-sm font-semibold tracking-tight text-[var(--sidebar-accent-foreground)]"
+          class="truncate text-[15px] font-semibold tracking-[-0.025em] text-sidebar-accent-foreground"
         >
           DevFathom
         </strong>
         <span
-          class="text-[10px] uppercase tracking-[0.18em] text-[color:var(--sidebar-foreground)]/50"
+          class="truncate font-mono text-[9px] uppercase tracking-[0.2em] text-sidebar-foreground/55"
         >
-          Company hub
+          Company workspace
         </span>
       </div>
       <button
-        v-if="!collapsed"
-        class="ml-auto grid h-8 w-8 place-items-center rounded-lg text-[color:var(--sidebar-foreground)]/70 hover:bg-[var(--sidebar-accent)] lg:hidden"
+        class="studio-icon-button ml-auto"
         aria-label="Close navigation"
         @click="emit('close')"
       >
-        ×
+        <X :size="18" />
       </button>
     </div>
 
-    <nav class="flex-1 space-y-1 overflow-y-auto px-2 py-4">
-      <NuxtLink
-        v-for="item in visibleNav"
-        :key="item.to"
-        :to="item.to"
-        class="group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-150"
-        :class="[
-          collapsed ? 'justify-center' : '',
-          bestMatch === item.to
-            ? 'bg-[var(--sidebar-accent)] text-[var(--sidebar-accent-foreground)] shadow-sm'
-            : 'text-[var(--sidebar-foreground)] hover:bg-[color:var(--sidebar-accent)]/40 hover:text-[var(--sidebar-accent-foreground)]',
-        ]"
-        :title="collapsed ? item.label : undefined"
-        :aria-current="bestMatch === item.to ? 'page' : undefined"
-        @click="emit('close')"
-      >
-        <component
-          :is="item.icon"
-          :size="18"
-          class="relative z-10 shrink-0 transition-colors"
+    <nav class="flex-1 space-y-6 overflow-y-auto px-3 py-5">
+      <section v-for="group in navigationGroups" :key="group" class="space-y-1">
+        <p
+          class="px-2 pb-2 font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/45"
+        >
+          Runbook / {{ group }}
+        </p>
+        <NuxtLink
+          v-for="item in itemsForGroup(group)"
+          :key="item.to"
+          :to="item.to"
+          class="group relative flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors duration-150"
           :class="
             bestMatch === item.to
-              ? 'text-[var(--sidebar-primary)]'
-              : 'text-[color:var(--sidebar-foreground)]/60 group-hover:text-[var(--sidebar-foreground)]'
+              ? 'bg-foreground text-primary-foreground'
+              : 'text-sidebar-foreground hover:bg-muted hover:text-sidebar-accent-foreground'
           "
-        />
-        <span v-if="!collapsed" class="relative z-10 truncate">{{ item.label }}</span>
-        <span
-          v-if="bestMatch === item.to && !collapsed"
-          class="relative z-10 ml-auto h-1.5 w-1.5 rounded-full bg-[var(--sidebar-primary)]"
-        />
-      </NuxtLink>
+          :aria-current="bestMatch === item.to ? 'page' : undefined"
+          @click="emit('close')"
+        >
+          <span
+            class="relative z-10 w-5 shrink-0 text-center font-mono text-[10px] tabular-nums"
+            :class="bestMatch === item.to ? 'text-accent-brand' : 'text-sidebar-foreground/45'"
+          >
+            {{ itemNumber(item.to) }}
+          </span>
+          <span class="relative z-10 truncate">{{ item.label }}</span>
+        </NuxtLink>
+      </section>
     </nav>
 
-    <button
-      class="mx-2 mb-2 hidden items-center justify-center rounded-lg p-2 text-[color:var(--sidebar-foreground)]/50 transition-colors hover:bg-[color:var(--sidebar-accent)]/50 hover:text-[var(--sidebar-foreground)] lg:flex"
-      :aria-label="collapsed ? 'Expand sidebar' : 'Collapse sidebar'"
-      @click="emit('update:collapsed', !collapsed)"
-    >
-      <ChevronRight v-if="collapsed" :size="16" />
-      <ChevronLeft v-else :size="16" />
-    </button>
-
-    <div
-      class="border-t border-[var(--sidebar-border)] p-3"
-      :class="collapsed ? 'flex justify-center' : ''"
-    >
-      <div class="flex items-center gap-3" :class="collapsed ? 'justify-center' : ''">
+    <div class="border-t border-sidebar-border p-4">
+      <div class="flex items-center gap-3">
         <span
-          class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[color:var(--sidebar-primary)]/20 text-xs font-medium text-[var(--sidebar-primary)]"
+          class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/10 font-mono text-xs font-medium text-primary"
         >
           {{ initials }}
         </span>
-        <div v-if="!collapsed" class="flex min-w-0 flex-col overflow-hidden">
-          <span class="truncate text-sm font-medium text-[var(--sidebar-accent-foreground)]">{{
+        <div class="flex min-w-0 flex-col overflow-hidden">
+          <span class="truncate text-sm font-medium text-sidebar-accent-foreground">{{
             user?.name
           }}</span>
-          <span class="truncate text-xs text-[color:var(--sidebar-foreground)]/50">
+          <span class="truncate font-mono text-[11px] text-sidebar-foreground/50">
             {{ user?.title || user?.role }}
           </span>
         </div>
