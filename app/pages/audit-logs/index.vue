@@ -2,6 +2,7 @@
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   Bot,
   Clock,
   Download,
@@ -9,24 +10,45 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
-  ScrollText,
   Sparkles,
   UserRound,
   X,
 } from 'lucide-vue-next';
 import type { AuditLog } from '~/types/firm';
 
+type AuditChange = { before?: unknown; after?: unknown };
+type AuditEvidence = AuditLog & {
+  actorId?: string | null;
+  actorEmail?: string | null;
+  actorRole?: string | null;
+  tokenId?: string | null;
+  tokenName?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  userAgent?: string | null;
+  httpMethod?: string | null;
+  path?: string | null;
+  statusCode?: number | null;
+  durationMs?: number | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  input?: unknown;
+  result?: unknown;
+  changes?: Record<string, AuditChange> | null;
+  metadata?: unknown;
+};
+
 useHead({ title: 'Audit logs · DevFathom Hub' });
 
 const api = useFirm();
 const { user } = useAuth();
 const allowed = computed(() => user.value?.role === 'ADMIN');
-const logs = ref<AuditLog[]>([]);
+const logs = ref<AuditEvidence[]>([]);
 const stats = ref<Record<string, any>>({});
 const filters = ref<Record<string, any>>({});
 const loading = ref(true);
 const error = ref('');
-const selected = ref<AuditLog | null>(null);
+const selected = ref<AuditEvidence | null>(null);
 const nextCursor = ref<string | null>(null);
 const loadingMore = ref(false);
 const query = reactive({
@@ -41,13 +63,18 @@ const query = reactive({
   assistant_only: false,
 });
 
-const requestQuery = (cursor?: string | null) => ({
-  ...Object.fromEntries(
-    Object.entries(query).filter(([, value]) => value !== '' && value !== false)
-  ),
-  limit: 50,
-  ...(cursor ? { cursor } : {}),
-});
+const requestQuery = (cursor?: string | null) => {
+  const { start_date, end_date, ...rest } = query;
+  return {
+    ...Object.fromEntries(
+      Object.entries(rest).filter(([, value]) => value !== '' && value !== false)
+    ),
+    ...(start_date ? { start_date: `${start_date}T00:00:00` } : {}),
+    ...(end_date ? { end_date: `${end_date}T23:59:59.999` } : {}),
+    limit: 50,
+    ...(cursor ? { cursor } : {}),
+  };
+};
 
 async function load() {
   if (!allowed.value) {
@@ -159,41 +186,58 @@ const operationTone = (operation: string) => {
   return 'bg-secondary text-text-muted';
 };
 const sourceTone = (source: string) => {
-  if (source === 'API') return 'bg-sky-500/10 text-sky-500';
-  if (source === 'ASSISTANT') return 'bg-violet-500/10 text-violet-500';
+  if (source === 'REST_API') return 'bg-sky-500/10 text-sky-500';
+  if (source === 'AUTH') return 'bg-violet-500/10 text-violet-500';
   return 'bg-secondary text-text-muted';
 };
+const isAssistantEntry = (entry: AuditEvidence) => {
+  if (entry.action.startsWith('assistant.')) return true;
+  return (
+    !!entry.metadata &&
+    typeof entry.metadata === 'object' &&
+    !Array.isArray(entry.metadata) &&
+    (entry.metadata as Record<string, unknown>).via === 'assistant'
+  );
+};
+const hasEvidence = (value: unknown) => {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return String(value).length > 0;
+};
+const formatEvidence = (value: unknown) => {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+const changeEntries = computed(() =>
+  selected.value?.changes && typeof selected.value.changes === 'object'
+    ? Object.entries(selected.value.changes)
+    : []
+);
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-6">
-    <div class="flex items-end justify-between gap-4">
-      <div>
-        <h1
-          class="flex items-center gap-2 font-display text-2xl font-bold tracking-tight text-foreground"
-        >
-          <ScrollText :size="24" class="text-primary" />Audit Log
-        </h1>
-        <p class="mt-1.5 text-[15px] text-text-muted">
-          Every action across the workspace — who did what, when, and from where.
-        </p>
-      </div>
-      <div class="flex shrink-0 items-center gap-2">
-        <button
-          class="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
-          :disabled="!logs.length"
-          @click="exportLogs"
-        >
+  <section class="studio-fade-in space-y-6">
+    <PageHeader
+      class="!mb-0"
+      eyebrow="System"
+      title="Audit Log"
+      description="Every action across the workspace — who did what, when, and from where."
+    >
+      <div class="flex flex-wrap items-center gap-2">
+        <button class="studio-outline-button" :disabled="!logs.length" @click="exportLogs">
           <Download :size="15" /> Export
         </button>
-        <button
-          class="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-secondary hover:text-foreground"
-          @click="load"
-        >
+        <button class="studio-outline-button" @click="load">
           <RefreshCw :size="15" /> Refresh
         </button>
       </div>
-    </div>
+    </PageHeader>
 
     <DeliveryFieldState v-if="!allowed" error="Audit logs are limited to administrators." />
     <template v-else>
@@ -216,7 +260,7 @@ const sourceTone = (source: string) => {
             },
           ]"
           :key="item.label"
-          class="rounded-xl bg-card px-5 py-9 ring-1 ring-foreground/10"
+          class="studio-kpi-card bg-card px-5 py-7"
         >
           <div class="flex items-center gap-2">
             <span
@@ -248,10 +292,7 @@ const sourceTone = (source: string) => {
         </article>
       </div>
 
-      <form
-        class="space-y-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10"
-        @submit.prevent="load"
-      >
+      <form class="audit-filter-shell studio-section-card" @submit.prevent="load">
         <div class="flex items-center gap-2">
           <label class="studio-audit-search flex-1"
             ><Search :size="16" /><input
@@ -270,31 +311,41 @@ const sourceTone = (source: string) => {
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <Filter :size="15" class="text-text-muted" />
-          <select v-model="query.category" aria-label="Category">
+          <select v-model="query.category" class="audit-filter-control" aria-label="Category">
             <option value="">All categories</option>
             <option v-for="item in filters.categories" :key="item">{{ item }}</option>
           </select>
-          <select v-model="query.operation" aria-label="Operation">
+          <select v-model="query.operation" class="audit-filter-control" aria-label="Operation">
             <option value="">All operations</option>
             <option v-for="item in filters.operations" :key="item">{{ item }}</option>
           </select>
-          <select v-model="query.source" aria-label="Source">
+          <select v-model="query.source" class="audit-filter-control" aria-label="Source">
             <option value="">All sources</option>
             <option v-for="item in filters.sources" :key="item">{{ item }}</option>
           </select>
-          <select v-model="query.outcome" aria-label="Outcome">
+          <select v-model="query.outcome" class="audit-filter-control" aria-label="Outcome">
             <option value="">Any outcome</option>
             <option v-for="item in filters.outcomes" :key="item">{{ item }}</option>
           </select>
-          <select v-model="query.actor_id" aria-label="Actor">
+          <select v-model="query.actor_id" class="audit-filter-control" aria-label="Actor">
             <option value="">All actors</option>
             <option v-for="actor in filters.actors" :key="actor.id" :value="actor.id">
               {{ actor.name || actor.id }} ({{ actor.count }})
             </option>
           </select>
-          <input v-model="query.start_date" type="date" aria-label="From date" />
+          <input
+            v-model="query.start_date"
+            class="audit-filter-control"
+            type="date"
+            aria-label="From date"
+          />
           <span class="text-xs text-text-muted">→</span>
-          <input v-model="query.end_date" type="date" aria-label="To date" />
+          <input
+            v-model="query.end_date"
+            class="audit-filter-control"
+            type="date"
+            aria-label="To date"
+          />
           <button
             type="button"
             class="studio-outline-button"
@@ -316,7 +367,7 @@ const sourceTone = (source: string) => {
         action="Try again"
         @action="load"
       />
-      <section v-else class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+      <section v-else class="studio-section-card overflow-hidden py-4">
         <div class="divide-y divide-border-subtle">
           <button
             v-for="entry in logs"
@@ -351,7 +402,7 @@ const sourceTone = (source: string) => {
             </span>
             <span class="hidden shrink-0 items-center gap-1.5 sm:flex">
               <em
-                v-if="entry.source === 'ASSISTANT'"
+                v-if="isAssistantEntry(entry)"
                 class="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium not-italic text-violet-500"
                 ><Sparkles :size="10" />Assistant</em
               >
@@ -411,6 +462,9 @@ const sourceTone = (source: string) => {
           />
           <aside
             class="absolute inset-y-0 right-0 w-full overflow-y-auto border-l border-border bg-card shadow-2xl sm:max-w-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Audit evidence"
           >
             <header class="sticky top-0 z-10 border-b border-border-subtle bg-card px-5 py-5">
               <div class="flex items-start justify-between gap-4">
@@ -419,6 +473,11 @@ const sourceTone = (source: string) => {
                     <h2 class="font-mono text-sm font-semibold text-foreground">
                       {{ selected.action }}
                     </h2>
+                    <span
+                      v-if="isAssistantEntry(selected)"
+                      class="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-600"
+                      ><Sparkles :size="10" />Assistant</span
+                    >
                     <span
                       class="rounded-full px-2 py-0.5 text-[11px] font-medium"
                       :class="operationTone(selected.operation)"
@@ -432,6 +491,7 @@ const sourceTone = (source: string) => {
                 </div>
                 <button
                   class="grid size-8 place-items-center rounded-lg text-text-muted hover:bg-secondary hover:text-foreground"
+                  aria-label="Close audit evidence"
                   @click="selected = null"
                 >
                   <X :size="16" />
@@ -439,62 +499,164 @@ const sourceTone = (source: string) => {
               </div>
             </header>
             <div class="space-y-5 px-5 py-6">
-              <section>
-                <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                  Who
-                </h3>
-                <dl class="grid grid-cols-2 gap-3 text-sm">
+              <section
+                v-if="selected.outcome === 'FAILURE' && selected.errorMessage"
+                class="rounded-2xl border border-red-500/20 bg-red-500/5 p-4"
+              >
+                <p class="text-sm font-semibold text-red-600">
+                  {{ selected.errorCode ? `${selected.errorCode}: ` : ''
+                  }}{{ selected.errorMessage }}
+                </p>
+              </section>
+
+              <section class="evidence-section">
+                <h3>Who</h3>
+                <dl class="evidence-grid">
                   <div>
-                    <dt class="text-xs text-text-muted">Actor</dt>
-                    <dd class="mt-1">{{ selected.actorName || '—' }}</dd>
+                    <dt>Actor</dt>
+                    <dd>{{ selected.actorName || '—' }}</dd>
                   </div>
                   <div>
-                    <dt class="text-xs text-text-muted">Actor type</dt>
-                    <dd class="mt-1">{{ selected.actorType }}</dd>
+                    <dt>Email</dt>
+                    <dd class="mono-evidence">{{ selected.actorEmail || '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>Role</dt>
+                    <dd>{{ selected.actorRole || '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>Actor type</dt>
+                    <dd>{{ selected.actorType }}</dd>
+                  </div>
+                  <div>
+                    <dt>Actor ID</dt>
+                    <dd class="mono-evidence">{{ selected.actorId || '—' }}</dd>
+                  </div>
+                  <div v-if="selected.tokenName">
+                    <dt>API token</dt>
+                    <dd>{{ selected.tokenName }}</dd>
+                  </div>
+                  <div v-if="selected.tokenId">
+                    <dt>Token ID</dt>
+                    <dd class="mono-evidence">{{ selected.tokenId }}</dd>
                   </div>
                 </dl>
               </section>
-              <section>
-                <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                  What
-                </h3>
-                <dl class="grid grid-cols-2 gap-3 text-sm">
+
+              <section class="evidence-section">
+                <h3>What</h3>
+                <dl class="evidence-grid">
                   <div>
-                    <dt class="text-xs text-text-muted">Category</dt>
-                    <dd class="mt-1">{{ selected.category }}</dd>
+                    <dt>Action</dt>
+                    <dd class="mono-evidence">{{ selected.action }}</dd>
                   </div>
                   <div>
-                    <dt class="text-xs text-text-muted">Source</dt>
-                    <dd class="mt-1">{{ selected.source }}</dd>
+                    <dt>Category</dt>
+                    <dd>{{ selected.category }}</dd>
                   </div>
-                  <div class="col-span-2">
-                    <dt class="text-xs text-text-muted">Description</dt>
-                    <dd class="mt-1">
-                      {{
-                        selected.description || selected.targetLabel || 'No description recorded.'
-                      }}
-                    </dd>
+                  <div>
+                    <dt>Operation</dt>
+                    <dd>{{ selected.operation }}</dd>
+                  </div>
+                  <div>
+                    <dt>Source</dt>
+                    <dd>{{ selected.source }}</dd>
+                  </div>
+                  <div class="sm:col-span-2">
+                    <dt>Description</dt>
+                    <dd>{{ selected.description || 'No description recorded.' }}</dd>
                   </div>
                 </dl>
               </section>
-              <section>
-                <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                  Context
-                </h3>
-                <dl class="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <dt class="text-xs text-text-muted">IP address</dt>
-                    <dd class="mt-1 font-mono text-xs">{{ selected.ip || '—' }}</dd>
+
+              <section
+                v-if="selected.targetType || selected.targetId || selected.targetLabel"
+                class="evidence-section"
+              >
+                <h3>Target</h3>
+                <dl class="evidence-grid">
+                  <div v-if="selected.targetLabel">
+                    <dt>Label</dt>
+                    <dd>{{ selected.targetLabel }}</dd>
                   </div>
-                  <div>
-                    <dt class="text-xs text-text-muted">Outcome</dt>
-                    <dd class="mt-1">{{ selected.outcome }}</dd>
+                  <div v-if="selected.targetType">
+                    <dt>Type</dt>
+                    <dd>{{ selected.targetType }}</dd>
+                  </div>
+                  <div v-if="selected.targetId">
+                    <dt>ID</dt>
+                    <dd class="mono-evidence">{{ selected.targetId }}</dd>
                   </div>
                 </dl>
               </section>
-              <pre
-                class="max-h-72 overflow-auto rounded-lg bg-secondary/50 p-3 font-mono text-[10px] text-foreground"
-                >{{ JSON.stringify(selected, null, 2) }}</pre>
+
+              <section v-if="changeEntries.length" class="evidence-section">
+                <h3>Changes</h3>
+                <div class="space-y-2">
+                  <article
+                    v-for="[field, change] in changeEntries"
+                    :key="field"
+                    class="rounded-xl border border-border-subtle bg-[var(--surface-sunken)] p-3"
+                  >
+                    <p class="mb-2 font-mono text-[11px] font-semibold">{{ field }}</p>
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                      <code class="change-before">{{ formatEvidence(change.before) }}</code>
+                      <ArrowRight :size="13" class="shrink-0 text-text-faint" />
+                      <code class="change-after">{{ formatEvidence(change.after) }}</code>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <section class="evidence-section">
+                <h3>Context</h3>
+                <dl class="evidence-grid">
+                  <div>
+                    <dt>IP address</dt>
+                    <dd class="mono-evidence">{{ selected.ip || '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>User agent</dt>
+                    <dd>{{ selected.userAgent || '—' }}</dd>
+                  </div>
+                  <div v-if="selected.httpMethod">
+                    <dt>HTTP method</dt>
+                    <dd>{{ selected.httpMethod }}</dd>
+                  </div>
+                  <div v-if="selected.path">
+                    <dt>Path</dt>
+                    <dd class="mono-evidence">{{ selected.path }}</dd>
+                  </div>
+                  <div v-if="typeof selected.statusCode === 'number'">
+                    <dt>Status code</dt>
+                    <dd>{{ selected.statusCode }}</dd>
+                  </div>
+                  <div v-if="typeof selected.durationMs === 'number'">
+                    <dt>Duration</dt>
+                    <dd>{{ selected.durationMs }}ms</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section v-if="hasEvidence(selected.input)" class="evidence-section">
+                <h3>Input</h3>
+                <pre class="json-evidence">{{ JSON.stringify(selected.input, null, 2) }}</pre>
+              </section>
+              <section v-if="hasEvidence(selected.result)" class="evidence-section">
+                <h3>Result</h3>
+                <pre class="json-evidence">{{ JSON.stringify(selected.result, null, 2) }}</pre>
+              </section>
+              <section v-if="hasEvidence(selected.metadata)" class="evidence-section">
+                <h3>Metadata</h3>
+                <pre class="json-evidence">{{ JSON.stringify(selected.metadata, null, 2) }}</pre>
+              </section>
+
+              <details class="rounded-2xl border border-border-subtle p-4">
+                <summary class="cursor-pointer text-xs font-semibold text-text-muted">
+                  Raw record
+                </summary>
+                <pre class="json-evidence mt-3">{{ JSON.stringify(selected, null, 2) }}</pre>
+              </details>
             </div>
           </aside>
         </div>
@@ -502,3 +664,117 @@ const sourceTone = (source: string) => {
     </ClientOnly>
   </section>
 </template>
+
+<style scoped>
+.audit-filter-shell {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.audit-filter-control {
+  min-height: 40px;
+  max-width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  padding: 0 10px;
+  color: var(--foreground);
+  background: var(--surface-card);
+  font-size: 12px;
+  outline: none;
+}
+
+.audit-filter-control:focus {
+  border-color: var(--foreground);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.evidence-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  padding: 16px;
+  background: var(--surface-card);
+}
+
+.evidence-section > h3 {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.evidence-grid dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.evidence-grid dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.mono-evidence,
+.json-evidence,
+.change-before,
+.change-after {
+  font-family: var(--font-mono);
+}
+
+.json-evidence {
+  max-height: 288px;
+  overflow: auto;
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--foreground);
+  background: var(--surface-sunken);
+  font-size: 10px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.change-before,
+.change-after {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border-radius: 7px;
+  padding: 4px 7px;
+}
+
+.change-before {
+  color: #b91c1c;
+  background: #fef2f2;
+  text-decoration: line-through;
+}
+
+.change-after {
+  color: #047857;
+  background: #ecfdf5;
+}
+
+@media (max-width: 640px) {
+  .audit-filter-shell > div {
+    align-items: stretch;
+  }
+
+  .audit-filter-control {
+    min-width: calc(50% - 12px);
+    flex: 1 1 140px;
+  }
+
+  .evidence-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

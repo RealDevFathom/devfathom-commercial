@@ -39,7 +39,10 @@ const webhooks = ref<WebhookType[]>([]);
 const resignations = ref<Resignation[]>([]);
 const loading = ref(true);
 const message = ref('');
-const error = ref('');
+const loadError = ref('');
+const actionError = ref('');
+const passwordError = ref('');
+const signingOut = ref(false);
 const editingProfile = ref(false);
 const showTokenForm = ref(false);
 const showWebhookForm = ref(false);
@@ -58,6 +61,14 @@ const tokenDraft = reactive({ name: '', scopes: 'team:read', expires_in_days: 90
 const webhookDraft = reactive({ url: '', events: ['invoice.paid'] as string[], active: true });
 const oneShot = ref<{ label: string; secret: string } | null>(null);
 const resignation = reactive({ reason: '', proposed_last_day: '' });
+
+const passwordRules = [
+  { id: 'length', label: 'At least 8 characters', test: (value: string) => value.length >= 8 },
+  { id: 'lower', label: 'One lowercase letter', test: (value: string) => /[a-z]/.test(value) },
+  { id: 'upper', label: 'One uppercase letter', test: (value: string) => /[A-Z]/.test(value) },
+  { id: 'number', label: 'One number', test: (value: string) => /[0-9]/.test(value) },
+];
+const passwordMeetsPolicy = computed(() => passwordRules.every((rule) => rule.test(password.next)));
 
 const notificationSettings = [
   { key: 'task', label: 'Tasks', description: 'Task assignments and updates' },
@@ -92,7 +103,7 @@ const scopeOptions = [
 
 async function load() {
   loading.value = true;
-  error.value = '';
+  loadError.value = '';
   try {
     member.value = await api.member(user.value!.id);
     Object.assign(profile, {
@@ -103,7 +114,7 @@ async function load() {
     });
     const saved = await api.preferences();
     prefs.value = {
-      theme: colorMode.value === 'dark' ? 'dark' : 'light',
+      theme: colorMode.preference === 'system' ? 'system' : colorMode.value,
       density: 'default',
       type: 'default',
       accent: 'quiet',
@@ -119,7 +130,7 @@ async function load() {
       [tokens.value, webhooks.value] = await Promise.all([api.apiTokens(), api.webhooks()]);
     }
   } catch (caught: any) {
-    error.value = caught?.data?.detail || 'Settings could not be loaded.';
+    loadError.value = caught?.data?.detail || 'Settings could not be loaded.';
   } finally {
     loading.value = false;
   }
@@ -154,14 +165,35 @@ async function savePreference(key: string, value: string) {
 }
 
 async function savePassword() {
-  error.value = '';
+  passwordError.value = '';
   if (password.next !== password.confirm) {
-    error.value = 'Passwords do not match.';
+    passwordError.value = 'Passwords do not match.';
     return;
   }
-  await api.changePassword(password.current, password.next);
-  password.current = password.next = password.confirm = '';
-  notify('Password changed successfully');
+  if (!passwordMeetsPolicy.value) {
+    passwordError.value = 'Password does not meet all the requirements below.';
+    return;
+  }
+  try {
+    await api.changePassword(password.current, password.next);
+    password.current = password.next = password.confirm = '';
+    notify('Password changed successfully');
+  } catch (caught: any) {
+    passwordError.value = caught?.data?.detail || 'Password could not be changed.';
+  }
+}
+
+async function signOutEverywhere() {
+  signingOut.value = true;
+  actionError.value = '';
+  try {
+    await api.signOutEverywhere();
+    await logout();
+  } catch (caught: any) {
+    actionError.value = caught?.data?.detail || 'Sessions could not be revoked.';
+  } finally {
+    signingOut.value = false;
+  }
 }
 
 function categoryPrefs(category: string) {
@@ -253,6 +285,36 @@ const date = (value: unknown) =>
       )
     : 'Never';
 
+function deviceLabel(value: unknown) {
+  const ua = typeof value === 'string' ? value : '';
+  if (!ua) return 'Unknown device';
+  const browser = /Edg\//.test(ua)
+    ? 'Edge'
+    : /OPR\/|Opera/.test(ua)
+      ? 'Opera'
+      : /Chrome\//.test(ua)
+        ? 'Chrome'
+        : /Firefox\//.test(ua)
+          ? 'Firefox'
+          : /Safari\//.test(ua)
+            ? 'Safari'
+            : '';
+  const os = /Windows/.test(ua)
+    ? 'Windows'
+    : /Mac OS X|Macintosh/.test(ua)
+      ? 'macOS'
+      : /iPhone|iPad|iOS/.test(ua)
+        ? 'iOS'
+        : /Android/.test(ua)
+          ? 'Android'
+          : /Linux/.test(ua)
+            ? 'Linux'
+            : '';
+  if (browser && os) return `${browser} on ${os}`;
+  if (browser || os) return browser || os;
+  return ua.length > 48 ? `${ua.slice(0, 48)}…` : ua;
+}
+
 function initials(name?: string | null) {
   return (name || 'User')
     .split(/\s+/)
@@ -264,24 +326,25 @@ function initials(name?: string | null) {
 </script>
 
 <template>
-  <section class="settings-page animate-fade-in">
-    <div>
-      <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">Settings</h1>
-      <p class="mt-1.5 text-[15px] text-text-muted">
-        Manage your profile, security, and preferences.
-      </p>
-    </div>
+  <section class="settings-page studio-fade-in">
+    <PageHeader
+      class="!mb-0"
+      eyebrow="Workspace"
+      title="Settings"
+      description="Manage your profile, security, and preferences."
+    />
 
     <DeliveryFieldState
-      v-if="loading || error"
+      v-if="loading || loadError"
       :loading="loading"
-      :error="error"
+      :error="loadError"
       action="Try again"
       @action="load"
     />
 
     <div v-else class="settings-stack">
       <p v-if="message" class="settings-message"><Check :size="14" />{{ message }}</p>
+      <p v-if="actionError" class="inline-error">{{ actionError }}</p>
 
       <section class="settings-card">
         <header class="settings-card-header row-between">
@@ -335,7 +398,7 @@ function initials(name?: string | null) {
           </div>
         </header>
         <form class="settings-card-body settings-form" @submit.prevent="savePassword">
-          <p v-if="error" class="inline-error">{{ error }}</p>
+          <p v-if="passwordError" class="inline-error">{{ passwordError }}</p>
           <div class="field-grid three">
             <label
               >Current Password<input
@@ -360,8 +423,22 @@ function initials(name?: string | null) {
                 required
             /></label>
           </div>
+          <ul v-if="password.next" class="password-rules" aria-label="Password requirements">
+            <li
+              v-for="rule in passwordRules"
+              :key="rule.id"
+              :class="{ passed: rule.test(password.next) }"
+            >
+              <Check :size="12" />{{ rule.label }}
+            </li>
+          </ul>
           <div class="form-actions">
-            <button class="studio-primary-button"><Lock :size="14" />Change Password</button>
+            <button
+              class="studio-primary-button"
+              :disabled="!password.current || !password.confirm || !passwordMeetsPolicy"
+            >
+              <Lock :size="14" />Change Password
+            </button>
           </div>
           <div class="danger-row">
             <div>
@@ -374,9 +451,10 @@ function initials(name?: string | null) {
             <button
               type="button"
               class="outline-button"
-              @click="api.signOutEverywhere().then(logout)"
+              :disabled="signingOut"
+              @click="signOutEverywhere"
             >
-              <LogOut :size="14" />Sign out everywhere
+              <LogOut :size="14" />{{ signingOut ? 'Signing out…' : 'Sign out everywhere' }}
             </button>
           </div>
         </form>
@@ -387,6 +465,11 @@ function initials(name?: string | null) {
           <div class="settings-title">
             <span class="icon-tile tile-emerald"><ShieldCheck :size="14" /></span>
             <h2>Two-Factor Authentication</h2>
+            <span
+              class="studio-status-pill"
+              :data-tone="twoFactor.enabled ? 'success' : 'neutral'"
+              >{{ twoFactor.enabled ? 'Enabled' : 'Not enabled' }}</span
+            >
           </div>
           <p>Require a time-based code from an authenticator app at sign-in.</p>
         </header>
@@ -453,7 +536,7 @@ function initials(name?: string | null) {
             <article v-for="entry in sessions" :key="String(entry.id)" class="settings-list-row">
               <span class="device-icon"><Monitor :size="14" /></span>
               <div>
-                <strong>{{ entry.userAgent || 'Unknown device' }}</strong
+                <strong>{{ deviceLabel(entry.userAgent) }}</strong
                 ><small>{{ entry.ip || 'Unknown IP' }}</small>
               </div>
               <time>{{ date(entry.createdAt) }}</time>
@@ -523,21 +606,128 @@ function initials(name?: string | null) {
           </p>
         </header>
         <div class="settings-card-body">
-          <label class="mb-3 block text-sm font-medium text-foreground">Theme</label>
-          <div class="theme-grid">
-            <button
-              v-for="option in [
-                { value: 'light', label: 'Light', icon: Sun },
-                { value: 'dark', label: 'Dark', icon: Moon },
-                { value: 'system', label: 'System', icon: Monitor },
-              ]"
-              :key="option.value"
-              :class="{ active: prefs.theme === option.value }"
-              @click="savePreference('theme', option.value)"
-            >
-              <component :is="option.icon" :size="20" />
-              <span>{{ option.label }}</span>
-            </button>
+          <div class="preference-list">
+            <article class="preference-row">
+              <div>
+                <strong>Theme</strong>
+                <p>Light or dark surfaces.</p>
+              </div>
+              <div class="segmented" aria-label="Theme">
+                <button
+                  v-for="option in [
+                    { value: 'light', label: 'Light', icon: Sun },
+                    { value: 'dark', label: 'Dark', icon: Moon },
+                    { value: 'system', label: 'System', icon: Monitor },
+                  ]"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: prefs.theme === option.value }"
+                  @click="savePreference('theme', option.value)"
+                >
+                  <component :is="option.icon" :size="14" />{{ option.label }}
+                </button>
+              </div>
+            </article>
+            <article class="preference-row">
+              <div>
+                <strong>Density</strong>
+                <p>Comfortable spacing or a tighter layout.</p>
+              </div>
+              <div class="segmented" aria-label="Density">
+                <button
+                  v-for="option in [
+                    { value: 'default', label: 'Default' },
+                    { value: 'compact', label: 'Compact' },
+                  ]"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: prefs.density === option.value }"
+                  @click="savePreference('density', option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </article>
+            <article class="preference-row">
+              <div>
+                <strong>Type scale</strong>
+                <p>Overall text size across the app.</p>
+              </div>
+              <div class="segmented" aria-label="Type scale">
+                <button
+                  v-for="option in [
+                    { value: 'default', label: 'Default' },
+                    { value: 'lg', label: 'Large' },
+                  ]"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: prefs.type === option.value }"
+                  @click="savePreference('type', option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </article>
+            <article class="preference-row">
+              <div>
+                <strong>Accent</strong>
+                <p>How much brass the interface uses.</p>
+              </div>
+              <div class="segmented" aria-label="Accent">
+                <button
+                  v-for="option in [
+                    { value: 'quiet', label: 'Quiet' },
+                    { value: 'bold', label: 'Bold' },
+                  ]"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: prefs.accent === option.value }"
+                  @click="savePreference('accent', option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </article>
+            <article class="preference-row">
+              <div>
+                <strong>Navigation layout</strong>
+                <p>A left rail or a top navigation bar.</p>
+              </div>
+              <div class="segmented" aria-label="Navigation layout">
+                <button
+                  v-for="option in [
+                    { value: 'rail', label: 'Side rail' },
+                    { value: 'top', label: 'Top nav' },
+                  ]"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: prefs.layout === option.value }"
+                  @click="savePreference('layout', option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </article>
+            <article class="preference-row">
+              <div>
+                <strong>Nav icons</strong>
+                <p>Numbered indices or architectural icons.</p>
+              </div>
+              <div class="segmented" aria-label="Nav icons">
+                <button
+                  v-for="option in [
+                    { value: 'numeric', label: 'Numbered' },
+                    { value: 'architectural', label: 'Icons' },
+                  ]"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: prefs.icons === option.value }"
+                  @click="savePreference('icons', option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </article>
           </div>
         </div>
       </section>
@@ -811,16 +1001,16 @@ function initials(name?: string | null) {
 .settings-card {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
   overflow: hidden;
-  border: 0;
-  border-radius: 12px;
-  padding: 16px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 24px;
+  padding: 0;
   background: var(--surface-card);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
+  box-shadow: var(--shadow-xs);
 }
 .settings-card-header {
-  padding: 0 16px 12px;
+  padding: 20px 20px 14px;
 }
 .settings-card-header > p,
 .settings-card-header > div > p {
@@ -830,7 +1020,7 @@ function initials(name?: string | null) {
   line-height: 1.55;
 }
 .settings-card-body {
-  padding: 0 16px;
+  padding: 0 20px 20px;
 }
 .compact-body {
   padding-top: 0;
@@ -1042,6 +1232,12 @@ function initials(name?: string | null) {
   justify-content: center;
   gap: 6px;
 }
+.studio-primary-button:disabled,
+.outline-button:disabled,
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .quiet-button {
   border: 0;
   color: var(--text-muted);
@@ -1069,6 +1265,24 @@ function initials(name?: string | null) {
   color: #dc2626;
   background: #fee2e2;
   font-size: 12px;
+}
+.password-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.password-rules li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.password-rules li.passed {
+  color: #047857;
 }
 .success-line {
   display: flex;
@@ -1383,7 +1597,8 @@ function initials(name?: string | null) {
   }
   .field-grid.two,
   .field-grid.three,
-  .account-grid {
+  .account-grid,
+  .password-rules {
     grid-template-columns: 1fr;
   }
   .row-between,

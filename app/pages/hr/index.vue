@@ -153,49 +153,51 @@ async function setBalance() {
 </script>
 
 <template>
-  <section class="animate-fade-in space-y-6">
-    <div>
-      <h1 class="font-display text-2xl font-bold tracking-tight text-foreground">HR</h1>
-      <p class="mt-1.5 text-[15px] text-text-muted">Leave, headcount, and people operations.</p>
-    </div>
+  <section class="studio-fade-in space-y-6">
+    <PageHeader
+      class="!mb-0"
+      eyebrow="People ops"
+      title="HR"
+      description="Leave, headcount, and people operations."
+    />
 
-    <nav
-      class="inline-flex h-8 w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-lg bg-muted p-[3px] text-text-muted"
-      aria-label="HR sections"
-    >
+    <nav class="studio-tabs" aria-label="HR sections" role="tablist">
       <button
-        class="h-[26px] rounded-md px-1.5 py-0.5 text-sm font-medium"
-        :class="tab === 'overview' ? 'bg-card text-foreground shadow-sm' : 'hover:text-foreground'"
+        :class="{ active: tab === 'overview' }"
+        role="tab"
+        :aria-selected="tab === 'overview'"
         @click="tab = 'overview'"
       >
         Overview
       </button>
       <button
-        class="h-[26px] rounded-md px-1.5 py-0.5 text-sm font-medium"
-        :class="tab === 'leave' ? 'bg-card text-foreground shadow-sm' : 'hover:text-foreground'"
+        :class="{ active: tab === 'leave' }"
+        role="tab"
+        :aria-selected="tab === 'leave'"
         @click="tab = 'leave'"
       >
         Leave
       </button>
       <button
-        class="h-[26px] rounded-md px-1.5 py-0.5 text-sm font-medium"
-        :class="tab === 'balances' ? 'bg-card text-foreground shadow-sm' : 'hover:text-foreground'"
+        :class="{ active: tab === 'balances' }"
+        role="tab"
+        :aria-selected="tab === 'balances'"
         @click="tab = 'balances'"
       >
         Balances
       </button>
       <button
-        class="h-[26px] rounded-md px-1.5 py-0.5 text-sm font-medium"
-        :class="tab === 'calendar' ? 'bg-card text-foreground shadow-sm' : 'hover:text-foreground'"
+        :class="{ active: tab === 'calendar' }"
+        role="tab"
+        :aria-selected="tab === 'calendar'"
         @click="tab = 'calendar'"
       >
         Calendar
       </button>
       <button
-        class="h-[26px] rounded-md px-1.5 py-0.5 text-sm font-medium"
-        :class="
-          tab === 'resignations' ? 'bg-card text-foreground shadow-sm' : 'hover:text-foreground'
-        "
+        :class="{ active: tab === 'resignations' }"
+        role="tab"
+        :aria-selected="tab === 'resignations'"
         @click="tab = 'resignations'"
       >
         Resignations
@@ -215,7 +217,7 @@ async function setBalance() {
         v-if="tab === 'overview' && !admin"
         empty="Overview is available to admins only."
       />
-      <div v-else-if="tab === 'overview'" class="space-y-6">
+      <div v-else-if="tab === 'overview'" class="space-y-6" role="tabpanel">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <article
             v-for="item in [
@@ -249,7 +251,7 @@ async function setBalance() {
               },
             ]"
             :key="item.label"
-            class="rounded-xl bg-card px-5 py-9 ring-1 ring-foreground/10"
+            class="studio-kpi-card bg-card px-5 py-7"
           >
             <div class="flex items-center gap-2">
               <span
@@ -283,7 +285,7 @@ async function setBalance() {
         </div>
 
         <div class="grid gap-5 lg:grid-cols-2">
-          <section class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+          <section class="studio-section-card overflow-hidden py-4">
             <header class="flex items-center gap-2 px-4 pb-2">
               <span class="grid size-7 place-items-center rounded-lg bg-amber-500/10 text-amber-600"
                 ><CalendarOff :size="15"
@@ -316,7 +318,7 @@ async function setBalance() {
               <DeliveryFieldState v-if="!outToday" empty="Everyone's in." />
             </div>
           </section>
-          <section class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+          <section class="studio-section-card overflow-hidden py-4">
             <header class="flex items-center gap-2 px-4 pb-2">
               <span
                 class="grid size-7 place-items-center rounded-lg bg-orange-500/10 text-orange-600"
@@ -345,7 +347,7 @@ async function setBalance() {
               <DeliveryFieldState v-if="!pendingLeave.length" empty="Nothing pending." />
             </div>
           </section>
-          <section class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+          <section class="studio-section-card overflow-hidden py-4">
             <header class="flex items-center gap-2 px-4 pb-2">
               <span class="grid size-7 place-items-center rounded-lg bg-blue-500/10 text-blue-600"
                 ><UserPlus :size="15"
@@ -375,7 +377,7 @@ async function setBalance() {
               />
             </div>
           </section>
-          <section class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+          <section class="studio-section-card overflow-hidden py-4">
             <header class="flex items-center gap-2 px-4 pb-2">
               <span class="grid size-7 place-items-center rounded-lg bg-pink-500/10 text-pink-600"
                 ><PartyPopper :size="15"
@@ -410,7 +412,7 @@ async function setBalance() {
         </div>
       </div>
 
-      <div v-else-if="tab === 'leave'" class="space-y-6">
+      <div v-else-if="tab === 'leave'" class="space-y-6" role="tabpanel">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <p class="text-sm text-text-muted">
             {{
@@ -423,47 +425,6 @@ async function setBalance() {
             <CalendarPlus :size="16" /> Request Leave
           </button>
         </div>
-        <form
-          v-if="leaveOpen"
-          class="space-y-4 rounded-xl bg-card p-5 ring-1 ring-primary/20"
-          @submit.prevent="requestLeave"
-        >
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-foreground">New Leave Request</h3>
-            <button
-              type="button"
-              class="text-text-muted hover:text-foreground"
-              @click="leaveOpen = false"
-            >
-              ×
-            </button>
-          </div>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <label class="studio-field"
-              >Type<select v-model="leaveDraft.type">
-                <option>VACATION</option>
-                <option>SICK</option>
-                <option>REMOTE</option>
-              </select></label
-            ><label class="studio-field"
-              >Start Date<input v-model="leaveDraft.start_date" type="date" required /></label
-            ><label class="studio-field"
-              >End Date<input v-model="leaveDraft.end_date" type="date" required
-            /></label>
-          </div>
-          <label class="studio-field"
-            >Reason (optional)<input v-model="leaveDraft.reason" placeholder="Brief reason..."
-          /></label>
-          <div class="flex justify-end gap-2">
-            <button
-              type="button"
-              class="rounded-xl px-4 py-2 text-xs font-medium text-text-muted"
-              @click="leaveOpen = false"
-            >
-              Cancel</button
-            ><button class="studio-primary-button">Submit Request</button>
-          </div>
-        </form>
         <nav class="flex flex-wrap items-center gap-1.5" aria-label="Leave request filters">
           <button
             v-for="filter in ['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const"
@@ -479,18 +440,18 @@ async function setBalance() {
             {{ filter === 'ALL' ? 'All' : filter.charAt(0) + filter.slice(1).toLowerCase() }}
           </button>
         </nav>
-        <section class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+        <section class="studio-section-card overflow-hidden py-4">
           <div class="divide-y divide-border-subtle">
             <article
               v-for="item in filteredLeave"
               :key="item.id"
-              class="flex items-center gap-4 px-6 py-4"
+              class="flex flex-wrap items-center gap-3 px-4 py-4 sm:gap-4 sm:px-6"
             >
               <span
                 class="grid size-10 shrink-0 place-items-center rounded-full bg-secondary text-sm font-medium"
                 >{{ initials(item.userName || 'My request') }}</span
               >
-              <div class="min-w-0 flex-1">
+              <div class="min-w-[12rem] flex-[1_1_16rem]">
                 <strong class="text-sm font-semibold text-foreground">{{
                   item.userName || 'My request'
                 }}</strong>
@@ -550,7 +511,8 @@ async function setBalance() {
 
       <section
         v-else-if="tab === 'balances'"
-        class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10"
+        class="studio-section-card overflow-hidden py-4"
+        role="tabpanel"
       >
         <header
           class="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--border-subtle)] p-5 sm:p-6"
@@ -592,7 +554,8 @@ async function setBalance() {
 
       <section
         v-else-if="tab === 'calendar'"
-        class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10"
+        class="studio-section-card overflow-hidden py-4"
+        role="tabpanel"
       >
         <header class="border-b border-[var(--border-subtle)] p-5 sm:p-6">
           <h2 class="text-[15px] font-semibold">Leave calendar</h2>
@@ -624,7 +587,7 @@ async function setBalance() {
         </div>
       </section>
 
-      <section v-else class="overflow-hidden rounded-xl bg-card py-4 ring-1 ring-foreground/10">
+      <section v-else class="studio-section-card overflow-hidden py-4" role="tabpanel">
         <header
           class="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--border-subtle)] p-5 sm:p-6"
         >
@@ -696,7 +659,12 @@ async function setBalance() {
       </section>
     </template>
 
-    <DeliveryFieldDialog :open="false" title="Request leave" @close="leaveOpen = false">
+    <DeliveryFieldDialog
+      :open="leaveOpen"
+      title="Request leave"
+      description="Submit dates for HR review. Approved requests appear on the leave calendar."
+      @close="leaveOpen = false"
+    >
       <form class="studio-form-grid" @submit.prevent="requestLeave">
         <label
           >Type<select v-model="leaveDraft.type">
