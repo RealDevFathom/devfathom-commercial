@@ -5,11 +5,16 @@ import { existsSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
+  classifyHealthResponse,
   detectRevenueBlocking,
   duplicateRequests,
   sanitizeDiagnostic,
   sanitizeUrl,
   summarize,
+  type HealthAssessment,
+  type HealthDatabaseStatus,
+  type HealthGateStatus,
+  type HealthServiceStatus,
   type NumericSummary,
   type SanitizedRequest,
 } from './core';
@@ -34,6 +39,33 @@ interface EndpointMeasurement {
   coldTotal: NumericSummary;
   warmTotal: NumericSummary;
   statuses: number[];
+}
+
+interface HealthSample extends HttpSample {
+  assessment: HealthAssessment;
+}
+
+interface HealthMeasurement extends EndpointMeasurement {
+  serviceStatus: HealthServiceStatus | 'mixed';
+  databaseStatus: HealthDatabaseStatus | 'mixed';
+  observations: {
+    cold: HealthAssessment;
+    warm: HealthAssessment[];
+  };
+  healthGate: {
+    status: HealthGateStatus;
+    reason: string;
+  };
+  databaseBenchmark:
+    | {
+        status: 'measured';
+        measurement: EndpointMeasurement;
+        description: string;
+      }
+    | {
+        status: 'skipped' | 'failed';
+        reason: string;
+      };
 }
 
 interface RequestTrace extends SanitizedRequest {
@@ -220,6 +252,16 @@ async function timedFetch(url: string, init?: RequestInit): Promise<HttpSample> 
   };
 }
 
+function createEndpointMeasurement(cold: HttpSample, warm: HttpSample[]): EndpointMeasurement {
+  return {
+    cold: summarize([cold.ttfbMs]),
+    warm: summarize(warm.map((sample) => sample.ttfbMs)),
+    coldTotal: summarize([cold.totalMs]),
+    warmTotal: summarize(warm.map((sample) => sample.totalMs)),
+    statuses: [cold.status, ...warm.map((sample) => sample.status)],
+  };
+}
+
 async function measureEndpoint(
   url: string,
   initFactory?: () => RequestInit
@@ -229,12 +271,81 @@ async function measureEndpoint(
   for (let index = 0; index < warmSamples; index += 1) {
     warm.push(await timedFetch(url, initFactory?.()));
   }
+  return createEndpointMeasurement(cold, warm);
+}
+
+async function timedHealthFetch(url: string): Promise<HealthSample> {
+  const startedAt = performance.now();
+  const response = await fetch(url, { redirect: 'manual' });
+  const headersAt = performance.now();
+  const body = await response.text();
+  const completedAt = performance.now();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    payload = undefined;
+  }
   return {
-    cold: summarize([cold.ttfbMs]),
-    warm: summarize(warm.map((sample) => sample.ttfbMs)),
-    coldTotal: summarize([cold.totalMs]),
-    warmTotal: summarize(warm.map((sample) => sample.totalMs)),
-    statuses: [cold.status, ...warm.map((sample) => sample.status)],
+    ttfbMs: headersAt - startedAt,
+    totalMs: completedAt - startedAt,
+    status: response.status,
+    assessment: classifyHealthResponse(response.status, payload, mode),
+  };
+}
+
+function consistentStatus<T extends string>(values: T[]): T | 'mixed' {
+  return values.every((value) => value === values[0]) ? values[0]! : 'mixed';
+}
+
+async function measureHealthEndpoint(url: string): Promise<HealthMeasurement> {
+  const cold = await timedHealthFetch(url);
+  const warm: HealthSample[] = [];
+  for (let index = 0; index < warmSamples; index += 1) {
+    warm.push(await timedHealthFetch(url));
+  }
+  const measurement = createEndpointMeasurement(cold, warm);
+  const assessments = [cold.assessment, ...warm.map((sample) => sample.assessment)];
+  const serviceStatus = consistentStatus(assessments.map((item) => item.serviceStatus));
+  const databaseStatus = consistentStatus(assessments.map((item) => item.databaseStatus));
+  const healthGateStatus: HealthGateStatus = assessments.some(
+    (item) => item.healthGateStatus === 'failed'
+  )
+    ? 'failed'
+    : assessments.some((item) => item.healthGateStatus === 'warning')
+      ? 'warning'
+      : 'passed';
+  const gateReason =
+    assessments.find((item) => item.healthGateStatus === healthGateStatus)?.message ||
+    'Health gate classification unavailable.';
+  const databaseAssessmentFailed = assessments.some(
+    (item) => item.databaseBenchmarkStatus === 'failed'
+  );
+  const databaseConnected = assessments.every(
+    (item) => item.databaseBenchmarkStatus === 'eligible' && item.databaseStatus === 'connected'
+  );
+
+  return {
+    ...measurement,
+    serviceStatus,
+    databaseStatus,
+    observations: {
+      cold: cold.assessment,
+      warm: warm.map((sample) => sample.assessment),
+    },
+    healthGate: { status: healthGateStatus, reason: gateReason },
+    databaseBenchmark: databaseConnected
+      ? {
+          status: 'measured',
+          measurement,
+          description: '/health latency includes the database SELECT 1 connectivity probe.',
+        }
+      : databaseAssessmentFailed
+        ? { status: 'failed', reason: gateReason }
+        : {
+            status: 'skipped',
+            reason: `Database status is ${databaseStatus}; no connected-database latency is reported.`,
+          },
   };
 }
 
@@ -899,7 +1010,7 @@ function metricLine(label: string, measurement: EndpointMeasurement): string {
 
 function renderMarkdown(report: JsonRecord): string {
   const backend = report.backend as JsonRecord;
-  const health = backend.health as EndpointMeasurement;
+  const health = backend.health as HealthMeasurement;
   const authentication = backend.authentication as JsonRecord;
   const frontends = report.frontends as JsonRecord[];
   const lines = [
@@ -912,7 +1023,15 @@ function renderMarkdown(report: JsonRecord): string {
     '',
     '## FastAPI',
     '',
-    `- ${metricLine('/health TTFB', health)}`,
+    `- Service status: \`${health.serviceStatus}\``,
+    `- Database status: \`${health.databaseStatus}\``,
+    `- Health gate: **${health.healthGate.status}** — ${health.healthGate.reason}`,
+    `- ${metricLine('/health endpoint TTFB', health)}`,
+    `- Connected-database benchmark: ${
+      health.databaseBenchmark.status === 'measured'
+        ? metricLine('/health database probe TTFB', health.databaseBenchmark.measurement)
+        : `${health.databaseBenchmark.status} — ${health.databaseBenchmark.reason}`
+    }`,
     `- Authentication: ${authentication.status === 'skipped' ? authentication.reason : metricLine('/api/auth/login TTFB', authentication.measurement as EndpointMeasurement)}`,
     '',
     '## Frontends',
@@ -999,7 +1118,7 @@ async function main(): Promise<void> {
   if (!apiUrl) throw new Error('PERF_API_URL is required in remote mode.');
 
   log('Benchmarking FastAPI /health');
-  const health = await measureEndpoint(endpointUrl(apiUrl, '/health'));
+  const health = await measureHealthEndpoint(endpointUrl(apiUrl, '/health'));
   const authentication: JsonRecord = credentials
     ? {
         status: 'measured',
@@ -1107,7 +1226,7 @@ async function main(): Promise<void> {
   }
 
   const report: JsonRecord = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     git: { commit: gitCommit.trim(), branch: gitBranch.trim() },
     configuration: {
@@ -1133,13 +1252,24 @@ async function main(): Promise<void> {
   await writeFile(join(outputRoot, 'latest.md'), renderMarkdown(report), 'utf8');
 
   log('Performance smoke complete.');
-  log(metricLine('FastAPI /health', health));
+  log(
+    `FastAPI health: service=${health.serviceStatus}; database=${health.databaseStatus}; gate=${health.healthGate.status}`
+  );
+  log(metricLine('FastAPI /health endpoint', health));
+  if (health.databaseBenchmark.status === 'measured') {
+    log(metricLine('FastAPI connected-database probe', health.databaseBenchmark.measurement));
+  } else {
+    log(
+      `FastAPI connected-database probe: ${health.databaseBenchmark.status} — ${health.databaseBenchmark.reason}`
+    );
+  }
   for (const frontend of frontends) {
     log(metricLine(`${frontend.label} /login`, frontend.loginHtml as EndpointMeasurement));
     const dashboard = frontend.dashboard as JsonRecord;
     if (dashboard.status !== 'measured') log(`${frontend.label} dashboard: ${dashboard.status}`);
   }
   log(`Report: ${join('.perf', basename(runDirectory), 'report.md')}`);
+  if (health.healthGate.status === 'failed') process.exitCode = 1;
 }
 
 try {
