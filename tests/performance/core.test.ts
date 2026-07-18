@@ -1,11 +1,67 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  classifyHealthResponse,
   detectRevenueBlocking,
   duplicateRequests,
   sanitizeDiagnostic,
   sanitizeUrl,
   summarize,
 } from '../../scripts/performance/core';
+
+describe('FastAPI health classification', () => {
+  test('accepts a connected database as an eligible database benchmark', () => {
+    expect(
+      classifyHealthResponse(200, { status: 'ok', database: 'connected' }, 'local')
+    ).toMatchObject({
+      serviceStatus: 'ok',
+      databaseStatus: 'connected',
+      contractValid: true,
+      healthGateStatus: 'passed',
+      databaseBenchmarkStatus: 'eligible',
+    });
+  });
+
+  test('distinguishes degraded database states and fails the remote health gate', () => {
+    expect(
+      classifyHealthResponse(200, { status: 'degraded', database: 'not configured' }, 'local')
+    ).toMatchObject({
+      serviceStatus: 'degraded',
+      databaseStatus: 'not configured',
+      healthGateStatus: 'warning',
+      databaseBenchmarkStatus: 'skipped',
+    });
+    expect(
+      classifyHealthResponse(200, { status: 'degraded', database: 'unavailable' }, 'remote')
+    ).toMatchObject({
+      serviceStatus: 'degraded',
+      databaseStatus: 'unavailable',
+      healthGateStatus: 'failed',
+      databaseBenchmarkStatus: 'skipped',
+    });
+  });
+
+  test('fails malformed health JSON without inventing a database benchmark', () => {
+    expect(classifyHealthResponse(200, undefined, 'local')).toMatchObject({
+      serviceStatus: 'unknown',
+      databaseStatus: 'unknown',
+      contractValid: false,
+      healthGateStatus: 'failed',
+      databaseBenchmarkStatus: 'failed',
+    });
+  });
+
+  test('fails non-200 health responses even when their JSON looks connected', () => {
+    expect(
+      classifyHealthResponse(503, { status: 'ok', database: 'connected' }, 'remote')
+    ).toMatchObject({
+      httpStatus: 503,
+      serviceStatus: 'ok',
+      databaseStatus: 'connected',
+      healthGateStatus: 'failed',
+      databaseBenchmarkStatus: 'failed',
+    });
+  });
+});
 
 describe('performance statistics', () => {
   test('keeps cold samples distinct and reports warm percentiles when enough samples exist', () => {

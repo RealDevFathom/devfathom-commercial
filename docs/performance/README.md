@@ -23,7 +23,7 @@ The harness uses Chrome's DevTools protocol directly. It does not require Playwr
 
 Each run reports these surfaces separately:
 
-- FastAPI `/health` TTFB and total response time.
+- FastAPI `/health` TTFB, total response time, service status, database status, and health-gate result.
 - `/api/auth/login` TTFB and total response time when test credentials are present.
 - Nuxt development startup and `/login` HTML TTFB.
 - Optimized Nitro preview startup, build duration, and `/login` HTML TTFB.
@@ -34,6 +34,8 @@ Each run reports these surfaces separately:
 The first observation in a newly started process or browser lifecycle is `cold`. Subsequent observations in that same lifecycle are `warm`. The report keeps cold and warm data separate. p50 requires at least two samples and p95 requires at least five; the default is five warm samples.
 
 Nuxt development results include Vite compilation, devtools, source maps, and other development-only work. Nitro preview results come from `.output/server/index.mjs` after `bun run build`. Do not treat those modes as interchangeable.
+
+The health response is parsed rather than treated as latency alone. A local `degraded` response with `database: "not configured"` or `database: "unavailable"` produces a warning and explicitly skips the connected-database benchmark. Only `database: "connected"` is labeled as database-probe latency. In remote mode, a degraded response fails the health gate and the command exits nonzero after writing the report. Malformed JSON and non-200 health responses fail the gate in every mode.
 
 ## Optional authenticated dashboard measurement
 

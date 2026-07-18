@@ -30,6 +30,22 @@ export interface RevenueBlockingResult {
   evidence: string;
 }
 
+export type HealthMode = 'local' | 'remote';
+export type HealthServiceStatus = 'ok' | 'degraded' | 'unknown';
+export type HealthDatabaseStatus = 'connected' | 'not configured' | 'unavailable' | 'unknown';
+export type HealthGateStatus = 'passed' | 'warning' | 'failed';
+export type DatabaseBenchmarkStatus = 'eligible' | 'skipped' | 'failed';
+
+export interface HealthAssessment {
+  httpStatus: number;
+  serviceStatus: HealthServiceStatus;
+  databaseStatus: HealthDatabaseStatus;
+  contractValid: boolean;
+  healthGateStatus: HealthGateStatus;
+  databaseBenchmarkStatus: DatabaseBenchmarkStatus;
+  message: string;
+}
+
 function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -68,6 +84,70 @@ export function summarize(values: number[]): NumericSummary {
     meanMs: round(sorted.reduce((sum, value) => sum + value, 0) / sorted.length),
     p50Ms: sorted.length >= 2 ? round(percentile(sorted, 0.5)) : null,
     p95Ms: sorted.length >= 5 ? round(percentile(sorted, 0.95)) : null,
+  };
+}
+
+export function classifyHealthResponse(
+  httpStatus: number,
+  payload: unknown,
+  mode: HealthMode
+): HealthAssessment {
+  const record = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+  const serviceStatus: HealthServiceStatus =
+    record.status === 'ok' || record.status === 'degraded' ? record.status : 'unknown';
+  const databaseStatus: HealthDatabaseStatus =
+    record.database === 'connected' ||
+    record.database === 'not configured' ||
+    record.database === 'unavailable'
+      ? record.database
+      : 'unknown';
+  const contractValid = serviceStatus !== 'unknown' && databaseStatus !== 'unknown';
+
+  if (httpStatus !== 200) {
+    return {
+      httpStatus,
+      serviceStatus,
+      databaseStatus,
+      contractValid,
+      healthGateStatus: 'failed',
+      databaseBenchmarkStatus: 'failed',
+      message: `Health endpoint returned HTTP ${httpStatus}.`,
+    };
+  }
+  if (!contractValid) {
+    return {
+      httpStatus,
+      serviceStatus,
+      databaseStatus,
+      contractValid,
+      healthGateStatus: 'failed',
+      databaseBenchmarkStatus: 'failed',
+      message: 'Health endpoint returned a malformed or unsupported JSON contract.',
+    };
+  }
+  if (serviceStatus === 'ok' && databaseStatus === 'connected') {
+    return {
+      httpStatus,
+      serviceStatus,
+      databaseStatus,
+      contractValid,
+      healthGateStatus: 'passed',
+      databaseBenchmarkStatus: 'eligible',
+      message: 'Service and database health checks passed.',
+    };
+  }
+
+  return {
+    httpStatus,
+    serviceStatus,
+    databaseStatus,
+    contractValid,
+    healthGateStatus: mode === 'remote' ? 'failed' : 'warning',
+    databaseBenchmarkStatus: databaseStatus === 'connected' ? 'eligible' : 'skipped',
+    message:
+      mode === 'remote'
+        ? `Remote health gate failed: service=${serviceStatus}, database=${databaseStatus}.`
+        : `Local health warning: service=${serviceStatus}, database=${databaseStatus}; database benchmark skipped unless connected.`,
   };
 }
 
