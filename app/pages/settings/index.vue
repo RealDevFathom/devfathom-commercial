@@ -20,26 +20,57 @@ import {
   Webhook,
   X,
 } from 'lucide-vue-next';
-import type { ApiTokenRecord, Resignation, TeamMember, Webhook as WebhookType } from '~/types/firm';
 
 useHead({ title: 'Settings · DevFathom Hub' });
 
-const api = useFirm();
-const { request } = useApi();
 const { user, logout } = useAuth();
 const colorMode = useColorMode();
-const admin = computed(() => user.value?.role === 'ADMIN');
+const {
+  data: settingsBootstrap,
+  status: bootstrapStatus,
+  error: bootstrapError,
+  refresh: refreshBootstrap,
+} = await useSettingsData();
+const {
+  profile: member,
+  preferences: prefs,
+  notificationPreferences: notificationPrefs,
+  admin,
+  sessions,
+  twoFactorStatus,
+  resignations,
+  apiTokens: tokens,
+  webhooks,
+  sectionLoaded,
+  sectionLoading,
+  sectionErrors,
+  loadSecurity,
+  loadEmployment,
+  loadApiTokens,
+  loadWebhooks,
+  updateProfile,
+  savePreference: persistPreference,
+  saveNotificationPreference,
+  changePassword,
+  signOutEverywhere: revokeAllSessions,
+  beginTwoFactorEnrollment,
+  confirmTwoFactor,
+  disableTwoFactor,
+  createApiToken,
+  revokeApiToken,
+  createWebhook: persistWebhook,
+  removeWebhook,
+  submitResignation: persistResignation,
+  withdrawResignation,
+} = useSettingsSections(settingsBootstrap);
 
-const member = ref<TeamMember | null>(null);
-const prefs = ref<Record<string, any>>({});
-const notificationPrefs = ref<Record<string, Record<string, boolean>>>({});
-const sessions = ref<Record<string, any>[]>([]);
-const tokens = ref<ApiTokenRecord[]>([]);
-const webhooks = ref<WebhookType[]>([]);
-const resignations = ref<Resignation[]>([]);
-const loading = ref(true);
+const loading = computed(() => bootstrapStatus.value === 'pending');
+const loadError = computed(() => {
+  if (!bootstrapError.value) return '';
+  const error = bootstrapError.value as { data?: { detail?: string } };
+  return error.data?.detail || 'Settings could not be loaded.';
+});
 const message = ref('');
-const loadError = ref('');
 const actionError = ref('');
 const passwordError = ref('');
 const signingOut = ref(false);
@@ -51,12 +82,12 @@ const showResignForm = ref(false);
 const profile = reactive({ name: '', phone: '', bio: '', skills: '' });
 const password = reactive({ current: '', next: '', confirm: '' });
 const twoFactor = reactive({
-  enabled: false,
   secret: '',
   uri: '',
   code: '',
   recovery: [] as string[],
 });
+const twoFactorEnabled = computed(() => Boolean(twoFactorStatus.value?.enabled));
 const tokenDraft = reactive({ name: '', scopes: 'team:read', expires_in_days: 90 });
 const webhookDraft = reactive({ url: '', events: ['invoice.paid'] as string[], active: true });
 const oneShot = ref<{ label: string; secret: string } | null>(null);
@@ -101,42 +132,19 @@ const scopeOptions = [
   { value: 'meetings:write', label: 'Meetings (write)' },
 ];
 
-async function load() {
-  loading.value = true;
-  loadError.value = '';
-  try {
-    member.value = await api.member(user.value!.id);
+watch(
+  member,
+  (currentMember) => {
+    if (!currentMember) return;
     Object.assign(profile, {
-      name: member.value.name,
-      phone: member.value.phone || '',
-      bio: member.value.bio || '',
-      skills: member.value.skills?.join(', ') || '',
+      name: currentMember.name,
+      phone: currentMember.phone || '',
+      bio: currentMember.bio || '',
+      skills: currentMember.skills?.join(', ') || '',
     });
-    const saved = await api.preferences();
-    prefs.value = {
-      theme: colorMode.preference === 'system' ? 'system' : colorMode.value,
-      density: 'default',
-      type: 'default',
-      accent: 'quiet',
-      layout: 'top',
-      icons: 'numeric',
-      ...(saved.preferences || {}),
-    };
-    notificationPrefs.value = saved.notificationPreferences || {};
-    sessions.value = (await api.sessions()).data;
-    twoFactor.enabled = Boolean((await api.twoFactorStatus()).enabled);
-    resignations.value = await api.resignations(true);
-    if (admin.value) {
-      [tokens.value, webhooks.value] = await Promise.all([api.apiTokens(), api.webhooks()]);
-    }
-  } catch (caught: any) {
-    loadError.value = caught?.data?.detail || 'Settings could not be loaded.';
-  } finally {
-    loading.value = false;
-  }
-}
-
-await load();
+  },
+  { immediate: true }
+);
 
 function notify(value: string) {
   message.value = value;
@@ -144,7 +152,7 @@ function notify(value: string) {
 }
 
 async function saveProfile() {
-  await api.updateMe({
+  await updateProfile({
     name: profile.name,
     phone: profile.phone || null,
     bio: profile.bio || null,
@@ -154,14 +162,12 @@ async function saveProfile() {
       .filter(Boolean),
   });
   editingProfile.value = false;
-  await load();
   notify('Profile updated');
 }
 
 async function savePreference(key: string, value: string) {
-  prefs.value[key] = value;
   if (key === 'theme') colorMode.preference = value;
-  await api.savePreferences(prefs.value);
+  await persistPreference(key, value);
 }
 
 async function savePassword() {
@@ -175,7 +181,7 @@ async function savePassword() {
     return;
   }
   try {
-    await api.changePassword(password.current, password.next);
+    await changePassword(password.current, password.next);
     password.current = password.next = password.confirm = '';
     notify('Password changed successfully');
   } catch (caught: any) {
@@ -187,7 +193,7 @@ async function signOutEverywhere() {
   signingOut.value = true;
   actionError.value = '';
   try {
-    await api.signOutEverywhere();
+    await revokeAllSessions();
     await logout();
   } catch (caught: any) {
     actionError.value = caught?.data?.detail || 'Sessions could not be revoked.';
@@ -197,36 +203,29 @@ async function signOutEverywhere() {
 }
 
 function categoryPrefs(category: string) {
-  notificationPrefs.value[category] ||= { inApp: true, email: true };
-  return notificationPrefs.value[category];
+  return { inApp: true, email: true, ...(notificationPrefs.value[category] || {}) };
 }
 
 async function toggleNotification(category: string, channel: 'inApp' | 'email', value: boolean) {
-  categoryPrefs(category)[channel] = value;
-  await request('/api/auth/notification-preferences', {
-    method: 'PUT',
-    body: notificationPrefs.value,
-  });
+  await saveNotificationPreference(category, channel, value);
 }
 
 async function enroll() {
-  const result = await api.twoFactorEnroll();
+  const result = await beginTwoFactorEnrollment();
   twoFactor.secret = result.secret;
   twoFactor.uri = result.otpauthUri;
 }
 
 async function confirm2fa() {
-  const result = await api.twoFactorConfirm(twoFactor.code);
+  const result = await confirmTwoFactor(twoFactor.code);
   twoFactor.recovery = result.recoveryCodes;
   twoFactor.secret = '';
   twoFactor.uri = '';
-  twoFactor.enabled = true;
   twoFactor.code = '';
 }
 
 async function disable2fa() {
-  await api.twoFactorDisable(twoFactor.code);
-  twoFactor.enabled = false;
+  await disableTwoFactor(twoFactor.code);
   twoFactor.code = '';
   notify('Two-factor authentication disabled');
 }
@@ -246,31 +245,53 @@ function toggleScope(scope: string) {
 }
 
 async function createToken() {
-  const result = await api.createToken({
+  const result = await createApiToken({
     name: tokenDraft.name,
     scopes: selectedScopes(),
     expires_in_days: tokenDraft.expires_in_days,
   });
   oneShot.value = { label: 'API token', secret: result.token };
   showTokenForm.value = false;
-  await load();
 }
 
 async function createWebhook() {
-  const result = await api.createWebhook(webhookDraft);
+  const result = await persistWebhook(webhookDraft);
   oneShot.value = { label: 'Webhook signing secret', secret: result.secret };
   showWebhookForm.value = false;
-  await load();
 }
 
 async function submitResignation() {
-  await api.resign({
+  await persistResignation({
     reason: resignation.reason,
     proposed_last_day: new Date(resignation.proposed_last_day).toISOString(),
   });
   showResignForm.value = false;
   notify('Resignation submitted');
-  await load();
+}
+
+async function revokeToken(id: string) {
+  await revokeApiToken(id);
+  notify('API token revoked');
+}
+
+async function deleteWebhook(id: string) {
+  await removeWebhook(id);
+  notify('Webhook deleted');
+}
+
+async function withdraw(id: string) {
+  await withdrawResignation(id);
+  notify('Resignation withdrawn');
+}
+
+async function openTokenForm() {
+  await loadApiTokens();
+  showTokenForm.value = true;
+}
+
+async function openWebhookForm() {
+  await loadWebhooks();
+  showWebhookForm.value = true;
 }
 
 function copySecret(secret: string) {
@@ -323,6 +344,53 @@ function initials(name?: string | null) {
     .join('')
     .toUpperCase();
 }
+
+const securitySectionEl = ref<HTMLElement | null>(null);
+const tokenSectionEl = ref<HTMLElement | null>(null);
+const webhookSectionEl = ref<HTMLElement | null>(null);
+const employmentSectionEl = ref<HTMLElement | null>(null);
+const sectionObservers: IntersectionObserver[] = [];
+const observedSectionElements = new WeakSet<HTMLElement>();
+
+function loadWhenVisible(element: HTMLElement | null, loader: () => Promise<unknown>) {
+  if (!element || observedSectionElements.has(element)) return;
+  observedSectionElements.add(element);
+  if (!('IntersectionObserver' in window)) {
+    void loader();
+    return;
+  }
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      void loader();
+    },
+    { rootMargin: '96px 0px' }
+  );
+  observer.observe(element);
+  sectionObservers.push(observer);
+}
+
+onMounted(() => {
+  watch(
+    [bootstrapStatus, admin],
+    async ([status, isAdmin]) => {
+      if (status !== 'success') return;
+      await nextTick();
+      loadWhenVisible(securitySectionEl.value, loadSecurity);
+      if (isAdmin) {
+        loadWhenVisible(tokenSectionEl.value, loadApiTokens);
+        loadWhenVisible(webhookSectionEl.value, loadWebhooks);
+      }
+      loadWhenVisible(employmentSectionEl.value, loadEmployment);
+    },
+    { immediate: true, flush: 'post' }
+  );
+});
+
+onBeforeUnmount(() => {
+  for (const observer of sectionObservers) observer.disconnect();
+});
 </script>
 
 <template>
@@ -339,7 +407,7 @@ function initials(name?: string | null) {
       :loading="loading"
       :error="loadError"
       action="Try again"
-      @action="load"
+      @action="refreshBootstrap"
     />
 
     <div v-else class="settings-stack">
@@ -460,22 +528,34 @@ function initials(name?: string | null) {
         </form>
       </section>
 
-      <section class="settings-card">
+      <section ref="securitySectionEl" class="settings-card">
         <header class="settings-card-header">
           <div class="settings-title">
             <span class="icon-tile tile-emerald"><ShieldCheck :size="14" /></span>
             <h2>Two-Factor Authentication</h2>
             <span
               class="studio-status-pill"
-              :data-tone="twoFactor.enabled ? 'success' : 'neutral'"
-              >{{ twoFactor.enabled ? 'Enabled' : 'Not enabled' }}</span
+              :data-tone="twoFactorEnabled ? 'success' : 'neutral'"
+              >{{
+                sectionLoaded.twoFactor
+                  ? twoFactorEnabled
+                    ? 'Enabled'
+                    : 'Not enabled'
+                  : 'Checking…'
+              }}</span
             >
           </div>
           <p>Require a time-based code from an authenticator app at sign-in.</p>
         </header>
         <div class="settings-card-body">
+          <p v-if="sectionErrors.twoFactor" class="inline-error">
+            {{ sectionErrors.twoFactor }}
+          </p>
+          <p v-if="sectionLoading.twoFactor && !sectionLoaded.twoFactor" class="empty-line">
+            Loading two-factor status…
+          </p>
           <AdminOneShotSecret
-            v-if="twoFactor.recovery.length"
+            v-else-if="twoFactor.recovery.length"
             label="Recovery codes"
             :secret="twoFactor.recovery.join('\n')"
             @dismiss="twoFactor.recovery = []"
@@ -501,7 +581,7 @@ function initials(name?: string | null) {
             </div>
           </div>
           <form
-            v-else-if="twoFactor.enabled"
+            v-else-if="twoFactorEnabled"
             class="row-between responsive-row"
             @submit.prevent="disable2fa"
           >
@@ -514,7 +594,7 @@ function initials(name?: string | null) {
               </button>
             </div>
           </form>
-          <button v-else class="studio-primary-button" @click="enroll">
+          <button v-else-if="sectionLoaded.twoFactor" class="studio-primary-button" @click="enroll">
             Enable two-factor authentication
           </button>
         </div>
@@ -532,7 +612,11 @@ function initials(name?: string | null) {
           </p>
         </header>
         <div class="settings-card-body compact-body">
-          <div v-if="sessions.length" class="list-divided">
+          <p v-if="sectionErrors.sessions" class="inline-error">{{ sectionErrors.sessions }}</p>
+          <p v-if="sectionLoading.sessions && !sectionLoaded.sessions" class="empty-line">
+            Loading recent sign-ins…
+          </p>
+          <div v-else-if="sessions.length" class="list-divided">
             <article v-for="entry in sessions" :key="String(entry.id)" class="settings-list-row">
               <span class="device-icon"><Monitor :size="14" /></span>
               <div>
@@ -542,7 +626,7 @@ function initials(name?: string | null) {
               <time>{{ date(entry.createdAt) }}</time>
             </article>
           </div>
-          <p v-else class="empty-line">No recent sign-ins recorded.</p>
+          <p v-else-if="sectionLoaded.sessions" class="empty-line">No recent sign-ins recorded.</p>
         </div>
       </section>
 
@@ -732,7 +816,7 @@ function initials(name?: string | null) {
         </div>
       </section>
 
-      <section v-if="admin" class="settings-card">
+      <section v-if="admin" ref="tokenSectionEl" class="settings-card">
         <header class="settings-card-header row-between">
           <div>
             <div class="settings-title">
@@ -741,7 +825,7 @@ function initials(name?: string | null) {
             </div>
             <p>Create scoped tokens for the REST API. Tokens are shown once.</p>
           </div>
-          <button v-if="!showTokenForm" class="outline-button" @click="showTokenForm = true">
+          <button v-if="!showTokenForm" class="outline-button" @click="openTokenForm">
             <Plus :size="14" />New Token
           </button>
         </header>
@@ -752,7 +836,13 @@ function initials(name?: string | null) {
             :secret="oneShot.secret"
             @dismiss="oneShot = null"
           />
-          <div v-if="tokens.length" class="list-divided">
+          <p v-if="sectionErrors.apiTokens" class="inline-error">
+            {{ sectionErrors.apiTokens }}
+          </p>
+          <p v-if="sectionLoading.apiTokens && !sectionLoaded.apiTokens" class="empty-line">
+            Loading API tokens…
+          </p>
+          <div v-else-if="tokens.length" class="list-divided">
             <article v-for="token in tokens" :key="token.id" class="settings-list-row">
               <span class="device-icon"><KeyRound :size="14" /></span>
               <div>
@@ -763,13 +853,13 @@ function initials(name?: string | null) {
               ><button
                 class="icon-button danger"
                 aria-label="Revoke token"
-                @click="api.revokeToken(token.id).then(load)"
+                @click="revokeToken(token.id)"
               >
                 <Trash2 :size="14" />
               </button>
             </article>
           </div>
-          <p v-else class="empty-line">No API tokens yet</p>
+          <p v-else-if="sectionLoaded.apiTokens" class="empty-line">No API tokens yet</p>
           <form
             v-if="showTokenForm"
             class="create-panel settings-form"
@@ -807,7 +897,7 @@ function initials(name?: string | null) {
         </div>
       </section>
 
-      <section v-if="admin" class="settings-card">
+      <section v-if="admin" ref="webhookSectionEl" class="settings-card">
         <header class="settings-card-header row-between">
           <div>
             <div class="settings-title">
@@ -816,7 +906,7 @@ function initials(name?: string | null) {
             </div>
             <p>Send a signed POST to your endpoint when events happen.</p>
           </div>
-          <button v-if="!showWebhookForm" class="outline-button" @click="showWebhookForm = true">
+          <button v-if="!showWebhookForm" class="outline-button" @click="openWebhookForm">
             <Plus :size="14" />New Webhook
           </button>
         </header>
@@ -827,7 +917,13 @@ function initials(name?: string | null) {
             :secret="oneShot.secret"
             @dismiss="oneShot = null"
           />
-          <div v-if="webhooks.length" class="list-divided">
+          <p v-if="sectionErrors.webhooks" class="inline-error">
+            {{ sectionErrors.webhooks }}
+          </p>
+          <p v-if="sectionLoading.webhooks && !sectionLoaded.webhooks" class="empty-line">
+            Loading webhooks…
+          </p>
+          <div v-else-if="webhooks.length" class="list-divided">
             <article v-for="hook in webhooks" :key="hook.id" class="settings-list-row">
               <span class="device-icon"><Webhook :size="14" /></span>
               <div>
@@ -838,13 +934,13 @@ function initials(name?: string | null) {
               ><button
                 class="icon-button danger"
                 aria-label="Delete webhook"
-                @click="api.removeWebhook(hook.id).then(load)"
+                @click="deleteWebhook(hook.id)"
               >
                 <Trash2 :size="14" />
               </button>
             </article>
           </div>
-          <p v-else class="empty-line">No webhooks yet</p>
+          <p v-else-if="sectionLoaded.webhooks" class="empty-line">No webhooks yet</p>
           <form
             v-if="showWebhookForm"
             class="create-panel settings-form"
@@ -910,7 +1006,7 @@ function initials(name?: string | null) {
         </dl>
       </section>
 
-      <section class="settings-card danger-card">
+      <section ref="employmentSectionEl" class="settings-card danger-card">
         <header class="settings-card-header row-between">
           <div>
             <div class="settings-title">
@@ -920,7 +1016,11 @@ function initials(name?: string | null) {
             <p>Submit a formal resignation request for administrator review.</p>
           </div>
           <button
-            v-if="!showResignForm && !resignations.some((item) => item.status === 'PENDING')"
+            v-if="
+              sectionLoaded.resignations &&
+              !showResignForm &&
+              !resignations.some((item) => item.status === 'PENDING')
+            "
             class="danger-outline"
             @click="showResignForm = true"
           >
@@ -928,7 +1028,13 @@ function initials(name?: string | null) {
           </button>
         </header>
         <div class="settings-card-body">
-          <div v-if="resignations.length" class="list-divided">
+          <p v-if="sectionErrors.resignations" class="inline-error">
+            {{ sectionErrors.resignations }}
+          </p>
+          <p v-if="sectionLoading.resignations && !sectionLoaded.resignations" class="empty-line">
+            Loading employment settings…
+          </p>
+          <div v-else-if="resignations.length" class="list-divided">
             <article v-for="item in resignations" :key="item.id" class="settings-list-row">
               <span class="device-icon"><AlertCircle :size="14" /></span>
               <div>
@@ -938,7 +1044,7 @@ function initials(name?: string | null) {
               <button
                 v-if="item.status === 'PENDING'"
                 class="outline-button"
-                @click="api.withdrawResignation(item.id).then(load)"
+                @click="withdraw(item.id)"
               >
                 Withdraw
               </button>

@@ -27,6 +27,9 @@ from .routers import (
     resources,
     trello_import,
 )
+from .routers import (
+    settings as settings_router,
+)
 
 settings = get_settings()
 
@@ -69,6 +72,7 @@ app.include_router(email_integration.router)
 app.include_router(finance.router)
 app.include_router(people.router)
 app.include_router(admin.router)
+app.include_router(settings_router.router)
 # Keep this dynamic compatibility router last: `/api/v1/{resource_name}`
 # would otherwise shadow static domain routes such as `/api/v1/search`.
 app.include_router(resources.router)
