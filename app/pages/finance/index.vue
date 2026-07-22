@@ -18,18 +18,11 @@ import {
   WalletCards,
 } from 'lucide-vue-next';
 import type { Component } from 'vue';
-import type {
-  CurrencySummary,
-  Invoice,
-  InvoiceItem,
-  RecurringExpense,
-  Transaction,
-} from '~/types/firm';
+import type { FinanceTab } from '~/types/finance-bootstrap';
+import type { CurrencySummary, Invoice, InvoiceItem, Transaction } from '~/types/firm';
 
-type FinanceTab = 'transactions' | 'invoices' | 'pnl' | 'recurring';
 useHead({ title: 'Finance · DevFathom Hub' });
 const api = useFirm();
-const crm = useCrm();
 const { user } = useAuth();
 const allowed = computed(() => user.value?.role === 'ADMIN');
 const admin = allowed;
@@ -55,13 +48,24 @@ const categoryLabels: Record<string, string> = {
 const tab = ref<FinanceTab>('transactions');
 const transactionFilter = ref<'ALL' | 'INCOME' | 'EXPENSE'>('ALL');
 const pnlCurrency = ref<'USD' | 'PKR'>('USD');
-const summary = ref<CurrencySummary[]>([]);
-const invoices = ref<Invoice[]>([]);
-const transactions = ref<Transaction[]>([]);
-const recurring = ref<RecurringExpense[]>([]);
-const clients = ref<{ id: string; name: string }[]>([]);
-const loading = ref(allowed.value);
-const error = ref('');
+const {
+  activeLoad,
+  clients,
+  ensureTab,
+  error,
+  invoices,
+  loading,
+  pnlTransactions,
+  recurring,
+  refreshAfterMutation,
+  refreshTransactionsAndSummary,
+  summary,
+  tabError,
+  transactions,
+} = await useFinanceData({
+  enabled: allowed.value,
+  cacheKey: user.value?.id || 'anonymous',
+});
 const form = ref<'invoice' | 'transaction' | 'payment' | null>(null);
 const selectedInvoice = ref<Invoice | null>(null);
 const recurringOpen = ref(false);
@@ -100,39 +104,16 @@ const recurringDraft = reactive({
   next_due_date: '',
 });
 
-async function load(showSpinner = true) {
-  if (!allowed.value) {
-    loading.value = false;
-    return;
-  }
-  if (showSpinner) loading.value = true;
-  error.value = '';
-  try {
-    const [s, i, t, c, r] = await Promise.all([
-      api.summary(),
-      api.invoices(),
-      api.transactions(),
-      crm.listClients(),
-      api.recurringExpenses(),
-    ]);
-    summary.value = s.byCurrency;
-    invoices.value = i;
-    transactions.value = t;
-    clients.value = c;
-    recurring.value = r;
-    if (
-      s.byCurrency.length &&
-      !s.byCurrency.some((group) => group.currency === pnlCurrency.value)
-    ) {
-      pnlCurrency.value = s.byCurrency[0]!.currency;
+watch(tab, (value) => void ensureTab(value));
+watch(
+  summary,
+  (value) => {
+    if (value.length && !value.some((group) => group.currency === pnlCurrency.value)) {
+      pnlCurrency.value = value[0]!.currency;
     }
-  } catch (caught: any) {
-    error.value = caught?.data?.detail || 'The finance workspace is unavailable.';
-  } finally {
-    loading.value = false;
-  }
-}
-await load();
+  },
+  { immediate: true }
+);
 
 const money = (amount: number, currency: string) =>
   new Intl.NumberFormat('en', { style: 'currency', currency, maximumFractionDigits: 0 }).format(
@@ -166,7 +147,7 @@ const pnlMonths = computed(() => {
   const now = new Date();
   return Array.from({ length: 12 }, (_, index) => {
     const month = new Date(now.getFullYear(), now.getMonth() - 11 + index, 1);
-    const entries = transactions.value.filter((entry) => {
+    const entries = pnlTransactions.value.filter((entry) => {
       const entryDate = new Date(entry.date);
       return (
         entry.currency === pnlCurrency.value &&
@@ -192,7 +173,7 @@ const pnlMax = computed(() =>
 );
 const expenseBreakdown = computed(() => {
   const amounts = new Map<string, number>();
-  for (const entry of transactions.value) {
+  for (const entry of pnlTransactions.value) {
     if (entry.currency !== pnlCurrency.value || entry.type !== 'EXPENSE') continue;
     const category = entry.category || 'Uncategorised';
     amounts.set(category, (amounts.get(category) || 0) + Number(entry.amount));
@@ -210,6 +191,9 @@ const invoiceDraftTotal = computed(() =>
     (total, item) => total + Number(item.quantity || 0) * Number(item.rate || 0),
     0
   )
+);
+const outstandingInvoiceCount = computed(() =>
+  summary.value.reduce((total, group) => total + Number(group.outstanding_count), 0)
 );
 
 function exportTransactions() {
@@ -262,7 +246,7 @@ const summaryCards = computed<
   {
     title: 'Outstanding',
     value: moneyList('total_outstanding'),
-    subtitle: `${invoices.value.filter((invoice) => !['PAID', 'CANCELLED'].includes(invoice.status)).length} invoices`,
+    subtitle: `${outstandingInvoiceCount.value} invoices`,
     icon: FileText,
     tone: 'amber',
   },
@@ -330,7 +314,7 @@ async function saveInvoice() {
             client_id: invoiceDraft.client_id,
             currency: invoiceDraft.currency,
           });
-      await load(false);
+      await refreshAfterMutation('invoice');
       return saved;
     },
     {
@@ -351,7 +335,7 @@ async function createTransaction() {
         date: new Date(txDraft.date).toISOString(),
         category: txDraft.category || null,
       });
-      await load(false);
+      await refreshAfterMutation('transaction');
       return created;
     },
     { success: 'Transaction added.', error: 'The transaction could not be added.' }
@@ -385,7 +369,7 @@ async function updateTransaction(entry: Transaction) {
         date: new Date(txEditDraft.date).toISOString(),
         category: entry.type === 'EXPENSE' ? txEditDraft.category || null : null,
       });
-      await load(false);
+      await refreshAfterMutation('transaction');
       return updated;
     },
     { success: 'Transaction updated.', error: 'The transaction could not be updated.' }
@@ -398,7 +382,7 @@ async function addPayment() {
     'Recording payment…',
     async () => {
       const recorded = await api.addPayment(selectedInvoice.value!.id, { ...payment });
-      await load(false);
+      await refreshAfterMutation('invoice');
       return recorded;
     },
     { success: 'Payment recorded.', error: 'The payment could not be recorded.' }
@@ -428,7 +412,7 @@ async function removeInvoicePayment(id: string) {
       const refreshed = await api.invoice(invoiceId);
       selectedInvoice.value = refreshed;
       payment.amount = refreshed.balance;
-      await load(false);
+      await refreshAfterMutation('invoice');
       return removed;
     },
     { success: 'Payment deleted.', error: 'The payment could not be deleted.' }
@@ -441,7 +425,7 @@ async function markOverdue() {
     'Checking overdue invoices…',
     async () => {
       const result = await api.markOverdueInvoices();
-      await load(false);
+      await refreshAfterMutation('invoice');
       return result;
     },
     {
@@ -459,7 +443,7 @@ async function removeTx(id: string) {
       'Deleting transaction…',
       async () => {
         const removed = await api.removeTransaction(id);
-        await load(false);
+        await refreshAfterMutation('transaction');
         return removed;
       },
       { success: 'Transaction deleted.', error: 'The transaction could not be deleted.' }
@@ -471,7 +455,7 @@ async function setStatus(invoice: Invoice, value: string) {
     'Updating invoice status…',
     async () => {
       const updated = await api.updateInvoiceStatus(invoice.id, value);
-      await load(false);
+      await refreshAfterMutation('invoice');
       return updated;
     },
     {
@@ -489,7 +473,7 @@ async function createRecurring() {
         next_due_date: new Date(recurringDraft.next_due_date).toISOString(),
         vendor_name: recurringDraft.vendor_name || null,
       });
-      await load(false);
+      await refreshAfterMutation('recurring');
       return created;
     },
     { success: 'Recurring expense added.', error: 'The recurring expense could not be added.' }
@@ -512,7 +496,7 @@ async function removeRecurring(id: string) {
     'Removing recurring expense…',
     async () => {
       const removed = await api.removeRecurringExpense(id);
-      await load(false);
+      await refreshAfterMutation('recurring');
       return removed;
     },
     { success: 'Recurring expense removed.', error: 'The recurring expense could not be removed.' }
@@ -523,7 +507,7 @@ async function postDue() {
     'Posting due cycles…',
     async () => {
       const result = await api.postDueRecurringExpenses();
-      await load(false);
+      await refreshAfterMutation('recurring-post');
       return result;
     },
     {
@@ -569,7 +553,7 @@ function removeInvoiceItem(index: number) {
       :loading="loading"
       :error="error"
       action="Try again"
-      @action="load"
+      @action="refreshTransactionsAndSummary"
     />
     <template v-else>
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -624,7 +608,15 @@ function removeInvoiceItem(index: number) {
         </button>
       </nav>
 
-      <section v-if="tab === 'transactions'" class="space-y-4">
+      <DeliveryFieldState v-if="activeLoad === tab" :loading="true" />
+      <DeliveryFieldState
+        v-else-if="tabError"
+        :error="tabError"
+        action="Try again"
+        @action="ensureTab(tab, true)"
+      />
+
+      <section v-else-if="tab === 'transactions'" class="space-y-4">
         <header class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-center gap-1.5" aria-label="Transaction filters">
             <button
