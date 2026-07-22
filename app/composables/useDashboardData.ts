@@ -1,64 +1,122 @@
-import type { ApiResponse, DashboardStats } from '~/types/api';
-import type { Meeting } from '~/types/collaboration';
-import type {
-  DashboardActivityItem,
-  DashboardCriticalData,
-  DashboardCriticalDataset,
-  DashboardDeadline,
-  DashboardTask,
-} from '~/types/dashboard';
-import type { Project } from '~/types/delivery';
+import type { ApiResponse } from '~/types/api';
+import type { DashboardBootstrapData, DashboardCriticalDataset } from '~/types/dashboard';
 
-export const DASHBOARD_CRITICAL_DATA_KEY = 'dashboard-critical-v1';
-
-export const DASHBOARD_CRITICAL_ENDPOINTS = {
-  stats: '/api/dashboard/stats',
-  activity: '/api/dashboard/activity',
-  projects: '/api/v1/projects',
-  meetings: '/api/v1/meetings/upcoming',
-  deadlines: '/api/dashboard/deadlines',
-  tasks: '/api/dashboard/my-tasks',
-} as const satisfies Record<DashboardCriticalDataset, string>;
+export const DASHBOARD_CRITICAL_DATA_KEY = 'dashboard-bootstrap-v1';
+export const DASHBOARD_BOOTSTRAP_ENDPOINT = '/api/dashboard/bootstrap';
+export const DASHBOARD_BROWSER_FRESHNESS_MS = 45_000;
 
 export interface DashboardRequest {
   <T>(path: string): Promise<T>;
 }
 
-export async function fetchDashboardCriticalData(
-  request: DashboardRequest
-): Promise<DashboardCriticalData> {
-  const [stats, activity, projects, meetings, deadlines, tasks] = await Promise.allSettled([
-    request<ApiResponse<DashboardStats>>(DASHBOARD_CRITICAL_ENDPOINTS.stats),
-    request<ApiResponse<DashboardActivityItem[]>>(DASHBOARD_CRITICAL_ENDPOINTS.activity),
-    request<ApiResponse<Project[]>>(DASHBOARD_CRITICAL_ENDPOINTS.projects),
-    request<Meeting[]>(DASHBOARD_CRITICAL_ENDPOINTS.meetings),
-    request<ApiResponse<DashboardDeadline[]>>(DASHBOARD_CRITICAL_ENDPOINTS.deadlines),
-    request<ApiResponse<DashboardTask[]>>(DASHBOARD_CRITICAL_ENDPOINTS.tasks),
-  ]);
+interface DashboardBrowserCacheEntry {
+  data: DashboardBootstrapData;
+  storedAt: number;
+}
 
-  const settled = { stats, activity, projects, meetings, deadlines, tasks };
-  const failedDatasets = (Object.keys(settled) as DashboardCriticalDataset[]).filter(
-    (dataset) => settled[dataset].status === 'rejected'
-  );
+interface DashboardCacheLookup {
+  userId?: string | null;
+  payloadData?: DashboardBootstrapData;
+  isHydrating: boolean;
+  cause: 'initial' | 'refresh:hook' | 'refresh:manual' | 'watch';
+  now?: number;
+}
 
+const dashboardBrowserCache = new Map<string, DashboardBrowserCacheEntry>();
+
+function listOrEmpty<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+export function normalizeDashboardBootstrap(
+  value: Partial<DashboardBootstrapData> | null | undefined
+): DashboardBootstrapData {
   return {
-    stats: stats.status === 'fulfilled' ? stats.value.data : null,
-    activity: activity.status === 'fulfilled' ? activity.value.data : [],
-    projects: projects.status === 'fulfilled' ? projects.value.data.slice(0, 4) : [],
-    meetings: meetings.status === 'fulfilled' ? meetings.value : [],
-    deadlines: deadlines.status === 'fulfilled' ? deadlines.value.data : [],
-    tasks: tasks.status === 'fulfilled' ? tasks.value.data : [],
-    failedDatasets,
+    stats: value?.stats ?? null,
+    activity: listOrEmpty(value?.activity),
+    projects: listOrEmpty(value?.projects).slice(0, 4),
+    meetings: listOrEmpty(value?.meetings),
+    deadlines: listOrEmpty(value?.deadlines),
+    tasks: listOrEmpty(value?.tasks),
+    failedDatasets: listOrEmpty(value?.failedDatasets).filter(
+      (dataset): dataset is DashboardCriticalDataset =>
+        ['stats', 'activity', 'projects', 'meetings', 'deadlines', 'tasks'].includes(dataset)
+    ),
   };
+}
+
+export async function fetchDashboardBootstrap(
+  request: DashboardRequest
+): Promise<DashboardBootstrapData> {
+  const response = await request<ApiResponse<DashboardBootstrapData>>(DASHBOARD_BOOTSTRAP_ENDPOINT);
+  return normalizeDashboardBootstrap(response.data);
+}
+
+export function cacheDashboardDataForUser(
+  userId: string | null | undefined,
+  data: DashboardBootstrapData,
+  now = Date.now()
+) {
+  if (!userId) return;
+  for (const cachedUserId of dashboardBrowserCache.keys()) {
+    if (cachedUserId !== userId) dashboardBrowserCache.delete(cachedUserId);
+  }
+  dashboardBrowserCache.set(userId, { data, storedAt: now });
+}
+
+export function getCachedDashboardData({
+  userId,
+  payloadData,
+  isHydrating,
+  cause,
+  now = Date.now(),
+}: DashboardCacheLookup): DashboardBootstrapData | undefined {
+  if (cause === 'refresh:manual') return undefined;
+
+  if (isHydrating && payloadData) {
+    cacheDashboardDataForUser(userId, payloadData, now);
+    return payloadData;
+  }
+  if (!userId) return undefined;
+
+  const cached = dashboardBrowserCache.get(userId);
+  if (!cached) return undefined;
+  const age = now - cached.storedAt;
+  if (age < 0 || age >= DASHBOARD_BROWSER_FRESHNESS_MS) {
+    dashboardBrowserCache.delete(userId);
+    return undefined;
+  }
+  return cached.data;
+}
+
+export function clearDashboardBrowserCache() {
+  dashboardBrowserCache.clear();
 }
 
 export function useDashboardData() {
   const { request } = useApi();
+  const { user } = useAuth();
+  const userId = computed(() => user.value?.id ?? null);
+  const key = computed(() => `${DASHBOARD_CRITICAL_DATA_KEY}:${userId.value ?? 'unresolved'}`);
 
-  return useAsyncData(DASHBOARD_CRITICAL_DATA_KEY, () => fetchDashboardCriticalData(request), {
+  return useAsyncData(key, () => fetchDashboardBootstrap(request), {
     server: true,
     lazy: false,
     deep: false,
     dedupe: 'cancel',
+    getCachedData: (cacheKey, nuxtApp, context) =>
+      getCachedDashboardData({
+        userId: userId.value,
+        payloadData:
+          nuxtApp.isHydrating === true
+            ? (nuxtApp.payload.data[cacheKey] as DashboardBootstrapData | undefined)
+            : undefined,
+        isHydrating: nuxtApp.isHydrating === true,
+        cause: context.cause,
+      }),
+    transform: (data) => {
+      if (import.meta.client) cacheDashboardDataForUser(userId.value, data);
+      return data;
+    },
   });
 }

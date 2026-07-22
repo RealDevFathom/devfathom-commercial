@@ -51,7 +51,7 @@ export interface DashboardTeamPerson {
 export type DashboardCriticalDataset =
   'stats' | 'activity' | 'projects' | 'meetings' | 'deadlines' | 'tasks';
 
-export interface DashboardCriticalData {
+export interface DashboardBootstrapData {
   stats: DashboardStats | null;
   activity: DashboardActivityItem[];
   projects: Project[];
@@ -60,3 +60,5 @@ export interface DashboardCriticalData {
   tasks: DashboardTask[];
   failedDatasets: DashboardCriticalDataset[];
 }
+
+export type DashboardCriticalData = DashboardBootstrapData;
