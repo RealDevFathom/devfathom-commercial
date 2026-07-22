@@ -1,7 +1,11 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import {
-  DASHBOARD_CRITICAL_ENDPOINTS,
-  fetchDashboardCriticalData,
+  DASHBOARD_BOOTSTRAP_ENDPOINT,
+  DASHBOARD_BROWSER_FRESHNESS_MS,
+  cacheDashboardDataForUser,
+  clearDashboardBrowserCache,
+  fetchDashboardBootstrap,
+  getCachedDashboardData,
 } from '../app/composables/useDashboardData.ts';
 
 const stats = {
@@ -15,73 +19,120 @@ const stats = {
   isAdmin: true,
 };
 
-const responses = {
-  [DASHBOARD_CRITICAL_ENDPOINTS.stats]: { data: stats },
-  [DASHBOARD_CRITICAL_ENDPOINTS.activity]: {
-    data: [
-      {
-        id: 'activity-1',
-        type: 'project',
-        message: 'Updated a project',
-        createdAt: '2026-07-18T00:00:00.000Z',
-      },
-    ],
-  },
-  [DASHBOARD_CRITICAL_ENDPOINTS.projects]: {
-    data: Array.from({ length: 5 }, (_, index) => ({ id: `project-${index}` })),
-  },
-  [DASHBOARD_CRITICAL_ENDPOINTS.meetings]: [{ id: 'meeting-1' }],
-  [DASHBOARD_CRITICAL_ENDPOINTS.deadlines]: { data: [{ id: 'deadline-1' }] },
-  [DASHBOARD_CRITICAL_ENDPOINTS.tasks]: { data: [{ id: 'task-1' }] },
+const bootstrap = {
+  stats,
+  activity: [
+    {
+      id: 'activity-1',
+      type: 'project',
+      message: 'Updated a project',
+      createdAt: '2026-07-18T00:00:00.000Z',
+    },
+  ],
+  projects: Array.from({ length: 4 }, (_, index) => ({ id: `project-${index}` })),
+  meetings: [{ id: 'meeting-1' }],
+  deadlines: [{ id: 'deadline-1' }],
+  tasks: [{ id: 'task-1' }],
+  failedDatasets: [],
 };
 
-describe('dashboard critical loading', () => {
-  test('starts all six critical requests before waiting for any response', async () => {
+describe('dashboard bootstrap loading', () => {
+  beforeEach(() => clearDashboardBrowserCache());
+
+  test('makes exactly one SSR-critical bootstrap request', async () => {
     const started = [];
-    const resolvers = new Map();
-    const request = (path) => {
+    const request = async (path) => {
       started.push(path);
-      return new Promise((resolve) => resolvers.set(path, resolve));
+      return { data: bootstrap };
     };
 
-    const loading = fetchDashboardCriticalData(request);
+    const result = await fetchDashboardBootstrap(request);
 
-    expect(started).toEqual(Object.values(DASHBOARD_CRITICAL_ENDPOINTS));
-    expect(resolvers.size).toBe(6);
-
-    for (const path of started) resolvers.get(path)(responses[path]);
-    const result = await loading;
-
-    expect(result.failedDatasets).toEqual([]);
-    expect(result.stats).toEqual(stats);
+    expect(started).toEqual([DASHBOARD_BOOTSTRAP_ENDPOINT]);
+    expect(result).toEqual(bootstrap);
     expect(result.projects).toHaveLength(4);
-    expect(result.meetings).toEqual([{ id: 'meeting-1' }]);
   });
 
-  test('keeps successful datasets when optional critical sections fail', async () => {
-    const request = (path) => {
-      if (
-        path === DASHBOARD_CRITICAL_ENDPOINTS.activity ||
-        path === DASHBOARD_CRITICAL_ENDPOINTS.deadlines
-      ) {
-        return Promise.reject(new Error('temporarily unavailable'));
-      }
-      return Promise.resolve(responses[path]);
-    };
+  test('reuses the SSR payload during hydration without a duplicate request', async () => {
+    let requests = 0;
+    const ssrData = await fetchDashboardBootstrap(async () => {
+      requests += 1;
+      return { data: bootstrap };
+    });
 
-    const result = await fetchDashboardCriticalData(request);
+    const hydrated = getCachedDashboardData({
+      userId: 'user-1',
+      payloadData: ssrData,
+      isHydrating: true,
+      cause: 'initial',
+      now: 1_000,
+    });
+    const warmNavigation = getCachedDashboardData({
+      userId: 'user-1',
+      isHydrating: false,
+      cause: 'initial',
+      now: 1_000 + DASHBOARD_BROWSER_FRESHNESS_MS - 1,
+    });
 
-    expect(result.failedDatasets).toEqual(['activity', 'deadlines']);
+    expect(requests).toBe(1);
+    expect(hydrated).toBe(ssrData);
+    expect(warmNavigation).toBe(ssrData);
+  });
+
+  test('expires browser data, bypasses it on manual refresh, and isolates users', () => {
+    cacheDashboardDataForUser('user-1', bootstrap, 2_000);
+
+    expect(
+      getCachedDashboardData({
+        userId: 'user-2',
+        isHydrating: false,
+        cause: 'initial',
+        now: 2_001,
+      })
+    ).toBeUndefined();
+    expect(
+      getCachedDashboardData({
+        userId: 'user-1',
+        isHydrating: false,
+        cause: 'refresh:manual',
+        now: 2_001,
+      })
+    ).toBeUndefined();
+    expect(
+      getCachedDashboardData({
+        userId: 'user-1',
+        isHydrating: false,
+        cause: 'initial',
+        now: 2_000 + DASHBOARD_BROWSER_FRESHNESS_MS,
+      })
+    ).toBeUndefined();
+  });
+
+  test('normalizes partial optional data without losing successful critical data', async () => {
+    const result = await fetchDashboardBootstrap(async () => ({
+      data: {
+        stats,
+        activity: null,
+        projects: [{ id: 'project-1' }],
+        meetings: undefined,
+        deadlines: null,
+        tasks: [{ id: 'task-1' }],
+        failedDatasets: ['activity', 'meetings', 'deadlines'],
+      },
+    }));
+
     expect(result.stats).toEqual(stats);
     expect(result.activity).toEqual([]);
+    expect(result.meetings).toEqual([]);
     expect(result.deadlines).toEqual([]);
     expect(result.tasks).toEqual([{ id: 'task-1' }]);
+    expect(result.failedDatasets).toEqual(['activity', 'meetings', 'deadlines']);
   });
 
-  test('keeps revenue out of the SSR-critical request set', () => {
-    const paths = Object.values(DASHBOARD_CRITICAL_ENDPOINTS);
-
-    expect(paths).toHaveLength(6);
-    expect(paths).not.toContain('/api/dashboard/revenue-chart');
+  test('keeps the revenue chart outside the critical request and payload', () => {
+    expect(DASHBOARD_BOOTSTRAP_ENDPOINT).toBe('/api/dashboard/bootstrap');
+    expect(DASHBOARD_BOOTSTRAP_ENDPOINT).not.toBe('/api/dashboard/revenue-chart');
+    expect(bootstrap).not.toHaveProperty('revenueChart');
+    expect(bootstrap).not.toHaveProperty('byCurrency');
   });
 });

@@ -24,6 +24,79 @@ finance_write = require_scope("finance:write")
 PAYMENT_EPSILON = Decimal("0.005")
 
 
+@router.get("/bootstrap")
+async def finance_bootstrap(
+    limit: int = Query(100, ge=1, le=100),
+    _: Principal = Depends(finance_read),
+    db: AsyncConnection = Depends(connection),
+) -> dict:
+    result = await db.execute(
+        statement(
+            """WITH transaction_page AS MATERIALIZED (
+              SELECT t.*, p.name AS "projectName", c.name AS "clientName"
+              FROM transactions t
+              LEFT JOIN projects p ON p.id = t."projectId"
+              LEFT JOIN clients c ON c.id = t."clientId"
+              ORDER BY t.date DESC, t.id DESC
+              LIMIT :fetch_limit
+            ), tx AS (
+              SELECT currency::text currency,
+                SUM(amount) FILTER (WHERE type = 'INCOME' AND date >= date_trunc('month', now()) AND date <= now()) monthly_income,
+                SUM(amount) FILTER (WHERE type = 'EXPENSE' AND date >= date_trunc('month', now()) AND date <= now()) monthly_expense,
+                SUM(amount) FILTER (WHERE type = 'INCOME' AND date >= date_trunc('year', now()) AND date <= now()) yearly_income,
+                SUM(amount) FILTER (WHERE type = 'EXPENSE' AND date >= date_trunc('year', now()) AND date <= now()) yearly_expense
+              FROM transactions GROUP BY currency
+            ), inv AS (
+              SELECT currency::text currency,
+                SUM(total) FILTER (WHERE status = 'PAID') total_paid,
+                COUNT(*) FILTER (WHERE status = 'PAID') paid_count,
+                SUM(total) FILTER (WHERE status IN ('SENT','OVERDUE')) total_outstanding,
+                COUNT(*) FILTER (WHERE status IN ('SENT','OVERDUE')) outstanding_count
+              FROM invoices GROUP BY currency
+            ), currencies AS (
+              SELECT currency FROM tx UNION SELECT currency FROM inv
+            ), finance_summary AS (
+              SELECT c.currency,
+                COALESCE(t.monthly_income, 0) monthly_income,
+                COALESCE(t.monthly_expense, 0) monthly_expense,
+                COALESCE(t.monthly_income, 0) - COALESCE(t.monthly_expense, 0) monthly_profit,
+                COALESCE(t.yearly_income, 0) yearly_income,
+                COALESCE(t.yearly_expense, 0) yearly_expense,
+                COALESCE(t.yearly_income, 0) - COALESCE(t.yearly_expense, 0) yearly_profit,
+                COALESCE(i.total_paid, 0) total_paid,
+                COALESCE(i.paid_count, 0) paid_count,
+                COALESCE(i.total_outstanding, 0) total_outstanding,
+                COALESCE(i.outstanding_count, 0) outstanding_count
+              FROM currencies c LEFT JOIN tx t USING(currency) LEFT JOIN inv i USING(currency)
+            ), visible_transactions AS (
+              SELECT * FROM transaction_page ORDER BY date DESC, id DESC LIMIT :limit
+            )
+            SELECT
+              COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.currency) FROM finance_summary s), '[]'::jsonb) summary,
+              COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.date DESC, t.id DESC) FROM visible_transactions t), '[]'::jsonb) transactions,
+              CASE WHEN (SELECT COUNT(*) FROM transaction_page) > :limit
+                THEN (SELECT id FROM visible_transactions ORDER BY date ASC, id ASC LIMIT 1)
+                ELSE NULL
+              END AS "nextCursor"
+            """  # noqa: E501
+        ),
+        {"limit": limit, "fetch_limit": limit + 1},
+    )
+    record = result.mappings().one()
+    return {
+        "summary": {"byCurrency": record["summary"] or []},
+        "transactions": {"items": record["transactions"] or [], "nextCursor": record["nextCursor"]},
+    }
+
+
+@router.get("/client-choices")
+async def list_finance_client_choices(
+    _: Principal = Depends(finance_read), db: AsyncConnection = Depends(connection)
+) -> dict:
+    result = await db.execute(statement("SELECT id, name FROM clients ORDER BY name"))
+    return {"data": rows(result)}
+
+
 @router.get("/transactions")
 async def list_transactions(
     type: str | None = None,

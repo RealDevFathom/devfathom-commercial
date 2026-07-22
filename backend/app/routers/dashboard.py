@@ -5,10 +5,19 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..database import connection, rows, statement
 from ..security import Principal, current_principal
+from ..services.dashboard_bootstrap import dashboard_bootstrap
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+@router.get("/bootstrap")
+async def bootstrap(
+    principal: Principal = Depends(current_principal),
+    db: AsyncConnection = Depends(connection),
+) -> dict:
+    return {"data": await dashboard_bootstrap(db, principal)}
 
 
 def recent_months(now: datetime, count: int = 6) -> list[tuple[str, str]]:
