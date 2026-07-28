@@ -603,7 +603,9 @@
   }
 
   .fieldbook-login-hero {
-    background: var(--sidebar);
+    /* Auth heroes stay ink-black in both themes. The Studio theme maps
+       --sidebar to white, which otherwise makes the white hero lockup vanish. */
+    background: #111110;
   }
 
   .fieldbook-login-grid {
@@ -712,6 +714,11 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
+  }
+
+  [data-slot='page-transition'] {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }
 
@@ -1326,4 +1333,179 @@
   .studio-search {
     width: 260px;
   }
+}
+
+/* ============================================================
+   PLATFORM CONTROL — same Studio surface as the tenant workspace
+   The platform remains information-dense, while inheriting the same fog
+   surround, paper cards, rounded geometry, ink controls, and coral signal.
+   ============================================================ */
+@layer components {
+  .platform-workspace {
+    color: var(--text-strong);
+  }
+
+  .platform-workspace .platform-page-heading {
+    margin-bottom: 1.75rem;
+  }
+
+  .platform-workspace
+    :is(section, aside, details, form, div.overflow-x-auto).border.border-border-default {
+    overflow: hidden;
+    border-color: var(--border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-xs);
+  }
+
+  .platform-workspace :is(section, details, form).bg-surface-card,
+  .platform-workspace div.overflow-x-auto.bg-surface-card {
+    background: var(--surface-card);
+  }
+
+  .platform-workspace :is(input, select, textarea) {
+    min-height: 44px;
+    border-color: var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    color: var(--text-strong);
+    transition:
+      border-color 180ms var(--ease-out),
+      box-shadow 180ms var(--ease-out),
+      background 180ms var(--ease-out);
+  }
+
+  .platform-workspace :is(input, select, textarea):hover {
+    border-color: var(--border-strong);
+  }
+
+  .platform-workspace :is(input, select, textarea):focus {
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-brand) 14%, transparent);
+  }
+
+  .platform-workspace input[type='checkbox'] {
+    min-height: 1rem;
+    border-radius: 4px;
+  }
+
+  .platform-workspace summary {
+    min-height: 44px;
+    transition: background 180ms var(--ease-out);
+  }
+
+  .platform-workspace summary:hover {
+    background: var(--surface-sunken);
+  }
+
+  .platform-workspace table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .platform-workspace thead {
+    background: var(--surface-sunken);
+  }
+
+  .platform-workspace thead th {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .platform-workspace tbody tr {
+    transition: background 160ms var(--ease-out);
+  }
+
+  .platform-workspace tbody tr:hover {
+    background: color-mix(in srgb, var(--surface-sunken) 72%, transparent);
+  }
+
+  .platform-workspace .bg-abyss-900 {
+    border-radius: 3px;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: 0 8px 18px -13px rgba(17, 17, 16, 0.72);
+  }
+
+  .platform-workspace .hover\:bg-abyss-800:hover,
+  .platform-workspace .bg-abyss-800 {
+    background: var(--primary-hover);
+    color: var(--primary-foreground);
+  }
+
+  .platform-workspace .border-abyss-900 {
+    border-color: var(--primary);
+  }
+
+  .platform-workspace .text-brass-300,
+  .platform-workspace .text-brass-500,
+  .platform-workspace .text-brass-700 {
+    color: var(--accent-brand);
+  }
+
+  .platform-workspace .bg-brass-100 {
+    background: var(--accent-quiet);
+  }
+
+  .platform-workspace button,
+  .platform-workspace a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .platform-workspace button:not(:disabled),
+  .platform-workspace summary {
+    cursor: pointer;
+  }
+
+  .platform-workspace button:focus-visible,
+  .platform-workspace a:focus-visible,
+  .platform-workspace summary:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@media (max-width: 639px) {
+  .platform-workspace .platform-page-heading {
+    margin-bottom: 1.25rem;
+  }
+
+  .platform-workspace .platform-page-heading h1 {
+    font-size: clamp(2rem, 11vw, 2.65rem);
+  }
+}
+
+/* Unlayered compatibility bridge for the first platform implementation's
+   palette utilities. Unlayered rules intentionally outrank Tailwind's utility
+   layer so every existing route adopts Studio ink/coral without a brittle
+   route-by-route color rewrite. */
+.platform-workspace .bg-abyss-900 {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.platform-workspace .bg-abyss-800,
+.platform-workspace .hover\:bg-abyss-800:hover {
+  background-color: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.platform-workspace .border-abyss-900 {
+  border-color: var(--primary);
+}
+
+.platform-workspace .text-abyss-200,
+.platform-workspace .text-abyss-300,
+.platform-workspace .text-paper-50,
+.platform-workspace .text-paper-white {
+  color: var(--primary-foreground);
+}
+
+.platform-workspace .text-brass-300,
+.platform-workspace .text-brass-500,
+.platform-workspace .text-brass-700 {
+  color: var(--accent-brand);
+}
+
+.platform-workspace .bg-brass-100 {
+  background-color: var(--accent-quiet);
 }

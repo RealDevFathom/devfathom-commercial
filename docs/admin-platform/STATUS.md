@@ -2,22 +2,22 @@
 
 Last reviewed: 2026-07-28. Branch: `codex/admin-control-plane`.
 
-| Phase                             | Implementation | Verification                                                                     | Production dependency                                      |
-| --------------------------------- | -------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Tenant schema and boundary        | Complete       | Fresh migration and adversarial RLS suite passed                                 | Managed PostgreSQL and backup policy                       |
-| Platform operator authentication  | Complete       | Login and authorization browser smoke passed                                     | Strong bootstrap credential and secret rotation            |
-| Organization onboarding/lifecycle | Complete       | Platform organization detail and mutation smoke passed                           | Approval, retention, and legal-hold policy                 |
-| Catalog, packages, entitlements   | Complete       | Unit tests plus disable/direct-route/restore browser test passed                 | Product catalog and signed contract data                   |
-| CRM and commercial ledger         | Complete       | All control surfaces rendered; build/type checks passed                          | Finance operating process; no automatic payment processor  |
-| Agency administration             | Complete       | `/organization` rendered, profile mutation passed                                | Customer administrator training                            |
-| OIDC/SAML/JIT                     | Complete       | Static/build checks; protocol requires real IdP staging test                     | IdP metadata, certificates, client credentials             |
-| SCIM 2.0                          | Complete       | Token issue, paginated Users request, unauthorized request, revoke/replay passed | Customer directory integration                             |
-| Shared provisioning               | Complete       | Real local worker job succeeded and deployment became READY                      | Base domain and production deployment                      |
-| Dedicated provisioning            | Complete       | SDK path/build verified; no live Vercel project was created                      | Vercel token/team/repository and customer rollout approval |
-| Domains/brand/email               | Complete       | UI, worker path, encryption, and build verified                                  | DNS records and selected email provider credentials        |
-| Export/purge/suspend/resume       | Complete       | Worker and lifecycle guards build/test clean                                     | Private Blob store and approved retention schedule         |
-| Audited support access            | Complete       | Start, one-use cross-domain launch, banner, action context, and end passed       | Platform operator policy                                   |
-| Documentation                     | Complete       | Cross-checked against routes, schema, migrations, and final QA                   | Keep synchronized with releases                            |
+| Phase                             | Implementation | Verification                                                                       | Production dependency                                      |
+| --------------------------------- | -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Tenant schema and boundary        | Complete       | Fresh migration and adversarial RLS suite passed                                   | Managed PostgreSQL and backup policy                       |
+| Platform operator authentication  | Complete       | Login and authorization browser smoke passed                                       | Strong bootstrap credential and secret rotation            |
+| Organization onboarding/lifecycle | Complete       | Platform organization detail and mutation smoke passed                             | Approval, retention, and legal-hold policy                 |
+| Catalog, packages, entitlements   | Complete       | Unit tests plus disable/direct-route/restore browser test passed                   | Product catalog and signed contract data                   |
+| CRM and commercial ledger         | Complete       | All control surfaces rendered; build/type checks passed                            | Finance operating process; no automatic payment processor  |
+| Agency administration             | Complete       | `/organization` rendered, profile mutation passed                                  | Customer administrator training                            |
+| OIDC/SAML/JIT                     | Complete       | Static/build checks; protocol requires real IdP staging test                       | IdP metadata, certificates, client credentials             |
+| SCIM 2.0                          | Complete       | Token issue, paginated Users request, unauthorized request, revoke/replay passed   | Customer directory integration                             |
+| Shared provisioning               | Complete       | Real local worker job succeeded and deployment became READY                        | Base domain and production deployment                      |
+| Dedicated provisioning            | Complete       | SDK path/build verified; no live Vercel project was created                        | Vercel token/team/repository and customer rollout approval |
+| Domains/brand/email               | Complete       | UI, worker path, encryption, and build verified                                    | DNS records and selected email provider credentials        |
+| Export/purge/suspend/resume       | Complete       | Worker and lifecycle guards build/test clean                                       | Private Blob store and approved retention schedule         |
+| Audited support access            | Complete       | Start, one-use cross-domain launch, banner, action context, and end passed         | Platform operator policy                                   |
+| Documentation                     | Complete       | Cross-checked against routes, schema, migrations, final QA, and Studio UI contract | Keep synchronized with releases                            |
 
 ## Product decisions
 
@@ -45,6 +45,7 @@ The checks below used disposable PostgreSQL databases on 2026-07-28. No credenti
 | `bun audit`                                      | Direct/runtime advisories cleared; two accepted toolchain-only advisories remain, described below           |
 | `bun run platform:jobs -- --max-jobs=1`          | Passed; shared provisioning job succeeded                                                                   |
 | Platform browser smoke                           | Passed on dashboard, organizations, CRM, commercial, catalog, deployments, jobs, operators, audit, settings |
+| Platform visual parity                           | Passed at desktop/mobile widths, light/dark themes, and reduced motion against the tenant Studio language   |
 | Tenant browser smoke                             | Passed on dashboard and organization administration                                                         |
 | Entitlement browser smoke                        | Reviews disabled, navigation hidden, direct route blocked, inherited package state restored                 |
 | SCIM browser/API smoke                           | Token created, authorized config/users succeeded, unauthenticated and revoked token returned 401            |

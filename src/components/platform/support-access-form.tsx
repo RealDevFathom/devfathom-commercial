@@ -55,13 +55,13 @@ export function SupportAccessForm({ organizationId }: { organizationId: string }
         minLength={10}
         maxLength={500}
         placeholder="Why support access is necessary (recorded in the audit ledger)"
-        className="w-full border border-border-default bg-surface-card px-3 py-2.5 text-sm outline-none focus:border-accent-brand"
+        className="w-full rounded-lg border border-border-default bg-card px-3 py-2.5 text-sm outline-none focus:border-accent-brand"
       />
       <div className="flex items-center gap-3">
         <select
           value={duration}
           onChange={(event) => setDuration(event.target.value)}
-          className="h-9 border border-border-default bg-surface-card px-3 text-xs"
+          className="h-11 rounded-lg border border-border-default bg-card px-3 text-xs"
         >
           <option value="15">15 minutes</option>
           <option value="30">30 minutes</option>
@@ -71,7 +71,7 @@ export function SupportAccessForm({ organizationId }: { organizationId: string }
           type="button"
           onClick={start}
           disabled={pending || reason.trim().length < 10}
-          className="inline-flex h-9 items-center gap-2 bg-abyss-900 px-3 text-xs font-semibold text-paper-white disabled:opacity-50"
+          className="inline-flex h-11 items-center gap-2 rounded-[3px] bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50"
         >
           {pending ? (
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" />

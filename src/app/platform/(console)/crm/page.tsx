@@ -99,7 +99,7 @@ export default async function CrmPage() {
             return (
               <div
                 key={stage}
-                className="min-w-[260px] border border-border-default bg-surface-card"
+                className="min-w-[260px] overflow-hidden rounded-lg border border-border-subtle bg-card"
               >
                 <div className="flex items-center justify-between border-b border-border-subtle bg-surface-sunken/60 px-3 py-3">
                   <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.12em]">
@@ -111,7 +111,7 @@ export default async function CrmPage() {
                   {items.map((opportunity) => (
                     <article
                       key={opportunity.id}
-                      className="border border-border-subtle bg-surface-card p-3"
+                      className="rounded-lg border border-border-subtle bg-card p-3"
                     >
                       <p className="text-xs font-semibold">{opportunity.name}</p>
                       <p className="mt-1 text-[10px] text-text-muted">{opportunity.account.name}</p>

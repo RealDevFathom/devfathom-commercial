@@ -1,11 +1,17 @@
-# DevFathom Hub — Brand & Design System
+# DevFathom Hub — Legacy Prototype Brand Reference
+
+> **Historical only.** This document describes the former teal/brass “The Sounding” prototype.
+> The canonical product UI/UX contract is now
+> [`docs/design-system/DEVFATHOM-STUDIO.md`](../../design-system/DEVFATHOM-STUDIO.md). Do not use
+> this file as visual authority for new tenant or platform-control work.
 
 > **"Depth in everything we build."**
 > System name: **The Sounding** · Palette: **Fathom**
 
-This is the canonical design language for DevFathom Hub. It applies the *same* tokens and
-component conventions across every module. Tokens live in `devfathom-tokens.css`; this doc
-explains the philosophy and how to use them.
+This file is retained as implementation history for the earlier prototype. Its accompanying
+tokens and screenshots remain useful for understanding prior decisions only.
+
+<!-- prettier-ignore-start -->
 
 ---
 
@@ -137,3 +143,5 @@ Page padding: `clamp(1.25rem, 5vw, 4rem)`. Whitespace is generous by default.
 *Configurable surface attributes from the prototype (carry over as optional preferences):*
 `data-theme` (light/dark) · `data-density` (default/compact) · `data-type` (sm/lg type scale) ·
 `data-accent` (quiet/bold brass) · `data-layout` (side rail / top nav) · `data-icons` (numeric/architectural).
+
+<!-- prettier-ignore-end -->

@@ -4,6 +4,10 @@
 
 ### Added
 
+- DevFathom Studio platform shell, responsive navigation drawer, tenant-aligned authentication,
+  light/dark themes, reduced-motion behavior, and shared platform page primitives.
+- Canonical repository-wide UI/UX contract with tokens, component/page recipes, accessibility,
+  motion, responsive behavior, visual QA gates, and mandatory agent instructions.
 - Seller-operated control desk with platform operators, MFA, capability checks, audit ledger, settings, and role-safe sessions.
 - Manual customer-agency onboarding, lifecycle transitions, profile, package, deployment mode, activation validation, suspension, retention, and purge scheduling.
 - Module catalog, packages, contract modules, organization overrides, limits, usage counters, seats, expiry, and grace handling.
@@ -19,6 +23,10 @@
 
 ### Fixed during QA
 
+- Replaced the platform control plane's disconnected legacy admin theme with the same fog, paper,
+  ink, coral, typography, rounded geometry, and navigation language as the tenant workspace.
+- Removed a reduced-motion hydration mismatch by keeping page-transition markup deterministic and
+  disabling motion through CSS media queries.
 - Prevented admin-host redirects from intercepting Next.js assets and breaking hydration.
 - Corrected public-origin reconstruction behind proxies for platform mutations, support redirects, SSO callbacks, SCIM locations, and REST specification URLs.
 - Prevented interactive platform pages and APIs from being served on tenant/dedicated hosts.

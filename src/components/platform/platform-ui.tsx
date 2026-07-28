@@ -1,34 +1,38 @@
-import { cn } from '@/lib/utils';
+import { PageHeader } from '@/components/ui/page-header';
+import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
-const statusTone: Record<string, string> = {
-  ACTIVE: 'bg-green-100 text-green-600',
-  READY: 'bg-green-100 text-green-600',
-  SUCCEEDED: 'bg-green-100 text-green-600',
-  PAID: 'bg-green-100 text-green-600',
-  WON: 'bg-green-100 text-green-600',
-  ONBOARDING: 'bg-amber-100 text-amber-600',
-  GRACE: 'bg-amber-100 text-amber-600',
-  PENDING: 'bg-amber-100 text-amber-600',
-  PENDING_SIGNATURE: 'bg-amber-100 text-amber-600',
-  QUEUED: 'bg-amber-100 text-amber-600',
-  PROVISIONING: 'bg-amber-100 text-amber-600',
-  OVERDUE: 'bg-red-100 text-red-600',
-  FAILED: 'bg-red-100 text-red-600',
-  SUSPENDED: 'bg-red-100 text-red-600',
-  TERMINATED: 'bg-red-100 text-red-600',
-  PURGING: 'bg-red-100 text-red-600',
+const toneByStatus: Record<string, StatusTone> = {
+  ACTIVE: 'success',
+  READY: 'success',
+  SUCCEEDED: 'success',
+  PAID: 'success',
+  WON: 'success',
+  VERIFIED: 'success',
+  COMPLETED: 'success',
+  ONBOARDING: 'warning',
+  GRACE: 'warning',
+  PENDING: 'warning',
+  PENDING_SIGNATURE: 'warning',
+  QUEUED: 'warning',
+  PROVISIONING: 'warning',
+  RUNNING: 'info',
+  OPEN: 'info',
+  SENT: 'info',
+  PROSPECT: 'info',
+  OVERDUE: 'danger',
+  FAILED: 'danger',
+  SUSPENDED: 'danger',
+  TERMINATED: 'danger',
+  PURGING: 'danger',
+  REVOKED: 'danger',
+  INACTIVE: 'neutral',
+  REDACTED: 'neutral',
+  PACKAGE_DEFAULT: 'neutral',
 };
 
 export function PlatformStatus({ value }: { value: string }) {
   return (
-    <span
-      className={cn(
-        'inline-flex w-fit px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.1em]',
-        statusTone[value] ?? 'bg-surface-sunken text-text-muted'
-      )}
-    >
-      {value.replaceAll('_', ' ')}
-    </span>
+    <StatusPill status={value} tone={toneByStatus[value]} label={value.replaceAll('_', ' ')} />
   );
 }
 
@@ -44,15 +48,12 @@ export function PlatformPageHeading({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col justify-between gap-5 border-b border-border-default pb-7 md:flex-row md:items-end">
-      <div>
-        <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-accent-brand">
-          {eyebrow}
-        </p>
-        <h1 className="mt-2 font-display text-4xl font-semibold tracking-[-0.045em]">{title}</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-text-muted">{description}</p>
-      </div>
-      {action}
-    </div>
+    <PageHeader
+      className="platform-page-heading"
+      eyebrow={eyebrow}
+      heading={title}
+      description={description}
+      actions={action}
+    />
   );
 }

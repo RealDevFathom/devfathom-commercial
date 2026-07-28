@@ -1357,7 +1357,7 @@ export default async function OrganizationDetailPage({
               Opens a time-boxed session as the tenant administrator. The reason and every action
               are recorded.
             </p>
-            <div className="mt-5 [&_textarea]:border-white/15 [&_textarea]:bg-white/5 [&_textarea]:text-paper-50 [&_select]:border-white/15 [&_select]:bg-abyss-900">
+            <div className="mt-5 [&_textarea]:border-primary-foreground/15 [&_textarea]:bg-primary-foreground/5 [&_textarea]:text-primary-foreground [&_select]:border-primary-foreground/15 [&_select]:bg-primary [&_select]:text-primary-foreground">
               <SupportAccessForm organizationId={organization.id} />
             </div>
           </section>

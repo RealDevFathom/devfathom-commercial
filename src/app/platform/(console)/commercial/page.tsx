@@ -114,7 +114,7 @@ export default async function CommercialPage() {
         description="Contract value, seats, modules, expiry, grace, renewals, invoices, and cash application in one auditable ledger."
       />
 
-      <section className="mt-7 grid gap-px bg-border-default md:grid-cols-3">
+      <section className="mt-7 grid gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle shadow-none md:grid-cols-3">
         {[
           [
             'Active contracted value',
@@ -132,11 +132,13 @@ export default async function CommercialPage() {
             'upcoming renewal records',
           ],
         ].map(([label, value, detail]) => (
-          <article key={label} className="bg-surface-card p-5">
+          <article key={label} className="bg-card p-5">
             <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-text-muted">
               {label}
             </p>
-            <p className="mt-5 font-display text-3xl font-semibold tracking-[-0.04em]">{value}</p>
+            <p className="mt-5 font-display text-3xl font-semibold tracking-[-0.04em] text-text-strong">
+              {value}
+            </p>
             <p className="mt-2 text-xs text-text-muted">{detail}</p>
           </article>
         ))}

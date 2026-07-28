@@ -62,7 +62,7 @@ export function PlatformMfaCard() {
   }
 
   return (
-    <section className="border border-border-default bg-surface-card">
+    <section className="overflow-hidden rounded-lg border border-border-subtle bg-card">
       <div className="flex items-center justify-between gap-4 border-b border-border-subtle px-5 py-4">
         <div>
           <h2 className="font-display text-xl font-semibold">
@@ -82,7 +82,7 @@ export function PlatformMfaCard() {
             type="button"
             disabled={pending}
             onClick={() => void action('begin')}
-            className="inline-flex h-10 items-center gap-2 bg-abyss-900 px-4 text-xs font-semibold text-paper-white disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-[3px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-60"
           >
             {pending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -93,7 +93,7 @@ export function PlatformMfaCard() {
           </button>
         ) : null}
         {secret ? (
-          <div className="border border-border-subtle bg-surface-sunken/40 p-4">
+          <div className="rounded-lg border border-border-subtle bg-surface-sunken/40 p-4">
             <p className="text-xs font-semibold">Add this account to your authenticator</p>
             <code className="mt-3 block break-all font-mono text-xs">{secret}</code>
             <button
@@ -119,21 +119,21 @@ export function PlatformMfaCard() {
                 onChange={(event) => setCode(event.target.value)}
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                className="h-10 border border-border-default bg-surface-card px-3 font-mono text-sm tracking-[0.16em]"
+                className="h-11 rounded-lg border border-border-default bg-card px-3 font-mono text-sm tracking-[0.16em]"
               />
             </label>
             <button
               type="button"
               disabled={pending || code.length < 6}
               onClick={() => void action(secret ? 'confirm' : 'regenerate')}
-              className="h-10 bg-abyss-900 px-4 text-xs font-semibold text-paper-white disabled:opacity-60"
+              className="h-10 rounded-[3px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-60"
             >
               {secret ? 'Confirm and require MFA' : 'Regenerate recovery codes'}
             </button>
           </div>
         ) : null}
         {recoveryCodes.length ? (
-          <div className="border border-amber-300 bg-amber-50 p-4 text-amber-950">
+          <div className="rounded-lg border border-warning/25 bg-warning/10 p-4 text-text-strong">
             <p className="text-xs font-semibold">Save these recovery codes now</p>
             <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-xs">
               {recoveryCodes.map((item) => (

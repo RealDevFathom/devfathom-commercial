@@ -132,11 +132,13 @@ export function PlatformCommandForm({
   return (
     <form
       onSubmit={submit}
-      className={cn(!compact && 'border border-border-default bg-surface-card')}
+      className={cn(!compact && 'overflow-hidden rounded-lg border border-border-subtle bg-card')}
     >
       {title || description ? (
         <div className={cn('border-b border-border-subtle', compact ? 'pb-4' : 'px-5 py-4')}>
-          {title ? <h3 className="font-display text-lg font-semibold">{title}</h3> : null}
+          {title ? (
+            <h3 className="font-display text-lg font-semibold tracking-tight">{title}</h3>
+          ) : null}
           {description ? (
             <p className="mt-1 text-xs leading-5 text-text-muted">{description}</p>
           ) : null}
@@ -157,7 +159,7 @@ export function PlatformCommandForm({
           const wide = field.type === 'textarea' || field.type === 'json';
           return (
             <label key={field.name} className={cn('block', wide && 'sm:col-span-2')}>
-              <span className="mb-1.5 block font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+              <span className="mb-1.5 block text-xs font-semibold text-text-strong">
                 {field.label}
               </span>
               {field.type === 'textarea' || field.type === 'json' ? (
@@ -171,14 +173,14 @@ export function PlatformCommandForm({
                   }
                   placeholder={field.placeholder}
                   rows={field.type === 'json' ? 6 : 3}
-                  className="w-full border border-border-default bg-surface-card px-3 py-2.5 font-sans text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
+                  className="w-full rounded-lg border border-border-default bg-card px-3 py-2.5 font-sans text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 />
               ) : field.type === 'select' ? (
                 <select
                   name={field.name}
                   required={field.required}
                   defaultValue={String(field.defaultValue ?? '')}
-                  className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
+                  className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 >
                   {!field.required ? <option value="">Not set</option> : null}
                   {field.options?.map((option) => (
@@ -188,7 +190,7 @@ export function PlatformCommandForm({
                   ))}
                 </select>
               ) : field.type === 'checkbox' ? (
-                <span className="flex h-10 items-center gap-2 border border-border-default px-3 text-xs">
+                <span className="flex h-11 items-center gap-2 rounded-lg border border-border-default bg-card px-3 text-xs">
                   <input
                     name={field.name}
                     type="checkbox"
@@ -211,7 +213,7 @@ export function PlatformCommandForm({
                   min={field.min}
                   max={field.max}
                   step={field.step}
-                  className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
+                  className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 />
               )}
               {field.help ? (
@@ -226,13 +228,13 @@ export function PlatformCommandForm({
       {error ? (
         <p
           role="alert"
-          className="mx-5 mb-4 border-l-2 border-destructive bg-red-100 px-3 py-2 text-xs"
+          className="mx-5 mb-4 rounded-[3px] border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
         >
           {error}
         </p>
       ) : null}
       {revealed ? (
-        <div className="mx-5 mb-4 border border-amber-300 bg-amber-50 p-3 text-amber-950">
+        <div className="mx-5 mb-4 rounded-lg border border-warning/25 bg-warning/10 p-3 text-text-strong">
           <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.14em]">
             Copy now · shown once
           </p>
@@ -240,7 +242,7 @@ export function PlatformCommandForm({
           <button
             type="button"
             onClick={() => void navigator.clipboard.writeText(revealed)}
-            className="mt-3 h-8 border border-amber-500 px-3 text-[10px] font-semibold"
+            className="mt-3 min-h-9 rounded-[3px] border border-warning/40 px-3 text-[10px] font-semibold transition hover:bg-warning/10"
           >
             Copy secret
           </button>
@@ -255,7 +257,7 @@ export function PlatformCommandForm({
         <button
           type="submit"
           disabled={pending}
-          className="inline-flex h-10 items-center gap-2 bg-abyss-900 px-4 text-xs font-semibold text-paper-white transition hover:bg-abyss-800 disabled:cursor-wait disabled:opacity-60"
+          className="inline-flex h-10 items-center gap-2 rounded-[3px] bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-[0_8px_18px_-13px_rgba(17,17,16,0.72)] transition-all hover:-translate-y-px hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60"
         >
           {pending ? (
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -317,11 +319,12 @@ export function PlatformCommandButton({
       onClick={run}
       disabled={pending}
       className={cn(
-        'inline-flex h-9 items-center gap-2 border px-3 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60',
-        tone === 'danger' && 'border-destructive bg-red-100 text-destructive hover:bg-red-100/70',
-        tone === 'quiet' &&
-          'border-border-default bg-surface-card text-text-body hover:bg-surface-sunken',
-        tone === 'default' && 'border-abyss-900 bg-abyss-900 text-paper-white hover:bg-abyss-800'
+        'inline-flex min-h-10 items-center gap-2 rounded-[3px] border px-3 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60',
+        tone === 'danger' &&
+          'border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/20',
+        tone === 'quiet' && 'border-border-default bg-card text-text-body hover:bg-muted',
+        tone === 'default' &&
+          'border-primary bg-primary text-primary-foreground hover:bg-primary-hover'
       )}
     >
       {pending ? (

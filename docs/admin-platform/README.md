@@ -16,25 +16,26 @@ This handbook is the source of truth for the implemented DevFathom control plane
 
 ## Handbook map
 
-| Need                                                | Document                                            |
-| --------------------------------------------------- | --------------------------------------------------- |
-| Delivery state and evidence                         | [STATUS](STATUS.md)                                 |
-| Architecture and request flow                       | [Architecture and tenancy](architecture-tenancy.md) |
-| Platform and agency UI                              | [Control plane](control-plane.md)                   |
-| Tables and invariants                               | [Data model](data-model.md)                         |
-| Modules, seats, limits, contracts                   | [Entitlements](entitlements.md)                     |
-| CRM and commercial operations                       | [Commercial ledger](commercial-ledger.md)           |
-| Password, MFA, ABAC, SSO, SCIM, support             | [Identity and access](identity-access.md)           |
-| HTTP and tRPC inventory                             | [API](api.md)                                       |
-| Brand, domains, and email                           | [White-label](white-label.md)                       |
-| Workers, shared/dedicated deployment, configuration | [Operations](operations.md)                         |
-| Organization states, export, retention, purge       | [Lifecycle](lifecycle.md)                           |
-| Setup and production rollout                        | [Migration and rollout](migration-rollout.md)       |
-| Operator procedures                                 | [Runbooks](runbooks.md)                             |
-| Threats and implemented controls                    | [Security threat model](security-threat-model.md)   |
-| Test matrix and release gates                       | [Testing and release](testing-release.md)           |
-| Accepted architecture decisions                     | [ADRs](adr/README.md)                               |
-| Change history                                      | [CHANGELOG](CHANGELOG.md)                           |
+| Need                                                | Document                                                 |
+| --------------------------------------------------- | -------------------------------------------------------- |
+| Delivery state and evidence                         | [STATUS](STATUS.md)                                      |
+| Architecture and request flow                       | [Architecture and tenancy](architecture-tenancy.md)      |
+| Platform and agency UI                              | [Control plane](control-plane.md)                        |
+| Tables and invariants                               | [Data model](data-model.md)                              |
+| Modules, seats, limits, contracts                   | [Entitlements](entitlements.md)                          |
+| CRM and commercial operations                       | [Commercial ledger](commercial-ledger.md)                |
+| Password, MFA, ABAC, SSO, SCIM, support             | [Identity and access](identity-access.md)                |
+| HTTP and tRPC inventory                             | [API](api.md)                                            |
+| Brand, domains, and email                           | [White-label](white-label.md)                            |
+| Workers, shared/dedicated deployment, configuration | [Operations](operations.md)                              |
+| Organization states, export, retention, purge       | [Lifecycle](lifecycle.md)                                |
+| Setup and production rollout                        | [Migration and rollout](migration-rollout.md)            |
+| Operator procedures                                 | [Runbooks](runbooks.md)                                  |
+| Threats and implemented controls                    | [Security threat model](security-threat-model.md)        |
+| Test matrix and release gates                       | [Testing and release](testing-release.md)                |
+| Canonical product UI/UX contract                    | [DevFathom Studio](../design-system/DEVFATHOM-STUDIO.md) |
+| Accepted architecture decisions                     | [ADRs](adr/README.md)                                    |
+| Change history                                      | [CHANGELOG](CHANGELOG.md)                                |
 
 ## Core source anchors
 

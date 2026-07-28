@@ -2,12 +2,16 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, LoaderCircle } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
+
+const inputClass =
+  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 
 export function PlatformLoginForm() {
   const router = useRouter();
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -39,64 +43,95 @@ export function PlatformLoginForm() {
   }
 
   return (
-    <form method="post" onSubmit={submit} className="mt-8 space-y-5">
-      <label className="block">
-        <span className="mb-2 block font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+    <form method="post" onSubmit={submit} className="space-y-5">
+      {error ? (
+        <div
+          role="alert"
+          className="rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          {error}
+        </div>
+      ) : null}
+
+      <div className="space-y-2">
+        <label htmlFor="platform-email" className="block text-sm font-semibold text-foreground">
           Work email
-        </span>
+        </label>
         <input
+          id="platform-email"
           name="email"
           type="email"
           autoComplete="username"
+          autoFocus
           required
           maxLength={254}
-          className="h-12 w-full border border-border-default bg-surface-card px-3.5 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
+          className={inputClass}
           placeholder="operator@devfathom.com"
         />
-      </label>
-      <label className="block">
-        <span className="mb-2 block font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
-          Authenticator or recovery code
-        </span>
+      </div>
+
+      <div className="space-y-2">
+        <label htmlFor="platform-password" className="block text-sm font-semibold text-foreground">
+          Password
+        </label>
+        <div className="relative">
+          <input
+            id="platform-password"
+            name="password"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="current-password"
+            required
+            minLength={8}
+            maxLength={256}
+            className={`${inputClass} pr-10`}
+            placeholder="Enter your password"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((visible) => !visible)}
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
+            className="absolute top-1/2 right-3 -translate-y-1/2 text-text-muted transition-colors hover:text-foreground"
+            tabIndex={-1}
+          >
+            {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <label
+            htmlFor="platform-auth-code"
+            className="block text-sm font-semibold text-foreground"
+          >
+            Authentication code
+          </label>
+          <span className="text-xs text-text-muted">If enrolled</span>
+        </div>
         <input
+          id="platform-auth-code"
           name="authenticationCode"
           type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
           maxLength={32}
-          className="h-12 w-full border border-border-default bg-surface-card px-3.5 font-mono text-sm tracking-[0.16em] outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
-          placeholder="Required after MFA enrollment"
+          className={`${inputClass} font-mono tracking-[0.16em]`}
+          placeholder="6-digit or recovery code"
         />
-      </label>
-      <label className="block">
-        <span className="mb-2 block font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
-          Password
-        </span>
-        <input
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          minLength={8}
-          maxLength={256}
-          className="h-12 w-full border border-border-default bg-surface-card px-3.5 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
-        />
-      </label>
-      {error ? (
-        <p role="alert" className="border-l-2 border-destructive bg-red-100 px-3 py-2.5 text-sm">
-          {error}
-        </p>
-      ) : null}
+      </div>
+
       <button
         type="submit"
         disabled={pending}
-        className="flex h-12 w-full items-center justify-between bg-abyss-900 px-4 text-sm font-semibold text-paper-white transition hover:bg-abyss-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-brand disabled:cursor-wait disabled:opacity-70"
+        className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(17,17,16,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
       >
-        {pending ? 'Checking access…' : 'Continue to control desk'}
         {pending ? (
-          <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+          <>
+            <Loader2 className="mr-2 size-4 animate-spin" />
+            Checking access…
+          </>
         ) : (
-          <ArrowRight aria-hidden="true" className="h-4 w-4" />
+          'Continue to control desk'
         )}
       </button>
     </form>
