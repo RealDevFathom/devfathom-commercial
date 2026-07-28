@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -191,7 +191,7 @@ function HrOverview({ isAdmin }: { isAdmin: boolean }) {
           </CardHeader>
           <CardContent>
             {data.outToday.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">Everyone's in.</p>
+              <p className="py-6 text-center text-sm text-muted-foreground">Everyone&apos;s in.</p>
             ) : (
               <div className="divide-y divide-border/60">
                 {data.outToday.map((lr) => {
@@ -456,6 +456,8 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
 
   // Virtualize the leave-history list — it can grow to hundreds of rows.
   const parentRef = useRef<HTMLDivElement>(null);
+  // React Compiler intentionally leaves TanStack Virtual in manual mode.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => parentRef.current,
@@ -732,13 +734,9 @@ function BalancesTab() {
   const utils = trpc.useUtils();
   const { data: roster } = trpc.team.getRoster.useQuery();
   const currentYear = new Date().getFullYear();
-  const [userId, setUserId] = useState(session?.user?.id ?? '');
+  const [selectedUserId, setSelectedUserId] = useState('');
   const [year, setYear] = useState(currentYear);
-
-  // Seed the picker with the signed-in user once the session resolves.
-  useEffect(() => {
-    if (!userId && session?.user?.id) setUserId(session.user.id);
-  }, [session?.user?.id, userId]);
+  const userId = selectedUserId || session?.user?.id || '';
 
   const { data, isLoading } = trpc.team.getLeaveBalances.useQuery(
     { userId, year },
@@ -761,7 +759,7 @@ function BalancesTab() {
           <label className="block text-xs font-medium text-foreground mb-1">Member</label>
           <select
             value={userId}
-            onChange={(e) => setUserId(e.target.value)}
+            onChange={(e) => setSelectedUserId(e.target.value)}
             className="min-w-[14rem] rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
           >
             {(roster ?? []).map((m) => (
@@ -801,7 +799,7 @@ function BalancesTab() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {data.types.map((t) => (
             <BalanceCard
-              key={t.type}
+              key={`${t.type}-${t.entitledDays}`}
               type={t.type}
               entitledDays={t.entitledDays}
               usedDays={t.usedDays}
@@ -836,9 +834,6 @@ function BalanceCard({
   const tc = typeConfig[type] ?? typeConfig.VACATION;
   const bar = typeBarColor[type] ?? typeBarColor.VACATION;
   const [draft, setDraft] = useState(String(entitledDays));
-  // Re-seed the editor whenever the persisted entitlement changes (after a save).
-  useEffect(() => setDraft(String(entitledDays)), [entitledDays]);
-
   const pct = entitledDays > 0 ? Math.min(100, Math.round((usedDays / entitledDays) * 100)) : 0;
   const over = remaining < 0;
   const parsed = Number(draft);
@@ -1173,7 +1168,11 @@ function ResignationsTab({ isReviewer }: { isReviewer: boolean }) {
         )}
       </CardContent>
 
-      <ReviewResignationDialog target={target} onClose={() => setTarget(null)} />
+      <ReviewResignationDialog
+        key={target ? `${target.id}-${target.decision}` : 'closed'}
+        target={target}
+        onClose={() => setTarget(null)}
+      />
     </Card>
   );
 }
@@ -1255,7 +1254,9 @@ function ReviewResignationDialog({
 }) {
   const utils = trpc.useUtils();
   const [note, setNote] = useState('');
-  const [lastDay, setLastDay] = useState('');
+  const [lastDay, setLastDay] = useState(() =>
+    target ? new Date(target.proposedLastDay).toISOString().slice(0, 10) : ''
+  );
 
   const review = trpc.resignations.review.useMutation({
     onSuccess: () => {
@@ -1264,14 +1265,6 @@ function ReviewResignationDialog({
       onClose();
     },
   });
-
-  // Seed the editable fields each time a new request is opened.
-  useEffect(() => {
-    if (target) {
-      setNote('');
-      setLastDay(new Date(target.proposedLastDay).toISOString().slice(0, 10));
-    }
-  }, [target]);
 
   const isApprove = target?.decision === 'APPROVED';
   const today = new Date().toISOString().slice(0, 10);

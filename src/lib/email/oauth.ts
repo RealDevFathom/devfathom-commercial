@@ -47,7 +47,8 @@ export function microsoftConfig() {
 /** True when a provider's OAuth env is present — used to gate the connect buttons. */
 export function isProviderConfigured(provider: OAuthProvider): boolean {
   try {
-    provider === 'GMAIL' ? googleConfig() : microsoftConfig();
+    if (provider === 'GMAIL') googleConfig();
+    else microsoftConfig();
     return true;
   } catch {
     return false;
@@ -101,10 +102,7 @@ export interface ExchangeResult {
 }
 
 /** Swap an authorization code for a refresh token + the mailbox's email address. */
-export async function exchangeCode(
-  provider: OAuthProvider,
-  code: string
-): Promise<ExchangeResult> {
+export async function exchangeCode(provider: OAuthProvider, code: string): Promise<ExchangeResult> {
   if (provider === 'GMAIL') {
     const client = googleOAuthClient();
     const { tokens } = await client.getToken(code);

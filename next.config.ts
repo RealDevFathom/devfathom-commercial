@@ -49,6 +49,11 @@ const contentSecurityPolicy = [
   .trim();
 
 const nextConfig: NextConfig = {
+  // This checkout sits beneath another project that owns a package-lock.json.
+  // Pinning the root keeps Turbopack resolution and file watching local.
+  turbopack: {
+    root: process.cwd(),
+  },
   serverExternalPackages: ['bcryptjs'],
   images: {
     // Was `hostname: '**'`, which turned the Next image optimizer into an open

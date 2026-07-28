@@ -14,7 +14,7 @@ import type { Policy } from './types';
 // Statuses that count as an active member of the company (may use the app).
 export const ACTIVE_STATUSES = new Set(['ACTIVE', 'ON_LEAVE']);
 
-const ALL_ACTIONS = [
+export const ALL_ACTIONS = [
   'admin:access', // the legacy "is this person an admin" gate
   'hr:access', // HR console: people-ops surfaces
   'team:view', // read the team directory

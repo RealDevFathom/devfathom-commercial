@@ -236,7 +236,11 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
     } catch (err) {
       const name = (err as DOMException | undefined)?.name;
       setStatus('error');
-      if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') {
+      if (
+        name === 'NotAllowedError' ||
+        name === 'SecurityError' ||
+        name === 'PermissionDeniedError'
+      ) {
         // Permission was dismissed or previously blocked — the browser won't
         // re-popup until it's reset, so point the user at how to do that, and
         // watch for them flipping it back to Allow to resume automatically.
@@ -312,8 +316,9 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
 
   // Auto-start on mount; guarantee teardown on unmount.
   useEffect(() => {
-    void start();
+    const startTimer = window.setTimeout(() => void start(), 0);
     return () => {
+      window.clearTimeout(startTimer);
       abortRef.current = true;
       stopTimer();
       const rec = recorderRef.current;

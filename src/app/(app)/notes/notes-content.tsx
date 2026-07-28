@@ -246,7 +246,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
             grid's minmax(0,1fr) instead of getting pushed by its contents. */}
         <div className="min-w-0">
           {selectedId ? (
-            <NoteDetail noteId={selectedId} />
+            <NoteDetail key={selectedId} noteId={selectedId} />
           ) : (
             <Card className="border-dashed border-border/60">
               <CardContent className="flex flex-col items-center justify-center py-24 text-center">
@@ -349,13 +349,6 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const [showSharePanel, setShowSharePanel] = useState(false);
   // IMP-NOTE-01: toggles the version-history panel.
   const [showHistory, setShowHistory] = useState(false);
-
-  // Reset to view mode whenever a different note is loaded
-  useEffect(() => {
-    setMode('view');
-    setShowSharePanel(false);
-    setShowHistory(false);
-  }, [noteId]);
 
   // Disable refetch-on-focus while editing so the server state can't stomp
   // the user's in-progress draft. View mode keeps the default (refetch).

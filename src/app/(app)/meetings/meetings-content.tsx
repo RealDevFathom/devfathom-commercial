@@ -62,10 +62,7 @@ export function MeetingsContent() {
 
   // Stable delete handler so memoized MeetingCards don't re-render when an
   // unrelated piece of parent state changes. mutate is referentially stable.
-  const handleDelete = useCallback(
-    (id: string) => deleteMeeting.mutate({ id }),
-    [deleteMeeting.mutate]
-  );
+  const handleDelete = useCallback((id: string) => deleteMeeting.mutate({ id }), [deleteMeeting]);
 
   const pastMeetings = useMemo(
     () => all?.filter((m) => isPast(new Date(m.startTime)) && !m.recurrence) ?? [],
@@ -78,9 +75,7 @@ export function MeetingsContent() {
         eyebrow="WORKSPACE"
         heading="Meetings"
         description={
-          <>
-            {upcoming?.length ?? 0} upcoming &middot; Schedule and manage your meetings.
-          </>
+          <>{upcoming?.length ?? 0} upcoming &middot; Schedule and manage your meetings.</>
         }
         actions={
           <Button size="lg" onClick={() => setShowCreate(true)}>
@@ -383,6 +378,7 @@ const MeetingCard = memo(function MeetingCard({
   const currentUserId = session?.user?.id;
   const [isEditing, setIsEditing] = useState(false);
   const [showAttendance, setShowAttendance] = useState(false);
+  const [renderedAt] = useState(() => Date.now());
 
   const markJoined = trpc.meetings.markJoined.useMutation({
     onSuccess: () => {
@@ -609,8 +605,7 @@ const MeetingCard = memo(function MeetingCard({
     );
   }
 
-  const now = Date.now();
-  const hasStarted = now >= start.getTime();
+  const hasStarted = renderedAt >= start.getTime();
   const dateLabel = isToday(start)
     ? 'Today'
     : isTomorrow(start)
@@ -727,7 +722,7 @@ const MeetingCard = memo(function MeetingCard({
             a meeting that hasn't ended, independent of any external location. */}
         {(() => {
           const isAttendee = meeting.attendees.some((a) => a.user.id === currentUserId);
-          const hasEnded = now >= end.getTime();
+          const hasEnded = renderedAt >= end.getTime();
           if (!isAttendee || hasEnded) return null;
           return (
             <Link
@@ -745,8 +740,8 @@ const MeetingCard = memo(function MeetingCard({
         {(() => {
           const isAttendee = meeting.attendees.some((a) => a.user.id === currentUserId);
           const myAttendee = meeting.attendees.find((a) => a.user.id === currentUserId);
-          const hasEnded = now >= end.getTime();
-          const isLive = now >= start.getTime() && now < end.getTime();
+          const hasEnded = renderedAt >= end.getTime();
+          const isLive = renderedAt >= start.getTime() && renderedAt < end.getTime();
           const alreadyJoined = !!myAttendee?.joinedAt;
 
           if (!isAttendee || hasEnded || !meeting.location) return null;

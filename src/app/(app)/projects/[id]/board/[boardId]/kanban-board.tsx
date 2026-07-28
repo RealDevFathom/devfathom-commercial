@@ -267,7 +267,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
       const filteredDestBase =
         source.droppableId === destination.droppableId
           ? filteredSource
-          : filteredColumns.find((c) => c.id === destination.droppableId)?.tasks ?? destCol.tasks;
+          : (filteredColumns.find((c) => c.id === destination.droppableId)?.tasks ?? destCol.tasks);
       const filteredDestAfterRemoval = filteredDestBase.filter((t) => t.id !== draggableId);
       const followNeighbour = filteredDestAfterRemoval[destination.index] ?? null;
 
@@ -338,11 +338,14 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
         );
       }
     },
-    [createTask, board]
+    [createTask, board, setAddingToColumn, setWipWarning]
   );
 
   // Stable selection handler so memoized children don't re-render on every change.
-  const handleSelectTask = useCallback((taskId: string) => setSelectedTaskId(taskId), []);
+  const handleSelectTask = useCallback(
+    (taskId: string) => setSelectedTaskId(taskId),
+    [setSelectedTaskId]
+  );
 
   // Compute unique assignees and labels from board data for filter options
   const allAssignees = useMemo(() => {
@@ -589,262 +592,262 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                   const wipCount = column.tasks.length;
                   const wipOver = wipLimit != null && wipCount > wipLimit;
                   return (
-                  <Draggable key={column.id} draggableId={column.id} index={colIndex}>
-                    {(colProvided, colSnapshot) => (
-                      <div
-                        ref={colProvided.innerRef}
-                        {...(colProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
-                        className={cn(
-                          'flex flex-col w-full sm:w-72 sm:shrink-0 max-h-full rounded-xl transition-shadow',
-                          colSnapshot.isDragging &&
-                            'shadow-2xl shadow-black/20 ring-1 ring-primary/20'
-                        )}
-                      >
-                        {/* Column header */}
-                        <div className="flex items-center justify-between mb-3 px-1 group/col">
-                          {/* Drag handle */}
-                          <div
-                            {...colProvided.dragHandleProps}
-                            className="flex h-6 w-5 items-center justify-center rounded-md text-muted-foreground/0 group-hover/col:text-muted-foreground cursor-grab active:cursor-grabbing transition-colors shrink-0 mr-1"
-                            title="Drag to reorder"
-                          >
-                            <GripVertical className="h-3.5 w-3.5" />
-                          </div>
-
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            {editingColumnId === column.id ? (
-                              <ColumnRenameInput
-                                initialName={column.name}
-                                onRename={(name) => updateColumn.mutate({ id: column.id, name })}
-                                onCancel={() => setEditingColumnId(null)}
-                              />
-                            ) : (
-                              <h3
-                                onDoubleClick={() => setEditingColumnId(column.id)}
-                                className="text-sm font-semibold text-foreground cursor-default truncate"
-                                title="Double-click to rename"
-                              >
-                                {column.name}
-                              </h3>
-                            )}
-                            {/* IMP-PROJ-07: task count, shown as count/limit when a
-                                WIP limit is set; red once the column is over. */}
-                            <span
-                              className={cn(
-                                'flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-medium shrink-0',
-                                wipOver
-                                  ? 'bg-red-500/15 text-red-500'
-                                  : 'bg-secondary text-muted-foreground'
-                              )}
-                              title={
-                                wipLimit != null
-                                  ? `${wipCount} of ${wipLimit} (WIP limit)`
-                                  : `${wipCount} task${wipCount === 1 ? '' : 's'}`
-                              }
+                    <Draggable key={column.id} draggableId={column.id} index={colIndex}>
+                      {(colProvided, colSnapshot) => (
+                        <div
+                          ref={colProvided.innerRef}
+                          {...(colProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
+                          className={cn(
+                            'flex flex-col w-full sm:w-72 sm:shrink-0 max-h-full rounded-xl transition-shadow',
+                            colSnapshot.isDragging &&
+                              'shadow-2xl shadow-black/20 ring-1 ring-primary/20'
+                          )}
+                        >
+                          {/* Column header */}
+                          <div className="flex items-center justify-between mb-3 px-1 group/col">
+                            {/* Drag handle */}
+                            <div
+                              {...colProvided.dragHandleProps}
+                              className="flex h-6 w-5 items-center justify-center rounded-md text-muted-foreground/0 group-hover/col:text-muted-foreground cursor-grab active:cursor-grabbing transition-colors shrink-0 mr-1"
+                              title="Drag to reorder"
                             >
-                              {wipLimit != null ? `${wipCount}/${wipLimit}` : wipCount}
-                            </span>
-                          </div>
+                              <GripVertical className="h-3.5 w-3.5" />
+                            </div>
 
-                          <div className="flex items-center gap-0.5">
-                            {deletingColumnId === column.id ? (
-                              <div className="flex items-center gap-1">
-                                {/* PROJ-03: name the task count so cascade deletion is never silent. */}
-                                <button
-                                  onClick={() => deleteColumn.mutate({ id: column.id })}
-                                  title={
-                                    column.tasks.length > 0
-                                      ? `Permanently deletes this column and its ${column.tasks.length} task(s), including their comments, checklists and attachments.`
-                                      : 'Delete this empty column'
-                                  }
-                                  className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600"
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              {editingColumnId === column.id ? (
+                                <ColumnRenameInput
+                                  initialName={column.name}
+                                  onRename={(name) => updateColumn.mutate({ id: column.id, name })}
+                                  onCancel={() => setEditingColumnId(null)}
+                                />
+                              ) : (
+                                <h3
+                                  onDoubleClick={() => setEditingColumnId(column.id)}
+                                  className="text-sm font-semibold text-foreground cursor-default truncate"
+                                  title="Double-click to rename"
                                 >
-                                  {column.tasks.length > 0
-                                    ? `Delete ${column.tasks.length} task${column.tasks.length === 1 ? '' : 's'}`
-                                    : 'Delete'}
-                                </button>
-                                <button
-                                  onClick={() => setDeletingColumnId(null)}
-                                  className="text-[10px] text-muted-foreground hover:text-foreground px-1"
-                                >
-                                  No
-                                </button>
-                              </div>
-                            ) : (
-                              <>
-                                {/* IMP-PROJ-07: set / clear this column's WIP limit */}
-                                <button
-                                  onClick={() =>
-                                    setWipEditorColumnId((prev) =>
-                                      prev === column.id ? null : column.id
-                                    )
-                                  }
-                                  className={cn(
-                                    'flex h-6 w-6 items-center justify-center rounded-md transition-all hover:bg-secondary hover:text-foreground',
-                                    wipLimit != null || wipEditorColumnId === column.id
-                                      ? 'text-muted-foreground'
-                                      : 'text-muted-foreground/0 group-hover/col:text-muted-foreground'
-                                  )}
-                                  title={
-                                    wipLimit != null ? `WIP limit: ${wipLimit}` : 'Set WIP limit'
-                                  }
-                                >
-                                  <Gauge className="h-3.5 w-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => setDeletingColumnId(column.id)}
-                                  className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/0 group-hover/col:text-muted-foreground hover:!bg-red-500/10 hover:!text-red-500 transition-all"
-                                  title="Delete column"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => setAddingToColumn(column.id)}
-                                  className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-                                >
-                                  <Plus className="h-4 w-4" />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* IMP-PROJ-07: WIP-limit editor (set / clear) */}
-                        {wipEditorColumnId === column.id && (
-                          <ColumnWipEditor
-                            initialLimit={wipLimit}
-                            taskCount={wipCount}
-                            isSaving={updateColumn.isPending}
-                            onSave={(limit) =>
-                              updateColumn.mutate({ id: column.id, wipLimit: limit })
-                            }
-                            onClear={() =>
-                              updateColumn.mutate({ id: column.id, wipLimit: null })
-                            }
-                            onCancel={() => setWipEditorColumnId(null)}
-                          />
-                        )}
-
-                        {/* Column owners — auto-assigned when a task enters */}
-                        <ColumnOwners
-                          column={column}
-                          projectMembers={board.project.members}
-                          currentUserId={session?.user?.id}
-                          isAdmin={session?.user?.role === 'ADMIN'}
-                          pickerOpen={ownerPickerColumnId === column.id}
-                          onTogglePicker={() =>
-                            setOwnerPickerColumnId((prev) =>
-                              prev === column.id ? null : column.id
-                            )
-                          }
-                          onSave={(userIds) =>
-                            setColumnOwners.mutate({ columnId: column.id, userIds })
-                          }
-                          isSaving={setColumnOwners.isPending}
-                        />
-
-                        {/* Droppable task zone */}
-                        <Droppable droppableId={column.id} type="TASK">
-                          {(provided, snapshot) => {
-                            // IMP-PROJ-09: only render the first N (filtered) tasks.
-                            const visible = visibleCounts[column.id] ?? INITIAL_VISIBLE;
-                            const hiddenCount = column.tasks.length - visible;
-                            return (
-                              <div
-                                ref={provided.innerRef}
-                                {...provided.droppableProps}
+                                  {column.name}
+                                </h3>
+                              )}
+                              {/* IMP-PROJ-07: task count, shown as count/limit when a
+                                WIP limit is set; red once the column is over. */}
+                              <span
                                 className={cn(
-                                  'flex-1 space-y-2 rounded-xl p-2 min-h-[100px] overflow-y-auto transition-colors',
-                                  snapshot.isDraggingOver
-                                    ? 'bg-primary/5 ring-1 ring-primary/20'
-                                    : 'bg-secondary/30'
+                                  'flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-medium shrink-0',
+                                  wipOver
+                                    ? 'bg-red-500/15 text-red-500'
+                                    : 'bg-secondary text-muted-foreground'
                                 )}
+                                title={
+                                  wipLimit != null
+                                    ? `${wipCount} of ${wipLimit} (WIP limit)`
+                                    : `${wipCount} task${wipCount === 1 ? '' : 's'}`
+                                }
                               >
-                                {column.tasks.slice(0, visible).map((task, index) => {
-                                  const isSelected = selected.has(task.id);
-                                  return (
-                                    <Draggable key={task.id} draggableId={task.id} index={index}>
-                                      {(taskProvided, taskSnapshot) => (
-                                        <div
-                                          ref={taskProvided.innerRef}
-                                          {...(taskProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
-                                          {...(taskProvided.dragHandleProps as HTMLAttributes<HTMLDivElement>)}
-                                          onClick={() =>
-                                            selectionMode
-                                              ? toggleSelect(task.id)
-                                              : handleSelectTask(task.id)
-                                          }
-                                          className={cn(
-                                            'group/card relative rounded-xl border bg-card p-3.5 cursor-pointer transition-all',
-                                            isSelected
-                                              ? 'border-primary ring-2 ring-primary/30'
-                                              : 'border-border/60',
-                                            taskSnapshot.isDragging
-                                              ? 'shadow-xl shadow-black/10 rotate-[2deg] border-primary/30'
-                                              : 'hover:border-border hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/20'
-                                          )}
-                                        >
-                                          {/* IMP-PROJ-08: per-card select checkbox */}
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              if (!selectionMode) setSelectionMode(true);
-                                              toggleSelect(task.id);
-                                            }}
-                                            className={cn(
-                                              'absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-md border transition-all',
-                                              isSelected
-                                                ? 'border-primary bg-primary text-white opacity-100'
-                                                : 'border-border bg-card text-transparent opacity-0 group-hover/card:opacity-100',
-                                              selectionMode && 'opacity-100'
-                                            )}
-                                            title={isSelected ? 'Deselect task' : 'Select task'}
-                                            aria-label={isSelected ? 'Deselect task' : 'Select task'}
-                                          >
-                                            {isSelected && (
-                                              <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                                            )}
-                                          </button>
-                                          <TaskCard task={task} />
-                                        </div>
-                                      )}
-                                    </Draggable>
-                                  );
-                                })}
-                                {provided.placeholder}
+                                {wipLimit != null ? `${wipCount}/${wipLimit}` : wipCount}
+                              </span>
+                            </div>
 
-                                {/* IMP-PROJ-09: reveal more tasks in this column */}
-                                {hiddenCount > 0 && (
+                            <div className="flex items-center gap-0.5">
+                              {deletingColumnId === column.id ? (
+                                <div className="flex items-center gap-1">
+                                  {/* PROJ-03: name the task count so cascade deletion is never silent. */}
+                                  <button
+                                    onClick={() => deleteColumn.mutate({ id: column.id })}
+                                    title={
+                                      column.tasks.length > 0
+                                        ? `Permanently deletes this column and its ${column.tasks.length} task(s), including their comments, checklists and attachments.`
+                                        : 'Delete this empty column'
+                                    }
+                                    className="rounded-md bg-red-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-600"
+                                  >
+                                    {column.tasks.length > 0
+                                      ? `Delete ${column.tasks.length} task${column.tasks.length === 1 ? '' : 's'}`
+                                      : 'Delete'}
+                                  </button>
+                                  <button
+                                    onClick={() => setDeletingColumnId(null)}
+                                    className="text-[10px] text-muted-foreground hover:text-foreground px-1"
+                                  >
+                                    No
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  {/* IMP-PROJ-07: set / clear this column's WIP limit */}
                                   <button
                                     onClick={() =>
-                                      setVisibleCounts((prev) => ({
-                                        ...prev,
-                                        [column.id]:
-                                          (prev[column.id] ?? INITIAL_VISIBLE) + INITIAL_VISIBLE,
-                                      }))
+                                      setWipEditorColumnId((prev) =>
+                                        prev === column.id ? null : column.id
+                                      )
                                     }
-                                    className="w-full rounded-lg border border-dashed border-border bg-card/50 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
+                                    className={cn(
+                                      'flex h-6 w-6 items-center justify-center rounded-md transition-all hover:bg-secondary hover:text-foreground',
+                                      wipLimit != null || wipEditorColumnId === column.id
+                                        ? 'text-muted-foreground'
+                                        : 'text-muted-foreground/0 group-hover/col:text-muted-foreground'
+                                    )}
+                                    title={
+                                      wipLimit != null ? `WIP limit: ${wipLimit}` : 'Set WIP limit'
+                                    }
                                   >
-                                    Show {Math.min(INITIAL_VISIBLE, hiddenCount)} more
+                                    <Gauge className="h-3.5 w-3.5" />
                                   </button>
-                                )}
+                                  <button
+                                    onClick={() => setDeletingColumnId(column.id)}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/0 group-hover/col:text-muted-foreground hover:!bg-red-500/10 hover:!text-red-500 transition-all"
+                                    title="Delete column"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => setAddingToColumn(column.id)}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                                  >
+                                    <Plus className="h-4 w-4" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
 
-                                {/* Inline add task */}
-                                {addingToColumn === column.id && (
-                                  <AddTaskForm
-                                    columnId={column.id}
-                                    teamMembers={teamMembers}
-                                    onAdd={handleAddTask}
-                                    onCancel={() => setAddingToColumn(null)}
-                                  />
-                                )}
-                              </div>
-                            );
-                          }}
-                        </Droppable>
-                      </div>
-                    )}
-                  </Draggable>
+                          {/* IMP-PROJ-07: WIP-limit editor (set / clear) */}
+                          {wipEditorColumnId === column.id && (
+                            <ColumnWipEditor
+                              initialLimit={wipLimit}
+                              taskCount={wipCount}
+                              isSaving={updateColumn.isPending}
+                              onSave={(limit) =>
+                                updateColumn.mutate({ id: column.id, wipLimit: limit })
+                              }
+                              onClear={() => updateColumn.mutate({ id: column.id, wipLimit: null })}
+                              onCancel={() => setWipEditorColumnId(null)}
+                            />
+                          )}
+
+                          {/* Column owners — auto-assigned when a task enters */}
+                          <ColumnOwners
+                            column={column}
+                            projectMembers={board.project.members}
+                            currentUserId={session?.user?.id}
+                            isAdmin={session?.user?.role === 'ADMIN'}
+                            pickerOpen={ownerPickerColumnId === column.id}
+                            onTogglePicker={() =>
+                              setOwnerPickerColumnId((prev) =>
+                                prev === column.id ? null : column.id
+                              )
+                            }
+                            onSave={(userIds) =>
+                              setColumnOwners.mutate({ columnId: column.id, userIds })
+                            }
+                            isSaving={setColumnOwners.isPending}
+                          />
+
+                          {/* Droppable task zone */}
+                          <Droppable droppableId={column.id} type="TASK">
+                            {(provided, snapshot) => {
+                              // IMP-PROJ-09: only render the first N (filtered) tasks.
+                              const visible = visibleCounts[column.id] ?? INITIAL_VISIBLE;
+                              const hiddenCount = column.tasks.length - visible;
+                              return (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.droppableProps}
+                                  className={cn(
+                                    'flex-1 space-y-2 rounded-xl p-2 min-h-[100px] overflow-y-auto transition-colors',
+                                    snapshot.isDraggingOver
+                                      ? 'bg-primary/5 ring-1 ring-primary/20'
+                                      : 'bg-secondary/30'
+                                  )}
+                                >
+                                  {column.tasks.slice(0, visible).map((task, index) => {
+                                    const isSelected = selected.has(task.id);
+                                    return (
+                                      <Draggable key={task.id} draggableId={task.id} index={index}>
+                                        {(taskProvided, taskSnapshot) => (
+                                          <div
+                                            ref={taskProvided.innerRef}
+                                            {...(taskProvided.draggableProps as HTMLAttributes<HTMLDivElement>)}
+                                            {...(taskProvided.dragHandleProps as HTMLAttributes<HTMLDivElement>)}
+                                            onClick={() =>
+                                              selectionMode
+                                                ? toggleSelect(task.id)
+                                                : handleSelectTask(task.id)
+                                            }
+                                            className={cn(
+                                              'group/card relative rounded-xl border bg-card p-3.5 cursor-pointer transition-all',
+                                              isSelected
+                                                ? 'border-primary ring-2 ring-primary/30'
+                                                : 'border-border/60',
+                                              taskSnapshot.isDragging
+                                                ? 'shadow-xl shadow-black/10 rotate-[2deg] border-primary/30'
+                                                : 'hover:border-border hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/20'
+                                            )}
+                                          >
+                                            {/* IMP-PROJ-08: per-card select checkbox */}
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (!selectionMode) setSelectionMode(true);
+                                                toggleSelect(task.id);
+                                              }}
+                                              className={cn(
+                                                'absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-md border transition-all',
+                                                isSelected
+                                                  ? 'border-primary bg-primary text-white opacity-100'
+                                                  : 'border-border bg-card text-transparent opacity-0 group-hover/card:opacity-100',
+                                                selectionMode && 'opacity-100'
+                                              )}
+                                              title={isSelected ? 'Deselect task' : 'Select task'}
+                                              aria-label={
+                                                isSelected ? 'Deselect task' : 'Select task'
+                                              }
+                                            >
+                                              {isSelected && (
+                                                <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                                              )}
+                                            </button>
+                                            <TaskCard task={task} />
+                                          </div>
+                                        )}
+                                      </Draggable>
+                                    );
+                                  })}
+                                  {provided.placeholder}
+
+                                  {/* IMP-PROJ-09: reveal more tasks in this column */}
+                                  {hiddenCount > 0 && (
+                                    <button
+                                      onClick={() =>
+                                        setVisibleCounts((prev) => ({
+                                          ...prev,
+                                          [column.id]:
+                                            (prev[column.id] ?? INITIAL_VISIBLE) + INITIAL_VISIBLE,
+                                        }))
+                                      }
+                                      className="w-full rounded-lg border border-dashed border-border bg-card/50 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
+                                    >
+                                      Show {Math.min(INITIAL_VISIBLE, hiddenCount)} more
+                                    </button>
+                                  )}
+
+                                  {/* Inline add task */}
+                                  {addingToColumn === column.id && (
+                                    <AddTaskForm
+                                      columnId={column.id}
+                                      teamMembers={teamMembers}
+                                      onAdd={handleAddTask}
+                                      onCancel={() => setAddingToColumn(null)}
+                                    />
+                                  )}
+                                </div>
+                              );
+                            }}
+                          </Droppable>
+                        </div>
+                      )}
+                    </Draggable>
                   );
                 })}
                 {boardProvided.placeholder}
@@ -1091,9 +1094,7 @@ const TaskCard = memo(function TaskCard({ task }: { task: TaskData }) {
     : 0;
 
   // IMP-PROJ-06: blocked when any blocker's blocking task is NOT in a done column.
-  const isBlocked = task.blockedBy.some(
-    (b) => !DONE_COLUMN_RE.test(b.blockingTask.column.name)
-  );
+  const isBlocked = task.blockedBy.some((b) => !DONE_COLUMN_RE.test(b.blockingTask.column.name));
 
   return (
     <>
@@ -1424,17 +1425,6 @@ function ColumnOwners({
   // Local draft state for the picker — committed on Save
   const [draft, setDraft] = useState<Set<string>>(new Set(owners.map((o) => o.user.id)));
 
-  // Reset draft whenever the picker opens (in case owners were updated externally)
-  const ownerIdsKey = owners
-    .map((o) => o.user.id)
-    .sort()
-    .join(',');
-  // Sync draft when picker opens or owners change
-  useEffect(() => {
-    if (pickerOpen) setDraft(new Set(owners.map((o) => o.user.id)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickerOpen, ownerIdsKey]);
-
   const toggle = (userId: string) => {
     setDraft((prev) => {
       const next = new Set(prev);
@@ -1455,7 +1445,14 @@ function ColumnOwners({
       {/* Compact owner row */}
       <button
         type="button"
-        onClick={canManage ? onTogglePicker : undefined}
+        onClick={
+          canManage
+            ? () => {
+                if (!pickerOpen) setDraft(new Set(owners.map((o) => o.user.id)));
+                onTogglePicker();
+              }
+            : undefined
+        }
         disabled={!canManage}
         className={cn(
           'flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-[11px] transition-colors',

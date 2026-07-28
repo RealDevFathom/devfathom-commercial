@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import {
   ClipboardList,
@@ -194,7 +194,11 @@ function CyclesList({
         </CardContent>
       </Card>
 
-      <CreateCycleDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateCycleDialog
+        key={showCreate ? 'open' : 'closed'}
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+      />
     </div>
   );
 }
@@ -211,16 +215,6 @@ function CreateCycleDialog({ open, onClose }: { open: boolean; onClose: () => vo
       onClose();
     },
   });
-
-  useEffect(() => {
-    if (open) {
-      setName('');
-      setStartDate('');
-      setEndDate('');
-      create.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 
   const datesValid = !!startDate && !!endDate && endDate >= startDate;
   const canSubmit = name.trim().length > 0 && datesValid && !create.isPending;
@@ -535,7 +529,11 @@ function MyReviewsPanel() {
         </CardContent>
       </Card>
 
-      <FillReviewDialog target={fillTarget} onClose={() => setFillTarget(null)} />
+      <FillReviewDialog
+        key={fillTarget?.id ?? 'closed'}
+        target={fillTarget}
+        onClose={() => setFillTarget(null)}
+      />
     </div>
   );
 }
@@ -585,10 +583,10 @@ function FeedbackBlock({ label, body }: { label: string; body: string }) {
 
 function FillReviewDialog({ target, onClose }: { target: ReviewRow | null; onClose: () => void }) {
   const utils = trpc.useUtils();
-  const [rating, setRating] = useState(0);
-  const [strengths, setStrengths] = useState('');
-  const [improvements, setImprovements] = useState('');
-  const [comments, setComments] = useState('');
+  const [rating, setRating] = useState(() => target?.rating ?? 0);
+  const [strengths, setStrengths] = useState(() => target?.strengths ?? '');
+  const [improvements, setImprovements] = useState(() => target?.improvements ?? '');
+  const [comments, setComments] = useState(() => target?.comments ?? '');
 
   const submit = trpc.reviews.submitReview.useMutation({
     onSuccess: () => {
@@ -597,17 +595,6 @@ function FillReviewDialog({ target, onClose }: { target: ReviewRow | null; onClo
       onClose();
     },
   });
-
-  useEffect(() => {
-    if (target) {
-      setRating(target.rating ?? 0);
-      setStrengths(target.strengths ?? '');
-      setImprovements(target.improvements ?? '');
-      setComments(target.comments ?? '');
-      submit.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
 
   const canSubmit = rating >= 1 && rating <= 5 && !submit.isPending;
 

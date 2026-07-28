@@ -15,7 +15,7 @@ type Phase = 'connecting' | 'syncing' | 'done' | 'error';
  */
 function CallbackInner() {
   const params = useSearchParams();
-  const [phase, setPhase] = useState<Phase>('connecting');
+  const [phase, setPhase] = useState<Phase>(() => (params.get('code') ? 'syncing' : 'connecting'));
   const [error, setError] = useState('');
   const firedRef = useRef(false);
   const connectCallback = trpc.email.connectCallback.useMutation();
@@ -52,7 +52,6 @@ function CallbackInner() {
       return;
     }
 
-    setPhase('syncing');
     connectCallback.mutate(
       { provider, code },
       {
@@ -96,7 +95,9 @@ function CallbackInner() {
             <h1 className="mt-3 text-base font-semibold">
               {phase === 'syncing' ? 'Syncing your inbox…' : 'Connecting…'}
             </h1>
-            <p className="mt-1 text-sm text-muted-foreground">Hang tight, this only takes a moment.</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Hang tight, this only takes a moment.
+            </p>
           </>
         )}
       </div>

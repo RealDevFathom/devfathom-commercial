@@ -1,10 +1,4 @@
-import type {
-  AdapterCredentials,
-  ListResult,
-  MailAdapter,
-  NormalizedMessage,
-  SendOptions,
-} from '../adapter';
+import type { AdapterCredentials, ListResult, MailAdapter, NormalizedMessage } from '../adapter';
 
 /**
  * RESERVED — a future self-hosted @domain mailbox (e.g. you@yourcompany.com).
@@ -30,7 +24,7 @@ export class HostedAdapter implements MailAdapter {
   async getMessage(): Promise<NormalizedMessage | null> {
     return this.notImplemented();
   }
-  async sendMessage(_opts: SendOptions): Promise<{ providerMessageId: string | null }> {
+  async sendMessage(): Promise<{ providerMessageId: string | null }> {
     return this.notImplemented();
   }
 }

@@ -86,6 +86,8 @@ export function InvoicesTab() {
     return () => window.removeEventListener('resize', measure);
   }, [isLoading, showCreate, invoices?.length]);
 
+  // React Compiler intentionally leaves TanStack Virtual in manual mode.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: invoices?.length ?? 0,
     getScrollElement: () => scrollElRef.current,

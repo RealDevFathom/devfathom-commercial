@@ -86,10 +86,10 @@ export function MeetingCall({ meetingId }: { meetingId: string }) {
   // Kept in a ref so the (once-only) call-init effect can read the latest title
   // without taking it as a dependency.
   const titleRef = useRef<string | undefined>(undefined);
-  titleRef.current = title;
 
   // If the title resolves after the conference is already up, push it as the subject.
   useEffect(() => {
+    titleRef.current = title;
     if (title) apiRef.current?.executeCommand('subject', title);
   }, [title]);
 
