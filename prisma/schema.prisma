@@ -129,9 +129,9 @@ enum ContractStatus {
 }
 
 enum NoteVisibility {
-  PRIVATE  // only the author
-  SHARED   // author + explicit users in NoteShare
-  TEAM     // everyone in the company
+  PRIVATE // only the author
+  SHARED // author + explicit users in NoteShare
+  TEAM // everyone in the company
 }
 
 enum NotePermission {
@@ -175,85 +175,267 @@ enum AuditOutcome {
 }
 
 // ============================================
+// PLATFORM CONTROL PLANE
+// ============================================
+
+enum PlatformRole {
+  SUPER_ADMIN
+  OPERATIONS
+  SALES
+  FINANCE
+  SUPPORT
+  AUDITOR
+}
+
+enum OrganizationStatus {
+  PROSPECT
+  ONBOARDING
+  ACTIVE
+  GRACE
+  SUSPENDED
+  TERMINATED
+  PURGING
+  PURGED
+}
+
+enum OrganizationDeploymentMode {
+  SHARED
+  DEDICATED
+}
+
+enum OrganizationModuleStatus {
+  ENABLED
+  DISABLED
+  TRIAL
+  EXPIRED
+}
+
+enum PermissionEffect {
+  ALLOW
+  DENY
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  DISQUALIFIED
+  CONVERTED
+}
+
+enum OpportunityStage {
+  DISCOVERY
+  QUALIFIED
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum ProposalStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum FollowUpStatus {
+  OPEN
+  COMPLETED
+  CANCELLED
+}
+
+enum CommercialContractStatus {
+  DRAFT
+  ACTIVE
+  GRACE
+  EXPIRED
+  TERMINATED
+  RENEWAL_DUE
+}
+
+enum BillingInterval {
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+  CUSTOM
+}
+
+enum PlatformInvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum PlatformPaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum RenewalStatus {
+  UPCOMING
+  IN_PROGRESS
+  RENEWED
+  LOST
+}
+
+enum DomainVerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+enum IdentityProtocol {
+  OIDC
+  SAML
+}
+
+enum IdentityConnectionStatus {
+  DRAFT
+  ACTIVE
+  DISABLED
+  ERROR
+}
+
+enum DeploymentStatus {
+  PENDING
+  PROVISIONING
+  READY
+  DEGRADED
+  FAILED
+  DECOMMISSIONED
+}
+
+enum PlatformJobType {
+  PROVISION_SHARED
+  PROVISION_DEDICATED
+  CONFIGURE_DOMAIN
+  APPLY_BRAND
+  SYNC_IDENTITY
+  EXPORT_DATA
+  PURGE_DATA
+  SUSPEND
+  RESUME
+}
+
+enum PlatformJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum SupportSessionStatus {
+  ACTIVE
+  ENDED
+  REVOKED
+  EXPIRED
+}
+
+enum LifecycleAction {
+  CREATED
+  ACTIVATED
+  ENTERED_GRACE
+  SUSPENDED
+  RESUMED
+  TERMINATED
+  PURGE_SCHEDULED
+  PURGED
+}
+
+// ============================================
 // AUTH & USERS
 // ============================================
 
 model User {
-  id            String     @id @default(cuid())
-  name          String
-  email         String     @unique
-  password      String?
-  role          Role       @default(EMPLOYEE)
-  department    Department
-  title         String
-  avatar        String?
-  phone         String?
-  bio           String?
-  skills        String[]   @default([])
-  startDate     DateTime   @default(now())
-  status        UserStatus @default(ACTIVE)
-  lastActiveAt  DateTime?
+  id                 String     @id @default(cuid())
+  organizationId     String     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  organizationRoleId String?
+  name               String
+  email              String     @unique
+  password           String?
+  role               Role       @default(EMPLOYEE)
+  department         Department
+  title              String
+  avatar             String?
+  phone              String?
+  bio                String?
+  skills             String[]   @default([])
+  startDate          DateTime   @default(now())
+  status             UserStatus @default(ACTIVE)
+  lastActiveAt       DateTime?
   // AUTH-01 / IMP-AUTH-03: bumped on password change, admin reset, and lay-off so
   // all other live JWT sessions are invalidated on the next jwt() revalidation.
   // "Sign out everywhere" bumps it too. passwordChangedAt is kept for display/audit.
-  tokenVersion      Int       @default(0)
-  passwordChangedAt DateTime?
+  tokenVersion       Int        @default(0)
+  passwordChangedAt  DateTime?
   // IMP-DASH-02: per-user dashboard widget layout/visibility prefs (JSON blob).
-  preferences       Json?
+  preferences        Json?
   // IMP-AUTH-04: per-type/channel notification opt-outs, honored by notify().
-  notificationPrefs Json?
+  notificationPrefs  Json?
   // IMP-AUTH-02: TOTP 2FA. Secret is base32; enabledAt null = 2FA off (the secret
   // may exist transiently during enrolment before the first verify).
   twoFactorSecret    String?
   twoFactorEnabledAt DateTime?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
 
   // Relations
-  projectMembers    ProjectMember[]
-  assignedTasks     TaskAssignee[]
-  taskComments      TaskComment[]
-  createdTasks      Task[]             @relation("TaskCreator")
-  sentMessages      Message[]
-  channelMembers    ChannelMember[]
-  createdChannels   Channel[]
-  messageMentions   MessageMention[]
-  pinnedMessages    PinnedMessage[]
-  savedMessages     SavedMessage[]
-  leaveRequests     LeaveRequest[]     @relation("LeaveRequester")
-  approvedLeaves    LeaveRequest[]     @relation("LeaveApprover")
-  performanceNotes  PerformanceNote[]  @relation("NoteSubject")
-  writtenNotes      PerformanceNote[]  @relation("NoteAuthor")
-  activities        Activity[]
-  notifications     Notification[]
-  uploadedFiles     ProjectFile[]
-  uploadedDocs      Document[]
-  timeEntries       TimeEntry[]
-  meetingAttendees  MeetingAttendee[]
-  apiTokens         ApiToken[]
-  authoredNotes     Note[]            @relation("NoteAuthor")
-  noteShares        NoteShare[]
-  columnDefaults    ColumnDefaultAssignee[]
-  attendanceLog     MeetingAttendanceLog[]
-  invitation        Invitation?        @relation("UserInvitation")
-  invitationsSent   Invitation[]       @relation("InvitationsSent")
-  passwordResetTokens PasswordResetToken[]
+  organization         Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationRole     OrganizationRole?        @relation(fields: [organizationRoleId], references: [id], onDelete: SetNull)
+  permissionOverrides  UserPermissionOverride[]
+  projectMembers       ProjectMember[]
+  assignedTasks        TaskAssignee[]
+  taskComments         TaskComment[]
+  createdTasks         Task[]                   @relation("TaskCreator")
+  sentMessages         Message[]
+  channelMembers       ChannelMember[]
+  createdChannels      Channel[]
+  messageMentions      MessageMention[]
+  pinnedMessages       PinnedMessage[]
+  savedMessages        SavedMessage[]
+  leaveRequests        LeaveRequest[]           @relation("LeaveRequester")
+  approvedLeaves       LeaveRequest[]           @relation("LeaveApprover")
+  performanceNotes     PerformanceNote[]        @relation("NoteSubject")
+  writtenNotes         PerformanceNote[]        @relation("NoteAuthor")
+  activities           Activity[]
+  notifications        Notification[]
+  uploadedFiles        ProjectFile[]
+  uploadedDocs         Document[]
+  timeEntries          TimeEntry[]
+  meetingAttendees     MeetingAttendee[]
+  apiTokens            ApiToken[]
+  authoredNotes        Note[]                   @relation("NoteAuthor")
+  noteShares           NoteShare[]
+  columnDefaults       ColumnDefaultAssignee[]
+  attendanceLog        MeetingAttendanceLog[]
+  invitation           Invitation?              @relation("UserInvitation")
+  invitationsSent      Invitation[]             @relation("InvitationsSent")
+  passwordResetTokens  PasswordResetToken[]
   // IMP-HR-04 performance reviews + IMP-NOTE-02 note mentions
-  reviewCyclesCreated ReviewCycle[]    @relation("ReviewCycleCreator")
-  reviewsAbout        Review[]         @relation("ReviewSubject")
-  reviewsWritten      Review[]         @relation("ReviewReviewer")
-  noteMentions        NoteMention[]
+  reviewCyclesCreated  ReviewCycle[]            @relation("ReviewCycleCreator")
+  reviewsAbout         Review[]                 @relation("ReviewSubject")
+  reviewsWritten       Review[]                 @relation("ReviewReviewer")
+  noteMentions         NoteMention[]
   // Big Bets: NOTE-01 versioning, HR-01 leave balances, AUTH-02 recovery codes
-  noteRevisions       NoteRevision[]   @relation("NoteRevisionEditor")
-  leaveBalances       LeaveBalance[]   @relation("UserLeaveBalances")
-  recoveryCodes       TwoFactorRecoveryCode[]
-  webhooksCreated     Webhook[]        @relation("WebhookCreator")
-  auditLogs         AuditLog[]         @relation("UserAuditLogs")
-  resignations      Resignation[]      @relation("UserResignations")
-  resignationsReviewed Resignation[]   @relation("ResignationsReviewed")
+  noteRevisions        NoteRevision[]           @relation("NoteRevisionEditor")
+  leaveBalances        LeaveBalance[]           @relation("UserLeaveBalances")
+  recoveryCodes        TwoFactorRecoveryCode[]
+  webhooksCreated      Webhook[]                @relation("WebhookCreator")
+  auditLogs            AuditLog[]               @relation("UserAuditLogs")
+  resignations         Resignation[]            @relation("UserResignations")
+  resignationsReviewed Resignation[]            @relation("ResignationsReviewed")
   // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
-  mailboxes         Mailbox[]
+  mailboxes            Mailbox[]
 
+  @@index([organizationId])
   @@map("users")
 }
 
@@ -265,6 +447,7 @@ model User {
 // who is still working their notice period.
 model Resignation {
   id              String            @id @default(cuid())
+  organizationId  String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   userId          String
   reason          String
   proposedLastDay DateTime
@@ -281,6 +464,7 @@ model Resignation {
 
   @@index([status])
   @@index([userId])
+  @@index([organizationId])
   @@map("resignations")
 }
 
@@ -288,68 +472,75 @@ model Resignation {
 // emailed to the invitee; only its SHA-256 hash is stored here. Accepting the
 // invite sets the user's password, flips status to ACTIVE, and stamps acceptedAt.
 model Invitation {
-  id          String    @id @default(cuid())
-  userId      String    @unique
-  user        User      @relation("UserInvitation", fields: [userId], references: [id], onDelete: Cascade)
-  email       String
-  tokenHash   String    @unique
-  invitedById String?
-  invitedBy   User?     @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
-  expiresAt   DateTime
-  acceptedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String    @unique
+  user           User      @relation("UserInvitation", fields: [userId], references: [id], onDelete: Cascade)
+  email          String
+  tokenHash      String    @unique
+  invitedById    String?
+  invitedBy      User?     @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
+  @@index([organizationId])
   @@map("invitations")
 }
 
 // IMP-AUTH-01: self-service password reset. Single-use, expiring token; only the
 // SHA-256 hash is stored (raw token is emailed once), mirroring Invitation.
 model PasswordResetToken {
-  id        String    @id @default(cuid())
-  userId    String
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  tokenHash      String    @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([organizationId])
   @@map("password_reset_tokens")
 }
 
 // IMP-HR-04: a real performance-review process (cycles + per-subject reviews),
 // distinct from the freeform PerformanceNote table.
 model ReviewCycle {
-  id          String   @id @default(cuid())
-  name        String
-  startDate   DateTime
-  endDate     DateTime
-  status      String   @default("OPEN") // OPEN | CLOSED
-  createdById String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  startDate      DateTime
+  endDate        DateTime
+  status         String   @default("OPEN") // OPEN | CLOSED
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   createdBy User     @relation("ReviewCycleCreator", fields: [createdById], references: [id])
   reviews   Review[]
 
+  @@index([organizationId])
   @@map("review_cycles")
 }
 
 model Review {
-  id           String    @id @default(cuid())
-  cycleId      String
-  subjectId    String
-  reviewerId   String
-  rating       Int? // 1..5
-  strengths    String?
-  improvements String?
-  comments     String?
-  status       String    @default("DRAFT") // DRAFT | SUBMITTED
-  submittedAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  cycleId        String
+  subjectId      String
+  reviewerId     String
+  rating         Int? // 1..5
+  strengths      String?
+  improvements   String?
+  comments       String?
+  status         String    @default("DRAFT") // DRAFT | SUBMITTED
+  submittedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   cycle    ReviewCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
   subject  User        @relation("ReviewSubject", fields: [subjectId], references: [id], onDelete: Cascade)
@@ -358,6 +549,7 @@ model Review {
   @@unique([cycleId, subjectId, reviewerId])
   @@index([subjectId])
   @@index([reviewerId])
+  @@index([organizationId])
   @@map("reviews")
 }
 
@@ -366,17 +558,18 @@ model Review {
 // ============================================
 
 model Client {
-  id        String       @id @default(cuid())
-  name      String
-  logo      String?
-  website   String?
-  industry  String?
-  location  String?
-  timezone  String?
-  notes     String?
-  status    ClientStatus @default(ACTIVE)
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  id             String       @id @default(cuid())
+  organizationId String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  logo           String?
+  website        String?
+  industry       String?
+  location       String?
+  timezone       String?
+  notes          String?
+  status         ClientStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   // Relations
   contacts     ClientContact[]
@@ -387,41 +580,45 @@ model Client {
   richNotes    Note[]
   contracts    Contract[]
 
+  @@index([organizationId])
   @@map("clients")
 }
 
 model ClientContact {
-  id        String   @id @default(cuid())
-  clientId  String
-  name      String
-  email     String?
-  phone     String?
-  role      String?
-  isPrimary Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  clientId       String
+  name           String
+  email          String?
+  phone          String?
+  role           String?
+  isPrimary      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("client_contacts")
 }
 
 model Contract {
-  id        String         @id @default(cuid())
-  clientId  String
-  title     String
-  fileUrl   String? // link to the signed document
-  value     Decimal?       @db.Decimal(12, 2)
-  currency  Currency       @default(USD)
-  status    ContractStatus @default(DRAFT)
-  startDate DateTime?
-  endDate   DateTime?
-  signedAt  DateTime?
-  notes     String?
+  id             String         @id @default(cuid())
+  organizationId String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  clientId       String
+  title          String
+  fileUrl        String? // link to the signed document
+  value          Decimal?       @db.Decimal(12, 2)
+  currency       Currency       @default(USD)
+  status         ContractStatus @default(DRAFT)
+  startDate      DateTime?
+  endDate        DateTime?
+  signedAt       DateTime?
+  notes          String?
   // IMP-CLI-05: optionally tie a contract to the delivery project it funds.
-  projectId String?
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  projectId      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   client  Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -429,6 +626,7 @@ model Contract {
   @@index([clientId])
   @@index([status])
   @@index([projectId])
+  @@index([organizationId])
   @@map("contracts")
 }
 
@@ -437,21 +635,22 @@ model Contract {
 // ============================================
 
 model Project {
-  id          String        @id @default(cuid())
-  name        String
-  description String?
-  status      ProjectStatus @default(ACTIVE)
-  type        ProjectType
-  startDate   DateTime?
-  endDate     DateTime?
-  techStack   String[]      @default([])
-  budget      Decimal?      @db.Decimal(12, 2)
-  clientId    String?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id             String        @id @default(cuid())
+  organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  description    String?
+  status         ProjectStatus @default(ACTIVE)
+  type           ProjectType
+  startDate      DateTime?
+  endDate        DateTime?
+  techStack      String[]      @default([])
+  budget         Decimal?      @db.Decimal(12, 2)
+  clientId       String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   // Relations
-  client       Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  client       Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
   members      ProjectMember[]
   boards       Board[]
   milestones   Milestone[]
@@ -462,20 +661,23 @@ model Project {
   notes        Note[]
   contracts    Contract[] // IMP-CLI-05: contracts linked to this delivery project
 
+  @@index([organizationId])
   @@map("projects")
 }
 
 model ProjectMember {
-  id        String  @id @default(cuid())
-  projectId String
-  userId    String
-  role      String  @default("MEMBER") // LEAD, MEMBER
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  projectId      String
+  userId         String
+  role           String @default("MEMBER") // LEAD, MEMBER
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, userId])
   @@index([userId])
+  @@index([organizationId])
   @@map("project_members")
 }
 
@@ -484,82 +686,91 @@ model ProjectMember {
 // ============================================
 
 model Board {
-  id            String   @id @default(cuid())
-  name          String
-  description   String?
-  projectId     String
-  trelloBoardId String?  @unique
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  description    String?
+  projectId      String
+  trelloBoardId  String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   // Relations
   project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   columns Column[]
   labels  Label[]
 
+  @@index([organizationId])
   @@map("boards")
 }
 
 model Column {
-  id        String   @id @default(cuid())
-  name      String
-  boardId   String
-  order     Int
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  boardId        String
+  order          Int
   // IMP-PROJ-07: optional work-in-progress limit; the board warns/blocks past it.
-  wipLimit  Int?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  wipLimit       Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   // Relations
   board            Board                   @relation(fields: [boardId], references: [id], onDelete: Cascade)
   tasks            Task[]
   defaultAssignees ColumnDefaultAssignee[]
 
+  @@index([organizationId])
   @@map("columns")
 }
 
 // When a task enters this column (created here or moved in), each user in
 // this list is added to the task's assignees (additively, via skipDuplicates).
 model ColumnDefaultAssignee {
-  id        String   @id @default(cuid())
-  columnId  String
-  userId    String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  columnId       String
+  userId         String
+  createdAt      DateTime @default(now())
 
   column Column @relation(fields: [columnId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([columnId, userId])
   @@index([userId])
+  @@index([organizationId])
   @@map("column_default_assignees")
 }
 
 model Label {
-  id      String @id @default(cuid())
-  name    String
-  color   String // hex color
-  boardId String
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  color          String // hex color
+  boardId        String
 
   // Relations
   board Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
   tasks TaskLabel[]
 
+  @@index([organizationId])
   @@map("labels")
 }
 
 model Task {
-  id          String    @id @default(cuid())
-  title       String
-  description String?
-  columnId    String
-  order       Int
-  priority    Priority  @default(MEDIUM)
-  dueDate     DateTime?
-  createdById String
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  title          String
+  description    String?
+  columnId       String
+  order          Int
+  priority       Priority  @default(MEDIUM)
+  dueDate        DateTime?
+  createdById    String
   // IMP-PROJ-06: optional parent for subtasks (self-relation).
-  parentId    String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  parentId       String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   // Relations
   column      Column           @relation(fields: [columnId], references: [id], onDelete: Cascade)
@@ -578,6 +789,7 @@ model Task {
   @@index([columnId, order])
   @@index([createdById])
   @@index([parentId])
+  @@index([organizationId])
   @@map("tasks")
 }
 
@@ -585,6 +797,7 @@ model Task {
 // the router (reject an edge that would close a loop), not the DB.
 model TaskBlocker {
   id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   blockedTaskId  String
   blockingTaskId String
   createdAt      DateTime @default(now())
@@ -594,66 +807,76 @@ model TaskBlocker {
 
   @@unique([blockedTaskId, blockingTaskId])
   @@index([blockingTaskId])
+  @@index([organizationId])
   @@map("task_blockers")
 }
 
 model TaskAssignee {
-  id     String @id @default(cuid())
-  taskId String
-  userId String
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  taskId         String
+  userId         String
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, userId])
   @@index([userId])
+  @@index([organizationId])
   @@map("task_assignees")
 }
 
 model TaskLabel {
-  id      String @id @default(cuid())
-  taskId  String
-  labelId String
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  taskId         String
+  labelId        String
 
   task  Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
   label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, labelId])
+  @@index([organizationId])
   @@map("task_labels")
 }
 
 model TaskChecklist {
-  id     String @id @default(cuid())
-  name   String
-  taskId String
-  order  Int    @default(0)
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  taskId         String
+  order          Int    @default(0)
 
-  task  Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task  Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
   items TaskChecklistItem[]
 
+  @@index([organizationId])
   @@map("task_checklists")
 }
 
 model TaskChecklistItem {
-  id          String  @id @default(cuid())
-  text        String
-  completed   Boolean @default(false)
-  checklistId String
-  order       Int     @default(0)
+  id             String  @id @default(cuid())
+  organizationId String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  text           String
+  completed      Boolean @default(false)
+  checklistId    String
+  order          Int     @default(0)
 
   checklist TaskChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("task_checklist_items")
 }
 
 model TaskComment {
-  id        String   @id @default(cuid())
-  content   String
-  taskId    String
-  userId    String
-  parentId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  content        String
+  taskId         String
+  userId         String
+  parentId       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   task    Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user    User          @relation(fields: [userId], references: [id])
@@ -662,20 +885,23 @@ model TaskComment {
 
   @@index([taskId])
   @@index([userId, createdAt])
+  @@index([organizationId])
   @@map("task_comments")
 }
 
 model TaskAttachment {
-  id        String   @id @default(cuid())
-  name      String
-  url       String
-  type      String?
-  size      Int?
-  taskId    String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  url            String
+  type           String?
+  size           Int?
+  taskId         String
+  createdAt      DateTime @default(now())
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("task_attachments")
 }
 
@@ -684,20 +910,22 @@ model TaskAttachment {
 // ============================================
 
 model TimeEntry {
-  id          String   @id @default(cuid())
-  userId      String
-  taskId      String?
-  projectId   String
-  description String?
-  hours       Decimal  @db.Decimal(5, 2)
-  date        DateTime
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  taskId         String?
+  projectId      String
+  description    String?
+  hours          Decimal  @db.Decimal(5, 2)
+  date           DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  user    User     @relation(fields: [userId], references: [id])
-  task    Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+  task    Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("time_entries")
 }
 
@@ -706,22 +934,23 @@ model TimeEntry {
 // ============================================
 
 model Invoice {
-  id            String        @id @default(cuid())
-  invoiceNumber String        @unique
-  clientId      String
-  projectId     String?
-  items         Json          // [{description, quantity, rate, amount}]
-  subtotal      Decimal       @db.Decimal(12, 2)
-  tax           Decimal       @default(0) @db.Decimal(12, 2)
-  total         Decimal       @db.Decimal(12, 2)
-  currency      Currency      @default(USD)
-  status        InvoiceStatus @default(DRAFT)
-  dueDate       DateTime
-  paidAt        DateTime?
-  sentAt        DateTime?
-  notes         String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id             String        @id @default(cuid())
+  organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  invoiceNumber  String        @unique
+  clientId       String
+  projectId      String?
+  items          Json // [{description, quantity, rate, amount}]
+  subtotal       Decimal       @db.Decimal(12, 2)
+  tax            Decimal       @default(0) @db.Decimal(12, 2)
+  total          Decimal       @db.Decimal(12, 2)
+  currency       Currency      @default(USD)
+  status         InvoiceStatus @default(DRAFT)
+  dueDate        DateTime
+  paidAt         DateTime?
+  sentAt         DateTime?
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   client   Client    @relation(fields: [clientId], references: [id])
   project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -730,40 +959,44 @@ model Invoice {
   @@index([status])
   @@index([clientId])
   @@index([projectId])
+  @@index([organizationId])
   @@map("invoices")
 }
 
 // IMP-FIN-04: a (partial) payment against an invoice. Invoice flips to PAID when
 // the sum of payments covers the total; OVERDUE automation is in the finance router.
 model Payment {
-  id        String   @id @default(cuid())
-  invoiceId String
-  amount    Decimal  @db.Decimal(12, 2)
-  currency  Currency @default(USD)
-  method    String?
-  note      String?
-  paidAt    DateTime @default(now())
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  invoiceId      String
+  amount         Decimal  @db.Decimal(12, 2)
+  currency       Currency @default(USD)
+  method         String?
+  note           String?
+  paidAt         DateTime @default(now())
+  createdAt      DateTime @default(now())
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
+  @@index([organizationId])
   @@map("payments")
 }
 
 model Transaction {
-  id          String          @id @default(cuid())
-  type        TransactionType
-  amount      Decimal         @db.Decimal(12, 2)
-  currency    Currency        @default(USD)
-  category    ExpenseCategory?
-  description String
-  projectId   String?
-  clientId    String?
-  receiptUrl  String?
-  date        DateTime
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id             String           @id @default(cuid())
+  organizationId String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  type           TransactionType
+  amount         Decimal          @db.Decimal(12, 2)
+  currency       Currency         @default(USD)
+  category       ExpenseCategory?
+  description    String
+  projectId      String?
+  clientId       String?
+  receiptUrl     String?
+  date           DateTime
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
 
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   client  Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
@@ -771,22 +1004,25 @@ model Transaction {
   @@index([clientId])
   @@index([date])
   @@index([type])
+  @@index([organizationId])
   @@map("transactions")
 }
 
 model RecurringExpense {
-  id          String          @id @default(cuid())
-  name        String
-  amount      Decimal         @db.Decimal(12, 2)
-  currency    Currency        @default(USD)
-  category    ExpenseCategory
-  interval    String          // monthly, yearly, quarterly
-  nextDueDate DateTime
-  vendorName  String?
-  active      Boolean         @default(true)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id             String          @id @default(cuid())
+  organizationId String          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       Currency        @default(USD)
+  category       ExpenseCategory
+  interval       String // monthly, yearly, quarterly
+  nextDueDate    DateTime
+  vendorName     String?
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
+  @@index([organizationId])
   @@map("recurring_expenses")
 }
 
@@ -795,16 +1031,17 @@ model RecurringExpense {
 // ============================================
 
 model Channel {
-  id          String      @id @default(cuid())
-  name        String?
-  description String?
-  topic       String?
-  type        ChannelType
-  isPrivate   Boolean     @default(true)
-  isArchived  Boolean     @default(false)
-  createdById String?
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id             String      @id @default(cuid())
+  organizationId String      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String?
+  description    String?
+  topic          String?
+  type           ChannelType
+  isPrivate      Boolean     @default(true)
+  isArchived     Boolean     @default(false)
+  createdById    String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   createdBy User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
   members   ChannelMember[]
@@ -812,38 +1049,42 @@ model Channel {
   pins      PinnedMessage[]
 
   @@index([type])
+  @@index([organizationId])
   @@map("channels")
 }
 
 model ChannelMember {
-  id         String    @id @default(cuid())
-  channelId  String
-  userId     String
-  lastReadAt DateTime?
-  muted      Boolean   @default(false)
-  role       String    @default("MEMBER") // OWNER, ADMIN, MEMBER
-  joinedAt   DateTime  @default(now())
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  channelId      String
+  userId         String
+  lastReadAt     DateTime?
+  muted          Boolean   @default(false)
+  role           String    @default("MEMBER") // OWNER, ADMIN, MEMBER
+  joinedAt       DateTime  @default(now())
 
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([channelId, userId])
   @@index([userId])
+  @@index([organizationId])
   @@map("channel_members")
 }
 
 model Message {
-  id          String    @id @default(cuid())
-  content     String
-  contentJson Json?
-  channelId   String
-  senderId    String
-  parentId    String?
-  isEdited    Boolean   @default(false)
-  editedAt    DateTime?
-  deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  content        String
+  contentJson    Json?
+  channelId      String
+  senderId       String
+  parentId       String?
+  isEdited       Boolean   @default(false)
+  editedAt       DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   channel     Channel             @relation(fields: [channelId], references: [id], onDelete: Cascade)
   sender      User                @relation(fields: [senderId], references: [id])
@@ -858,6 +1099,7 @@ model Message {
 
   @@index([channelId, createdAt])
   @@index([parentId])
+  @@index([organizationId])
   @@map("messages")
 }
 
@@ -865,6 +1107,7 @@ model Message {
 // the edit history can be reconstructed.
 model MessageEdit {
   id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   messageId           String
   previousContent     String
   previousContentJson Json?
@@ -873,58 +1116,66 @@ model MessageEdit {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@index([messageId])
+  @@index([organizationId])
   @@map("message_edits")
 }
 
 model MessageAttachment {
-  id        String   @id @default(cuid())
-  messageId String
-  name      String
-  url       String
-  type      String?
-  size      Int?
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  messageId      String
+  name           String
+  url            String
+  type           String?
+  size           Int?
   // Playback length in milliseconds — set for audio/voice attachments only.
-  duration  Int?
-  createdAt DateTime @default(now())
+  duration       Int?
+  createdAt      DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("message_attachments")
 }
 
 model MessageReaction {
-  id        String @id @default(cuid())
-  messageId String
-  userId    String
-  emoji     String
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  messageId      String
+  userId         String
+  emoji          String
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId, emoji])
   @@index([messageId])
+  @@index([organizationId])
   @@map("message_reactions")
 }
 
 model MessageMention {
-  id        String   @id @default(cuid())
-  messageId String
-  userId    String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  messageId      String
+  userId         String
+  createdAt      DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId])
   @@index([userId])
+  @@index([organizationId])
   @@map("message_mentions")
 }
 
 model PinnedMessage {
-  id         String   @id @default(cuid())
-  messageId  String
-  channelId  String
-  pinnedById String
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  messageId      String
+  channelId      String
+  pinnedById     String
+  createdAt      DateTime @default(now())
 
   message  Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   channel  Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -932,20 +1183,23 @@ model PinnedMessage {
 
   @@unique([messageId])
   @@index([channelId])
+  @@index([organizationId])
   @@map("pinned_messages")
 }
 
 model SavedMessage {
-  id        String   @id @default(cuid())
-  messageId String
-  userId    String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  messageId      String
+  userId         String
+  createdAt      DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId])
   @@index([userId, createdAt])
+  @@index([organizationId])
   @@map("saved_messages")
 }
 
@@ -954,36 +1208,40 @@ model SavedMessage {
 // ============================================
 
 model LeaveRequest {
-  id           String      @id @default(cuid())
-  userId       String
-  type         LeaveType
-  startDate    DateTime
-  endDate      DateTime
-  status       LeaveStatus @default(PENDING)
-  approvedById String?
-  reason       String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id             String      @id @default(cuid())
+  organizationId String      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  type           LeaveType
+  startDate      DateTime
+  endDate        DateTime
+  status         LeaveStatus @default(PENDING)
+  approvedById   String?
+  reason         String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   user       User  @relation("LeaveRequester", fields: [userId], references: [id])
   approvedBy User? @relation("LeaveApprover", fields: [approvedById], references: [id])
 
   @@index([status])
   @@index([userId])
+  @@index([organizationId])
   @@map("leave_requests")
 }
 
 model PerformanceNote {
-  id        String   @id @default(cuid())
-  userId    String
-  authorId  String
-  content   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  authorId       String
+  content        String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   user   User @relation("NoteSubject", fields: [userId], references: [id])
   author User @relation("NoteAuthor", fields: [authorId], references: [id])
 
+  @@index([organizationId])
   @@map("performance_notes")
 }
 
@@ -992,34 +1250,38 @@ model PerformanceNote {
 // ============================================
 
 model Document {
-  id           String   @id @default(cuid())
-  name         String
-  url          String
-  type         String?
-  size         Int?
-  clientId     String?
-  uploadedById String
-  createdAt    DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  url            String
+  type           String?
+  size           Int?
+  clientId       String?
+  uploadedById   String
+  createdAt      DateTime @default(now())
 
   client     Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
   uploadedBy User    @relation(fields: [uploadedById], references: [id])
 
+  @@index([organizationId])
   @@map("documents")
 }
 
 model ProjectFile {
-  id           String   @id @default(cuid())
-  name         String
-  url          String
-  type         String?
-  size         Int?
-  projectId    String
-  uploadedById String
-  createdAt    DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  url            String
+  type           String?
+  size           Int?
+  projectId      String
+  uploadedById   String
+  createdAt      DateTime @default(now())
 
   project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   uploadedBy User    @relation(fields: [uploadedById], references: [id])
 
+  @@index([organizationId])
   @@map("project_files")
 }
 
@@ -1028,18 +1290,20 @@ model ProjectFile {
 // ============================================
 
 model Milestone {
-  id          String    @id @default(cuid())
-  name        String
-  description String?
-  projectId   String
-  dueDate     DateTime
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  description    String?
+  projectId      String
+  dueDate        DateTime
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
+  @@index([organizationId])
   @@map("milestones")
 }
 
@@ -1048,37 +1312,41 @@ model Milestone {
 // ============================================
 
 model Activity {
-  id         String   @id @default(cuid())
-  type       String   // task_created, invoice_sent, project_updated, etc.
-  message    String
-  userId     String
-  entityType String?  // Project, Task, Invoice, etc.
-  entityId   String?
-  metadata   Json?
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  type           String // task_created, invoice_sent, project_updated, etc.
+  message        String
+  userId         String
+  entityType     String? // Project, Task, Invoice, etc.
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
 
   @@index([createdAt])
   @@index([entityType, entityId])
+  @@index([organizationId])
   @@map("activities")
 }
 
 model Notification {
-  id         String   @id @default(cuid())
-  userId     String
-  title      String
-  message    String
-  type       String   // task_assigned, mention, invoice_paid, etc.
-  isRead     Boolean  @default(false)
-  entityType String?
-  entityId   String?
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  title          String
+  message        String
+  type           String // task_assigned, mention, invoice_paid, etc.
+  isRead         Boolean  @default(false)
+  entityType     String?
+  entityId       String?
+  createdAt      DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
   @@index([createdAt])
+  @@index([organizationId])
   @@map("notifications")
 }
 
@@ -1092,8 +1360,9 @@ model Notification {
 /// stays meaningful even after the user is deleted (actor relation is SetNull).
 /// Sensitive input fields (passwords, tokens) are redacted before storage.
 model AuditLog {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now()) // WHEN
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  createdAt      DateTime @default(now()) // WHEN
 
   // WHO — snapshotted at the time of the action for durability
   actorType  AuditActorType @default(USER)
@@ -1145,6 +1414,7 @@ model AuditLog {
   @@index([outcome, createdAt])
   @@index([action])
   @@index([targetType, targetId])
+  @@index([organizationId])
   @@map("audit_logs")
 }
 
@@ -1153,38 +1423,42 @@ model AuditLog {
 // ============================================
 
 model Meeting {
-  id          String   @id @default(cuid())
-  title       String
-  description String?
-  startTime   DateTime
-  endTime     DateTime
-  location    String?  // "Google Meet", "Office", URL, etc.
-  recurrence  String?  // "daily", "weekly", "biweekly", "monthly", null = one-time
-  createdById String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  title          String
+  description    String?
+  startTime      DateTime
+  endTime        DateTime
+  location       String? // "Google Meet", "Office", URL, etc.
+  recurrence     String? // "daily", "weekly", "biweekly", "monthly", null = one-time
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   attendees     MeetingAttendee[]
   attendanceLog MeetingAttendanceLog[]
 
   @@index([startTime])
+  @@index([organizationId])
   @@map("meetings")
 }
 
 model MeetingAttendee {
-  id        String    @id @default(cuid())
-  meetingId String
-  userId    String
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  meetingId      String
+  userId         String
   // DEPRECATED: kept for backwards-compat during rollout. Real attendance
   // tracking is in MeetingAttendanceLog, which records per-occurrence joins.
   // This field will be removed in a future change.
-  joinedAt  DateTime?
+  joinedAt       DateTime?
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([meetingId, userId])
   @@index([userId, joinedAt])
+  @@index([organizationId])
   @@map("meeting_attendees")
 }
 
@@ -1193,7 +1467,8 @@ model MeetingAttendee {
 /// start of that specific instance). Single-shot meetings get exactly one
 /// row per user-who-joined.
 model MeetingAttendanceLog {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   meetingId       String
   userId          String
   occurrenceStart DateTime
@@ -1202,7 +1477,7 @@ model MeetingAttendanceLog {
   // readyToClose). Null while the call is still open or for joins recorded
   // outside the embedded call.
   leftAt          DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1210,6 +1485,7 @@ model MeetingAttendanceLog {
   @@unique([meetingId, userId, occurrenceStart])
   @@index([userId, occurrenceStart])
   @@index([meetingId, occurrenceStart])
+  @@index([organizationId])
   @@map("meeting_attendance_log")
 }
 
@@ -1218,20 +1494,22 @@ model MeetingAttendanceLog {
 // ============================================
 
 model ApiToken {
-  id          String    @id @default(cuid())
-  name        String
-  prefix      String    // First 12 chars for display, e.g. "df_a1b2c3d4"
-  tokenHash   String    @unique // bcrypt hash of the full token
-  scopes      String[]  @default([]) // ["tasks:read", "finance:write", etc.]
-  userId      String    // The user this token acts on behalf of
-  lastUsedAt  DateTime?
-  expiresAt   DateTime?
-  createdAt   DateTime  @default(now())
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  prefix         String // First 12 chars for display, e.g. "df_a1b2c3d4"
+  tokenHash      String    @unique // bcrypt hash of the full token
+  scopes         String[]  @default([]) // ["tasks:read", "finance:write", etc.]
+  userId         String // The user this token acts on behalf of
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([prefix])
+  @@index([organizationId])
   @@map("api_tokens")
 }
 
@@ -1240,158 +1518,176 @@ model ApiToken {
 // ============================================
 
 model Note {
-  id          String         @id @default(cuid())
-  title       String
-  contentJson Json           // Tiptap JSON document
-  contentText String         @default("") // Plain text extract for search
-  authorId    String
-  visibility  NoteVisibility @default(PRIVATE)
-  projectId   String?        // Optional: attach to a project
-  clientId    String?        // Optional: attach to a client
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id             String         @id @default(cuid())
+  organizationId String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  title          String
+  contentJson    Json // Tiptap JSON document
+  contentText    String         @default("") // Plain text extract for search
+  authorId       String
+  visibility     NoteVisibility @default(PRIVATE)
+  projectId      String? // Optional: attach to a project
+  clientId       String? // Optional: attach to a client
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
-  author      User        @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
-  project     Project?    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  client      Client?     @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  shares      NoteShare[]
-  linksFrom   NoteLink[]  @relation("LinksFrom") // outgoing links from this note
-  linksTo     NoteLink[]  @relation("LinksTo")   // incoming backlinks to this note
-  mentions    NoteMention[] // IMP-NOTE-02: @mentioned people on this note
-  revisions   NoteRevision[] // IMP-NOTE-01: version history
+  author    User           @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  project   Project?       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  client    Client?        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  shares    NoteShare[]
+  linksFrom NoteLink[]     @relation("LinksFrom") // outgoing links from this note
+  linksTo   NoteLink[]     @relation("LinksTo") // incoming backlinks to this note
+  mentions  NoteMention[] // IMP-NOTE-02: @mentioned people on this note
+  revisions NoteRevision[] // IMP-NOTE-01: version history
 
   @@index([authorId])
   @@index([projectId])
   @@index([clientId])
   @@index([updatedAt])
+  @@index([organizationId])
   @@map("notes")
 }
 
 // IMP-NOTE-01: an immutable snapshot of a note taken before each edit, so changes
 // can be diffed and restored. Bounded retention is enforced in the router.
 model NoteRevision {
-  id          String   @id @default(cuid())
-  noteId      String
-  title       String
-  contentJson Json
-  contentText String   @default("")
-  editedById  String?
-  createdAt   DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  noteId         String
+  title          String
+  contentJson    Json
+  contentText    String   @default("")
+  editedById     String?
+  createdAt      DateTime @default(now())
 
   note     Note  @relation(fields: [noteId], references: [id], onDelete: Cascade)
   editedBy User? @relation("NoteRevisionEditor", fields: [editedById], references: [id], onDelete: SetNull)
 
   @@index([noteId])
+  @@index([organizationId])
   @@map("note_revisions")
 }
 
 // IMP-HR-01: per-user, per-year, per-type leave entitlement. "Used" days are
 // derived from APPROVED LeaveRequests; this stores the allowance to compare against.
 model LeaveBalance {
-  id           String    @id @default(cuid())
-  userId       String
-  year         Int
-  type         LeaveType
-  entitledDays Int
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  year           Int
+  type           LeaveType
+  entitledDays   Int
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   user User @relation("UserLeaveBalances", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, year, type])
   @@index([userId])
+  @@index([organizationId])
   @@map("leave_balances")
 }
 
 // IMP-REST-03: outbound webhook subscription. `secret` signs the payload (HMAC).
 model Webhook {
-  id          String   @id @default(cuid())
-  url         String
-  secret      String
-  events      String[] @default([]) // e.g. ["invoice.paid", "task.created"]
-  active      Boolean  @default(true)
-  createdById String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  url            String
+  secret         String
+  events         String[] @default([]) // e.g. ["invoice.paid", "task.created"]
+  active         Boolean  @default(true)
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   createdBy  User              @relation("WebhookCreator", fields: [createdById], references: [id], onDelete: Cascade)
   deliveries WebhookDelivery[]
 
+  @@index([organizationId])
   @@map("webhooks")
 }
 
 // IMP-REST-03: a single delivery attempt for an event → webhook (for observability).
 model WebhookDelivery {
-  id          String   @id @default(cuid())
-  webhookId   String
-  event       String
-  payload     Json
-  statusCode  Int?
-  success     Boolean  @default(false)
-  error       String?
-  attemptedAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  webhookId      String
+  event          String
+  payload        Json
+  statusCode     Int?
+  success        Boolean  @default(false)
+  error          String?
+  attemptedAt    DateTime @default(now())
 
   webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId])
+  @@index([organizationId])
   @@map("webhook_deliveries")
 }
 
 // IMP-AUTH-02: single-use TOTP recovery codes. Only the hash is stored.
 model TwoFactorRecoveryCode {
-  id        String    @id @default(cuid())
-  userId    String
-  codeHash  String
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  codeHash       String
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([organizationId])
   @@map("two_factor_recovery_codes")
 }
 
 // IMP-NOTE-02: a person @mentioned in a note (scoped to the note's visibility),
 // used to notify them and surface "notes that mention me".
 model NoteMention {
-  id        String   @id @default(cuid())
-  noteId    String
-  userId    String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  noteId         String
+  userId         String
+  createdAt      DateTime @default(now())
 
   note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([noteId, userId])
   @@index([userId])
+  @@index([organizationId])
   @@map("note_mentions")
 }
 
 model NoteShare {
-  id         String         @id @default(cuid())
-  noteId     String
-  userId     String
-  permission NotePermission @default(VIEW)
-  createdAt  DateTime       @default(now())
+  id             String         @id @default(cuid())
+  organizationId String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  noteId         String
+  userId         String
+  permission     NotePermission @default(VIEW)
+  createdAt      DateTime       @default(now())
 
   note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([noteId, userId])
+  @@index([organizationId])
   @@map("note_shares")
 }
 
 model NoteLink {
-  id         String   @id @default(cuid())
-  fromNoteId String
-  toNoteId   String
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  fromNoteId     String
+  toNoteId       String
+  createdAt      DateTime @default(now())
 
   fromNote Note @relation("LinksFrom", fields: [fromNoteId], references: [id], onDelete: Cascade)
-  toNote   Note @relation("LinksTo",   fields: [toNoteId],   references: [id], onDelete: Cascade)
+  toNote   Note @relation("LinksTo", fields: [toNoteId], references: [id], onDelete: Cascade)
 
   @@unique([fromNoteId, toNoteId])
   @@index([toNoteId])
+  @@index([organizationId])
   @@map("note_links")
 }
 
@@ -1411,46 +1707,811 @@ enum MailboxType {
 // the OAuth refresh token (NEVER plaintext, NEVER sent to the client). Decryption
 // happens server-side only, in the adapter layer.
 model Mailbox {
-  id           String      @id @default(cuid())
-  userId       String
-  type         MailboxType
-  emailAddress String
-  displayName  String?
-  credentials  String // AES-256-GCM ciphertext of the OAuth refresh token
-  status       String      @default("active")
-  lastSyncedAt DateTime?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id             String      @id @default(cuid())
+  organizationId String      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  type           MailboxType
+  emailAddress   String
+  displayName    String?
+  credentials    String // AES-256-GCM ciphertext of the OAuth refresh token
+  status         String      @default("active")
+  lastSyncedAt   DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages EmailMessage[]
 
   @@index([userId])
+  @@index([organizationId])
   @@map("mailboxes")
 }
 
 // A synced message belonging to a Mailbox. Provider-agnostic shape; bodies are
 // backfilled lazily on first open to keep the initial inbox paint fast.
 model EmailMessage {
-  id               String   @id @default(cuid())
-  mailboxId        String
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  mailboxId         String
   providerMessageId String
-  threadId         String?
-  fromAddr         String
-  toAddrs          Json
-  ccAddrs          Json?
-  subject          String?
-  snippet          String?
-  bodyHtml         String?
-  bodyText         String?
-  isRead           Boolean  @default(false)
-  hasAttachments   Boolean  @default(false)
-  sentAt           DateTime
-  createdAt        DateTime @default(now())
+  threadId          String?
+  fromAddr          String
+  toAddrs           Json
+  ccAddrs           Json?
+  subject           String?
+  snippet           String?
+  bodyHtml          String?
+  bodyText          String?
+  isRead            Boolean  @default(false)
+  hasAttachments    Boolean  @default(false)
+  sentAt            DateTime
+  createdAt         DateTime @default(now())
 
   mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
 
   @@unique([mailboxId, providerMessageId])
   @@index([mailboxId, sentAt])
+  @@index([organizationId])
   @@map("email_messages")
+}
+
+// ===========================================================================
+// PLATFORM CONTROL PLANE — commercial, tenant configuration, identity and ops
+// ===========================================================================
+
+model Organization {
+  id                  String                     @id @default(cuid())
+  slug                String                     @unique
+  legalName           String
+  displayName         String
+  status              OrganizationStatus         @default(ONBOARDING)
+  deploymentMode      OrganizationDeploymentMode @default(SHARED)
+  packageId           String?
+  timezone            String                     @default("UTC")
+  locale              String                     @default("en")
+  currency            String                     @default("USD")
+  seatLimit           Int                        @default(1)
+  gracePeriodDays     Int                        @default(0)
+  activatedAt         DateTime?
+  suspendedAt         DateTime?
+  terminatedAt        DateTime?
+  purgeScheduledAt    DateTime?
+  dataResidency       String?
+  primaryContactName  String?
+  primaryContactEmail String?
+  notes               String?
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+
+  package                PlatformPackage?                 @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  users                  User[]
+  roles                  OrganizationRole[]
+  permissionOverrides    UserPermissionOverride[]
+  modules                OrganizationModule[]
+  limits                 OrganizationLimit[]
+  usageCounters          OrganizationUsageCounter[]
+  brand                  OrganizationBrand?
+  emailSettings          OrganizationEmailSettings?
+  domains                OrganizationDomain[]
+  identityConnections    OrganizationIdentityConnection[]
+  scimTokens             OrganizationScimToken[]
+  scimEvents             OrganizationScimEvent[]
+  accounts               PlatformAccount[]
+  convertedOpportunities PlatformOpportunity[]
+  contracts              PlatformContract[]
+  invoices               PlatformInvoice[]
+  payments               PlatformPayment[]
+  renewals               PlatformRenewal[]
+  deployments            OrganizationDeployment[]
+  jobs                   PlatformJob[]
+  lifecycleEvents        OrganizationLifecycleEvent[]
+  supportSessions        PlatformSupportSession[]
+  auditLogs              PlatformAuditLog[]
+
+  @@index([status])
+  @@index([deploymentMode])
+  @@index([packageId])
+  @@map("organizations")
+}
+
+model PlatformUser {
+  id           String       @id @default(cuid())
+  name         String
+  email        String       @unique
+  passwordHash String
+  role         PlatformRole @default(AUDITOR)
+  active       Boolean      @default(true)
+  mfaRequired  Boolean      @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([role, active])
+  @@map("platform_users")
+}
+
+model PlatformModule {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  category    String
+  routePrefix String?
+  icon        String?
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  packageLinks  PlatformPackageModule[]
+  organizations OrganizationModule[]
+  contracts     PlatformContractModule[]
+
+  @@index([category, active])
+  @@map("platform_modules")
+}
+
+model PlatformPackage {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  name         String
+  description  String?
+  version      Int      @default(1)
+  active       Boolean  @default(true)
+  defaultSeats Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  moduleLinks   PlatformPackageModule[]
+  organizations Organization[]
+
+  @@index([active])
+  @@map("platform_packages")
+}
+
+model PlatformPackageModule {
+  id        String  @id @default(cuid())
+  packageId String
+  moduleId  String
+  enabled   Boolean @default(true)
+  limits    Json?
+
+  package PlatformPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  module  PlatformModule  @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, moduleId])
+  @@index([moduleId])
+  @@map("platform_package_modules")
+}
+
+model OrganizationModule {
+  id             String                   @id @default(cuid())
+  organizationId String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  moduleId       String
+  status         OrganizationModuleStatus @default(ENABLED)
+  seatLimit      Int?
+  startsAt       DateTime                 @default(now())
+  expiresAt      DateTime?
+  overrides      Json?
+  reason         String?
+  changedById    String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  module       PlatformModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, moduleId])
+  @@index([organizationId, status])
+  @@index([moduleId])
+  @@map("organization_modules")
+}
+
+model OrganizationLimit {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  value          Int
+  period         String?
+  source         String    @default("CONTRACT")
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+  @@map("organization_limits")
+}
+
+model OrganizationUsageCounter {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  periodStart    DateTime
+  periodEnd      DateTime
+  value          BigInt   @default(0)
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key, periodStart, periodEnd])
+  @@index([organizationId, key])
+  @@map("organization_usage_counters")
+}
+
+model OrganizationRole {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  name           String
+  description    String?
+  isSystem       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  permissions  OrganizationRolePermission[]
+  users        User[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+  @@map("organization_roles")
+}
+
+model OrganizationRolePermission {
+  id                 String           @id @default(cuid())
+  organizationId     String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  organizationRoleId String
+  capability         String
+  effect             PermissionEffect @default(ALLOW)
+  createdAt          DateTime         @default(now())
+
+  role OrganizationRole @relation(fields: [organizationRoleId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationRoleId, capability])
+  @@index([organizationId])
+  @@map("organization_role_permissions")
+}
+
+model UserPermissionOverride {
+  id             String           @id @default(cuid())
+  organizationId String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  capability     String
+  effect         PermissionEffect
+  reason         String
+  expiresAt      DateTime?
+  createdById    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, capability])
+  @@index([organizationId])
+  @@map("user_permission_overrides")
+}
+
+model PlatformAccount {
+  id             String   @id @default(cuid())
+  organizationId String?
+  name           String
+  legalName      String?
+  website        String?
+  industry       String?
+  country        String?
+  ownerId        String?
+  status         String   @default("PROSPECT")
+  source         String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  contacts      PlatformContact[]
+  leads         PlatformLead[]
+  opportunities PlatformOpportunity[]
+  followUps     PlatformFollowUp[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("platform_accounts")
+}
+
+model PlatformLead {
+  id          String     @id @default(cuid())
+  accountId   String?
+  name        String
+  email       String?
+  phone       String?
+  companyName String?
+  status      LeadStatus @default(NEW)
+  source      String?
+  ownerId     String?
+  notes       String?
+  convertedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  account   PlatformAccount?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  followUps PlatformFollowUp[]
+
+  @@index([status, createdAt])
+  @@index([accountId])
+  @@map("platform_leads")
+}
+
+model PlatformContact {
+  id        String   @id @default(cuid())
+  accountId String
+  name      String
+  email     String?
+  phone     String?
+  title     String?
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@map("platform_contacts")
+}
+
+model PlatformOpportunity {
+  id                      String           @id @default(cuid())
+  accountId               String
+  convertedOrganizationId String?
+  name                    String
+  stage                   OpportunityStage @default(DISCOVERY)
+  estimatedValue          Decimal?         @db.Decimal(14, 2)
+  currency                String           @default("USD")
+  probability             Int              @default(10)
+  ownerId                 String?
+  expectedCloseAt         DateTime?
+  wonAt                   DateTime?
+  lostAt                  DateTime?
+  lossReason              String?
+  notes                   String?
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+
+  account               PlatformAccount                 @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  convertedOrganization Organization?                   @relation(fields: [convertedOrganizationId], references: [id], onDelete: SetNull)
+  stageEvents           PlatformOpportunityStageEvent[]
+  proposals             PlatformProposal[]
+  followUps             PlatformFollowUp[]
+  contracts             PlatformContract[]
+
+  @@index([accountId, stage])
+  @@index([convertedOrganizationId])
+  @@index([expectedCloseAt])
+  @@map("platform_opportunities")
+}
+
+model PlatformOpportunityStageEvent {
+  id            String            @id @default(cuid())
+  opportunityId String
+  fromStage     OpportunityStage?
+  toStage       OpportunityStage
+  reason        String?
+  changedById   String?
+  createdAt     DateTime          @default(now())
+
+  opportunity PlatformOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([opportunityId, createdAt])
+  @@map("platform_opportunity_stage_events")
+}
+
+model PlatformProposal {
+  id            String         @id @default(cuid())
+  opportunityId String
+  number        String         @unique
+  title         String
+  status        ProposalStatus @default(DRAFT)
+  currency      String         @default("USD")
+  total         Decimal        @db.Decimal(14, 2)
+  lineItems     Json
+  validUntil    DateTime?
+  fileUrl       String?
+  sentAt        DateTime?
+  acceptedAt    DateTime?
+  createdById   String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  opportunity PlatformOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([opportunityId, status])
+  @@map("platform_proposals")
+}
+
+model PlatformFollowUp {
+  id            String         @id @default(cuid())
+  accountId     String?
+  leadId        String?
+  opportunityId String?
+  ownerId       String?
+  title         String
+  notes         String?
+  dueAt         DateTime
+  status        FollowUpStatus @default(OPEN)
+  completedAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  account     PlatformAccount?     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  lead        PlatformLead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  opportunity PlatformOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, status, dueAt])
+  @@index([accountId])
+  @@index([leadId])
+  @@index([opportunityId])
+  @@map("platform_follow_ups")
+}
+
+model PlatformContract {
+  id              String                   @id @default(cuid())
+  organizationId  String
+  opportunityId   String?
+  number          String                   @unique
+  title           String
+  status          CommercialContractStatus @default(DRAFT)
+  currency        String                   @default("USD")
+  value           Decimal                  @db.Decimal(14, 2)
+  billingInterval BillingInterval          @default(ANNUAL)
+  seatLimit       Int                      @default(1)
+  startDate       DateTime
+  endDate         DateTime
+  graceUntil      DateTime?
+  autoRenew       Boolean                  @default(false)
+  signedAt        DateTime?
+  ownerId         String?
+  notes           String?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  opportunity  PlatformOpportunity?     @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  modules      PlatformContractModule[]
+  invoices     PlatformInvoice[]
+  renewals     PlatformRenewal[]
+
+  @@index([organizationId, status])
+  @@index([endDate])
+  @@map("platform_contracts")
+}
+
+model PlatformContractModule {
+  id         String @id @default(cuid())
+  contractId String
+  moduleId   String
+  seatLimit  Int?
+  limits     Json?
+
+  contract PlatformContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  module   PlatformModule   @relation(fields: [moduleId], references: [id], onDelete: Restrict)
+
+  @@unique([contractId, moduleId])
+  @@index([moduleId])
+  @@map("platform_contract_modules")
+}
+
+model PlatformInvoice {
+  id             String                @id @default(cuid())
+  organizationId String
+  contractId     String?
+  number         String                @unique
+  status         PlatformInvoiceStatus @default(DRAFT)
+  currency       String                @default("USD")
+  subtotal       Decimal               @db.Decimal(14, 2)
+  tax            Decimal               @default(0) @db.Decimal(14, 2)
+  total          Decimal               @db.Decimal(14, 2)
+  lineItems      Json
+  issuedAt       DateTime?
+  dueAt          DateTime
+  paidAt         DateTime?
+  notes          String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  contract     PlatformContract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  payments     PlatformPayment[]
+
+  @@index([organizationId, status])
+  @@index([contractId])
+  @@index([dueAt])
+  @@map("platform_invoices")
+}
+
+model PlatformPayment {
+  id             String                @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  status         PlatformPaymentStatus @default(PENDING)
+  amount         Decimal               @db.Decimal(14, 2)
+  currency       String                @default("USD")
+  method         String?
+  externalRef    String?
+  idempotencyKey String?               @unique
+  paidAt         DateTime?
+  failureReason  String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  invoice      PlatformInvoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([invoiceId])
+  @@map("platform_payments")
+}
+
+model PlatformRenewal {
+  id             String        @id @default(cuid())
+  organizationId String
+  contractId     String
+  status         RenewalStatus @default(UPCOMING)
+  dueAt          DateTime
+  ownerId        String?
+  proposedValue  Decimal?      @db.Decimal(14, 2)
+  proposedSeats  Int?
+  notes          String?
+  completedAt    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  contract     PlatformContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([dueAt])
+  @@map("platform_renewals")
+}
+
+model OrganizationBrand {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  logoUrl        String?
+  markUrl        String?
+  primaryColor   String   @default("#111110")
+  accentColor    String   @default("#FF684F")
+  supportEmail   String?
+  fromName       String?
+  faviconUrl     String?
+  tokens         Json?
+  customCss      String?
+  updatedById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_brands")
+}
+
+model OrganizationEmailSettings {
+  id               String    @id @default(cuid())
+  organizationId   String    @unique
+  provider         String    @default("PLATFORM")
+  fromName         String?
+  fromAddress      String?
+  replyTo          String?
+  encryptedApiKey  String?
+  domainVerifiedAt DateTime?
+  configuration    Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_email_settings")
+}
+
+model OrganizationDomain {
+  id                 String                   @id @default(cuid())
+  organizationId     String
+  host               String                   @unique
+  kind               String                   @default("APP")
+  verificationStatus DomainVerificationStatus @default(PENDING)
+  verificationToken  String                   @unique
+  isPrimary          Boolean                  @default(false)
+  verifiedAt         DateTime?
+  lastCheckedAt      DateTime?
+  failureReason      String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, verificationStatus])
+  @@map("organization_domains")
+}
+
+model OrganizationIdentityConnection {
+  id                    String                   @id @default(cuid())
+  organizationId        String
+  name                  String
+  protocol              IdentityProtocol
+  status                IdentityConnectionStatus @default(DRAFT)
+  issuer                String?
+  clientId              String?
+  encryptedClientSecret String?
+  discoveryUrl          String?
+  ssoUrl                String?
+  entityId              String?
+  certificate           String?
+  domains               String[]                 @default([])
+  allowJit              Boolean                  @default(true)
+  enforceSso            Boolean                  @default(false)
+  roleMappings          Json?
+  configuration         Json?
+  lastTestedAt          DateTime?
+  lastError             String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  scimEvents   OrganizationScimEvent[]
+
+  @@index([organizationId, status])
+  @@map("organization_identity_connections")
+}
+
+model OrganizationScimToken {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  prefix         String
+  tokenHash      String    @unique
+  expiresAt      DateTime?
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([prefix])
+  @@map("organization_scim_tokens")
+}
+
+model OrganizationScimEvent {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  identityConnectionId String?
+  externalId           String?
+  idempotencyKey       String?  @unique
+  operation            String
+  resourceType         String
+  status               String
+  payload              Json?
+  error                String?
+  createdAt            DateTime @default(now())
+
+  organization       Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  identityConnection OrganizationIdentityConnection? @relation(fields: [identityConnectionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([externalId])
+  @@map("organization_scim_events")
+}
+
+model OrganizationDeployment {
+  id             String                     @id @default(cuid())
+  organizationId String
+  environment    String                     @default("production")
+  mode           OrganizationDeploymentMode
+  status         DeploymentStatus           @default(PENDING)
+  provider       String                     @default("VERCEL")
+  projectId      String?
+  region         String?
+  url            String?
+  databaseRef    String?
+  edgeConfigRef  String?
+  version        String?
+  health         Json?
+  lastHealthyAt  DateTime?
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, environment])
+  @@index([status])
+  @@map("organization_deployments")
+}
+
+model PlatformJob {
+  id             String            @id @default(cuid())
+  organizationId String?
+  type           PlatformJobType
+  status         PlatformJobStatus @default(QUEUED)
+  payload        Json?
+  result         Json?
+  error          String?
+  attempts       Int               @default(0)
+  maxAttempts    Int               @default(3)
+  idempotencyKey String?           @unique
+  requestedById  String?
+  scheduledAt    DateTime          @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+  @@index([organizationId])
+  @@map("platform_jobs")
+}
+
+model OrganizationLifecycleEvent {
+  id             String              @id @default(cuid())
+  organizationId String
+  action         LifecycleAction
+  fromStatus     OrganizationStatus?
+  toStatus       OrganizationStatus
+  reason         String
+  metadata       Json?
+  actorId        String?
+  createdAt      DateTime            @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@map("organization_lifecycle_events")
+}
+
+model PlatformSupportSession {
+  id             String               @id @default(cuid())
+  organizationId String
+  platformUserId String
+  tenantUserId   String?
+  reason         String
+  status         SupportSessionStatus @default(ACTIVE)
+  expiresAt      DateTime
+  endedAt        DateTime?
+  createdAt      DateTime             @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([platformUserId, status])
+  @@map("platform_support_sessions")
+}
+
+model PlatformAuditLog {
+  id                  String   @id @default(cuid())
+  organizationId      String?
+  actorPlatformUserId String?
+  actorTenantUserId   String?
+  action              String
+  targetType          String?
+  targetId            String?
+  before              Json?
+  after               Json?
+  metadata            Json?
+  requestId           String?
+  reason              String?
+  success             Boolean  @default(true)
+  error               String?
+  ip                  String?
+  userAgent           String?
+  createdAt           DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([actorPlatformUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([requestId])
+  @@map("platform_audit_logs")
 }

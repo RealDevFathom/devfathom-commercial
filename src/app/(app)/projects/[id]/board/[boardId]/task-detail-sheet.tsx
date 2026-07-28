@@ -1341,7 +1341,16 @@ export function TaskDetailSheet({
         if (!label) return old;
         return {
           ...old,
-          labels: [...old.labels, { id: `optimistic-${labelId}`, taskId, labelId, label }],
+          labels: [
+            ...old.labels,
+            {
+              id: `optimistic-${labelId}`,
+              organizationId: old.organizationId,
+              taskId,
+              labelId,
+              label,
+            },
+          ],
         };
       });
       return { previous };
@@ -1400,6 +1409,7 @@ export function TaskDetailSheet({
             return [
               {
                 id: `optimistic-${id}`,
+                organizationId: old.organizationId,
                 taskId,
                 userId: id,
                 user: {
