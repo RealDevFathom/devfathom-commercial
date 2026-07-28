@@ -1,16 +1,27 @@
-import { db } from '@/lib/db';
 import { compare, hash } from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { NextResponse } from 'next/server';
 import { recordRestAudit } from '@/server/audit';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
+import {
+  createTenantDb,
+  type ScopedDb,
+  withPlatformDb,
+  withTenantDb,
+} from '@/lib/tenancy/scoped-db';
+import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { moduleForApiScope } from '@/lib/module-catalog';
+import type { EntitlementView } from '@/lib/module-catalog';
 
 export type ApiContext = {
+  organizationId: string;
   userId: string;
   userRole: 'ADMIN' | 'EMPLOYEE' | 'HR';
   scopes: string[];
   tokenId: string;
+  db: ScopedDb;
+  entitlements: EntitlementView;
 };
 
 /**
@@ -46,11 +57,24 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
 
   const prefix = token.slice(0, 12);
 
-  // Find candidate tokens by prefix
-  const candidates = await db.apiToken.findMany({
-    where: { prefix },
-    include: { user: { select: { id: true, role: true, status: true } } },
-  });
+  // The tenant is not known until the token is resolved, so discovery runs in
+  // the explicitly privileged platform scope. Every subsequent operation is
+  // returned to the token's tenant scope.
+  const candidates = await withPlatformDb((platformDb) =>
+    platformDb.apiToken.findMany({
+      where: { prefix },
+      include: {
+        user: {
+          select: {
+            id: true,
+            role: true,
+            status: true,
+            organization: { select: { id: true, status: true } },
+          },
+        },
+      },
+    })
+  );
 
   // Verify against bcrypt hash
   for (const candidate of candidates) {
@@ -61,23 +85,40 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
       return NextResponse.json({ error: 'User account is inactive' }, { status: 403 });
     }
 
+    if (!['ONBOARDING', 'ACTIVE', 'GRACE'].includes(candidate.user.organization.status)) {
+      return NextResponse.json({ error: 'Organization access is suspended' }, { status: 403 });
+    }
+
     if (candidate.expiresAt && candidate.expiresAt < new Date()) {
       return NextResponse.json({ error: 'Token has expired' }, { status: 401 });
     }
 
     // Update lastUsedAt (fire and forget)
-    db.apiToken
-      .update({
+    void withTenantDb(candidate.organizationId, (tenantDb) =>
+      tenantDb.apiToken.update({
         where: { id: candidate.id },
         data: { lastUsedAt: new Date() },
       })
-      .catch(() => {});
+    ).catch(() => {});
+
+    const entitlements = await withTenantDb(candidate.organizationId, (tenantDb) =>
+      resolveOrganizationEntitlements(candidate.organizationId, tenantDb)
+    );
+    if (!hasModule(entitlements, 'api')) {
+      return NextResponse.json(
+        { error: 'API access is not enabled for this organization.' },
+        { status: 403 }
+      );
+    }
 
     return {
+      organizationId: candidate.organizationId,
       userId: candidate.userId,
       userRole: candidate.user.role,
       scopes: candidate.scopes,
       tokenId: candidate.id,
+      db: createTenantDb(candidate.organizationId),
+      entitlements,
     };
   }
 
@@ -190,7 +231,18 @@ export function withApiAuth<T extends unknown[]>(
     }
 
     try {
-      const res = await handler(auth, request, ...args);
+      const res = await withTenantDb(auth.organizationId, async (tenantDb) => {
+        const moduleKey = moduleForApiScope(requiredScope);
+        if (moduleKey) {
+          if (!hasModule(auth.entitlements, moduleKey)) {
+            return NextResponse.json(
+              { error: `The ${moduleKey} module is not enabled for this organization.` },
+              { status: 403 }
+            );
+          }
+        }
+        return Promise.resolve(handler({ ...auth, db: tenantDb }, request, ...args));
+      });
       recordRestAudit({
         request,
         ctx: auth,

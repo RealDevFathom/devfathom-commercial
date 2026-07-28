@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateApiRequest } from '@/lib/api-auth';
+import { publicRequestOrigin } from '@/lib/http-origin';
 import { recordRestAudit } from '@/server/audit';
 
 /**
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
     return auth;
   }
 
-  const baseUrl = new URL(request.url).origin;
+  const baseUrl = publicRequestOrigin(request);
   const md = buildSpec(baseUrl);
 
   recordRestAudit({

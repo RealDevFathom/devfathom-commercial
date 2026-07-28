@@ -28,7 +28,14 @@ import type { PrismaClient } from '@/generated/prisma/client';
 // Accept the base client or any extended/transactional variant.
 export type AuthzDb = Pick<
   PrismaClient,
-  'projectMember' | 'board' | 'column' | 'task' | 'channelMember' | 'meeting' | 'notification'
+  | 'user'
+  | 'projectMember'
+  | 'board'
+  | 'column'
+  | 'task'
+  | 'channelMember'
+  | 'meeting'
+  | 'notification'
 >;
 
 export function isAdmin(role?: string | null): boolean {

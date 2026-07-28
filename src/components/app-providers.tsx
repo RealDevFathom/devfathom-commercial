@@ -7,7 +7,6 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { TRPCProvider } from '@/lib/trpc-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
-import { RealtimeProvider } from '@/components/chat/realtime-provider';
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
@@ -18,9 +17,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
         <PreferencesProvider>
           <TRPCProvider>
             <TooltipProvider delay={200}>
-              <LazyMotion features={domMax}>
-                <RealtimeProvider>{children}</RealtimeProvider>
-              </LazyMotion>
+              <LazyMotion features={domMax}>{children}</LazyMotion>
               <Toaster position="top-right" richColors closeButton />
             </TooltipProvider>
           </TRPCProvider>

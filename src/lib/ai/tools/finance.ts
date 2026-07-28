@@ -16,7 +16,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { db } from '@/lib/db';
 import { templates, appUrl } from '@/lib/email';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
@@ -83,6 +82,7 @@ const dateLabel = (d: Date) =>
  * receives no finance tools at all; admins get the full read + write surface.
  */
 export function buildFinanceTools(h: AssistantHelpers): ToolSet {
+  const { db } = h;
   const tools: ToolSet = {};
   if (!h.isAdmin) return tools; // finance is admin-only — no tools for non-admins.
 
@@ -184,7 +184,13 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
     description:
       'A profit-and-loss report: income, expense, profit and margin per month over the last N months, plus a year-to-date expense breakdown by category. Use for "P&L", "monthly profit trend", "where is the money going", "expense breakdown". ADMIN ONLY.',
     inputSchema: z.object({
-      months: z.number().int().min(1).max(24).nullish().describe('How many months back (default 12)'),
+      months: z
+        .number()
+        .int()
+        .min(1)
+        .max(24)
+        .nullish()
+        .describe('How many months back (default 12)'),
     }),
     execute: async ({ months }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
@@ -301,7 +307,10 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       'Full detail for ONE invoice: client + primary contact, project, line items, subtotal/tax/total, status and key dates. Identify it by its invoice number (e.g. "INV-2026-001") or by client name. Use for "show invoice <number>", "what is on <client>\'s invoice", "the line items on that invoice". ADMIN ONLY.',
     inputSchema: z.object({
       invoiceNumber: z.string().nullish().describe('Invoice number, e.g. "INV-2026-001"'),
-      clientName: z.string().nullish().describe('Client name — used when no invoice number is given'),
+      clientName: z
+        .string()
+        .nullish()
+        .describe('Client name — used when no invoice number is given'),
     }),
     execute: async ({ invoiceNumber, clientName }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
@@ -332,8 +341,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           select: { id: true, invoiceNumber: true, status: true },
           take: 10,
         });
-        if (clientInvoices.length === 0)
-          return { error: `${r.value.name} has no invoices.` };
+        if (clientInvoices.length === 0) return { error: `${r.value.name} has no invoices.` };
         if (clientInvoices.length > 1)
           return {
             needsClarification: `${r.value.name} has several invoices — which one? ${clientInvoices
@@ -366,9 +374,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         invoiceNumber: invoice.invoiceNumber,
         status: invoice.status,
         client: invoice.client.name,
-        clientContact: primary
-          ? { name: primary.name, email: primary.email ?? null }
-          : null,
+        clientContact: primary ? { name: primary.name, email: primary.email ?? null } : null,
         project: invoice.project?.name ?? null,
         currency: invoice.currency,
         subtotal: Number(invoice.subtotal),
@@ -379,9 +385,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         paidAt: invoice.paidAt,
         notes: invoice.notes,
         overdue:
-          invoice.status !== 'PAID' &&
-          invoice.status !== 'CANCELLED' &&
-          invoice.dueDate < now(),
+          invoice.status !== 'PAID' && invoice.status !== 'CANCELLED' && invoice.dueDate < now(),
         items: rawItems.map((it) => ({
           description: it.description ?? '',
           quantity: Number(it.quantity ?? 0),
@@ -615,7 +619,9 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       }
       // FIN-06: enforce the status state-machine.
       if (!INVOICE_TRANSITIONS[priorStatus]?.includes(status)) {
-        return { error: `Cannot change invoice ${matches[0].invoiceNumber} from ${priorStatus} to ${status}.` };
+        return {
+          error: `Cannot change invoice ${matches[0].invoiceNumber} from ${priorStatus} to ${status}.`,
+        };
       }
 
       const data: Prisma.InvoiceUpdateInput = { status };
@@ -705,7 +711,16 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       date: z.string().nullish().describe('ISO date; defaults to today'),
     }),
     needsApproval: true,
-    execute: async ({ type, amount, description, category, currency, projectName, clientName, date }) => {
+    execute: async ({
+      type,
+      amount,
+      description,
+      category,
+      currency,
+      projectName,
+      clientName,
+      date,
+    }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
 
       let projectId: string | null = null;

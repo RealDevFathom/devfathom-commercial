@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { isAdmin } from '@/lib/authz';
 
 export const GET = withApiAuth('team:read', async (ctx) => {
   const admin = isAdmin(ctx.userRole);
-  const team = await db.user.findMany({
+  const team = await ctx.db.user.findMany({
     select: {
       // Directory fields — safe for any team:read token (needed for assignee
       // / user-ID lookups documented in the API spec).

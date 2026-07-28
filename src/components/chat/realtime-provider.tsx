@@ -37,15 +37,21 @@ import { useRealtimeStore } from '@/lib/chat/realtime-store';
 
 const TYPING_AUTOCLEAR_MS = 4000;
 
-export function RealtimeProvider({ children }: { children: ReactNode }) {
+export function RealtimeProvider({
+  children,
+  enabled = true,
+}: {
+  children: ReactNode;
+  enabled?: boolean;
+}) {
   const { data: session } = useSession();
   const userId = session?.user?.id;
   const myId = userId ?? '';
   const utils = trpc.useUtils();
-  const { client } = useAbly(userId);
+  const { client } = useAbly(enabled ? userId : undefined);
 
   // Know every channel so we can subscribe to its rooms (live updates everywhere).
-  const channelsQuery = trpc.chat.getChannels.useQuery(undefined, { enabled: !!userId });
+  const channelsQuery = trpc.chat.getChannels.useQuery(undefined, { enabled: enabled && !!userId });
   const channelIds = channelsQuery.data?.map((c) => c.id);
   const idsKey = (channelIds ?? []).join(',');
 
@@ -78,9 +84,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         await pc.presence.enter();
         const members = await pc.presence.get();
         if (cancelled) return;
-        store().setOnlineRoster(
-          members.map((m) => m.clientId).filter((id): id is string => !!id)
-        );
+        store().setOnlineRoster(members.map((m) => m.clientId).filter((id): id is string => !!id));
       } catch (err) {
         console.error('[realtime] presence init failed', err);
       }
@@ -227,23 +231,27 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // Typing channel (client-published). Identity is the message clientId.
         const tch = client.channels.get(typingRoom(channelId));
         channels.push(tch);
-        void tch.subscribe(RT.TYPING, (m) => {
-          const who = m.clientId;
-          if (!who || who === myId) return;
-          const userName = (m.data as { userName?: string } | undefined)?.userName ?? 'Someone';
-          store().setTyping(channelId, who, userName);
-          const key = `${channelId}:${who}`;
-          const prev = timers.get(key);
-          if (prev) clearTimeout(prev);
-          timers.set(
-            key,
-            setTimeout(() => store().clearTyping(channelId, who), TYPING_AUTOCLEAR_MS)
-          );
-        }).catch(logSubErr);
-        void tch.subscribe(RT.STOP_TYPING, (m) => {
-          const who = m.clientId;
-          if (who) store().clearTyping(channelId, who);
-        }).catch(logSubErr);
+        void tch
+          .subscribe(RT.TYPING, (m) => {
+            const who = m.clientId;
+            if (!who || who === myId) return;
+            const userName = (m.data as { userName?: string } | undefined)?.userName ?? 'Someone';
+            store().setTyping(channelId, who, userName);
+            const key = `${channelId}:${who}`;
+            const prev = timers.get(key);
+            if (prev) clearTimeout(prev);
+            timers.set(
+              key,
+              setTimeout(() => store().clearTyping(channelId, who), TYPING_AUTOCLEAR_MS)
+            );
+          })
+          .catch(logSubErr);
+        void tch
+          .subscribe(RT.STOP_TYPING, (m) => {
+            const who = m.clientId;
+            if (who) store().clearTyping(channelId, who);
+          })
+          .catch(logSubErr);
       }
     })();
 

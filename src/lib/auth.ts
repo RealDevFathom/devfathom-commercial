@@ -1,11 +1,15 @@
 import NextAuth, { CredentialsSignin } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import { compare } from 'bcryptjs';
-import { db } from '@/lib/db';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ipFromHeaders, recordAuthAudit } from '@/server/audit';
 import { rateLimit } from '@/lib/rate-limit';
 import { verifyTotp, hashRecoveryCode } from '@/lib/totp';
+import { isTenantLifecycleAccessible, resolveOrganizationForRequest } from '@/lib/tenancy/host';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { parseCookie } from '@/lib/platform/security';
+import { SSO_TICKET_COOKIE } from '@/lib/sso';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -40,6 +44,13 @@ const SIGNIN_ALLOWED_STATUSES = new Set(['ACTIVE', 'ON_LEAVE']);
 // becomes an account-enumeration oracle for attackers who don't know the password.
 class SuspendedError extends CredentialsSignin {
   code = 'suspended';
+}
+
+class OrganizationSuspendedError extends CredentialsSignin {
+  code = 'organization_suspended';
+}
+class SsoRequiredError extends CredentialsSignin {
+  code = 'sso_required';
 }
 
 // IMP-AUTH-02: thrown ONLY after the password is verified correct, so 2FA state is
@@ -100,132 +111,258 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        const user = await db.user.findUnique({
-          where: { email },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            password: true,
-            role: true,
-            department: true,
-            title: true,
-            avatar: true,
-            status: true,
-            tokenVersion: true,
-            twoFactorEnabledAt: true,
-            twoFactorSecret: true,
-          },
-        });
-
-        // Always perform a bcrypt comparison — against a dummy hash when the
-        // account is absent — so timing does not reveal account existence.
-        const isValid = await compare(password, user?.password ?? DUMMY_PASSWORD_HASH);
-
-        // Uniform null result for "no such user" and "wrong password" — the two
-        // cases an attacker who doesn't know the password could probe. Crucially,
-        // a WRONG password against a deactivated account also lands here, so the
-        // "suspended" signal below can never be used to enumerate accounts.
-        if (!user || !isValid) {
-          // The client sees a uniform null, but the admin-only audit log records
-          // the precise reason (it never leaks back to the would-be attacker).
-          const reason = !user ? 'No such account' : 'Incorrect password';
+        const organization = await resolveOrganizationForRequest(request);
+        if (!organization) {
+          await compare(password, DUMMY_PASSWORD_HASH);
           recordAuthAudit({
             type: 'LOGIN_FAILED',
-            userId: user?.id ?? null,
-            name: user?.name ?? null,
             email,
-            role: user?.role ?? null,
             ip,
             userAgent,
-            reason,
+            reason: 'Unknown workspace host',
           });
           return null;
         }
 
-        // Correct password, but the account is not permitted to sign in
-        // (INACTIVE/INVITED). Only now — after the password is proven correct — do
-        // we reveal the suspended state, via a distinguishable error code that the
-        // login form turns into an actionable message.
-        if (!SIGNIN_ALLOWED_STATUSES.has(user.status)) {
+        return withTenantDb(organization.id, async (tenantDb) => {
+          const user = await tenantDb.user.findFirst({
+            where: { email },
+            select: {
+              id: true,
+              organizationId: true,
+              name: true,
+              email: true,
+              password: true,
+              role: true,
+              department: true,
+              title: true,
+              avatar: true,
+              status: true,
+              tokenVersion: true,
+              twoFactorEnabledAt: true,
+              twoFactorSecret: true,
+            },
+          });
+
+          // Always perform a bcrypt comparison — against a dummy hash when the
+          // account is absent — so timing does not reveal account existence.
+          const isValid = await compare(password, user?.password ?? DUMMY_PASSWORD_HASH);
+
+          // Uniform null result for "no such user" and "wrong password" — the two
+          // cases an attacker who doesn't know the password could probe. Crucially,
+          // a WRONG password against a deactivated account also lands here, so the
+          // "suspended" signal below can never be used to enumerate accounts.
+          if (!user || !isValid) {
+            // The client sees a uniform null, but the admin-only audit log records
+            // the precise reason (it never leaks back to the would-be attacker).
+            const reason = !user ? 'No such account' : 'Incorrect password';
+            recordAuthAudit({
+              type: 'LOGIN_FAILED',
+              organizationId: organization.id,
+              userId: user?.id ?? null,
+              name: user?.name ?? null,
+              email,
+              role: user?.role ?? null,
+              ip,
+              userAgent,
+              reason,
+            });
+            return null;
+          }
+
+          const enforcedConnection = await tenantDb.organizationIdentityConnection.findFirst({
+            where: { status: 'ACTIVE', enforceSso: true },
+            select: { id: true },
+          });
+          if (enforcedConnection) {
+            recordAuthAudit({
+              type: 'LOGIN_FAILED',
+              organizationId: organization.id,
+              userId: user.id,
+              name: user.name,
+              email,
+              role: user.role,
+              ip,
+              userAgent,
+              reason: 'Password sign-in disabled by SSO enforcement',
+            });
+            throw new SsoRequiredError();
+          }
+
+          // Correct password, but the account is not permitted to sign in
+          // (INACTIVE/INVITED). Only now — after the password is proven correct — do
+          // we reveal the suspended state, via a distinguishable error code that the
+          // login form turns into an actionable message.
+          if (!SIGNIN_ALLOWED_STATUSES.has(user.status)) {
+            recordAuthAudit({
+              type: 'LOGIN_FAILED',
+              organizationId: organization.id,
+              userId: user.id,
+              name: user.name,
+              email,
+              role: user.role,
+              ip,
+              userAgent,
+              reason: `Account is ${user.status}`,
+            });
+            throw new SuspendedError();
+          }
+
+          if (!isTenantLifecycleAccessible(organization.status)) {
+            recordAuthAudit({
+              type: 'LOGIN_FAILED',
+              organizationId: organization.id,
+              userId: user.id,
+              name: user.name,
+              email,
+              role: user.role,
+              ip,
+              userAgent,
+              reason: `Organization is ${organization.status}`,
+            });
+            throw new OrganizationSuspendedError();
+          }
+
+          // IMP-AUTH-02: second factor. Enforced AFTER the password is proven correct
+          // (so it never reveals whether an account exists or has 2FA). Accepts a TOTP
+          // code or a single-use recovery code.
+          if (user.twoFactorEnabledAt) {
+            const code = (parsed.data.totp ?? '').trim();
+            if (!code) {
+              recordAuthAudit({
+                type: 'LOGIN_FAILED',
+                organizationId: organization.id,
+                userId: user.id,
+                name: user.name,
+                email,
+                role: user.role,
+                ip,
+                userAgent,
+                reason: '2FA code required',
+              });
+              throw new TwoFactorRequiredError();
+            }
+            let ok = user.twoFactorSecret ? verifyTotp(user.twoFactorSecret, code) : false;
+            if (!ok) {
+              // Fall back to a recovery code: match an unused hash, then consume it
+              // atomically (the usedAt:null guard makes it single-use under races).
+              const codeHash = hashRecoveryCode(code);
+              const match = await tenantDb.twoFactorRecoveryCode.findFirst({
+                where: { userId: user.id, codeHash, usedAt: null },
+                select: { id: true },
+              });
+              if (match) {
+                const res = await tenantDb.twoFactorRecoveryCode.updateMany({
+                  where: { id: match.id, usedAt: null },
+                  data: { usedAt: new Date() },
+                });
+                ok = res.count === 1;
+              }
+            }
+            if (!ok) {
+              recordAuthAudit({
+                type: 'LOGIN_FAILED',
+                organizationId: organization.id,
+                userId: user.id,
+                name: user.name,
+                email,
+                role: user.role,
+                ip,
+                userAgent,
+                reason: 'Invalid 2FA code',
+              });
+              throw new TwoFactorInvalidError();
+            }
+          }
+
+          // Update last active
+          await tenantDb.user.update({
+            where: { id: user.id },
+            data: { lastActiveAt: new Date() },
+          });
+
           recordAuthAudit({
-            type: 'LOGIN_FAILED',
+            type: 'LOGIN',
+            organizationId: organization.id,
             userId: user.id,
             name: user.name,
-            email,
+            email: user.email,
             role: user.role,
             ip,
             userAgent,
-            reason: `Account is ${user.status}`,
           });
-          throw new SuspendedError();
-        }
 
-        // IMP-AUTH-02: second factor. Enforced AFTER the password is proven correct
-        // (so it never reveals whether an account exists or has 2FA). Accepts a TOTP
-        // code or a single-use recovery code.
-        if (user.twoFactorEnabledAt) {
-          const code = (parsed.data.totp ?? '').trim();
-          if (!code) {
-            recordAuthAudit({
-              type: 'LOGIN_FAILED', userId: user.id, name: user.name, email,
-              role: user.role, ip, userAgent, reason: '2FA code required',
-            });
-            throw new TwoFactorRequiredError();
-          }
-          let ok = user.twoFactorSecret ? verifyTotp(user.twoFactorSecret, code) : false;
-          if (!ok) {
-            // Fall back to a recovery code: match an unused hash, then consume it
-            // atomically (the usedAt:null guard makes it single-use under races).
-            const codeHash = hashRecoveryCode(code);
-            const match = await db.twoFactorRecoveryCode.findFirst({
-              where: { userId: user.id, codeHash, usedAt: null },
-              select: { id: true },
-            });
-            if (match) {
-              const res = await db.twoFactorRecoveryCode.updateMany({
-                where: { id: match.id, usedAt: null },
-                data: { usedAt: new Date() },
-              });
-              ok = res.count === 1;
-            }
-          }
-          if (!ok) {
-            recordAuthAudit({
-              type: 'LOGIN_FAILED', userId: user.id, name: user.name, email,
-              role: user.role, ip, userAgent, reason: 'Invalid 2FA code',
-            });
-            throw new TwoFactorInvalidError();
-          }
-        }
-
-        // Update last active
-        await db.user.update({
-          where: { id: user.id },
-          data: { lastActiveAt: new Date() },
+          return {
+            id: user.id,
+            organizationId: user.organizationId,
+            organizationSlug: organization.slug,
+            organizationStatus: organization.status,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            department: user.department,
+            title: user.title,
+            image: user.avatar,
+            status: user.status,
+            tokenVersion: user.tokenVersion,
+          };
         });
-
-        recordAuthAudit({
-          type: 'LOGIN',
-          userId: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          ip,
-          userAgent,
+      },
+    }),
+    Credentials({
+      id: 'enterprise',
+      name: 'Enterprise SSO',
+      credentials: {},
+      async authorize(_credentials, request) {
+        const rawTicket = parseCookie(request.headers.get('cookie'), SSO_TICKET_COOKIE);
+        if (!rawTicket || rawTicket.length < 32 || rawTicket.length > 128) return null;
+        const organization = await resolveOrganizationForRequest(request);
+        if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
+        return withTenantDb(organization.id, async (tenantDb) => {
+          const ticket = await tenantDb.tenantSsoTicket.findFirst({
+            where: {
+              tokenHash: createHash('sha256').update(rawTicket).digest('hex'),
+              usedAt: null,
+              expiresAt: { gt: new Date() },
+            },
+            include: { user: true },
+          });
+          if (!ticket || !SIGNIN_ALLOWED_STATUSES.has(ticket.user.status)) return null;
+          const consumed = await tenantDb.tenantSsoTicket.updateMany({
+            where: { id: ticket.id, usedAt: null },
+            data: { usedAt: new Date() },
+          });
+          if (consumed.count !== 1) return null;
+          await tenantDb.user.update({
+            where: { id: ticket.user.id },
+            data: { lastActiveAt: new Date() },
+          });
+          recordAuthAudit({
+            type: 'LOGIN',
+            organizationId: organization.id,
+            userId: ticket.user.id,
+            name: ticket.user.name,
+            email: ticket.user.email,
+            role: ticket.user.role,
+            ip: ipFromHeaders(request.headers),
+            userAgent: request.headers.get('user-agent'),
+            reason: 'Enterprise SSO',
+          });
+          return {
+            id: ticket.user.id,
+            organizationId: ticket.user.organizationId,
+            organizationSlug: organization.slug,
+            organizationStatus: organization.status,
+            name: ticket.user.name,
+            email: ticket.user.email,
+            role: ticket.user.role,
+            department: ticket.user.department,
+            title: ticket.user.title,
+            image: ticket.user.avatar,
+            status: ticket.user.status,
+            tokenVersion: ticket.user.tokenVersion,
+          };
         });
-
-        return {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          department: user.department,
-          title: user.title,
-          image: user.avatar,
-          status: user.status,
-          tokenVersion: user.tokenVersion,
-        };
       },
     }),
   ],
@@ -236,6 +373,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // so on-leave staff are gated truthfully from the first request.
       if (user) {
         token.id = user.id;
+        token.organizationId = (user as Record<string, unknown>).organizationId as string;
+        token.organizationSlug = (user as Record<string, unknown>).organizationSlug as string;
+        token.organizationStatus = (user as Record<string, unknown>).organizationStatus as string;
         token.role = (user as Record<string, unknown>).role as string;
         token.department = (user as Record<string, unknown>).department as string;
         token.title = (user as Record<string, unknown>).title as string;
@@ -252,12 +392,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // unrevocable. Fail OPEN on DB errors to avoid mass lockout on a blip.
       const lastValidated = typeof token.lastValidatedAt === 'number' ? token.lastValidatedAt : 0;
       const stale = Date.now() - lastValidated > REVALIDATE_AFTER_MS;
-      if (token.id && stale) {
+      if (token.id && token.organizationId && stale) {
         try {
-          const fresh = await db.user.findUnique({
-            where: { id: token.id as string },
-            select: { role: true, status: true, department: true, title: true, tokenVersion: true },
-          });
+          const fresh = await withTenantDb(token.organizationId as string, (tenantDb) =>
+            tenantDb.user.findUnique({
+              where: { id: token.id as string },
+              select: {
+                role: true,
+                status: true,
+                department: true,
+                title: true,
+                tokenVersion: true,
+                organization: { select: { slug: true, status: true } },
+              },
+            })
+          );
           if (!fresh) {
             token.status = 'DELETED';
           } else if (fresh.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
@@ -271,10 +420,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             token.status = fresh.status;
             token.department = fresh.department;
             token.title = fresh.title;
+            token.organizationSlug = fresh.organization.slug;
+            token.organizationStatus = fresh.organization.status;
+            if (!isTenantLifecycleAccessible(fresh.organization.status)) {
+              token.status = 'ORGANIZATION_SUSPENDED';
+            }
           }
           token.lastValidatedAt = Date.now();
         } catch {
-          // Transient DB issue: keep existing claims, retry on the next request.
+          // Tenant authorization fails closed if its backing state cannot be
+          // revalidated. A fresh sign-in can recover after a transient outage.
+          token.status = 'REVALIDATION_FAILED';
+          token.lastValidatedAt = Date.now();
         }
       }
       return token;
@@ -282,6 +439,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as string;
+        session.user.organizationId = token.organizationId as string;
+        session.user.organizationSlug = token.organizationSlug as string;
+        session.user.organizationStatus = token.organizationStatus as string;
         session.user.role = token.role as string;
         session.user.department = token.department as string;
         session.user.title = token.title as string;
@@ -299,6 +459,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (token?.id) {
         recordAuthAudit({
           type: 'LOGOUT',
+          organizationId:
+            typeof token.organizationId === 'string' ? token.organizationId : undefined,
           userId: token.id as string,
           role: typeof token.role === 'string' ? token.role : null,
         });

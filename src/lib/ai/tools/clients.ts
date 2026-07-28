@@ -15,7 +15,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { db } from '@/lib/db';
 import { appUrl, templates } from '@/lib/email';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 
@@ -27,15 +26,14 @@ const badWebsite = (url?: string | null): boolean =>
   !!url && url.trim() !== '' && !/^https?:\/\//i.test(url.trim());
 
 export function buildClientsTools(h: AssistantHelpers): ToolSet {
+  const { db } = h;
   const tools: ToolSet = {};
 
   // Non-admins may only see clients they touch through a shared project; admins
   // see everything (undefined predicate). Writes are admin-only, so for those
   // this resolves to `undefined` (all clients) anyway.
   const clientVisibility = (): Prisma.ClientWhereInput | undefined =>
-    h.isAdmin
-      ? undefined
-      : { projects: { some: { members: { some: { userId: h.ctx.userId } } } } };
+    h.isAdmin ? undefined : { projects: { some: { members: { some: { userId: h.ctx.userId } } } } };
 
   /** Resolve a free-text client name to one client the viewer can see. */
   const resolveClient = async (name: string) => {
@@ -249,7 +247,7 @@ export function buildClientsTools(h: AssistantHelpers): ToolSet {
         'Update an existing client (found by name): rename it, change its website / industry / location / timezone / notes, or set its status (ACTIVE / INACTIVE / PROSPECT). ADMIN ONLY. Use for "mark <client> as inactive", "update <client>\'s industry", "rename <client> to <new name>". Give the client name plus the fields to change.',
       inputSchema: z.object({
         name: z.string().describe('The client to update (fuzzy name match)'),
-        newName: z.string().min(1).nullish().describe("Rename the client to this"),
+        newName: z.string().min(1).nullish().describe('Rename the client to this'),
         website: z.string().nullish(),
         industry: z.string().nullish(),
         location: z.string().nullish(),
@@ -418,7 +416,7 @@ export function buildClientsTools(h: AssistantHelpers): ToolSet {
 
     tools.deleteClientContact = tool({
       description:
-        "Remove a contact from a client, identified by the client name and the contact's name. ADMIN ONLY. Use for \"remove <contact> from <client>\", \"delete <client>'s contact <name>\".",
+        'Remove a contact from a client, identified by the client name and the contact\'s name. ADMIN ONLY. Use for "remove <contact> from <client>", "delete <client>\'s contact <name>".',
       inputSchema: z.object({
         clientName: z.string().describe('The client the contact belongs to (fuzzy name match)'),
         contactName: z.string().describe('The contact to remove (fuzzy name match)'),
@@ -436,8 +434,7 @@ export function buildClientsTools(h: AssistantHelpers): ToolSet {
           where: { clientId: r.value.id },
           select: { id: true, name: true },
         });
-        if (contacts.length === 0)
-          return { error: `${r.value.name} has no contacts to remove.` };
+        if (contacts.length === 0) return { error: `${r.value.name} has no contacts to remove.` };
 
         const cr = h.resolveNamed(contactName, contacts);
         if (cr.kind === 'notfound')

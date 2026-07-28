@@ -5,14 +5,14 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import crypto from 'node:crypto';
-import { auth } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await resolveTenantActor({ request });
+    if (!actor?.session.user?.id) {
       return new Response('Unauthorized', { status: 401 });
     }
 
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
 
     // RT-05: write to a PRIVATE dir (outside public/) and return an authenticated
     // delivery URL, so files are no longer world-readable by raw URL.
-    const uploadsDir = join(process.cwd(), 'private-uploads');
+    const uploadsDir = join(process.cwd(), 'private-uploads', actor.organization.id);
     await mkdir(uploadsDir, { recursive: true });
     await writeFile(join(uploadsDir, filename), Buffer.from(await file.arrayBuffer()));
 

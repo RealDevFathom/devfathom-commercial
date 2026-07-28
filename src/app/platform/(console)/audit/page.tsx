@@ -1,0 +1,102 @@
+import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
+import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+
+export default async function PlatformAuditPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; outcome?: string }>;
+}) {
+  const query = await searchParams;
+  const q = query.q?.trim().slice(0, 100);
+  const success =
+    query.outcome === 'success' ? true : query.outcome === 'failure' ? false : undefined;
+  const logs = await withPlatformDb((db) =>
+    db.platformAuditLog.findMany({
+      where: {
+        ...(success === undefined ? {} : { success }),
+        ...(q
+          ? {
+              OR: [
+                { action: { contains: q, mode: 'insensitive' } },
+                { targetType: { contains: q, mode: 'insensitive' } },
+                { targetId: { contains: q, mode: 'insensitive' } },
+                { reason: { contains: q, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      include: { organization: { select: { displayName: true } } },
+      take: 500,
+    })
+  );
+
+  return (
+    <div className="mx-auto max-w-[1480px]">
+      <PlatformPageHeading
+        eyebrow="Security / immutable operations record"
+        title="Audit ledger"
+        description="Platform commands, support entry, lifecycle changes, denied operations, and actor attribution. Sensitive values are redacted before persistence."
+      />
+      <form className="mt-6 grid gap-3 border border-border-default bg-surface-card p-4 sm:grid-cols-[1fr_200px_auto]">
+        <input
+          name="q"
+          defaultValue={q}
+          placeholder="Search action, target, or reason"
+          className="h-10 border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
+        />
+        <select
+          name="outcome"
+          defaultValue={query.outcome ?? ''}
+          className="h-10 border border-border-default bg-surface-card px-3 text-sm"
+        >
+          <option value="">All outcomes</option>
+          <option value="success">Success</option>
+          <option value="failure">Failure</option>
+        </select>
+        <button className="h-10 bg-abyss-900 px-4 text-xs font-semibold text-paper-white">
+          Filter
+        </button>
+      </form>
+      <div className="mt-6 overflow-x-auto border border-border-default bg-surface-card">
+        <table className="w-full min-w-[1000px] text-left">
+          <thead className="bg-surface-sunken/60 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
+            <tr>
+              <th className="px-4 py-3">Time</th>
+              <th className="px-4 py-3">Action</th>
+              <th className="px-4 py-3">Organization</th>
+              <th className="px-4 py-3">Actor</th>
+              <th className="px-4 py-3">Target</th>
+              <th className="px-4 py-3">Outcome</th>
+              <th className="px-4 py-3">Reason / error</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-subtle">
+            {logs.map((log) => (
+              <tr key={log.id}>
+                <td className="px-4 py-4 font-mono text-[9px]">{log.createdAt.toLocaleString()}</td>
+                <td className="px-4 py-4 text-xs font-semibold">{log.action}</td>
+                <td className="px-4 py-4 text-xs">{log.organization?.displayName ?? 'Platform'}</td>
+                <td className="px-4 py-4 font-mono text-[9px]">
+                  {log.actorPlatformUserId ?? log.actorTenantUserId ?? 'Anonymous'}
+                </td>
+                <td className="px-4 py-4">
+                  <p className="text-xs">{log.targetType ?? '—'}</p>
+                  <p className="mt-1 max-w-40 truncate font-mono text-[8px] text-text-muted">
+                    {log.targetId}
+                  </p>
+                </td>
+                <td className="px-4 py-4">
+                  <PlatformStatus value={log.success ? 'SUCCEEDED' : 'FAILED'} />
+                </td>
+                <td className="max-w-sm px-4 py-4 text-xs text-text-muted">
+                  {log.error ?? log.reason ?? '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { canAccessProject, projectIdOfTask } from '@/lib/authz';
@@ -10,13 +9,13 @@ export const GET = withApiAuth(
   async (authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
     // Object-level authz: resolve the task's project and require access.
-    const projectId = await projectIdOfTask(db, id);
+    const projectId = await projectIdOfTask(authCtx.db, id);
     if (!projectId) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-    if (!(await canAccessProject(db, authCtx.userId, authCtx.userRole, projectId))) {
+    if (!(await canAccessProject(authCtx.db, authCtx.userId, authCtx.userRole, projectId))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const comments = await db.taskComment.findMany({
+    const comments = await authCtx.db.taskComment.findMany({
       where: { taskId: id, parentId: null },
       orderBy: { createdAt: 'asc' },
       include: {
@@ -43,8 +42,8 @@ export const POST = withApiAuth(
   async (authCtx, request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
     const __j = await readJson(request); // REST-05
-  if (!__j.ok) return __j.response;
-  const body = __j.data;
+    if (!__j.ok) return __j.response;
+    const body = __j.data;
     const parsed = createCommentSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
@@ -54,13 +53,13 @@ export const POST = withApiAuth(
     }
 
     // Object-level authz: resolve the task's project and require access.
-    const projectId = await projectIdOfTask(db, id);
+    const projectId = await projectIdOfTask(authCtx.db, id);
     if (!projectId) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-    if (!(await canAccessProject(db, authCtx.userId, authCtx.userRole, projectId))) {
+    if (!(await canAccessProject(authCtx.db, authCtx.userId, authCtx.userRole, projectId))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const comment = await db.taskComment.create({
+    const comment = await authCtx.db.taskComment.create({
       data: {
         content: parsed.data.content,
         taskId: id,

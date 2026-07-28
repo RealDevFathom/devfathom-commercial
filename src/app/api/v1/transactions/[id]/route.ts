@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 
@@ -30,11 +29,11 @@ const updateSchema = z.object({
 
 export const PATCH = withApiAuth(
   'finance:write',
-  async (_ctx, request, ctx: { params: Promise<{ id: string }> }) => {
+  async (authCtx, request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
     const __j = await readJson(request); // REST-05
-  if (!__j.ok) return __j.response;
-  const body = __j.data;
+    if (!__j.ok) return __j.response;
+    const body = __j.data;
     const parsed = updateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
@@ -42,11 +41,14 @@ export const PATCH = withApiAuth(
         { status: 400 }
       );
     }
-    const existing = await db.transaction.findUnique({ where: { id }, select: { id: true } });
+    const existing = await authCtx.db.transaction.findUnique({
+      where: { id },
+      select: { id: true },
+    });
     if (!existing) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
 
     const { date, ...data } = parsed.data;
-    const transaction = await db.transaction.update({
+    const transaction = await authCtx.db.transaction.update({
       where: { id },
       data: { ...data, ...(date && { date: new Date(date) }) },
     });
@@ -56,11 +58,14 @@ export const PATCH = withApiAuth(
 
 export const DELETE = withApiAuth(
   'finance:write',
-  async (_ctx, _request, ctx: { params: Promise<{ id: string }> }) => {
+  async (authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
-    const existing = await db.transaction.findUnique({ where: { id }, select: { id: true } });
+    const existing = await authCtx.db.transaction.findUnique({
+      where: { id },
+      select: { id: true },
+    });
     if (!existing) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
-    await db.transaction.delete({ where: { id } });
+    await authCtx.db.transaction.delete({ where: { id } });
     return NextResponse.json({ success: true });
   }
 );

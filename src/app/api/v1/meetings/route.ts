@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 
@@ -8,7 +7,7 @@ export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   const url = new URL(request.url);
   const limitParam = url.searchParams.get('limit');
   const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
-  const meetings = await db.meeting.findMany({
+  const meetings = await ctx.db.meeting.findMany({
     where: { attendees: { some: { userId: ctx.userId } } },
     take: limit,
     include: { attendees: { include: { user: { select: { id: true, name: true } } } } },
@@ -43,12 +42,12 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   const allAttendees = [...new Set([ctx.userId, ...attendeeIds])];
 
   // REST-07: validate attendee ids exist before insert (bad id → raw FK 500).
-  const foundAttendees = await db.user.count({ where: { id: { in: allAttendees } } });
+  const foundAttendees = await ctx.db.user.count({ where: { id: { in: allAttendees } } });
   if (foundAttendees !== allAttendees.length) {
     return NextResponse.json({ error: 'One or more attendeeIds do not exist.' }, { status: 400 });
   }
 
-  const meeting = await db.meeting.create({
+  const meeting = await ctx.db.meeting.create({
     data: {
       ...rest,
       startTime: new Date(startTime),

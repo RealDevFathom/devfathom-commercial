@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
 
-export const GET = withApiAuth('finance:read', async (_ctx, request) => {
+export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
   const status = url.searchParams.get('status');
   const clientId = url.searchParams.get('clientId');
@@ -17,7 +16,7 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   if (status) where.status = status;
   if (clientId) where.clientId = clientId;
 
-  const invoices = await db.invoice.findMany({
+  const invoices = await ctx.db.invoice.findMany({
     where,
     take: limit,
     ...(cursor && { cursor: { id: cursor }, skip: 1 }),
@@ -81,12 +80,12 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
 
   // FIN-09: per-year sequence — scope the count to this year so it resets to -001.
   const year = new Date().getFullYear();
-  const count = await db.invoice.count({
+  const count = await ctx.db.invoice.count({
     where: { invoiceNumber: { startsWith: `INV-${year}-` } },
   });
   const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
 
-  const invoice = await db.invoice.create({
+  const invoice = await ctx.db.invoice.create({
     data: {
       invoiceNumber,
       clientId: parsed.data.clientId,
@@ -103,7 +102,7 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
     include: { client: { select: { name: true } } },
   });
 
-  logActivity(db, ctx.userId, {
+  logActivity(ctx.db, ctx.userId, {
     type: 'invoice_created',
     message: `created invoice ${invoice.invoiceNumber} for ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
     entityType: 'Invoice',

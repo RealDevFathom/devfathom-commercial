@@ -8,7 +8,8 @@ export const metadata: Metadata = {
 };
 
 export default async function DashboardPage() {
-  const { helpers } = await createSSRHelpers();
+  const ssr = await createSSRHelpers();
+  const helpers = ssr?.helpers;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
@@ -21,18 +22,20 @@ export default async function DashboardPage() {
   //
   // `.prefetch()` never throws — react-query captures errors into the cache, so
   // an UNAUTHORIZED/FORBIDDEN result degrades gracefully to the client fetch.
-  await Promise.all([
-    helpers.dashboard.getStats.prefetch(),
-    helpers.dashboard.getRecentActivity.prefetch(),
-    helpers.dashboard.getUpcomingDeadlines.prefetch(),
-    helpers.dashboard.getProjectCards.prefetch(),
-    helpers.dashboard.getMyTasks.prefetch(),
-    helpers.meetings.getUpcoming.prefetch(),
-    helpers.team.getAll.prefetch(),
-  ]);
+  if (helpers) {
+    await Promise.all([
+      helpers.dashboard.getStats.prefetch(),
+      helpers.dashboard.getRecentActivity.prefetch(),
+      helpers.dashboard.getUpcomingDeadlines.prefetch(),
+      helpers.dashboard.getProjectCards.prefetch(),
+      helpers.dashboard.getMyTasks.prefetch(),
+      helpers.meetings.getUpcoming.prefetch(),
+      helpers.team.getAll.prefetch(),
+    ]);
+  }
 
   return (
-    <HydrationBoundary state={helpers.dehydrate()}>
+    <HydrationBoundary state={helpers?.dehydrate()}>
       <DashboardContent />
     </HydrationBoundary>
   );

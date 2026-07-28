@@ -1,0 +1,119 @@
+import { z } from 'zod';
+import {
+  requestBaseUrl,
+  recordScimEvent,
+  SCIM_LIST_SCHEMA,
+  scimError,
+  scimJson,
+  scimRole,
+  scimUser,
+  withScimAuth,
+} from '@/lib/scim';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+
+const createUserSchema = z.object({
+  schemas: z.array(z.string()).optional(),
+  externalId: z.string().max(255).optional(),
+  userName: z.email().max(254),
+  displayName: z.string().trim().min(1).max(200).optional(),
+  name: z.object({ formatted: z.string().trim().min(1).max(200).optional() }).optional(),
+  active: z.boolean().default(true),
+  roles: z.array(z.object({ value: z.string() })).optional(),
+});
+
+function filterEmail(value: string | null): string | null {
+  if (!value) return null;
+  const match = /^userName\s+eq\s+"([^"]+)"$/i.exec(value.trim());
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+export async function GET(request: Request) {
+  return withScimAuth(request, async (ctx) => {
+    const url = new URL(request.url);
+    const startIndex = Math.max(1, Number(url.searchParams.get('startIndex') ?? 1) || 1);
+    const count = Math.min(200, Math.max(1, Number(url.searchParams.get('count') ?? 100) || 100));
+    const email = filterEmail(url.searchParams.get('filter'));
+    if (url.searchParams.has('filter') && !email) {
+      return scimError(400, 'Only userName eq "email" filters are supported.', 'invalidFilter');
+    }
+    const where = email ? { email } : {};
+    const [users, totalResults] = await Promise.all([
+      ctx.db.user.findMany({
+        where,
+        orderBy: { createdAt: 'asc' },
+        skip: startIndex - 1,
+        take: count,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+      ctx.db.user.count({ where }),
+    ]);
+    const baseUrl = requestBaseUrl(request);
+    return scimJson({
+      schemas: [SCIM_LIST_SCHEMA],
+      totalResults,
+      startIndex,
+      itemsPerPage: users.length,
+      Resources: users.map((user) => scimUser(user, baseUrl)),
+    });
+  });
+}
+
+export async function POST(request: Request) {
+  return withScimAuth(request, async (ctx) => {
+    try {
+      const input = createUserSchema.parse(await request.json());
+      const email = input.userName.trim().toLowerCase();
+      const existing = await ctx.db.user.findFirst({ where: { email }, select: { id: true } });
+      if (existing)
+        return scimError(409, 'A user with this userName already exists.', 'uniqueness');
+      const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, ctx.db);
+      if (entitlements.activeSeats >= entitlements.seatLimit) {
+        return scimError(403, 'The organization seat limit has been reached.');
+      }
+      const role = scimRole(input.roles?.[0]?.value);
+      const user = await ctx.db.user.create({
+        data: {
+          organizationId: ctx.organizationId,
+          name: input.displayName ?? input.name?.formatted ?? email.split('@')[0]!,
+          email,
+          password: null,
+          role,
+          department: role === 'ADMIN' ? 'LEADERSHIP' : 'ENGINEERING',
+          title: role === 'ADMIN' ? 'Organization administrator' : 'Team member',
+          status: input.active ? 'ACTIVE' : 'INACTIVE',
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+      const body = scimUser(user, requestBaseUrl(request));
+      await recordScimEvent(ctx, request, {
+        operation: 'CREATE',
+        resourceType: 'User',
+        externalId: input.externalId,
+        status: 'SUCCEEDED',
+        payload: { userId: user.id, userName: user.email },
+      });
+      return scimJson(body, 201, { Location: body.meta.location, ETag: body.meta.version });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return scimError(400, error.issues[0]?.message ?? 'Invalid SCIM user.', 'invalidValue');
+      }
+      throw error;
+    }
+  });
+}

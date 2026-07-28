@@ -53,7 +53,7 @@ export const passwordResetRouter = router({
         });
       }
 
-      const user = await ctx.db.user.findUnique({
+      const user = await ctx.db.user.findFirst({
         where: { email },
         select: { id: true, name: true, email: true, status: true, password: true },
       });

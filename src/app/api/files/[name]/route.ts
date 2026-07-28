@@ -10,8 +10,8 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { auth } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 // Kept OUTSIDE public/ so the platform never serves these statically.
 const UPLOAD_DIR = join(process.cwd(), 'private-uploads');
@@ -33,37 +33,43 @@ const MIME: Record<string, string> = {
   mp3: 'audio/mpeg',
 };
 
-export async function GET(_request: Request, ctx: { params: Promise<{ name: string }> }) {
-  const session = await auth();
-  if (!session?.user?.id) {
+export async function GET(request: Request, ctx: { params: Promise<{ name: string }> }) {
+  const actor = await resolveTenantActor({ request });
+  if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
+  const session = actor.session;
 
   const { name } = await ctx.params;
   // Defense-in-depth against path traversal — only a bare filename is valid.
   if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
     return new Response('Bad request', { status: 400 });
   }
+  const organization = actor.organization;
 
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
   // leaks a private-channel/DM file to any signed-in user. Non-chat uploads
   // (project files, avatars, client logos) keep the session-only gate; they have
   // their own visibility model and aren't in this ticket's scope.
-  const attachment = await db.messageAttachment.findFirst({
-    where: { url: '/api/files/' + name },
-    select: { message: { select: { channelId: true } } },
-  });
+  const attachment = await withTenantDb(organization.id, (db) =>
+    db.messageAttachment.findFirst({
+      where: { url: '/api/files/' + name },
+      select: { message: { select: { channelId: true } } },
+    })
+  );
   if (attachment) {
-    const member = await db.channelMember.findUnique({
-      where: {
-        channelId_userId: {
-          channelId: attachment.message.channelId,
-          userId: session.user.id,
+    const member = await withTenantDb(organization.id, (db) =>
+      db.channelMember.findUnique({
+        where: {
+          channelId_userId: {
+            channelId: attachment.message.channelId,
+            userId: session.user.id,
+          },
         },
-      },
-      select: { id: true },
-    });
+        select: { id: true },
+      })
+    );
     if (!member) {
       // 404 (not 403) so non-members can't even confirm the file exists.
       return new Response('Not found', { status: 404 });
@@ -74,7 +80,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ name: stri
   const contentType = MIME[ext] ?? 'application/octet-stream';
 
   try {
-    const data = await readFile(join(UPLOAD_DIR, name));
+    const data = await readFile(join(UPLOAD_DIR, organization.id, name));
     return new Response(data, {
       headers: {
         'Content-Type': contentType,

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth, hasScope } from '@/lib/api-auth';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
@@ -18,7 +17,7 @@ export const GET = withApiAuth('clients:read', async (ctx, request) => {
   const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
   // REST-01: only surface the invoice count to tokens that also hold finance:read.
   const includeFinance = hasScope(ctx, 'finance:read');
-  const clients = await db.client.findMany({
+  const clients = await ctx.db.client.findMany({
     take: limit,
     include: {
       contacts: true,
@@ -51,9 +50,9 @@ export const POST = withApiAuth('clients:write', async (ctx, request) => {
       { status: 400 }
     );
   }
-  const client = await db.client.create({ data: parsed.data });
+  const client = await ctx.db.client.create({ data: parsed.data });
 
-  logActivity(db, ctx.userId, {
+  logActivity(ctx.db, ctx.userId, {
     type: 'client_created',
     message: `added client ${client.name}`,
     entityType: 'Client',

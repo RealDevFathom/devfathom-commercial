@@ -20,7 +20,7 @@
  */
 import type { Tool } from 'ai';
 import { Prisma } from '@/generated/prisma/client';
-import { db } from '@/lib/db';
+import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import * as authz from '@/lib/authz';
 import {
   can as abacCan,
@@ -34,6 +34,7 @@ import { recordAudit, type AuditOperationT } from '@/server/audit';
 import { notify, type NotifyArgs } from '@/lib/notifications';
 
 export type AssistantContext = {
+  organizationId: string;
   userId: string;
   role: string;
   name?: string | null;
@@ -143,7 +144,10 @@ export function resolveNamed<T extends NamedRow>(query: string, rows: T[]): Reso
 
 export type AssistantHelpers = ReturnType<typeof createAssistantHelpers>;
 
-export function createAssistantHelpers(ctx: AssistantContext) {
+export function createAssistantHelpers(
+  ctx: AssistantContext,
+  db: ScopedDb = createTenantDb(ctx.organizationId)
+) {
   const subject: Subject = subjectFromSession({
     id: ctx.userId,
     role: ctx.role,
@@ -217,9 +221,16 @@ export function createAssistantHelpers(ctx: AssistantContext) {
     const strong = scored.filter((s) => s.score >= 70);
     if (strong.length === 1) return { kind: 'resolved', value: strong[0].u };
     if (strong.length > 1)
-      return { kind: 'ambiguous', candidates: strong.slice(0, 6).map((s) => `${s.u.name} (${s.u.title})`) };
-    if (scored.length === 1) return { kind: 'resolved', value: scored[0].u, interpreted: scored[0].u.name };
-    return { kind: 'ambiguous', candidates: scored.slice(0, 6).map((s) => `${s.u.name} (${s.u.title})`) };
+      return {
+        kind: 'ambiguous',
+        candidates: strong.slice(0, 6).map((s) => `${s.u.name} (${s.u.title})`),
+      };
+    if (scored.length === 1)
+      return { kind: 'resolved', value: scored[0].u, interpreted: scored[0].u.name };
+    return {
+      kind: 'ambiguous',
+      candidates: scored.slice(0, 6).map((s) => `${s.u.name} (${s.u.title})`),
+    };
   };
 
   /** ADMIN or a member of the project — for reads + member-level writes. */
@@ -253,6 +264,7 @@ export function createAssistantHelpers(ctx: AssistantContext) {
     result?: unknown;
   }): void => {
     recordAudit({
+      organizationId: ctx.organizationId,
       source: 'SYSTEM',
       actorType: 'USER',
       actorId: ctx.userId,

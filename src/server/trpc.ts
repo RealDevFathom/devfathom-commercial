@@ -1,9 +1,14 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
+import type { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
-import { auth } from '@/lib/auth';
-import { db } from '@/lib/db';
 import { can, subjectFromSession, ACTIVE_STATUSES, type Action } from '@/lib/abac';
+import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TenantOrganization } from '@/lib/tenancy/host';
+import type { SupportIdentity } from '@/lib/tenancy/support-session';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { moduleForProcedure } from '@/lib/module-catalog';
 import {
   type AuditDetail,
   ipFromHeaders,
@@ -16,16 +21,37 @@ import {
  * it with no args. We capture request metadata (IP, user-agent) when present so
  * the audit layer can record *where* an action came from.
  */
-export const createTRPCContext = async (opts?: { req?: Request; session?: Session | null }) => {
+export const createTRPCContext = async (opts?: {
+  req?: Request;
+  session?: Session | null;
+  db?: ScopedDb;
+  organization?: TenantOrganization;
+  support?: SupportIdentity | null;
+}) => {
   // Route adapters can execute their context factory after Next's request
   // AsyncLocalStorage scope has been released. When the route already resolved
   // the session, use it instead of calling auth() again outside request scope.
-  const session = opts && 'session' in opts ? opts.session : await auth();
+  const explicitSession = opts && 'session' in opts ? opts.session : undefined;
+  const actor =
+    explicitSession !== undefined && opts?.organization
+      ? null
+      : await resolveTenantActor({ request: opts?.req, session: explicitSession });
+  const session = explicitSession !== undefined ? explicitSession : (actor?.session ?? null);
+  const organization = opts?.organization ?? actor?.organization ?? null;
   const headers = opts?.req?.headers ?? null;
+  const organizationId = organization?.id ?? session?.user?.organizationId;
+  if (!organizationId) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+  }
+  const scopedDb = opts?.db ?? createTenantDb(organizationId);
+  const entitlements = await resolveOrganizationEntitlements(organizationId, scopedDb);
 
   return {
-    db,
+    db: scopedDb,
+    entitlements,
     session,
+    organization,
+    support: opts?.support ?? actor?.support ?? null,
     requestMeta: {
       ip: ipFromHeaders(headers),
       userAgent: headers?.get('user-agent') ?? null,
@@ -120,6 +146,17 @@ const requireActiveUser = t.middleware(async ({ ctx, next }) => {
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
 
+const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
+  const moduleKey = moduleForProcedure(path);
+  if (moduleKey && !hasModule(ctx.entitlements, moduleKey)) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: `The ${moduleKey} module is not enabled for this organization.`,
+    });
+  }
+  return next();
+});
+
 // Capability guard — the ABAC engine is the single decision point. The role is
 // re-read from the DB by the jwt() callback, so a demoted user loses access
 // within the revalidation window. Resource-level conditions (e.g. "this
@@ -136,6 +173,7 @@ function requireCapability(action: Action) {
     assertActive(ctx.session.user);
     const subject = subjectFromSession(ctx.session.user);
     const allowed = await can(subject, action, undefined, {
+      db: ctx.db as Prisma.TransactionClient,
       source: 'TRPC',
       ip: ctx.requestMeta.ip,
     });
@@ -150,20 +188,29 @@ function requireCapability(action: Action) {
 }
 
 // Protected procedure — audit (outer) wraps the auth guard.
-export const protectedProcedure = t.procedure.use(auditMutations).use(requireActiveUser);
+export const protectedProcedure = t.procedure
+  .use(auditMutations)
+  .use(requireActiveUser)
+  .use(requireLicensedModule);
 
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
 // role ADMIN). Identical behaviour to the previous literal check, but the
 // decision flows through the one engine. Audits mutations AND sensitive reads.
-export const adminProcedure = t.procedure.use(auditAll).use(requireCapability('admin:access'));
+export const adminProcedure = t.procedure
+  .use(auditAll)
+  .use(requireCapability('admin:access'))
+  .use(requireLicensedModule);
 
 // HR console procedure — ADMIN or HR (policy: 'hr:access').
-export const hrProcedure = t.procedure.use(auditAll).use(requireCapability('hr:access'));
+export const hrProcedure = t.procedure
+  .use(auditAll)
+  .use(requireCapability('hr:access'))
+  .use(requireLicensedModule);
 
 /**
  * Generic capability-gated procedure. Use for any action in the ABAC catalogue,
  * e.g. `capabilityProcedure('resignation:readAll')`. Audits like adminProcedure.
  */
 export function capabilityProcedure(action: Action) {
-  return t.procedure.use(auditAll).use(requireCapability(action));
+  return t.procedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
 }

@@ -1,4 +1,4 @@
-import { db } from '@/lib/db';
+import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * ============================================================================
@@ -61,6 +61,10 @@ export interface AuditContext {
       name?: string | null;
       email?: string | null;
       role?: string | null;
+      organizationId?: string | null;
+      isSupportSession?: boolean;
+      supportSessionId?: string;
+      platformUserId?: string;
     } | null;
   } | null;
   requestMeta?: { ip?: string | null; userAgent?: string | null } | null;
@@ -109,7 +113,9 @@ export function toAuditJson(value: unknown, depth = 0): unknown {
   const t = typeof value;
   if (t === 'string') {
     const s = value as string;
-    return s.length > MAX_STRING ? `${s.slice(0, MAX_STRING)}…[+${s.length - MAX_STRING} chars]` : s;
+    return s.length > MAX_STRING
+      ? `${s.slice(0, MAX_STRING)}…[+${s.length - MAX_STRING} chars]`
+      : s;
   }
   if (t === 'number' || t === 'boolean') return value;
   if (t === 'bigint') return (value as bigint).toString();
@@ -291,6 +297,7 @@ export function annotateAudit(ctx: AuditContext, detail: AuditDetail): void {
 // ---------------------------------------------------------------------------
 
 export interface AuditRowInput {
+  organizationId?: string | null;
   actorType?: AuditActorTypeT;
   actorId?: string | null;
   actorName?: string | null;
@@ -327,42 +334,69 @@ export interface AuditRowInput {
  * columns (same pattern as logActivity).
  */
 export function recordAudit(row: AuditRowInput): void {
-  db.auditLog
-    .create({
-      data: {
-        actorType: row.actorType ?? 'USER',
-        actorId: row.actorId ?? null,
-        actorName: row.actorName ?? null,
-        actorEmail: row.actorEmail ?? null,
-        actorRole: row.actorRole ?? null,
-        tokenId: row.tokenId ?? null,
-        tokenName: row.tokenName ?? null,
-        source: row.source,
-        category: row.category,
-        operation: row.operation ?? 'OTHER',
-        action: row.action,
-        description: row.description ?? null,
-        targetType: row.targetType ?? null,
-        targetId: row.targetId ?? null,
-        targetLabel: row.targetLabel ?? null,
-        input: (row.input ?? undefined) as never,
-        changes: (row.changes ?? undefined) as never,
-        result: (row.result ?? undefined) as never,
-        metadata: (row.metadata ?? undefined) as never,
-        ip: row.ip ?? null,
-        userAgent: row.userAgent ?? null,
-        httpMethod: row.httpMethod ?? null,
-        path: row.path ?? null,
-        statusCode: row.statusCode ?? null,
-        outcome: row.outcome ?? 'SUCCESS',
-        errorCode: row.errorCode ?? null,
-        errorMessage: row.errorMessage ?? null,
-        durationMs: row.durationMs ?? null,
-      },
-    })
-    .catch((err) => {
-      console.error('[audit] failed to record', row.action, err);
-    });
+  const write = row.organizationId
+    ? withTenantDb(row.organizationId, (tenantDb) =>
+        tenantDb.auditLog.create({
+          data: {
+            organizationId: row.organizationId!,
+            actorType: row.actorType ?? 'USER',
+            actorId: row.actorId ?? null,
+            actorName: row.actorName ?? null,
+            actorEmail: row.actorEmail ?? null,
+            actorRole: row.actorRole ?? null,
+            tokenId: row.tokenId ?? null,
+            tokenName: row.tokenName ?? null,
+            source: row.source,
+            category: row.category,
+            operation: row.operation ?? 'OTHER',
+            action: row.action,
+            description: row.description ?? null,
+            targetType: row.targetType ?? null,
+            targetId: row.targetId ?? null,
+            targetLabel: row.targetLabel ?? null,
+            input: (row.input ?? undefined) as never,
+            changes: (row.changes ?? undefined) as never,
+            result: (row.result ?? undefined) as never,
+            metadata: (row.metadata ?? undefined) as never,
+            ip: row.ip ?? null,
+            userAgent: row.userAgent ?? null,
+            httpMethod: row.httpMethod ?? null,
+            path: row.path ?? null,
+            statusCode: row.statusCode ?? null,
+            outcome: row.outcome ?? 'SUCCESS',
+            errorCode: row.errorCode ?? null,
+            errorMessage: row.errorMessage ?? null,
+            durationMs: row.durationMs ?? null,
+          },
+        })
+      )
+    : withPlatformDb((platformDb) =>
+        platformDb.platformAuditLog.create({
+          data: {
+            actorTenantUserId: row.actorId ?? null,
+            action: row.action,
+            targetType: row.targetType ?? null,
+            targetId: row.targetId ?? null,
+            metadata: {
+              source: row.source,
+              category: row.category,
+              operation: row.operation ?? 'OTHER',
+              description: row.description ?? null,
+              input: toAuditJson(row.input),
+              outcome: row.outcome ?? 'SUCCESS',
+            } as never,
+            requestId: null,
+            success: (row.outcome ?? 'SUCCESS') === 'SUCCESS',
+            error: row.errorMessage ?? null,
+            ip: row.ip ?? null,
+            userAgent: row.userAgent ?? null,
+          },
+        })
+      );
+
+  void write.catch((err) => {
+    console.error('[audit] failed to record', row.action, err);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +418,7 @@ export function recordTrpcAudit(args: {
   const { code, message } = extractError(args.error);
 
   recordAudit({
+    organizationId: user?.organizationId ?? null,
     actorType: user?.id ? 'USER' : 'ANONYMOUS',
     actorId: user?.id ?? null,
     actorName: user?.name ?? null,
@@ -400,7 +435,16 @@ export function recordTrpcAudit(args: {
     input: detail.skipInput ? '[skipped]' : toAuditJson(args.input),
     changes: detail.changes ? toAuditJson(detail.changes) : undefined,
     result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
-    metadata: detail.metadata ? toAuditJson(detail.metadata) : undefined,
+    metadata: toAuditJson({
+      ...(detail.metadata ?? {}),
+      ...(user?.isSupportSession
+        ? {
+            supportSessionId: user.supportSessionId,
+            platformUserId: user.platformUserId,
+            actingAsTenantUserId: user.id,
+          }
+        : {}),
+    }),
     ip: args.ctx.requestMeta?.ip ?? null,
     userAgent: args.ctx.requestMeta?.userAgent ?? null,
     path: args.path,
@@ -418,7 +462,7 @@ export function recordTrpcAudit(args: {
  */
 export function recordRestAudit(args: {
   request: Request;
-  ctx: { userId: string; userRole: string; tokenId: string } | null;
+  ctx: { userId: string; userRole: string; tokenId: string; organizationId: string } | null;
   scope: string;
   status: number;
   error?: unknown;
@@ -433,13 +477,18 @@ export function recordRestAudit(args: {
       let actorEmail: string | null = null;
       let tokenName: string | null = null;
       if (args.ctx) {
-        const [u, tk] = await Promise.all([
-          db.user.findUnique({
-            where: { id: args.ctx.userId },
-            select: { name: true, email: true },
-          }),
-          db.apiToken.findUnique({ where: { id: args.ctx.tokenId }, select: { name: true } }),
-        ]);
+        const [u, tk] = await withTenantDb(args.ctx.organizationId, (tenantDb) =>
+          Promise.all([
+            tenantDb.user.findUnique({
+              where: { id: args.ctx!.userId },
+              select: { name: true, email: true },
+            }),
+            tenantDb.apiToken.findUnique({
+              where: { id: args.ctx!.tokenId },
+              select: { name: true },
+            }),
+          ])
+        );
         actorName = u?.name ?? null;
         actorEmail = u?.email ?? null;
         tokenName = tk?.name ?? null;
@@ -448,6 +497,7 @@ export function recordRestAudit(args: {
       const outcome: AuditOutcomeT = args.status < 400 ? 'SUCCESS' : 'FAILURE';
 
       recordAudit({
+        organizationId: args.ctx?.organizationId ?? null,
         actorType: args.ctx ? 'API_TOKEN' : 'ANONYMOUS',
         actorId: args.ctx?.userId ?? null,
         actorName,
@@ -485,6 +535,7 @@ export function recordRestAudit(args: {
 /** Called by NextAuth for authentication events. */
 export function recordAuthAudit(args: {
   type: 'LOGIN' | 'LOGOUT' | 'LOGIN_FAILED';
+  organizationId?: string | null;
   userId?: string | null;
   name?: string | null;
   email?: string | null;
@@ -502,6 +553,7 @@ export function recordAuthAudit(args: {
         : 'auth.loginFailed';
 
   recordAudit({
+    organizationId: args.organizationId ?? null,
     actorType: args.userId ? 'USER' : 'ANONYMOUS',
     actorId: args.userId ?? null,
     actorName: args.name ?? null,

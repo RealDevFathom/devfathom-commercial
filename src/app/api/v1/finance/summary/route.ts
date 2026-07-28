@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
 
-export const GET = withApiAuth('finance:read', async (_ctx, request) => {
+export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
   const startDateParam = url.searchParams.get('startDate');
   const endDateParam = url.searchParams.get('endDate');
@@ -18,31 +17,31 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   // reports a USD + PKR sum as a single figure. Each total is an array of
   // { currency, amount } pairs.
   const [incomeG, expenseG, paidG, outstandingG, expenseByCategoryG] = await Promise.all([
-    db.transaction.groupBy({
+    ctx.db.transaction.groupBy({
       by: ['currency'],
       _sum: { amount: true },
       _count: true,
       where: { type: 'INCOME', date: { gte: startDate, lte: endDate } },
     }),
-    db.transaction.groupBy({
+    ctx.db.transaction.groupBy({
       by: ['currency'],
       _sum: { amount: true },
       _count: true,
       where: { type: 'EXPENSE', date: { gte: startDate, lte: endDate } },
     }),
-    db.invoice.groupBy({
+    ctx.db.invoice.groupBy({
       by: ['currency'],
       _sum: { total: true },
       _count: true,
       where: { status: 'PAID' },
     }),
-    db.invoice.groupBy({
+    ctx.db.invoice.groupBy({
       by: ['currency'],
       _sum: { total: true },
       _count: true,
       where: { status: { in: ['SENT', 'OVERDUE'] } },
     }),
-    db.transaction.groupBy({
+    ctx.db.transaction.groupBy({
       by: ['category', 'currency'],
       _sum: { amount: true },
       where: { type: 'EXPENSE', date: { gte: startDate, lte: endDate } },

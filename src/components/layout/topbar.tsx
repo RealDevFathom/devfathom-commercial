@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import {
@@ -32,6 +33,7 @@ import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { FathomMark } from '@/components/brand/logo';
+import type { TenantBrand } from '@/lib/tenant-brand';
 // Badge unused after notification refactor
 import {
   DropdownMenu,
@@ -84,7 +86,13 @@ function isLinkableBreadcrumb(href: string) {
 
 const subscribeToHydration = () => () => {};
 
-export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
+export function Topbar({
+  onMenuClick,
+  brand,
+}: {
+  onMenuClick?: () => void;
+  brand?: TenantBrand;
+} = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
   // Mount the lazily-rendered palette once it has first been opened, then keep
   // it mounted so subsequent opens are immediate.
@@ -199,10 +207,21 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           href="/dashboard"
           className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <FathomMark className="h-10 w-10" variant="brand" />
+          {brand?.markUrl || brand?.logoUrl ? (
+            <Image
+              src={brand.markUrl ?? brand.logoUrl ?? ''}
+              alt=""
+              width={40}
+              height={40}
+              unoptimized
+              className="h-10 w-10 rounded-xl object-contain"
+            />
+          ) : (
+            <FathomMark className="h-10 w-10" variant="brand" />
+          )}
           <div className="hidden leading-tight sm:block">
             <span className="block text-sm font-semibold tracking-[-0.03em] text-foreground">
-              DevFathom
+              {brand?.displayName ?? 'DevFathom'}
             </span>
             <span className="block text-xs text-muted-foreground">Company workspace</span>
           </div>

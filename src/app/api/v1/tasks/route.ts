@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { canAccessProject } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
@@ -13,7 +12,10 @@ export const GET = withApiAuth('tasks:read', async (ctx, request) => {
   const assigneeId = url.searchParams.get('assigneeId');
   const priority = url.searchParams.get('priority');
   // REST-06: NaN-safe — `?limit=abc` must not reach Prisma as take:NaN (→ 500).
-  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1), 100);
+  const limit = Math.min(
+    Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1),
+    100
+  );
   const cursor = url.searchParams.get('cursor'); // REST-02: cursor pagination
 
   const where: Record<string, unknown> = {};
@@ -27,7 +29,7 @@ export const GET = withApiAuth('tasks:read', async (ctx, request) => {
 
   // REST-02: fetch one extra row to know whether there's a next page, then return
   // a consistent { data, nextCursor } envelope.
-  const rows = await db.task.findMany({
+  const rows = await ctx.db.task.findMany({
     where,
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -73,7 +75,7 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
   const input = parsed.data;
 
   // Verify column exists and grab its project for activity logging
-  const column = await db.column.findUnique({
+  const column = await ctx.db.column.findUnique({
     where: { id: input.columnId },
     include: {
       board: { select: { project: { select: { id: true, name: true } } } },
@@ -83,26 +85,26 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
   if (!column) return NextResponse.json({ error: 'Column not found' }, { status: 404 });
 
   // Object-level authz: the acting user must be able to access the column's project.
-  if (!(await canAccessProject(db, ctx.userId, ctx.userRole, column.board.project.id))) {
+  if (!(await canAccessProject(ctx.db, ctx.userId, ctx.userRole, column.board.project.id))) {
     return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
   }
 
   // REST-07: validate referenced FKs exist BEFORE the create, so a bad assignee/
   // label id is a clean 400 instead of a raw Prisma FK violation (500).
   if (input.assigneeIds.length > 0) {
-    const found = await db.user.count({ where: { id: { in: input.assigneeIds } } });
+    const found = await ctx.db.user.count({ where: { id: { in: input.assigneeIds } } });
     if (found !== new Set(input.assigneeIds).size) {
       return NextResponse.json({ error: 'One or more assigneeIds do not exist.' }, { status: 400 });
     }
   }
   if (input.labelIds.length > 0) {
-    const found = await db.label.count({ where: { id: { in: input.labelIds } } });
+    const found = await ctx.db.label.count({ where: { id: { in: input.labelIds } } });
     if (found !== new Set(input.labelIds).size) {
       return NextResponse.json({ error: 'One or more labelIds do not exist.' }, { status: 400 });
     }
   }
 
-  const maxOrder = await db.task.aggregate({
+  const maxOrder = await ctx.db.task.aggregate({
     _max: { order: true },
     where: { columnId: input.columnId },
   });
@@ -112,7 +114,7 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     ...new Set([...input.assigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
   ];
 
-  const task = await db.task.create({
+  const task = await ctx.db.task.create({
     data: {
       title: input.title,
       description: input.description,
@@ -136,7 +138,7 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     },
   });
 
-  logActivity(db, ctx.userId, {
+  logActivity(ctx.db, ctx.userId, {
     type: 'task_created',
     message: `created task "${task.title}" in ${column.board.project.name}`,
     entityType: 'Task',

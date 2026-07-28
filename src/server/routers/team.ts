@@ -2,7 +2,13 @@ import { z } from 'zod';
 import { hash, compare } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
-import { router, protectedProcedure, adminProcedure, hrProcedure, capabilityProcedure } from '../trpc';
+import {
+  router,
+  protectedProcedure,
+  adminProcedure,
+  hrProcedure,
+  capabilityProcedure,
+} from '../trpc';
 import { can, subjectFromSession } from '@/lib/abac';
 import { assertNotificationOwner } from '../authz';
 import { annotateAudit, diffChanges } from '../audit';
@@ -118,13 +124,19 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const email = input.email.toLowerCase();
-      const existing = await ctx.db.user.findUnique({
+      const existing = await ctx.db.user.findFirst({
         where: { email },
         select: { id: true, status: true },
       });
       // Only a still-pending invite may be re-sent; an active/real account blocks.
       if (existing && existing.status !== 'INVITED') {
         throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
+      }
+      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+        });
       }
 
       const { token, tokenHash } = generateInviteToken();
@@ -313,10 +325,16 @@ export const teamRouter = router({
       });
       if (!leave) throw new TRPCError({ code: 'NOT_FOUND', message: 'Leave request not found' });
       if (leave.userId !== ctx.session.user.id) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only cancel your own request.' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only cancel your own request.',
+        });
       }
       if (leave.status !== 'PENDING') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only a pending request can be cancelled.' });
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only a pending request can be cancelled.',
+        });
       }
       await ctx.db.leaveRequest.delete({ where: { id: input.id } });
       return { success: true };
@@ -343,12 +361,18 @@ export const teamRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own request.' });
       }
       if (existing.status !== 'PENDING') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only a pending request can be edited.' });
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only a pending request can be edited.',
+        });
       }
       const start = input.startDate ?? existing.startDate;
       const end = input.endDate ?? existing.endDate;
       if (end < start) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'End date must be on or after the start date.' });
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'End date must be on or after the start date.',
+        });
       }
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -366,7 +390,10 @@ export const teamRouter = router({
         select: { id: true },
       });
       if (overlap) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'You already have a leave request overlapping these dates.' });
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'You already have a leave request overlapping these dates.',
+        });
       }
       return ctx.db.leaveRequest.update({
         where: { id: input.id },
@@ -793,7 +820,14 @@ export const teamRouter = router({
       // coarse hrProcedure gate already required ADMIN/HR; this resource-level
       // check enforces the "HR can't terminate an admin" attribute condition.
       const subject = subjectFromSession(ctx.session.user);
-      if (!(await can(subject, 'team:layoff', { type: 'User', targetRole: before.role }, { source: 'TRPC' }))) {
+      if (
+        !(await can(
+          subject,
+          'team:layoff',
+          { type: 'User', targetRole: before.role },
+          { source: 'TRPC', db: ctx.db }
+        ))
+      ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'You do not have permission to lay off this member.',

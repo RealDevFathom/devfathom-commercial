@@ -1,8 +1,8 @@
 import { streamText, convertToModelMessages, stepCountIs, type UIMessage } from 'ai';
 import { google } from '@ai-sdk/google';
-import { auth } from '@/lib/auth';
 import { buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 // Allow headroom for multi-step tool runs.
 export const maxDuration = 60;
@@ -17,7 +17,10 @@ function recentUserText(messages: UIMessage[]): string {
     const m = messages[i];
     if (m.role !== 'user') continue;
     const t = (m.parts ?? [])
-      .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+      .filter(
+        (p): p is { type: 'text'; text: string } =>
+          p.type === 'text' && typeof (p as { text?: unknown }).text === 'string'
+      )
       .map((p) => p.text)
       .join(' ');
     if (t.trim()) texts.push(t);
@@ -26,14 +29,17 @@ function recentUserText(messages: UIMessage[]): string {
 }
 
 export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actor = await resolveTenantActor({ request: req });
+  if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
+  const session = actor.session;
 
   const { messages }: { messages: UIMessage[] } = await req.json();
+  const organization = actor.organization;
 
   const ctx = {
+    organizationId: organization.id,
     userId: session.user.id,
     role: session.user.role ?? 'EMPLOYEE',
     name: session.user.name,
@@ -57,7 +63,8 @@ export async function POST(req: Request) {
   // we load the full set (one call) rather than risk hint-routing dropping it.
   const isApprovalContinuation = messages.some((m) =>
     (m.parts ?? []).some(
-      (p) => typeof (p as { state?: unknown }).state === 'string' &&
+      (p) =>
+        typeof (p as { state?: unknown }).state === 'string' &&
         (p as { state: string }).state === 'approval-responded'
     )
   );
@@ -69,7 +76,10 @@ export async function POST(req: Request) {
     // Cost control: send only the tools relevant to what the user is asking
     // about (a core read set + the matched domain), not all ~96 every request.
     // The hint is the recent user text. See buildAssistantTools / tools.ts.
-    tools: buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint: recentUserText(messages) }),
+    tools: buildAssistantTools(
+      ctx,
+      isApprovalContinuation ? {} : { hint: recentUserText(messages) }
+    ),
     // Operator actions chain resolve → act → confirm; 6 steps covers that while
     // capping the worst-case number of (token-heavy) model round-trips per turn.
     stopWhen: stepCountIs(6),

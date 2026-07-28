@@ -1,20 +1,22 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 const MAX_MONEY = 9_999_999_999.99;
 
-export const GET = withApiAuth('finance:read', async (_ctx, request) => {
+export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
   const type = url.searchParams.get('type'); // INCOME or EXPENSE
   const startDate = url.searchParams.get('startDate');
   const endDate = url.searchParams.get('endDate');
   const category = url.searchParams.get('category');
   // REST-06: NaN-safe — a non-numeric ?limit= must not reach Prisma as take:NaN.
-  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1), 200);
+  const limit = Math.min(
+    Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1),
+    200
+  );
   const cursor = url.searchParams.get('cursor'); // REST-02: cursor pagination
 
   const where: Record<string, unknown> = {};
@@ -28,7 +30,7 @@ export const GET = withApiAuth('finance:read', async (_ctx, request) => {
   }
 
   // REST-02: consistent { data, nextCursor } envelope (fetch one extra to detect more).
-  const rows = await db.transaction.findMany({
+  const rows = await ctx.db.transaction.findMany({
     where,
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -70,7 +72,7 @@ const createTransactionSchema = z.object({
   date: z.string().datetime(),
 });
 
-export const POST = withApiAuth('finance:write', async (_ctx, request) => {
+export const POST = withApiAuth('finance:write', async (ctx, request) => {
   const json = await readJson(request); // REST-05: malformed JSON → 400, not 500
   if (!json.ok) return json.response;
   const parsed = createTransactionSchema.safeParse(json.data);
@@ -84,14 +86,20 @@ export const POST = withApiAuth('finance:write', async (_ctx, request) => {
   const { date, projectId, clientId, category, ...rest } = parsed.data;
 
   // REST-07: validate FKs exist before insert (else a bad id is a raw FK 500).
-  if (projectId && !(await db.project.findUnique({ where: { id: projectId }, select: { id: true } }))) {
+  if (
+    projectId &&
+    !(await ctx.db.project.findUnique({ where: { id: projectId }, select: { id: true } }))
+  ) {
     return NextResponse.json({ error: 'projectId does not exist.' }, { status: 400 });
   }
-  if (clientId && !(await db.client.findUnique({ where: { id: clientId }, select: { id: true } }))) {
+  if (
+    clientId &&
+    !(await ctx.db.client.findUnique({ where: { id: clientId }, select: { id: true } }))
+  ) {
     return NextResponse.json({ error: 'clientId does not exist.' }, { status: 400 });
   }
 
-  const transaction = await db.transaction.create({
+  const transaction = await ctx.db.transaction.create({
     data: {
       ...rest,
       date: new Date(date),

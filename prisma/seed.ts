@@ -45,7 +45,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   const password = await hash(seedPassword, 12);
 
   const alex = await tx.user.upsert({
-    where: { email: 'alex@company.com' },
+    where: {
+      organizationId_email: {
+        organizationId: 'org_devfathom',
+        email: 'alex@company.com',
+      },
+    },
     update: {},
     create: {
       name: 'Alex Carter',
@@ -63,7 +68,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   });
 
   const jordan = await tx.user.upsert({
-    where: { email: 'jordan@company.com' },
+    where: {
+      organizationId_email: {
+        organizationId: 'org_devfathom',
+        email: 'jordan@company.com',
+      },
+    },
     update: {},
     create: {
       name: 'Jordan Lee',
@@ -81,7 +91,9 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   });
 
   const sam = await tx.user.upsert({
-    where: { email: 'sam@company.com' },
+    where: {
+      organizationId_email: { organizationId: 'org_devfathom', email: 'sam@company.com' },
+    },
     update: {},
     create: {
       name: 'Sam Patel',
@@ -99,7 +111,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   });
 
   const taylor = await tx.user.upsert({
-    where: { email: 'taylor@company.com' },
+    where: {
+      organizationId_email: {
+        organizationId: 'org_devfathom',
+        email: 'taylor@company.com',
+      },
+    },
     update: {},
     create: {
       name: 'Taylor Reed',
@@ -117,7 +134,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   });
 
   const casey = await tx.user.upsert({
-    where: { email: 'casey@company.com' },
+    where: {
+      organizationId_email: {
+        organizationId: 'org_devfathom',
+        email: 'casey@company.com',
+      },
+    },
     update: {},
     create: {
       name: 'Casey Brooks',
@@ -135,7 +157,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   });
 
   const riley = await tx.user.upsert({
-    where: { email: 'riley@company.com' },
+    where: {
+      organizationId_email: {
+        organizationId: 'org_devfathom',
+        email: 'riley@company.com',
+      },
+    },
     update: {},
     create: {
       name: 'Riley Quinn',
@@ -153,7 +180,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   });
 
   const jamie = await tx.user.upsert({
-    where: { email: 'jamie@company.com' },
+    where: {
+      organizationId_email: {
+        organizationId: 'org_devfathom',
+        email: 'jamie@company.com',
+      },
+    },
     update: {},
     create: {
       name: 'Jamie Fox',
@@ -171,7 +203,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   });
 
   const morgan = await tx.user.upsert({
-    where: { email: 'morgan@company.com' },
+    where: {
+      organizationId_email: {
+        organizationId: 'org_devfathom',
+        email: 'morgan@company.com',
+      },
+    },
     update: {},
     create: {
       name: 'Morgan Hayes',

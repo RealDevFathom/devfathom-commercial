@@ -16,7 +16,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { db } from '@/lib/db';
 import * as authz from '@/lib/authz';
 import { appUrl, templates } from '@/lib/email';
 import { findRelevantOccurrence, computePunctuality } from '@/lib/meeting-occurrence';
@@ -50,6 +49,7 @@ function formatDuration(start: Date, end: Date): string {
 }
 
 export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
+  const { db } = h;
   // Visibility scope, mirroring the reads in `meetings.ts`: admins see every
   // meeting; everyone else only meetings they created or were invited to. This
   // is also the pool a meeting title is resolved against, so a non-admin can
@@ -58,10 +58,7 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
     h.isAdmin
       ? {}
       : {
-          OR: [
-            { createdById: h.ctx.userId },
-            { attendees: { some: { userId: h.ctx.userId } } },
-          ],
+          OR: [{ createdById: h.ctx.userId }, { attendees: { some: { userId: h.ctx.userId } } }],
         };
 
   /** Resolve a free-text meeting title to one visible meeting, or candidates. */
@@ -130,7 +127,9 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
       execute: async ({ meeting }) => {
         const r = await resolveMeeting(meeting);
         if (r.kind === 'notfound')
-          return { error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.` };
+          return {
+            error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.`,
+          };
         if (r.kind === 'ambiguous')
           return { needsClarification: `Which meeting — ${r.candidates.join(', ')}?` };
         const meetingId = r.value.id;
@@ -220,7 +219,15 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           .describe('Names of people to invite (besides you)'),
       }),
       needsApproval: true,
-      execute: async ({ title, startTime, endTime, description, location, recurrence, attendees }) => {
+      execute: async ({
+        title,
+        startTime,
+        endTime,
+        description,
+        location,
+        recurrence,
+        attendees,
+      }) => {
         // Stale-session guard, mirroring the router: a JWT pointing at a deleted
         // user would otherwise blow up on the FK instead of a useful message.
         const user = await db.user.findUnique({
@@ -228,13 +235,17 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           select: { id: true },
         });
         if (!user) {
-          return { error: 'Your session has expired. Please log out and back in to create meetings.' };
+          return {
+            error: 'Your session has expired. Please log out and back in to create meetings.',
+          };
         }
 
         const start = parseDate(startTime);
-        if (!start) return { error: `Could not read the start time "${startTime}". Use an ISO datetime.` };
+        if (!start)
+          return { error: `Could not read the start time "${startTime}". Use an ISO datetime.` };
         const end = parseDate(endTime);
-        if (!end) return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
+        if (!end)
+          return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
         if (end.getTime() <= start.getTime()) {
           return { error: 'The end time must be after the start time.' };
         }
@@ -317,7 +328,7 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
 
     updateMeeting: tool({
       description:
-        "Update an existing meeting — change its title, times, location, recurrence, or replace the attendee list. Find the meeting by its current title. Only the meeting's creator or an admin may edit it. Use for \"move <meeting> to 3pm\", \"rename <meeting>\", \"swap the attendees on <meeting>\".",
+        'Update an existing meeting — change its title, times, location, recurrence, or replace the attendee list. Find the meeting by its current title. Only the meeting\'s creator or an admin may edit it. Use for "move <meeting> to 3pm", "rename <meeting>", "swap the attendees on <meeting>".',
       inputSchema: z.object({
         meeting: z.string().describe('The current title of the meeting to update'),
         title: z.string().min(1).nullish().describe('New title'),
@@ -332,10 +343,21 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           .describe('Replace the whole attendee list with these people (by name)'),
       }),
       needsApproval: true,
-      execute: async ({ meeting, title, startTime, endTime, description, location, recurrence, attendees }) => {
+      execute: async ({
+        meeting,
+        title,
+        startTime,
+        endTime,
+        description,
+        location,
+        recurrence,
+        attendees,
+      }) => {
         const r = await resolveMeeting(meeting);
         if (r.kind === 'notfound')
-          return { error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.` };
+          return {
+            error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.`,
+          };
         if (r.kind === 'ambiguous')
           return { needsClarification: `Which meeting — ${r.candidates.join(', ')}?` };
         const meetingId = r.value.id;
@@ -351,12 +373,14 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         if (recurrence != null) data.recurrence = recurrence;
         if (startTime != null) {
           const d = parseDate(startTime);
-          if (!d) return { error: `Could not read the start time "${startTime}". Use an ISO datetime.` };
+          if (!d)
+            return { error: `Could not read the start time "${startTime}". Use an ISO datetime.` };
           data.startTime = d;
         }
         if (endTime != null) {
           const d = parseDate(endTime);
-          if (!d) return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
+          if (!d)
+            return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
           data.endTime = d;
         }
 
@@ -430,13 +454,17 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
       execute: async ({ meeting }) => {
         const r = await resolveMeeting(meeting);
         if (r.kind === 'notfound')
-          return { error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.` };
+          return {
+            error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.`,
+          };
         if (r.kind === 'ambiguous')
           return { needsClarification: `Which meeting — ${r.candidates.join(', ')}?` };
         const meetingId = r.value.id;
 
         if (!(await authz.canManageMeeting(db, h.ctx.userId, h.ctx.role, meetingId))) {
-          return { error: 'You can only delete meetings you created (admins can delete any meeting).' };
+          return {
+            error: 'You can only delete meetings you created (admins can delete any meeting).',
+          };
         }
 
         const existing = await db.meeting.findUnique({
@@ -470,7 +498,9 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
       execute: async ({ meeting }) => {
         const r = await resolveMeeting(meeting);
         if (r.kind === 'notfound')
-          return { error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.` };
+          return {
+            error: `No meeting matches "${meeting}"${h.isAdmin ? '' : ' that you can see'}.`,
+          };
         if (r.kind === 'ambiguous')
           return { needsClarification: `Which meeting — ${r.candidates.join(', ')}?` };
         const meetingId = r.value.id;

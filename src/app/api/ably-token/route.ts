@@ -1,7 +1,7 @@
 import * as Ably from 'ably';
-import { auth } from '@/lib/auth';
-import { db } from '@/lib/db';
 import { channelRoom, userRoom, typingRoom, PRESENCE_CHANNEL } from '@/lib/chat/contract';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 /**
  * Ably token issuer.
@@ -28,9 +28,9 @@ const ABLY_API_KEY = process.env.ABLY_API_KEY;
 // shared across users.
 export const dynamic = 'force-dynamic';
 
-export const GET = auth(async (request) => {
-  const session = request.auth;
-  if (!session?.user?.id) {
+export const GET = async (request: Request) => {
+  const actor = await resolveTenantActor({ request });
+  if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
   if (!ABLY_API_KEY) {
@@ -39,13 +39,16 @@ export const GET = auth(async (request) => {
     return new Response('Realtime not configured', { status: 503 });
   }
 
-  const userId = session.user.id;
+  const userId = actor.session.user.id;
   const rest = new Ably.Rest(ABLY_API_KEY);
+  const organization = actor.organization;
 
-  const memberships = await db.channelMember.findMany({
-    where: { userId },
-    select: { channelId: true },
-  });
+  const memberships = await withTenantDb(organization.id, (db) =>
+    db.channelMember.findMany({
+      where: { userId },
+      select: { channelId: true },
+    })
+  );
 
   const capability: Record<string, string[]> = {
     [userRoom(userId)]: ['subscribe'],
@@ -66,4 +69,4 @@ export const GET = auth(async (request) => {
   });
 
   return Response.json(tokenRequest);
-});
+};

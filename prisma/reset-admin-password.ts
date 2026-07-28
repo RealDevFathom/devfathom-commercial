@@ -8,6 +8,7 @@ import 'dotenv/config';
 
 const ADMIN_EMAIL = 'admin@company.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ORGANIZATION_ID = process.env.ORGANIZATION_ID ?? 'org_devfathom';
 
 if (!ADMIN_PASSWORD) {
   console.error('❌ ADMIN_PASSWORD env var is required');
@@ -26,9 +27,18 @@ const prisma = new PrismaClient({ adapter });
 async function main() {
   const hashedPassword = await hash(ADMIN_PASSWORD!, 12);
 
-  const updated = await prisma.user.update({
-    where: { email: ADMIN_EMAIL },
-    data: { password: hashedPassword },
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT set_config('app.current_organization_id', $1, true),
+              set_config('app.is_platform_admin', 'true', true)`,
+      ORGANIZATION_ID
+    );
+    return tx.user.update({
+      where: {
+        organizationId_email: { organizationId: ORGANIZATION_ID, email: ADMIN_EMAIL },
+      },
+      data: { password: hashedPassword },
+    });
   });
 
   console.log(`✅ Password updated for ${updated.email}`);

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { canAccessProject, canManageProject, projectIdOfTask } from '@/lib/authz';
@@ -10,7 +9,7 @@ export const GET = withApiAuth(
   'tasks:read',
   async (authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
-    const task = await db.task.findUnique({
+    const task = await authCtx.db.task.findUnique({
       where: { id },
       include: {
         column: {
@@ -31,7 +30,12 @@ export const GET = withApiAuth(
     if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     // Object-level authz: the task's owning project must be accessible.
     if (
-      !(await canAccessProject(db, authCtx.userId, authCtx.userRole, task.column.board.projectId))
+      !(await canAccessProject(
+        authCtx.db,
+        authCtx.userId,
+        authCtx.userRole,
+        task.column.board.projectId
+      ))
     ) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
@@ -64,8 +68,8 @@ export const PATCH = withApiAuth(
   async (authCtx, request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
     const __j = await readJson(request); // REST-05
-  if (!__j.ok) return __j.response;
-  const body = __j.data;
+    if (!__j.ok) return __j.response;
+    const body = __j.data;
     const parsed = updateTaskSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
@@ -75,9 +79,9 @@ export const PATCH = withApiAuth(
     }
 
     // Object-level authz: the acting user must be able to write to the task's project.
-    const projectId = await projectIdOfTask(db, id);
+    const projectId = await projectIdOfTask(authCtx.db, id);
     if (!projectId) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-    if (!(await canAccessProject(db, authCtx.userId, authCtx.userRole, projectId))) {
+    if (!(await canAccessProject(authCtx.db, authCtx.userId, authCtx.userRole, projectId))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -85,7 +89,7 @@ export const PATCH = withApiAuth(
       parsed.data;
 
     // Load the existing task so we can detect a column move and reorder properly.
-    const existing = await db.task.findUnique({
+    const existing = await authCtx.db.task.findUnique({
       where: { id },
       include: { column: { select: { id: true, name: true } } },
     });
@@ -95,7 +99,7 @@ export const PATCH = withApiAuth(
 
     // Look up target column metadata — needed for defaults + activity logging
     const targetColumn = isColumnMove
-      ? await db.column.findUnique({
+      ? await authCtx.db.column.findUnique({
           where: { id: columnId },
           include: {
             board: { select: { project: { select: { id: true, name: true } } } },
@@ -111,13 +115,18 @@ export const PATCH = withApiAuth(
     if (
       isColumnMove &&
       targetColumn &&
-      !(await canAccessProject(db, authCtx.userId, authCtx.userRole, targetColumn.board.project.id))
+      !(await canAccessProject(
+        authCtx.db,
+        authCtx.userId,
+        authCtx.userRole,
+        targetColumn.board.project.id
+      ))
     ) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     // Do the mutation in a transaction so reorder + update + defaults are atomic.
-    const updated = await db.$transaction(async (tx) => {
+    const updated = await (async (tx) => {
       // Assignee operations — process in order: full replace, then partial add, then partial remove.
       // Mutual exclusivity between full-replace and partials is enforced at schema level.
       if (assigneeIds) {
@@ -175,7 +184,7 @@ export const PATCH = withApiAuth(
       }
 
       return task;
-    });
+    })(authCtx.db);
 
     // Activity log: task_completed fires only when entering Done from a different column
     if (
@@ -184,7 +193,7 @@ export const PATCH = withApiAuth(
       targetColumn.name === 'Done' &&
       existing.column.name !== 'Done'
     ) {
-      logActivity(db, authCtx.userId, {
+      logActivity(authCtx.db, authCtx.userId, {
         type: 'task_completed',
         message: `completed task "${updated.title}" in ${targetColumn.board.project.name}`,
         entityType: 'Task',
@@ -201,12 +210,12 @@ export const DELETE = withApiAuth(
   async (authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
     // Destructive op: require admin or project LEAD on the task's project.
-    const projectId = await projectIdOfTask(db, id);
+    const projectId = await projectIdOfTask(authCtx.db, id);
     if (!projectId) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-    if (!(await canManageProject(db, authCtx.userId, authCtx.userRole, projectId))) {
+    if (!(await canManageProject(authCtx.db, authCtx.userId, authCtx.userRole, projectId))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-    await db.task.delete({ where: { id } });
+    await authCtx.db.task.delete({ where: { id } });
     return NextResponse.json({ success: true });
   }
 );

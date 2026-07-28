@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import { withApiAuth, hasScope } from '@/lib/api-auth';
 import { isAdmin } from '@/lib/authz';
 
@@ -15,7 +14,7 @@ export const GET = withApiAuth(
     // invoices when the token ALSO holds finance:read — otherwise the finance
     // admin double-gate is bypassed via the client object.
     const includeFinance = hasScope(authCtx, 'finance:read');
-    const client = await db.client.findUnique({
+    const client = await authCtx.db.client.findUnique({
       where: { id },
       include: {
         contacts: true,
@@ -36,9 +35,9 @@ export const DELETE = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     const { id } = await ctx.params;
-    const client = await db.client.findUnique({ where: { id }, select: { id: true } });
+    const client = await authCtx.db.client.findUnique({ where: { id }, select: { id: true } });
     if (!client) return NextResponse.json({ error: 'Client not found' }, { status: 404 });
-    await db.client.delete({ where: { id } });
+    await authCtx.db.client.delete({ where: { id } });
     return NextResponse.json({ success: true });
   }
 );

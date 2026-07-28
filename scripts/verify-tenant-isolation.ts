@@ -50,10 +50,42 @@ async function main() {
   try {
     await client.query('BEGIN');
 
-    const legacy = await client.query<{ organizationId: string }>(
-      `SELECT "organizationId" FROM "users" WHERE "id" = 'user_legacy'`
+    const tenantAUser = await client.query<{ id: string; organizationId: string }>(
+      `SELECT "id", "organizationId" FROM "users"
+       WHERE "organizationId" = 'org_devfathom'
+       ORDER BY "createdAt" ASC LIMIT 1`
     );
-    assertEqual(legacy.rows[0]?.organizationId, 'org_devfathom', 'legacy rows must be backfilled');
+    assertEqual(
+      tenantAUser.rows[0]?.organizationId,
+      'org_devfathom',
+      'the seeded tenant must be organization-scoped'
+    );
+    const userA = tenantAUser.rows[0]!.id;
+    const platformUser = await client.query<{ id: string }>(
+      `SELECT "id" FROM "platform_users" LIMIT 1`
+    );
+    const platformUserId = platformUser.rows[0]?.id;
+
+    const missingRls = await client.query<{ tableName: string }>(
+      `SELECT tables.table_name AS "tableName"
+       FROM information_schema.columns columns
+       JOIN information_schema.tables tables
+         ON tables.table_schema = columns.table_schema
+        AND tables.table_name = columns.table_name
+       JOIN pg_class relation ON relation.relname = tables.table_name
+       JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+       WHERE columns.table_schema = 'public'
+         AND columns.column_name = 'organizationId'
+         AND namespace.nspname = 'public'
+         AND (NOT relation.relrowsecurity OR NOT relation.relforcerowsecurity)`
+    );
+    assertEqual(
+      missingRls.rows.length,
+      0,
+      `every organization-scoped table must FORCE RLS (${missingRls.rows
+        .map((row) => row.tableName)
+        .join(', ')})`
+    );
 
     await client.query(`CREATE ROLE "${runtimeRole}" NOLOGIN`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
@@ -82,23 +114,77 @@ async function main() {
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [projectA]
     );
+    const identityA = `identity_a_${suffix}`;
+    const identityB = `identity_b_${suffix}`;
+    await client.query(
+      `INSERT INTO "organization_identity_connections" (
+        "id", "organizationId", "name", "protocol", "status", "domains", "createdAt", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', 'Tenant A OIDC', 'OIDC', 'DRAFT', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ($2, $3, 'Tenant B OIDC', 'OIDC', 'DRAFT', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [identityA, identityB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "organization_sso_states" (
+        "id", "organizationId", "identityConnectionId", "key", "kind", "payload", "expiresAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, 'OIDC', '{}', CURRENT_TIMESTAMP + interval '10 minutes'),
+        ($4, $5, $6, $7, 'OIDC', '{}', CURRENT_TIMESTAMP + interval '10 minutes')`,
+      [
+        `state_a_${suffix}`,
+        identityA,
+        `state-key-a-${suffix}`,
+        `state_b_${suffix}`,
+        organizationB,
+        identityB,
+        `state-key-b-${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "tenant_sso_tickets" (
+        "id", "organizationId", "userId", "tokenHash", "expiresAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, CURRENT_TIMESTAMP + interval '10 minutes'),
+        ($4, $5, $6, $7, CURRENT_TIMESTAMP + interval '10 minutes')`,
+      [
+        `ticket_a_${suffix}`,
+        userA,
+        `ticket-hash-a-${suffix}`,
+        `ticket_b_${suffix}`,
+        organizationB,
+        userB,
+        `ticket-hash-b-${suffix}`,
+      ]
+    );
 
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
 
     const tenantA = await client.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM "users" WHERE "id" IN ('user_legacy', $1)`,
-      [userB]
+      `SELECT COUNT(*)::int AS count FROM "users" WHERE "id" IN ($1, $2)`,
+      [userA, userB]
     );
     assertEqual(tenantA.rows[0]?.count, 1, 'tenant A must only see its own user');
+    const tenantASso = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "organization_sso_states"
+       WHERE "id" IN ($1, $2)`,
+      [`state_a_${suffix}`, `state_b_${suffix}`]
+    );
+    assertEqual(tenantASso.rows[0]?.count, 1, 'tenant A must only see its own SSO state');
+    const tenantATicket = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "tenant_sso_tickets"
+       WHERE "id" IN ($1, $2)`,
+      [`ticket_a_${suffix}`, `ticket_b_${suffix}`]
+    );
+    assertEqual(tenantATicket.rows[0]?.count, 1, 'tenant A must only see its own SSO ticket');
 
     await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [
       organizationB,
     ]);
     const tenantB = await client.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM "users" WHERE "id" IN ('user_legacy', $1)`,
-      [userB]
+      `SELECT COUNT(*)::int AS count FROM "users" WHERE "id" IN ($1, $2)`,
+      [userA, userB]
     );
     assertEqual(tenantB.rows[0]?.count, 1, 'tenant B must only see its own user');
 
@@ -129,6 +215,17 @@ async function main() {
       )
     );
 
+    if (platformUserId) {
+      await expectDatabaseError('42501', () =>
+        client.query(
+          `INSERT INTO "platform_recovery_codes" (
+            "id", "platformUserId", "codeHash", "createdAt"
+          ) VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+          [`recovery_denied_${suffix}`, platformUserId, `hash-${suffix}`]
+        )
+      );
+    }
+
     await expectDatabaseError('42501', () =>
       client.query(
         `INSERT INTO "platform_leads" ("id", "name", "status", "createdAt", "updatedAt")
@@ -150,7 +247,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: backfill, read isolation, fail-closed access, composite ownership, and platform-only policies.'
+      'RLS verification passed: forced policies, read isolation, SSO/ticket isolation, fail-closed access, composite ownership, and platform-only policies.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);

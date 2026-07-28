@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import { withApiAuth } from '@/lib/api-auth';
 import { canAccessProject } from '@/lib/authz';
 
@@ -7,7 +6,7 @@ export const GET = withApiAuth(
   'tasks:read',
   async (authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
-    const board = await db.board.findUnique({
+    const board = await authCtx.db.board.findUnique({
       where: { id },
       include: {
         project: { select: { id: true, name: true } },
@@ -28,7 +27,7 @@ export const GET = withApiAuth(
     });
     if (!board) return NextResponse.json({ error: 'Board not found' }, { status: 404 });
     // Object-level authz: the board's owning project must be accessible.
-    if (!(await canAccessProject(db, authCtx.userId, authCtx.userRole, board.projectId))) {
+    if (!(await canAccessProject(authCtx.db, authCtx.userId, authCtx.userRole, board.projectId))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     return NextResponse.json({ data: board });

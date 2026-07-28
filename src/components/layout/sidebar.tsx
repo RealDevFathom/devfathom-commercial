@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { m } from 'motion/react';
@@ -21,6 +22,7 @@ import {
   BarChart3,
   ScrollText,
   ClipboardList,
+  Building2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -28,6 +30,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
+import { useEntitlements } from '@/components/entitlements-provider';
+import type { TenantBrand } from '@/lib/tenant-brand';
 
 type NavGroup = 'Workspace' | 'Firm';
 
@@ -36,6 +40,7 @@ interface NavItem {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   group: NavGroup;
+  module?: string;
   adminOnly?: boolean;
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
@@ -44,19 +49,96 @@ interface NavItem {
 // Grouped to match the prototype's WORKSPACE / FIRM rail. Order defines the
 // numbered index (recomputed after RBAC filtering so numbers stay contiguous).
 const navigation: NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'Workspace' },
-  { label: 'Projects', href: '/projects', icon: FolderKanban, group: 'Workspace' },
-  { label: 'Clients', href: '/clients', icon: Briefcase, group: 'Workspace' },
-  { label: 'Notes', href: '/notes', icon: StickyNote, group: 'Workspace' },
+  {
+    label: 'Dashboard',
+    href: '/dashboard',
+    icon: LayoutDashboard,
+    group: 'Workspace',
+    module: 'dashboard',
+  },
+  {
+    label: 'Projects',
+    href: '/projects',
+    icon: FolderKanban,
+    group: 'Workspace',
+    module: 'projects',
+  },
+  {
+    label: 'Clients',
+    href: '/clients',
+    icon: Briefcase,
+    group: 'Workspace',
+    module: 'clients',
+  },
+  {
+    label: 'Notes',
+    href: '/notes',
+    icon: StickyNote,
+    group: 'Workspace',
+    module: 'notes',
+  },
   // Email stays disabled until its OAuth credentials and mailbox schema are deployed.
-  { label: 'Meetings', href: '/meetings', icon: Video, group: 'Workspace' },
-  { label: 'Chat', href: '/chat', icon: MessageSquare, group: 'Workspace' },
-  { label: 'Finance', href: '/finance', icon: DollarSign, adminOnly: true, group: 'Firm' },
-  { label: 'Team', href: '/team', icon: Users, group: 'Firm' },
-  { label: 'Reviews', href: '/reviews', icon: ClipboardList, group: 'Firm' },
-  { label: 'Insights', href: '/team/stats', icon: BarChart3, adminOnly: true, group: 'Firm' },
-  { label: 'HR', href: '/hr', icon: UserCog, hrAccess: true, group: 'Firm' },
-  { label: 'Audit Log', href: '/audit-logs', icon: ScrollText, adminOnly: true, group: 'Firm' },
+  {
+    label: 'Meetings',
+    href: '/meetings',
+    icon: Video,
+    group: 'Workspace',
+    module: 'meetings',
+  },
+  {
+    label: 'Chat',
+    href: '/chat',
+    icon: MessageSquare,
+    group: 'Workspace',
+    module: 'chat',
+  },
+  {
+    label: 'Finance',
+    href: '/finance',
+    icon: DollarSign,
+    adminOnly: true,
+    group: 'Firm',
+    module: 'finance',
+  },
+  { label: 'Team', href: '/team', icon: Users, group: 'Firm', module: 'hr' },
+  {
+    label: 'Reviews',
+    href: '/reviews',
+    icon: ClipboardList,
+    group: 'Firm',
+    module: 'reviews',
+  },
+  {
+    label: 'Insights',
+    href: '/team/stats',
+    icon: BarChart3,
+    adminOnly: true,
+    group: 'Firm',
+    module: 'hr',
+  },
+  {
+    label: 'HR',
+    href: '/hr',
+    icon: UserCog,
+    hrAccess: true,
+    group: 'Firm',
+    module: 'hr',
+  },
+  {
+    label: 'Audit Log',
+    href: '/audit-logs',
+    icon: ScrollText,
+    adminOnly: true,
+    group: 'Firm',
+    module: 'audit',
+  },
+  {
+    label: 'Organization',
+    href: '/organization',
+    icon: Building2,
+    adminOnly: true,
+    group: 'Firm',
+  },
   { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
 ];
 
@@ -65,10 +147,12 @@ const GROUP_ORDER: NavGroup[] = ['Workspace', 'Firm'];
 function useVisibleNavigation() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const entitlements = useEntitlements();
   const isAdmin = session?.user?.role === 'ADMIN';
   const isHr = session?.user?.role === 'HR';
 
   const filteredNav = navigation.filter((item) => {
+    if (item.module && !entitlements.enabledModules.includes(item.module)) return false;
     if (item.hrAccess) return isAdmin || isHr;
     if (item.adminOnly) return isAdmin;
     return true;
@@ -87,6 +171,7 @@ function useVisibleNavigation() {
 }
 
 interface SidebarProps {
+  brand?: TenantBrand;
   onNavigate?: () => void;
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -94,6 +179,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  brand,
   onNavigate,
   collapsed: controlledCollapsed,
   onCollapsedChange,
@@ -139,11 +225,22 @@ export function Sidebar({
           collapsed ? 'justify-center' : 'gap-3'
         )}
       >
-        <FathomMark className="h-9 w-9 shrink-0" variant="brand" />
+        {brand?.markUrl || brand?.logoUrl ? (
+          <Image
+            src={brand.markUrl ?? brand.logoUrl ?? ''}
+            alt=""
+            width={36}
+            height={36}
+            unoptimized
+            className="h-9 w-9 shrink-0 rounded-lg object-contain"
+          />
+        ) : (
+          <FathomMark className="h-9 w-9 shrink-0" variant="brand" />
+        )}
         {!collapsed && (
           <div className="flex flex-col overflow-hidden animate-fade-in">
             <span className="font-display text-[15px] font-semibold tracking-[-0.025em] text-sidebar-accent-foreground">
-              DevFathom
+              {brand?.displayName ?? 'DevFathom'}
             </span>
             <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-sidebar-foreground/55">
               Company workspace

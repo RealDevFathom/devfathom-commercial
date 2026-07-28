@@ -20,11 +20,11 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { db } from '@/lib/db';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
+  const { db } = h;
   const tools: ToolSet = {};
   const now = h.now();
   const isAdmin = h.isAdmin;
@@ -50,7 +50,10 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
         result: { error: `No project matches "${name}"${isAdmin ? '' : ' that you can access'}.` },
       };
     if (r.kind === 'ambiguous')
-      return { ok: false, result: { needsClarification: `Which project — ${r.candidates.join(', ')}?` } };
+      return {
+        ok: false,
+        result: { needsClarification: `Which project — ${r.candidates.join(', ')}?` },
+      };
     return { ok: true, id: r.value.id, name: r.value.name, interpreted: r.interpreted };
   };
 
@@ -66,7 +69,8 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       orderBy: { createdAt: 'asc' },
       select: { id: true, name: true },
     });
-    if (boards.length === 0) return { ok: false, result: { error: 'That project has no boards yet.' } };
+    if (boards.length === 0)
+      return { ok: false, result: { error: 'That project has no boards yet.' } };
     if (!boardName) {
       if (boards.length === 1) return { ok: true, id: boards[0].id, name: boards[0].name };
       return {
@@ -75,9 +79,13 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       };
     }
     const r = h.resolveNamed(boardName, boards);
-    if (r.kind === 'notfound') return { ok: false, result: { error: `No board matches "${boardName}".` } };
+    if (r.kind === 'notfound')
+      return { ok: false, result: { error: `No board matches "${boardName}".` } };
     if (r.kind === 'ambiguous')
-      return { ok: false, result: { needsClarification: `Which board — ${r.candidates.join(', ')}?` } };
+      return {
+        ok: false,
+        result: { needsClarification: `Which board — ${r.candidates.join(', ')}?` },
+      };
     return { ok: true, id: r.value.id, name: r.value.name };
   };
 
@@ -255,10 +263,7 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       name: z.string().min(1).describe('Project name'),
       type: z.enum(['CLIENT', 'INTERNAL']).describe('CLIENT (for a client) or INTERNAL'),
       description: z.string().nullish(),
-      status: z
-        .enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD'])
-        .nullish()
-        .describe('Default ACTIVE'),
+      status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD']).nullish().describe('Default ACTIVE'),
       clientName: z.string().nullish().describe('Attach to a client by name (fuzzy match)'),
       techStack: z.array(z.string()).nullish().describe('e.g. ["Next.js", "Postgres"]'),
       startDate: z.string().nullish().describe('ISO date'),
@@ -364,9 +369,7 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       'Update a project: rename it, change its status (ACTIVE / IN_DEVELOPMENT / ON_HOLD / COMPLETED / CANCELLED), edit the description, dates, or tech stack. Use for "mark <project> as completed", "put <project> on hold", "rename <project>". Any project member (or admin) may do this.',
     inputSchema: z.object({
       project: z.string().describe('The project to update, by name'),
-      status: z
-        .enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD', 'COMPLETED', 'CANCELLED'])
-        .nullish(),
+      status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD', 'COMPLETED', 'CANCELLED']).nullish(),
       newName: z.string().min(1).nullish().describe('Rename the project'),
       description: z.string().nullish(),
       startDate: z.string().nullish().describe('ISO date'),
@@ -378,7 +381,8 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // Member-level access — mirrors assertProjectAccess(ctx, id).
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const data: Prisma.ProjectUpdateInput = {};
       if (newName != null) data.name = newName;
@@ -388,7 +392,10 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       if (endDate != null) data.endDate = new Date(endDate);
       if (techStack != null) data.techStack = techStack;
       if (Object.keys(data).length === 0)
-        return { error: 'Nothing to update — provide a new status, name, description, dates or tech stack.' };
+        return {
+          error:
+            'Nothing to update — provide a new status, name, description, dates or tech stack.',
+        };
 
       const updated = await db.project.update({ where: { id: pr.id }, data });
 
@@ -429,7 +436,8 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // Manage-level — mirrors assertProjectAccess(ctx, id, { manage: true }).
-      if (!(await h.canManageProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canManageProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       await db.project.delete({ where: { id: pr.id } });
 
@@ -557,9 +565,7 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
 
       h.activity({
         type: 'project_member_removed',
-        message: isSelf
-          ? `left project ${pr.name}`
-          : `removed ${targetName} from ${pr.name}`,
+        message: isSelf ? `left project ${pr.name}` : `removed ${targetName} from ${pr.name}`,
         entityType: 'Project',
         entityId: pr.id,
       });
@@ -647,7 +653,8 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
     execute: async ({ project, name, dueDate, description }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const milestone = await db.milestone.create({
         data: {
@@ -687,14 +694,16 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
     execute: async ({ project, milestone, newName, dueDate, description, completed }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const milestones = await db.milestone.findMany({
         where: { projectId: pr.id },
         select: { id: true, name: true },
       });
       const mr = h.resolveNamed(milestone, milestones);
-      if (mr.kind === 'notfound') return { error: `No milestone matches "${milestone}" on ${pr.name}.` };
+      if (mr.kind === 'notfound')
+        return { error: `No milestone matches "${milestone}" on ${pr.name}.` };
       if (mr.kind === 'ambiguous')
         return { needsClarification: `Which milestone — ${mr.candidates.join(', ')}?` };
 
@@ -704,7 +713,10 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       if (dueDate != null) data.dueDate = new Date(dueDate);
       if (completed != null) data.completedAt = completed ? now : null;
       if (Object.keys(data).length === 0)
-        return { error: 'Nothing to update — provide a new name, due date, description, or completion state.' };
+        return {
+          error:
+            'Nothing to update — provide a new name, due date, description, or completion state.',
+        };
 
       const updated = await db.milestone.update({ where: { id: mr.value.id }, data });
 
@@ -738,14 +750,16 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
     execute: async ({ project, milestone }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const milestones = await db.milestone.findMany({
         where: { projectId: pr.id },
         select: { id: true, name: true },
       });
       const mr = h.resolveNamed(milestone, milestones);
-      if (mr.kind === 'notfound') return { error: `No milestone matches "${milestone}" on ${pr.name}.` };
+      if (mr.kind === 'notfound')
+        return { error: `No milestone matches "${milestone}" on ${pr.name}.` };
       if (mr.kind === 'ambiguous')
         return { needsClarification: `Which milestone — ${mr.candidates.join(', ')}?` };
 
@@ -781,7 +795,8 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // createBoard is member-level — mirrors assertProjectAccess(ctx, projectId).
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const withColumns = createDefaultColumns !== false;
       const board = await db.board.create({
@@ -830,14 +845,18 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       'Delete a board (and all its columns and tasks) from a project. Destructive. Only a project LEAD or an admin may delete a board. Use for "delete the <name> board".',
     inputSchema: z.object({
       project: z.string().describe('The project, by name'),
-      board: z.string().nullish().describe('The board name (optional if the project has one board)'),
+      board: z
+        .string()
+        .nullish()
+        .describe('The board name (optional if the project has one board)'),
     }),
     needsApproval: true,
     execute: async ({ project, board }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // deleteBoard is manage-level — mirrors assertBoardAccess(ctx, id, { manage: true }).
-      if (!(await h.canManageProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canManageProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const br = await resolveBoard(pr.id, board);
       if (!br.ok) return br.result;
@@ -866,14 +885,18 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
     inputSchema: z.object({
       project: z.string().describe('The project, by name'),
       name: z.string().min(1).describe('Column name'),
-      board: z.string().nullish().describe('The board name (optional if the project has one board)'),
+      board: z
+        .string()
+        .nullish()
+        .describe('The board name (optional if the project has one board)'),
     }),
     needsApproval: true,
     execute: async ({ project, name, board }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // createColumn is member-level — mirrors assertBoardAccess(ctx, boardId).
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const br = await resolveBoard(pr.id, board);
       if (!br.ok) return br.result;
@@ -907,14 +930,18 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       project: z.string().describe('The project, by name'),
       column: z.string().describe('The column to rename, by its current name'),
       newName: z.string().min(1).describe('The new column name'),
-      board: z.string().nullish().describe('The board name (optional if the project has one board)'),
+      board: z
+        .string()
+        .nullish()
+        .describe('The board name (optional if the project has one board)'),
     }),
     needsApproval: true,
     execute: async ({ project, column, newName, board }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // updateColumn is member-level — mirrors assertColumnAccess(ctx, id).
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const br = await resolveBoard(pr.id, board);
       if (!br.ok) return br.result;
@@ -927,7 +954,10 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       if (cr.kind === 'ambiguous')
         return { needsClarification: `Which column — ${cr.candidates.join(', ')}?` };
 
-      const updated = await db.column.update({ where: { id: cr.value.id }, data: { name: newName } });
+      const updated = await db.column.update({
+        where: { id: cr.value.id },
+        data: { name: newName },
+      });
 
       h.audit({
         category: 'PROJECT',
@@ -949,14 +979,18 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
     inputSchema: z.object({
       project: z.string().describe('The project, by name'),
       column: z.string().describe('The column to delete, by name'),
-      board: z.string().nullish().describe('The board name (optional if the project has one board)'),
+      board: z
+        .string()
+        .nullish()
+        .describe('The board name (optional if the project has one board)'),
     }),
     needsApproval: true,
     execute: async ({ project, column, board }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // deleteColumn is manage-level — mirrors assertColumnAccess(ctx, id, { manage: true }).
-      if (!(await h.canManageProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canManageProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const br = await resolveBoard(pr.id, board);
       if (!br.ok) return br.result;
@@ -992,14 +1026,18 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       project: z.string().describe('The project, by name'),
       column: z.string().describe('The column to move, by name'),
       newOrder: z.number().int().describe('Target position, 0 = first'),
-      board: z.string().nullish().describe('The board name (optional if the project has one board)'),
+      board: z
+        .string()
+        .nullish()
+        .describe('The board name (optional if the project has one board)'),
     }),
     needsApproval: true,
     execute: async ({ project, column, newOrder, board }) => {
       const pr = await resolveProject(project);
       if (!pr.ok) return pr.result;
       // reorderColumns is member-level — mirrors assertBoardAccess(ctx, boardId).
-      if (!(await h.canAccessProject(pr.id))) return { error: 'You do not have access to that project.' };
+      if (!(await h.canAccessProject(pr.id)))
+        return { error: 'You do not have access to that project.' };
 
       const br = await resolveBoard(pr.id, board);
       if (!br.ok) return br.result;
@@ -1013,7 +1051,8 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
         return { needsClarification: `Which column — ${cr.candidates.join(', ')}?` };
 
       const oldOrder = cr.value.order;
-      if (oldOrder === newOrder) return { moved: cr.value.name, board: br.name, position: newOrder };
+      if (oldOrder === newOrder)
+        return { moved: cr.value.name, board: br.name, position: newOrder };
 
       // Same order-shifting transaction the router uses.
       await db.$transaction(async (tx) => {

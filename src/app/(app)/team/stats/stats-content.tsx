@@ -308,7 +308,9 @@ function VelocityChart({ velocity }: { velocity: { date: string; count: number }
           }}
           labelStyle={{ color: 'var(--popover-foreground)', fontWeight: 600 }}
           itemStyle={{ color: 'var(--popover-foreground)' }}
-          labelFormatter={(d) => format(new Date(d), 'EEE, MMM d')}
+          labelFormatter={(d) =>
+            typeof d === 'string' || typeof d === 'number' ? format(new Date(d), 'EEE, MMM d') : ''
+          }
           formatter={(value) => [String(value), 'completed']}
         />
         <Line

@@ -181,7 +181,7 @@ export const resignationsRouter = router({
           status: resignation.status,
           targetRole: resignation.user.role,
         },
-        { source: 'TRPC' }
+        { source: 'TRPC', db: ctx.db }
       );
       if (!allowed) {
         throw new TRPCError({
@@ -198,9 +198,7 @@ export const resignationsRouter = router({
           reviewedById: ctx.session.user.id,
           reviewedAt: new Date(),
           reviewNote: input.reviewNote ?? null,
-          lastWorkingDay: approved
-            ? (input.lastWorkingDay ?? resignation.proposedLastDay)
-            : null,
+          lastWorkingDay: approved ? (input.lastWorkingDay ?? resignation.proposedLastDay) : null,
         },
       });
 

@@ -47,10 +47,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
     description:
       'List CURRENTLY ACTIVE employees / staff / people / team members (name, title, department, status, skills). Use for "who works here", "the team", headcount. NOTE: this excludes deactivated / laid-off (former) people — to look up or act on a SPECIFIC person who might be inactive, use getTeamMember or the action tool directly (they include former members), not this.',
     inputSchema: z.object({
-      department: z
-        .enum(DEPARTMENTS)
-        .nullish()
-        .describe('Optional department filter'),
+      department: z.enum(DEPARTMENTS).nullish().describe('Optional department filter'),
       query: z.string().nullish().describe('Optional name/role search (fuzzy, typo-tolerant)'),
     }),
     execute: async ({ department, query }) => {
@@ -80,7 +77,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
 
   tools.getTeamMember = tool({
     description:
-      "A deep profile of ONE person: title, department, skills, bio, the projects they're on, a breakdown of their tasks (open / overdue / done), and any current or pending leave. Use for \"tell me about <name>\", \"what is <name> working on\", \"<name>'s workload\". Give the person's name.",
+      'A deep profile of ONE person: title, department, skills, bio, the projects they\'re on, a breakdown of their tasks (open / overdue / done), and any current or pending leave. Use for "tell me about <name>", "what is <name> working on", "<name>\'s workload". Give the person\'s name.',
     inputSchema: z.object({
       name: z.string().describe('The team member\'s name, e.g. "Aisha" or "Aisha Khan"'),
     }),
@@ -227,7 +224,15 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         if (!h.isAdminOrHr) return { error: 'The HR overview is restricted to admins and HR.' };
         const now = h.now();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        const todayEnd = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          23,
+          59,
+          59,
+          999
+        );
         const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         const thirtyDaysAhead = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
@@ -333,7 +338,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
 
       const isSelf = targetId === ctx.userId;
       if (!h.isAdmin && !isSelf) {
-        return { error: 'Performance notes are visible only to admins or to the person themselves.' };
+        return {
+          error: 'Performance notes are visible only to admins or to the person themselves.',
+        };
       }
 
       const notes = await h.db.performanceNote.findMany({
@@ -468,7 +475,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
     // team.updateLeaveStatus + its requester notification).
     tools.setLeaveStatus = tool({
       description:
-        'Approve or decline a team member\'s PENDING time-off request. Use for "approve <name>\'s vacation", "decline <name>\'s leave". Give the person\'s name; if they have more than one pending request you\'ll be asked which dates. The requester is notified of the decision. ADMIN / HR only.',
+        "Approve or decline a team member's PENDING time-off request. Use for \"approve <name>'s vacation\", \"decline <name>'s leave\". Give the person's name; if they have more than one pending request you'll be asked which dates. The requester is notified of the decision. ADMIN / HR only.",
       inputSchema: z.object({
         name: z.string().describe('The requester\'s name, e.g. "Aisha Khan"'),
         status: z.enum(['APPROVED', 'REJECTED']).describe('REJECTED = declined'),
@@ -509,7 +516,14 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const leave = await h.db.leaveRequest.update({
           where: { id: pending[0].id },
           data: { status, approvedById: ctx.userId },
-          select: { id: true, type: true, startDate: true, endDate: true, status: true, userId: true },
+          select: {
+            id: true,
+            type: true,
+            startDate: true,
+            endDate: true,
+            status: true,
+            userId: true,
+          },
         });
 
         const displayStatus = status === 'REJECTED' ? 'DECLINED' : 'APPROVED';
@@ -593,7 +607,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         // Already gone — don't silently "re-lay-off"; report it plainly so the
         // model never tells the user the person doesn't exist.
         if (before.status === 'INACTIVE') {
-          return { error: `${before.name} is already inactive — they were laid off / deactivated previously. No action needed.` };
+          return {
+            error: `${before.name} is already inactive — they were laid off / deactivated previously. No action needed.`,
+          };
         }
 
         // ABAC: admins may lay off anyone; HR may lay off non-admins only.
@@ -747,7 +763,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const finalRole = role ?? 'EMPLOYEE';
         const lowerEmail = email.toLowerCase();
 
-        const existing = await h.db.user.findUnique({
+        const existing = await h.db.user.findFirst({
           where: { email: lowerEmail },
           select: { id: true, status: true },
         });
@@ -839,7 +855,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
     // last active admin against being demoted out of existence.
     tools.updateMember = tool({
       description:
-        "Update another team member's details — role, department, title, phone, bio, or skills. Use for \"make <name> an admin\", \"move <name> to Engineering\", \"change <name>'s title\". Only fields you provide change. To activate/deactivate someone use setMemberStatus or layOffMember. ADMIN only.",
+        'Update another team member\'s details — role, department, title, phone, bio, or skills. Use for "make <name> an admin", "move <name> to Engineering", "change <name>\'s title". Only fields you provide change. To activate/deactivate someone use setMemberStatus or layOffMember. ADMIN only.',
       inputSchema: z.object({
         name: z.string().describe('The member to update, e.g. "Aisha Khan"'),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).nullish(),
@@ -943,7 +959,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
     // Reset another member's password (mirrors team.adminResetPassword).
     tools.resetMemberPassword = tool({
       description:
-        "Set a new password for another team member (admin password reset). Use for \"reset <name>'s password\", \"set a new password for <name>\". The password is stored hashed and never echoed back. ADMIN only.",
+        'Set a new password for another team member (admin password reset). Use for "reset <name>\'s password", "set a new password for <name>". The password is stored hashed and never echoed back. ADMIN only.',
       inputSchema: z.object({
         name: z.string().describe('The member whose password to reset, e.g. "Aisha Khan"'),
         // AI-01: a bare min(8) string only — the policy regexes serialize to
