@@ -1,11 +1,119 @@
 # Hybrid Deployment and Operations
 
-## Current
+## Process model
 
-The repository targets Next.js/Vercel and includes `vercel.json`, `@vercel/blob`, `@vercel/edge-config`, and `@vercel/sdk` dependencies (`package.json`). `DEPLOY-NOTES.md` records prior deploy-gated considerations. Dependency presence does not prove linked production resources, environment variables, or active use.
+Web/API runs on Next.js Node.js/Fluid Compute. PostgreSQL is the durable source of truth. Platform jobs are durable database records processed by:
 
-## Planned operational model
+- Vercel Cron: `GET /api/platform/jobs/process` every five minutes; or
+- CLI: `bun run platform:jobs -- --max-jobs=<n>`.
 
-Use Vercel Functions/Fluid Compute for web/API workloads unless a documented workload requires another runtime. Keep PostgreSQL as the durable system of record; use object storage for durable file payloads; use a queue/worker design for exports, SCIM, billing webhooks and purge jobs. Define regions, RPO/RTO, backups, restore drills, secret rotation, health checks, logging, metrics and alert ownership before production launch.
+The route has `maxDuration = 300` and requires `CRON_SECRET`. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, recovers 15-minute stale leases, increments attempts, and uses exponential backoff capped at 30 minutes.
 
-Document every required environment variable by name, purpose, environment, rotation owner and whether it is sensitive—never its value.
+## Job types
+
+| Type                  | Behavior                                                 | Required external configuration                |
+| --------------------- | -------------------------------------------------------- | ---------------------------------------------- |
+| `PROVISION_SHARED`    | creates/updates ready shared production deployment       | base domain; optional shared Vercel project ID |
+| `PROVISION_DEDICATED` | creates/uses Vercel project, env, deployment, then polls | Vercel token/team/Git repo                     |
+| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to project              | DNS and Vercel credentials/project             |
+| `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                           |
+| `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                         |
+| `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                        |
+| `PURGE_DATA`          | retention-gated tenant-row deletion                      | approved lifecycle state/time                  |
+| `SUSPEND` / `RESUME`  | deployment availability and support revocation           | none                                           |
+
+Jobs are idempotency-keyed where commands can be retried. Operators can inspect payload/result/error, retry failed jobs, or cancel queued/running work.
+
+## Shared deployment
+
+Shared is the default. The worker records:
+
+- provider `VERCEL`;
+- production environment;
+- shared mode;
+- project ID/region when configured;
+- canonical `https://<slug>.<base-domain>` (HTTP for localhost);
+- current commit/local version;
+- READY/health timestamps.
+
+All organizations share application compute and PostgreSQL while RLS isolates data.
+
+## Dedicated deployment
+
+The dedicated worker requires:
+
+- `VERCEL_ACCESS_TOKEN`;
+- `VERCEL_TEAM_ID` or `VERCEL_ORG_ID`;
+- `VERCEL_GIT_REPO_ORG`;
+- `VERCEL_GIT_REPO_NAME`;
+- optional `VERCEL_GIT_REPO_REF`.
+
+It creates/uses `devfathom-<slug>`, upserts runtime environment variables, creates a production Git deployment, stores provider IDs/URL/health, and schedules polling jobs until READY/ERROR/CANCELED.
+
+Local QA did not create a live Vercel project. Test this path in a controlled team before enterprise launch.
+
+## Configuration reference
+
+Use `.env.example` as the machine-copyable template.
+
+### Required runtime
+
+| Variable                           | Sensitive | Purpose                                    |
+| ---------------------------------- | --------- | ------------------------------------------ |
+| `DATABASE_URL`                     | yes       | PostgreSQL application connection          |
+| `AUTH_SECRET`                      | yes       | Auth.js JWT encryption/signing secret      |
+| `AUTH_URL` / `NEXT_PUBLIC_APP_URL` | no        | canonical tenant application URL           |
+| `PLATFORM_BASE_DOMAIN`             | no        | base domain; admin host is `admin.<value>` |
+| `PLATFORM_ENCRYPTION_KEY`          | yes       | encrypt SSO/email/MFA/support secrets      |
+| `CRON_SECRET`                      | yes       | job worker bearer credential               |
+| `DEFAULT_ORGANIZATION_ID`          | no        | local/default-host tenant                  |
+
+### Bootstrap/seed only
+
+`PLATFORM_ADMIN_EMAIL`, `PLATFORM_ADMIN_PASSWORD`, `ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_DEPARTMENT`, `ADMIN_TITLE`, and `SEED_PASSWORD`. Do not retain bootstrap passwords in deployment config after controlled initialization unless the script is intentionally rerunnable.
+
+### Dedicated Vercel
+
+`VERCEL_ACCESS_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_REGION`, `VERCEL_GIT_REPO_ORG`, `VERCEL_GIT_REPO_NAME`, `VERCEL_GIT_REPO_REF`.
+
+### Optional integrations
+
+- private files/exports: `BLOB_READ_WRITE_TOKEN`;
+- realtime: `ABLY_API_KEY`;
+- email: `RESEND_API_KEY`, `BREVO_*`, `EMAIL_*`;
+- Edge Config: `EDGE_CONFIG`;
+- Google/Microsoft: OAuth variables in `.env.example`;
+- AI: `GROQ_MODEL`, `GEMINI_MODEL` plus provider credentials already used by the app;
+- meetings: `NEXT_PUBLIC_JAAS_APP_ID`, `JAAS_KID`, `JAAS_PRIVATE_KEY`.
+
+## Observability
+
+Operational evidence is available in:
+
+- platform overview status cards;
+- deployments and health JSON;
+- jobs with attempts/result/error/timestamps;
+- lifecycle events;
+- platform audit ledger;
+- tenant audit and SCIM events;
+- provider deployment logs.
+
+Production should add alerting for failed/stale jobs, overdue invoices, expiring contracts, identity errors, domain verification failures, degraded deployments, repeated auth failures, and RLS verifier failures.
+
+## Backup and recovery
+
+Before production:
+
+1. enable managed PostgreSQL point-in-time recovery;
+2. define RPO/RTO;
+3. back up Blob/export objects according to classification;
+4. restore into an isolated environment;
+5. run migrations and RLS verification on the restored copy;
+6. validate at least two organizations, login, files, contracts, and jobs;
+7. record drill time and evidence.
+
+## Secret rotation
+
+Rotate platform/bootstrap passwords, `AUTH_SECRET`, cron secret, Vercel token, Blob token, email keys, SCIM tokens, IdP client secrets/certificates, and `PLATFORM_ENCRYPTION_KEY` under a documented schedule.
+
+Changing the encryption key without re-encrypting stored ciphertext makes encrypted values unreadable. Use an expand/rotate/reencrypt/retire procedure before production key rotation.

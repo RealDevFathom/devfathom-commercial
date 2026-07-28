@@ -1,7 +1,81 @@
 # Organization Lifecycle, Export, and Purge
 
-## Planned state machine
+## State machine
 
-`trial → active → suspended → pending_deletion → purged`, with explicit reactivation rules. Suspension blocks new sessions/mutations according to policy while retaining audit visibility. Pending deletion starts a retention clock and export window. Purge is asynchronous, idempotent, auditable and covers database records, blobs, search/cache material, credentials and provider-held data according to the data-processing agreement.
+```text
+PROSPECT
+  ├─ ONBOARDING
+  └─ TERMINATED
 
-Exports are authorization-gated jobs with a snapshot boundary, encryption, expiry, download audit event and tenant isolation test. Legal holds override automated purge. No production retention period is defined by this baseline; obtain policy approval before setting one.
+ONBOARDING
+  ├─ ACTIVE
+  ├─ SUSPENDED
+  └─ TERMINATED
+
+ACTIVE
+  ├─ GRACE
+  ├─ SUSPENDED
+  └─ TERMINATED
+
+GRACE
+  ├─ ACTIVE
+  ├─ SUSPENDED
+  └─ TERMINATED
+
+SUSPENDED ── ACTIVE | TERMINATED
+TERMINATED ── PURGING
+PURGING ── PURGED (worker only)
+PURGED (terminal)
+```
+
+The control plane exposes only allowed next states. Every transition requires operator capability; sensitive transitions require a reason and create `OrganizationLifecycleEvent` plus platform audit.
+
+## Access by state
+
+- `ONBOARDING`, `ACTIVE`, `GRACE`: tenant host may authenticate and operate.
+- `PROSPECT`: not a usable workspace.
+- `SUSPENDED`: tenant authentication/actor resolution fails; deployment health is marked unavailable; active support is revoked.
+- `TERMINATED`: data retained but tenant access blocked.
+- `PURGING`: retention-approved purge is queued/runnable.
+- `PURGED`: tenant data deleted, control evidence retained.
+
+## Activation
+
+Activation is manual. Before `ACTIVE`, verify:
+
+- package and seat ceiling;
+- at least one active administrator;
+- deployment mode;
+- contract/module state;
+- required production deployment/provisioning plan;
+- identity/domain state when contractually required.
+
+The transition can enqueue `PROVISION_SHARED` or `PROVISION_DEDICATED`.
+
+## Suspension and resume
+
+Suspension enqueues a `SUSPEND` job. The worker marks non-decommissioned deployments degraded and revokes active support sessions. Resume enqueues `RESUME`, restores deployment state to ready, and records health timestamps.
+
+Lifecycle access checks remain authoritative even if a provider deployment has not yet changed state.
+
+## Export
+
+`EXPORT_DATA` requires private Blob storage. The worker captures a bounded organization snapshot containing organization metadata, users, clients, projects, tasks, invoices, transactions, and audit records; writes a private JSON object; and stores path, URL, time, and record count in the job result.
+
+Exports are platform jobs, not public links. Operations must add download authorization/expiry policy around any distribution workflow and should delete artifacts according to the data policy.
+
+## Termination and purge
+
+Termination records the retention/purge schedule. `PURGE_DATA` refuses to run unless:
+
+- organization status is `PURGING`;
+- `purgeScheduledAt` exists; and
+- the retention timestamp has elapsed.
+
+The worker introspects tenant tables, computes a foreign-key-safe deletion order, deletes rows by `organizationId`, marks the organization `PURGED`, and records deleted row counts in the lifecycle event.
+
+Control-plane tables needed for legal/audit evidence are excluded from tenant deletion. Blob/provider cleanup beyond the implemented database/export object path must be included in the approved production retention runbook.
+
+## Legal hold
+
+The schema does not invent a legal-hold policy. If a hold applies, operators must not transition to `PURGING` or schedule the job. Add an explicit hold field and dual-control workflow before automating legal-hold decisions.

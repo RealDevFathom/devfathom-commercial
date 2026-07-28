@@ -1,31 +1,53 @@
-# Admin Platform Documentation
+# DevFathom Administration Platform
 
-This directory is the operating record for the proposed multi-tenant admin-platform expansion of DevFathom Hub. It is deliberately evidence-led: **Current** means verified in the repository on 2026-07-28; **Planned contract** is a target design, not shipped behavior; **Verification** is recorded only after a reproducible check.
+This handbook is the source of truth for the implemented DevFathom control plane and customer-agency administration. The product remains manually sold and activated: it does not expose self-service signup, checkout, or automatic organization activation.
 
-| Area                     | Document                                          | Status            |
-| ------------------------ | ------------------------------------------------- | ----------------- |
-| Delivery ledger          | [STATUS](STATUS.md)                               | active            |
-| Architecture and tenancy | [architecture-tenancy](architecture-tenancy.md)   | planned contract  |
-| Product surfaces         | [control-plane](control-plane.md)                 | planned contract  |
-| Domain model             | [data-model](data-model.md)                       | current + target  |
-| Entitlements             | [entitlements](entitlements.md)                   | planned contract  |
-| Commercial               | [commercial-ledger](commercial-ledger.md)         | planned contract  |
-| Identity                 | [identity-access](identity-access.md)             | current + planned |
-| APIs                     | [api](api.md)                                     | current + planned |
-| Branding/domains/email   | [white-label](white-label.md)                     | planned contract  |
-| Deployment/operations    | [operations](operations.md)                       | current + planned |
-| Lifecycle                | [lifecycle](lifecycle.md)                         | planned contract  |
-| Security                 | [security-threat-model](security-threat-model.md) | current + planned |
-| Quality                  | [testing-release](testing-release.md)             | current + planned |
-| Rollout                  | [migration-rollout](migration-rollout.md)         | planned contract  |
-| Runbooks                 | [runbooks](runbooks.md)                           | planned contract  |
-| Decisions                | [ADRs](adr/README.md)                             | active            |
-| Change record            | [CHANGELOG](CHANGELOG.md)                         | active            |
+## What shipped
 
-## Source anchors
+- A separate platform control desk at `admin.<PLATFORM_BASE_DOMAIN>/platform`.
+- Manual organization onboarding and lifecycle gates.
+- Shared-by-default and dedicated-enterprise deployment records and workers.
+- One PostgreSQL database with forced row-level security on every tenant table.
+- Module catalog, packages, contracts, overrides, seats, limits, expiry, and grace.
+- Full sales CRM, proposal follow-up, opportunity conversion, contract, renewal, invoice, payment, and payment-status ledgers.
+- Tenant organization administration for profile, people, roles, domains, brand, email, SCIM, and licensed capabilities.
+- Platform MFA, role-scoped operator sessions, one-use audited support access, OIDC, SAML, JIT, SCIM 2.0, API scope enforcement, and an audit ledger.
+- Durable jobs for provisioning, domain verification, identity testing, branding, export, suspension, resumption, and retention-controlled purge.
 
-The existing application is Next.js 16/App Router, React 19, Prisma 7/PostgreSQL, NextAuth v5 and tRPC v11 (`package.json`; `README.md`). Core runtime anchors include `src/lib/auth.ts`, `src/server/trpc.ts`, `src/lib/api-auth.ts`, `prisma/schema.prisma`, and `src/app/api/v1/spec/route.ts`. Line references in these documents are navigation aids, not a substitute for source review.
+## Handbook map
 
-## Documentation rules
+| Need                                                | Document                                            |
+| --------------------------------------------------- | --------------------------------------------------- |
+| Delivery state and evidence                         | [STATUS](STATUS.md)                                 |
+| Architecture and request flow                       | [Architecture and tenancy](architecture-tenancy.md) |
+| Platform and agency UI                              | [Control plane](control-plane.md)                   |
+| Tables and invariants                               | [Data model](data-model.md)                         |
+| Modules, seats, limits, contracts                   | [Entitlements](entitlements.md)                     |
+| CRM and commercial operations                       | [Commercial ledger](commercial-ledger.md)           |
+| Password, MFA, ABAC, SSO, SCIM, support             | [Identity and access](identity-access.md)           |
+| HTTP and tRPC inventory                             | [API](api.md)                                       |
+| Brand, domains, and email                           | [White-label](white-label.md)                       |
+| Workers, shared/dedicated deployment, configuration | [Operations](operations.md)                         |
+| Organization states, export, retention, purge       | [Lifecycle](lifecycle.md)                           |
+| Setup and production rollout                        | [Migration and rollout](migration-rollout.md)       |
+| Operator procedures                                 | [Runbooks](runbooks.md)                             |
+| Threats and implemented controls                    | [Security threat model](security-threat-model.md)   |
+| Test matrix and release gates                       | [Testing and release](testing-release.md)           |
+| Accepted architecture decisions                     | [ADRs](adr/README.md)                               |
+| Change history                                      | [CHANGELOG](CHANGELOG.md)                           |
 
-Update STATUS and CHANGELOG with each delivery. A feature moves to Implemented only with a source anchor, and to Verified only with command, environment, date, and result. Do not infer production readiness from a dependency being present.
+## Core source anchors
+
+- `prisma/schema.prisma` and `prisma/migrations/`
+- `src/lib/tenancy/scoped-db.ts`, `src/lib/tenancy/host.ts`
+- `src/lib/entitlements.ts`, `src/lib/module-catalog.ts`
+- `src/lib/platform/auth.ts`, `src/lib/platform/commands.ts`, `src/lib/platform/jobs.ts`
+- `src/app/platform/`, `src/app/(app)/organization/`
+- `src/server/routers/organization-admin.ts`
+- `src/app/api/platform/`, `src/app/api/scim/`, `src/app/api/sso/`
+
+## Status language
+
+- **Implemented** means source and migrations exist.
+- **Verified locally** means a reproducible check is recorded in [STATUS](STATUS.md).
+- **Production configured** requires real deployment secrets, DNS, provider accounts, and an operator-run rollout; local verification is not a claim that those external resources exist.

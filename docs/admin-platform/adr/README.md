@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-ADRs record accepted decisions, context, alternatives, consequences, owner and date. Decisions are not accepted merely because a document proposes them.
+- [ADR-001: shared PostgreSQL with forced tenant RLS](001-tenant-rls.md) — accepted and implemented
+- [ADR-002: separate seller control plane](002-control-plane-separation.md) — accepted and implemented
 
-- [ADR-001: tenant isolation with database RLS](001-tenant-rls.md) — proposed
-- [ADR-002: control plane separation](002-control-plane-separation.md) — proposed
+ADRs describe durable decisions. Operational configuration and verification live in the parent handbook.

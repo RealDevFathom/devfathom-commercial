@@ -6,9 +6,10 @@
 
 **Depth in everything we build.**
 
-The internal company hub for **DevFathom** — a premium software services and
-consultancy firm. Projects, finance, clients, people, and real-time
-collaboration, in one calm, unified workspace.
+The company operating hub for **DevFathom** and customer agencies. Projects,
+finance, clients, people, real-time collaboration, and organization
+administration in one calm workspace, backed by a separate seller control
+plane.
 
 </div>
 
@@ -28,19 +29,23 @@ consistent surface:
 - **Chat** — real-time messaging over WebSockets
 - **Team, HR & Insights** — people, leave, and analytics
 - **REST API + API docs** — programmatic access for scripts and AI agents
+- **Organization administration** — people, roles, modules, domains, identity,
+  SCIM, email, and brand
+- **Platform control desk** — CRM, contracts, manual onboarding, licenses,
+  shared/dedicated deployments, jobs, operators, support, and audit
 
 ## Tech stack
 
-| Area | Choice |
-| --- | --- |
-| Framework | Next.js 16 (App Router) · React 19 |
-| Styling | Tailwind CSS v4 · shadcn/ui on `@base-ui/react` |
-| Motion | GSAP + `@gsap/react` · Motion (Framer Motion) |
-| Type-safe API | tRPC v11 · TanStack Query |
-| Data | Prisma 7 · PostgreSQL |
-| Auth | NextAuth v5 |
-| Realtime | Socket.IO |
-| Runtime / PM | [Bun](https://bun.sh) |
+| Area          | Choice                                              |
+| ------------- | --------------------------------------------------- |
+| Framework     | Next.js 16 (App Router) · React 19                  |
+| Styling       | Tailwind CSS v4 · shadcn/ui on `@base-ui/react`     |
+| Motion        | GSAP + `@gsap/react` · Motion (Framer Motion)       |
+| Type-safe API | tRPC v11 · TanStack Query                           |
+| Data          | Prisma 7 · PostgreSQL                               |
+| Auth          | NextAuth v5                                         |
+| Realtime      | Ably when configured; graceful no-realtime fallback |
+| Runtime / PM  | [Bun](https://bun.sh)                               |
 
 ## Getting started
 
@@ -49,23 +54,36 @@ This project uses **Bun** as its package manager and runtime.
 ```bash
 bun install          # install dependencies
 bun run db:generate  # generate the Prisma client
-bun run db:push      # sync the schema to your database
+bunx prisma migrate deploy
 bun run db:seed      # (optional) seed demo data
-bun dev              # start web + socket server together
+bun run dev          # start Next.js
 ```
 
-Open [http://localhost:3000](http://localhost:3000). In production this runs at
-**dev-fathom-hub.vercel.app**.
+For local multi-host development, open
+`http://devfathom.localhost:3000` for the tenant workspace and
+`http://admin.localhost:3000/platform` for the seller control desk.
 
 ### Useful scripts
 
 ```bash
-bun dev            # web (next dev) + socket server, concurrently
+bun run dev        # Next.js development server
 bun run build      # prisma generate && next build
-bun run lint       # eslint
+bun run typecheck  # TypeScript
+bun run lint       # ESLint
+bun run test       # Vitest
+bun run test:rls   # PostgreSQL isolation verification (test DB only)
+bun run platform:jobs -- --max-jobs=25
 bun run format     # prettier --write
 bun run db:studio  # Prisma Studio
 ```
+
+## Administration platform
+
+The product uses one PostgreSQL database with forced organization RLS. Customer
+agencies are activated manually; shared deployment is the default and
+enterprise customers may use dedicated Vercel projects. Start with
+**[the administration handbook](./docs/admin-platform/README.md)** and copy
+**[`.env.example`](./.env.example)** for configuration names.
 
 ## Brand
 
@@ -87,7 +105,8 @@ src/
     (app)/             # authenticated workspace (dashboard, projects, …)
     brand/             # public brand showcase (/brand)
     login/             # animated sign-in
-    api/               # tRPC + REST (/api/v1)
+    platform/          # seller control desk
+    api/               # tRPC, REST, platform, SCIM, SSO, support
   components/
     brand/             # logo / DevFathom mark
     layout/            # app shell, sidebar, topbar
@@ -95,5 +114,6 @@ src/
     ui/                # shadcn primitives
   lib/                 # auth, db, trpc, motion tokens
   server/              # tRPC routers
-socket-server/         # Socket.IO server
+prisma/                # schema, seed, migrations
+docs/admin-platform/   # architecture, API, status, runbooks, release evidence
 ```

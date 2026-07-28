@@ -1,7 +1,61 @@
-# Custom Domains, White-label, and Email
+# Brand, Custom Domains, and Email
 
-## Planned contract
+## Organization brand
 
-Each organization may have verified custom domains and a brand profile (name, mark, colors, support contacts, legal links). Host resolution must occur before authentication and must reject unverified, suspended, or ambiguous domains. Domain proof uses DNS/HTTP verification, renewal monitoring and safe takeover prevention.
+`OrganizationBrand` stores:
 
-Email branding and sender domains require separate DNS verification (SPF, DKIM, DMARC) and clear transactional-versus-marketing classifications. Tenant email configuration must not permit arbitrary sender spoofing. Existing email abstractions live in `src/lib/email/`; provider enablement must be verified from deployment configuration.
+- primary and accent colors;
+- logo, mark, and favicon URLs;
+- support email;
+- sender name;
+- update actor/time.
+
+The tenant layout reads brand state inside the tenant transaction and applies CSS variables and workspace identity at runtime. Missing values fall back to DevFathom defaults. The brand preview page uses a safe entitlement context so it can render outside a tenant layout.
+
+Applying a brand enqueues or executes `APPLY_BRAND`, which records a deterministic brand version in deployment health metadata.
+
+## Custom domains
+
+Domains have a purpose, primary flag, generated verification token, verification state, last check, failure reason, and verified timestamp.
+
+Verification workflow:
+
+1. tenant or platform operator adds the normalized host;
+2. DevFathom shows `_devfathom-verification.<host>` and its exact TXT value;
+3. the worker resolves TXT records;
+4. mismatches remain `FAILED` with an actionable reason;
+5. a verified record is attached to the organization’s Vercel project;
+6. only `VERIFIED` domains resolve to the tenant.
+
+Retry is explicit and auditable. Manual status control exists for operational recovery. Unverified domains never route tenant traffic.
+
+The shared canonical slug host remains available while customer DNS is pending.
+
+## Dedicated domains
+
+Support and host resolution use the ready deployment URL when available, so a dedicated Vercel hostname works before a customer domain is verified. Custom-domain attachment uses the deployment project ID and the same DNS proof.
+
+## Email delivery
+
+Organization email settings include provider name, sender name/address, reply-to, encrypted API key, verification time, and provider configuration JSON.
+
+Tenant administrators can update presentation/configuration, but existing secrets are never returned. Omitting the API key retains the stored credential. Platform settings show whether optional global email integrations are configured.
+
+The repository retains existing provider adapters (platform email, Brevo/SMTP-style settings, Gmail/Microsoft integrations where configured). Production must select and provision the real provider. UI presence is not proof of sender-domain verification.
+
+## Email DNS and abuse controls
+
+Before customer-branded sending:
+
+- verify the provider’s required domain records;
+- configure SPF and DKIM;
+- publish an appropriate DMARC policy;
+- constrain `fromAddress` to approved domains;
+- separate transactional and marketing use;
+- rotate provider API keys;
+- monitor bounce/complaint/reputation signals;
+- document fallback sender behavior.
+
+## Asset handling
+
+Brand fields currently accept HTTPS URLs; they do not upload image assets. Use a trusted object store/CDN and restrict operationally who can update these values. Private organization data must never be embedded in public brand assets.
