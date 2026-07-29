@@ -52,10 +52,15 @@ async function organizationForServerComponent(
 async function organizationForActor(
   expectedOrganizationId: string,
   request?: Request
-): Promise<TenantOrganization> {
-  return request
-    ? requireOrganizationForRequest(request, expectedOrganizationId)
-    : organizationForServerComponent(expectedOrganizationId);
+): Promise<TenantOrganization | null> {
+  try {
+    return request
+      ? await requireOrganizationForRequest(request, expectedOrganizationId)
+      : await organizationForServerComponent(expectedOrganizationId);
+  } catch (error) {
+    if (error instanceof TenantHostError) return null;
+    throw error;
+  }
 }
 
 function isUsableSession(session: Session | null | undefined): session is Session {
@@ -78,6 +83,7 @@ async function resolveTenantActorUncached(
   const support = await getSupportSession(options.request);
   if (support) {
     const organization = await organizationForActor(support.organizationId, options.request);
+    if (!organization) return null;
     const user = await withTenantDb(organization.id, (tenantDb) =>
       tenantDb.user.findUnique({
         where: { id: support.tenantUserId },
@@ -125,6 +131,7 @@ async function resolveTenantActorUncached(
 
   if (isUsableSession(session)) {
     const organization = await organizationForActor(session.user.organizationId, options.request);
+    if (!organization) return null;
     return { session, organization, support: null };
   }
 
