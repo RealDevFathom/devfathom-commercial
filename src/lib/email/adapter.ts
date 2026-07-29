@@ -1,14 +1,11 @@
 import { decryptToken } from './crypto';
 import { GmailAdapter } from './providers/gmail';
 import { OutlookAdapter } from './providers/outlook';
-import { HostedAdapter } from './providers/hosted';
 
 /**
- * The Mailbox abstraction. Every provider (Gmail, Outlook, and a future HOSTED
- * @domain mailbox) implements the SAME {@link MailAdapter} interface, and the
- * router/UI only ever talk to this interface — never to a specific provider. To
- * add a provider later you implement the interface and register it in
- * {@link createAdapter}; nothing in email.ts or the UI changes.
+ * The Mailbox abstraction. Every implemented provider uses the same
+ * {@link MailAdapter} interface, and the router/UI never depend on a concrete
+ * provider.
  */
 
 export type ProviderType = 'GMAIL' | 'OUTLOOK' | 'HOSTED';
@@ -73,9 +70,7 @@ export function createAdapter(type: ProviderType, creds: AdapterCredentials): Ma
     case 'OUTLOOK':
       return new OutlookAdapter(creds);
     case 'HOSTED':
-      // Reserved for a future self-hosted @domain mailbox. Same interface, so it
-      // plugs in here without touching the router or UI. Not implemented yet.
-      return new HostedAdapter(creds);
+      throw new Error('Hosted mailboxes are not available yet.');
     default: {
       const _exhaustive: never = type;
       throw new Error(`Unsupported mailbox type: ${_exhaustive}`);
