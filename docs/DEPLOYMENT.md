@@ -37,7 +37,7 @@ vercel env ls production
 ```
 
 Confirm the generated `.vercel/project.json` points to the intended production project before
-running any mutation. Run `vercel pull --environment=production` only in a dedicated release/CI
+running any mutation. Run `vercel pull --environment=production` only in a dedicated release
 workspace; do not overwrite the `.env.local` used by normal development.
 
 ## 2. Configure environments
@@ -94,7 +94,7 @@ Before the first production migration:
 4. Confirm the production connection requires TLS.
 5. Take a release backup if the database already contains data.
 
-Apply migrations from a secure operator or CI environment where `DATABASE_URL` is injected:
+Apply migrations from a secure operator environment where `DATABASE_URL` is injected:
 
 ```bash
 bun install --frozen-lockfile
@@ -166,16 +166,6 @@ After the database migration and release checks pass, promote the same artifact:
 ```bash
 vercel promote "$DEPLOYMENT_URL"
 ```
-
-For CI-controlled prebuilt deployment:
-
-```bash
-vercel pull --yes --environment=production
-vercel build --prod
-vercel deploy --prebuilt --prod
-```
-
-Always use `--prebuilt` after `vercel build`; otherwise Vercel ignores the local build output.
 
 ## 6. Domains and cron
 
