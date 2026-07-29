@@ -82,7 +82,7 @@ bun run db:studio  # Prisma Studio
 The product uses one PostgreSQL database with forced organization RLS. Customer
 agencies are activated manually; shared deployment is the default and
 enterprise customers may use dedicated Vercel projects. Start with
-**[the deployment runbook](./docs/DEPLOYMENT.md)** and
+**[the local setup guide](./docs/LOCAL_SETUP.md)** and
 **[the administration handbook](./docs/admin-platform/README.md)**, then copy
 **[`.env.example`](./.env.example)** for configuration names.
 
