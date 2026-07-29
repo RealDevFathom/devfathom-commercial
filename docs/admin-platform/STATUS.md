@@ -72,3 +72,5 @@ Production release is conditional on:
 6. Running OIDC/SAML/SCIM acceptance tests with each customer IdP/directory.
 7. Choosing and configuring the production email provider.
 8. Approving retention, purge, support-access, and incident-response policies.
+9. Approving a zero-demo bootstrap procedure for the first production organization and platform
+   operator.

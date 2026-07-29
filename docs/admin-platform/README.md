@@ -18,6 +18,7 @@ This handbook is the source of truth for the implemented DevFathom control plane
 
 | Need                                                | Document                                                 |
 | --------------------------------------------------- | -------------------------------------------------------- |
+| Production deployment                               | [Deployment runbook](../DEPLOYMENT.md)                   |
 | Delivery state and evidence                         | [STATUS](STATUS.md)                                      |
 | Architecture and request flow                       | [Architecture and tenancy](architecture-tenancy.md)      |
 | Platform and agency UI                              | [Control plane](control-plane.md)                        |
