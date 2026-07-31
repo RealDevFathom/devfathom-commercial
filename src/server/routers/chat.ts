@@ -267,7 +267,7 @@ export const chatRouter = router({
         }
       }
       // Attachment URLs must be ones our upload route issued — no arbitrary/external URLs.
-      if (input.attachments?.some((a) => !a.url.startsWith('/uploads/'))) {
+      if (input.attachments?.some((a) => !a.url.startsWith('/api/files/'))) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid attachment URL' });
       }
       // Authoritative server-side derivation — never trust client content/mentions.
