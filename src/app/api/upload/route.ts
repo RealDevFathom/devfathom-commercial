@@ -1,7 +1,4 @@
-// DEV STORAGE ONLY — local FS.
-// PROD: swap for Vercel Blob (`import { put } from '@vercel/blob'`, needs BLOB_READ_WRITE_TOKEN);
-// Vercel serverless FS is read-only so local FS won't work in prod.
-
+import { put } from '@vercel/blob';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import crypto from 'node:crypto';
@@ -77,11 +74,16 @@ export async function POST(request: Request) {
     const safeName = file.name.replace(/[/\\]/g, '').replace(/[^a-zA-Z0-9._\-]/g, '_');
     const filename = `${id}-${safeName}`;
 
-    // RT-05: write to a PRIVATE dir (outside public/) and return an authenticated
-    // delivery URL, so files are no longer world-readable by raw URL.
-    const uploadsDir = join(process.cwd(), 'private-uploads');
-    await mkdir(uploadsDir, { recursive: true });
-    await writeFile(join(uploadsDir, filename), Buffer.from(await file.arrayBuffer()));
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      await put(filename, file, {
+        access: 'private',
+        contentType: baseType,
+      });
+    } else {
+      const uploadsDir = join(process.cwd(), 'private-uploads');
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(join(uploadsDir, filename), Buffer.from(await file.arrayBuffer()));
+    }
 
     return NextResponse.json({
       url: '/api/files/' + filename,

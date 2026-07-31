@@ -1,13 +1,4 @@
-// RT-05 — authenticated attachment delivery (DEV local-FS storage).
-//
-// Previously uploads were written to public/uploads and served statically with
-// ZERO authorization — anyone who obtained the URL (a since-removed member, a
-// referer/log leak, link sharing) could fetch private-DM voice notes/files
-// forever. This route requires a valid session before streaming the bytes, so a
-// stale URL no longer leaks to anonymous or signed-out users. IMP-RT-05 adds
-// per-channel membership enforcement for chat attachments below; signed-URL
-// delivery against object storage remains the linked production enhancement.
-
+import { get } from '@vercel/blob';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { auth } from '@/lib/auth';
@@ -74,6 +65,20 @@ export async function GET(_request: Request, ctx: { params: Promise<{ name: stri
   const contentType = MIME[ext] ?? 'application/octet-stream';
 
   try {
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      const result = await get(name, { access: 'private' });
+      if (result?.statusCode !== 200) {
+        return new Response('Not found', { status: 404 });
+      }
+      return new Response(result.stream, {
+        headers: {
+          'Content-Type': result.blob.contentType ?? contentType,
+          'Content-Disposition': 'inline',
+          'Cache-Control': 'private, max-age=3600',
+        },
+      });
+    }
+
     const data = await readFile(join(UPLOAD_DIR, name));
     return new Response(data, {
       headers: {
