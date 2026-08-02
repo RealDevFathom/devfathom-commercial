@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { httpBatchLink } from '@trpc/client';
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { httpBatchLink, TRPCClientError } from '@trpc/client';
 import superjson from 'superjson';
+import { signInRedirectPath } from '@/lib/auth/session-state';
 import { trpc } from './trpc';
 
 function getBaseUrl() {
@@ -11,10 +12,28 @@ function getBaseUrl() {
   return `http://localhost:${process.env.PORT ?? 3000}`;
 }
 
+/**
+ * #16: the server ends a revoked session with UNAUTHORIZED. Without this the
+ * client would sit in a shell that silently fails every request. Send the user
+ * to sign in again — the accurate remedy — instead of leaving a dead workspace
+ * on screen. Uses a full navigation so the stale Auth.js session cookie and all
+ * cached tenant data are dropped.
+ */
+function redirectOnEndedSession(error: unknown) {
+  if (typeof window === 'undefined') return;
+  if (!(error instanceof TRPCClientError)) return;
+  if (error.data?.code !== 'UNAUTHORIZED') return;
+  const target = signInRedirectPath('session-ended');
+  if (window.location.pathname + window.location.search === target) return;
+  window.location.assign(target);
+}
+
 export function TRPCProvider({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
     () =>
       new QueryClient({
+        queryCache: new QueryCache({ onError: redirectOnEndedSession }),
+        mutationCache: new MutationCache({ onError: redirectOnEndedSession }),
         defaultOptions: {
           queries: {
             staleTime: 60 * 1000,

@@ -10,6 +10,7 @@ import { isTenantLifecycleAccessible, resolveOrganizationForRequest } from '@/li
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
 import { SSO_TICKET_COOKIE } from '@/lib/sso';
+import type { SessionInvalidReason } from '@/lib/auth/session-state';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -382,6 +383,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.status = ((user as Record<string, unknown>).status as string) ?? 'ACTIVE';
         // AUTH-01: snapshot the session-revocation counter at sign-in.
         token.tokenVersion = ((user as Record<string, unknown>).tokenVersion as number) ?? 0;
+        // #16: session validity is its own claim. `status` now only ever holds a
+        // real UserStatus, so a revoked session can never be misreported as a
+        // deactivated account (and vice versa).
+        token.sessionRevoked = false;
+        token.sessionInvalidReason = null;
         token.lastValidatedAt = Date.now();
         return token;
       }
@@ -389,7 +395,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // Subsequent requests: periodically re-read role/status from the DB so
       // deactivation and role changes take effect within REVALIDATE_AFTER_MS
       // rather than after the full token lifetime — stateless JWTs are otherwise
-      // unrevocable. Fail OPEN on DB errors to avoid mass lockout on a blip.
+      // unrevocable.
+      //
+      // FAIL CLOSED on database errors (#16). The previous comment here claimed
+      // this path failed OPEN while the code below failed closed; the closed
+      // behaviour is the intended one and is now the documented contract.
+      // Rationale: an unverifiable session is not an authorized session, and the
+      // application cannot serve tenant data without the same database anyway,
+      // so failing open buys no availability — only an unrevocable window.
+      // Recovery is a fresh sign-in, or the next successful revalidation once
+      // REVALIDATE_AFTER_MS has elapsed.
       const lastValidated = typeof token.lastValidatedAt === 'number' ? token.lastValidatedAt : 0;
       const stale = Date.now() - lastValidated > REVALIDATE_AFTER_MS;
       if (token.id && token.organizationId && stale) {
@@ -408,13 +423,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             })
           );
           if (!fresh) {
-            token.status = 'DELETED';
+            token.sessionRevoked = true;
+            token.sessionInvalidReason = 'DELETED';
           } else if (fresh.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
             // AUTH-01 / IMP-AUTH-03: the counter was bumped (password change,
             // admin reset, lay-off, or "sign out everywhere"), so every token
-            // issued before it is stale. Force re-auth via the same path the
-            // page guard uses for deactivated/forged sessions.
-            token.status = 'REVOKED';
+            // issued before it is stale. This is permanent for this token: the
+            // snapshot never catches up, so the claim can never clear itself.
+            token.sessionRevoked = true;
+            token.sessionInvalidReason = 'REVOKED';
           } else {
             token.role = fresh.role;
             token.status = fresh.status;
@@ -423,14 +440,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             token.organizationSlug = fresh.organization.slug;
             token.organizationStatus = fresh.organization.status;
             if (!isTenantLifecycleAccessible(fresh.organization.status)) {
-              token.status = 'ORGANIZATION_SUSPENDED';
+              token.sessionRevoked = true;
+              token.sessionInvalidReason = 'ORGANIZATION_SUSPENDED';
+            } else {
+              // Recoverable conditions (a resumed organization, a database blip)
+              // clear once the state is re-read successfully.
+              token.sessionRevoked = false;
+              token.sessionInvalidReason = null;
             }
           }
           token.lastValidatedAt = Date.now();
         } catch {
-          // Tenant authorization fails closed if its backing state cannot be
-          // revalidated. A fresh sign-in can recover after a transient outage.
-          token.status = 'REVALIDATION_FAILED';
+          token.sessionRevoked = true;
+          token.sessionInvalidReason = 'REVALIDATION_FAILED';
           token.lastValidatedAt = Date.now();
         }
       }
@@ -446,6 +468,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.department = token.department as string;
         session.user.title = token.title as string;
         session.user.status = token.status as string;
+        // #16: every consumer of the session must be able to see that the
+        // session itself was invalidated, independently of account status.
+        session.user.sessionRevoked = Boolean(token.sessionRevoked);
+        session.user.sessionInvalidReason =
+          (token.sessionInvalidReason as SessionInvalidReason | null) ?? null;
       }
       return session;
     },

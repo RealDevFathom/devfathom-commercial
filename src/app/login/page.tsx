@@ -6,12 +6,30 @@ import { headers } from 'next/headers';
 import { resolveOrganizationByHost, TENANT_HOST_HEADER } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+import {
+  ACCOUNT_INACTIVE_MESSAGE,
+  SESSION_ENDED_MESSAGE,
+  WORKSPACE_UNAVAILABLE_MESSAGE,
+} from '@/lib/auth/session-state';
 
 export const metadata: Metadata = {
   title: 'Sign in',
 };
 
-export default async function LoginPage() {
+/**
+ * #16: a session that ended must say so. The old guard redirected here silently
+ * after telling the user their *account* was inactive — the wrong condition and
+ * the wrong remedy. `signInRedirectPath` carries the accurate reason instead.
+ */
+const SIGN_OUT_NOTICES: Record<string, string> = {
+  'session-ended': SESSION_ENDED_MESSAGE,
+  'account-inactive': ACCOUNT_INACTIVE_MESSAGE,
+  'workspace-unavailable': WORKSPACE_UNAVAILABLE_MESSAGE,
+};
+
+export default async function LoginPage(props: PageProps<'/login'>) {
+  const { reason } = await props.searchParams;
+  const notice = typeof reason === 'string' ? SIGN_OUT_NOTICES[reason] : undefined;
   const requestHeaders = await headers();
   const organization = await resolveOrganizationByHost(
     requestHeaders.get(TENANT_HOST_HEADER) ??
@@ -57,13 +75,22 @@ export default async function LoginPage() {
               <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
                 Secure workspace access
               </p>
-              <h2 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
+              <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
                 Welcome back
-              </h2>
+              </h1>
               <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
                 Sign in to pick up the work your team is moving forward.
               </p>
             </div>
+
+            {notice ? (
+              <p
+                role="status"
+                className="mb-5 border-l-2 border-accent-brand bg-muted px-4 py-3 text-sm leading-5 text-text-muted"
+              >
+                {notice}
+              </p>
+            ) : null}
 
             <LoginForm connections={identity.connections} ssoEnforced={identity.enforced} />
           </div>

@@ -12,7 +12,10 @@
 import type { Policy } from './types';
 
 // Statuses that count as an active member of the company (may use the app).
-export const ACTIVE_STATUSES = new Set(['ACTIVE', 'ON_LEAVE']);
+// Owned by the session-state module so the API guard, the page guard, and the
+// policy engine can never drift apart (#16).
+export { ACTIVE_STATUSES } from '@/lib/auth/session-state';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 
 export const ALL_ACTIONS = [
   'admin:access', // the legacy "is this person an admin" gate
@@ -31,8 +34,12 @@ export type Action = (typeof ALL_ACTIONS)[number];
 
 const isAdmin: Policy = ({ subject }) => subject.role === 'ADMIN';
 const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject.role === 'HR';
+// #16: fail closed. A subject whose status is unknown is not a proven active
+// member, and every caller now resolves its subject from a session that has
+// already passed `evaluateSessionUser`, so a missing status means something
+// upstream is wrong — not that the member is fine.
 const isActiveMember: Policy = ({ subject }) =>
-  !subject.status || ACTIVE_STATUSES.has(subject.status);
+  Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
 
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────

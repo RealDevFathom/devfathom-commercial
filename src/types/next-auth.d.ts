@@ -1,4 +1,5 @@
 import 'next-auth';
+import type { SessionInvalidReason } from '@/lib/auth/session-state';
 
 declare module 'next-auth' {
   interface Session {
@@ -18,8 +19,14 @@ declare module 'next-auth' {
       platformUserId?: string;
       supportReason?: string;
       // Account status, refreshed from the DB by the jwt() callback so
-      // deactivation propagates to stateless JWT sessions. See src/server/trpc.ts.
+      // deactivation propagates to stateless JWT sessions. Only ever a real
+      // UserStatus (ACTIVE | INACTIVE | ON_LEAVE | INVITED). See #16.
       status?: string;
+      // Session validity, independent of account status. `true` means the token
+      // itself is no longer usable (revoked, deleted, suspended organization, or
+      // unverifiable). See src/lib/auth/session-state.ts.
+      sessionRevoked?: boolean;
+      sessionInvalidReason?: SessionInvalidReason | null;
     };
   }
 
@@ -51,5 +58,8 @@ declare module 'next-auth/jwt' {
     // revocation. Populated/refreshed in the jwt() callback.
     status?: string;
     lastValidatedAt?: number;
+    // #16: session revocation as its own claim, never folded into `status`.
+    sessionRevoked?: boolean;
+    sessionInvalidReason?: SessionInvalidReason | null;
   }
 }

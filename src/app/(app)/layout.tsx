@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
-import { ACTIVE_STATUSES } from '@/lib/abac';
+import { signInRedirectPath } from '@/lib/auth/session-state';
 import { AppShell } from '@/components/layout/app-shell';
 import { TenantSessionBoundary } from '@/components/tenant-session-boundary';
-import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { resolveTenantActor, resolveTenantSessionDenial } from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 
@@ -12,14 +12,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // otherwise slip through and render a broken shell; verifying the session here
   // (auth() validates the JWT) sends it to a clean /login redirect instead, and
   // pages no longer each have to remember to call auth() themselves.
+  // AUTH-01 / AUTH-03 / #16: a revoked session (its tokenVersion was bumped on
+  // password change / lay-off / sign-out-everywhere), a deactivated account, a
+  // suspended workspace, or a session whose state could not be verified is no
+  // longer an actor at all — `resolveTenantActor` applies the SAME verdict the
+  // tRPC guard applies, so the page and the API can never disagree about one
+  // session. The reason travels to the login page so the user is told the
+  // accurate remedy instead of "contact an administrator" for a dead session.
   const actor = await resolveTenantActor();
-  if (!actor?.session.user?.id) redirect('/login');
-  // AUTH-01 / AUTH-03: a deactivated, deleted, or session-REVOKED token (its
-  // tokenVersion was bumped on password change / lay-off / sign-out-everywhere)
-  // is no longer allowed to render the app — send it to a clean re-login. Lenient
-  // on a missing status to avoid locking out older valid tokens (mirrors ABAC).
-  if (actor.session.user.status && !ACTIVE_STATUSES.has(actor.session.user.status)) {
-    redirect('/login');
+  if (!actor?.session.user?.id) {
+    const denial = await resolveTenantSessionDenial();
+    redirect(denial ? signInRedirectPath(denial) : '/login');
   }
   const { entitlements, brand } = await withTenantDb(actor.organization.id, async (db) => {
     const [entitlementSnapshot, organization] = await Promise.all([
