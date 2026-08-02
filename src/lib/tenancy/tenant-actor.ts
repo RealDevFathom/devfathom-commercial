@@ -14,6 +14,11 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { getSupportSession, type SupportIdentity } from '@/lib/tenancy/support-session';
+import {
+  evaluateSessionUser,
+  isSessionUsable,
+  type SessionDenialKind,
+} from '@/lib/auth/session-state';
 
 export type TenantActor = {
   session: Session;
@@ -130,6 +135,12 @@ async function resolveTenantActorUncached(
   const session = 'session' in options ? options.session : await auth();
 
   if (isUsableSession(session)) {
+    // #16: a revoked/deleted/unverifiable session is not an actor. Enforcing it
+    // here — rather than at each of the six call sites — means no route handler
+    // can forget the check, so the API is closed to a revoked token even when it
+    // never loads a page. Audited support sessions keep their own validity model
+    // (`getSupportSession` already enforces expiry and revocation).
+    if (!isSessionUsable(session.user)) return null;
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
     return { session, organization, support: null };
@@ -137,6 +148,18 @@ async function resolveTenantActorUncached(
 
   return null;
 }
+
+/**
+ * Why the current server-component request has no usable tenant session.
+ * Only consulted on the failure path, so the extra Auth.js evaluation costs
+ * nothing for signed-in traffic.
+ */
+export const resolveTenantSessionDenial = cache(async (): Promise<SessionDenialKind | null> => {
+  const session = await auth();
+  if (!session?.user?.id) return null;
+  const verdict = evaluateSessionUser(session.user);
+  return verdict.ok ? null : verdict.kind;
+});
 
 // Layouts and pages can render in parallel in the App Router. Auth.js may rotate
 // a JWT while resolving it, so evaluating auth() independently in both branches
