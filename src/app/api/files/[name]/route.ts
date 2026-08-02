@@ -8,13 +8,9 @@
 // per-channel membership enforcement for chat attachments below; signed-URL
 // delivery against object storage remains the linked production enhancement.
 
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-
-// Kept OUTSIDE public/ so the platform never serves these statically.
-const UPLOAD_DIR = join(process.cwd(), 'private-uploads');
+import { getUpload } from '@/lib/storage';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -80,8 +76,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   const contentType = MIME[ext] ?? 'application/octet-stream';
 
   try {
-    const data = await readFile(join(UPLOAD_DIR, organization.id, name));
-    return new Response(data, {
+    const data = await getUpload(organization.id, name);
+    return new Response(new Uint8Array(data), {
       headers: {
         'Content-Type': contentType,
         'Content-Disposition': 'inline',

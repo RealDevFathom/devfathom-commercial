@@ -36,36 +36,83 @@ import { buildInsightsTools } from '@/lib/ai/tools/insights';
 export type { AssistantContext } from '@/lib/ai/context';
 
 type Domain =
-  | 'insights' | 'people' | 'resignations' | 'projects' | 'tasks'
-  | 'clients' | 'finance' | 'chat' | 'notes' | 'meetings';
+  | 'insights'
+  | 'people'
+  | 'resignations'
+  | 'projects'
+  | 'tasks'
+  | 'clients'
+  | 'finance'
+  | 'chat'
+  | 'notes'
+  | 'meetings';
 
 // High-frequency READ tools that answer most questions — always offered, so a
 // plain question rarely needs a domain bundle loaded at all.
 const CORE_TOOLS = new Set([
-  'getOverview', 'globalSearch', 'getRecentActivity',
-  'listTeam', 'getTeamMember', 'getLeaveOverview',
-  'listProjects', 'getProject', 'findProjectsBehindSchedule',
-  'searchTasks', 'listMyTasks', 'findOverdueTasks',
-  'listClients', 'listMeetings', 'searchNotes', 'listChannels',
+  'getOverview',
+  'globalSearch',
+  'getRecentActivity',
+  'listTeam',
+  'getTeamMember',
+  'getLeaveOverview',
+  'listProjects',
+  'getProject',
+  'findProjectsBehindSchedule',
+  'searchTasks',
+  'listMyTasks',
+  'findOverdueTasks',
+  'listClients',
+  'listMeetings',
+  'searchNotes',
+  'listChannels',
 ]);
+
+const UNSUPPORTED_TOOL_INTENT =
+  /\b(?:company )?(?:logo|branding|theme)\b|\bexport\b.{0,80}\b(?:database|csv|download)\b/i;
+const SELF_LEAVE_REQUEST =
+  /\b(?:i (?:want|need|would like|plan) to )?(?:take|book|request|submit|put in for)\b.{0,40}\b(?:leave|time off|vacation|pto)\b/i;
+const FINANCE_INTENT =
+  /invoic|revenue|profit|expense|transaction|p&l|pnl|budget|\bpaid\b|owe|financ|money|billing|\bbill\b|payment|cash|margin/i;
+
+export function assistantToolChoice(hint: string) {
+  return SELF_LEAVE_REQUEST.test(hint)
+    ? ({ type: 'tool', toolName: 'requestLeave' } as const)
+    : ('auto' as const);
+}
 
 // Keyword → domain(s) whose FULL toolset (incl. writes) to load. Generous on
 // purpose: a missed keyword just means a write tool isn't offered for that turn,
 // and CORE still answers reads. Matched against the recent user message(s).
 const ROUTES: Array<[RegExp, Domain[]]> = [
-  [/invoic|revenue|profit|expense|transaction|p&l|pnl|budget|\bpaid\b|owe|financ|money|billing|\bbill\b|payment|cash|margin/i, ['finance']],
-  [/\btask|to-?do|kanban|checklist|\blabel|assign|comment|ticket|backlog|sprint|\bcard\b|due date|priorit|move .*to|mark .*done/i, ['tasks', 'projects']],
-  [/project|milestone|deadline|deliverable|roadmap|behind schedule|\bboard\b|column/i, ['projects', 'tasks']],
+  [FINANCE_INTENT, ['finance']],
+  [
+    /\btask|to-?do|kanban|checklist|\blabel|assign|comment|ticket|backlog|sprint|\bcard\b|due date|priorit|move .*to|mark .*done/i,
+    ['tasks', 'projects'],
+  ],
+  [
+    /project|milestone|deadline|deliverable|roadmap|behind schedule|\bboard\b|column/i,
+    ['projects', 'tasks'],
+  ],
   [/client|customer|\baccount\b|contact|vendor|prospect/i, ['clients']],
   [/\bchat\b|messag|channel|\bdm\b|conversation|slack|\bpost\b|reply|mention|announce/i, ['chat']],
   [/\bnote|\bdoc\b|document|knowledge|wiki|write.?up|memo|jot/i, ['notes']],
-  [/meeting|schedul|calendar|\bsync\b|stand.?up|\bcall\b|appointment|agenda|1.?on.?1/i, ['meetings']],
-  [/resign|\bquit\b|\bnotice\b|last day|step down|leaving the company/i, ['resignations', 'people']],
+  [
+    /meeting|schedul|calendar|\bsync\b|stand.?up|\bcall\b|appointment|agenda|1.?on.?1/i,
+    ['meetings'],
+  ],
+  [
+    /resign|\bquit\b|\bnotice\b|last day|step down|leaving the company/i,
+    ['resignations', 'people'],
+  ],
   [
     /lay ?off|terminate|\bfire\b|let .* go|offboard|deactivat|\bhire\b|invit|onboard|\brole\b|promot|demote|perform|\bhr\b|headcount|staff|team member|employee|profile|leave|time off|vacation|sick|\bpto\b|holiday|password/i,
     ['people'],
   ],
-  [/audit|workload|capacity|overload|bandwidth|\bskill|who knows|who (?:on the team )?knows|who can (?:do|build|write|use|code|design)|anyone who knows|expert(?:ise)? in|behind|overdue|brief|catch me up|dashboard|stat/i, ['insights', 'people', 'projects', 'tasks']],
+  [
+    /audit|workload|capacity|overload|bandwidth|\bskill|who knows|who (?:on the team )?knows|who can (?:do|build|write|use|code|design)|anyone who knows|expert(?:ise)? in|behind|overdue|brief|catch me up|dashboard|stat/i,
+    ['insights', 'people', 'projects', 'tasks'],
+  ],
 ];
 
 // When no keyword matches at all, offer the common write targets (reads are
@@ -86,8 +133,11 @@ function selectDomains(hint: string): Set<Domain> {
  * route which domains to load; omit it (or pass empty) to get the full set.
  */
 export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string } = {}): ToolSet {
-  const h = createAssistantHelpers(ctx);
+  const hint = (opts.hint ?? '').trim();
+  if (hint && UNSUPPORTED_TOOL_INTENT.test(hint)) return {};
+  if (hint && ctx.role !== 'ADMIN' && FINANCE_INTENT.test(hint)) return {};
 
+  const h = createAssistantHelpers(ctx);
   const perDomain: Record<Domain, ToolSet> = {
     insights: buildInsightsTools(h),
     people: buildPeopleTools(h),
@@ -101,7 +151,6 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     meetings: buildMeetingsTools(h),
   };
 
-  const hint = (opts.hint ?? '').trim();
   const selectAll = hint.length === 0;
   const domains = selectAll ? null : selectDomains(hint);
 

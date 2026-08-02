@@ -44,6 +44,29 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   }
   const password = await hash(seedPassword, 12);
 
+  if (await tx.invoice.findUnique({ where: { invoiceNumber: 'INV-2026-001' } })) {
+    await tx.user.updateMany({
+      where: {
+        organizationId: 'org_devfathom',
+        email: {
+          in: [
+            'alex@company.com',
+            'jordan@company.com',
+            'sam@company.com',
+            'taylor@company.com',
+            'casey@company.com',
+            'riley@company.com',
+            'morgan@company.com',
+            'jamie@company.com',
+          ],
+        },
+      },
+      data: { password },
+    });
+    console.log('  ✓ Seed data already present; refreshed seeded-user credentials\n');
+    return;
+  }
+
   const alex = await tx.user.upsert({
     where: {
       organizationId_email: {
@@ -51,7 +74,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         email: 'alex@company.com',
       },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Alex Carter',
       email: 'alex@company.com',
@@ -74,7 +97,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         email: 'jordan@company.com',
       },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Jordan Lee',
       email: 'jordan@company.com',
@@ -94,7 +117,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
     where: {
       organizationId_email: { organizationId: 'org_devfathom', email: 'sam@company.com' },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Sam Patel',
       email: 'sam@company.com',
@@ -117,7 +140,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         email: 'taylor@company.com',
       },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Taylor Reed',
       email: 'taylor@company.com',
@@ -140,7 +163,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         email: 'casey@company.com',
       },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Casey Brooks',
       email: 'casey@company.com',
@@ -163,7 +186,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         email: 'riley@company.com',
       },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Riley Quinn',
       email: 'riley@company.com',
@@ -186,7 +209,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         email: 'jamie@company.com',
       },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Jamie Fox',
       email: 'jamie@company.com',
@@ -209,7 +232,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         email: 'morgan@company.com',
       },
     },
-    update: {},
+    update: { password },
     create: {
       name: 'Morgan Hayes',
       email: 'morgan@company.com',

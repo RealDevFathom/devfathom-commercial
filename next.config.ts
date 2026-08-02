@@ -49,6 +49,12 @@ const contentSecurityPolicy = [
   .trim();
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
+  typescript: {
+    // Docker runs `tsc --noEmit` in a clean process before `next build` so the
+    // low-memory ACR builder does not retain compiler and bundler heaps together.
+    ignoreBuildErrors: process.env.NEXT_BUILD_SKIP_TYPECHECK === '1',
+  },
   // This checkout sits beneath another project that owns a package-lock.json.
   // Pinning the root keeps Turbopack resolution and file watching local.
   turbopack: {
@@ -64,6 +70,7 @@ const nextConfig: NextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
+    cpus: 1,
     optimizePackageImports: ['@base-ui/react', 'cmdk'],
   },
   headers: async () => [

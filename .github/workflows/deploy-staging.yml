@@ -1,0 +1,58 @@
+name: Deploy staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and push immutable image
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr login --name "${{ vars.AZURE_ACR_NAME }}"
+          tag="${{ vars.AZURE_ACR_NAME }}.azurecr.io/devfathom-commercial:${GITHUB_SHA}"
+          docker build --platform linux/amd64 --tag "$tag" .
+          docker push "$tag"
+          digest=$(az acr repository show --name "${{ vars.AZURE_ACR_NAME }}" --image "devfathom-commercial:${GITHUB_SHA}" --query digest --output tsv)
+          echo "uri=${{ vars.AZURE_ACR_NAME }}.azurecr.io/devfathom-commercial@$digest" >> "$GITHUB_OUTPUT"
+      - name: Migrate and seed staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job update --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_MIGRATION_JOB_NAME }}" --image "${{ steps.image.outputs.uri }}" --output none
+          execution=$(az containerapp job start --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_MIGRATION_JOB_NAME }}" --query name --output tsv)
+          for attempt in {1..90}; do
+            status=$(az containerapp job execution show --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_MIGRATION_JOB_NAME }}" --job-execution-name "$execution" --query properties.status --output tsv)
+            case "$status" in
+              Succeeded) break ;;
+              Failed|Stopped|Degraded) echo "Migration execution failed: $status" >&2; exit 1 ;;
+            esac
+            if [ "$attempt" -eq 90 ]; then echo 'Migration execution timed out.' >&2; exit 1; fi
+            sleep 10
+          done
+      - name: Deploy and smoke staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" --image "${{ steps.image.outputs.uri }}" --output none
+          fqdn=$(az containerapp show --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" --query properties.configuration.ingress.fqdn --output tsv)
+          curl --fail --show-error --silent --retry 12 --retry-delay 10 "https://$fqdn/api/health"

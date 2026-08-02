@@ -1,13 +1,11 @@
 import { streamText, convertToModelMessages, stepCountIs, type UIMessage } from 'ai';
-import { google } from '@ai-sdk/google';
-import { buildAssistantTools } from '@/lib/ai/tools';
+import { createAIModel } from '@/lib/ai/provider';
+import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 // Allow headroom for multi-step tool runs.
 export const maxDuration = 60;
-
-const MODEL_ID = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
 
 // The text of the last couple of user messages — used to route which tool
 // domains to load (including the prior turn handles follow-ups like "do it").
@@ -69,20 +67,21 @@ export async function POST(req: Request) {
     )
   );
 
+  const hint = recentUserText(messages);
+  const ai = createAIModel();
   const result = streamText({
-    model: google(MODEL_ID),
+    model: ai.model,
     system: assistantSystemPrompt(ctx),
     messages: modelMessages,
     // Cost control: send only the tools relevant to what the user is asking
     // about (a core read set + the matched domain), not all ~96 every request.
     // The hint is the recent user text. See buildAssistantTools / tools.ts.
-    tools: buildAssistantTools(
-      ctx,
-      isApprovalContinuation ? {} : { hint: recentUserText(messages) }
-    ),
+    tools: buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint }),
+    toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint),
     // Operator actions chain resolve → act → confirm; 6 steps covers that while
     // capping the worst-case number of (token-heavy) model round-trips per turn.
     stopWhen: stepCountIs(6),
+    providerOptions: ai.providerOptions,
     onError: ({ error }) => {
       console.error('[assistant] stream error:', error);
     },

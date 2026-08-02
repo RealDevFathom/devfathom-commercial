@@ -1,0 +1,483 @@
+@allowed(['staging', 'production'])
+param environmentName string
+param location string = resourceGroup().location
+param sharedResourceGroupName string
+param registryName string
+param initialImage string
+param tenantHost string
+param platformHost string
+param seedDatabase bool
+param emailDeliveryMode string
+
+@secure()
+param postgresAdminPassword string
+@secure()
+param authSecret string
+@secure()
+param platformEncryptionKey string
+@secure()
+param cronSecret string
+@secure()
+param seedPassword string
+@secure()
+param adminPassword string
+@secure()
+param platformAdminPassword string
+
+param adminEmail string = 'admin@staging.devfathom.com'
+param platformAdminEmail string = 'platform-admin@staging.devfathom.com'
+param aiModelName string = 'gpt-5-mini'
+param aiModelVersion string = '2025-08-07'
+param aiDeploymentName string = 'ask-fathom-gpt-5-mini'
+param aiCapacity int = 10
+
+var shortEnvironment = environmentName == 'production' ? 'prd' : 'stg'
+var suffix = uniqueString(resourceGroup().id)
+var identityName = 'df-${shortEnvironment}-${suffix}-id'
+var vaultName = 'df-${shortEnvironment}-${suffix}-kv'
+var storageName = 'df${shortEnvironment}${suffix}st'
+var postgresName = 'df-${shortEnvironment}-${suffix}-pg'
+var openAIName = 'df-${shortEnvironment}-${suffix}-ai'
+var appEnvironmentName = 'df-${shortEnvironment}-${suffix}-cae'
+var appName = 'devfathom-${shortEnvironment}'
+var migrationJobName = 'devfathom-${shortEnvironment}-migrate'
+var databaseUrl = 'postgresql://devfathomadmin:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
+var migrationCommand = seedDatabase
+  ? 'bunx prisma migrate deploy && bun prisma/seed.ts'
+  : 'bunx prisma migrate deploy'
+
+resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
+  name: registryName
+  scope: resourceGroup(sharedResourceGroupName)
+}
+
+resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: identityName
+  location: location
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+  name: 'df-${shortEnvironment}-vnet'
+  location: location
+  properties: {
+    addressSpace: { addressPrefixes: ['10.42.0.0/21'] }
+    subnets: [
+      {
+        name: 'container-apps'
+        properties: {
+          addressPrefix: '10.42.0.0/23'
+          delegations: [
+            {
+              name: 'Microsoft.App-environments'
+              properties: { serviceName: 'Microsoft.App/environments' }
+            }
+          ]
+        }
+      }
+      {
+        name: 'postgres'
+        properties: {
+          addressPrefix: '10.42.2.0/24'
+          delegations: [
+            {
+              name: 'Microsoft.DBforPostgreSQL-flexibleServers'
+              properties: { serviceName: 'Microsoft.DBforPostgreSQL/flexibleServers' }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource postgresSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
+  parent: vnet
+  name: 'postgres'
+}
+
+resource containerAppsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
+  parent: vnet
+  name: 'container-apps'
+}
+
+resource postgresDns 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: 'private.postgres.database.azure.com'
+  location: 'global'
+}
+
+resource postgresDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: postgresDns
+  name: 'df-${shortEnvironment}-vnet-link'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: { id: vnet.id }
+  }
+}
+
+resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
+  name: postgresName
+  location: location
+  sku: {
+    name: 'Standard_B1ms'
+    tier: 'Burstable'
+  }
+  properties: {
+    administratorLogin: 'devfathomadmin'
+    administratorLoginPassword: postgresAdminPassword
+    version: '16'
+    storage: {
+      storageSizeGB: 32
+      autoGrow: 'Disabled'
+    }
+    backup: {
+      backupRetentionDays: 7
+      geoRedundantBackup: 'Disabled'
+    }
+    highAvailability: { mode: 'Disabled' }
+    network: {
+      publicNetworkAccess: 'Disabled'
+      delegatedSubnetResourceId: postgresSubnet.id
+      privateDnsZoneArmResourceId: postgresDns.id
+    }
+    authConfig: {
+      activeDirectoryAuth: 'Disabled'
+      passwordAuth: 'Enabled'
+    }
+  }
+  dependsOn: [postgresDnsLink]
+}
+
+resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
+  parent: postgres
+  name: 'devfathom'
+  properties: {
+    charset: 'UTF8'
+    collation: 'en_US.utf8'
+  }
+}
+
+resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: vaultName
+  location: location
+  properties: {
+    tenantId: subscription().tenantId
+    sku: { family: 'A', name: 'standard' }
+    enableRbacAuthorization: true
+    enabledForTemplateDeployment: true
+    publicNetworkAccess: 'Enabled'
+    softDeleteRetentionInDays: 7
+  }
+}
+
+resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'database-url'
+  properties: { value: databaseUrl }
+}
+resource authSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'auth-secret'
+  properties: { value: authSecret }
+}
+resource platformEncryptionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'platform-encryption-key'
+  properties: { value: platformEncryptionKey }
+}
+resource cronSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'cron-secret'
+  properties: { value: cronSecret }
+}
+resource seedPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'seed-password'
+  properties: { value: seedPassword }
+}
+resource adminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'admin-password'
+  properties: { value: adminPassword }
+}
+resource platformAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'platform-admin-password'
+  properties: { value: platformAdminPassword }
+}
+
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageName
+  location: location
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    publicNetworkAccess: 'Enabled'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: storage
+  name: 'default'
+}
+
+resource uploads 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'uploads'
+  properties: { publicAccess: 'None' }
+}
+
+resource openAI 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+  name: openAIName
+  location: location
+  kind: 'OpenAI'
+  sku: { name: 'S0' }
+  properties: {
+    customSubDomainName: openAIName
+    disableLocalAuth: true
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource openAIDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: openAI
+  name: aiDeploymentName
+  sku: {
+    name: 'GlobalStandard'
+    capacity: aiCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: aiModelName
+      version: aiModelVersion
+    }
+    versionUpgradeOption: 'NoAutoUpgrade'
+  }
+}
+
+resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: 'df-${shortEnvironment}-${suffix}-logs'
+  location: location
+  properties: {
+    retentionInDays: 30
+    sku: { name: 'PerGB2018' }
+    workspaceCapping: { dailyQuotaGb: json('0.1') }
+  }
+}
+
+resource appEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+  name: appEnvironmentName
+  location: location
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logs.properties.customerId
+        sharedKey: logs.listKeys().primarySharedKey
+      }
+    }
+    vnetConfiguration: {
+      infrastructureSubnetId: containerAppsSubnet.id
+      internal: false
+    }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
+  }
+}
+
+var openAIUserRole = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
+)
+var blobContributorRole = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+)
+var keyVaultSecretsUserRole = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '4633458b-17de-408a-b874-0445c86b69e6'
+)
+
+module acrPull 'acr-pull.bicep' = {
+  name: 'acr-pull-${shortEnvironment}'
+  scope: resourceGroup(sharedResourceGroupName)
+  params: {
+    registryName: registryName
+    principalId: identity.properties.principalId
+    identityResourceId: identity.id
+  }
+}
+
+resource openAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(openAI.id, identity.id, openAIUserRole)
+  scope: openAI
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: openAIUserRole
+  }
+}
+
+resource blobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, identity.id, blobContributorRole)
+  scope: storage
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: blobContributorRole
+  }
+}
+
+resource vaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(vault.id, identity.id, keyVaultSecretsUserRole)
+  scope: vault
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRole
+  }
+}
+
+var vaultBaseUrl = 'https://${vault.name}${environment().suffixes.keyvaultDns}/secrets'
+var keyVaultSecrets = [
+  { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
+  { name: 'auth-secret', keyVaultUrl: '${vaultBaseUrl}/auth-secret', identity: identity.id }
+  { name: 'platform-encryption-key', keyVaultUrl: '${vaultBaseUrl}/platform-encryption-key', identity: identity.id }
+  { name: 'cron-secret', keyVaultUrl: '${vaultBaseUrl}/cron-secret', identity: identity.id }
+  { name: 'seed-password', keyVaultUrl: '${vaultBaseUrl}/seed-password', identity: identity.id }
+  { name: 'admin-password', keyVaultUrl: '${vaultBaseUrl}/admin-password', identity: identity.id }
+  { name: 'platform-admin-password', keyVaultUrl: '${vaultBaseUrl}/platform-admin-password', identity: identity.id }
+]
+
+var commonEnvironment = [
+  { name: 'NODE_ENV', value: 'production' }
+  { name: 'DATABASE_URL', secretRef: 'database-url' }
+  { name: 'AUTH_SECRET', secretRef: 'auth-secret' }
+  { name: 'AUTH_URL', value: 'https://${tenantHost}' }
+  { name: 'AUTH_TRUST_HOST', value: 'true' }
+  { name: 'NEXT_PUBLIC_APP_URL', value: 'https://${tenantHost}' }
+  { name: 'PLATFORM_BASE_DOMAIN', value: tenantHost }
+  { name: 'PLATFORM_ENCRYPTION_KEY', secretRef: 'platform-encryption-key' }
+  { name: 'CRON_SECRET', secretRef: 'cron-secret' }
+  { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
+  { name: 'SEED_PASSWORD', secretRef: 'seed-password' }
+  { name: 'ADMIN_NAME', value: 'Workspace Administrator' }
+  { name: 'ADMIN_EMAIL', value: adminEmail }
+  { name: 'ADMIN_PASSWORD', secretRef: 'admin-password' }
+  { name: 'ADMIN_DEPARTMENT', value: 'LEADERSHIP' }
+  { name: 'ADMIN_TITLE', value: 'Administrator' }
+  { name: 'PLATFORM_ADMIN_EMAIL', value: platformAdminEmail }
+  { name: 'PLATFORM_ADMIN_PASSWORD', secretRef: 'platform-admin-password' }
+  { name: 'EMAIL_DELIVERY_MODE', value: emailDeliveryMode }
+  { name: 'AI_PROVIDER', value: 'azure' }
+  { name: 'AI_MODEL', value: aiDeploymentName }
+  { name: 'AZURE_OPENAI_RESOURCE_NAME', value: openAI.name }
+  { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+  { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storage.name }
+  { name: 'AZURE_STORAGE_CONTAINER', value: uploads.name }
+]
+
+resource app 'Microsoft.App/containerApps@2024-03-01' = {
+  name: appName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identity.id}': {} }
+  }
+  properties: {
+    managedEnvironmentId: appEnvironment.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        allowInsecure: false
+        targetPort: 3000
+        transport: 'auto'
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: identity.id }
+      ]
+      secrets: keyVaultSecrets
+    }
+    template: {
+      containers: [
+        {
+          name: 'web'
+          image: initialImage
+          env: commonEnvironment
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+          probes: [
+            {
+              type: 'Readiness'
+              httpGet: { path: '/api/health', port: 3000, scheme: 'HTTP' }
+              initialDelaySeconds: 10
+              periodSeconds: 10
+              failureThreshold: 12
+              timeoutSeconds: 5
+            }
+          ]
+        }
+      ]
+      scale: { minReplicas: 0, maxReplicas: 1 }
+    }
+  }
+  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, databaseUrlSecret, authSecretResource, platformEncryptionSecret, cronSecretResource, seedPasswordSecret, adminPasswordSecret, platformAdminPasswordSecret]
+}
+
+resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: migrationJobName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identity.id}': {} }
+  }
+  properties: {
+    environmentId: appEnvironment.id
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 1800
+      replicaRetryLimit: 1
+      manualTriggerConfig: { parallelism: 1, replicaCompletionCount: 1 }
+      registries: [
+        { server: registry.properties.loginServer, identity: identity.id }
+      ]
+      secrets: keyVaultSecrets
+    }
+    template: {
+      containers: [
+        {
+          name: 'migrate'
+          image: initialImage
+          command: ['/bin/sh']
+          args: ['-c', migrationCommand]
+          env: commonEnvironment
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, vaultSecretsUser, database]
+}
+
+output appName string = app.name
+output appFqdn string = app.properties.configuration.ingress.fqdn
+output customDomainVerificationId string = app.properties.customDomainVerificationId
+output migrationJobName string = migrationJob.name
+output keyVaultName string = vault.name
+output postgresName string = postgres.name
+output storageName string = storage.name
+output openAIName string = openAI.name
+output aiDeploymentName string = openAIDeployment.name
+output identityClientId string = identity.properties.clientId
+output tenantHost string = tenantHost
+output platformHost string = platformHost

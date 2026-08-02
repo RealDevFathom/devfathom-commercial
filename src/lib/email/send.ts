@@ -43,15 +43,18 @@ function resolveSender(override?: EmailAddress): EmailAddress {
  * the Brevo error body included, so callers can log/surface the cause.
  */
 export async function sendEmail(options: SendEmailOptions): Promise<SendEmailResult> {
-  const apiKey = process.env.BREVO_API_KEY;
-  if (!apiKey) {
-    throw new Error('BREVO_API_KEY is not set');
-  }
   if (!options.html && !options.text && !options.templateId) {
     throw new Error('sendEmail requires one of: html, text, or templateId');
   }
 
   const to = Array.isArray(options.to) ? options.to : [options.to];
+  if (process.env.EMAIL_DELIVERY_MODE === 'capture') {
+    console.info('[email:capture]', { recipientCount: to.length });
+    return { messageId: `captured-${Date.now()}` };
+  }
+
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) throw new Error('BREVO_API_KEY is not set');
 
   const payload: Record<string, unknown> = {
     sender: resolveSender(options.sender),

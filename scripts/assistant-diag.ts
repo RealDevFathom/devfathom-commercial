@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import { generateText, stepCountIs } from 'ai';
-import { groq } from '@ai-sdk/groq';
 import { db } from '../src/lib/db';
-import { buildAssistantTools } from '../src/lib/ai/tools';
+import { createAIModel } from '../src/lib/ai/provider';
+import { assistantToolChoice, buildAssistantTools } from '../src/lib/ai/tools';
 import { assistantSystemPrompt } from '../src/lib/ai/prompt';
 
 async function main() {
@@ -13,8 +13,9 @@ async function main() {
   if (!admin) throw new Error('no admin user found');
   const ctx = { userId: admin.id, role: admin.role, name: admin.name };
 
+  const prompt = process.argv[2] ?? 'List employees';
   // Wrap every tool execute so we SEE the real error instead of the masked one.
-  const base = buildAssistantTools(ctx) as Record<string, any>;
+  const base = buildAssistantTools(ctx, { hint: prompt }) as Record<string, any>;
   const tools: Record<string, any> = {};
   for (const [name, t] of Object.entries(base)) {
     tools[name] = {
@@ -32,18 +33,21 @@ async function main() {
     };
   }
 
-  const prompt = process.argv[2] ?? 'List employees';
-  console.log(`\n=== prompt: "${prompt}" | model: ${process.env.GROQ_MODEL} ===`);
+  const ai = createAIModel();
+  console.log(`\n=== prompt: "${prompt}" | provider: ${ai.provider} | model: ${ai.modelId} ===`);
   try {
+    const startedAt = Date.now();
     const res = await generateText({
-      model: groq(process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'),
+      model: ai.model,
       system: assistantSystemPrompt(ctx),
       prompt,
       tools,
+      toolChoice: assistantToolChoice(prompt),
       stopWhen: stepCountIs(6),
-      providerOptions: { groq: { parallelToolCalls: false } },
+      providerOptions: ai.providerOptions,
     });
     console.log('finishReason:', res.finishReason);
+    console.log('latencyMs:', Date.now() - startedAt, 'usage:', res.totalUsage);
     res.steps.forEach((s: any, i: number) =>
       console.log(
         `  step ${i}: calls=[${s.toolCalls.map((t: any) => t.toolName).join(', ') || '-'}]`
