@@ -39,6 +39,12 @@ jobs:
       SHADOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_shadow
       TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci
       AUTH_SECRET: ci-only-secret-value-not-used-anywhere-else
+      # The end-to-end step serves the production build, and Auth.js refuses an
+      # untrusted host in production mode. Staging sets both of these on the
+      # Container App for the same reason.
+      AUTH_URL: http://localhost:4319
+      NEXT_PUBLIC_APP_URL: http://localhost:4319
+      AUTH_TRUST_HOST: 'true'
       PLATFORM_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
       PLATFORM_BASE_DOMAIN: localhost
       SEED_PASSWORD: CiSeedPassword!2026
