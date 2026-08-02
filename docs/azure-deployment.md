@@ -138,5 +138,5 @@ Database migrations are forward-only; restore to a new server for a data/schema 
 - Ask Fathom: Azure managed identity calls Global Standard deployment `ask-fathom-gpt-5-mini`; diagnostics pass. Final Azure suite passes 46/46 cases with 856,849 ms aggregate model latency, 459,782 input tokens, and 28,092 output tokens.
 - Email: capture-only, no sender/API key, no outbound delivery, and no captured message PII in logs.
 - OIDC: main-branch and production-environment federated credentials exist. Staging principal has Contributor only on the staging group and AcrPush only on ACR. GitHub plan rejects required-reviewer configuration, so production remains a manual workflow without an enforceable reviewer until the plan supports protected-environment reviewers.
-- DNS: exact records are above; GoDaddy is unchanged and custom hosts remain unbound until records resolve and managed certificates are attached.
+- DNS/TLS: GoDaddy records are live. `staging.devfathom.com` and `admin.staging.devfathom.com` are bound to the staging Container App with Azure-managed DigiCert certificates and both HTTPS routes return HTTP 200.
 - Production: IaC and digest-promotion workflow are defined. No production resource group, RBAC, deployment, database, or DNS change exists.
