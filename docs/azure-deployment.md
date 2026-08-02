@@ -30,7 +30,7 @@ Production uses the same Bicep with `infra/production.bicepparam`, `seedDatabase
 
 ## CI/CD and OIDC
 
-`.github/workflows/deploy-staging.yml` authenticates through GitHub Actions OIDC, builds and pushes one immutable `${GITHUB_SHA}` image, updates and waits for the migration/seed job, deploys the same digest, then checks `/api/health`. The Entra service principal has Contributor only on the staging resource group and `AcrPush` only on the shared registry. GitHub stores subscription, tenant, client, resource-group, app, job, and registry IDs as variables; there is no client secret.
+`.github/workflows/deploy-staging.yml` authenticates through GitHub Actions OIDC, builds and pushes one immutable `${GITHUB_SHA}` image, updates and waits for the migration/seed job, deploys the same digest, then checks `/api/health`. The Entra service principal has Contributor only on the staging resource group and `AcrPush` only on the shared registry. GitHub stores subscription, tenant, client, resource-group, app, job, and registry IDs as variables; there is no client secret. `infra/configure-github-oidc.sh` reads GitHub's repository-specific OIDC subject prefix, including immutable owner/repository IDs when enabled, before creating or updating the federated credentials.
 
 `.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a `sha256:` digest already present in the same ACR, runs production migrations without seed data, then updates production to that exact digest. Production resource variables and Azure RBAC are deliberately absent until cutover.
 

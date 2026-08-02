@@ -18,18 +18,26 @@ if [ -z "$principal_id" ]; then
   principal_id=$(az ad sp create --id "$app_id" --query id --output tsv)
 fi
 
+oidc_subject_prefix=$(gh api "repos/${repo}/actions/oidc/customization/sub" --jq .sub_claim_prefix)
+
 ensure_federation() {
   local name=$1 subject=$2
-  if ! az ad app federated-credential list --id "$app_id" --query "[?name=='$name'].name | [0]" --output tsv | rg -q .; then
+  local current_subject
+  current_subject=$(az ad app federated-credential list --id "$app_id" --query "[?name=='$name'].subject | [0]" --output tsv)
+  if [ -z "$current_subject" ]; then
     az ad app federated-credential create --id "$app_id" --parameters "$(jq -n \
       --arg name "$name" \
       --arg subject "$subject" \
       '{name:$name,issuer:"https://token.actions.githubusercontent.com",subject:$subject,audiences:["api://AzureADTokenExchange"]}')" --output none
+  elif [ "$current_subject" != "$subject" ]; then
+    az ad app federated-credential update --id "$app_id" --federated-credential-id "$name" --parameters "$(jq -n \
+      --arg subject "$subject" \
+      '{issuer:"https://token.actions.githubusercontent.com",subject:$subject,audiences:["api://AzureADTokenExchange"]}')" --output none
   fi
 }
 
-ensure_federation main "repo:${repo}:ref:refs/heads/main"
-ensure_federation production "repo:${repo}:environment:production"
+ensure_federation main "${oidc_subject_prefix}:ref:refs/heads/main"
+ensure_federation production "${oidc_subject_prefix}:environment:production"
 
 staging_scope="/subscriptions/${subscription_id}/resourceGroups/${staging_group}"
 registry_name=$(az deployment group show --resource-group "$shared_group" --name shared --query properties.outputs.registryName.value --output tsv)
