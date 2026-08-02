@@ -5,21 +5,19 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Building2, Eye, EyeOff, Loader2 } from 'lucide-react';
 
-// Prevent open redirect: accept only same-origin relative paths (a single
-// leading slash, not '//' or '/\'), rejecting absolute and javascript: URLs.
-function safeCallbackUrl(raw: string | null): string {
-  return raw && /^\/(?![/\\])/.test(raw) ? raw : '/dashboard';
-}
-
 const inputClass =
   'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 
 export function LoginForm({
   connections,
   ssoEnforced,
+  // D15: already validated on the server. The form no longer reads, or trusts,
+  // the raw query string.
+  callbackUrl,
 }: {
   connections: Array<{ id: string; name: string; protocol: 'OIDC' | 'SAML' }>;
   ssoEnforced: boolean;
+  callbackUrl: string;
 }) {
   const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
@@ -37,9 +35,6 @@ export function LoginForm({
     const email = String(formData.get('email') ?? '');
     const password = String(formData.get('password') ?? '');
     const totp = String(formData.get('totp') ?? '');
-    const callbackUrl = safeCallbackUrl(
-      new URLSearchParams(window.location.search).get('callbackUrl')
-    );
 
     // This chunk is required after authentication, but not to render the login
     // form. Fetch it in parallel with the credentials request so the dashboard

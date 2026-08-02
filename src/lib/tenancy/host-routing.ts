@@ -127,3 +127,23 @@ export function classifyHost(hostValue: string | null | undefined): HostKind {
 export function isSharedHost(hostValue: string | null | undefined): boolean {
   return classifyHost(hostValue).kind === 'shared';
 }
+
+/**
+ * The organization's own host.
+ *
+ * D11/D12: enterprise SSO stays on tenant and dedicated hosts, because OIDC
+ * redirect URIs and SAML ACS/audience values are derived from the request host
+ * and registered at the customer IdP. An SSO-enforced workspace shown on the
+ * shared picker therefore links OUT to its own host to begin SSO — the shared
+ * host never starts an SSO flow itself.
+ *
+ * Returns null when no base domain is configured, so the caller can omit the
+ * link rather than render a broken one.
+ */
+export function tenantHostUrl(slug: string, path = '/login'): string | null {
+  const baseDomain = configuredBaseDomain();
+  if (!baseDomain || !slug) return null;
+  const protocol =
+    LOCAL_HOSTS.has(baseDomain) || baseDomain.endsWith('.localhost') ? 'http' : 'https';
+  return `${protocol}://${slug}.${baseDomain}${path}`;
+}

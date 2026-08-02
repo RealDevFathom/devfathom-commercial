@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { OrganizationStatus, UserStatus } from '@/generated/prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -33,12 +34,12 @@ export type LoginCandidate = {
   userId: string;
   organizationId: string;
   passwordHash: string | null;
-  userStatus: string;
+  userStatus: UserStatus;
   organization: {
     id: string;
     slug: string;
     displayName: string;
-    status: string;
+    status: OrganizationStatus;
   };
 };
 

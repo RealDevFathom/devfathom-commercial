@@ -6,12 +6,20 @@ import { z } from 'zod';
 import { ipFromHeaders, recordAuthAudit } from '@/server/audit';
 import { rateLimit } from '@/lib/rate-limit';
 import { verifyTotp, hashRecoveryCode } from '@/lib/totp';
-import { isTenantLifecycleAccessible, resolveOrganizationForRequest } from '@/lib/tenancy/host';
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import {
+  isTenantLifecycleAccessible,
+  resolveOrganizationById,
+  resolveOrganizationForRequest,
+} from '@/lib/tenancy/host';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
 import { SSO_TICKET_COOKIE } from '@/lib/sso';
 import type { SessionInvalidReason } from '@/lib/auth/session-state';
+import { DUMMY_PASSWORD_HASH, SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
+import { consumeLoginIntent, LOGIN_INTENT_COOKIE, peekLoginIntent } from '@/lib/auth/login-intent';
 import { emailSchema } from '@/lib/email-address';
+import { requestHost } from '@/lib/tenancy/host';
+import { isSharedHost } from '@/lib/tenancy/host-routing';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -31,17 +39,6 @@ const loginSchema = z.object({
   // IMP-AUTH-02: a TOTP code or recovery code, required only when 2FA is enabled.
   totp: z.string().optional(),
 });
-
-// A valid bcrypt hash of a value no one will ever submit. When a login targets a
-// missing/inactive account we still run a bcrypt comparison against this hash so
-// the response time is independent of whether the account exists — this defeats
-// the username-enumeration timing oracle.
-const DUMMY_PASSWORD_HASH = '$2b$10$7Jh22HC1lxzaVDwJSaJVp./wPe52BukW8KMrtnZfsoTMNsvJxWclS';
-
-// Account statuses permitted to authenticate. ON_LEAVE staff keep their access;
-// INACTIVE (deactivated) and INVITED (not yet onboarded) accounts are blocked.
-// Using an allow-list means any future/unknown status fails closed.
-const SIGNIN_ALLOWED_STATUSES = new Set(['ACTIVE', 'ON_LEAVE']);
 
 // Distinguishable credentials error for a *deactivated* account. NextAuth/@auth
 // surfaces the `code` to the client (in the redirect URL's `code` param, which the
@@ -71,6 +68,79 @@ class TwoFactorInvalidError extends CredentialsSignin {
 
 // How long a JWT's cached role/status is trusted before being re-read from the DB.
 const REVALIDATE_AFTER_MS = 60_000;
+
+/**
+ * IMP-AUTH-02: second factor. Enforced AFTER the password is proven correct (so
+ * it never reveals whether an account exists or has 2FA). Accepts a TOTP code or
+ * a single-use recovery code.
+ *
+ * Shared by the per-host credentials provider and the shared-host selection
+ * provider, so the two can never enforce different second-factor rules.
+ */
+async function assertSecondFactor(
+  tenantDb: ScopedDb,
+  user: { id: string; twoFactorEnabledAt: Date | null; twoFactorSecret: string | null },
+  submitted: unknown,
+  audit: {
+    organizationId: string;
+    email: string;
+    name: string | null;
+    role: string | null;
+    ip: string | null;
+    userAgent: string | null;
+  }
+): Promise<void> {
+  if (!user.twoFactorEnabledAt) return;
+
+  const code = (typeof submitted === 'string' ? submitted : '').trim();
+  if (!code) {
+    recordAuthAudit({
+      type: 'LOGIN_FAILED',
+      organizationId: audit.organizationId,
+      userId: user.id,
+      name: audit.name,
+      email: audit.email,
+      role: audit.role,
+      ip: audit.ip,
+      userAgent: audit.userAgent,
+      reason: '2FA code required',
+    });
+    throw new TwoFactorRequiredError();
+  }
+
+  let ok = user.twoFactorSecret ? verifyTotp(user.twoFactorSecret, code) : false;
+  if (!ok) {
+    // Fall back to a recovery code: match an unused hash, then consume it
+    // atomically (the usedAt:null guard makes it single-use under races).
+    const codeHash = hashRecoveryCode(code);
+    const match = await tenantDb.twoFactorRecoveryCode.findFirst({
+      where: { userId: user.id, codeHash, usedAt: null },
+      select: { id: true },
+    });
+    if (match) {
+      const res = await tenantDb.twoFactorRecoveryCode.updateMany({
+        where: { id: match.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      ok = res.count === 1;
+    }
+  }
+
+  if (!ok) {
+    recordAuthAudit({
+      type: 'LOGIN_FAILED',
+      organizationId: audit.organizationId,
+      userId: user.id,
+      name: audit.name,
+      email: audit.email,
+      role: audit.role,
+      ip: audit.ip,
+      userAgent: audit.userAgent,
+      reason: 'Invalid 2FA code',
+    });
+    throw new TwoFactorInvalidError();
+  }
+}
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -229,57 +299,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             throw new OrganizationSuspendedError();
           }
 
-          // IMP-AUTH-02: second factor. Enforced AFTER the password is proven correct
-          // (so it never reveals whether an account exists or has 2FA). Accepts a TOTP
-          // code or a single-use recovery code.
-          if (user.twoFactorEnabledAt) {
-            const code = (parsed.data.totp ?? '').trim();
-            if (!code) {
-              recordAuthAudit({
-                type: 'LOGIN_FAILED',
-                organizationId: organization.id,
-                userId: user.id,
-                name: user.name,
-                email,
-                role: user.role,
-                ip,
-                userAgent,
-                reason: '2FA code required',
-              });
-              throw new TwoFactorRequiredError();
-            }
-            let ok = user.twoFactorSecret ? verifyTotp(user.twoFactorSecret, code) : false;
-            if (!ok) {
-              // Fall back to a recovery code: match an unused hash, then consume it
-              // atomically (the usedAt:null guard makes it single-use under races).
-              const codeHash = hashRecoveryCode(code);
-              const match = await tenantDb.twoFactorRecoveryCode.findFirst({
-                where: { userId: user.id, codeHash, usedAt: null },
-                select: { id: true },
-              });
-              if (match) {
-                const res = await tenantDb.twoFactorRecoveryCode.updateMany({
-                  where: { id: match.id, usedAt: null },
-                  data: { usedAt: new Date() },
-                });
-                ok = res.count === 1;
-              }
-            }
-            if (!ok) {
-              recordAuthAudit({
-                type: 'LOGIN_FAILED',
-                organizationId: organization.id,
-                userId: user.id,
-                name: user.name,
-                email,
-                role: user.role,
-                ip,
-                userAgent,
-                reason: 'Invalid 2FA code',
-              });
-              throw new TwoFactorInvalidError();
-            }
-          }
+          await assertSecondFactor(tenantDb, user, parsed.data.totp, {
+            organizationId: organization.id,
+            email,
+            name: user.name,
+            role: user.role,
+            ip,
+            userAgent,
+          });
 
           // Update last active
           await tenantDb.user.update({
@@ -296,6 +323,141 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             role: user.role,
             ip,
             userAgent,
+          });
+
+          return {
+            id: user.id,
+            organizationId: user.organizationId,
+            organizationSlug: organization.slug,
+            organizationStatus: organization.status,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            department: user.department,
+            title: user.title,
+            image: user.avatar,
+            status: user.status,
+            tokenVersion: user.tokenVersion,
+          };
+        });
+      },
+    }),
+    /**
+     * D9 — the final step of a shared-host login.
+     *
+     * Mirrors the `enterprise` provider: a one-use server-side handle is
+     * exchanged for a normal Auth.js JWT carrying `organizationId`. No new
+     * session machinery, no second cookie, no change to how a session is read.
+     *
+     * The submitted organization id is not authority: it is only accepted if it
+     * is a member of the candidate set the server itself computed when the
+     * password was proven, and only on the host the intent was minted on.
+     */
+    Credentials({
+      id: 'login-intent',
+      name: 'Workspace selection',
+      credentials: {
+        organizationId: { label: 'Workspace', type: 'text' },
+        totp: { label: 'Authentication code', type: 'text' },
+      },
+      async authorize(credentials, request) {
+        const host = requestHost(request);
+        if (!isSharedHost(host)) return null;
+
+        const ip = ipFromHeaders(request.headers);
+        const userAgent = request.headers.get('user-agent');
+
+        const organizationId =
+          typeof credentials?.organizationId === 'string' ? credentials.organizationId : '';
+        if (!organizationId) return null;
+
+        // D18: selection is rate limited independently of the credential check,
+        // so a valid intent cannot be used to grind organization ids.
+        const selectionGate = rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
+        if (!selectionGate.ok) return null;
+
+        const rawIntent = parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE);
+        const intent = await peekLoginIntent(rawIntent, host);
+        if (!intent) return null;
+
+        const candidate = intent.candidates.find(
+          (entry) => entry.organizationId === organizationId
+        );
+        if (!candidate) {
+          recordAuthAudit({
+            type: 'LOGIN_FAILED',
+            email: intent.email,
+            ip,
+            userAgent,
+            reason: 'Workspace selection outside the verified candidate set',
+          });
+          return null;
+        }
+
+        const organization = await resolveOrganizationById(organizationId);
+        if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
+
+        return withTenantDb(organization.id, async (tenantDb) => {
+          const user = await tenantDb.user.findUnique({
+            where: { id: candidate.userId },
+            select: {
+              id: true,
+              organizationId: true,
+              name: true,
+              email: true,
+              role: true,
+              department: true,
+              title: true,
+              avatar: true,
+              status: true,
+              tokenVersion: true,
+              twoFactorEnabledAt: true,
+              twoFactorSecret: true,
+            },
+          });
+          // Re-check everything the intent asserted. The intent is a handle to a
+          // decision, not a substitute for the state it was based on: the account
+          // may have been deactivated, or SSO enforced, in the five minutes since.
+          if (!user || user.email !== intent.email) return null;
+          if (!SIGNIN_ALLOWED_STATUSES.has(user.status)) throw new SuspendedError();
+
+          const enforcedConnection = await tenantDb.organizationIdentityConnection.findFirst({
+            where: { status: 'ACTIVE', enforceSso: true },
+            select: { id: true },
+          });
+          if (enforcedConnection) throw new SsoRequiredError();
+
+          // IMP-AUTH-02: the second factor belongs to a user, and the user is only
+          // known once a workspace is chosen — so it is enforced here. The intent
+          // is consumed AFTER the code verifies, so a mistyped code does not force
+          // the password to be entered again.
+          await assertSecondFactor(tenantDb, user, credentials?.totp, {
+            organizationId: organization.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            ip,
+            userAgent,
+          });
+
+          const consumed = await consumeLoginIntent(rawIntent, host, organization.id);
+          if (!consumed) return null;
+
+          await tenantDb.user.update({
+            where: { id: user.id },
+            data: { lastActiveAt: new Date() },
+          });
+
+          recordAuthAudit({
+            type: 'LOGIN',
+            organizationId: organization.id,
+            userId: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            ip,
+            userAgent,
+            reason: 'Shared host workspace selection',
           });
 
           return {

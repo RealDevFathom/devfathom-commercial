@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { useSession, signOut } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
+import { signOutEverything } from '@/lib/auth/sign-out';
 import { useTheme } from '@/components/theme-provider';
 import Link from 'next/link';
 import {
@@ -554,7 +555,7 @@ function PasswordSection() {
 
   // IMP-AUTH-03: revoke every other session, then sign this device out too.
   const signOutEverywhere = trpc.team.signOutEverywhere.useMutation({
-    onSuccess: () => signOut({ callbackUrl: '/login' }),
+    onSuccess: () => void signOutEverything(),
   });
 
   const [current, setCurrent] = useState('');
