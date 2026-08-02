@@ -50,7 +50,13 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bunx prisma generate
       - run: bun run lint
-      - run: bun run typecheck
+      - name: Typecheck
+        # The generated Prisma client is large enough that `tsc --noEmit` exceeds
+        # Node's default ~2 GB heap on a GitHub runner and aborts with SIGABRT.
+        # Runners have 16 GB; this is a runner-capacity setting, not a code fix.
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: bun run typecheck
       - name: Prettier check on changed files
         # The repository-wide `format:check` is not a clean baseline: it reports
         # legacy source files that predate this work, and mass-reformatting them
