@@ -7,6 +7,7 @@ import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken, hashInviteToken } from '@/lib/invite-token';
 import { rateLimit } from '@/lib/rate-limit';
 import { ACTIVE_STATUSES } from '@/lib/abac';
+import { emailLookupSchema } from '@/lib/email-address';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 
 // Public (unauthenticated) procedures backing the forgot-password / reset flow.
@@ -36,9 +37,12 @@ export const passwordResetRouter = router({
   // Step 1 — request a reset link. ALWAYS returns success to prevent account
   // enumeration: the response is identical whether or not the email exists.
   request: publicProcedure
-    .input(z.object({ email: z.string().trim().min(1).max(320) }))
+    // D10: lookup-only normalization. A malformed address must be indistinguish-
+    // able from an unknown one here, so this deliberately does not validate the
+    // format — it would turn the endpoint into an enumeration oracle.
+    .input(z.object({ email: emailLookupSchema }))
     .mutation(async ({ ctx, input }) => {
-      const email = input.email.toLowerCase();
+      const email = input.email;
       const ip = ctx.requestMeta.ip ?? 'unknown';
 
       // Throttle per IP (broad) and per email so the endpoint can't be used to

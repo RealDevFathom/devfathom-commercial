@@ -15,6 +15,7 @@ import { annotateAudit, diffChanges } from '../audit';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { notify } from '@/lib/notifications';
 import type { NotificationPrefs } from '@/lib/notifications';
+import { emailSchema } from '@/lib/email-address';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
 
@@ -106,7 +107,11 @@ export const teamRouter = router({
     .input(
       z.object({
         name: z.string().min(1),
-        email: z.string().email(),
+        // D10: normalized here so the duplicate guard below and the stored row
+        // agree. Previously the guard lowercased the input but the index was
+        // case-sensitive, so ALEX@COMPANY.COM could be created alongside
+        // alex@company.com without the guard ever firing.
+        email: emailSchema,
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
         department: z.enum([
           'LEADERSHIP',
@@ -123,7 +128,7 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const email = input.email.toLowerCase();
+      const email = input.email;
       const existing = await ctx.db.user.findFirst({
         where: { email },
         select: { id: true, status: true },

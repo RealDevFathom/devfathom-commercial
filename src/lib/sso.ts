@@ -6,6 +6,7 @@ import type { OrganizationIdentityConnection } from '@/generated/prisma/client';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { normalizeEmail } from '@/lib/email-address';
 import { requireOrganizationForRequest } from '@/lib/tenancy/host';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -98,12 +99,16 @@ export async function provisionIdentityUser(
   connection: ActiveIdentityConnection,
   claims: Record<string, unknown>
 ) {
-  const email = (
+  // D10/D20: an IdP may assert ALEX@COMPANY.COM for the person stored as
+  // alex@company.com. Both sides are normalized to the one canonical form so the
+  // lookup below MATCHES the existing user instead of silently provisioning a
+  // second account for the same person in the same organization.
+  const email = normalizeEmail(
     claimString(claims.email) ??
-    claimString(claims.mail) ??
-    claimString(claims['urn:oid:0.9.2342.19200300.100.1.3']) ??
-    ''
-  ).toLowerCase();
+      claimString(claims.mail) ??
+      claimString(claims['urn:oid:0.9.2342.19200300.100.1.3']) ??
+      ''
+  );
   if (!email || !email.includes('@')) throw new Error('Identity provider did not return an email.');
   if (claims.email_verified === false) throw new Error('Identity email is not verified.');
   assertAllowedEmail(connection, email);
@@ -129,6 +134,12 @@ export async function provisionIdentityUser(
     const entitlements = await resolveOrganizationEntitlements(connection.organizationId, db);
     if (entitlements.activeSeats >= entitlements.seatLimit) {
       throw new Error('The organization seat limit has been reached.');
+    }
+    // D20: never let the composite unique index surface as a raw Prisma error.
+    // The lookup above already normalizes, so reaching here with a duplicate
+    // means a concurrent provision — report it, do not create a second row.
+    if (await db.user.findFirst({ where: { email }, select: { id: true } })) {
+      throw new Error('An account with this email already exists in this organization.');
     }
     const role = roleFromClaims(connection, claims);
     return db.user.create({

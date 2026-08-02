@@ -9,9 +9,11 @@ import {
   scimUser,
   withScimAuth,
 } from '@/lib/scim';
+import { emailSchema, normalizeEmail } from '@/lib/email-address';
 
 const replaceSchema = z.object({
-  userName: z.email().max(254),
+  // D10: normalized at the schema layer — see the create route.
+  userName: emailSchema,
   displayName: z.string().trim().min(1).max(200).optional(),
   name: z.object({ formatted: z.string().trim().min(1).max(200).optional() }).optional(),
   active: z.boolean().default(true),
@@ -66,10 +68,19 @@ export async function PUT(request: Request, route: { params: Promise<{ id: strin
       const input = replaceSchema.parse(await request.json());
       const current = await loadUser(ctx, id);
       if (!current) return scimError(404, 'User not found.');
+      // D10/D20: a replace may move a user onto an address another member
+      // already holds. Guard explicitly so the directory sees SCIM `uniqueness`
+      // instead of a raw constraint violation.
+      const email = normalizeEmail(input.userName);
+      const clash = await ctx.db.user.findFirst({
+        where: { email, id: { not: id } },
+        select: { id: true },
+      });
+      if (clash) return scimError(409, 'A user with this userName already exists.', 'uniqueness');
       const user = await ctx.db.user.update({
         where: { id },
         data: {
-          email: input.userName.trim().toLowerCase(),
+          email,
           name: input.displayName ?? input.name?.formatted ?? current.name,
           role: scimRole(input.roles?.[0]?.value ?? current.role),
           status: input.active ? 'ACTIVE' : 'INACTIVE',

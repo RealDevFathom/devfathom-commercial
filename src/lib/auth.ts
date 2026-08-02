@@ -11,6 +11,7 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
 import { SSO_TICKET_COOKIE } from '@/lib/sso';
 import type { SessionInvalidReason } from '@/lib/auth/session-state';
+import { emailSchema } from '@/lib/email-address';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -21,7 +22,11 @@ if (process.env.NODE_ENV === 'production' && !process.env.AUTH_SECRET) {
 }
 
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
+  // D10: normalized at the schema layer, so the lookup below and every stored
+  // address agree on one canonical form. Before this, `Alex@Company.com` could
+  // not sign in at all: line 102 lowercased only the rate-limit key while the
+  // query used the raw string against a case-sensitive unique index.
+  email: emailSchema,
   password: z.string().min(1, 'Password is required'),
   // IMP-AUTH-02: a TOTP code or recovery code, required only when 2FA is enabled.
   totp: z.string().optional(),
@@ -100,7 +105,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // (broad) and per account — so an unthrottled flood can neither brute-
         // force a password nor burn CPU on prefix-matching bcrypt compares.
         const ipGate = rateLimit(`login:ip:${ip ?? 'unknown'}`, 30, 5 * 60_000);
-        const acctGate = rateLimit(`login:acct:${email.toLowerCase()}`, 10, 5 * 60_000);
+        const acctGate = rateLimit(`login:acct:${email}`, 10, 5 * 60_000);
         if (!ipGate.ok || !acctGate.ok) {
           recordAuthAudit({
             type: 'LOGIN_FAILED',

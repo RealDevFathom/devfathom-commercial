@@ -10,11 +10,15 @@ import {
   withScimAuth,
 } from '@/lib/scim';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { emailSchema, normalizeEmail } from '@/lib/email-address';
 
 const createUserSchema = z.object({
   schemas: z.array(z.string()).optional(),
   externalId: z.string().max(255).optional(),
-  userName: z.email().max(254),
+  // D10: normalized at the schema layer, so a directory that pads or upper-cases
+  // the userName is provisioned against the same canonical identity rather than
+  // rejected as malformed or duplicated as a second row.
+  userName: emailSchema,
   displayName: z.string().trim().min(1).max(200).optional(),
   name: z.object({ formatted: z.string().trim().min(1).max(200).optional() }).optional(),
   active: z.boolean().default(true),
@@ -24,7 +28,7 @@ const createUserSchema = z.object({
 function filterEmail(value: string | null): string | null {
   if (!value) return null;
   const match = /^userName\s+eq\s+"([^"]+)"$/i.exec(value.trim());
-  return match?.[1]?.toLowerCase() ?? null;
+  return match?.[1] ? normalizeEmail(match[1]) : null;
 }
 
 export async function GET(request: Request) {
@@ -70,7 +74,11 @@ export async function POST(request: Request) {
   return withScimAuth(request, async (ctx) => {
     try {
       const input = createUserSchema.parse(await request.json());
-      const email = input.userName.trim().toLowerCase();
+      // D10/D20: the directory may assert a different casing than the stored
+      // row. Both are normalized, so this pre-check matches — and a duplicate
+      // returns SCIM `uniqueness` (409) rather than letting the composite unique
+      // index surface as a raw Prisma 500.
+      const email = normalizeEmail(input.userName);
       const existing = await ctx.db.user.findFirst({ where: { email }, select: { id: true } });
       if (existing)
         return scimError(409, 'A user with this userName already exists.', 'uniqueness');

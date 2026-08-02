@@ -6,7 +6,9 @@ import { publicRequestOrigin } from '@/lib/http-origin';
 export class PlatformSecurityError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 401 | 403 | 429 = 403
+    // 409 is the documented conflict code (docs/admin-platform/api.md); D20 uses
+    // it so a duplicate email reports a conflict rather than a bad request.
+    readonly status: 400 | 401 | 403 | 409 | 429 = 403
   ) {
     super(message);
     this.name = 'PlatformSecurityError';
