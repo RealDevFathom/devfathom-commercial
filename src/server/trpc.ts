@@ -2,7 +2,8 @@ import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
-import { can, subjectFromSession, ACTIVE_STATUSES, type Action } from '@/lib/abac';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { evaluateSessionUser, type SessionUserState } from '@/lib/auth/session-state';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TenantOrganization } from '@/lib/tenancy/host';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
@@ -75,17 +76,27 @@ const t = initTRPC.context<TRPCContext>().create({
 export const router = t.router;
 export const publicProcedure = t.procedure;
 
-// Reject sessions whose backing account has been deactivated. `status` is
-// refreshed from the DB on each request by the NextAuth jwt() callback, so a
-// deactivated/deleted user is locked out within the revalidation window even
-// though sessions are stateless JWTs. Undefined status (legacy token, before
-// the next jwt() refresh) is tolerated — it is populated on the next request.
-function assertActive(user: { status?: string | null }) {
-  // ACTIVE and ON_LEAVE may use the app; INACTIVE / INVITED / DELETED may not.
-  // (Allow-list via ABAC's ACTIVE_STATUSES so it stays consistent everywhere.)
-  if (user.status && !ACTIVE_STATUSES.has(user.status)) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Your account is no longer active.' });
-  }
+/**
+ * Reject any session that is not provably usable (#16).
+ *
+ * The previous guard was `if (user.status && !ACTIVE_STATUSES.has(user.status))`
+ * — it only fired when `status` was TRUTHY, so a session carrying no status at
+ * all passed straight through. That is the fail-open the QA report exercised: a
+ * revoked token read and wrote tenant data while `/api/auth/session` reported it
+ * revoked.
+ *
+ * `evaluateSessionUser` fails CLOSED, and is the same decision the `/(app)` page
+ * guard uses, so the API and the page cannot disagree about one session. A dead
+ * session gets 401 (sign in again); an inactive account or an unavailable
+ * workspace gets 403 (a person, not a re-login, must fix it).
+ */
+function assertSessionUsable(user: SessionUserState) {
+  const verdict = evaluateSessionUser(user);
+  if (verdict.ok) return;
+  throw new TRPCError({
+    code: verdict.kind === 'session-ended' ? 'UNAUTHORIZED' : 'FORBIDDEN',
+    message: verdict.message,
+  });
 }
 
 /**
@@ -142,7 +153,7 @@ const requireActiveUser = t.middleware(async ({ ctx, next }) => {
       message: 'You must be logged in to access this resource',
     });
   }
-  assertActive(ctx.session.user);
+  assertSessionUsable(ctx.session.user);
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
 
@@ -170,7 +181,7 @@ function requireCapability(action: Action) {
         message: 'You must be logged in to access this resource',
       });
     }
-    assertActive(ctx.session.user);
+    assertSessionUsable(ctx.session.user);
     const subject = subjectFromSession(ctx.session.user);
     const allowed = await can(subject, action, undefined, {
       db: ctx.db as Prisma.TransactionClient,

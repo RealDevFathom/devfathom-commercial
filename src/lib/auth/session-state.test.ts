@@ -1,0 +1,120 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  ACCOUNT_INACTIVE_MESSAGE,
+  SESSION_ENDED_MESSAGE,
+  WORKSPACE_UNAVAILABLE_MESSAGE,
+  evaluateSessionUser,
+  isSessionUsable,
+  signInRedirectPath,
+  type SessionUserState,
+} from './session-state';
+
+describe('evaluateSessionUser', () => {
+  it.each([
+    ['ACTIVE'],
+    ['ON_LEAVE'], // #16 regression: on-leave staff keep their access.
+  ])('admits an active session with status %s', (status) => {
+    expect(evaluateSessionUser({ status, sessionRevoked: false })).toEqual({ ok: true });
+  });
+
+  it.each<[string, SessionUserState, string, string]>([
+    // The revocation claim, in every reason it can carry.
+    [
+      'revoked session',
+      { status: 'ACTIVE', sessionRevoked: true, sessionInvalidReason: 'REVOKED' },
+      'session-ended',
+      SESSION_ENDED_MESSAGE,
+    ],
+    [
+      'deleted account',
+      { status: 'ACTIVE', sessionRevoked: true, sessionInvalidReason: 'DELETED' },
+      'session-ended',
+      SESSION_ENDED_MESSAGE,
+    ],
+    [
+      'failed revalidation',
+      { status: 'ACTIVE', sessionRevoked: true, sessionInvalidReason: 'REVALIDATION_FAILED' },
+      'session-ended',
+      SESSION_ENDED_MESSAGE,
+    ],
+    [
+      'suspended organization',
+      { status: 'ACTIVE', sessionRevoked: true, sessionInvalidReason: 'ORGANIZATION_SUSPENDED' },
+      'workspace-unavailable',
+      WORKSPACE_UNAVAILABLE_MESSAGE,
+    ],
+    // Legacy sentinels written into `status` by tokens minted before #16.
+    ['legacy REVOKED sentinel', { status: 'REVOKED' }, 'session-ended', SESSION_ENDED_MESSAGE],
+    ['legacy DELETED sentinel', { status: 'DELETED' }, 'session-ended', SESSION_ENDED_MESSAGE],
+    [
+      'legacy REVALIDATION_FAILED sentinel',
+      { status: 'REVALIDATION_FAILED' },
+      'session-ended',
+      SESSION_ENDED_MESSAGE,
+    ],
+    [
+      'legacy ORGANIZATION_SUSPENDED sentinel',
+      { status: 'ORGANIZATION_SUSPENDED' },
+      'workspace-unavailable',
+      WORKSPACE_UNAVAILABLE_MESSAGE,
+    ],
+    // Real account statuses that may not sign in.
+    ['deactivated account', { status: 'INACTIVE' }, 'account-inactive', ACCOUNT_INACTIVE_MESSAGE],
+    [
+      'not-yet-onboarded account',
+      { status: 'INVITED' },
+      'account-inactive',
+      ACCOUNT_INACTIVE_MESSAGE,
+    ],
+    ['unknown future status', { status: 'ARCHIVED' }, 'account-inactive', ACCOUNT_INACTIVE_MESSAGE],
+  ])('rejects a %s', (_label, user, kind, message) => {
+    const verdict = evaluateSessionUser(user);
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) return;
+    expect(verdict.kind).toBe(kind);
+    expect(verdict.message).toBe(message);
+  });
+
+  // The exact fail-open the QA report exercised: the old guard was
+  // `if (user.status && ...)`, so a session with no status passed through.
+  it.each<[string, SessionUserState | null | undefined]>([
+    ['undefined status', { status: undefined }],
+    ['null status', { status: null }],
+    ['empty status', { status: '' }],
+    ['no fields at all', {}],
+    ['null user', null],
+    ['undefined user', undefined],
+  ])('fails closed on %s', (_label, user) => {
+    const verdict = evaluateSessionUser(user);
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) return;
+    expect(verdict.kind).toBe('session-ended');
+    expect(verdict.message).toBe(SESSION_ENDED_MESSAGE);
+  });
+
+  it('never reports a revoked session as a deactivated account', () => {
+    const verdict = evaluateSessionUser({
+      status: 'ACTIVE',
+      sessionRevoked: true,
+      sessionInvalidReason: 'REVOKED',
+    });
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) return;
+    expect(verdict.message).not.toContain('administrator');
+    expect(verdict.message).toBe('Your session has ended. Please sign in again.');
+  });
+
+  it('prefers the revocation claim over an otherwise-active status', () => {
+    expect(isSessionUsable({ status: 'ACTIVE' })).toBe(true);
+    expect(isSessionUsable({ status: 'ACTIVE', sessionRevoked: true })).toBe(false);
+  });
+});
+
+describe('signInRedirectPath', () => {
+  it('sends every denial back to sign-in with its reason', () => {
+    expect(signInRedirectPath('session-ended')).toBe('/login?reason=session-ended');
+    expect(signInRedirectPath('account-inactive')).toBe('/login?reason=account-inactive');
+    expect(signInRedirectPath('workspace-unavailable')).toBe('/login?reason=workspace-unavailable');
+  });
+});
