@@ -149,6 +149,39 @@ export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
     await continueInto(twoFactorFor, totpRef.current?.value ?? '');
   };
 
+  const HEADINGS: Record<Stage, { eyebrow: string; title: string; description: string }> = {
+    credentials: {
+      eyebrow: 'Secure workspace access',
+      title: 'Welcome back',
+      description: 'Sign in to pick up the work your team is moving forward.',
+    },
+    select: {
+      eyebrow: 'Choose a workspace',
+      title: 'Where to?',
+      description: 'Your account belongs to more than one workspace. Choose where to continue.',
+    },
+    'sso-only': {
+      eyebrow: 'Single sign-on',
+      title: 'Continue with SSO',
+      description: 'Every workspace on this account signs in through its own identity provider.',
+    },
+  };
+  const heading = HEADINGS[stage];
+
+  const header = (
+    <div className="mb-8">
+      <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+        {heading.eyebrow}
+      </p>
+      <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
+        {heading.title}
+      </h1>
+      <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+        {heading.description}
+      </p>
+    </div>
+  );
+
   const alert = error ? (
     <div
       id={errorId}
@@ -162,6 +195,7 @@ export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
   if (stage === 'credentials') {
     return (
       <>
+        {header}
         {alert}
         <form method="post" onSubmit={onSubmitCredentials} className="space-y-5">
           <div className="space-y-2">
@@ -240,10 +274,8 @@ export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
   if (stage === 'sso-only') {
     return (
       <>
+        {header}
         {alert}
-        <p className="mb-5 text-sm leading-relaxed text-text-muted">
-          Every workspace on this account signs in through its own identity provider.
-        </p>
         <ul className="space-y-3">
           {organizations.map((organization) => (
             <li key={organization.id}>
@@ -258,10 +290,8 @@ export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
 
   return (
     <>
+      {header}
       {alert}
-      <p className="mb-5 text-sm leading-relaxed text-text-muted">
-        Your account belongs to more than one workspace. Choose where to continue.
-      </p>
 
       <ul className="space-y-3">
         {organizations.map((organization) =>

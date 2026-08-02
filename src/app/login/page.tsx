@@ -83,17 +83,22 @@ export default async function LoginPage(props: PageProps<'/login'>) {
 
           <div className="border-l-2 border-primary pl-5 sm:pl-6">
             {/* Mobile logo */}
-            <div className="mb-8">
-              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
-                Secure workspace access
-              </p>
-              <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
-                Welcome back
-              </h1>
-              <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
-                Sign in to pick up the work your team is moving forward.
-              </p>
-            </div>
+            {/* The shared form owns its heading because the heading changes with
+                the step — "Welcome back" would be wrong on the selection screen.
+                Either way the page renders exactly one <h1>. */}
+            {shared ? null : (
+              <div className="mb-8">
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+                  Secure workspace access
+                </p>
+                <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
+                  Welcome back
+                </h1>
+                <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+                  Sign in to pick up the work your team is moving forward.
+                </p>
+              </div>
+            )}
 
             {notice ? (
               <p
