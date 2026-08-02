@@ -5,8 +5,11 @@ import { headers } from 'next/headers';
 import type { Session } from 'next-auth';
 import { auth } from '@/lib/auth';
 import {
+  isSharedHost,
   isTenantLifecycleAccessible,
+  requestHost,
   requireOrganizationForRequest,
+  resolveOrganizationById,
   resolveOrganizationByHost,
   TenantHostError,
   TENANT_HOST_HEADER,
@@ -35,15 +38,33 @@ type ResolveTenantActorOptions = {
   session?: Session | null;
 };
 
+async function currentRequestHost(): Promise<string | null> {
+  const requestHeaders = await headers();
+  return (
+    requestHeaders.get(TENANT_HOST_HEADER) ??
+    requestHeaders.get('x-forwarded-host') ??
+    requestHeaders.get('host')
+  );
+}
+
 async function organizationForServerComponent(
   expectedOrganizationId: string
 ): Promise<TenantOrganization> {
-  const requestHeaders = await headers();
-  const organization = await resolveOrganizationByHost(
-    requestHeaders.get(TENANT_HOST_HEADER) ??
-      requestHeaders.get('x-forwarded-host') ??
-      requestHeaders.get('host')
-  );
+  const host = await currentRequestHost();
+
+  // D13: mirrors requireOrganizationForRequest for pages. On a shared host the
+  // session's organization is authoritative and the lifecycle gate is explicit;
+  // everywhere else the host must still agree with the session.
+  if (isSharedHost(host)) {
+    const shared = await resolveOrganizationById(expectedOrganizationId);
+    if (!shared) throw new TenantHostError('Workspace not found.', 404);
+    if (!isTenantLifecycleAccessible(shared.status)) {
+      throw new TenantHostError('This workspace is not currently active.', 423);
+    }
+    return shared;
+  }
+
+  const organization = await resolveOrganizationByHost(host);
   if (!organization) throw new TenantHostError('Workspace not found.', 404);
   if (organization.id !== expectedOrganizationId) {
     throw new TenantHostError('This session belongs to a different workspace.', 409);
@@ -82,10 +103,20 @@ function isUsableSession(session: Session | null | undefined): session is Sessio
 async function resolveTenantActorUncached(
   options: ResolveTenantActorOptions
 ): Promise<TenantActor | null> {
+  // D14: `df_support_session` is deliberately domain-wide (`domain: '.<base>'`)
+  // and takes precedence over the tenant JWT, so an operator with a live support
+  // session who visits the shared host would otherwise be handed a surprising
+  // impersonated actor for a workspace they did not open. Support access is
+  // scoped to a tenant host; the shared host ignores the cookie entirely.
+  const host = options.request
+    ? requestHost(options.request)
+    : await currentRequestHost().catch(() => null);
+  const onSharedHost = isSharedHost(host);
+
   // An explicit, audited support cookie takes precedence over a tenant JWT.
   // This keeps every action attributed to the operator even when the browser
   // already has a tenant session, and avoids decoding a stale JWT first.
-  const support = await getSupportSession(options.request);
+  const support = onSharedHost ? null : await getSupportSession(options.request);
   if (support) {
     const organization = await organizationForActor(support.organizationId, options.request);
     if (!organization) return null;

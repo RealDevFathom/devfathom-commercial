@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   getSupportSession: vi.fn(),
   requireOrganizationForRequest: vi.fn(),
+  isSharedHost: vi.fn(() => false),
+  resolveOrganizationById: vi.fn(),
+  withTenantDb: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -21,14 +24,17 @@ vi.mock('@/lib/tenancy/host', () => {
   }
 
   return {
+    isSharedHost: mocks.isSharedHost,
     isTenantLifecycleAccessible: vi.fn(() => true),
+    requestHost: (request: Request) => new URL(request.url).hostname,
     requireOrganizationForRequest: mocks.requireOrganizationForRequest,
+    resolveOrganizationById: mocks.resolveOrganizationById,
     resolveOrganizationByHost: vi.fn(),
     TenantHostError,
     TENANT_HOST_HEADER: 'x-devfathom-host',
   };
 });
-vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
 vi.mock('@/lib/tenancy/support-session', () => ({
   getSupportSession: mocks.getSupportSession,
 }));
@@ -53,6 +59,7 @@ describe('resolveTenantActor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSupportSession.mockResolvedValue(null);
+    mocks.isSharedHost.mockReturnValue(false);
   });
 
   it('treats a session for another workspace as unauthenticated', async () => {
@@ -96,5 +103,34 @@ describe('resolveTenantActor', () => {
       session: sessionFor({ status: 'ON_LEAVE' }),
     });
     expect(actor?.organization).toEqual({ id: 'org_other' });
+  });
+
+  // D14: `df_support_session` is domain-wide and outranks the tenant JWT, so an
+  // operator with a live support session who opened the shared host would have
+  // been handed an impersonated actor for a workspace they never opened.
+  describe('on the shared host', () => {
+    beforeEach(() => mocks.isSharedHost.mockReturnValue(true));
+
+    it('ignores a live support session', async () => {
+      mocks.getSupportSession.mockResolvedValue({
+        organizationId: 'org_support',
+        tenantUserId: 'user_support',
+      });
+      mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+
+      const actor = await resolveTenantActor({ request: request(), session });
+
+      expect(mocks.getSupportSession).not.toHaveBeenCalled();
+      expect(actor?.support).toBeNull();
+      expect(actor?.session.user.id).toBe('user_1');
+    });
+
+    it('still resolves the tenant session normally', async () => {
+      mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+
+      const actor = await resolveTenantActor({ request: request(), session });
+
+      expect(actor?.organization).toEqual({ id: 'org_other' });
+    });
   });
 });

@@ -106,3 +106,42 @@ describe('organization.create admin email', () => {
     );
   });
 });
+
+// D3 — a slug becomes `<slug>.<baseDomain>`, so a reserved label would shadow
+// the control plane or the shared application host.
+describe('organization.create reserved slugs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it.each([['www'], ['admin'], ['app'], ['api'], ['staging'], ['WWW'], ['  Admin  ']])(
+    'refuses the reserved slug %j',
+    async (reserved) => {
+      await expect(
+        executePlatformCommand(
+          actor,
+          'organization.create',
+          { ...payload('admin@acme.com'), slug: reserved },
+          request
+        )
+      ).rejects.toThrow(/Reserved slug/);
+      expect(platformDb.organization.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still accepts an ordinary slug', async () => {
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), slug: 'Acme-Group' },
+        request
+      )
+    ).resolves.toBeDefined();
+    expect(platformDb.organization.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ slug: 'acme-group' }) })
+    );
+  });
+});

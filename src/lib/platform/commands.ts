@@ -15,6 +15,7 @@ import { PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
+import { RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 
 const id = z
   .string()
@@ -46,9 +47,16 @@ const money = z.coerce.number().finite().min(0).max(999_999_999_999);
 const slug = z
   .string()
   .trim()
+  .toLowerCase()
   .min(3)
   .max(63)
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  // D3: a slug becomes `<slug>.<baseDomain>`. Assigning one of the reserved
+  // labels would shadow the control plane or the shared application host, so it
+  // is refused at creation rather than discovered as a routing collision.
+  .refine((value) => !RESERVED_HOST_LABELS.includes(value), {
+    message: `Reserved slug. Choose another: ${RESERVED_HOST_LABELS.join(', ')} are used by the platform.`,
+  });
 const hostname = z
   .string()
   .trim()
