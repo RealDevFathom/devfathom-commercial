@@ -5,7 +5,6 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, MailCheck } from 'lucide-react';
-import { trpc } from '@/lib/trpc';
 
 const schema = z.object({
   email: z.string().email('Please enter a valid email address'),
@@ -21,7 +20,6 @@ const inputClass =
 const CONFIRMATION = "If an account exists for that email, we've sent a reset link.";
 
 export function ForgotPasswordForm() {
-  const requestReset = trpc.passwordReset.request.useMutation();
   const [sent, setSent] = useState(false);
 
   const {
@@ -32,7 +30,15 @@ export function ForgotPasswordForm() {
 
   const onSubmit = async (data: FormData) => {
     try {
-      await requestReset.mutateAsync({ email: data.email });
+      // D19: this used to call the tRPC mutation, but the transport answered 401
+      // before the router ran, so no reset link was ever sent — and the catch
+      // below hid it. The anonymous endpoint carries the email; on the shared
+      // host it fans out across every workspace the address belongs to.
+      await fetch('/api/password-reset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: data.email }),
+      });
     } catch {
       // Swallow errors (e.g. rate limiting) — still show the neutral
       // confirmation so the form can never be used to probe for accounts.
