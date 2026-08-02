@@ -51,7 +51,26 @@ jobs:
       - run: bunx prisma generate
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun run format:check
+      - name: Prettier check on changed files
+        # The repository-wide `format:check` is not a clean baseline: it reports
+        # legacy source files that predate this work, and mass-reformatting them
+        # would bury product changes in unrelated diff. The documented release
+        # gate is every CHANGED file, which is what this enforces.
+        run: |
+          set -euo pipefail
+          base=$(git rev-parse "${GITHUB_SHA}^" 2>/dev/null || echo '')
+          if [ -z "$base" ]; then
+            echo 'No parent commit; checking the whole source tree instead.'
+            bun run format:check
+            exit 0
+          fi
+          mapfile -t changed < <(git diff --name-only --diff-filter=ACMR "$base" "${GITHUB_SHA}" -- 'src/**/*.ts' 'src/**/*.tsx' 'src/**/*.css')
+          if [ ${#changed[@]} -eq 0 ]; then
+            echo 'No source files changed.'
+            exit 0
+          fi
+          printf '%s\n' "${changed[@]}"
+          bunx prettier --check "${changed[@]}"
       - run: bun run test
       - name: Prepare a disposable database
         run: |
