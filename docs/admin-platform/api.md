@@ -3,7 +3,8 @@
 ## Conventions
 
 - Public URLs are reconstructed from `x-forwarded-host`/`host` and `x-forwarded-proto`; internal runtime origins are never returned.
-- Tenant authority comes from host plus authenticated credential, never a submitted organization ID.
+- Tenant authority comes from an authenticated credential. On tenant, custom and dedicated hosts the host resolves the organization and the session must agree with it. On the shared host there is no host organization, so the organization comes from the session claim and the lifecycle gate is applied explicitly.
+- A submitted organization ID is never authority on its own. The one endpoint that accepts one — shared-host workspace selection — validates it against a server-side, single-use, host-bound login intent that records the candidate set the server itself computed when the password was proven. An id outside that set is refused and does not consume the intent.
 - JSON mutations validate input with Zod and return structured errors.
 - Tenant REST and tRPC activity is audited; platform commands use the platform audit ledger; SCIM has its own event ledger.
 - API tokens, SCIM tokens, sessions, and launch tickets are stored as hashes.
@@ -124,6 +125,24 @@ The bearer token determines organization. The host must resolve to the same orga
 - `/api/assistant`;
 - `/api/ably-token`;
 - `/api/auth/[...nextauth]`.
+
+## Anonymous authentication endpoints
+
+| Method/path                | Purpose                                                                                                                                                                                            |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/login`          | Shared host only. Proves credentials, then mints a single-use, host-bound login intent and returns the eligible workspaces. Never establishes a session. Every failure returns one identical body. |
+| `DELETE /api/login`        | Invalidates a pending login intent and clears its cookie; called on sign-out.                                                                                                                      |
+| `POST /api/password-reset` | Emails a reset link. On the shared host it fans out across every workspace the address belongs to. Always returns `{"ok":true}`.                                                                   |
+
+`POST /api/login` requires an exact same-origin `Origin`, a same-origin
+`Sec-Fetch-Site` when present, and `application/json`. It answers `404` on tenant,
+dedicated and admin hosts.
+
+The tRPC transport also accepts four procedures with no session at all —
+`invitations.get`, `invitations.accept`, `passwordReset.validate` and
+`passwordReset.reset`. Each carries a token whose hash is globally unique, so the
+token identifies the tenant with no host and no session. A request without a valid
+token, or a batch containing any other procedure, is rejected with `401`.
 
 Uploads/files validate actor and object-level access. Realtime returns 503 without `ABLY_API_KEY` and the client does not initialize when that integration is absent.
 

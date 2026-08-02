@@ -20,11 +20,32 @@ Current unit coverage includes:
 - module-to-page/procedure/API mapping;
 - RFC TOTP vector, recovery-code hashing, and invalid input;
 - ABAC wildcard, explicit deny, override, inactive/fail-closed behavior;
-- host routing/normalization;
+- host routing/normalization, including shared-host classification, the base-domain
+  apex, reserved labels, explicitly configured shared hosts, and unrecognised hosts;
 - platform password and exact-origin controls;
 - public proxy origin reconstruction;
 - platform-vs-tenant proxy boundaries and framework assets;
-- platform command-form null handling.
+- platform command-form null handling;
+- session usability: every revocation reason, the legacy sentinels, and the
+  fail-closed missing-status case, plus a table-driven pass over every procedure
+  builder (protected, admin, hr, capability) on a representative read AND write;
+- email normalization (mixed case, whitespace, unicode) and a duplicate pre-check
+  on every user-creation path — tenant invite, platform onboarding, SCIM create and
+  replace, SSO JIT, and the assistant tool;
+- login candidate discovery: one privileged transaction, the email as the only
+  predicate, a hard field whitelist, and cap behaviour;
+- login intent: creation, five-minute expiry, single-use consumption, replay
+  rejection, host-binding rejection, and tampered/forged organization id rejection;
+- shared-host resolution: one compare per candidate, the zero-candidate timing
+  defence, per-organization password matching, every `OrganizationStatus`, the
+  candidate cap, SSO-enforced marking, and audit attribution;
+- the shared login endpoint: host gating, origin/CSRF gating, byte-identical
+  failures with no cookie, single/select/SSO-only outcomes, and server-side
+  callback-URL validation;
+- `safeCallbackUrl` against a hostile-input table (encoded protocol-relative,
+  authority-looking first segments, control characters, absolute and scheme URLs,
+  and traversal that resolves into a protocol-relative URL);
+- anonymous tenant resolution from a globally unique invite or reset token.
 
 ## RLS matrix
 
@@ -39,7 +60,10 @@ The verifier:
 7. validates missing session settings fail closed;
 8. validates control tables require platform scope;
 9. validates SSO state/ticket isolation and composite FK rejection;
-10. rolls back fixture data.
+10. validates that a tenant scope can neither read nor write a pending login
+    intent, and that the by-email lookup login discovery performs returns nothing
+    for another organization's member from a tenant scope;
+11. rolls back fixture data.
 
 Run it only against a disposable or approved test database:
 
@@ -58,9 +82,29 @@ Platform:
 - settings/MFA state;
 - no framework-asset redirects.
 
+Shared host (`www` / `staging`):
+
+- the login URL carries no workspace slug and no `workspace=` parameter at any step;
+- a wrong password and an unknown address produce identical responses and no cookie;
+- one eligible workspace continues straight to the dashboard;
+- several render the selection screen, and the chosen workspace never appears in the URL;
+- an SSO-enforced workspace renders non-selectable with a working link to its own host;
+- an all-SSO account gets the SSO-only screen rather than an empty picker;
+- sign-out clears the pending selection as well as the session;
+- `/login`, the session-ended notice, `/forgot-password` and the workspace picker
+  at 375/768/1024/1440 in light and dark, plus `prefers-reduced-motion: reduce`;
+- exactly one `<h1>` and no document horizontal overflow on every one of those.
+
+The matrix is automated in `tests/e2e/visual-qa.spec.ts`, which writes screenshots
+to `test-results/visual-qa/`. Run it in a FOREGROUND tab: a backgrounded tab
+freezes `requestAnimationFrame` and makes Motion-driven panels look broken. Note
+that `emulateMedia({colorScheme})` alone does NOT switch this app's theme — an
+inline script in the root layout reads `localStorage` and stamps `data-theme`.
+
 Tenant:
 
 - credential login and dashboard;
+- a differently-cased address reaches the same account;
 - organization administration sections;
 - profile mutation;
 - effective modules and seats;

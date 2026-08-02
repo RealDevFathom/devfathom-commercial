@@ -1,6 +1,6 @@
 # Platform Status Ledger
 
-Last reviewed: 2026-07-28. Branch: `codex/admin-control-plane`.
+Last reviewed: 2026-08-02. Branch: `codex/shared-host-login`.
 
 | Phase                             | Implementation | Verification                                                                       | Production dependency                                      |
 | --------------------------------- | -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -30,26 +30,28 @@ Last reviewed: 2026-07-28. Branch: `codex/admin-control-plane`.
 
 ## Local verification evidence
 
-The checks below used disposable PostgreSQL databases on 2026-07-28. No credentials or tokens are stored in this repository.
+The checks below used disposable PostgreSQL databases, most recently on 2026-08-02 for the shared-host login release. No credentials or tokens are stored in this repository.
 
-| Check                                            | Result                                                                                                      |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `bun run typecheck`                              | Passed                                                                                                      |
-| `bun run lint -- --max-warnings=0`               | Passed                                                                                                      |
-| `bun run test`                                   | Passed; 9 files and 37 tests                                                                                |
-| `bunx prisma validate`                           | Passed                                                                                                      |
-| `bunx prisma migrate deploy` on a fresh database | Passed; all migrations applied                                                                              |
-| `bun run test:rls` against the fresh database    | Passed; policy, cross-tenant, SSO, and fail-closed checks                                                   |
-| Changed-file Prettier check                      | Passed for every changed TypeScript, TSX, JSON, Markdown, YAML, and CSS file                                |
-| `bun run build`                                  | Passed on Next.js 16.2.12/Prisma 7.9.1 with deprecation tracing and no warning requiring action             |
-| `bun audit`                                      | Direct/runtime advisories cleared; two accepted toolchain-only advisories remain, described below           |
-| `bun run platform:jobs -- --max-jobs=1`          | Passed; shared provisioning job succeeded                                                                   |
-| Platform browser smoke                           | Passed on dashboard, organizations, CRM, commercial, catalog, deployments, jobs, operators, audit, settings |
-| Platform visual parity                           | Passed at desktop/mobile widths, light/dark themes, and reduced motion against the tenant Studio language   |
-| Tenant browser smoke                             | Passed on dashboard and organization administration                                                         |
-| Entitlement browser smoke                        | Reviews disabled, navigation hidden, direct route blocked, inherited package state restored                 |
-| SCIM browser/API smoke                           | Token created, authorized config/users succeeded, unauthenticated and revoked token returned 401            |
-| Support browser smoke                            | Audited session created, one-use ticket consumed on tenant host, banner shown, session ended                |
+| Check                                            | Result                                                                                                                      |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `bun run typecheck`                              | Passed                                                                                                                      |
+| `bun run lint -- --max-warnings=0`               | Passed                                                                                                                      |
+| `bun run test`                                   | Passed; 28 files and 333 tests                                                                                              |
+| `bunx prisma validate`                           | Passed                                                                                                                      |
+| `bunx prisma migrate deploy` on a fresh database | Passed; all 13 migrations applied                                                                                           |
+| Email-collision pre-check                        | 0 collisions on the development dataset; the abort path was exercised on a disposable database and left both rows untouched |
+| `bun run test:rls` against the fresh database    | Passed; policy, cross-tenant, SSO, fail-closed, and pending-login-intent control-plane checks                               |
+| `bun run test:e2e` (local, both projects)        | Passed; 42 tests including the shared-host flow and the §12 visual QA matrix                                                |
+| Changed-file Prettier check                      | Passed for every changed TypeScript, TSX, JSON, Markdown, YAML, and CSS file                                                |
+| `bun run build`                                  | Passed on Next.js 16.2.12/Prisma 7.9.1 with deprecation tracing and no warning requiring action                             |
+| `bun audit`                                      | Direct/runtime advisories cleared; two accepted toolchain-only advisories remain, described below                           |
+| `bun run platform:jobs -- --max-jobs=1`          | Passed; shared provisioning job succeeded                                                                                   |
+| Platform browser smoke                           | Passed on dashboard, organizations, CRM, commercial, catalog, deployments, jobs, operators, audit, settings                 |
+| Platform visual parity                           | Passed at desktop/mobile widths, light/dark themes, and reduced motion against the tenant Studio language                   |
+| Tenant browser smoke                             | Passed on dashboard and organization administration                                                                         |
+| Entitlement browser smoke                        | Reviews disabled, navigation hidden, direct route blocked, inherited package state restored                                 |
+| SCIM browser/API smoke                           | Token created, authorized config/users succeeded, unauthenticated and revoked token returned 401                            |
+| Support browser smoke                            | Audited session created, one-use ticket consumed on tenant host, banner shown, session ended                                |
 
 The repository-wide `bun run format:check` still reports pre-existing formatting drift in 49 legacy source files. They were not mass-reformatted because that would create unrelated product changes; every file touched by this implementation passes a targeted Prettier check.
 
