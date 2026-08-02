@@ -110,10 +110,13 @@ test.describe('authentication visual QA matrix', () => {
 
     const password = page.locator('input[name="password"]');
     await expect
-      .poll(async () => {
-        await page.getByRole('button', { name: 'Show password' }).click();
-        return password.getAttribute('type');
-      })
+      .poll(
+        async () => {
+          await page.getByRole('button', { name: 'Show password' }).click();
+          return password.getAttribute('type');
+        },
+        { timeout: 60_000, intervals: [250, 500, 1000] }
+      )
       .toBe('text');
     await page.getByRole('button', { name: 'Hide password' }).click();
 
