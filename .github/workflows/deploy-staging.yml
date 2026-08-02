@@ -49,6 +49,12 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bunx prisma generate
+      - name: Generate route types
+        # `PageProps<'/login'>` is a Next-generated global, written during
+        # `next dev`, `next build` or `next typegen`. A clean checkout has none of
+        # them yet, so typecheck must generate them first — locally this passes
+        # only because a previous build left them behind.
+        run: bunx next typegen
       - run: bun run lint
       - name: Typecheck
         # The generated Prisma client is large enough that `tsc --noEmit` exceeds
