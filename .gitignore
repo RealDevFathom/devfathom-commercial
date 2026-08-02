@@ -56,3 +56,7 @@ scripts/.enh-internal-map.json
 
 # Playwright MCP scratch (screenshots saved to docs/ instead)
 .playwright-mcp/
+
+# Playwright output
+/test-results/
+/playwright-report/
