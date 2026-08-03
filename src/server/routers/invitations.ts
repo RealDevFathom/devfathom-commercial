@@ -69,28 +69,39 @@ export const invitationsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const invitation = await loadPendingInvitation(ctx.db, input.token);
+      const hashed = await hash(input.password, 12);
 
-      // CLAIM THE TOKEN FIRST, then hash.
+      // Hash BEFORE opening the transaction.
       //
-      // The read above and the write below are separate statements, so two
-      // requests presenting the same token could both pass the read and both
-      // proceed. A conditional update on `acceptedAt IS NULL` makes consumption
-      // atomic: PostgreSQL serialises the two writers on the row, and the loser
-      // matches zero rows and is rejected with the same generic error as any
-      // other unusable token.
-      //
-      // Ordering matters for cost as well as correctness. bcrypt at cost 12 is
-      // deliberately expensive, and it is the only expensive thing an anonymous
-      // caller can reach here. Claiming first means a replayed or already-used
-      // token is refused by one indexed UPDATE, and never spends a hash.
+      // bcrypt at cost 12 takes on the order of a quarter of a second, and an
+      // interactive transaction pins one pooled connection for its whole
+      // lifetime. Hashing inside it meant every concurrent acceptance held a
+      // connection idle for that entire time, so a burst of invitations could
+      // exhaust the pool and stall unrelated tenant traffic. The read above
+      // already rejects missing, accepted, and expired tokens without hashing,
+      // so the work moved here is only ever spent on a token that looked usable.
       return ctx.db.$transaction(async (tx) => {
+        // Fresh, and read once: the same instant decides whether the invitation
+        // is still live and stamps the acceptance.
+        const now = new Date();
+
+        // ATOMIC CLAIM.
+        //
+        // The read above and this write are separate statements, so two requests
+        // presenting the same token could both pass the read and both proceed. A
+        // conditional update makes consumption atomic: PostgreSQL serialises the
+        // two writers on the row, and the loser matches zero rows and is rejected
+        // with the same generic error as any other unusable token.
+        //
+        // `expiresAt` is re-checked here rather than trusted from the read.
+        // Between the two statements the invitation can lapse, and expiry that is
+        // only enforced on the read is enforced nowhere that the write can see.
         const claimed = await tx.invitation.updateMany({
-          where: { id: invitation.id, acceptedAt: null },
-          data: { acceptedAt: new Date() },
+          where: { id: invitation.id, acceptedAt: null, expiresAt: { gt: now } },
+          data: { acceptedAt: now },
         });
         if (claimed.count !== 1) throw invalidInvitation();
 
-        const hashed = await hash(input.password, 12);
         await tx.user.update({
           where: { id: invitation.userId },
           data: {

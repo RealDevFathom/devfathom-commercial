@@ -48,6 +48,59 @@ export function isTenantLifecycleAccessible(status: OrganizationStatus): boolean
   return status === 'ONBOARDING' || status === 'ACTIVE' || status === 'GRACE';
 }
 
+/**
+ * A deployment URL is stored as a whole URL, written either by provisioning
+ * (`https://<vercel-host>`) or by a platform operator through the admin form,
+ * so the same host legitimately appears under either scheme and with or without
+ * a trailing slash. Enumerating those forms lets the lookup compare whole
+ * values instead of matching a substring.
+ */
+function deploymentUrlCandidates(host: string): readonly string[] {
+  return [
+    `https://${host}`,
+    `https://${host}/`,
+    `http://${host}`,
+    `http://${host}/`,
+    host,
+    `${host}/`,
+  ];
+}
+
+/**
+ * Prisma compiles `equals` + `mode: 'insensitive'` to `url ILIKE $n`, which is
+ * genuinely case-insensitive but also treats the BOUND PARAMETER as a pattern:
+ * `%` and `_` inside it are wildcards. The host arrives from a request header,
+ * so `Host: %.apps.example.test` would otherwise fan out to whatever tenant
+ * deployment happens to match. Hosts are restricted to the DNS character set
+ * before they are ever used to build a candidate, and the rows that come back
+ * are re-checked against the candidate set in application code, so the match is
+ * exact regardless of which operator Prisma chooses.
+ */
+const DEPLOYMENT_HOST_PATTERN = /^[a-z0-9.-]+$/;
+
+export type TenantHostResolutionWarning = {
+  event: 'tenant_host_resolution_ambiguous';
+  hostname: string;
+  matchCount: number;
+  organizationCount: number;
+  organizationIds: string[];
+  deploymentIds: string[];
+};
+
+export type ExplicitHostResolverOptions = {
+  /**
+   * Injected so tests can assert the ambiguity warning. Deliberately a plain
+   * callback rather than an audit write: this resolver runs on unauthenticated
+   * traffic and must stay read-only, so it must not depend on audit storage
+   * being reachable to make a routing decision.
+   */
+  warn?: (warning: TenantHostResolutionWarning) => void;
+};
+
+function warnToConsole(warning: TenantHostResolutionWarning): void {
+  console.warn(`[tenancy] ${warning.event}`, JSON.stringify(warning));
+}
+
 export async function resolveOrganizationByHost(
   hostValue: string | null | undefined
 ): Promise<TenantOrganization | null> {
@@ -116,23 +169,31 @@ export async function resolveOrganizationForRequest(
  *     "email a password reset link", that fallback silently picks a tenant the
  *     caller never named.
  *  2. After an exact slug match fails, a configured default/shared host stops
- *     here. Otherwise the deployment lookup below — a SUBSTRING match
- *     (`url contains host`) resolved with `findFirst` — would let the shared host
- *     `staging.devfathom.com` match a tenant deployment at
- *     `acme-staging.devfathom.com` and hand the request to an arbitrary
- *     organization. The slug lookup runs first so `<slug>.localhost` development
- *     hosts, which land in `configuredDefaultHosts()` via NEXT_PUBLIC_APP_URL,
- *     still resolve to their own tenant.
+ *     here. Otherwise the deployment lookup below would let the shared host
+ *     `staging.devfathom.com` reach a tenant deployment and hand the request to
+ *     an arbitrary organization. The slug lookup runs first so `<slug>.localhost`
+ *     development hosts, which land in `configuredDefaultHosts()` via
+ *     NEXT_PUBLIC_APP_URL, still resolve to their own tenant.
+ *
+ * The deployment lookup itself is exact and fails closed. It never matches a
+ * substring, so `staging.devfathom.com` cannot reach a deployment recorded at
+ * `acme-staging.devfathom.com`; and it never picks a winner among several
+ * organizations, because "the most recently updated deployment wins" is a
+ * routing decision no caller asked for. Two organizations claiming one host is a
+ * misconfiguration or an attempted takeover, and either way the safe answer is
+ * to name no tenant at all.
  *
  * Callers must treat null as "no organization was named" and answer with the
  * same generic response they would give for an unknown account — never with an
  * error that distinguishes an unrecognised host from a recognised one.
  */
 export async function resolveExplicitOrganizationByHost(
-  hostValue: string | null | undefined
+  hostValue: string | null | undefined,
+  options: ExplicitHostResolverOptions = {}
 ): Promise<TenantOrganization | null> {
   const classified = classifyHost(hostValue);
   if (classified.kind !== 'tenant') return null;
+  const warn = options.warn ?? warnToConsole;
 
   return withPlatformDb(async (tx) => {
     if (classified.slug) {
@@ -160,13 +221,52 @@ export async function resolveExplicitOrganizationByHost(
     });
     if (domain?.verificationStatus === 'VERIFIED') return domain.organization;
 
-    const deployment = await tx.organizationDeployment.findFirst({
-      where: { url: { contains: classified.host }, status: 'READY' },
-      select: { organization: { select: ORGANIZATION_SELECT } },
-    });
-    if (deployment) return deployment.organization;
+    if (!DEPLOYMENT_HOST_PATTERN.test(classified.host)) return null;
 
-    return null;
+    const candidates = deploymentUrlCandidates(classified.host);
+    const candidateSet = new Set(candidates);
+    const deployments = await tx.organizationDeployment.findMany({
+      where: {
+        status: 'READY',
+        OR: candidates.map((url) => ({ url: { equals: url, mode: 'insensitive' as const } })),
+      },
+      select: {
+        id: true,
+        url: true,
+        organizationId: true,
+        organization: { select: ORGANIZATION_SELECT },
+      },
+      // Stable, so an ambiguous host reports the same rows on every request and
+      // the warning below is reproducible. It is explicitly NOT a tie-break.
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    });
+
+    const matches = deployments.filter(
+      (deployment) =>
+        deployment.url !== null && candidateSet.has(deployment.url.trim().toLowerCase())
+    );
+
+    const byOrganization = new Map<string, (typeof matches)[number]>();
+    for (const match of matches) {
+      if (!byOrganization.has(match.organizationId))
+        byOrganization.set(match.organizationId, match);
+    }
+
+    if (byOrganization.size === 0) return null;
+
+    if (byOrganization.size > 1) {
+      warn({
+        event: 'tenant_host_resolution_ambiguous',
+        hostname: classified.host,
+        matchCount: matches.length,
+        organizationCount: byOrganization.size,
+        organizationIds: [...byOrganization.keys()],
+        deploymentIds: matches.map((match) => match.id),
+      });
+      return null;
+    }
+
+    return [...byOrganization.values()][0]!.organization;
   });
 }
 
