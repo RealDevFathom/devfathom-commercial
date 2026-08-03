@@ -14,6 +14,7 @@ import { assertPlatformCapability } from '@/lib/platform/auth';
 import { PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { encryptSecret } from '@/lib/secret-crypto';
+import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 
 const id = z
   .string()
@@ -48,7 +49,10 @@ const slug = z
   .trim()
   .min(3)
   .max(63)
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  .refine((value) => !isReservedHostLabel(value), {
+    message: `Reserved slug. Choose another: ${RESERVED_HOST_LABELS.join(', ')} are used by the platform.`,
+  });
 const hostname = z
   .string()
   .trim()

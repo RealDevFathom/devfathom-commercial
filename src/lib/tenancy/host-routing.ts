@@ -3,6 +3,23 @@ export type HostKind =
   | { kind: 'tenant'; host: string; slug?: string }
   | { kind: 'unknown'; host: string };
 
+/** Host labels owned by DevFathom infrastructure, never by an organization. */
+export const RESERVED_HOST_LABELS = Object.freeze([
+  'www',
+  'admin',
+  'app',
+  'api',
+  'staging',
+  'meet',
+  'meet-staging',
+  'turn',
+  'turn-staging',
+]);
+
+export function isReservedHostLabel(value: string): boolean {
+  return RESERVED_HOST_LABELS.includes(value.trim().toLowerCase());
+}
+
 export function normalizeHost(value: string | null | undefined): string {
   const first = value?.split(',')[0]?.trim().toLowerCase() ?? '';
   if (!first) return '';
