@@ -85,25 +85,50 @@ compare against. It is the second such table after the control plane (ADR-002), 
 control plane it is reachable, indirectly, by unauthenticated traffic.
 
 Compensating controls, all of which are part of the implementation and none of which are
-optional:
+optional. The first four are structural and hold even when application code is wrong; the rest
+assume application code and exist for when it is wrong anyway.
 
-- **Platform-scope only.** Every read and write goes through the explicitly privileged scope
-  (`withPlatformDb`), never through a tenant handle, and never through a generic helper that a
-  tenant router could reach by accident.
-- **A narrow, audited access surface.** Access is confined to a small, named module — the way
-  `organizationForAnonymousToken` is today — rather than being available wherever a Prisma client
-  is in scope. Reviewing "what can read credentials" must mean reviewing one file.
-- **Minimal projection.** Lookups return the least that will do. Nothing outside the
+- **A dedicated schema and database role.** The identity plane lives in its own schema
+  (`identity`), owned by a role that is not the application role. The application's ordinary
+  connection holds no rights there, so a query that has no business reading credentials cannot
+  reach them even by accident.
+- **No access through generic repositories.** No Prisma model exposed to shared repository
+  helpers, no inclusion in generic `findMany`/`count` utilities, and no relation traversal from
+  `User`. The only way in is a named function in the authentication module, so reviewing "what
+  can read credentials" means reviewing one file.
+- **No access through `withPlatformDb`.** The control-plane escape hatch is already the widest
+  scope in the product; widening it to cover credentials would put every platform-admin path one
+  mistake away from a credential dump. The identity plane gets its own narrow scope
+  (`withIdentityDb`), used only by authentication. `scripts/verify-tenant-isolation.ts` gains
+  cases asserting both that a tenant scope cannot read `AuthenticationIdentity` and that
+  `withPlatformDb` cannot either, so the boundary is checked by the same gate as every other
+  isolation property.
+- **Direct table access is revoked.** `REVOKE ALL` on the identity tables, with access granted
+  only to `SECURITY DEFINER` functions that take one identifier and return one fixed, minimal
+  result. There is no ambient `SELECT *` over the identity tables for any application role.
+- **Narrow, column-explicit authentication queries.** Every query names its columns, is bounded
+  by a hard row cap, and is predicated on a single normalized address or a single identity id.
+  No `select: *`, no dynamic `where`, no caller-supplied filters. Nothing outside the
   authentication path may select the password hash, and no query returns the set of
   organizations an identity belongs to before authentication succeeds.
+- **Envelope-encrypted MFA secrets.** TOTP secrets stop being stored as plaintext base32, as
+  `users.twoFactorSecret` is today. A per-identity data key is encrypted under a root key held
+  in a key-management service, and the row stores the ciphertext and the wrapped key. A database
+  dump alone then yields no working second factor, and rotating the root key does not mean
+  re-encrypting every row.
+- **A separate identity audit ledger.** Credential changes, MFA enrolment and reset, grant issue
+  and revocation, session-version bumps, and every read of a credential column are appended to a
+  ledger that is neither the tenant `AuditLog` nor `PlatformAuditLog`. Neither existing ledger
+  can hold these: one is tenant-scoped for events that span tenants, and the other is readable
+  by every platform operator role.
+- **Bulk access raises an alert.** Identity reads are counted per actor per window. The normal
+  shape of this traffic is one row per authentication attempt, so a caller reading many
+  identities in a short window is either a feature nobody reviewed or an incident in progress.
+  It alerts either way, at a threshold low enough to fire before the second case finishes.
 - **No tenant business data.** The table holds credentials and identity-wide session state only.
   Anything an organization owns stays in `User` under RLS.
 - **Enumeration parity.** Every unauthenticated outcome — unknown address, wrong password, no
   eligible membership — returns one identical body in one indistinguishable time.
-- **Explicit RLS verification.** `scripts/verify-tenant-isolation.ts` gains cases asserting that
-  a tenant-scoped connection cannot read `AuthenticationIdentity` at all, so the boundary is
-  checked by the same gate as every other isolation property.
-- **Audit.** Credential changes and grant changes are audited events, not silent writes.
 
 ### 3. Dual session versions: identity-wide and membership-scoped
 
@@ -200,25 +225,47 @@ time-boxed, reasoned, audited support sessions (ADR-002), which are unaffected.
 
 ### 8. Prerequisite: a global `lower(email)` collision report before any migration is designed
 
-No migration may be designed, and this ADR may not move beyond Proposed, until a report has been
-run against production and staging answering:
+No migration may be designed, and this ADR may not move beyond Proposed, until a global
+`lower(email)` collision report has been run against production and staging.
 
-- how many `lower(email)` values occur in more than one organization, and with what multiplicity;
-- for each collision, whether the password hashes are identical, different, or partly absent;
-- whether the colliding rows have different account statuses, roles, or last-sign-in times;
-- how many collisions involve an organization that already enforces SSO, where no password needs
-  to survive at all;
-- whether any collision is an address shared by genuinely different people, rather than one
-  person in several workspaces.
+`scripts/report-global-email-collisions.ts`, added alongside this ADR, is that report. It is
+strictly read-only — one `READ ONLY` transaction, SELECT statements only, `ROLLBACK` at the end —
+and it reports, per duplicate `lower(btrim(email))` group:
 
-The migration strategy depends entirely on that distribution. A long tail of
+- how many organizations the address spans, and how many accounts exist;
+- which account statuses those accounts hold;
+- how many are SSO-managed or SCIM-managed;
+- how many have MFA enabled;
+- whether the group exceeds the ten-candidate discovery cap;
+- whether the group is demo/seed data or a real customer population.
+
+Each of those changes the migration, which is why the report comes first. Two `ACTIVE` accounts
+holding different password hashes is a merge decision a human must make; one `ACTIVE` and one
+`INVITED` is not. SSO- and SCIM-managed accounts have no password to reconcile and can be
+attached mechanically. MFA-enabled accounts are the ones where a wrong merge locks a real person
+out of a real workspace. A group above ten already exceeds what shared-host discovery would
+process, so it needs an answer in the migration rather than at login. Demo and seed rows are
+noise, and counting them as customer impact would size the change wrongly in both directions.
+
+`lower(btrim(email))` is the right key because `20260802120000_user_email_lowercase` already
+normalized stored addresses, so the report and any future unique index agree on one canonical
+form. The cross-organization read requires the control-plane escape hatch, since `users` is
+`FORCE ROW LEVEL SECURITY`; the script sets `app.is_platform_admin` transaction-locally and
+Postgres discards it at `ROLLBACK`.
+
+The migration strategy depends entirely on the distribution the report finds. A long tail of
 identical-hash duplicates merges mechanically; a population of different-hash collisions requires
 a per-person reset or an explicit claim flow, and that changes the delivery plan, the
 communication plan, and the rollback plan. Designing the schema before the data is known would be
 guessing.
 
-`scripts/report-email-collisions.ts` on the deferred `codex/shared-host-login` branch is the
-starting point for this report and should be lifted out and run first.
+**The report's output is customer data.** It is never committed, never attached to a pull
+request, and never pasted into an issue — not even masked, which is why the script masks by
+default and requires `--reveal`. Counts and classifications are what travel; rows do not.
+
+`scripts/report-email-collisions.ts` remains the per-organization companion to the email
+normalization migration and answers a different question — case collisions *within* one
+organization, against a tenant-local unique index. It is not a substitute for this report.
 
 ## Consequences
 
