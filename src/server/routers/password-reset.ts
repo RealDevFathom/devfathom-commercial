@@ -8,6 +8,7 @@ import { generateInviteToken, hashInviteToken } from '@/lib/invite-token';
 import { rateLimit } from '@/lib/rate-limit';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { appUrl, templates, sendEmail } from '@/lib/email';
+import { RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 
 // Public (unauthenticated) procedures backing the forgot-password / reset flow.
 // A raw, high-entropy token is emailed once; only its SHA-256 hash is stored
@@ -17,6 +18,14 @@ import { appUrl, templates, sendEmail } from '@/lib/email';
 
 const tokenInput = z.object({ token: z.string().min(1) });
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+// One message for every way a reset link can fail. Shared with the fallback
+// router the `/api/trpc` handler uses when a token names no tenant at all, so an
+// anonymous caller cannot tell "no such token anywhere" from "a real token that
+// has expired".
+function invalidResetLink() {
+  return new TRPCError({ code: 'BAD_REQUEST', message: RESET_GENERIC_MESSAGE });
+}
 
 // Resolve a presented raw token to a still-usable reset record (+ its user), or
 // null when the token is missing, already consumed, or expired. We never reveal
@@ -107,32 +116,38 @@ export const passwordResetRouter = router({
     .input(z.object({ token: z.string().min(1), newPassword: passwordSchema }))
     .mutation(async ({ ctx, input }) => {
       const record = await loadUsableToken(ctx.db, input.token);
-      if (!record) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'This reset link is invalid or has expired. Please request a new one.',
+      if (!record) throw invalidResetLink();
+
+      // CLAIM THE TOKEN FIRST, then hash.
+      //
+      // `loadUsableToken` and the write below are separate statements, so two
+      // requests presenting the same token could both pass the read and both set
+      // a password. A conditional update on `usedAt IS NULL` makes consumption
+      // atomic: PostgreSQL serialises the two writers on the row, and the loser
+      // matches zero rows and gets the same generic error as any other unusable
+      // link. Hashing after the claim also means a replayed token is refused by
+      // one indexed UPDATE and never spends a bcrypt at cost 12 — the only
+      // expensive operation an anonymous caller can reach here.
+      await ctx.db.$transaction(async (tx) => {
+        const claimed = await tx.passwordResetToken.updateMany({
+          where: { id: record.id, usedAt: null },
+          data: { usedAt: new Date() },
         });
-      }
+        if (claimed.count !== 1) throw invalidResetLink();
 
-      const hashed = await hash(input.newPassword, 12);
+        const hashed = await hash(input.newPassword, 12);
 
-      // AUTH-01: bump tokenVersion + stamp passwordChangedAt so every existing
-      // JWT session for this user is revoked on its next revalidation. Mark the
-      // token used in the SAME transaction so it can't be replayed.
-      await ctx.db.$transaction([
-        ctx.db.user.update({
+        // AUTH-01: bump tokenVersion + stamp passwordChangedAt so every existing
+        // JWT session for this user is revoked on its next revalidation.
+        await tx.user.update({
           where: { id: record.userId },
           data: {
             password: hashed,
             passwordChangedAt: new Date(),
             tokenVersion: { increment: 1 },
           },
-        }),
-        ctx.db.passwordResetToken.update({
-          where: { id: record.id },
-          data: { usedAt: new Date() },
-        }),
-      ]);
+        });
+      });
 
       return { success: true };
     }),
