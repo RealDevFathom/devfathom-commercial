@@ -116,20 +116,30 @@ describe('organization.create reserved slugs', () => {
     mocks.userCreate.mockResolvedValue({ id: 'user_new' });
   });
 
-  it.each([['www'], ['admin'], ['app'], ['api'], ['staging'], ['WWW'], ['  Admin  ']])(
-    'refuses the reserved slug %j',
-    async (reserved) => {
-      await expect(
-        executePlatformCommand(
-          actor,
-          'organization.create',
-          { ...payload('admin@acme.com'), slug: reserved },
-          request
-        )
-      ).rejects.toThrow(/Reserved slug/);
-      expect(platformDb.organization.create).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    ['www'],
+    ['admin'],
+    ['app'],
+    ['api'],
+    ['staging'],
+    ['meet'],
+    ['meet-staging'],
+    ['turn'],
+    ['turn-staging'],
+    ['WWW'],
+    ['  Admin  '],
+    ['  Meet-Staging  '],
+  ])('refuses the reserved slug %j', async (reserved) => {
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), slug: reserved },
+        request
+      )
+    ).rejects.toThrow(/Reserved slug/);
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
 
   it('still accepts an ordinary slug', async () => {
     await expect(

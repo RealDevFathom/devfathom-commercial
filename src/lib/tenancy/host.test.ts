@@ -53,6 +53,10 @@ describe('shared host classification', () => {
     ['app.devfathom.com'],
     ['api.devfathom.com'],
     ['staging.devfathom.com'],
+    ['meet.devfathom.com'],
+    ['meet-staging.devfathom.com'],
+    ['turn.devfathom.com'],
+    ['turn-staging.devfathom.com'],
   ])('classifies the reserved label host %s as shared', async (host) => {
     process.env.PLATFORM_BASE_DOMAIN = 'devfathom.com';
     const { classifyHost } = await import('./host-routing');
@@ -177,6 +181,16 @@ describe('reserved host labels', () => {
   it('reserves every label that would shadow a platform or shared host', async () => {
     const { RESERVED_HOST_LABELS } = await import('./host-routing');
 
-    expect([...RESERVED_HOST_LABELS].sort()).toEqual(['admin', 'api', 'app', 'staging', 'www']);
+    expect([...RESERVED_HOST_LABELS].sort()).toEqual([
+      'admin',
+      'api',
+      'app',
+      'meet',
+      'meet-staging',
+      'staging',
+      'turn',
+      'turn-staging',
+      'www',
+    ]);
   });
 });

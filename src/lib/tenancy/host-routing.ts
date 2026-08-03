@@ -13,7 +13,17 @@ export type HostKind =
  * host has to avoid. `organization.create` rejects these too, so a customer can
  * never claim a slug that would shadow one of them.
  */
-export const RESERVED_HOST_LABELS = Object.freeze(['www', 'admin', 'app', 'api', 'staging']);
+export const RESERVED_HOST_LABELS = Object.freeze([
+  'www',
+  'admin',
+  'app',
+  'api',
+  'staging',
+  'meet',
+  'meet-staging',
+  'turn',
+  'turn-staging',
+]);
 
 /** Reserved labels that route to the shared application rather than a tenant. */
 const SHARED_HOST_LABELS = new Set(RESERVED_HOST_LABELS.filter((label) => label !== 'admin'));
