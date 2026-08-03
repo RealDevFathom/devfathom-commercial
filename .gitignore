@@ -56,3 +56,6 @@ scripts/.enh-internal-map.json
 
 # Playwright MCP scratch (screenshots saved to docs/ instead)
 .playwright-mcp/
+
+# MEET-02: locally generated LiveKit development credentials
+docker/livekit/livekit.dev.keys.yaml
