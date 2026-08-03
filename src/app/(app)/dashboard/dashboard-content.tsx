@@ -71,24 +71,6 @@ function NextMeetingBanner() {
     },
   });
 
-  const markJoined = trpc.meetings.markJoined.useMutation({
-    onSuccess: () => utils.meetings.getUpcoming.invalidate(),
-  });
-
-  /**
-   * Fires when the user taps Join/Join now. Stamps attendance first, then
-   * opens the meeting link (if any) in a new tab. Attendance logging is
-   * fire-and-forget — the link opens even if the mutation fails, because
-   * we never want to block the user from joining a meeting.
-   */
-  const handleJoinClick = (meetingId: string, location: string | null | undefined) => {
-    markJoined.mutate({ meetingId });
-    if (location) {
-      const href = location.startsWith('http') ? location : `https://${location}`;
-      window.open(href, '_blank', 'noopener,noreferrer');
-    }
-  };
-
   const handleCreate = () => {
     if (!title.trim() || !date || !startTime || !endTime) return;
     createMeeting.mutate({
@@ -345,32 +327,12 @@ function NextMeetingBanner() {
             elapsed
           </span>
         )}
-        {meeting!.location ? (
-          <button
-            type="button"
-            onClick={() => handleJoinClick(meeting!.id, meeting!.location)}
-            className={cn(
-              'rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all active:scale-[0.98]',
-              isLive
-                ? 'bg-emerald-500 hover:bg-emerald-600 hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.5)]'
-                : 'bg-primary hover:bg-primary-hover'
-            )}
-          >
-            {isLive ? 'Join now' : 'Join'}
-          </button>
-        ) : (
-          <Link
-            href="/meetings"
-            className={cn(
-              'rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all active:scale-[0.98]',
-              isLive
-                ? 'bg-emerald-500 hover:bg-emerald-600 hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.5)]'
-                : 'bg-primary hover:bg-primary-hover'
-            )}
-          >
-            View
-          </Link>
-        )}
+        <Link
+          href={`/meetings/${meeting!.id}/call`}
+          className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
+        >
+          {isLive ? 'Join now' : 'Join call'}
+        </Link>
       </div>
 
       <MeetingCountdown meeting={meeting!} variant="mobile" />

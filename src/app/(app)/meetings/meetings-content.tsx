@@ -380,25 +380,6 @@ const MeetingCard = memo(function MeetingCard({
   const [showAttendance, setShowAttendance] = useState(false);
   const [renderedAt] = useState(() => Date.now());
 
-  const markJoined = trpc.meetings.markJoined.useMutation({
-    onSuccess: () => {
-      utils.meetings.getUpcoming.invalidate();
-      utils.meetings.getAll.invalidate();
-    },
-  });
-
-  // Fires when the user taps Join. Stamps attendance first, then opens the
-  // meeting link in a new tab. The open is always attempted even if the
-  // mutation fails — we never want to block joining a meeting.
-  const handleJoin = () => {
-    markJoined.mutate({ meetingId: meeting.id });
-    if (meeting.location) {
-      const href = meeting.location.startsWith('http')
-        ? meeting.location
-        : `https://${meeting.location}`;
-      window.open(href, '_blank', 'noopener,noreferrer');
-    }
-  };
   const [eTitle, setETitle] = useState('');
   const [eDesc, setEDesc] = useState('');
   const [eDate, setEDate] = useState('');
@@ -718,8 +699,7 @@ const MeetingCard = memo(function MeetingCard({
           )}
         </div>
 
-        {/* Join call — opens the in-app JaaS video room. Shown for attendees of
-            a meeting that hasn't ended, independent of any external location. */}
+        {/* Opens the in-app JaaS video room for active attendees. */}
         {(() => {
           const isAttendee = meeting.attendees.some((a) => a.user.id === currentUserId);
           const hasEnded = renderedAt >= end.getTime();
@@ -727,58 +707,12 @@ const MeetingCard = memo(function MeetingCard({
           return (
             <Link
               href={`/meetings/${meeting.id}/call`}
-              className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary shrink-0"
+              className="flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
               title="Join in-app video call"
             >
               <Video className="h-3.5 w-3.5" />
               Join call
             </Link>
-          );
-        })()}
-
-        {/* Join button — shown for attendees if the meeting hasn't ended */}
-        {(() => {
-          const isAttendee = meeting.attendees.some((a) => a.user.id === currentUserId);
-          const myAttendee = meeting.attendees.find((a) => a.user.id === currentUserId);
-          const hasEnded = renderedAt >= end.getTime();
-          const isLive = renderedAt >= start.getTime() && renderedAt < end.getTime();
-          const alreadyJoined = !!myAttendee?.joinedAt;
-
-          if (!isAttendee || hasEnded || !meeting.location) return null;
-
-          if (alreadyJoined) {
-            return (
-              <button
-                type="button"
-                onClick={handleJoin}
-                className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-600 dark:text-emerald-500 transition-colors hover:bg-emerald-500/15 shrink-0"
-                title="Rejoin meeting"
-              >
-                <Check className="h-3.5 w-3.5" />
-                Joined · Rejoin
-              </button>
-            );
-          }
-
-          return (
-            <button
-              type="button"
-              onClick={handleJoin}
-              disabled={markJoined.isPending}
-              className={cn(
-                'flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold text-white transition-all active:scale-[0.98] shrink-0 disabled:opacity-50',
-                isLive
-                  ? 'bg-emerald-500 hover:bg-emerald-600 hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.5)]'
-                  : 'bg-primary hover:bg-[#0C2E2C]'
-              )}
-            >
-              {markJoined.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Video className="h-3.5 w-3.5" />
-              )}
-              {isLive ? 'Join now' : 'Join'}
-            </button>
           );
         })()}
 
