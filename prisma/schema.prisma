@@ -350,6 +350,52 @@ enum LifecycleAction {
   PURGED
 }
 
+/// Lifecycle of one materialised meeting instance. DRAFT is a slot the
+/// organizer has not published; SCHEDULED is published but not joinable;
+/// OPEN means the join window is open; ACTIVE means the media room has
+/// participants; ENDING is the drain phase; ENDED and CANCELLED are terminal.
+enum MeetingOccurrenceStatus {
+  DRAFT
+  SCHEDULED
+  OPEN
+  ACTIVE
+  ENDING
+  ENDED
+  CANCELLED
+}
+
+enum MeetingParticipantRole {
+  HOST
+  COHOST
+  PRESENTER
+  ATTENDEE
+  OBSERVER
+}
+
+enum MeetingInviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  TENTATIVE
+}
+
+enum MeetingLobbyStatus {
+  NOT_REQUIRED
+  WAITING
+  ADMITTED
+  DENIED
+}
+
+/// Provenance of a participant session row. WEBHOOK rows are signed by the
+/// media provider and are the only ones that may be treated as evidence.
+/// LEGACY_CLIENT rows were reported by the browser before webhooks existed —
+/// they were backfilled from MeetingAttendanceLog and are self-reported.
+enum MeetingSessionSource {
+  WEBHOOK
+  LEGACY_CLIENT
+  MANUAL
+}
+
 // ============================================
 // AUTH & USERS
 // ============================================
@@ -388,23 +434,23 @@ model User {
   updatedAt          DateTime   @updatedAt
 
   // Relations
-  organization         Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationRole     OrganizationRole?        @relation(fields: [organizationRoleId], references: [id], onDelete: SetNull)
+  organization         Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationRole     OrganizationRole?              @relation(fields: [organizationRoleId], references: [id], onDelete: SetNull)
   permissionOverrides  UserPermissionOverride[]
   projectMembers       ProjectMember[]
   assignedTasks        TaskAssignee[]
   taskComments         TaskComment[]
-  createdTasks         Task[]                   @relation("TaskCreator")
+  createdTasks         Task[]                         @relation("TaskCreator")
   sentMessages         Message[]
   channelMembers       ChannelMember[]
   createdChannels      Channel[]
   messageMentions      MessageMention[]
   pinnedMessages       PinnedMessage[]
   savedMessages        SavedMessage[]
-  leaveRequests        LeaveRequest[]           @relation("LeaveRequester")
-  approvedLeaves       LeaveRequest[]           @relation("LeaveApprover")
-  performanceNotes     PerformanceNote[]        @relation("NoteSubject")
-  writtenNotes         PerformanceNote[]        @relation("NoteAuthor")
+  leaveRequests        LeaveRequest[]                 @relation("LeaveRequester")
+  approvedLeaves       LeaveRequest[]                 @relation("LeaveApprover")
+  performanceNotes     PerformanceNote[]              @relation("NoteSubject")
+  writtenNotes         PerformanceNote[]              @relation("NoteAuthor")
   activities           Activity[]
   notifications        Notification[]
   uploadedFiles        ProjectFile[]
@@ -412,29 +458,33 @@ model User {
   timeEntries          TimeEntry[]
   meetingAttendees     MeetingAttendee[]
   apiTokens            ApiToken[]
-  authoredNotes        Note[]                   @relation("NoteAuthor")
+  authoredNotes        Note[]                         @relation("NoteAuthor")
   noteShares           NoteShare[]
   columnDefaults       ColumnDefaultAssignee[]
   attendanceLog        MeetingAttendanceLog[]
-  invitation           Invitation?              @relation("UserInvitation")
-  invitationsSent      Invitation[]             @relation("InvitationsSent")
+  invitation           Invitation?                    @relation("UserInvitation")
+  invitationsSent      Invitation[]                   @relation("InvitationsSent")
   passwordResetTokens  PasswordResetToken[]
   // IMP-HR-04 performance reviews + IMP-NOTE-02 note mentions
-  reviewCyclesCreated  ReviewCycle[]            @relation("ReviewCycleCreator")
-  reviewsAbout         Review[]                 @relation("ReviewSubject")
-  reviewsWritten       Review[]                 @relation("ReviewReviewer")
+  reviewCyclesCreated  ReviewCycle[]                  @relation("ReviewCycleCreator")
+  reviewsAbout         Review[]                       @relation("ReviewSubject")
+  reviewsWritten       Review[]                       @relation("ReviewReviewer")
   noteMentions         NoteMention[]
   // Big Bets: NOTE-01 versioning, HR-01 leave balances, AUTH-02 recovery codes
-  noteRevisions        NoteRevision[]           @relation("NoteRevisionEditor")
-  leaveBalances        LeaveBalance[]           @relation("UserLeaveBalances")
+  noteRevisions        NoteRevision[]                 @relation("NoteRevisionEditor")
+  leaveBalances        LeaveBalance[]                 @relation("UserLeaveBalances")
   recoveryCodes        TwoFactorRecoveryCode[]
-  webhooksCreated      Webhook[]                @relation("WebhookCreator")
-  auditLogs            AuditLog[]               @relation("UserAuditLogs")
-  resignations         Resignation[]            @relation("UserResignations")
-  resignationsReviewed Resignation[]            @relation("ResignationsReviewed")
+  webhooksCreated      Webhook[]                      @relation("WebhookCreator")
+  auditLogs            AuditLog[]                     @relation("UserAuditLogs")
+  resignations         Resignation[]                  @relation("UserResignations")
+  resignationsReviewed Resignation[]                  @relation("ResignationsReviewed")
   // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
   mailboxes            Mailbox[]
   ssoTickets           TenantSsoTicket[]
+  // MEET-01
+  meetingParticipants  MeetingParticipant[]
+  meetingAdmissions    MeetingOccurrenceParticipant[]
+  meetingSessions      MeetingParticipantSession[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -581,6 +631,7 @@ model Client {
   transactions Transaction[]
   richNotes    Note[]
   contracts    Contract[]
+  meetingLinks MeetingEntityLink[]
 
   @@index([organizationId])
   @@map("clients")
@@ -598,7 +649,8 @@ model ClientContact {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client              Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  meetingParticipants MeetingParticipant[]
 
   @@index([organizationId])
   @@map("client_contacts")
@@ -652,7 +704,7 @@ model Project {
   updatedAt      DateTime      @updatedAt
 
   // Relations
-  client       Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  client       Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
   members      ProjectMember[]
   boards       Board[]
   milestones   Milestone[]
@@ -662,6 +714,7 @@ model Project {
   timeEntries  TimeEntry[]
   notes        Note[]
   contracts    Contract[] // IMP-CLI-05: contracts linked to this delivery project
+  meetingLinks MeetingEntityLink[]
 
   @@index([organizationId])
   @@map("projects")
@@ -775,18 +828,19 @@ model Task {
   updatedAt      DateTime  @updatedAt
 
   // Relations
-  column      Column           @relation(fields: [columnId], references: [id], onDelete: Cascade)
-  createdBy   User             @relation("TaskCreator", fields: [createdById], references: [id])
-  parent      Task?            @relation("TaskSubtasks", fields: [parentId], references: [id], onDelete: SetNull)
-  subtasks    Task[]           @relation("TaskSubtasks")
-  blockedBy   TaskBlocker[]    @relation("BlockedTask")
-  blocking    TaskBlocker[]    @relation("BlockingTask")
-  assignees   TaskAssignee[]
-  labels      TaskLabel[]
-  checklists  TaskChecklist[]
-  comments    TaskComment[]
-  attachments TaskAttachment[]
-  timeEntries TimeEntry[]
+  column       Column              @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  createdBy    User                @relation("TaskCreator", fields: [createdById], references: [id])
+  parent       Task?               @relation("TaskSubtasks", fields: [parentId], references: [id], onDelete: SetNull)
+  subtasks     Task[]              @relation("TaskSubtasks")
+  blockedBy    TaskBlocker[]       @relation("BlockedTask")
+  blocking     TaskBlocker[]       @relation("BlockingTask")
+  assignees    TaskAssignee[]
+  labels       TaskLabel[]
+  checklists   TaskChecklist[]
+  comments     TaskComment[]
+  attachments  TaskAttachment[]
+  timeEntries  TimeEntry[]
+  meetingLinks MeetingEntityLink[]
 
   @@index([columnId, order])
   @@index([createdById])
@@ -1045,10 +1099,11 @@ model Channel {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
-  createdBy User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  members   ChannelMember[]
-  messages  Message[]
-  pins      PinnedMessage[]
+  createdBy    User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  members      ChannelMember[]
+  messages     Message[]
+  pins         PinnedMessage[]
+  meetingLinks MeetingEntityLink[]
 
   @@index([type])
   @@index([organizationId])
@@ -1424,24 +1479,53 @@ model AuditLog {
 // MEETINGS
 // ============================================
 
+/// A meeting SERIES. `startTime`/`endTime` describe the first instance and the
+/// duration; every joinable instance is a MeetingOccurrence. A Meeting has no
+/// public identifier on purpose — see MeetingOccurrence.publicId.
 model Meeting {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  title          String
-  description    String?
-  startTime      DateTime
-  endTime        DateTime
-  location       String? // "Google Meet", "Office", URL, etc.
-  recurrence     String? // "daily", "weekly", "biweekly", "monthly", null = one-time
-  createdById    String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                  String    @id @default(cuid())
+  organizationId      String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  title               String
+  description         String?
+  startTime           DateTime
+  endTime             DateTime
+  location            String? // "Google Meet", "Office", URL, etc.
+  /// DEPRECATED (MEET-01): superseded by `recurrenceRule`. Still written and
+  /// read during the migration window so a rollback to pre-MEET-01 application
+  /// code keeps working; it drops in a later PR once nothing reads it.
+  recurrence          String? // "daily", "weekly", "biweekly", "monthly", null = one-time
+  /// RFC 5545 RRULE, without the "RRULE:" prefix — e.g. "FREQ=WEEKLY;INTERVAL=2".
+  /// Null means a one-time meeting. Interpreted in `timezone`.
+  recurrenceRule      String?
+  /// IANA zone the series recurs in, validated against pg_timezone_names by a
+  /// CHECK constraint. A recurring series is anchored to wall-clock time, so
+  /// the zone — not a UTC offset — is what survives a DST transition.
+  ///
+  /// The empty-string default is a placeholder, never a stored value: a
+  /// BEFORE INSERT OR UPDATE trigger replaces a blank zone with the owning
+  /// organization's, or raises. It exists so Prisma treats the field as
+  /// optional, which is what lets MEET-01 add a NOT NULL column without
+  /// editing the callers that create meetings today. Deriving beats
+  /// defaulting — UTC is not a safe guess for a recurring series.
+  timezone            String    @default(dbgenerated("''"))
+  /// Watermark for lazy occurrence materialisation: every instance up to this
+  /// instant already exists as a row. Null means nothing is materialised yet.
+  /// The materialiser only ever advances this to now() + the rolling window
+  /// (see MeetingOccurrence) so a daily series never expands unbounded.
+  materializedThrough DateTime?
+  createdById         String
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   attendees     MeetingAttendee[]
   attendanceLog MeetingAttendanceLog[]
+  occurrences   MeetingOccurrence[]
+  participants  MeetingParticipant[]
+  entityLinks   MeetingEntityLink[]
 
   @@index([startTime])
   @@index([organizationId])
+  @@index([organizationId, materializedThrough])
   @@map("meetings")
 }
 
@@ -1491,6 +1575,285 @@ model MeetingAttendanceLog {
   @@map("meeting_attendance_log")
 }
 
+/// One materialised instance of a meeting series — the unit people actually
+/// join, and the unit every piece of evidence hangs off.
+///
+/// MATERIALISATION IS LAZY AND BOUNDED. Occurrences are never expanded for a
+/// whole series: the materialiser walks the RRULE forward only to
+/// now() + MEETING_MATERIALISATION_WINDOW (30 days) and records how far it got
+/// in Meeting.materializedThrough. An infinite RRULE therefore produces a
+/// bounded, rolling set of rows. The window is a database-independent constant
+/// consumed by the materialiser; the schema enforces the *shape* (one row per
+/// series slot) rather than the horizon.
+///
+/// EXCEPTIONS LIVE HERE, NOT ON THE SERIES. `seriesSlotStart` is the instant
+/// the RRULE produced and never changes, so it is the stable identity of this
+/// instance. A reschedule moves `scheduledStart`/`scheduledEnd` away from it;
+/// a cancellation sets the cancellation columns; a one-off retitle sets
+/// `titleOverride`. Editing the series can therefore never silently rewrite
+/// what already happened.
+model MeetingOccurrence {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  meetingId      String
+
+  /// GLOBALLY unique, cryptographically random UUIDv4 (PostgreSQL
+  /// gen_random_uuid()). This is the third anonymous tenant-resolution key
+  /// alongside Invitation.tokenHash and PasswordResetToken.tokenHash: a join
+  /// link arrives on www.devfathom.com, a SHARED host where
+  /// resolveOrganizationByHost returns null by design, so the identifier alone
+  /// must name exactly one organization — hence global, not per-tenant,
+  /// uniqueness. See src/lib/auth/anonymous-tenant.ts.
+  ///
+  /// It is a LOCATOR, NOT AUTHORIZATION. Holding it proves nothing; the guest
+  /// credential lives on MeetingOccurrenceParticipant. It lives on the
+  /// occurrence and not on the series because a series-level identifier would
+  /// be an indefinitely reusable join link, and would force the application to
+  /// guess which instance a joiner meant.
+  publicId String @unique @default(dbgenerated("gen_random_uuid()::text"))
+
+  /// The RRULE instant that identifies this instance within the series.
+  /// Immutable — a reschedule changes `scheduledStart`, never this.
+  seriesSlotStart DateTime
+  scheduledStart  DateTime
+  scheduledEnd    DateTime
+  /// First and last media activity, stamped from provider webhooks.
+  actualStart     DateTime?
+  actualEnd       DateTime?
+
+  status MeetingOccurrenceStatus @default(SCHEDULED)
+
+  /// `mtg_` + 26 base32 characters over 16 CSPRNG bytes, defaulted in the
+  /// database so it cannot be forgotten by a caller. Deliberately DISTINCT
+  /// from and underivable from `publicId`: if the room name could be computed
+  /// from the join link, a link-holder could address the media room directly
+  /// and bypass the lobby.
+  providerRoomName String @unique @default(dbgenerated("meeting_provider_room_name()"))
+
+  /// Join window. Outside it the occurrence is not joinable regardless of
+  /// credential; enforced by the join path, bounded here so the bound is data.
+  joinOpensAt  DateTime
+  joinClosesAt DateTime
+
+  /// Per-occurrence exceptions.
+  titleOverride      String?
+  cancelledAt        DateTime?
+  cancelledById      String?
+  cancellationReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meeting        Meeting                        @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  participants   MeetingOccurrenceParticipant[]
+  sessions       MeetingParticipantSession[]
+  providerEvents MeetingProviderEvent[]
+
+  @@unique([meetingId, seriesSlotStart])
+  @@index([organizationId])
+  @@index([organizationId, scheduledStart])
+  @@index([organizationId, status, scheduledStart])
+  @@index([meetingId, scheduledStart])
+  @@map("meeting_occurrences")
+}
+
+/// SERIES-LEVEL INVITEE METADATA ONLY.
+///
+/// This row says "these people are on the invite list for this series". It is
+/// NOT a guest identity and MUST NOT gain a token hash, secret, expiry, or any
+/// other credential column: nothing credential-bearing may span a recurring
+/// series, because a secret that outlives one occurrence is a permanent key to
+/// every future one. Guest credentials live on
+/// MeetingOccurrenceParticipant, occurrence-scoped. scripts/verify-tenant-isolation.ts
+/// asserts this table has no credential-shaped column, because it is a
+/// boundary that will otherwise erode.
+model MeetingParticipant {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  meetingId      String
+
+  /// Exactly one contact reference must be present (CHECK constraint):
+  /// an internal user, a client contact, or a bare email for an outsider.
+  userId          String?
+  clientContactId String?
+  email           String?
+
+  displayName      String
+  defaultRole      MeetingParticipantRole @default(ATTENDEE)
+  invitationStatus MeetingInviteStatus    @default(PENDING)
+  respondedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meeting       Meeting                        @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user          User?                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientContact ClientContact?                 @relation(fields: [clientContactId], references: [id], onDelete: Cascade)
+  occurrences   MeetingOccurrenceParticipant[]
+
+  @@unique([meetingId, userId])
+  @@unique([meetingId, clientContactId])
+  @@unique([meetingId, email])
+  @@index([organizationId])
+  @@index([organizationId, userId])
+  @@map("meeting_participants")
+}
+
+/// The occurrence-scoped access grant: admission state for one person at one
+/// instance, AND the only place a guest credential may live. Everything here
+/// expires with the occurrence it belongs to.
+model MeetingOccurrenceParticipant {
+  id             String  @id @default(cuid())
+  organizationId String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  occurrenceId   String
+  /// Null for someone who joined without being on the series invite list.
+  participantId  String?
+  userId         String?
+  displayName    String
+
+  lobbyStatus  MeetingLobbyStatus      @default(NOT_REQUIRED)
+  roleOverride MeetingParticipantRole?
+
+  /// Tri-state: null = never asked, true/false = the recorded answer.
+  recordingConsent   Boolean?
+  recordingConsentAt DateTime?
+
+  admittedAt   DateTime?
+  admittedById String?
+  removedAt    DateTime?
+  removedById  String?
+
+  /// GUEST CREDENTIAL — occurrence-scoped, never series-scoped. SHA-256 of a
+  /// token handed out once, mirroring Invitation.tokenHash. Globally unique so
+  /// a stray collision is a database error rather than a cross-tenant hit.
+  /// A CHECK constraint requires an expiry whenever a hash is present: a guest
+  /// credential with no expiry is a permanent one.
+  guestTokenHash      String?   @unique
+  guestTokenExpiresAt DateTime?
+  guestTokenRevokedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  occurrence  MeetingOccurrence           @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  participant MeetingParticipant?         @relation(fields: [participantId], references: [id], onDelete: SetNull)
+  user        User?                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions    MeetingParticipantSession[]
+
+  @@unique([occurrenceId, participantId])
+  @@unique([occurrenceId, userId])
+  @@index([organizationId])
+  @@index([organizationId, occurrenceId, lobbyStatus])
+  @@index([guestTokenExpiresAt])
+  @@map("meeting_occurrence_participants")
+}
+
+/// One connection to the media room. A person who drops and rejoins produces
+/// two rows; this is the join/leave ledger, not a presence flag.
+model MeetingParticipantSession {
+  id                      String  @id @default(cuid())
+  organizationId          String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  occurrenceId            String
+  occurrenceParticipantId String?
+  userId                  String?
+
+  /// The media provider's participant SID. Null on rows that predate webhook
+  /// verification — always paired with source = LEGACY_CLIENT.
+  providerParticipantSid String?
+  /// Provenance. Backfilled rows are LEGACY_CLIENT and can never be mistaken
+  /// for webhook-verified evidence.
+  source                 MeetingSessionSource
+
+  joinedAt         DateTime
+  leftAt           DateTime?
+  disconnectReason String?
+
+  /// Provider event IDs that produced the join and the leave, so a session can
+  /// be traced back to the signed webhook that asserted it.
+  joinEventId  String?
+  leaveEventId String?
+
+  createdAt DateTime @default(now())
+
+  occurrence            MeetingOccurrence             @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  occurrenceParticipant MeetingOccurrenceParticipant? @relation(fields: [occurrenceParticipantId], references: [id], onDelete: SetNull)
+  user                  User?                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, providerParticipantSid])
+  @@index([organizationId])
+  @@index([occurrenceId, joinedAt])
+  @@index([userId, joinedAt])
+  @@map("meeting_participant_sessions")
+}
+
+/// Raw provider webhook receipts, for idempotency and for auditing what the
+/// provider actually said.
+model MeetingProviderEvent {
+  id             String  @id @default(cuid())
+  organizationId String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  occurrenceId   String?
+
+  /// The provider's own event identifier. Unique PER TENANT, deliberately not
+  /// globally: a global unique key would let one tenant's insert fail because
+  /// another tenant had already received that event id, which leaks the
+  /// existence of another tenant's event.
+  providerEventId String
+  eventType       String
+  payload         Json
+
+  receivedAt    DateTime  @default(now())
+  processedAt   DateTime?
+  /// Set when handling failed; kept so a poison event is visible instead of
+  /// silently retried forever.
+  failureReason String?
+
+  occurrence MeetingOccurrence? @relation(fields: [occurrenceId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, providerEventId])
+  @@index([organizationId, receivedAt])
+  @@index([occurrenceId, receivedAt])
+  @@map("meeting_provider_events")
+}
+
+/// Links a meeting series to whatever else it is about. Typed nullable columns
+/// rather than a polymorphic (type, id) pair, so every link carries a real
+/// foreign key and a composite same-organization constraint. A CHECK requires
+/// exactly one target.
+model MeetingEntityLink {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  meetingId      String
+
+  projectId String?
+  clientId  String?
+  channelId String?
+  noteId    String?
+  taskId    String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  meeting Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  client  Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channel Channel? @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  note    Note?    @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, projectId])
+  @@unique([meetingId, clientId])
+  @@unique([meetingId, channelId])
+  @@unique([meetingId, noteId])
+  @@unique([meetingId, taskId])
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([clientId])
+  @@index([channelId])
+  @@index([noteId])
+  @@index([taskId])
+  @@map("meeting_entity_links")
+}
+
 // ============================================
 // API TOKENS
 // ============================================
@@ -1532,14 +1895,15 @@ model Note {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  author    User           @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
-  project   Project?       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  client    Client?        @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  shares    NoteShare[]
-  linksFrom NoteLink[]     @relation("LinksFrom") // outgoing links from this note
-  linksTo   NoteLink[]     @relation("LinksTo") // incoming backlinks to this note
-  mentions  NoteMention[] // IMP-NOTE-02: @mentioned people on this note
-  revisions NoteRevision[] // IMP-NOTE-01: version history
+  author       User                @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  project      Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  client       Client?             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  shares       NoteShare[]
+  linksFrom    NoteLink[]          @relation("LinksFrom") // outgoing links from this note
+  linksTo      NoteLink[]          @relation("LinksTo") // incoming backlinks to this note
+  mentions     NoteMention[] // IMP-NOTE-02: @mentioned people on this note
+  revisions    NoteRevision[] // IMP-NOTE-01: version history
+  meetingLinks MeetingEntityLink[]
 
   @@index([authorId])
   @@index([projectId])
@@ -2564,19 +2928,19 @@ model OrganizationLifecycleEvent {
 }
 
 model PlatformSupportSession {
-  id                String               @id @default(cuid())
-  organizationId    String
-  platformUserId    String
-  tenantUserId      String?
-  tokenHash         String               @unique
-  tokenCiphertext   String?              @db.Text
-  launchTokenHash   String?              @unique
-  launchUsedAt      DateTime?
-  reason            String
-  status            SupportSessionStatus @default(ACTIVE)
-  expiresAt         DateTime
-  endedAt           DateTime?
-  createdAt         DateTime             @default(now())
+  id              String               @id @default(cuid())
+  organizationId  String
+  platformUserId  String
+  tenantUserId    String?
+  tokenHash       String               @unique
+  tokenCiphertext String?              @db.Text
+  launchTokenHash String?              @unique
+  launchUsedAt    DateTime?
+  reason          String
+  status          SupportSessionStatus @default(ACTIVE)
+  expiresAt       DateTime
+  endedAt         DateTime?
+  createdAt       DateTime             @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
