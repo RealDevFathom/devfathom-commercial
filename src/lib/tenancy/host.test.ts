@@ -40,3 +40,28 @@ describe('tenant host classification', () => {
     });
   });
 });
+
+describe('reserved infrastructure host labels', () => {
+  it.each([
+    'www',
+    'admin',
+    'app',
+    'api',
+    'staging',
+    'meet',
+    'meet-staging',
+    'turn',
+    'turn-staging',
+    '  Meet-Staging  ',
+  ])('reserves %j against organization slugs', async (label) => {
+    const { isReservedHostLabel } = await import('./host-routing');
+
+    expect(isReservedHostLabel(label)).toBe(true);
+  });
+
+  it('does not reserve an ordinary organization slug', async () => {
+    const { isReservedHostLabel } = await import('./host-routing');
+
+    expect(isReservedHostLabel('acme-group')).toBe(false);
+  });
+});
