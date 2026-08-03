@@ -1,0 +1,165 @@
+/**
+ * The fallback router exists so that a request which could not be routed to any
+ * tenant is answered INDISTINGUISHABLY from one that reached the real router and
+ * was refused there. That only holds if both tRPC instances serialize an error
+ * the same way.
+ *
+ * `@/server/trpc` builds its instance with an `errorFormatter`, and
+ * `anonymous-fallback` builds a second instance without one. Two `initTRPC.create`
+ * calls with different options are exactly the kind of thing that drifts silently:
+ * nothing fails, the bodies just stop matching, and the difference is a signal an
+ * anonymous caller can read. These tests compare the two byte for byte so the
+ * drift is caught here rather than by someone diffing responses in the wild.
+ */
+import { TRPCError } from '@trpc/server';
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
+import { describe, expect, it, vi } from 'vitest';
+
+// `@/server/trpc` is imported for its REAL tRPC instance, so only its unrelated
+// server-side dependencies are stubbed. The `errorFormatter` under test is
+// untouched.
+vi.mock('server-only', () => ({}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+vi.mock('@/lib/entitlements', () => ({
+  hasModule: vi.fn(() => true),
+  resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
+}));
+vi.mock('@/server/audit', () => ({
+  ipFromHeaders: vi.fn(() => null),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: vi.fn(),
+}));
+
+import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import { publicProcedure, router } from '@/server/trpc';
+
+import { anonymousFallbackRouter } from './anonymous-fallback';
+
+const TRPC_ENDPOINT = '/api/trpc';
+
+/**
+ * The real routers' rejections, raised through the REAL tRPC instance and at the
+ * same procedure paths the fallback serves. Same code, same message, same path,
+ * so anything that differs in the response is the formatter and nothing else.
+ */
+const realRouter = router({
+  invitations: router({
+    get: publicProcedure.query(() => {
+      throw new TRPCError({ code: 'NOT_FOUND', message: INVITATION_GENERIC_MESSAGE });
+    }),
+  }),
+  passwordReset: router({
+    reset: publicProcedure.mutation(() => {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: RESET_GENERIC_MESSAGE });
+    }),
+  }),
+});
+
+type ServedResponse = {
+  status: number;
+  contentType: string | null;
+  body: unknown;
+  hasStack: boolean;
+};
+
+/**
+ * `data.stack` is a per-call file/line trace that cannot match across two
+ * different modules, and tRPC omits it in production. Parity is asserted on
+ * everything else, plus on stack PRESENCE, which is the part an anonymous caller
+ * could actually use to tell the two paths apart.
+ */
+function stripStacks(value: unknown): { body: unknown; hasStack: boolean } {
+  let hasStack = false;
+
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+        if (key === 'stack') {
+          hasStack = true;
+          continue;
+        }
+        out[key] = walk(child);
+      }
+      return out;
+    }
+    return node;
+  };
+
+  return { body: walk(value), hasStack };
+}
+
+async function serve(
+  router_: typeof realRouter | typeof anonymousFallbackRouter,
+  request: Request
+): Promise<ServedResponse> {
+  const response = await fetchRequestHandler({
+    endpoint: TRPC_ENDPOINT,
+    req: request,
+    router: router_ as never,
+    // Both routers are erased to `never` above so one helper can serve either;
+    // the context factory has to follow.
+    createContext: (() => ({})) as never,
+  });
+  const parsed = stripStacks(await response.json());
+  return {
+    status: response.status,
+    contentType: response.headers.get('content-type'),
+    body: parsed.body,
+    hasStack: parsed.hasStack,
+  };
+}
+
+const query = (path: string) =>
+  new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, { method: 'GET' });
+
+const mutation = (path: string, input: unknown) =>
+  new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ '0': { json: input } }),
+  });
+
+describe('fallback and real routers serialize refusals identically', () => {
+  it('matches on a NOT_FOUND from invitations.get', async () => {
+    const request = () => query('invitations.get');
+
+    const real = await serve(realRouter, request());
+    const fallback = await serve(anonymousFallbackRouter, request());
+
+    expect(fallback.status).toBe(real.status);
+    expect(fallback.contentType).toBe(real.contentType);
+    expect(fallback.hasStack).toBe(real.hasStack);
+    expect(fallback.body).toEqual(real.body);
+  });
+
+  it('matches on a BAD_REQUEST from passwordReset.reset', async () => {
+    const input = { token: 'anything', newPassword: 'Sufficiently-Long-1!' };
+
+    const real = await serve(realRouter, mutation('passwordReset.reset', input));
+    const fallback = await serve(anonymousFallbackRouter, mutation('passwordReset.reset', input));
+
+    expect(fallback.status).toBe(real.status);
+    expect(fallback.contentType).toBe(real.contentType);
+    expect(fallback.hasStack).toBe(real.hasStack);
+    expect(fallback.body).toEqual(real.body);
+  });
+
+  /**
+   * The batched envelope is part of the observable shape: a caller that batches
+   * two calls must not be able to tell the paths apart by how the array comes
+   * back, only by the errors inside it.
+   */
+  it('matches on the batched-response envelope', async () => {
+    const request = () => query('invitations.get,invitations.get');
+
+    const real = await serve(realRouter, request());
+    const fallback = await serve(anonymousFallbackRouter, request());
+
+    expect(Array.isArray(fallback.body)).toBe(true);
+    expect((fallback.body as unknown[]).length).toBe((real.body as unknown[]).length);
+    expect(fallback.body).toEqual(real.body);
+  });
+});

@@ -46,8 +46,8 @@ const ORIGINAL = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]
 
 /**
  * A fake platform-scope client. Every lookup is recorded so a test can assert
- * that a shared host stopped BEFORE the substring deployment lookup, not merely
- * that it happened to return nothing.
+ * that a shared host stopped BEFORE the deployment lookup, not merely that it
+ * happened to return nothing.
  */
 function fakeDb(rows: {
   organizationBySlug?: Record<string, typeof ORGANIZATION>;
@@ -74,12 +74,30 @@ function fakeDb(rows: {
       }),
     },
     organizationDeployment: {
+      // `resolveOrganizationByHost` — the permissive sibling — still matches by
+      // substring, and this fake keeps behaving exactly as Prisma's `contains`
+      // does so that half of the suite still tests what it used to.
       findFirst: vi.fn(async ({ where }: { where: { url: { contains: string } } }) => {
         calls.push(`deployment:${where.url.contains}`);
-        // Deliberately a SUBSTRING match, exactly as Prisma's `contains` behaves.
         const hit = rows.deployments?.find((d) => d.url.includes(where.url.contains));
         return hit ? { organization: hit.organization } : null;
       }),
+      // `resolveExplicitOrganizationByHost` matches whole URLs, case-insensitively,
+      // and inspects every match rather than taking the first.
+      findMany: vi.fn(
+        async ({ where }: { where: { OR: Array<{ url: { equals: string; mode: string } }> } }) => {
+          const wanted = new Set(where.OR.map((clause) => clause.url.equals.toLowerCase()));
+          calls.push(`deployment:exact:${[...wanted][0]}`);
+          return (rows.deployments ?? [])
+            .filter((deployment) => wanted.has(deployment.url.toLowerCase()))
+            .map((deployment, index) => ({
+              id: `deploy_${index}`,
+              url: deployment.url,
+              organizationId: deployment.organization.id,
+              organization: deployment.organization,
+            }));
+        }
+      ),
     },
   };
   mocks.withPlatformDb.mockImplementation(async (run: (tx: unknown) => Promise<unknown>) =>
@@ -153,18 +171,20 @@ describe('resolveExplicitOrganizationByHost', () => {
   );
 
   /**
-   * The deployment lookup is `url contains host` resolved with `findFirst`. For
-   * the shared host `staging.devfathom.com` that substring also occurs inside
-   * every tenant deployment URL such as `acme-staging.devfathom.com`, so without
-   * an early stop the shared host would be handed an arbitrary tenant.
+   * A shared host must stop before the deployment lookup runs at all, not merely
+   * come back empty from it. The lookup is exact now, so `staging.devfathom.com`
+   * would no longer reach `acme-staging.devfathom.com` on its own — but the early
+   * stop is what makes that independent of how the lookup is written, and it is
+   * still what keeps the shared host from matching a deployment recorded at
+   * exactly that host.
    */
-  it('stops before the substring deployment lookup on a shared host', async () => {
+  it('stops before the deployment lookup on a shared host', async () => {
     const calls = fakeDb({
       deployments: [{ url: 'https://acme-staging.devfathom.com', organization: ORGANIZATION }],
     });
 
     await expect(resolveExplicitOrganizationByHost('staging.devfathom.com')).resolves.toBeNull();
-    expect(calls).not.toContain('deployment:staging.devfathom.com');
+    expect(calls.some((call) => call.startsWith('deployment:'))).toBe(false);
   });
 
   it('returns null for a host nobody has registered', async () => {

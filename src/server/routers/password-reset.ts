@@ -118,24 +118,38 @@ export const passwordResetRouter = router({
       const record = await loadUsableToken(ctx.db, input.token);
       if (!record) throw invalidResetLink();
 
-      // CLAIM THE TOKEN FIRST, then hash.
+      // Hash BEFORE opening the transaction.
       //
-      // `loadUsableToken` and the write below are separate statements, so two
-      // requests presenting the same token could both pass the read and both set
-      // a password. A conditional update on `usedAt IS NULL` makes consumption
-      // atomic: PostgreSQL serialises the two writers on the row, and the loser
-      // matches zero rows and gets the same generic error as any other unusable
-      // link. Hashing after the claim also means a replayed token is refused by
-      // one indexed UPDATE and never spends a bcrypt at cost 12 — the only
-      // expensive operation an anonymous caller can reach here.
+      // bcrypt at cost 12 takes on the order of a quarter of a second, and an
+      // interactive transaction pins one pooled connection for its whole
+      // lifetime. Hashing inside it meant every concurrent reset held a
+      // connection idle for that entire time, so a burst of resets could exhaust
+      // the pool and stall unrelated tenant traffic. `loadUsableToken` already
+      // rejects missing, used, and expired tokens without hashing, so the work
+      // moved here is only ever spent on a token that looked usable.
+      const hashed = await hash(input.newPassword, 12);
+
       await ctx.db.$transaction(async (tx) => {
+        // Fresh, and read once: the same instant decides whether the token is
+        // still live and stamps its consumption.
+        const now = new Date();
+
+        // ATOMIC CLAIM.
+        //
+        // `loadUsableToken` and this write are separate statements, so two
+        // requests presenting the same token could both pass the read and both
+        // set a password. A conditional update makes consumption atomic:
+        // PostgreSQL serialises the two writers on the row, and the loser matches
+        // zero rows and gets the same generic error as any other unusable link.
+        //
+        // `expiresAt` is re-checked here rather than trusted from the read.
+        // Between the two statements the link can lapse, and expiry that is only
+        // enforced on the read is enforced nowhere that the write can see.
         const claimed = await tx.passwordResetToken.updateMany({
-          where: { id: record.id, usedAt: null },
-          data: { usedAt: new Date() },
+          where: { id: record.id, usedAt: null, expiresAt: { gt: now } },
+          data: { usedAt: now },
         });
         if (claimed.count !== 1) throw invalidResetLink();
-
-        const hashed = await hash(input.newPassword, 12);
 
         // AUTH-01: bump tokenVersion + stamp passwordChangedAt so every existing
         // JWT session for this user is revoked on its next revalidation.
