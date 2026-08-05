@@ -4,8 +4,22 @@ param location string = resourceGroup().location
 param sharedResourceGroupName string
 param registryName string
 param initialImage string
+@description('Canonical host the app is served on. Drives AUTH_URL and NEXT_PUBLIC_APP_URL.')
 param tenantHost string
+
+@description('Control-plane host. Must be admin.<baseDomain>.')
 param platformHost string
+
+@description('''
+Registrable domain that tenant and platform hosts hang off. Drives PLATFORM_BASE_DOMAIN.
+Deliberately NOT the same parameter as tenantHost, and must not be re-merged with it: the
+canonical app URL can carry a label of its own (www.devfathom.com) while host classification
+in src/lib/tenancy/host-routing.ts and src/proxy.ts only recognises admin.<baseDomain> and
+<slug>.<baseDomain>. Setting this to tenantHost makes admin.devfathom.com classify as a tenant
+and strips the slug off every tenant host. In staging the two happen to be equal; that is a
+coincidence of the DNS layout, not an invariant.
+''')
+param baseDomain string
 param seedDatabase bool
 param emailDeliveryMode string
 
@@ -366,7 +380,8 @@ var commonEnvironment = [
   { name: 'AUTH_URL', value: 'https://${tenantHost}' }
   { name: 'AUTH_TRUST_HOST', value: 'true' }
   { name: 'NEXT_PUBLIC_APP_URL', value: 'https://${tenantHost}' }
-  { name: 'PLATFORM_BASE_DOMAIN', value: tenantHost }
+  // Base domain, not the app URL. See the baseDomain parameter for why these differ.
+  { name: 'PLATFORM_BASE_DOMAIN', value: baseDomain }
   { name: 'PLATFORM_ENCRYPTION_KEY', secretRef: 'platform-encryption-key' }
   { name: 'CRON_SECRET', secretRef: 'cron-secret' }
   { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }

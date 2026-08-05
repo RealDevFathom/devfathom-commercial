@@ -6,6 +6,7 @@ param registryName = readEnvironmentVariable('DEVFATHOM_REGISTRY_NAME')
 param initialImage = readEnvironmentVariable('DEVFATHOM_STAGING_IMAGE')
 param tenantHost = 'staging.devfathom.com'
 param platformHost = 'admin.staging.devfathom.com'
+param baseDomain = 'staging.devfathom.com'
 param seedDatabase = true
 param emailDeliveryMode = 'capture'
 param postgresAdminPassword = readEnvironmentVariable('DEVFATHOM_STAGING_POSTGRES_PASSWORD')
