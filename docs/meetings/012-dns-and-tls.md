@@ -6,17 +6,18 @@ are performed by a human, once, after the VM exists and its public IP is known.
 
 ## Hostnames
 
-| Host | Purpose | Environment |
-| --- | --- | --- |
-| `meet-staging.devfathom.com` | Signalling — `wss://`, HTTPS | staging |
-| `turn-staging.devfathom.com` | TURN/TLS SNI target | staging |
-| `meet.devfathom.com` | Signalling | production (later) |
-| `turn.devfathom.com` | TURN/TLS SNI target | production (later) |
+| Host                         | Purpose                      | Environment        |
+| ---------------------------- | ---------------------------- | ------------------ |
+| `meet-staging.devfathom.com` | Signalling — `wss://`, HTTPS | staging            |
+| `turn-staging.devfathom.com` | TURN/TLS SNI target          | staging            |
+| `meet.devfathom.com`         | Signalling                   | production (later) |
+| `turn.devfathom.com`         | TURN/TLS SNI target          | production (later) |
 
 All four labels are already reserved in `src/lib/tenancy/host-routing.ts`
 (`RESERVED_HOST_LABELS`), so no tenant can register a subdomain that collides
-with meeting infrastructure. That reservation landed in commit `27be9f0` and is
-a prerequisite for this document, not a consequence of it.
+with meeting infrastructure. That reservation landed on `main` via PR #21
+(commit `417ff97`) and is a prerequisite for this document, not a consequence
+of it.
 
 Two hostnames are required, not one. Caddy's layer4 app distinguishes signalling
 from TURN/TLS **by SNI on the same port 443** — see the generated `caddy.yaml`
@@ -41,10 +42,10 @@ Perform after provisioning, once `az deployment group show` reports the public I
 
 2. In the GoDaddy DNS manager for `devfathom.com`, add two records:
 
-   | Type | Name | Value | TTL |
-   | --- | --- | --- | --- |
-   | A | `meet-staging` | *the IP from step 1* | 600 |
-   | A | `turn-staging` | *the same IP* | 600 |
+   | Type | Name           | Value                | TTL |
+   | ---- | -------------- | -------------------- | --- |
+   | A    | `meet-staging` | _the IP from step 1_ | 600 |
+   | A    | `turn-staging` | _the same IP_        | 600 |
 
    Both point at the same host. LiveKit and TURN are the same process on the
    same VM; the second name exists for SNI routing, not for a second machine.
