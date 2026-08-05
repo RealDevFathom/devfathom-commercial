@@ -1592,6 +1592,22 @@ model MeetingAttendanceLog {
 /// a cancellation sets the cancellation columns; a one-off retitle sets
 /// `titleOverride`. Editing the series can therefore never silently rewrite
 /// what already happened.
+///
+/// MATERIALISATION MUST NEVER DELETE A HISTORICAL OCCURRENCE. This table is
+/// NOT "the set the current RRULE generates". It is that set UNION every
+/// instant historical attendance has already named. The MEET-01 backfill
+/// produced 215 occurrences from 210 meetings precisely because five
+/// attendance rows named an instant the series' recurrence rule does not
+/// generate; those five rows are durable evidence that a meeting happened,
+/// not drift to be reconciled away.
+///
+/// A materialiser reconciling this table against a series may therefore only
+/// ADD missing slots, and may only mark a FUTURE slot cancelled when it leaves
+/// the rule. It must never DELETE a row, and must never treat a past
+/// occurrence that no longer matches the current RRULE as garbage to collect:
+/// changing a recurrence rule does not un-happen the meetings already held,
+/// and the sessions hanging off such an occurrence are the only record that
+/// they were.
 model MeetingOccurrence {
   id             String @id @default(cuid())
   organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1599,11 +1615,11 @@ model MeetingOccurrence {
 
   /// GLOBALLY unique, cryptographically random UUIDv4 (PostgreSQL
   /// gen_random_uuid()). This is the third anonymous tenant-resolution key
-  /// alongside Invitation.tokenHash and PasswordResetToken.tokenHash: a join
-  /// link arrives on www.devfathom.com, a SHARED host where
-  /// resolveOrganizationByHost returns null by design, so the identifier alone
-  /// must name exactly one organization — hence global, not per-tenant,
-  /// uniqueness. See src/lib/auth/anonymous-tenant.ts.
+  /// alongside Invitation.tokenHash and PasswordResetToken.tokenHash: the
+  /// shared public join URL supplies no tenant context by product design, so
+  /// publicId must resolve exactly one organization before tenant scope is
+  /// entered — hence global, not per-tenant, uniqueness. See
+  /// src/lib/auth/anonymous-tenant.ts.
   ///
   /// It is a LOCATOR, NOT AUTHORIZATION. Holding it proves nothing; the guest
   /// credential lives on MeetingOccurrenceParticipant. It lives on the
