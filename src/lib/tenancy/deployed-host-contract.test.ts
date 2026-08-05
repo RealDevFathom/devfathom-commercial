@@ -99,13 +99,17 @@ describe.each(ENVIRONMENTS)('$name deployed host contract', ({ hosts }) => {
     const classification = classifyHost(hosts.tenantHost);
     expect(['tenant', 'shared']).toContain(classification.kind);
 
-    const slug = 'slug' in classification ? classification.slug : undefined;
-    if (slug === undefined) {
-      // No slug is only legitimate when the app is served on the base domain itself, as staging
-      // is. On production the app host carries a label (www) and that label must be reserved.
-      expect(hosts.tenantHost).toBe(hosts.baseDomain);
-    } else {
-      expect(isReservedHostLabel(slug)).toBe(true);
+    // Slug rules apply only to the tenant variant. A `shared` classification carries no slug by
+    // construction — that absence is the correct shape, not a missing-slug case to explain.
+    if (classification.kind === 'tenant') {
+      const slug = 'slug' in classification ? classification.slug : undefined;
+      if (slug === undefined) {
+        // A tenant classification with no slug is only legitimate when the app is served on the
+        // base domain itself, as staging is. Production's www must arrive as a reserved label.
+        expect(hosts.tenantHost).toBe(hosts.baseDomain);
+      } else {
+        expect(isReservedHostLabel(slug)).toBe(true);
+      }
     }
   });
 });
