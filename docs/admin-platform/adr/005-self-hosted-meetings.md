@@ -251,12 +251,42 @@ Cutting a live call because a billing flag changed is a bad outcome for a custom
 indistinguishable one from an outage. **Immediate termination is a separate, explicit platform
 action**, audited as such.
 
-**CODE-VERIFIED implementation constraint, which shapes where code may live.** The gate is
-**namespace-wide**: the module key is the first dot-separated segment of the tRPC path
-(`src/lib/module-catalog.ts:36-38`) and the middleware rejects the entire call
-(`src/server/trpc.ts:160-169`). Anything that must survive a disabled module therefore **cannot be a
-`meetings.*` tRPC procedure**. Ingestion and reconciliation are a platform-scope REST route and a
-scheduled job. Entitlements are also resolved once per request at context construction
+**CODE-VERIFIED implementation constraint, which shapes where code may live.** Two separate
+mechanisms, and conflating them gets the constraint wrong.
+
+**Selection is namespace-based.** The module key is the first dot-separated segment of the tRPC path
+(`src/lib/module-catalog.ts:36-38`), so every `meetings.*` path selects the `meetings` key, and the
+middleware rejects the entire call when that key is not licensed (`src/server/trpc.ts:160-169`).
+
+**Enforcement is procedure-builder-scoped.** `requireLicensedModule` is a middleware, and it runs
+only where a builder composes it: `protectedProcedure` (`src/server/trpc.ts:202-205`),
+`adminProcedure` (`:210-213`), `hrProcedure` (`:216-219`) and `capabilityProcedure` (`:226`).
+`publicProcedure` is bare `t.procedure` with no middleware at all (`:77`). A `meetings.*` procedure
+built on `publicProcedure` is therefore **not** gated — so "must survive a disabled module" does not
+by itself force code out of the `meetings` namespace.
+
+**The real constraint is stronger, and it is about transport, not namespace: ingestion is not a tRPC
+procedure at all.**
+
+- **The tRPC transport does not admit a provider payload.** `/api/trpc` is the only tRPC transport
+  (`src/app/api/trpc/[trpc]/route.ts:162`). A session-less caller reaches it only by the anonymous
+  path, which admits an exact allowlist of five recovery procedures
+  (`src/lib/auth/anonymous-access.ts:27-44`, enforced at `:82-94`) and names the tenant from a
+  `token` field parsed out of the tRPC input (`:103-135`). A LiveKit webhook carries a signed
+  provider event naming a **room**, not a token naming a tenant. Reaching it through that transport
+  would mean widening the anonymous allowlist and inventing a second tenant-routing rule inside it —
+  which is the review-visible list that `src/lib/auth/anonymous-access.ts:18-23` exists to keep
+  narrow.
+- **Raw-body signature verification belongs in a route handler.** Verification is over the exact
+  received bytes, and a tRPC adapter's job is to parse the body before the procedure sees it — the
+  anonymous path already has to `request.clone().json()` to look at input at all
+  (`src/lib/auth/anonymous-access.ts:131`). A route handler reads the bytes before anything parses
+  them; a procedure behind a body-parsing adapter cannot.
+- **The tRPC context refuses to build without an organization id** (`src/server/trpc.ts:44-46`). A
+  provider webhook names a room; the tenant is _derived_ from the room, after verification.
+
+So **LiveKit ingestion is a dedicated raw-body route handler**, and **reconciliation is a platform
+job**. Entitlements are also resolved once per request at context construction
 (`src/server/trpc.ts:48`), so a disable takes effect on the next request, not the current one — which
 is consistent with "an active occurrence may finish" but is a consequence of the existing design, not
 a control we implemented for this purpose.

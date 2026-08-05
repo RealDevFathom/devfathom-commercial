@@ -38,12 +38,19 @@ which is exactly the evidence-destroying coupling ADR-005 decision 7 forbids.
 
 **DECISION.**
 
-- A single **platform-level** REST route, not a tRPC procedure. Two reasons, both binding:
-  1. The licensed-module middleware keys on the first segment of the tRPC path
-     (`src/lib/module-catalog.ts:36-38`) and rejects the whole call
-     (`src/server/trpc.ts:160-169`). A `meetings.*` procedure would be gated by the `meetings`
-     entitlement — and ingestion must **never** be gated (ADR-005 decision 7).
-  2. The tRPC context refuses to build without an organization id
+- A single **platform-level** REST route handler, not a tRPC procedure. Three reasons, all binding:
+  1. **The tRPC transport does not admit this payload.** `/api/trpc` is the only tRPC transport
+     (`src/app/api/trpc/[trpc]/route.ts:162`), and a caller with no session reaches it only through
+     the anonymous path: an exact allowlist of five recovery procedures
+     (`src/lib/auth/anonymous-access.ts:27-44`, enforced at `:82-94`), with the tenant named by a
+     `token` field parsed out of the tRPC input (`:103-135`). A LiveKit event names a **room**, not a
+     token, so admitting it would mean both widening that allowlist and adding a second
+     tenant-routing rule inside it.
+  2. **Signature verification is over raw bytes, and a route handler is where raw bytes exist.** The
+     tRPC adapter parses the body before any procedure runs — the anonymous path already has to
+     `request.clone().json()` to read input at all (`src/lib/auth/anonymous-access.ts:131`). Verify
+     first, parse second; that ordering is only available to a route handler.
+  3. The tRPC context refuses to build without an organization id
      (`src/server/trpc.ts:44-46`). A provider webhook names a room, not a tenant. The tenant is
      _derived_ from the room, after verification.
 - The route is not host-routed. The provider posts to one fixed URL per environment.
@@ -162,10 +169,16 @@ endpoint where getting it wrong destroys data:
 - Immediate termination is a **separate, explicit platform action**, audited as such — never a side
   effect of a billing change.
 
-**CODE-VERIFIED consequence.** Because the gate is namespace-wide
-(`src/lib/module-catalog.ts:36-38`, `src/server/trpc.ts:160-169`), reconciliation cannot be a
-`meetings.*` tRPC procedure. It is a scheduled job or a platform-scope route. There is already a
-`CRON_SECRET` convention for scheduled work (`.env.example:13`).
+**CODE-VERIFIED consequence.** Module selection is namespace-based
+(`src/lib/module-catalog.ts:36-38`, rejected at `src/server/trpc.ts:160-169`), but enforcement is
+procedure-builder-scoped: `requireLicensedModule` is composed by `protectedProcedure`
+(`src/server/trpc.ts:202-205`), `adminProcedure` (`:210-213`), `hrProcedure` (`:216-219`) and
+`capabilityProcedure` (`:226`), and not by `publicProcedure`, which is bare `t.procedure` (`:77`).
+The consequence is therefore not "reconciliation cannot be a `meetings.*` procedure" — it is that
+neither ingestion nor reconciliation is a tRPC procedure at all: ingestion is the raw-body route
+handler above, for the transport and byte-ordering reasons given there, and reconciliation is a
+scheduled platform job. There is already a `CRON_SECRET` convention for scheduled work
+(`.env.example:13`).
 
 ## Failure responses
 

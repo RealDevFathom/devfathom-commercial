@@ -112,13 +112,22 @@ the series. The research report's `app.devfathom.com/m/{id}` shape is **not** ad
 `meetings-video`, no `meetings-v2`. ADR-005 decision 7 states what the entitlement does and does not
 control.
 
-**CODE-VERIFIED constraint that shapes the implementation:** the licensed-module middleware derives
-its key from the _first dot-separated segment of the tRPC path_
-(`src/lib/module-catalog.ts:36-38`) and then rejects the call
-(`src/server/trpc.ts:160-169`). The gate is therefore **namespace-wide**: everything routed under a
-`meetings.*` tRPC path is gated together, all-or-nothing. Any procedure that must keep working while
-the module is disabled — reconciliation, historical reads — cannot live in that namespace. See
-MEET-003 and ADR-005 decision 7.
+**CODE-VERIFIED constraint that shapes the implementation.** Module **selection** is namespace-based:
+the licensed-module middleware derives its key from the _first dot-separated segment of the tRPC
+path_ (`src/lib/module-catalog.ts:36-38`) and then rejects the whole call
+(`src/server/trpc.ts:160-169`). **Enforcement**, though, is **procedure-builder-scoped**: that
+middleware runs only where a builder composes it — `protectedProcedure`
+(`src/server/trpc.ts:202-205`), `adminProcedure` (`:210-213`), `hrProcedure` (`:216-219`) and
+`capabilityProcedure` (`:226`) — while `publicProcedure` is bare `t.procedure` with no middleware
+(`:77`).
+
+So the rule is **not** "anything that must survive a disabled module leaves the `meetings`
+namespace". It is that **webhook ingestion is not a tRPC procedure at all**: the anonymous tRPC
+transport admits an exact five-procedure allowlist routed by a `token` field
+(`src/lib/auth/anonymous-access.ts:27-44`, `:103-135`) and cannot carry a signed provider event that
+names a room, and raw-body signature verification has to happen before any body parsing. Ingestion is
+a dedicated raw-body route handler; reconciliation is a platform job. See MEET-003 and ADR-005
+decision 7.
 
 ### D5 — Launch topology is deliberately small
 

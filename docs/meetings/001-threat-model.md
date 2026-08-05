@@ -273,12 +273,23 @@ evidence is destroyed.
 - Immediate termination is a **separate, explicit platform action** with its own audit trail — not a
   side effect of a billing change.
 
-**CODE-VERIFIED constraint.** The gate is namespace-wide: the module key comes from the first
-segment of the tRPC path (`src/lib/module-catalog.ts:36-38`) and the middleware rejects the whole
-call (`src/server/trpc.ts:160-169`). Anything that must survive a disabled module cannot be a
-`meetings.*` procedure. Entitlements are also resolved once per request at context construction
-(`src/server/trpc.ts:48`), so a mid-call disable takes effect on the _next_ request, not the current
-one.
+**CODE-VERIFIED constraint.** Module **selection** is namespace-based — the module key comes from the
+first segment of the tRPC path (`src/lib/module-catalog.ts:36-38`) and the middleware rejects the
+whole call (`src/server/trpc.ts:160-169`). **Enforcement is procedure-builder-scoped**: only
+`protectedProcedure` (`src/server/trpc.ts:202-205`), `adminProcedure` (`:210-213`), `hrProcedure`
+(`:216-219`) and `capabilityProcedure` (`:226`) compose `requireLicensedModule`; `publicProcedure` is
+bare `t.procedure` (`:77`) and composes nothing. A `meetings.*` procedure built on `publicProcedure`
+would not be gated — so this constraint does not read "not a `meetings.*` procedure".
+
+What it does force is stronger: **ingestion is not a tRPC procedure at all.** The anonymous tRPC
+transport admits an exact allowlist of five recovery procedures
+(`src/lib/auth/anonymous-access.ts:27-44`, enforced at `:82-94`) and derives the tenant from a
+`token` field in the parsed input (`:103-135`); a signed provider event names a room, not a token,
+and its signature is over raw bytes that a body-parsing adapter has already consumed. Ingestion is
+therefore a dedicated raw-body route handler and reconciliation a platform job — neither is reachable
+by the entitlement middleware in the first place. Entitlements are also resolved once per request at
+context construction (`src/server/trpc.ts:48`), so a mid-call disable takes effect on the _next_
+request, not the current one.
 
 ### T12 — Forged deployment assignment
 
