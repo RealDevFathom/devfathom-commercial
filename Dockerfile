@@ -5,7 +5,11 @@ RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM dependencies AS builder
 COPY . .
-RUN bunx prisma generate && bun run typecheck
+# `tsconfig.json` includes `.next/types`, and `PageProps`/`LayoutProps`/`RouteContext`
+# are globals Next generates there. `.dockerignore` excludes `.next`, so nothing the
+# host generated reaches this stage — `next typegen` has to run here, before `tsc`,
+# or every route-type global is `TS2304: Cannot find name`.
+RUN bunx prisma generate && bunx next typegen && bun run typecheck
 ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
     NEXT_TELEMETRY_DISABLED=1
 RUN AUTH_SECRET=container-build-only bun run build
