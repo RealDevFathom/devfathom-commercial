@@ -180,6 +180,12 @@ handler above, for the transport and byte-ordering reasons given there, and reco
 scheduled platform job. There is already a `CRON_SECRET` convention for scheduled work
 (`.env.example:13`).
 
+The third never-gated item, **historical records**, is not covered by either of those and must not
+be pushed onto `publicProcedure` — it is an authenticated in-app tenant read, and `publicProcedure`
+carries no auth, no audit and no capability check. It needs an authenticated, audited, tenant-scoped
+builder that omits only `requireLicensedModule`, which does not exist yet. ADR-005 decision 7 records
+that requirement; nothing in this contract changes because of it.
+
 ## Failure responses
 
 **DECISION.**
@@ -208,11 +214,16 @@ Returning 5xx for a bad signature invites a retry storm from a forged sender.
    participant interval is still open, the close time could be the room-end time, or the interval
    could be marked incomplete. The first is friendlier, the second is more honest. Needs a decision,
    because it changes what "attended" means in a report.
-4. **Where do webhook events live?** A dedicated durable event table under tenant RLS, keyed for
-   idempotency, is the obvious answer — but the occurrence record it would reference does not exist
-   yet (`000-product-scope.md` open question 2).
-5. **Are guest participants ingested into attendance at all?** Blocked on MEET-001 open question 1 —
-   `MeetingAttendanceLog` requires a `User` foreign key (`prisma/schema.prisma:1475`, `:1485`).
+4. **Where do webhook events live? — ANSWERED by MEET-01 (PR #23), pending merge.** In
+   `MeetingProviderEvent`, under tenant RLS, unique on `(organizationId, providerEventId)` and
+   deliberately not globally — a global key would make one tenant's insert fail because another
+   tenant had already received that event id, which leaks its existence. It stores the raw payload,
+   `receivedAt`/`processedAt`, and a `failureReason` so a poison event stays visible instead of being
+   retried forever, and it references the `MeetingOccurrence` this question was blocked on.
+5. **Are guest participants ingested into attendance at all? — ANSWERED by MEET-01 (PR #23), pending
+   merge.** Yes. Attendance no longer requires a `User`: a session is a `MeetingParticipantSession`
+   row with a nullable `userId`, tied to a `MeetingOccurrenceParticipant` grant, and the person may be
+   an internal user, a client contact, or a bare email. See MEET-001 open question 1.
 6. **Is `minReplicas: 1` applied to staging as well as production?** ADR-005 decision 6 says every
    environment receiving **real** LiveKit webhooks. Whether staging receives real ones is an
    environment decision with a monthly cost attached.

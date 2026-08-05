@@ -241,5 +241,13 @@ keyboard, no horizontal overflow, no console errors — is a release gate for th
    currently earmarked for the SFU. `meet.devfathom.com/<id>` versus
    `www.devfathom.com/meet/<id>` is an unforced choice that should be made once, deliberately —
    D3 of `000-product-scope.md` records the current answer.
-6. **Where does the public ID live until an occurrence record exists?** Nowhere correct. This flow is
-   blocked on `000-product-scope.md` open question 2.
+6. **Where does the public ID live until an occurrence record exists? — ANSWERED by MEET-01 (PR #23),
+   pending merge.** On the occurrence. `MeetingOccurrence.publicId` is globally unique and
+   database-defaulted to `gen_random_uuid()`, because the shared public join URL carries no tenant
+   context and the id must resolve exactly one organization before tenant scope is entered — the same
+   role `Invitation.tokenHash` and `PasswordResetToken.tokenHash` already play. It is a **locator, not
+   authorization**: holding it proves nothing, the credential lives on
+   `MeetingOccurrenceParticipant`, and the media room name (`providerRoomName`) is independently
+   random so a link holder cannot address the room directly and skip the lobby. It is deliberately
+   not on the series, which would be an indefinitely reusable link. Open question 1 above — where the
+   guest credential travels — is unaffected and still open.

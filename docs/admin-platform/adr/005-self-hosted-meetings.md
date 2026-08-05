@@ -6,8 +6,9 @@ This ADR records the decision to run DevFathom's meeting media on infrastructure
 and pins the policies that decision forces. It follows ADR-001 (forced tenant RLS) and ADR-002 (the
 separate seller control plane), and is deliberately compatible with ADR-004 (the authentication
 identity plane), which is itself **Proposed** and currently unmerged on the
-`codex/adr-004-draft` branch. There is no ADR-003 on `main`; the number belongs to the deferred
-_Standard Shared-Host Login_ record, described in ADR-004's own context.
+`codex/adr-004-draft` branch. There is no ADR-003 on `main` yet: the number is reserved for the
+_Standard Shared-Host Login_ record, which lands with the shared-host-login branch and is described
+in ADR-004's own context until then.
 
 Supporting documents, in `docs/meetings/`: `000-product-scope.md`, `001-threat-model.md`,
 `002-provider-adapter-contract.md`, `003-webhook-contract.md`, `004-join-flow.md`.
@@ -291,6 +292,32 @@ job**. Entitlements are also resolved once per request at context construction
 is consistent with "an active occurrence may finish" but is a consequence of the existing design, not
 a control we implemented for this purpose.
 
+**Historical reads are a third case, and today there is nowhere to put them.** "Not gated, ever"
+above includes historical records: after the `meetings` licence lapses, the tenant's own users must
+still be able to read who attended what, and the reporting and team-statistics paths that consume it
+(`src/server/routers/meetings.ts:517-551`, `src/server/routers/team-stats.ts:84`, `:309`) must keep
+answering. Unlike ingestion and reconciliation, these are ordinary in-app tenant reads — they belong
+on the tRPC transport, made by a signed-in member of the organization. Every authenticated builder in
+`src/server/trpc.ts` composes `requireLicensedModule`, so such a read fails with FORBIDDEN the moment
+the module is disabled.
+
+**`publicProcedure` is not the escape hatch.** It is bare `t.procedure` (`src/server/trpc.ts:77`):
+no `requireActiveUser`, no audit middleware, no capability check. Serving attendance history from it
+would exchange a billing gate for no authentication at all, on precisely the records this decision
+exists to preserve — the same loss of evidence by a different route. Historical meeting reads
+**must not** use `publicProcedure`.
+
+**What closing this needs, recorded here so it is not discovered during implementation:** an
+authenticated, audited, tenant-scoped procedure builder that omits **only** `requireLicensedModule`
+— the shape of `protectedProcedure` (`src/server/trpc.ts:202-205`) with its third middleware
+dropped, and composing the read-auditing middleware the sensitive-read builders already use
+(`auditAll`, `:146`, as `adminProcedure` `:210-213` and `hrProcedure` `:216-219` do) rather than
+`auditMutations`, since these are reads. Tenant scoping is unchanged and comes from the context, not
+the builder: it still refuses to construct without an organization id (`:44-46`) and still hands the
+resolver an RLS-scoped client (`:47`). **This ADR does not add that builder** — it records the
+requirement. Whichever phase first ships a historical meeting read introduces it. Nothing above
+changes: ingestion stays a raw-body route handler, reconciliation stays a platform job.
+
 ### 8. Pilot reliability
 
 **DECISION.** A **single LiveKit VM is acceptable for staging and a controlled pilot only, explicitly
@@ -403,15 +430,28 @@ Costs:
 
 1. **The transition plan from JaaS.** Feature-flagged per organization, hard cutover at a release
    boundary, or both live for one release. Needs a human decision before implementation starts.
-2. **Occurrence materialisation.** Decision 4 requires an occurrence record; today's recurrence model
-   has four fixed intervals, no end date, no exceptions, and no per-occurrence overrides
-   (`prisma/schema.prisma:1435`). This is a scheduling redesign, and it is unsized.
+2. **Occurrence materialisation. — ANSWERED by MEET-01 (PR #23), pending merge.** Decision 4 required
+   an occurrence record and there was none. `MeetingOccurrence` is now materialised per instance
+   (`prisma/migrations/20260803120000_meeting_occurrences/`), identified within its series by an
+   immutable `seriesSlotStart` RRULE instant, with per-occurrence exceptions on the row
+   (`titleOverride`, `cancelledAt`/`cancelledById`/`cancellationReason`) and a reschedule moving
+   `scheduledStart`/`scheduledEnd` away from the slot instead of rewriting it. The series carries
+   `recurrenceRule` plus a validated IANA `timezone`; the four fixed intervals are migrated and the
+   legacy `recurrence` column is deprecated, not read. The scheduling redesign this question called
+   unsized is what MEET-01 shipped. What remains is the application work that reads these tables.
 3. **The join-token TTL, in minutes.** The entire mitigation for participant re-entry
    (`docs/meetings/001-threat-model.md` T5). Needs a number, informed by reconnect behaviour on a
    flaky mobile network.
-4. **Guest attendance.** `MeetingAttendanceLog` is `User`-keyed (`prisma/schema.prisma:1475`,
-   `:1485`). Guests are either excluded from attendance or the model changes; both affect reporting
-   and team statistics.
+4. **Guest attendance. — ANSWERED by MEET-01 (PR #23), pending merge.** The model changed rather than
+   excluding guests. `MeetingParticipant` holds series-level invitee metadata with exactly one contact
+   reference by CHECK — internal user, client contact, or a bare email for an outsider — and no
+   credential column. `MeetingOccurrenceParticipant` is the occurrence-scoped grant and the only place
+   a guest credential lives. `MeetingParticipantSession` is the attendance evidence, with a nullable
+   `userId`, the provider participant SID, and a `source` that keeps webhook-verified rows
+   distinguishable from backfilled `LEGACY_CLIENT` ones. `MeetingAttendanceLog` is left in place. The
+   consequence this question flagged is now a migration task, not a decision: reporting
+   (`src/server/routers/meetings.ts:517-551`) and team statistics
+   (`src/server/routers/team-stats.ts:84`, `:309`) still read the `User`-keyed log and must be moved.
 5. **The benchmark itself.** Decision 3 requires UAE North versus West Europe before the production
    region is chosen. Who runs it, against which client population, and what result would actually
    change the decision.

@@ -281,6 +281,14 @@ whole call (`src/server/trpc.ts:160-169`). **Enforcement is procedure-builder-sc
 bare `t.procedure` (`:77`) and composes nothing. A `meetings.*` procedure built on `publicProcedure`
 would not be gated — so this constraint does not read "not a `meetings.*` procedure".
 
+**That is not a licence to serve historical records from `publicProcedure`.** Attendance history is
+the evidence this threat is about; `publicProcedure` has no `requireActiveUser`, no audit middleware
+and no capability check, so reaching for it would remove authentication from the very records the
+decision protects. Keeping tenant history readable after a disable needs an authenticated, audited,
+tenant-scoped builder that omits only `requireLicensedModule`. No such builder exists yet; ADR-005
+decision 7 records the requirement, and this model treats a `publicProcedure`-backed history read as
+a defect.
+
 What it does force is stronger: **ingestion is not a tRPC procedure at all.** The anonymous tRPC
 transport admits an exact allowlist of five recovery procedures
 (`src/lib/auth/anonymous-access.ts:27-44`, enforced at `:82-94`) and derives the tenant from a
@@ -418,11 +426,16 @@ changes. Recorded as an open question below.
 
 ## Open Questions
 
-1. **How are guests recorded in attendance?** `MeetingAttendanceLog` is `User`-keyed
-   (`prisma/schema.prisma:1475`). Options: guests are excluded from attendance entirely; a nullable
-   guest-grant reference is added; or a separate guest-attendance record exists. This changes the
+1. **How are guests recorded in attendance? — ANSWERED by MEET-01 (PR #23), pending merge.** In a
+   separate evidence table, not in the `User`-keyed log. `MeetingParticipantSession` records one
+   attendance interval with a nullable `userId`, the provider participant SID, the webhook event ids
+   that asserted the join and the leave, and a `source` that separates webhook-verified rows from
+   backfilled `LEGACY_CLIENT` ones. The person it belongs to is a `MeetingOccurrenceParticipant`
+   grant, which may point at a `MeetingParticipant` carrying a user, a client contact, or a bare
+   email. Guests are therefore in attendance, and identified without being given accounts. The
    reporting query (`src/server/routers/meetings.ts:517-551`) and team statistics
-   (`src/server/routers/team-stats.ts:309`). Needs a product answer.
+   (`src/server/routers/team-stats.ts:309`) still read `MeetingAttendanceLog` and must be moved — that
+   is now migration work, not an open product question.
 2. **What is the join-token TTL, in minutes?** T5's entire mitigation is this number. It trades
    re-entry exposure against refresh traffic and reconnect friction on a flaky mobile network. Needs
    a decision informed by measurement, not a guess.

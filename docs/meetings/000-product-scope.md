@@ -172,10 +172,12 @@ stated.
    feature-flagged cutover per organization; a hard cutover at a release boundary; or running both
    for one release. This is a delivery-plan decision and needs a human answer before MEET-01.
 2. **Does an occurrence record get introduced by the meetings work, or by a separate scheduling
-   change?** ADR-005 decision 4 makes an occurrence record a hard prerequisite for guests, and there
-   is none today. The recurrence model is also thin — four fixed intervals, no end date, no
-   exceptions, no per-occurrence overrides (`prisma/schema.prisma:1435`) — so materializing
-   occurrences is a scheduling redesign, not a table addition. Needs sizing.
+   change? — ANSWERED by MEET-01 (PR #23), pending merge.** By the meetings work. `MeetingOccurrence`
+   is materialised per instance (`prisma/migrations/20260803120000_meeting_occurrences/`), keyed
+   within its series by an immutable `seriesSlotStart` RRULE instant, with per-occurrence exceptions
+   on the row and the series carrying `recurrenceRule` plus a validated IANA `timezone`. The
+   scheduling redesign was done there, in one additive migration. Documents that were blocked on this
+   question — MEET-003 open question 4, MEET-004 open question 6 — are unblocked with it.
 3. **Which browsers are "supported"?** D2 names iOS Safari and Android Chrome. The exact minimum
    versions, and what a user on an unsupported browser is shown, are unanswered.
 4. **Is guest joining permitted at all for a given organization, or is it a per-tenant policy?** The
