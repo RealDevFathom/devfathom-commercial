@@ -11,7 +11,9 @@ param tenantHost string
 param platformHost string
 
 @description('''
-Registrable domain that tenant and platform hosts hang off. Drives PLATFORM_BASE_DOMAIN.
+Host-routing base domain (the routing suffix) that tenant and platform hosts hang off. Drives
+PLATFORM_BASE_DOMAIN. Not necessarily a registrable domain — staging routes off
+staging.devfathom.com, which is a subdomain of the registrable devfathom.com.
 Deliberately NOT the same parameter as tenantHost, and must not be re-merged with it: the
 canonical app URL can carry a label of its own (www.devfathom.com) while host classification
 in src/lib/tenancy/host-routing.ts and src/proxy.ts only recognises admin.<baseDomain> and

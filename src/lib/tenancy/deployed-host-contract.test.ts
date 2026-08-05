@@ -85,15 +85,27 @@ describe.each(ENVIRONMENTS)('$name deployed host contract', ({ hosts }) => {
     });
   });
 
-  it('serves the canonical app host as a shared host no organization can claim', async () => {
+  /**
+   * Deliberately accepts a classification this repository does not produce yet. `shared` is not
+   * a HostKind today; Standard Shared-Host Login is expected to add it for exactly this host, and
+   * pinning the assertion to 'tenant' would turn that desired change into a red test. What has to
+   * hold either way is the routing invariant, not the label: the canonical app host is never the
+   * control plane, never unroutable, and never a slug an organization could claim.
+   */
+  it('keeps the canonical app host off the control plane and out of claimable slugs', async () => {
     applyDeployedEnvironment(hosts);
     const { classifyHost } = await import('./host-routing');
 
     const classification = classifyHost(hosts.tenantHost);
-    expect(classification.kind).toBe('tenant');
-    // The app host may sit directly on the base domain (staging) or carry a label of its
-    // own (production's www). Either way it must never resolve to a claimable slug.
+    expect(['tenant', 'shared']).toContain(classification.kind);
+
     const slug = 'slug' in classification ? classification.slug : undefined;
-    if (slug !== undefined) expect(isReservedHostLabel(slug)).toBe(true);
+    if (slug === undefined) {
+      // No slug is only legitimate when the app is served on the base domain itself, as staging
+      // is. On production the app host carries a label (www) and that label must be reserved.
+      expect(hosts.tenantHost).toBe(hosts.baseDomain);
+    } else {
+      expect(isReservedHostLabel(slug)).toBe(true);
+    }
   });
 });
