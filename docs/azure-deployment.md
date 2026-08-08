@@ -33,7 +33,6 @@ The staging script creates only the two `rg-devfathom-*` groups above, builds on
 
 Production-readiness PR #33 is merged to `main` at `ffec57b4`. The merged hardening includes safe create-only bootstrap, capture-mode email, production minimum replicas/probes, and promotion concurrency/health safeguards. The post-merge staging workflow is currently **IN PROGRESS / AWAITING FINAL RESULT**; no production deployment or DNS cutover has occurred.
 
-<<<<<<< HEAD
 After final staging approval and explicit cutover authorization, production uses the same Bicep with `infra/production.bicepparam`, `seedDatabase = false`, `bootstrapDatabase = false`, and an approved staging image digest. The first approved deployment instead uses `infra/production.bootstrap.bicepparam`, which requires initial tenant and platform administrator passwords and configures the manual job to run migrations plus the create-only production bootstrap. This is documented procedure only and has not been run.
 
 ```bash
@@ -56,22 +55,15 @@ az containerapp job secret remove -g rg-devfathom-production-uaenorth -n devfath
 ```
 
 Unset the initialization password environment variables after verification. Routine production deployments and promotions do not read or require them.
-=======
-Minimal readiness fixes are **IN PROGRESS** in a separate worktree and under test. They are not merged or deployed. Keep that status until the fixes are merged, reviewed against the audited main baseline, exercised in staging, and deployed. An approved image digest alone is not a production gate.
->>>>>>> 589813f (docs: reconcile staging release evidence)
 
 ## CI/CD and OIDC
 
 `.github/workflows/deploy-staging.yml` authenticates through GitHub Actions OIDC, builds and pushes one immutable `${GITHUB_SHA}` image, updates and waits for the migration/seed job, deploys the same digest, then checks `/api/health`. The Entra service principal has Contributor only on the staging resource group and `AcrPush` only on the shared registry. GitHub stores subscription, tenant, client, resource-group, app, job, and registry IDs as variables; there is no client secret. `infra/configure-github-oidc.sh` reads GitHub's repository-specific OIDC subject prefix, including immutable owner/repository IDs when enabled, before creating or updating the federated credentials.
 
-<<<<<<< HEAD
 `.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a validated `sha256:` digest already present in the same ACR, refuses an initialization-configured migration job, runs production migrations without seed data, then updates production to that exact digest. It confirms the ready active revision uses the requested digest before checking `/api/health`. Production identity and GitHub environment configuration exist, but no production resources or DNS cutover exist.
-The GitHub production environment has the seven required Azure variables and a custom deployment branch policy allowing only `main`.
-=======
 The latest reported staging workflow passed immutable image build, migration/backfill plus seed, deployment, and smoke stages in 8m01s. Staging is running the resulting approved immutable image on a healthy revision; image digests, revision names, and workflow-run identifiers are intentionally omitted here.
 
-`.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a `sha256:` digest already present in the same ACR, runs production migrations without seed data, then updates production to that exact digest. The GitHub production environment now has the seven required Azure variables and a custom deployment branch policy allowing only `main`.
->>>>>>> 589813f (docs: reconcile staging release evidence)
+The GitHub production environment has the seven required Azure variables and a custom deployment branch policy allowing only `main`.
 
 Authentication is through a separate production-only Entra/GitHub OIDC service principal with no client secret. It has Contributor only on the production resource group and Reader plus `AcrPull` on the shared ACR; it has no staging role. No identifier or variable value belongs in this documentation. The promotion workflow still lacks post-deploy health smoke and the production resources do not exist, so it remains **BLOCKED** as a safe production promotion.
 
