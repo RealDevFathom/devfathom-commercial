@@ -3,6 +3,10 @@
 Status: **Proposed**, 2026-08-03. Documentation only. No code, schema, or infrastructure in this
 phase depends on this document.
 
+Operational status update, 2026-08-08: the latest reported audited `main` was `89f75459` (#24).
+PR #23 remains the final Wave-1 schema PR and is pending rebase and staging verification. The
+planned `meet.devfathom.com` and `turn.devfathom.com` media endpoints are not live.
+
 ## How to read the markings
 
 Every substantive statement in this document set carries one of three markings, and they are never
@@ -102,7 +106,7 @@ starts on it.
 authorization. `MEET-004` specifies the resolution algorithm and why the identifier cannot live on
 the series. The research report's `app.devfathom.com/m/{id}` shape is **not** adopted.
 
-**CODE-VERIFIED** that these hosts are the real ones: production `tenantHost` is
+**CODE-VERIFIED** that these are the configured target hosts: production `tenantHost` is
 `www.devfathom.com` (`infra/production.bicepparam:7`), staging is `staging.devfathom.com`
 (`infra/staging.bicepparam:7`).
 

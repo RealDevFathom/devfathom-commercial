@@ -39,7 +39,7 @@ Fragmented work across task trackers, documents, chat, meetings, CRM, HR, and fi
 | Chat and realtime | **PARTIAL** | Ably when configured; fallback exists; in-house realtime is planned |
 | Ask Fathom | **PARTIAL** | Provider-adapter based, credit usage; Azure is current environment |
 | Email | **PARTIAL** | Capture-safe delivery exists; connected inbox roadmap follows Meetings |
-| Meetings | **PLANNED / PARTIAL** | Existing scheduling evidence plus self-hosted LiveKit/TURN rollout; Wave 1 unshipped until verified |
+| Meetings | **PLANNED / PARTIAL** | Existing scheduling evidence; final Wave-1 schema PR #23 remains pending rebase/staging verification; media endpoints are not live |
 | SSO / SCIM / custom domains | **PARTIAL** | Code and contracts exist; customer IdP/DNS rollout is a gate |
 | Native mobile | **FUTURE** | Not in current scope |
 
@@ -74,10 +74,10 @@ The evidence-backed offer is a controlled implementation: manual activation, org
 
 **Does DevFathom provide email mailboxes?** No. The roadmap supports connected Gmail, Outlook, and generic IMAP/SMTP inboxes.
 
-**Is Meetings live?** Scheduling code exists and a self-hosted LiveKit/TURN architecture is defined. Wave 1 must be treated as **PLANNED / PARTIAL** until the landing PR and release evidence confirm shipment.
+**Is Meetings live?** Scheduling code exists and a self-hosted LiveKit/TURN architecture is defined. The latest reported audited main was `89f75459` (#24), while final Wave-1 schema PR #23 still requires rebase and staging verification. `meet.devfathom.com` and `turn.devfathom.com` are future endpoints, not live services.
 
 **Is there a mobile app?** No native app is in current scope. The current product is web-only, with responsive browser behavior where implemented.
 
 **Can you promise savings, compliance, or an SLA?** Not from repository evidence. Use an owner-approved contract or validated study.
 
-**Where does it run?** Azure. Staging is live; production cutover is being prepared and requires an explicit gate.
+**Where does it run?** Azure. Staging is live. Production currently has only an empty, non-billable resource-group shell; the app, database, security services, DNS, certificates, and access controls have not been provisioned. The current template is blocked while readiness fixes are in progress.

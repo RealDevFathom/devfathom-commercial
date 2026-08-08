@@ -19,10 +19,10 @@ Browser
        -> Azure Blob (when configured; private filesystem locally)
        -> Azure OpenAI / other provider adapters (Ask Fathom)
        -> Ably when configured (realtime fallback exists)
-       -> self-hosted LiveKit/TURN (Meetings rollout; verify current PR state)
+       -> self-hosted LiveKit/TURN (future media topology; not live)
 ```
 
-Azure staging is live. Production IaC and digest promotion are defined, but production resources and cutover remain gated. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
+Azure staging is live. Production currently consists only of an empty tagged resource-group shell with no billable resources. The current production template and promotion path are blocked; readiness fixes are in progress. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
 
 ## Tenancy and security boundary
 
@@ -50,7 +50,7 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 | Ask Fathom provider adapter and credits | **PARTIAL** | `src/lib/ai/provider.ts`, assistant routes/tools, Azure staging evidence; provider and quota operations remain environment-dependent |
 | Email | **PARTIAL** | Templates and delivery abstraction exist; staging is capture-only and production sender verification is pending |
 | Realtime chat | **PARTIAL** | Ably integration with graceful fallback; in-house realtime is planned |
-| Meetings self-hosted LiveKit/TURN | **PLANNED / PARTIAL** | Meeting scope and ADR define the target; do not call Wave 1 shipped until repository evidence says so |
+| Meetings self-hosted LiveKit/TURN | **PLANNED / PARTIAL** | Audited main was `89f75459` (#24); final Wave-1 schema PR #23 still needs rebase and staging verification; media endpoints are not live |
 | Native mobile applications | **FUTURE** | Current scope is web; responsive browser use is distinct from native apps |
 
 ## Non-goals and operating constraints
@@ -59,4 +59,6 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 - No `@devfathom.com` mailbox is provided; connected Gmail, Outlook, and generic IMAP/SMTP are the planned email direction.
 - No pricing, SLA, compliance certification, customer, savings, or benchmark claim is publishable without an owner-approved evidence source.
 - Production and staging databases must remain separate.
+- Planned production hosts are `www.devfathom.com` and `admin.devfathom.com` on one Container App; the apex remains the marketing site.
+- `meet.devfathom.com` and `turn.devfathom.com` are future endpoints, not live services.
 - Azure is the platform of record. Legacy Vercel SDK/blob code is a partial migration dependency, not deployment guidance.

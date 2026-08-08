@@ -54,7 +54,7 @@ Command families:
 - operator create/update/MFA reset;
 - platform setting upsert.
 
-Sensitive transitions require a reason. System roles cannot be edited or deleted. Production provisioning is automated; non-production deployments are manually registered to avoid pretending a production provider action occurred.
+Sensitive transitions require a reason. System roles cannot be edited or deleted. Production provisioning is **BLOCKED** pending readiness work; non-production deployments are manually registered to avoid pretending a production provider action occurred.
 
 ## Organization activation
 
