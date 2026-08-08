@@ -1,0 +1,33 @@
+name: Image build
+
+# The staging image build is the only thing that compiles this app for a
+# container, and it only runs after a merge — so a build that dies on x86_64 is
+# found in the deploy, not in the pull request. This runs the same build on a
+# native x64 runner, before merge. It needs no secret: the Dockerfile supplies
+# its own AUTH_SECRET=container-build-only, and nothing here pushes or deploys.
+
+on: pull_request
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the image on native amd64
+    runs-on: ubuntu-latest
+    steps:
+      # The point of this job is the architecture. If `ubuntu-latest` ever moves
+      # to arm64, a passing build would stop meaning what it says here.
+      - name: Require a native x64 runner
+        run: |
+          if [ "$RUNNER_ARCH" != "X64" ]; then
+            echo "::error::this check only proves anything on x64, but the runner reported $RUNNER_ARCH"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: docker build --progress=plain .
