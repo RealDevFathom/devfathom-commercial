@@ -39,7 +39,7 @@ Fragmented work across task trackers, documents, chat, meetings, CRM, HR, and fi
 | Chat and realtime | **PARTIAL** | Ably when configured; fallback exists; in-house realtime is planned |
 | Ask Fathom | **PARTIAL** | Provider-adapter based, credit usage; Azure is current environment |
 | Email | **PARTIAL** | Capture-safe delivery exists; connected inbox roadmap follows Meetings |
-| Meetings | **PARTIAL / BLOCKED** | Wave-1 schema/reconciliation PR #23 merged and staging-verified; browser QA has an unresolved admin-discovery authorization blocker; self-hosted media endpoints and public production rollout are not live |
+| Meetings | **PARTIAL / BLOCKED** | Wave-1 schema/reconciliation PR #23 merged and staging-verified; Cowork login/dashboard/responsive checks passed but admin discovery has an unresolved attendee-filter/list-policy defect; self-hosted media endpoints and public production rollout are not live |
 | SSO / SCIM / custom domains | **PARTIAL** | Code and contracts exist; customer IdP/DNS rollout is a gate |
 | Native mobile | **FUTURE** | Not in current scope |
 

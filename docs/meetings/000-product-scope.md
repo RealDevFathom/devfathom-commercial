@@ -8,6 +8,22 @@ passed build, migration/seed, deploy, and smoke in 7m40s. Controlled browser QA 
 admin meeting discovery is attendee-filtered even though admin detail/manage authorization is org-wide.
 The planned `meet.devfathom.com` and `turn.devfathom.com` media endpoints are not live.
 
+## Wave-1 browser QA correction — unresolved authorization/list-policy defect
+
+Cowork browser QA on 2026-08-08 confirmed authenticated staging login/dashboard and responsive
+behavior **PASS**, but Meetings discovery **BLOCKED**. On `origin/main` `ffec57b4`, `getAll` and
+both `getUpcoming` queries in `src/server/routers/meetings.ts` always filter for an attendee matching
+the current user, while `canAccessMeeting` and `canManageMeeting` in `src/lib/authz.ts` grant an
+`ADMIN` org-wide access decision. The staging admin is not one of the seeded attendees, so five
+migrated meetings are undiscoverable even though a known meeting ID is accessible.
+
+Proposed repair: within tenant RLS, make `ADMIN` list/upcoming queries org-wide while ordinary users
+remain attendee/creator scoped, then add cross-tenant authorization tests. The five seeded meetings
+are past and non-recurring; after repair, **Past** should show five while **Upcoming** may correctly
+remain zero. The RSC-prefetch 503 burst is linked to existing issue #32. Bad-ID retry-on-`NOT_FOUND`
+is a nonblocking follow-up. Do not call Wave-1 browser QA complete until the list-policy repair and
+browser retest pass.
+
 ## How to read the markings
 
 Every substantive statement in this document set carries one of three markings, and they are never

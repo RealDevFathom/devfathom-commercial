@@ -18,7 +18,7 @@ Last run: 2026-08-08.
 | Staging release evidence | PASS | Latest reported run passed immutable build, migration/seed, deploy, and smoke in 7m40s; opaque digest/revision/run values are omitted |
 | Production dark deployment | PASS WITH CAVEAT | Approved `ffec57b4` build, one-time bootstrap, migrations, min replica, and dark Azure-FQDN health check passed; public DNS/custom-domain cutover has not occurred |
 | Production public cutover | BLOCKED | `admin.devfathom.com` is DNS-unconfigured and `www.devfathom.com` remains the existing marketing site; no public custom domain is attached |
-| Meetings Wave-1 browser QA | BLOCKED | Admin meeting discovery is attendee-filtered while admin detail/manage authorization is org-wide; do not call browser QA closed |
+| Meetings Wave-1 browser QA | BLOCKED | Cowork login/dashboard/responsive checks passed, but `getAll` and both `getUpcoming` queries attendee-filter the admin; `canAccessMeeting`/`canManageMeeting` grant ADMIN org-wide access; five migrated meetings are undiscoverable by the staging admin |
 | Status vocabulary | PASS | New pack uses IMPLEMENTED, PARTIAL, PLANNED, BLOCKED, and FUTURE |
 | Pricing/claims safety | PASS | No final price, limit, customer, savings, compliance, SLA, or benchmark claim added |
 
@@ -38,4 +38,5 @@ The Vercel result is not automatically a defect when it names a disabled legacy 
 - Keep the Meetings schema/reconciliation row **IMPLEMENTED**, while tracking media rollout separately as **PLANNED / PARTIAL**.
 - Keep production **DARK / NOT PUBLICLY CUT OVER** until public DNS/custom-domain attachment and explicit release approval are verified. A dark-host health check is not public availability evidence.
 - Keep Meetings Wave-1 browser QA **BLOCKED** until admin discovery authorization matches the org-wide detail/manage policy and the relevant browser checks pass.
+- Proposed repair: make ADMIN list/upcoming queries org-wide within tenant RLS, retain attendee/creator scope for ordinary users, and add cross-tenant tests. After repair, five past seeded meetings should appear under Past while Upcoming may remain zero. Track the RSC-prefetch 503 burst in issue #32; bad-ID retry-on-`NOT_FOUND` is nonblocking.
 - Replace `[VERIFY: ...]` placeholders in pitch material only with approved evidence.

@@ -51,7 +51,7 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 | Email | **PARTIAL** | Templates and delivery abstraction exist; staging is capture-only and production sender verification is pending |
 | Realtime chat | **PARTIAL** | Ably integration with graceful fallback; in-house realtime is planned |
 | Meetings schema/reconciliation | **IMPLEMENTED** | PR #23 merged to `main`; staging migration/backfill, seed, deploy, and smoke passed |
-| Meetings Wave-1 browser QA | **BLOCKED** | Admin discovery is attendee-filtered while admin detail/manage authorization is org-wide; browser QA is not closed |
+| Meetings Wave-1 browser QA | **BLOCKED** | Cowork login/dashboard/responsive checks passed, but `getAll` and both `getUpcoming` queries attendee-filter the admin despite org-wide ADMIN detail/manage authorization; five migrated meetings are undiscoverable |
 | Meetings self-hosted LiveKit/TURN | **PLANNED / PARTIAL** | Schema release is verified, but media endpoints are not live and production has not been cut over |
 | Native mobile applications | **FUTURE** | Current scope is web; responsive browser use is distinct from native apps |
 
