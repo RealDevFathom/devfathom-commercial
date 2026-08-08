@@ -22,7 +22,7 @@ Browser
        -> self-hosted LiveKit/TURN (future media topology; not live)
 ```
 
-Azure staging is live and the latest reported workflow passed immutable build, migration/backfill plus seed, deployment, and smoke. Production currently has an empty tagged resource-group shell plus a separate secretless deployment identity, least-privilege RBAC, and GitHub environment configuration. No billable production resource, secret, deployment, DNS, or certificate exists. Production-readiness PR #33 is merged to `main`; post-merge staging validation is **IN PROGRESS / AWAITING FINAL RESULT**, and production remains undeployed. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
+Azure staging is live and the latest reported run passed immutable build, migration/seed, deployment, and smoke in 7m40s. Isolated production resources are provisioned with the approved `ffec57b4` build; bootstrap, migrations, minimum replica, and dark-host health checks passed. Production is not publicly cut over: `www.devfathom.com` remains the existing marketing site, `admin.devfathom.com` is DNS-unconfigured, and no public custom domain is attached. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
 
 ## Tenancy and security boundary
 
@@ -51,6 +51,7 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 | Email | **PARTIAL** | Templates and delivery abstraction exist; staging is capture-only and production sender verification is pending |
 | Realtime chat | **PARTIAL** | Ably integration with graceful fallback; in-house realtime is planned |
 | Meetings schema/reconciliation | **IMPLEMENTED** | PR #23 merged to `main`; staging migration/backfill, seed, deploy, and smoke passed |
+| Meetings Wave-1 browser QA | **BLOCKED** | Admin discovery is attendee-filtered while admin detail/manage authorization is org-wide; browser QA is not closed |
 | Meetings self-hosted LiveKit/TURN | **PLANNED / PARTIAL** | Schema release is verified, but media endpoints are not live and production has not been cut over |
 | Native mobile applications | **FUTURE** | Current scope is web; responsive browser use is distinct from native apps |
 

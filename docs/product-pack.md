@@ -39,7 +39,7 @@ Fragmented work across task trackers, documents, chat, meetings, CRM, HR, and fi
 | Chat and realtime | **PARTIAL** | Ably when configured; fallback exists; in-house realtime is planned |
 | Ask Fathom | **PARTIAL** | Provider-adapter based, credit usage; Azure is current environment |
 | Email | **PARTIAL** | Capture-safe delivery exists; connected inbox roadmap follows Meetings |
-| Meetings | **PARTIAL** | Wave-1 schema/reconciliation PR #23 merged and staging-verified; self-hosted media endpoints and production rollout are not live |
+| Meetings | **PARTIAL / BLOCKED** | Wave-1 schema/reconciliation PR #23 merged and staging-verified; browser QA has an unresolved admin-discovery authorization blocker; self-hosted media endpoints and public production rollout are not live |
 | SSO / SCIM / custom domains | **PARTIAL** | Code and contracts exist; customer IdP/DNS rollout is a gate |
 | Native mobile | **FUTURE** | Not in current scope |
 
@@ -80,4 +80,4 @@ The evidence-backed offer is a controlled implementation: manual activation, org
 
 **Can you promise savings, compliance, or an SLA?** Not from repository evidence. Use an owner-approved contract or validated study.
 
-**Where does it run?** Azure. Staging is live. Production currently has an empty, non-billable resource-group shell and deployment identity/configuration only; no app, database, secret, deployment, DNS, or certificate exists. `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is absent. PR #33 hardening is merged to `main`, while post-merge staging validation is **IN PROGRESS / AWAITING FINAL RESULT**; production remains undeployed.
+**Where does it run?** Azure. Staging is live, and isolated production resources are provisioned behind a dark Azure FQDN. The approved `ffec57b4` build, bootstrap, migrations, minimum replica, and health check passed. Public custom domains are not attached: `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is DNS-unconfigured. PR #33 hardening is merged to `main`; production is **DARK / NOT PUBLICLY CUT OVER**.

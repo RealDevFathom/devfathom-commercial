@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-08-08. This file preserves local control-plane verification; [`docs/status-ledger.md`](../status-ledger.md) is the current cross-product release ledger.
 
-Production evidence update: production-readiness PR #33 is merged to `main` at `ffec57b4`. Post-merge staging validation is **IN PROGRESS / AWAITING FINAL RESULT**. An empty tagged production resource-group shell exists, but it has no billable resources. A separate secretless production-only OIDC identity, least-privilege production-RG/shared-ACR roles, seven required GitHub Azure variables, and a `main`-only deployment branch policy are configured. No production app, database, Key Vault, storage, AI, secret, deployment, DNS, or certificate exists; the production template and promotion path remain **BLOCKED** until staging and deployment gates clear.
+Production evidence update: production-readiness PR #33 is merged to `main` at `ffec57b4`. The latest staging run passed build, migration/seed, deploy, and smoke in 7m40s. Isolated production resources are provisioned; the approved build, one-time bootstrap, regular migration-only redeployment, second credential-free migration, minimum replica, and dark Azure-FQDN health check passed. Public custom domains are not attached: `admin.devfathom.com` is DNS-unconfigured and `www.devfathom.com` remains the existing marketing site. Production is **DARK / NOT PUBLICLY CUT OVER**.
 
 | Phase                             | Implementation | Verification                                                                       | Production dependency                                      |
 | --------------------------------- | -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -64,14 +64,16 @@ The earlier direct/runtime findings in Next.js, Auth.js, Sharp, and PostCSS were
 
 ## External readiness conditions
 
-Production release is conditional on:
+Production public release is conditional on:
 
 1. Provisioning PostgreSQL and testing backup/restore.
 2. Setting every required secret in [Operations](operations.md).
 3. Connecting wildcard/base domains and adding verified customer DNS.
-4. Completing safe first-tenant/platform-admin bootstrap and post-deploy health smoke.
+4. Maintaining the completed safe first-tenant/platform-admin bootstrap and post-deploy health smoke evidence.
 5. Provisioning private Blob storage before enabling export jobs.
 6. Running OIDC/SAML/SCIM acceptance tests with each customer IdP/directory.
 7. Choosing and configuring the production email provider before enabling send mode.
 8. Revalidating the configured production-only OIDC identity, least-privilege RBAC, seven GitHub Azure variables, and `main`-only deployment policy.
 9. Approving retention, purge, support-access, and incident-response policies.
+
+Meetings Wave-1 browser QA remains **BLOCKED**: admin meeting discovery is attendee-filtered even though admin detail/manage authorization is org-wide. Do not call browser QA closed until discovery authorization is reconciled and retested.

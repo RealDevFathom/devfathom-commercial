@@ -3,10 +3,10 @@
 Status: **Proposed**, 2026-08-03. Documentation only. No code, schema, or infrastructure in this
 phase depends on this document.
 
-Operational status update: the latest reported audited `main` was `89f75459` (#24). Meetings PR
-#23 merged to `main` at `ac20ca0`, and the staging release workflow passed build, migration/backfill,
-seed, deploy, and smoke. The planned `meet.devfathom.com` and `turn.devfathom.com` media endpoints
-are not live.
+Operational status update: Meetings PR #23 merged to `main` at `ac20ca0`, and the latest staging run
+passed build, migration/seed, deploy, and smoke in 7m40s. Controlled browser QA remains **BLOCKED**:
+admin meeting discovery is attendee-filtered even though admin detail/manage authorization is org-wide.
+The planned `meet.devfathom.com` and `turn.devfathom.com` media endpoints are not live.
 
 ## How to read the markings
 

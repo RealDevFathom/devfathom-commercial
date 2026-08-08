@@ -6,7 +6,7 @@ DevFathom uses native Azure resources in UAE North:
 
 - `rg-devfathom-shared-uaenorth`: one Basic ACR shared by staging and a later production deployment.
 - `rg-devfathom-staging-uaenorth`: Container Apps consumption environment, one scale-to-zero web app (0.5 CPU/1 GiB, max one replica), one manual migration/seed job, PostgreSQL Flexible Server `Standard_B1ms` with 32 GiB and seven-day backups, Key Vault, user-assigned identity, Blob Storage, VNet/private PostgreSQL DNS, Azure OpenAI, and a 30-day Log Analytics workspace capped at 0.1 GiB/day.
-- `rg-devfathom-production-uaenorth`: an empty tagged resource-group shell. It contains no billable resources. Production remains isolated from the staging Container Apps environment and database.
+- `rg-devfathom-production-uaenorth`: isolated production Container Apps, migration, database, and supporting resources. Production remains isolated from the staging Container Apps environment and database; public custom domains are not attached.
 
 ACR Basic and the running staging PostgreSQL server are the main current fixed costs. At the 2026-08-02 UAE North retail rates, PostgreSQL compute is about $14.60/month (`$0.02/hour`), its 32 GiB storage is about $4.42/month (`$0.138/GiB-month`), and ACR Basic is about $5/month. The current fixed baseline is therefore about $24/month before logs and request usage.
 
@@ -16,7 +16,7 @@ Live resource inventory (names intentionally omitted from this documentation):
 
 - Shared: one Basic ACR reused by staging and the planned production environment.
 - Staging: one Container App, migration job, isolated Container Apps environment, PostgreSQL server, Key Vault, managed identity, storage account, Azure OpenAI resource, Log Analytics workspace, and VNet.
-- Production: the empty tagged resource-group shell and production-only deployment identity/RBAC configuration exist. There is no production app, database, Key Vault, storage account, AI resource, DNS record, certificate, secret, deployment, or billable resource.
+- Production: isolated resources are provisioned and the approved `ffec57b4` build is deployed. One-time migration/bootstrap and a second credential-free migration succeeded. The production app is dark behind its Azure FQDN; public custom domains are not attached, and `www.devfathom.com` remains the existing marketing site.
 
 ## IaC and first deployment
 
@@ -29,11 +29,11 @@ Live resource inventory (names intentionally omitted from this documentation):
 
 The staging script creates only the two `rg-devfathom-*` groups above, builds one `linux/amd64` image, pushes it to ACR, provisions staging, sets the generated Container Apps hostname as a recognized default tenant host, and starts the migration/seed job. Re-running the full script generates new bootstrap credentials; use the GitHub workflow for normal releases.
 
-## Production deployment status — NOT LIVE
+## Production deployment status — DARK / NOT PUBLICLY CUT OVER
 
-Production-readiness PR #33 is merged to `main` at `ffec57b4`. The merged hardening includes safe create-only bootstrap, capture-mode email, production minimum replicas/probes, and promotion concurrency/health safeguards. The post-merge staging workflow is currently **IN PROGRESS / AWAITING FINAL RESULT**; no production deployment or DNS cutover has occurred.
+Production-readiness PR #33 is merged to `main` at `ffec57b4`. The merged hardening includes safe create-only bootstrap, capture-mode email, production minimum replicas/probes, and promotion concurrency/health safeguards. The latest staging run passed build, migration/seed, deploy, and smoke in 7m40s; opaque run and image values are intentionally omitted.
 
-After final staging approval and explicit cutover authorization, production uses the same Bicep with `infra/production.bicepparam`, `seedDatabase = false`, `bootstrapDatabase = false`, and an approved staging image digest. The first approved deployment instead uses `infra/production.bootstrap.bicepparam`, which requires initial tenant and platform administrator passwords and configures the manual job to run migrations plus the create-only production bootstrap. This is documented procedure only and has not been run.
+The approved `ffec57b4` build is provisioned in isolated production. The one-time bootstrap succeeded, regular production parameters were redeployed, and a second credential-free migration succeeded. The migration job is now migration-only, retains only the operational `database-url` secret, and has no admin/seed initialization environment or secret. Initial credentials remain only in the local macOS Keychain and are not documented.
 
 ```bash
 az deployment group create -g rg-devfathom-production-uaenorth \
@@ -60,18 +60,18 @@ Unset the initialization password environment variables after verification. Rout
 
 `.github/workflows/deploy-staging.yml` authenticates through GitHub Actions OIDC, builds and pushes one immutable `${GITHUB_SHA}` image, updates and waits for the migration/seed job, deploys the same digest, then checks `/api/health`. The Entra service principal has Contributor only on the staging resource group and `AcrPush` only on the shared registry. GitHub stores subscription, tenant, client, resource-group, app, job, and registry IDs as variables; there is no client secret. `infra/configure-github-oidc.sh` reads GitHub's repository-specific OIDC subject prefix, including immutable owner/repository IDs when enabled, before creating or updating the federated credentials.
 
-`.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a validated `sha256:` digest already present in the same ACR, refuses an initialization-configured migration job, runs production migrations without seed data, then updates production to that exact digest. It confirms the ready active revision uses the requested digest before checking `/api/health`. Production identity and GitHub environment configuration exist, but no production resources or DNS cutover exist.
-The latest reported staging workflow passed immutable image build, migration/backfill plus seed, deployment, and smoke stages in 8m01s. Staging is running the resulting approved immutable image on a healthy revision; image digests, revision names, and workflow-run identifiers are intentionally omitted here.
+`.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a validated `sha256:` digest already present in the same ACR, refuses an initialization-configured migration job, runs production migrations without seed data, then updates production to that exact digest. It confirms the ready active revision uses the requested digest before checking `/api/health`. The approved production app has minimum one replica and its dark Azure FQDN `/api/health` returns OK; public custom domains remain unattached.
+The staging workflow passed immutable image build, migration/seed, deployment, and smoke stages in 7m40s. Staging and production use the approved `ffec57b4` build; image digests, revision names, and workflow-run identifiers are intentionally omitted here.
 
 The GitHub production environment has the seven required Azure variables and a custom deployment branch policy allowing only `main`.
 
-Authentication is through a separate production-only Entra/GitHub OIDC service principal with no client secret. It has Contributor only on the production resource group and Reader plus `AcrPull` on the shared ACR; it has no staging role. No identifier or variable value belongs in this documentation. The promotion workflow still lacks post-deploy health smoke and the production resources do not exist, so it remains **BLOCKED** as a safe production promotion.
+Authentication is through a separate production-only Entra/GitHub OIDC service principal with no client secret. It has Contributor only on the production resource group and Reader plus `AcrPull` on the shared ACR; it has no staging role. No identifier or variable value belongs in this documentation. The production deployment has passed its dark-host health check, but public DNS/custom-domain cutover remains **BLOCKED** pending explicit release approval.
 
 Repository mismatch: `infra/configure-github-oidc.sh` still models staging and production federation on one principal and disables custom deployment branch policies. It does not reproduce the current production identity or `main`-only policy and must be treated as **PARTIAL/BLOCKED** for production until the separate implementation workstream reconciles it.
 
 ## Secrets and email
 
-The staging Key Vault contains the database URL, Auth.js secret, platform encryption key, cron bearer, seed password, tenant administrator password, and platform administrator password. The staging Container App reads versionless Key Vault references with its managed identity. That identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope. No production Key Vault or application secret exists.
+The staging Key Vault contains the database URL, Auth.js secret, platform encryption key, cron bearer, seed password, tenant administrator password, and platform administrator password. The staging Container App reads versionless Key Vault references with its managed identity. That identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope. Production secrets are not copied into documentation; the migration job retains only its operational database URL, and initial credentials remain in the local macOS Keychain.
 
 Staging and production set `EMAIL_DELIVERY_MODE=capture`, have no `BREVO_API_KEY`, and do not require a configured sender. Captures log only the recipient count; recipient addresses, subject, and body are excluded. No message leaves either environment. Production must remain in capture mode until Brevo Key Vault wiring, DNS, and sender verification are complete.
 
@@ -179,6 +179,6 @@ Database migrations are forward-only; restore to a new server for a data/schema 
 - Configuration drift: the repository OIDC helper does not yet reproduce the separate production principal or `main`-only policy. Do not treat that helper as production-ready.
 - DNS/TLS: GoDaddy records are live. `staging.devfathom.com` and `admin.staging.devfathom.com` are bound to the staging Container App with Azure-managed DigiCert certificates and both HTTPS routes return HTTP 200.
 - Source baseline: current `main` is `ffec57b4` after production-readiness PR #33 merged. Meetings PR #23 is merged and its schema/reconciliation work is staging-verified.
-- Production resource shell: the tagged production resource group exists and is empty, with no billable resources.
-- Post-merge staging: the production-readiness validation workflow is **IN PROGRESS / AWAITING FINAL RESULT**.
-- Production services: no app, database, Key Vault, storage, AI, secret, deployment, DNS, certificate, or billable resource exists. `www.devfathom.com` still serves or redirects to the existing GoDaddy marketing site; `admin.devfathom.com` is absent. No production cutover has occurred.
+- Production resources: isolated production resources are provisioned in the tagged resource group; the approved `ffec57b4` build is deployed with minimum one replica, one-time bootstrap and two migrations succeeded, and the dark Azure FQDN `/api/health` check is OK.
+- Production configuration: the regular migration job is migration-only with only the operational database URL secret; initialization environment and secrets are absent. Initial admin credentials remain only in the local macOS Keychain.
+- Production public access: `admin.devfathom.com` remains DNS-unconfigured, `www.devfathom.com` still serves or redirects to the existing GoDaddy marketing site, and no public custom domain is attached. Production is **DARK / NOT PUBLICLY CUT OVER**.
