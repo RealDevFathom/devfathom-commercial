@@ -1,0 +1,62 @@
+# Technical overview
+
+Status: **IMPLEMENTED** for the core web workspace and shared tenant boundary; individual integrations and release surfaces are marked below.
+
+## Product shape
+
+DevFathom Commercial is a web-based operating hub for agencies and companies. The repository contains an authenticated tenant workspace, a separate seller/platform control desk, organization administration, and API surfaces. The product is organization-scoped: customer data is not a global shared workspace even though the default deployment shares infrastructure.
+
+Evidence: [`README.md`](../README.md), [`src/app/(app)/`](../src/app/(app)/), [`src/app/platform/`](../src/app/platform/), [`prisma/schema.prisma`](../prisma/schema.prisma).
+
+## Runtime topology
+
+```text
+Browser
+  -> Azure Container App (Next.js 16 App Router)
+       -> NextAuth / tenant and platform session handling
+       -> tRPC routers + REST routes + SCIM/SSO routes
+       -> Prisma 7 -> PostgreSQL Flexible Server
+       -> Azure Blob (when configured; private filesystem locally)
+       -> Azure OpenAI / other provider adapters (Ask Fathom)
+       -> Ably when configured (realtime fallback exists)
+       -> self-hosted LiveKit/TURN (Meetings rollout; verify current PR state)
+```
+
+Azure staging is live. Production IaC and digest promotion are defined, but production resources and cutover remain gated. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
+
+## Tenancy and security boundary
+
+The database is shared by default, with organization-scoped rows, forced PostgreSQL RLS, and scoped composite references. `withTenantDb` is the application access pattern; platform operations use `withPlatformDb`. Organization activation is manual through the seller control desk. Shared deployment is the default; dedicated environments and custom domains are enterprise work subject to rollout approval.
+
+Evidence: [`admin-platform/architecture-tenancy.md`](admin-platform/architecture-tenancy.md), [`admin-platform/adr/001-tenant-rls.md`](admin-platform/adr/001-tenant-rls.md), [`src/lib/tenancy/scoped-db.ts`](../src/lib/tenancy/scoped-db.ts), [`scripts/verify-tenant-isolation.ts`](../scripts/verify-tenant-isolation.ts).
+
+## API and background work
+
+The application exposes tRPC under `/api/trpc/[trpc]`, a versioned REST surface under `/api/v1`, health at `/api/health`, platform session/control/job routes, SCIM v2, SSO callbacks, file/upload routes, assistant routes, and an Ably token route. The generated API documentation page and REST spec are the best route-level inventory.
+
+Platform jobs are processed through `src/lib/platform/jobs.ts`, the CLI script, and `/api/platform/jobs/process`. Jobs cover provisioning and lifecycle operations; external provider dependencies are not equivalent to local build verification.
+
+Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../src/app/api/), [`src/lib/platform/jobs.ts`](../src/lib/platform/jobs.ts), [`src/app/(app)/api-docs/`](../src/app/(app)/api-docs/).
+
+## Current capability map
+
+| Capability | Status | Evidence / boundary |
+| --- | --- | --- |
+| Workspace shell, dashboard, projects, clients, notes, team/HR, finance, reviews, settings | **IMPLEMENTED** | `src/app/(app)/` and `README.md`; depth varies by module |
+| Organization administration | **IMPLEMENTED** | `src/app/(app)/organization/`, `admin-platform/` docs |
+| Manual platform activation, contracts, entitlements, support access, audit | **IMPLEMENTED** | `src/app/platform/`, `src/lib/platform/`, `admin-platform/` docs |
+| Tenant RLS and isolation checks | **IMPLEMENTED** | Prisma migrations, `src/lib/tenancy/`, `scripts/verify-tenant-isolation.ts` |
+| OIDC/SAML, JIT, SCIM | **PARTIAL** | Routes and contract/build evidence exist; real customer IdP rollout remains required |
+| Ask Fathom provider adapter and credits | **PARTIAL** | `src/lib/ai/provider.ts`, assistant routes/tools, Azure staging evidence; provider and quota operations remain environment-dependent |
+| Email | **PARTIAL** | Templates and delivery abstraction exist; staging is capture-only and production sender verification is pending |
+| Realtime chat | **PARTIAL** | Ably integration with graceful fallback; in-house realtime is planned |
+| Meetings self-hosted LiveKit/TURN | **PLANNED / PARTIAL** | Meeting scope and ADR define the target; do not call Wave 1 shipped until repository evidence says so |
+| Native mobile applications | **FUTURE** | Current scope is web; responsive browser use is distinct from native apps |
+
+## Non-goals and operating constraints
+
+- No self-serve SaaS activation or automatic payment processing is represented as shipped.
+- No `@devfathom.com` mailbox is provided; connected Gmail, Outlook, and generic IMAP/SMTP are the planned email direction.
+- No pricing, SLA, compliance certification, customer, savings, or benchmark claim is publishable without an owner-approved evidence source.
+- Production and staging databases must remain separate.
+- Azure is the platform of record. Legacy Vercel SDK/blob code is a partial migration dependency, not deployment guidance.
