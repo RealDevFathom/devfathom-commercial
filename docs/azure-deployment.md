@@ -33,7 +33,7 @@ The staging script creates only the two `rg-devfathom-*` groups above, builds on
 
 The current production template is **not deployable** and must not be run. It has no safe first-tenant/platform-administrator bootstrap, configures `EMAIL_DELIVERY_MODE=send` without production Brevo API/sender wiring, and is paired with a promotion workflow that has no post-deploy health smoke. Production identity, least-privilege RBAC, required GitHub Azure variables, and the main-only deployment branch policy are configured, but they do not close these application and release-safety gaps.
 
-Minimal readiness fixes are **IN PROGRESS** in a separate worktree and under test. They are not merged or deployed. Keep that status until the fixes are merged, reviewed against the audited main baseline, exercised in staging, and deployed. An approved image digest alone is not a production gate.
+Minimal readiness fixes are **IN PROGRESS** in draft PR #33 and under test in a separate worktree. PR #33 is open but not merged or deployed. Keep that status until the fixes are merged, reviewed against the audited main baseline, exercised in staging, and deployed. An approved image digest alone is not a production gate.
 
 ## CI/CD and OIDC
 
@@ -158,5 +158,5 @@ Database migrations are forward-only; restore to a new server for a data/schema 
 - DNS/TLS: GoDaddy records are live. `staging.devfathom.com` and `admin.staging.devfathom.com` are bound to the staging Container App with Azure-managed DigiCert certificates and both HTTPS routes return HTTP 200.
 - Source baseline: the latest reported audited `main` was commit `89f75459` from PR #24. Meetings PR #23 merged to `main` at `ac20ca0` and its schema/reconciliation work passed the staging release workflow.
 - Production resource shell: the tagged production resource group exists and is empty, with no billable resources.
-- Production readiness: the minimal patch is **IN PROGRESS**, under test in another worktree, and not merged or deployed. The current template and promotion path remain **BLOCKED** for the bootstrap, email, health-smoke, resource-provisioning, and deployment-validation gaps above.
+- Production readiness: draft PR #33 is **IN PROGRESS**, under test in another worktree, and not merged or deployed. The current template and promotion path remain **BLOCKED** for the bootstrap, email, health-smoke, resource-provisioning, and deployment-validation gaps above.
 - Production services: no app, database, Key Vault, storage, AI, secret, deployment, DNS, certificate, or billable resource exists. `www.devfathom.com` still serves or redirects to the existing GoDaddy marketing site; `admin.devfathom.com` is absent. No production cutover has occurred.
