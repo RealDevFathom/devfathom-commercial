@@ -214,14 +214,14 @@ Returning 5xx for a bad signature invites a retry storm from a forged sender.
    participant interval is still open, the close time could be the room-end time, or the interval
    could be marked incomplete. The first is friendlier, the second is more honest. Needs a decision,
    because it changes what "attended" means in a report.
-4. **Where do webhook events live? — ANSWERED by MEET-01 (PR #23), pending merge.** In
+4. **Where do webhook events live? — ANSWERED by MEET-01 (PR #23), merged to `main`.** In
    `MeetingProviderEvent`, under tenant RLS, unique on `(organizationId, providerEventId)` and
    deliberately not globally — a global key would make one tenant's insert fail because another
    tenant had already received that event id, which leaks its existence. It stores the raw payload,
    `receivedAt`/`processedAt`, and a `failureReason` so a poison event stays visible instead of being
    retried forever, and it references the `MeetingOccurrence` this question was blocked on.
-5. **Are guest participants ingested into attendance at all? — ANSWERED by MEET-01 (PR #23), pending
-   merge.** Yes. Attendance no longer requires a `User`: a session is a `MeetingParticipantSession`
+5. **Are guest participants ingested into attendance at all? — ANSWERED by MEET-01 (PR #23), merged
+   to `main`.** Yes. Attendance no longer requires a `User`: a session is a `MeetingParticipantSession`
    row with a nullable `userId`, tied to a `MeetingOccurrenceParticipant` grant, and the person may be
    an internal user, a client contact, or a bare email. See MEET-001 open question 1.
 6. **Is `minReplicas: 1` applied to staging as well as production?** ADR-005 decision 6 says every

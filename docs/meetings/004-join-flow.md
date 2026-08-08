@@ -241,7 +241,7 @@ keyboard, no horizontal overflow, no console errors — is a release gate for th
    currently earmarked for the SFU. `meet.devfathom.com/<id>` versus
    `www.devfathom.com/meet/<id>` is an unforced choice that should be made once, deliberately —
    D3 of `000-product-scope.md` records the current answer.
-6. **Where does the public ID live until an occurrence record exists? — ANSWERED by MEET-01 (PR #23),
+6. **Where does the public ID live until an occurrence record exists? — ANSWERED by MEET-01 (PR #23), merged to `main`,
    pending merge.** On the occurrence. `MeetingOccurrence.publicId` is globally unique and
    database-defaulted to `gen_random_uuid()`, because the shared public join URL carries no tenant
    context and the id must resolve exactly one organization before tenant scope is entered — the same
