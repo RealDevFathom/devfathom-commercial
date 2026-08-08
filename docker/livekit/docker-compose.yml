@@ -1,0 +1,50 @@
+# LiveKit OSS for local development. Not a staging or production artefact.
+#
+#   docker compose -f docker/livekit/docker-compose.yml up -d
+#   curl -fsS http://localhost:7880/
+#   docker compose -f docker/livekit/docker-compose.yml down
+#
+# Full walkthrough: docs/meetings/010-local-livekit.md
+#
+# The image is pinned by digest. `latest` is not a version.
+
+name: devfathom-livekit-dev
+
+services:
+  # Generates an isolated development API key pair on first run and writes it to
+  # livekit.dev.keys.yaml (gitignored, mode 0600). Re-runs are a no-op, so the
+  # credentials survive restarts but never enter the repository. These keys are
+  # local-only and share nothing with staging, whose pair lives in Key Vault.
+  keygen:
+    image: livekit/livekit-server:v1.13.5@sha256:3497163e15c48fef6e7830c78716f9e9d5edc28abf7aa90b61c86e93bbc306b1
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        set -eu
+        keys=/etc/livekit/livekit.dev.keys.yaml
+        if [ -s "$$keys" ]; then
+          echo "livekit: reusing existing development credentials"
+          exit 0
+        fi
+        umask 077
+        /livekit-server generate-keys \
+          | awk '/API Key/ { k = $$3 } /API Secret/ { s = $$3 } END { printf "%s: %s\n", k, s }' \
+          > "$$keys"
+        chmod 600 "$$keys"
+        echo "livekit: generated new development credentials in docker/livekit/livekit.dev.keys.yaml"
+    volumes:
+      - ./:/etc/livekit
+
+  livekit:
+    image: livekit/livekit-server:v1.13.5@sha256:3497163e15c48fef6e7830c78716f9e9d5edc28abf7aa90b61c86e93bbc306b1
+    command: --config /etc/livekit/livekit.dev.yaml
+    restart: unless-stopped
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+    ports:
+      - '7880:7880/tcp' # HTTP + WebSocket signalling
+      - '7881:7881/tcp' # ICE/TCP fallback
+      - '7882:7882/udp' # ICE/UDP mux
+    volumes:
+      - ./:/etc/livekit
