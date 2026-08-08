@@ -430,7 +430,7 @@ Costs:
 
 1. **The transition plan from JaaS.** Feature-flagged per organization, hard cutover at a release
    boundary, or both live for one release. Needs a human decision before implementation starts.
-2. **Occurrence materialisation. — ANSWERED by MEET-01 (PR #23), pending merge.** Decision 4 required
+2. **Occurrence materialisation. — ANSWERED by MEET-01 (PR #23), merged to `main`.** Decision 4 required
    an occurrence record and there was none. `MeetingOccurrence` is now materialised per instance
    (`prisma/migrations/20260803120000_meeting_occurrences/`), identified within its series by an
    immutable `seriesSlotStart` RRULE instant, with per-occurrence exceptions on the row
@@ -442,7 +442,7 @@ Costs:
 3. **The join-token TTL, in minutes.** The entire mitigation for participant re-entry
    (`docs/meetings/001-threat-model.md` T5). Needs a number, informed by reconnect behaviour on a
    flaky mobile network.
-4. **Guest attendance. — ANSWERED by MEET-01 (PR #23), pending merge.** The model changed rather than
+4. **Guest attendance. — ANSWERED by MEET-01 (PR #23), merged to `main`.** The model changed rather than
    excluding guests. `MeetingParticipant` holds series-level invitee metadata with exactly one contact
    reference by CHECK — internal user, client contact, or a bare email for an outsider — and no
    credential column. `MeetingOccurrenceParticipant` is the occurrence-scoped grant and the only place

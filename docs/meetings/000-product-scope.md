@@ -3,9 +3,10 @@
 Status: **Proposed**, 2026-08-03. Documentation only. No code, schema, or infrastructure in this
 phase depends on this document.
 
-Operational status update, 2026-08-08: the latest reported audited `main` was `89f75459` (#24).
-PR #23 remains the final Wave-1 schema PR and is pending rebase and staging verification. The
-planned `meet.devfathom.com` and `turn.devfathom.com` media endpoints are not live.
+Operational status update: the latest reported audited `main` was `89f75459` (#24). Meetings PR
+#23 merged to `main` at `ac20ca0`, and the staging release workflow passed build, migration/backfill,
+seed, deploy, and smoke. The planned `meet.devfathom.com` and `turn.devfathom.com` media endpoints
+are not live.
 
 ## How to read the markings
 
@@ -176,7 +177,7 @@ stated.
    feature-flagged cutover per organization; a hard cutover at a release boundary; or running both
    for one release. This is a delivery-plan decision and needs a human answer before MEET-01.
 2. **Does an occurrence record get introduced by the meetings work, or by a separate scheduling
-   change? — ANSWERED by MEET-01 (PR #23), pending merge.** By the meetings work. `MeetingOccurrence`
+   change? — ANSWERED by MEET-01 (PR #23), merged to `main`.** By the meetings work. `MeetingOccurrence`
    is materialised per instance (`prisma/migrations/20260803120000_meeting_occurrences/`), keyed
    within its series by an immutable `seriesSlotStart` RRULE instant, with per-occurrence exceptions
    on the row and the series carrying `recurrenceRule` plus a validated IANA `timezone`. The

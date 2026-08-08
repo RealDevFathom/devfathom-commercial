@@ -48,7 +48,7 @@ Speaker note: Customer IdP, DNS, dedicated environment, backup policy, and contr
 
 ## Slide 8 — Roadmap
 
-Near-term: land and stage-verify final Meetings Wave-1 schema PR #23, complete production-readiness fixes, then connected email, richer finance/accounts, and tiered Insights. Later: in-house realtime and broader commercial packaging. Native mobile remains future scope.
+Near-term: complete Meetings application/media integration, complete and deploy production-readiness fixes, then connected email, richer finance/accounts, and tiered Insights. Later: in-house realtime and broader commercial packaging. Native mobile remains future scope.
 
 Speaker note: Use the [status ledger](status-ledger.md) for release truth.
 
