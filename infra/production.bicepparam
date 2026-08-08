@@ -6,6 +6,7 @@ param registryName = readEnvironmentVariable('DEVFATHOM_REGISTRY_NAME')
 param initialImage = readEnvironmentVariable('DEVFATHOM_PRODUCTION_IMAGE')
 param tenantHost = 'www.devfathom.com'
 param platformHost = 'admin.devfathom.com'
+param baseDomain = 'devfathom.com'
 param seedDatabase = false
 param emailDeliveryMode = 'send'
 param adminEmail = 'admin@devfathom.com'
