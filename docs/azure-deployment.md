@@ -16,7 +16,7 @@ Live resource inventory (names intentionally omitted from this documentation):
 
 - Shared: one Basic ACR reused by staging and the planned production environment.
 - Staging: one Container App, migration job, isolated Container Apps environment, PostgreSQL server, Key Vault, managed identity, storage account, Azure OpenAI resource, Log Analytics workspace, and VNet.
-- Production: only the empty tagged resource-group shell exists. There is no production app, database, Key Vault, storage account, AI resource, DNS record, certificate, or RBAC assignment.
+- Production: the empty tagged resource-group shell and production-only deployment identity/RBAC configuration exist. There is no production app, database, Key Vault, storage account, AI resource, DNS record, certificate, secret, deployment, or billable resource.
 
 ## IaC and first deployment
 
@@ -31,7 +31,7 @@ The staging script creates only the two `rg-devfathom-*` groups above, builds on
 
 ### Production template status — BLOCKED
 
-The current production template is **not deployable** and must not be run. It has no safe first-tenant/platform-administrator bootstrap, configures `EMAIL_DELIVERY_MODE=send` without production Brevo API/sender wiring, and is paired with a promotion workflow that has no post-deploy health smoke. Production GitHub variables and Azure RBAC are also absent.
+The current production template is **not deployable** and must not be run. It has no safe first-tenant/platform-administrator bootstrap, configures `EMAIL_DELIVERY_MODE=send` without production Brevo API/sender wiring, and is paired with a promotion workflow that has no post-deploy health smoke. Production identity, least-privilege RBAC, required GitHub Azure variables, and the main-only deployment branch policy are configured, but they do not close these application and release-safety gaps.
 
 Minimal readiness fixes are **IN PROGRESS** in a separate implementation workstream. Keep that status until the fixes are merged, reviewed against the audited main baseline, exercised in staging, and deployed. An approved image digest alone is not a production gate.
 
@@ -39,11 +39,15 @@ Minimal readiness fixes are **IN PROGRESS** in a separate implementation workstr
 
 `.github/workflows/deploy-staging.yml` authenticates through GitHub Actions OIDC, builds and pushes one immutable `${GITHUB_SHA}` image, updates and waits for the migration/seed job, deploys the same digest, then checks `/api/health`. The Entra service principal has Contributor only on the staging resource group and `AcrPush` only on the shared registry. GitHub stores subscription, tenant, client, resource-group, app, job, and registry IDs as variables; there is no client secret. `infra/configure-github-oidc.sh` reads GitHub's repository-specific OIDC subject prefix, including immutable owner/repository IDs when enabled, before creating or updating the federated credentials.
 
-`.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a `sha256:` digest already present in the same ACR, runs production migrations without seed data, then updates production to that exact digest. It currently lacks a post-deploy health smoke. Production resource variables and Azure RBAC are absent, so the workflow is defined but not executable as a safe production promotion.
+`.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a `sha256:` digest already present in the same ACR, runs production migrations without seed data, then updates production to that exact digest. The GitHub production environment now has the seven required Azure variables and a custom deployment branch policy allowing only `main`.
+
+Authentication is through a separate production-only Entra/GitHub OIDC service principal with no client secret. It has Contributor only on the production resource group and Reader plus `AcrPull` on the shared ACR; it has no staging role. No identifier or variable value belongs in this documentation. The promotion workflow still lacks post-deploy health smoke and the production resources do not exist, so it remains **BLOCKED** as a safe production promotion.
+
+Repository mismatch: `infra/configure-github-oidc.sh` still models staging and production federation on one principal and disables custom deployment branch policies. It does not reproduce the current production identity or `main`-only policy and must be treated as **PARTIAL/BLOCKED** for production until the separate implementation workstream reconciles it.
 
 ## Secrets and email
 
-Key Vault contains the database URL, Auth.js secret, platform encryption key, cron bearer, seed password, tenant administrator password, and platform administrator password. Container Apps reads versionless Key Vault references with its managed identity. The same identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope.
+The staging Key Vault contains the database URL, Auth.js secret, platform encryption key, cron bearer, seed password, tenant administrator password, and platform administrator password. The staging Container App reads versionless Key Vault references with its managed identity. That identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope. No production Key Vault or application secret exists.
 
 Staging sets `EMAIL_DELIVERY_MODE=capture`, has no `BREVO_API_KEY`, and does not require a configured sender. Captures log only the recipient count; recipient addresses, subject, and body are excluded. No message leaves staging. Production sender remains unconfigured. The current template's `EMAIL_DELIVERY_MODE=send` setting is a blocker: send mode must not be enabled until the Brevo API integration, sender domain, and delivery smoke are configured and verified.
 
@@ -146,9 +150,11 @@ Database migrations are forward-only; restore to a new server for a data/schema 
 - Database: all 11 Prisma migrations, clean idempotent seed, and tenant RLS isolation check pass on staging.
 - Ask Fathom: Azure managed identity calls Global Standard deployment `ask-fathom-gpt-5-mini`; diagnostics pass. Final Azure suite passes 46/46 cases with 856,849 ms aggregate model latency, 459,782 input tokens, and 28,092 output tokens.
 - Email: capture-only, no sender/API key, no outbound delivery, and no captured message PII in logs.
-- OIDC: main-branch and production-environment federated credentials exist. Staging principal has Contributor only on the staging group and AcrPush only on ACR. GitHub plan rejects required-reviewer configuration, so production remains a manual workflow without an enforceable reviewer until the plan supports protected-environment reviewers.
+- OIDC/RBAC: staging and production use separate service principals. The production-only principal has Contributor only on the production resource group and Reader plus `AcrPull` on the shared ACR, with no staging role and no client secret.
+- GitHub production environment: seven required Azure variables are configured, and the custom deployment branch policy allows only `main`. No values are recorded here.
+- Configuration drift: the repository OIDC helper does not yet reproduce the separate production principal or `main`-only policy. Do not treat that helper as production-ready.
 - DNS/TLS: GoDaddy records are live. `staging.devfathom.com` and `admin.staging.devfathom.com` are bound to the staging Container App with Azure-managed DigiCert certificates and both HTTPS routes return HTTP 200.
 - Source baseline: the latest reported audited `main` was commit `89f75459` from PR #24. PR #23 remains the final Meetings Wave-1 schema PR pending rebase and staging verification.
 - Production resource shell: the tagged production resource group exists and is empty, with no billable resources.
-- Production readiness: minimal fixes are **IN PROGRESS** outside this documentation change. The current template and promotion path remain **BLOCKED** for the bootstrap, email, health-smoke, GitHub-variable, and RBAC gaps above.
-- Production services: no app, database, Key Vault, storage, AI, DNS, certificate, or RBAC exists. No production cutover has occurred.
+- Production readiness: minimal fixes are **IN PROGRESS** outside this documentation change. The current template and promotion path remain **BLOCKED** for the bootstrap, email, health-smoke, resource-provisioning, and deployment-validation gaps above.
+- Production services: no app, database, Key Vault, storage, AI, secret, deployment, DNS, certificate, or billable resource exists. No production cutover has occurred.
