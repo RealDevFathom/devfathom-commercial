@@ -53,7 +53,11 @@ function fakeDb(rows: {
   organizationBySlug?: Record<string, typeof ORGANIZATION>;
   organizationById?: Record<string, typeof ORGANIZATION>;
   domain?: Record<string, { verificationStatus: string; organization: typeof ORGANIZATION }>;
-  deployments?: Array<{ url: string; organization: typeof ORGANIZATION }>;
+  deployments?: Array<{
+    url: string;
+    provider?: string;
+    organization: typeof ORGANIZATION;
+  }>;
 }) {
   const calls: string[] = [];
   const db = {
@@ -85,14 +89,26 @@ function fakeDb(rows: {
       // `resolveExplicitOrganizationByHost` matches whole URLs, case-insensitively,
       // and inspects every match rather than taking the first.
       findMany: vi.fn(
-        async ({ where }: { where: { OR: Array<{ url: { equals: string; mode: string } }> } }) => {
+        async ({
+          where,
+        }: {
+          where: {
+            OR: Array<{ url: { equals: string; mode: string } }>;
+            provider?: string;
+          };
+        }) => {
           const wanted = new Set(where.OR.map((clause) => clause.url.equals.toLowerCase()));
           calls.push(`deployment:exact:${[...wanted][0]}`);
           return (rows.deployments ?? [])
-            .filter((deployment) => wanted.has(deployment.url.toLowerCase()))
+            .filter(
+              (deployment) =>
+                wanted.has(deployment.url.toLowerCase()) &&
+                (!where.provider || deployment.provider === where.provider)
+            )
             .map((deployment, index) => ({
               id: `deploy_${index}`,
               url: deployment.url,
+              provider: deployment.provider,
               organizationId: deployment.organization.id,
               organization: deployment.organization,
             }));
@@ -191,6 +207,22 @@ describe('resolveExplicitOrganizationByHost', () => {
     fakeDb({});
 
     await expect(resolveExplicitOrganizationByHost('who-is-this.example.com')).resolves.toBeNull();
+  });
+
+  it('treats Azure Container Apps as an opaque deployment provider', async () => {
+    fakeDb({
+      deployments: [
+        {
+          url: 'https://portal.acme.com',
+          provider: 'AZURE_CONTAINER_APPS',
+          organization: ORGANIZATION,
+        },
+      ],
+    });
+
+    await expect(resolveExplicitOrganizationByHost('portal.acme.com')).resolves.toEqual(
+      ORGANIZATION
+    );
   });
 
   it('returns null for the platform host', async () => {

@@ -17,7 +17,7 @@ Live resource inventory:
 
 ## IaC and first deployment
 
-`shared.bicep` creates the registry. `environment.bicep` creates one isolated environment. Secure parameters enter only through process environment variables and become Key Vault secrets; values are never committed.
+`shared.bicep` creates the registry. `environment.bicep` creates one isolated environment. Operational secure parameters enter only through process environment variables and become Key Vault secrets; values are never committed. Initialization passwords are temporary Container Apps job secrets and are never available to the web app.
 
 ```bash
 ./infra/deploy-staging.sh
@@ -26,23 +26,44 @@ Live resource inventory:
 
 The staging script creates only the two `rg-devfathom-*` groups above, builds one `linux/amd64` image, pushes it to ACR, provisions staging, sets the generated Container Apps hostname as a recognized default tenant host, and starts the migration/seed job. Re-running the full script generates new bootstrap credentials; use the GitHub workflow for normal releases.
 
-Production uses the same Bicep with `infra/production.bicepparam`, `seedDatabase = false`, and an approved staging image digest. Never run it until cutover is explicitly initiated.
+Production uses the same Bicep with `infra/production.bicepparam`, `seedDatabase = false`, `bootstrapDatabase = false`, and an approved staging image digest. Never run it until cutover is explicitly initiated. The first approved deployment instead uses `infra/production.bootstrap.bicepparam`, which requires initial tenant and platform administrator passwords and configures the manual job to run migrations plus the create-only production bootstrap. Start that job once, wait for success, then immediately redeploy with `infra/production.bicepparam`; the regular definition restores a migrations-only command and removes initialization environment and job-secret entries.
+
+```bash
+az deployment group create -g rg-devfathom-production-uaenorth \
+  --parameters infra/production.bootstrap.bicepparam --name production-bootstrap
+az containerapp job start -g rg-devfathom-production-uaenorth -n devfathom-prd-migrate
+# Wait for a Succeeded execution before continuing.
+az containerapp job execution list -g rg-devfathom-production-uaenorth \
+  -n devfathom-prd-migrate -o table
+az deployment group create -g rg-devfathom-production-uaenorth \
+  --parameters infra/production.bicepparam --name production
+```
+
+After that regular redeployment, verify that the job retains only its operational `database-url` secret. If the Container Apps resource provider still reports any initialization secret, remove it explicitly after confirming no job environment variable references it:
+
+```bash
+az containerapp job secret list -g rg-devfathom-production-uaenorth -n devfathom-prd-migrate -o table
+az containerapp job secret remove -g rg-devfathom-production-uaenorth -n devfathom-prd-migrate \
+  --secret-names admin-password platform-admin-password --yes
+```
+
+Unset the initialization password environment variables after verification. Routine production deployments and promotions do not read or require them.
 
 ## CI/CD and OIDC
 
 `.github/workflows/deploy-staging.yml` authenticates through GitHub Actions OIDC, builds and pushes one immutable `${GITHUB_SHA}` image, updates and waits for the migration/seed job, deploys the same digest, then checks `/api/health`. The Entra service principal has Contributor only on the staging resource group and `AcrPush` only on the shared registry. GitHub stores subscription, tenant, client, resource-group, app, job, and registry IDs as variables; there is no client secret. `infra/configure-github-oidc.sh` reads GitHub's repository-specific OIDC subject prefix, including immutable owner/repository IDs when enabled, before creating or updating the federated credentials.
 
-`.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a `sha256:` digest already present in the same ACR, runs production migrations without seed data, then updates production to that exact digest. Production resource variables and Azure RBAC are deliberately absent until cutover.
+`.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a validated `sha256:` digest already present in the same ACR, refuses an initialization-configured migration job, runs production migrations without seed data, then updates production to that exact digest. It confirms the ready active revision uses the requested digest before checking `/api/health`. Production resource variables and Azure RBAC are deliberately absent until cutover.
 
 ## Secrets and email
 
-Key Vault contains the database URL, Auth.js secret, platform encryption key, cron bearer, seed password, tenant administrator password, and platform administrator password. Container Apps reads versionless Key Vault references with its managed identity. The same identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope.
+Key Vault contains the database URL, Auth.js secret, platform encryption key, and cron bearer. Container Apps reads versionless Key Vault references with its managed identity. One-time seed/bootstrap passwords are job-local secrets supplied only when initialization is explicitly enabled; the always-on web app has neither those secrets nor their environment variables. The same identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope.
 
-Staging sets `EMAIL_DELIVERY_MODE=capture`, has no `BREVO_API_KEY`, and does not require a configured sender. Captures log only the recipient count; recipient addresses, subject, and body are excluded. No message leaves staging. Production sender remains unconfigured and must use `EMAIL_DELIVERY_MODE=send` only after Brevo DNS and sender verification pass.
+Staging and production set `EMAIL_DELIVERY_MODE=capture`, have no `BREVO_API_KEY`, and do not require a configured sender. Captures log only the recipient count; recipient addresses, subject, and body are excluded. No message leaves either environment. Production must remain in capture mode until Brevo Key Vault wiring, DNS, and sender verification are complete.
 
 ## Database migration, RLS, seed, and restore
 
-The manual Container Apps job runs `prisma migrate deploy`; staging then runs the idempotent seed. Production configuration runs migrations only, leaving application tables empty. PostgreSQL is reachable only through the VNet-integrated Container Apps environment. RLS remains migration-owned; never use `prisma db push`.
+The manual Container Apps job runs `prisma migrate deploy`; staging then runs the idempotent demo seed. The explicit one-time production initialization path instead follows migrations with a create-only bootstrap for the platform catalog, default organization, system roles and permission, brand, deployment, tenant administrator, and platform administrator. It creates no demo users, projects, invoices, or meetings. Regular production configuration and every promotion run migrations only. PostgreSQL is reachable only through the VNet-integrated Container Apps environment. RLS remains migration-owned; never use `prisma db push`.
 
 Verification commands:
 
@@ -134,7 +155,7 @@ Database migrations are forward-only; restore to a new server for a data/schema 
 
 - Deployment: staging is provisioned in UAE North at `https://devfathom-stg.bravewater-2487da89.uaenorth.azurecontainerapps.io`; app configuration is 0.5 CPU/1 GiB with zero-to-one replicas.
 - Public health: `/api/health` returns HTTP 200 with `{"status":"ok"}`. Tenant login and authenticated routes pass desktop and mobile browser smoke QA. Admin-host routing, platform administrator login/session validation, and test-session revocation also pass through the generated endpoint with the forwarded Azure-validated host.
-- Database: all 11 Prisma migrations, clean idempotent seed, and tenant RLS isolation check pass on staging.
+- Database: all 12 Prisma migrations, clean idempotent seed, and tenant RLS isolation check pass on staging.
 - Ask Fathom: Azure managed identity calls Global Standard deployment `ask-fathom-gpt-5-mini`; diagnostics pass. Final Azure suite passes 46/46 cases with 856,849 ms aggregate model latency, 459,782 input tokens, and 28,092 output tokens.
 - Email: capture-only, no sender/API key, no outbound delivery, and no captured message PII in logs.
 - OIDC: main-branch and production-environment federated credentials exist. Staging principal has Contributor only on the staging group and AcrPush only on ACR. GitHub plan rejects required-reviewer configuration, so production remains a manual workflow without an enforceable reviewer until the plan supports protected-environment reviewers.

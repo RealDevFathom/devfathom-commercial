@@ -4,30 +4,11 @@ import pg from 'pg';
 import { hash } from 'bcryptjs';
 import 'dotenv/config';
 
+import { PLATFORM_MODULES } from './production-bootstrap.js';
+
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
-
-const PLATFORM_MODULES = [
-  ['dashboard', 'Dashboard', 'Core', '/dashboard'],
-  ['projects', 'Projects', 'Delivery', '/projects'],
-  ['clients', 'Clients', 'Delivery', '/clients'],
-  ['finance', 'Finance', 'Operations', '/finance'],
-  ['chat', 'Chat', 'Collaboration', '/chat'],
-  ['meetings', 'Meetings', 'Collaboration', '/meetings'],
-  ['notes', 'Notes', 'Knowledge', '/notes'],
-  ['hr', 'HR', 'People', '/hr'],
-  ['reviews', 'Performance reviews', 'People', '/reviews'],
-  ['email', 'Email', 'Communication', '/email'],
-  ['api', 'API access', 'Developer', '/organization/api'],
-  ['webhooks', 'Webhooks', 'Developer', '/organization/webhooks'],
-  ['audit', 'Audit logs', 'Security', '/audit-logs'],
-  ['branding', 'White-label branding', 'Configuration', '/organization/branding'],
-  ['domains', 'Custom domains', 'Configuration', '/organization/domains'],
-  ['identity', 'Enterprise SSO', 'Security', '/organization/authentication'],
-  ['scim', 'SCIM provisioning', 'Security', '/organization/provisioning'],
-  ['data', 'Data controls', 'Governance', '/organization/data'],
-] as const;
 
 async function seedTenantData(tx: Prisma.TransactionClient) {
   console.log('🌱 Seeding DevFathom database...\n');
