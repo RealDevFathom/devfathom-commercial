@@ -23,7 +23,12 @@ coincidence of the DNS layout, not an invariant.
 ''')
 param baseDomain string
 param seedDatabase bool
+@description('Run the one-time production bootstrap after migrations. Keep false for routine deployments.')
+param bootstrapDatabase bool = false
 param emailDeliveryMode string
+@minValue(0)
+@maxValue(1)
+param minReplicas int = 0
 
 @secure()
 param postgresAdminPassword string
@@ -34,11 +39,11 @@ param platformEncryptionKey string
 @secure()
 param cronSecret string
 @secure()
-param seedPassword string
+param seedPassword string = ''
 @secure()
-param adminPassword string
+param adminPassword string = ''
 @secure()
-param platformAdminPassword string
+param platformAdminPassword string = ''
 
 param adminEmail string = 'admin@staging.devfathom.com'
 param platformAdminEmail string = 'platform-admin@staging.devfathom.com'
@@ -58,9 +63,21 @@ var appEnvironmentName = 'df-${shortEnvironment}-${suffix}-cae'
 var appName = 'devfathom-${shortEnvironment}'
 var migrationJobName = 'devfathom-${shortEnvironment}-migrate'
 var databaseUrl = 'postgresql://devfathomadmin:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
-var migrationCommand = seedDatabase
-  ? 'bunx prisma migrate deploy && bun prisma/seed.ts'
-  : 'bunx prisma migrate deploy'
+var migrationCommand = seedDatabase && bootstrapDatabase
+  ? fail('seedDatabase and bootstrapDatabase cannot both be enabled.')
+  : seedDatabase
+    ? environmentName != 'staging'
+      ? fail('Database seeding is only supported in staging.')
+      : empty(seedPassword) || empty(adminPassword) || empty(platformAdminPassword)
+        ? fail('Staging database seeding requires seed, administrator, and platform administrator passwords.')
+        : 'bunx prisma migrate deploy && bun prisma/seed.ts'
+    : bootstrapDatabase
+      ? environmentName != 'production'
+        ? fail('Production bootstrap is only supported in production.')
+        : length(trim(adminPassword)) < 12 || length(trim(platformAdminPassword)) < 12
+          ? fail('Production bootstrap requires administrator passwords of at least 12 characters.')
+          : 'bunx prisma migrate deploy && bun prisma/bootstrap.ts'
+      : 'bunx prisma migrate deploy'
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: registryName
@@ -206,22 +223,6 @@ resource cronSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: 'cron-secret'
   properties: { value: cronSecret }
 }
-resource seedPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: vault
-  name: 'seed-password'
-  properties: { value: seedPassword }
-}
-resource adminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: vault
-  name: 'admin-password'
-  properties: { value: adminPassword }
-}
-resource platformAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: vault
-  name: 'platform-admin-password'
-  properties: { value: platformAdminPassword }
-}
-
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
   location: location
@@ -365,17 +366,25 @@ resource vaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 }
 
 var vaultBaseUrl = 'https://${vault.name}${environment().suffixes.keyvaultDns}/secrets'
-var keyVaultSecrets = [
+var runtimeKeyVaultSecrets = [
   { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
   { name: 'auth-secret', keyVaultUrl: '${vaultBaseUrl}/auth-secret', identity: identity.id }
   { name: 'platform-encryption-key', keyVaultUrl: '${vaultBaseUrl}/platform-encryption-key', identity: identity.id }
   { name: 'cron-secret', keyVaultUrl: '${vaultBaseUrl}/cron-secret', identity: identity.id }
-  { name: 'seed-password', keyVaultUrl: '${vaultBaseUrl}/seed-password', identity: identity.id }
-  { name: 'admin-password', keyVaultUrl: '${vaultBaseUrl}/admin-password', identity: identity.id }
-  { name: 'platform-admin-password', keyVaultUrl: '${vaultBaseUrl}/platform-admin-password', identity: identity.id }
 ]
 
-var commonEnvironment = [
+var migrationSecrets = concat(
+  [{ name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }],
+  seedDatabase ? [{ name: 'seed-password', value: seedPassword }] : [],
+  seedDatabase || bootstrapDatabase
+    ? [
+        { name: 'admin-password', value: adminPassword }
+        { name: 'platform-admin-password', value: platformAdminPassword }
+      ]
+    : []
+)
+
+var webEnvironment = [
   { name: 'NODE_ENV', value: 'production' }
   { name: 'DATABASE_URL', secretRef: 'database-url' }
   { name: 'AUTH_SECRET', secretRef: 'auth-secret' }
@@ -387,14 +396,6 @@ var commonEnvironment = [
   { name: 'PLATFORM_ENCRYPTION_KEY', secretRef: 'platform-encryption-key' }
   { name: 'CRON_SECRET', secretRef: 'cron-secret' }
   { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
-  { name: 'SEED_PASSWORD', secretRef: 'seed-password' }
-  { name: 'ADMIN_NAME', value: 'Workspace Administrator' }
-  { name: 'ADMIN_EMAIL', value: adminEmail }
-  { name: 'ADMIN_PASSWORD', secretRef: 'admin-password' }
-  { name: 'ADMIN_DEPARTMENT', value: 'LEADERSHIP' }
-  { name: 'ADMIN_TITLE', value: 'Administrator' }
-  { name: 'PLATFORM_ADMIN_EMAIL', value: platformAdminEmail }
-  { name: 'PLATFORM_ADMIN_PASSWORD', secretRef: 'platform-admin-password' }
   { name: 'EMAIL_DELIVERY_MODE', value: emailDeliveryMode }
   { name: 'AI_PROVIDER', value: 'azure' }
   { name: 'AI_MODEL', value: aiDeploymentName }
@@ -403,6 +404,36 @@ var commonEnvironment = [
   { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storage.name }
   { name: 'AZURE_STORAGE_CONTAINER', value: uploads.name }
 ]
+
+var migrationEnvironment = concat(
+  [
+    { name: 'NODE_ENV', value: 'production' }
+    { name: 'DATABASE_URL', secretRef: 'database-url' }
+    { name: 'AUTH_URL', value: 'https://${tenantHost}' }
+    { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
+  ],
+  seedDatabase
+    ? [
+        { name: 'SEED_PASSWORD', secretRef: 'seed-password' }
+        { name: 'ADMIN_NAME', value: 'Workspace Administrator' }
+        { name: 'ADMIN_EMAIL', value: adminEmail }
+        { name: 'ADMIN_PASSWORD', secretRef: 'admin-password' }
+        { name: 'ADMIN_DEPARTMENT', value: 'LEADERSHIP' }
+        { name: 'ADMIN_TITLE', value: 'Administrator' }
+        { name: 'PLATFORM_ADMIN_EMAIL', value: platformAdminEmail }
+        { name: 'PLATFORM_ADMIN_PASSWORD', secretRef: 'platform-admin-password' }
+      ]
+    : bootstrapDatabase
+      ? [
+          { name: 'ADMIN_NAME', value: 'Workspace Administrator' }
+          { name: 'ADMIN_EMAIL', value: adminEmail }
+          { name: 'ADMIN_PASSWORD', secretRef: 'admin-password' }
+          { name: 'ADMIN_TITLE', value: 'Administrator' }
+          { name: 'PLATFORM_ADMIN_EMAIL', value: platformAdminEmail }
+          { name: 'PLATFORM_ADMIN_PASSWORD', secretRef: 'platform-admin-password' }
+        ]
+      : []
+)
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
@@ -424,16 +455,32 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         { server: registry.properties.loginServer, identity: identity.id }
       ]
-      secrets: keyVaultSecrets
+      secrets: runtimeKeyVaultSecrets
     }
     template: {
       containers: [
         {
           name: 'web'
           image: initialImage
-          env: commonEnvironment
+          env: webEnvironment
           resources: { cpu: json('0.5'), memory: '1Gi' }
           probes: [
+            {
+              type: 'Startup'
+              tcpSocket: { port: 3000 }
+              initialDelaySeconds: 10
+              periodSeconds: 10
+              failureThreshold: 10
+              timeoutSeconds: 5
+            }
+            {
+              type: 'Liveness'
+              tcpSocket: { port: 3000 }
+              initialDelaySeconds: 60
+              periodSeconds: 30
+              failureThreshold: 3
+              timeoutSeconds: 5
+            }
             {
               type: 'Readiness'
               httpGet: { path: '/api/health', port: 3000, scheme: 'HTTP' }
@@ -445,10 +492,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           ]
         }
       ]
-      scale: { minReplicas: 0, maxReplicas: 1 }
+      scale: { minReplicas: minReplicas, maxReplicas: 1 }
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, databaseUrlSecret, authSecretResource, platformEncryptionSecret, cronSecretResource, seedPasswordSecret, adminPasswordSecret, platformAdminPasswordSecret]
+  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, databaseUrlSecret, authSecretResource, platformEncryptionSecret, cronSecretResource]
 }
 
 resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
@@ -468,7 +515,7 @@ resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
       registries: [
         { server: registry.properties.loginServer, identity: identity.id }
       ]
-      secrets: keyVaultSecrets
+      secrets: migrationSecrets
     }
     template: {
       containers: [
@@ -477,13 +524,13 @@ resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
           image: initialImage
           command: ['/bin/sh']
           args: ['-c', migrationCommand]
-          env: commonEnvironment
+          env: migrationEnvironment
           resources: { cpu: json('0.5'), memory: '1Gi' }
         }
       ]
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, database]
+  dependsOn: [acrPull, vaultSecretsUser, database, databaseUrlSecret]
 }
 
 output appName string = app.name

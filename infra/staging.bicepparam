@@ -8,6 +8,7 @@ param tenantHost = 'staging.devfathom.com'
 param platformHost = 'admin.staging.devfathom.com'
 param baseDomain = 'staging.devfathom.com'
 param seedDatabase = true
+param bootstrapDatabase = false
 param emailDeliveryMode = 'capture'
 param postgresAdminPassword = readEnvironmentVariable('DEVFATHOM_STAGING_POSTGRES_PASSWORD')
 param authSecret = readEnvironmentVariable('DEVFATHOM_STAGING_AUTH_SECRET')
