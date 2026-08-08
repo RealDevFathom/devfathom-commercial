@@ -104,8 +104,8 @@ For every release:
 
 ### Stage 3: enterprise dedicated pilot
 
-- use a restricted Vercel team/project;
-- validate generated environment values and deployment URL;
+- provision an approved isolated Azure environment;
+- validate generated environment values, managed identity, and deployment URL;
 - connect dedicated/custom domain;
 - run customer IdP and SCIM acceptance;
 - test audited support on the dedicated URL;

@@ -1,6 +1,8 @@
 # Platform Status Ledger
 
-Last reviewed: 2026-07-28. Branch: `codex/admin-control-plane`.
+Last reviewed: 2026-08-08. This file preserves local control-plane verification; [`docs/status-ledger.md`](../status-ledger.md) is the current cross-product release ledger.
+
+Production evidence update: the reported audited `main` baseline is `89f75459` (#24). An empty tagged production resource-group shell exists, but it has no billable resources. No production app, database, Key Vault, storage, AI, DNS, certificate, or RBAC exists. The current production template and promotion path are **BLOCKED**; minimal readiness fixes are **IN PROGRESS** outside this documentation change.
 
 | Phase                             | Implementation | Verification                                                                       | Production dependency                                      |
 | --------------------------------- | -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -13,7 +15,7 @@ Last reviewed: 2026-07-28. Branch: `codex/admin-control-plane`.
 | OIDC/SAML/JIT                     | Complete       | Static/build checks; protocol requires real IdP staging test                       | IdP metadata, certificates, client credentials             |
 | SCIM 2.0                          | Complete       | Token issue, paginated Users request, unauthorized request, revoke/replay passed   | Customer directory integration                             |
 | Shared provisioning               | Complete       | Real local worker job succeeded and deployment became READY                        | Base domain and production deployment                      |
-| Dedicated provisioning            | Complete       | SDK path/build verified; no live Vercel project was created                        | Vercel token/team/repository and customer rollout approval |
+| Dedicated provisioning            | Partial        | Legacy SDK path/build verified; no Azure dedicated environment exists              | Azure topology, isolation, customer contract, and rollout approval |
 | Domains/brand/email               | Complete       | UI, worker path, encryption, and build verified                                    | DNS records and selected email provider credentials        |
 | Export/purge/suspend/resume       | Complete       | Worker and lifecycle guards build/test clean                                       | Private Blob store and approved retention schedule         |
 | Audited support access            | Complete       | Start, one-use cross-domain launch, banner, action context, and end passed         | Platform operator policy                                   |
@@ -67,8 +69,9 @@ Production release is conditional on:
 1. Provisioning PostgreSQL and testing backup/restore.
 2. Setting every required secret in [Operations](operations.md).
 3. Connecting wildcard/base domains and adding verified customer DNS.
-4. Providing Vercel credentials only if dedicated automation will be used.
+4. Completing safe first-tenant/platform-admin bootstrap and post-deploy health smoke.
 5. Provisioning private Blob storage before enabling export jobs.
 6. Running OIDC/SAML/SCIM acceptance tests with each customer IdP/directory.
-7. Choosing and configuring the production email provider.
-8. Approving retention, purge, support-access, and incident-response policies.
+7. Choosing and configuring the production email provider before enabling send mode.
+8. Supplying production GitHub variables and least-privilege Azure RBAC.
+9. Approving retention, purge, support-access, and incident-response policies.
