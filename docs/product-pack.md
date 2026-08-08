@@ -80,4 +80,4 @@ The evidence-backed offer is a controlled implementation: manual activation, org
 
 **Can you promise savings, compliance, or an SLA?** Not from repository evidence. Use an owner-approved contract or validated study.
 
-**Where does it run?** Azure. Staging is live. Production currently has an empty, non-billable resource-group shell and deployment identity/configuration only; no app, database, secret, deployment, DNS, or certificate exists. `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is absent. Draft PR #33 is open and unmerged; the current template is blocked while readiness fixes are under test.
+**Where does it run?** Azure. Staging is live. Production currently has an empty, non-billable resource-group shell and deployment identity/configuration only; no app, database, secret, deployment, DNS, or certificate exists. `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is absent. PR #33 hardening is merged to `main`, while post-merge staging validation is **IN PROGRESS / AWAITING FINAL RESULT**; production remains undeployed.
