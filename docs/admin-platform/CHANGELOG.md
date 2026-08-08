@@ -39,4 +39,4 @@
 
 ### Operational note
 
-No live dedicated Vercel project, production DNS record, customer IdP, email sender, or payment provider was created by local QA. Those remain deployment-time integrations, not missing application code.
+No live dedicated Azure environment, production DNS record, customer IdP, email sender, or payment provider was created by local QA. Those remain deployment-time integrations, not missing application code.

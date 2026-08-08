@@ -32,7 +32,7 @@ Speaker note: These are repository-backed controls, not a certification claim. C
 
 Projects, clients, finance, notes, team/HR, chat, insights, organization administration, REST/API docs, and Ask Fathom.
 
-Speaker note: Mark Meetings and connected email as rollout-dependent. Do not present planned tiers as shipped limits.
+Speaker note: Mark Meetings and connected email as rollout-dependent. Meetings media endpoints are not live. Do not present planned tiers as shipped limits.
 
 ## Slide 6 — Commercial model
 
@@ -48,7 +48,7 @@ Speaker note: Customer IdP, DNS, dedicated environment, backup policy, and contr
 
 ## Slide 8 — Roadmap
 
-Near-term: reconcile Meetings Wave 1, connected email, richer finance/accounts, and tiered Insights. Later: in-house realtime and broader commercial packaging. Native mobile remains future scope.
+Near-term: land and stage-verify final Meetings Wave-1 schema PR #23, complete production-readiness fixes, then connected email, richer finance/accounts, and tiered Insights. Later: in-house realtime and broader commercial packaging. Native mobile remains future scope.
 
 Speaker note: Use the [status ledger](status-ledger.md) for release truth.
 
