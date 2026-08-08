@@ -22,7 +22,7 @@ Browser
        -> self-hosted LiveKit/TURN (future media topology; not live)
 ```
 
-Azure staging is live. Production currently consists only of an empty tagged resource-group shell with no billable resources. The current production template and promotion path are blocked; readiness fixes are in progress. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
+Azure staging is live. Production currently has an empty tagged resource-group shell plus a separate secretless deployment identity, least-privilege RBAC, and GitHub environment configuration. No billable production resource, secret, deployment, DNS, or certificate exists. The current production template and promotion path remain blocked; readiness fixes are in progress. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
 
 ## Tenancy and security boundary
 

@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-08-08. This file preserves local control-plane verification; [`docs/status-ledger.md`](../status-ledger.md) is the current cross-product release ledger.
 
-Production evidence update: the reported audited `main` baseline is `89f75459` (#24). An empty tagged production resource-group shell exists, but it has no billable resources. No production app, database, Key Vault, storage, AI, DNS, certificate, or RBAC exists. The current production template and promotion path are **BLOCKED**; minimal readiness fixes are **IN PROGRESS** outside this documentation change.
+Production evidence update: the reported audited `main` baseline is `89f75459` (#24). An empty tagged production resource-group shell exists, but it has no billable resources. A separate secretless production-only OIDC identity, least-privilege production-RG/shared-ACR roles, seven required GitHub Azure variables, and a `main`-only deployment branch policy are configured. No production app, database, Key Vault, storage, AI, secret, deployment, DNS, or certificate exists. The current production template and promotion path are **BLOCKED**; minimal readiness fixes are **IN PROGRESS** outside this documentation change.
 
 | Phase                             | Implementation | Verification                                                                       | Production dependency                                      |
 | --------------------------------- | -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -73,5 +73,5 @@ Production release is conditional on:
 5. Provisioning private Blob storage before enabling export jobs.
 6. Running OIDC/SAML/SCIM acceptance tests with each customer IdP/directory.
 7. Choosing and configuring the production email provider before enabling send mode.
-8. Supplying production GitHub variables and least-privilege Azure RBAC.
+8. Revalidating the configured production-only OIDC identity, least-privilege RBAC, seven GitHub Azure variables, and `main`-only deployment policy.
 9. Approving retention, purge, support-access, and incident-response policies.
