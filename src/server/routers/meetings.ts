@@ -1,15 +1,16 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import jwt from 'jsonwebtoken';
-import type { PrismaClient } from '@/generated/prisma/client';
+import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
 import { assertMeetingManage, assertMeetingAccess } from '../authz';
+import { isAdmin } from '@/lib/authz';
 import { logActivity } from '../activity';
 import { computePunctuality, findRelevantOccurrence } from '@/lib/meeting-occurrence';
 
 export const meetingsRouter = router({
   getUpcoming: protectedProcedure.query(async ({ ctx }) => {
-    const userId = ctx.session.user.id;
+    const scope = meetingListScope(ctx.session.user);
     const now = new Date();
 
     // Include currently-running meetings (endTime still in the future),
@@ -18,7 +19,7 @@ export const meetingsRouter = router({
     const [futureMeetings, recurringMeetings] = await Promise.all([
       ctx.db.meeting.findMany({
         where: {
-          attendees: { some: { userId } },
+          ...scope,
           endTime: { gte: now },
         },
         include: {
@@ -30,7 +31,7 @@ export const meetingsRouter = router({
       // Get recurring meetings (even if startTime is in the past — we compute next occurrence)
       ctx.db.meeting.findMany({
         where: {
-          attendees: { some: { userId } },
+          ...scope,
           recurrence: { not: null },
         },
         include: {
@@ -79,12 +80,11 @@ export const meetingsRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const userId = ctx.session.user.id;
       const now = new Date();
       const limit = input?.limit ? Math.min(input.limit, 1000) : undefined;
 
       const meetings = await ctx.db.meeting.findMany({
-        where: { attendees: { some: { userId } } },
+        where: meetingListScope(ctx.session.user),
         include: {
           attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
         },
@@ -550,6 +550,24 @@ export const meetingsRouter = router({
       };
     }),
 });
+
+/**
+ * Whose meetings the list procedures return (#35).
+ *
+ * ADMIN comes from `isAdmin` — the SAME predicate `canAccessMeeting` /
+ * `assertMeetingAccess` already use to grant an admin organization-wide access
+ * and manage rights. Writing a second `role === 'ADMIN'` literal here is
+ * precisely how list policy and access policy came to disagree: an admin could
+ * open and manage a meeting whose id they held, but could not discover one.
+ *
+ * The admin branch drops the attendee filter and NOTHING else. Tenant scope is
+ * RLS's job on the scoped client, so adding `organizationId` here would make a
+ * cross-organization test pass even with RLS broken — a guard that guards
+ * nothing.
+ */
+function meetingListScope(user: { id: string; role?: string | null }): Prisma.MeetingWhereInput {
+  return isAdmin(user.role) ? {} : { attendees: { some: { userId: user.id } } };
+}
 
 /**
  * Given a list of meetings whose `startTime` has already been resolved to the
