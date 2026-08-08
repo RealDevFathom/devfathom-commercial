@@ -2,6 +2,8 @@
 
 This handbook is the source of truth for the implemented DevFathom control plane and customer-agency administration. The product remains manually sold and activated: it does not expose self-service signup, checkout, or automatic organization activation.
 
+Current platform note: Azure is the deployment platform. References below to Vercel or other provider-specific paths describe legacy repository code and deployment-time dependencies; they are not current deployment guidance. Use [`docs/azure-deployment.md`](../azure-deployment.md) for staging and production operations.
+
 ## What shipped
 
 - A separate platform control desk at `admin.<PLATFORM_BASE_DOMAIN>/platform`.
@@ -50,6 +52,10 @@ This handbook is the source of truth for the implemented DevFathom control plane
 
 ## Status language
 
-- **Implemented** means source and migrations exist.
+- **IMPLEMENTED** means source and migrations exist.
+- **PARTIAL** means source exists but an integration or release gate remains.
+- **PLANNED** means an accepted design exists without complete implementation.
+- **BLOCKED** means a named external dependency prevents progress.
+- **FUTURE** means outside the current web scope.
 - **Verified locally** means a reproducible check is recorded in [STATUS](STATUS.md).
 - **Production configured** requires real deployment secrets, DNS, provider accounts, and an operator-run rollout; local verification is not a claim that those external resources exist.

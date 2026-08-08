@@ -1,21 +1,23 @@
-# Hybrid Deployment and Operations
+# Azure Deployment and Operations
+
+Azure is the current deployment platform. Provider-specific deployment records elsewhere are retained as legacy implementation evidence only, not deployment procedure.
 
 ## Process model
 
-Web/API runs on Next.js Node.js/Fluid Compute. PostgreSQL is the durable source of truth. Platform jobs are durable database records processed by:
+Web/API runs on Next.js Node.js in an Azure Container App. PostgreSQL is the durable source of truth. Platform jobs are durable database records processed by:
 
-- Vercel Cron: `GET /api/platform/jobs/process` every five minutes; or
+- an operator-triggered `POST /api/platform/jobs/process` request when a bearer secret is configured; or
 - CLI: `bun run platform:jobs -- --max-jobs=<n>`.
 
-The route has `maxDuration = 300` and requires `CRON_SECRET`. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, recovers 15-minute stale leases, increments attempts, and uses exponential backoff capped at 30 minutes.
+The route requires `CRON_SECRET`. An Azure scheduler/recurring trigger is a production gate; do not claim five-minute processing until that trigger exists and is verified. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, recovers 15-minute stale leases, increments attempts, and uses exponential backoff capped at 30 minutes.
 
 ## Job types
 
 | Type                  | Behavior                                                 | Required external configuration                |
 | --------------------- | -------------------------------------------------------- | ---------------------------------------------- |
-| `PROVISION_SHARED`    | creates/updates ready shared production deployment       | base domain; optional shared Vercel project ID |
-| `PROVISION_DEDICATED` | creates/uses Vercel project, env, deployment, then polls | Vercel token/team/Git repo                     |
-| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to project              | DNS and Vercel credentials/project             |
+| `PROVISION_SHARED`    | records/updates shared deployment state                  | Azure environment and approved base domain    |
+| `PROVISION_DEDICATED` | records a contracted dedicated deployment and polls      | approved Azure resources and rollout           |
+| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to the deployment       | DNS and Azure ingress                          |
 | `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                           |
 | `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                         |
 | `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                        |
@@ -28,7 +30,7 @@ Jobs are idempotency-keyed where commands can be retried. Operators can inspect 
 
 Shared is the default. The worker records:
 
-- provider `VERCEL`;
+- provider `AZURE`;
 - production environment;
 - shared mode;
 - project ID/region when configured;
@@ -38,19 +40,9 @@ Shared is the default. The worker records:
 
 All organizations share application compute and PostgreSQL while RLS isolates data.
 
-## Dedicated deployment
+## Dedicated deployment (enterprise gate)
 
-The dedicated worker requires:
-
-- `VERCEL_ACCESS_TOKEN`;
-- `VERCEL_TEAM_ID` or `VERCEL_ORG_ID`;
-- `VERCEL_GIT_REPO_ORG`;
-- `VERCEL_GIT_REPO_NAME`;
-- optional `VERCEL_GIT_REPO_REF`.
-
-It creates/uses `devfathom-<slug>`, upserts runtime environment variables, creates a production Git deployment, stores provider IDs/URL/health, and schedules polling jobs until READY/ERROR/CANCELED.
-
-Local QA did not create a live Vercel project. Test this path in a controlled team before enterprise launch.
+Dedicated environments are not part of the current staging deployment. Define the Azure resource topology, tenant isolation proof, domain/SSO rollout, backup policy, and owner approval before implementing or advertising an enterprise environment. No dedicated production environment is currently verified.
 
 ## Configuration reference
 
@@ -71,10 +63,6 @@ Use `.env.example` as the machine-copyable template.
 ### Bootstrap/seed only
 
 `PLATFORM_ADMIN_EMAIL`, `PLATFORM_ADMIN_PASSWORD`, `ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_DEPARTMENT`, `ADMIN_TITLE`, and `SEED_PASSWORD`. Do not retain bootstrap passwords in deployment config after controlled initialization unless the script is intentionally rerunnable.
-
-### Dedicated Vercel
-
-`VERCEL_ACCESS_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_REGION`, `VERCEL_GIT_REPO_ORG`, `VERCEL_GIT_REPO_NAME`, `VERCEL_GIT_REPO_REF`.
 
 ### Optional integrations
 
@@ -98,11 +86,11 @@ Operational evidence is available in:
 - tenant audit and SCIM events;
 - provider deployment logs.
 
-Production should add alerting for failed/stale jobs, overdue invoices, expiring contracts, identity errors, domain verification failures, degraded deployments, repeated auth failures, and RLS verifier failures.
+Azure platform logs are available in staging through capped Log Analytics. Application error tracking, request metrics, and production alerting are not implemented; add and verify them before production launch.
 
 ## Backup and recovery
 
-Before production:
+Staging currently has managed PostgreSQL backups with seven-day retention. Before production:
 
 1. enable managed PostgreSQL point-in-time recovery;
 2. define RPO/RTO;
@@ -114,6 +102,6 @@ Before production:
 
 ## Secret rotation
 
-Rotate platform/bootstrap passwords, `AUTH_SECRET`, cron secret, Vercel token, Blob token, email keys, SCIM tokens, IdP client secrets/certificates, and `PLATFORM_ENCRYPTION_KEY` under a documented schedule.
+Rotate platform/bootstrap passwords, `AUTH_SECRET`, cron secret, Blob token, email keys, SCIM tokens, IdP client secrets/certificates, and `PLATFORM_ENCRYPTION_KEY` under a documented schedule.
 
 Changing the encryption key without re-encrypting stored ciphertext makes encrypted values unreadable. Use an expand/rotate/reencrypt/retire procedure before production key rotation.
