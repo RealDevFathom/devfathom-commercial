@@ -80,4 +80,4 @@ The evidence-backed offer is a controlled implementation: manual activation, org
 
 **Can you promise savings, compliance, or an SLA?** Not from repository evidence. Use an owner-approved contract or validated study.
 
-**Where does it run?** Azure. Staging is live. Production currently has only an empty, non-billable resource-group shell; the app, database, security services, DNS, certificates, and access controls have not been provisioned. The current template is blocked while readiness fixes are in progress.
+**Where does it run?** Azure. Staging is live. Production currently has an empty, non-billable resource-group shell and deployment identity/configuration only; no app, database, secret, deployment, DNS, or certificate exists. The current template is blocked while readiness fixes are in progress.

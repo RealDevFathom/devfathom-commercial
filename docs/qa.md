@@ -12,7 +12,10 @@ Last run: 2026-08-08.
 | Vercel-reference audit | PASS WITH CAVEAT | Remaining references identify disabled legacy package/code paths or state the Azure-only policy; none are current deployment instructions |
 | Hostname consistency | PASS | Planned app hosts are `www.devfathom.com` and `admin.devfathom.com` on one Container App; apex remains marketing; meet/turn are future and not live |
 | Environment separation | PASS | Production isolation is retained; only an empty resource-group shell exists and no production database/resources are deployed |
-| Production deployability | BLOCKED | Template lacks safe bootstrap and email wiring; promotion lacks health smoke; GitHub variables and Azure RBAC are absent |
+| Production identity isolation | PASS | Separate secretless production OIDC identity has scoped production/ACR roles and no staging role; IDs and values are omitted |
+| GitHub production environment | PASS | Seven required Azure variables and a `main`-only deployment branch policy are configured; values are omitted |
+| Repository/live OIDC parity | ACTION REQUIRED | Current helper still models a shared principal and disables custom branch policy; it does not reproduce live production configuration |
+| Production deployability | BLOCKED | Template lacks safe bootstrap and email wiring; promotion lacks health smoke; no production resources or deployment exist |
 | Status vocabulary | PASS | New pack uses IMPLEMENTED, PARTIAL, PLANNED, BLOCKED, and FUTURE |
 | Pricing/claims safety | PASS | No final price, limit, customer, savings, compliance, SLA, or benchmark claim added |
 
