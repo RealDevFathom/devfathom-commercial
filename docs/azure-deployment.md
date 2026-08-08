@@ -33,11 +33,13 @@ The staging script creates only the two `rg-devfathom-*` groups above, builds on
 
 The current production template is **not deployable** and must not be run. It has no safe first-tenant/platform-administrator bootstrap, configures `EMAIL_DELIVERY_MODE=send` without production Brevo API/sender wiring, and is paired with a promotion workflow that has no post-deploy health smoke. Production identity, least-privilege RBAC, required GitHub Azure variables, and the main-only deployment branch policy are configured, but they do not close these application and release-safety gaps.
 
-Minimal readiness fixes are **IN PROGRESS** in a separate implementation workstream. Keep that status until the fixes are merged, reviewed against the audited main baseline, exercised in staging, and deployed. An approved image digest alone is not a production gate.
+Minimal readiness fixes are **IN PROGRESS** in a separate worktree and under test. They are not merged or deployed. Keep that status until the fixes are merged, reviewed against the audited main baseline, exercised in staging, and deployed. An approved image digest alone is not a production gate.
 
 ## CI/CD and OIDC
 
 `.github/workflows/deploy-staging.yml` authenticates through GitHub Actions OIDC, builds and pushes one immutable `${GITHUB_SHA}` image, updates and waits for the migration/seed job, deploys the same digest, then checks `/api/health`. The Entra service principal has Contributor only on the staging resource group and `AcrPush` only on the shared registry. GitHub stores subscription, tenant, client, resource-group, app, job, and registry IDs as variables; there is no client secret. `infra/configure-github-oidc.sh` reads GitHub's repository-specific OIDC subject prefix, including immutable owner/repository IDs when enabled, before creating or updating the federated credentials.
+
+The latest reported staging workflow passed immutable image build, migration/backfill plus seed, deployment, and smoke stages in 8m01s. Staging is running the resulting approved immutable image on a healthy revision; image digests, revision names, and workflow-run identifiers are intentionally omitted here.
 
 `.github/workflows/promote-production.yml` is manual, targets the protected `production` environment, accepts only a `sha256:` digest already present in the same ACR, runs production migrations without seed data, then updates production to that exact digest. The GitHub production environment now has the seven required Azure variables and a custom deployment branch policy allowing only `main`.
 
@@ -154,7 +156,7 @@ Database migrations are forward-only; restore to a new server for a data/schema 
 - GitHub production environment: seven required Azure variables are configured, and the custom deployment branch policy allows only `main`. No values are recorded here.
 - Configuration drift: the repository OIDC helper does not yet reproduce the separate production principal or `main`-only policy. Do not treat that helper as production-ready.
 - DNS/TLS: GoDaddy records are live. `staging.devfathom.com` and `admin.staging.devfathom.com` are bound to the staging Container App with Azure-managed DigiCert certificates and both HTTPS routes return HTTP 200.
-- Source baseline: the latest reported audited `main` was commit `89f75459` from PR #24. PR #23 remains the final Meetings Wave-1 schema PR pending rebase and staging verification.
+- Source baseline: the latest reported audited `main` was commit `89f75459` from PR #24. Meetings PR #23 merged to `main` at `ac20ca0` and its schema/reconciliation work passed the staging release workflow.
 - Production resource shell: the tagged production resource group exists and is empty, with no billable resources.
-- Production readiness: minimal fixes are **IN PROGRESS** outside this documentation change. The current template and promotion path remain **BLOCKED** for the bootstrap, email, health-smoke, resource-provisioning, and deployment-validation gaps above.
-- Production services: no app, database, Key Vault, storage, AI, secret, deployment, DNS, certificate, or billable resource exists. No production cutover has occurred.
+- Production readiness: the minimal patch is **IN PROGRESS**, under test in another worktree, and not merged or deployed. The current template and promotion path remain **BLOCKED** for the bootstrap, email, health-smoke, resource-provisioning, and deployment-validation gaps above.
+- Production services: no app, database, Key Vault, storage, AI, secret, deployment, DNS, certificate, or billable resource exists. `www.devfathom.com` still serves or redirects to the existing GoDaddy marketing site; `admin.devfathom.com` is absent. No production cutover has occurred.

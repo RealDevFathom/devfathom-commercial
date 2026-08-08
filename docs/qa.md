@@ -10,12 +10,13 @@ Last run: 2026-08-08.
 | Internal Markdown links | PASS | Newly added links resolve to repository paths; run the command below after doc edits |
 | Secret scan | PASS | Documentation contains placeholders and identifiers only; never copy secret values |
 | Vercel-reference audit | PASS WITH CAVEAT | Remaining references identify disabled legacy package/code paths or state the Azure-only policy; none are current deployment instructions |
-| Hostname consistency | PASS | Planned app hosts are `www.devfathom.com` and `admin.devfathom.com` on one Container App; apex remains marketing; meet/turn are future and not live |
+| Hostname consistency | PASS WITH CAVEAT | `www.devfathom.com` still serves/redirects the GoDaddy marketing site; `admin.devfathom.com` is absent; planned app hosts remain future; meet/turn are future and not live |
 | Environment separation | PASS | Production isolation is retained; only an empty resource-group shell exists and no production database/resources are deployed |
 | Production identity isolation | PASS | Separate secretless production OIDC identity has scoped production/ACR roles and no staging role; IDs and values are omitted |
 | GitHub production environment | PASS | Seven required Azure variables and a `main`-only deployment branch policy are configured; values are omitted |
 | Repository/live OIDC parity | ACTION REQUIRED | Current helper still models a shared principal and disables custom branch policy; it does not reproduce live production configuration |
-| Production deployability | BLOCKED | Template lacks safe bootstrap and email wiring; promotion lacks health smoke; no production resources or deployment exist |
+| Staging release evidence | PASS | Latest reported workflow passed immutable build, migration/backfill plus seed, deploy, and smoke in 8m01s; opaque digest/revision/run values are omitted |
+| Production deployability | BLOCKED | Readiness patch is under test and not merged/deployed; template lacks safe bootstrap and email wiring; promotion lacks health smoke; no production resources or deployment exist |
 | Status vocabulary | PASS | New pack uses IMPLEMENTED, PARTIAL, PLANNED, BLOCKED, and FUTURE |
 | Pricing/claims safety | PASS | No final price, limit, customer, savings, compliance, SLA, or benchmark claim added |
 
@@ -32,6 +33,6 @@ The Vercel result is not automatically a defect when it names a disabled legacy 
 ## Known reconciliation items
 
 - Keep dedicated provisioning **BLOCKED/PARTIAL** until an isolated Azure path is implemented and verified.
-- Update the Meetings ledger after PR #23 is rebased, merged, staging-verified, and attached to release evidence.
-- Keep production readiness **IN PROGRESS** until implementation changes are merged, reviewed, staging-verified, and deployed; the empty resource group is not deployment evidence.
+- Keep the Meetings schema/reconciliation row **IMPLEMENTED**, while tracking media rollout separately as **PLANNED / PARTIAL**.
+- Keep production readiness **IN PROGRESS** until the patch is merged, reviewed, staging-verified, and deployed; the empty resource group is not deployment evidence.
 - Replace `[VERIFY: ...]` placeholders in pitch material only with approved evidence.

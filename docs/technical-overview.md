@@ -22,7 +22,7 @@ Browser
        -> self-hosted LiveKit/TURN (future media topology; not live)
 ```
 
-Azure staging is live. Production currently has an empty tagged resource-group shell plus a separate secretless deployment identity, least-privilege RBAC, and GitHub environment configuration. No billable production resource, secret, deployment, DNS, or certificate exists. The current production template and promotion path remain blocked; readiness fixes are in progress. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
+Azure staging is live and the latest reported workflow passed immutable build, migration/backfill plus seed, deployment, and smoke. Production currently has an empty tagged resource-group shell plus a separate secretless deployment identity, least-privilege RBAC, and GitHub environment configuration. No billable production resource, secret, deployment, DNS, or certificate exists. The current production template and promotion path remain blocked; readiness fixes are under test and not merged/deployed. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
 
 ## Tenancy and security boundary
 
@@ -50,7 +50,8 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 | Ask Fathom provider adapter and credits | **PARTIAL** | `src/lib/ai/provider.ts`, assistant routes/tools, Azure staging evidence; provider and quota operations remain environment-dependent |
 | Email | **PARTIAL** | Templates and delivery abstraction exist; staging is capture-only and production sender verification is pending |
 | Realtime chat | **PARTIAL** | Ably integration with graceful fallback; in-house realtime is planned |
-| Meetings self-hosted LiveKit/TURN | **PLANNED / PARTIAL** | Audited main was `89f75459` (#24); final Wave-1 schema PR #23 still needs rebase and staging verification; media endpoints are not live |
+| Meetings schema/reconciliation | **IMPLEMENTED** | PR #23 merged to `main`; staging migration/backfill, seed, deploy, and smoke passed |
+| Meetings self-hosted LiveKit/TURN | **PLANNED / PARTIAL** | Schema release is verified, but media endpoints are not live and production has not been cut over |
 | Native mobile applications | **FUTURE** | Current scope is web; responsive browser use is distinct from native apps |
 
 ## Non-goals and operating constraints
@@ -59,6 +60,6 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 - No `@devfathom.com` mailbox is provided; connected Gmail, Outlook, and generic IMAP/SMTP are the planned email direction.
 - No pricing, SLA, compliance certification, customer, savings, or benchmark claim is publishable without an owner-approved evidence source.
 - Production and staging databases must remain separate.
-- Planned production hosts are `www.devfathom.com` and `admin.devfathom.com` on one Container App; the apex remains the marketing site.
+- Planned production hosts are `www.devfathom.com` and `admin.devfathom.com` on one Container App. Currently `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is absent; the apex remains marketing.
 - `meet.devfathom.com` and `turn.devfathom.com` are future endpoints, not live services.
 - Azure is the platform of record. Legacy Vercel SDK/blob code is a partial migration dependency, not deployment guidance.
