@@ -41,7 +41,15 @@ const recurrenceLabels: Record<string, string> = {
 export function MeetingsContent() {
   const utils = trpc.useUtils();
   const { data: upcoming, isLoading: loadingUpcoming } = trpc.meetings.getUpcoming.useQuery();
-  const { data: all } = trpc.meetings.getAll.useQuery();
+  // One page at a time (#38). `getAll` is organization-wide for an admin, so
+  // asking for "all of it" was a request for every meeting in the tenant; the
+  // Past list below renders what is loaded and `fetchNextPage` reaches the rest.
+  const {
+    data: allPages,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = trpc.meetings.getAll.useInfiniteQuery({}, { getNextPageParam: (last) => last.nextCursor });
   const { data: team } = trpc.team.getAll.useQuery();
 
   const deleteMeeting = trpc.meetings.delete.useMutation({
@@ -64,9 +72,11 @@ export function MeetingsContent() {
   // unrelated piece of parent state changes. mutate is referentially stable.
   const handleDelete = useCallback((id: string) => deleteMeeting.mutate({ id }), [deleteMeeting]);
 
+  const loaded = useMemo(() => allPages?.pages.flatMap((p) => p.items) ?? [], [allPages]);
+
   const pastMeetings = useMemo(
-    () => all?.filter((m) => isPast(new Date(m.startTime)) && !m.recurrence) ?? [],
-    [all]
+    () => loaded.filter((m) => isPast(new Date(m.startTime)) && !m.recurrence),
+    [loaded]
   );
 
   return (
@@ -128,8 +138,11 @@ export function MeetingsContent() {
         )}
       </div>
 
-      {/* Past meetings */}
-      {pastMeetings.length > 0 && (
+      {/* Past meetings. Rendered whenever there is either something to show or
+          another page to fetch: this is one page of the organization's
+          meetings, not all of them, so the control that reaches the rest has to
+          stay reachable even on a page that happens to hold no past meeting. */}
+      {(pastMeetings.length > 0 || hasNextPage) && (
         <div>
           <h2 className="font-display text-[15px] font-semibold text-muted-foreground mb-3 flex items-center gap-2">
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-secondary">
@@ -138,10 +151,29 @@ export function MeetingsContent() {
             Past
           </h2>
           <div className="space-y-2">
-            {pastMeetings.slice(0, 10).map((m) => (
+            {pastMeetings.map((m) => (
               <MeetingCard key={m.id} meeting={m} onDelete={handleDelete} isPast />
             ))}
           </div>
+          {hasNextPage && (
+            <div className="mt-3 flex flex-col items-center gap-1.5">
+              <p className="text-xs text-muted-foreground">
+                {pastMeetings.length} past of {loaded.length} meetings loaded — more remain.
+              </p>
+              <button
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
+              >
+                {isFetchingNextPage ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                )}
+                Load more
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

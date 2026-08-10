@@ -1,7 +1,7 @@
 /**
  * Meetings list policy, against a REAL PostgreSQL (#35).
  *
- * A mock cannot establish what this file is for. Two of the five cases are
+ * A mock cannot establish what this file is for. Two of the cases are
  * decided by PostgreSQL, not by application code:
  *
  *  - the ADMIN branch deliberately carries NO `organizationId` filter, so the
@@ -84,7 +84,7 @@ const sorted = (ids: string[]) => [...ids].sort();
 
 const getAllIds = (organizationId: string, actor: Actor) =>
   deps.withTenantDb(organizationId, async (db) =>
-    sorted((await caller(db, actor).getAll()).map((m) => m.id))
+    sorted((await caller(db, actor).getAll()).items.map((m) => m.id))
   );
 
 const getUpcomingIds = (organizationId: string, actor: Actor) =>
@@ -207,9 +207,20 @@ describeIfDatabase('meetings list policy, against PostgreSQL', () => {
     expect(await getAllIds(ORGANIZATION_A, { id: ADMIN_A, role: 'ADMIN' })).toEqual(
       sorted([FUTURE_MEMBER, PAST_MEMBER, FUTURE_STRANGER])
     );
-    expect(await getUpcomingIds(ORGANIZATION_A, { id: ADMIN_A, role: 'ADMIN' })).toEqual(
-      sorted([FUTURE_MEMBER, FUTURE_STRANGER])
-    );
+  });
+
+  // CHANGED BY #38, deliberately. This file asserted organization-wide
+  // `getUpcoming` for an ADMIN because that is what #35 specified and PR #36
+  // delivered. #38 narrows the upcoming surfaces back to user-relevant for
+  // every role: they feed the dashboard widget and the Upcoming section, and
+  // organization-wide they made every admin dashboard load fetch the tenant's
+  // entire future calendar. Organization-wide DISCOVERY is unchanged and still
+  // lives on `getAll`, asserted above. See `upcomingListScope`.
+  it('keeps the upcoming surfaces user-relevant, including for an ADMIN (#38)', async () => {
+    expect(await getUpcomingIds(ORGANIZATION_A, { id: ADMIN_A, role: 'ADMIN' })).toEqual([]);
+    expect(await getUpcomingIds(ORGANIZATION_A, { id: MEMBER_A, role: 'EMPLOYEE' })).toEqual([
+      FUTURE_MEMBER,
+    ]);
   });
 
   it('shows an ordinary non-attendee nothing', async () => {
@@ -240,7 +251,7 @@ describeIfDatabase('meetings list policy, against PostgreSQL', () => {
       caller(db, { id: ADMIN_A, role: 'ADMIN' }).getAll()
     );
 
-    const past = meetings.find((m) => m.id === PAST_MEMBER);
+    const past = meetings.items.find((m) => m.id === PAST_MEMBER);
     // `meetings-content.tsx` builds its Past section from getAll with
     // `isPast(startTime) && !recurrence`.
     expect(past?.startTime.getTime()).toBeLessThan(Date.now());
