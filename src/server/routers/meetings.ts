@@ -8,9 +8,18 @@ import { isAdmin } from '@/lib/authz';
 import { logActivity } from '../activity';
 import { computePunctuality, findRelevantOccurrence } from '@/lib/meeting-occurrence';
 
+/** Page size `getAll` falls back to when the caller sends no `limit` (#38). */
+const MEETINGS_PAGE_SIZE = 50;
+/** Ceiling a caller may raise `getAll`'s page size to. */
+const MEETINGS_PAGE_SIZE_MAX = 200;
+/** Live occurrences `getUpcoming` reads directly. */
+const UPCOMING_LIMIT = 50;
+/** Recurring series `getUpcoming` evaluates per call — see the query below. */
+const UPCOMING_SERIES_LIMIT = 200;
+
 export const meetingsRouter = router({
   getUpcoming: protectedProcedure.query(async ({ ctx }) => {
-    const scope = meetingListScope(ctx.session.user);
+    const scope = upcomingListScope(ctx.session.user);
     const now = new Date();
 
     // Include currently-running meetings (endTime still in the future),
@@ -25,18 +34,52 @@ export const meetingsRouter = router({
         include: {
           attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
         },
-        orderBy: { startTime: 'asc' },
-        take: 50,
+        // `startTime` alone leaves ties in an arbitrary order, so which rows
+        // survive `take` is arbitrary too. `id` is unique — (startTime, id) is
+        // a total order, so the same fixture always yields the same page.
+        orderBy: [{ startTime: 'asc' }, { id: 'asc' }],
+        take: UPCOMING_LIMIT,
       }),
-      // Get recurring meetings (even if startTime is in the past — we compute next occurrence)
+      // Recurring series whose ORIGINAL occurrence has already ended: the query
+      // above cannot see them (it filters on endTime), yet their NEXT
+      // occurrence may still be ahead of us, so it is computed below.
+      //
+      // BOUNDED (#38). This query used to carry no take, no orderBy and no time
+      // bound at all, which for an admin meant every recurring meeting in the
+      // tenant plus its full attendee graph on every dashboard load.
+      //
+      // `endTime: { lt: now }` is free: for a series whose original occurrence
+      // has NOT ended, getNextOccurrence returns that original occurrence
+      // unchanged (its first iteration already satisfies `end > now`), which is
+      // byte-for-byte the row the query above already returned and the merge
+      // below already dedupes. Excluding those rows spends the bound only on
+      // series the other query cannot reach.
+      //
+      // The take is a real ceiling, not a lossless bound, because which series
+      // matter is decided by getNextOccurrence AFTER the fetch: every live
+      // series recurs at most monthly, so every one of them has a next
+      // occurrence within ~31 days and no column on this row orders them by it.
+      // MeetingOccurrence (MEET-01) would order them by `scheduledStart`, but
+      // nothing in `src/` writes that table — it has a one-shot backfill
+      // (scripts/backfill-meeting-occurrences.ts) and no materialiser, so
+      // `meetings.create` produces no occurrence rows and reading it here would
+      // silently drop every series created since the backfill. That is a worse
+      // failure than the ceiling. Combined with the attendee scope above, the
+      // ceiling means "the 200 most recently started recurring series you
+      // personally attend", which no real calendar reaches.
+      // ponytail: raise this to a MeetingOccurrence window query the moment a
+      // materialiser writes that table on create/update.
       ctx.db.meeting.findMany({
         where: {
           ...scope,
           recurrence: { not: null },
+          endTime: { lt: now },
         },
         include: {
           attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
         },
+        orderBy: [{ startTime: 'desc' }, { id: 'desc' }],
+        take: UPCOMING_SERIES_LIMIT,
       }),
     ]);
 
@@ -70,38 +113,70 @@ export const meetingsRouter = router({
     return attachPerOccurrenceJoinedAt(ctx.db, merged);
   }),
 
+  /**
+   * The organization-wide meeting list — one page of it (#38).
+   *
+   * `limit` carries a schema-level default and the whole input object defaults
+   * to `{}`, so the bound holds for the production call shape, which sends no
+   * input at all. A page size that depended on the caller remembering to ask
+   * for one is the defect this replaces: for an admin, `meetingListScope`
+   * drops the attendee filter, so an unbounded take here is "every meeting in
+   * the tenant, with its full attendee graph".
+   *
+   * Nothing is hidden by the bound — `nextCursor` walks the rest.
+   */
   getAll: protectedProcedure
     .input(
       z
         .object({
-          limit: z.number().int().min(1).max(1000).optional(),
+          limit: z.number().int().min(1).max(MEETINGS_PAGE_SIZE_MAX).default(MEETINGS_PAGE_SIZE),
           cursor: z.string().optional(),
         })
-        .optional()
+        // `prefault`, not `default`: an absent input is PARSED as `{}`, so
+        // `limit`'s own default applies to it. The production call site sends
+        // no input at all, and that is the shape the bound has to survive.
+        .prefault({})
     )
     .query(async ({ ctx, input }) => {
       const now = new Date();
-      const limit = input?.limit ? Math.min(input.limit, 1000) : undefined;
 
       const meetings = await ctx.db.meeting.findMany({
         where: meetingListScope(ctx.session.user),
         include: {
           attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
         },
-        orderBy: { startTime: 'desc' },
-        take: limit,
-        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        // `startTime` alone is NOT a total order: two meetings can start at the
+        // same instant, and a cursor over a non-unique ordering skips or
+        // repeats rows across the page boundary. `id` is unique, so
+        // (startTime, id) is total and the cursor below is consistent with it.
+        orderBy: [{ startTime: 'desc' }, { id: 'desc' }],
+        // One row past the page tells us whether another page exists without a
+        // second count query, and that extra row IS the next page's cursor.
+        take: input.limit + 1,
+        // Prisma's cursor is INCLUSIVE — the cursor row is the first row of
+        // the page. Pairing it with `skip: 1` (as the pre-#38 plumbing did)
+        // while pointing it at the row after the page silently drops exactly
+        // one meeting per page boundary.
+        ...(input.cursor ? { cursor: { id: input.cursor } } : {}),
       });
+
+      let nextCursor: string | undefined;
+      if (meetings.length > input.limit) nextCursor = meetings.pop()?.id;
 
       // For each meeting, resolve the "relevant" occurrence for display so the
       // per-occurrence attendance lookup targets the right one. Non-recurring:
       // the meeting's own start/end. Recurring: the occurrence closest to now.
+      // Note this rewrites the DISPLAY times only; the cursor above walks the
+      // stored `startTime`, which is what keeps paging stable.
       const withResolvedStart = meetings.map((m) => {
         const occ = findRelevantOccurrence(m.startTime, m.endTime, m.recurrence, now);
         return { ...m, startTime: occ.start, endTime: occ.end };
       });
 
-      return attachPerOccurrenceJoinedAt(ctx.db, withResolvedStart);
+      return {
+        items: await attachPerOccurrenceJoinedAt(ctx.db, withResolvedStart),
+        nextCursor,
+      };
     }),
 
   create: protectedProcedure
@@ -424,8 +499,10 @@ export const meetingsRouter = router({
       // user who opens /meetings/<id>/call off-hours is stamped "present" for the
       // resolved occurrence. Attendance counts only within [start-5min, end].
       const windowStart = new Date(occurrence.start.getTime() - 5 * 60_000);
-      if (now < windowStart) return { skipped: 'too_early' as const, alreadyJoined: false as const };
-      if (now > occurrence.end) return { skipped: 'too_late' as const, alreadyJoined: false as const };
+      if (now < windowStart)
+        return { skipped: 'too_early' as const, alreadyJoined: false as const };
+      if (now > occurrence.end)
+        return { skipped: 'too_late' as const, alreadyJoined: false as const };
 
       // RT-06: atomic insert. createMany + skipDuplicates can't race the way the
       // old findUnique→create did (a genuine concurrent double-join threw P2002 →
@@ -567,6 +644,35 @@ export const meetingsRouter = router({
  */
 function meetingListScope(user: { id: string; role?: string | null }): Prisma.MeetingWhereInput {
   return isAdmin(user.role) ? {} : { attendees: { some: { userId: user.id } } };
+}
+
+/**
+ * Whose meetings the UPCOMING surfaces return (#38).
+ *
+ * DELIBERATELY NOT `meetingListScope`, and this is why the two now differ.
+ *
+ * Issue #35 (closed, delivered by PR #36) specified "ADMIN — organization-wide
+ * list AND upcoming visibility", and `getUpcoming` shared `meetingListScope`
+ * accordingly. #38 narrows the upcoming half back to user-relevant for every
+ * role, admins included. That is an intentional PARTIAL REVERSAL of shipped,
+ * accepted behaviour, not a bug fix landing on top of it:
+ *
+ *  - `getUpcoming` feeds the dashboard widget and the Meetings page's Upcoming
+ *    section. Both answer "what am I doing next", not "what is the
+ *    organization doing next". Organization-wide, it made every admin
+ *    dashboard load fetch every future meeting in the tenant plus every
+ *    recurring series plus their full attendee graphs.
+ *  - Organization-wide DISCOVERY is unaffected: it lives on `getAll`, which is
+ *    bounded and paginated, and an admin still reaches every organization
+ *    meeting there.
+ *
+ * An organization-wide upcoming view remains a legitimate feature — it is just
+ * a separately authorized one. Until it is explicitly requested, this
+ * procedure stays attendee-scoped, which is byte-for-byte what a non-admin
+ * already saw.
+ */
+function upcomingListScope(user: { id: string }): Prisma.MeetingWhereInput {
+  return { attendees: { some: { userId: user.id } } };
 }
 
 /**
