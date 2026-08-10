@@ -31,5 +31,6 @@ describe('module catalog routing', () => {
     expect(moduleForPath('/projects/project_123')).toBe('projects');
     expect(moduleForPath('/project-settings')).toBeNull();
     expect(moduleForPath('/organization')).toBeNull();
+    expect(moduleForPath('/api-docs')).toBeNull();
   });
 });

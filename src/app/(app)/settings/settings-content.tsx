@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
+import { toast } from 'sonner';
 import { useTheme } from '@/components/theme-provider';
 import Link from 'next/link';
 import {
@@ -43,6 +44,8 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import { useEntitlements } from '@/components/entitlements-provider';
+import type { EntitlementView } from '@/lib/module-catalog';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
@@ -67,6 +70,27 @@ function formatDay(d: Date | string) {
     day: 'numeric',
     year: 'numeric',
   });
+}
+
+type UiError = { message?: string; data?: { code?: string } | null };
+type EntitlementModule = EntitlementView['modules'][number] | undefined;
+
+function readableError(error: UiError, forbiddenFallback: string, fallback: string) {
+  return error.data?.code === 'FORBIDDEN' ? error.message || forbiddenFallback : fallback;
+}
+
+function disabledModuleMessage(module: EntitlementModule, key: 'api' | 'webhooks') {
+  if (module?.source === 'NONE') {
+    return 'This feature is not included in your organization’s current plan. Contact your administrator or DevFathom sales to enable it.';
+  }
+  if (module?.source === 'OVERRIDE') {
+    return key === 'api'
+      ? 'API access is disabled for this organization. Existing tokens cannot authenticate, and new tokens cannot be created. Contact your platform administrator to enable it.'
+      : 'Webhooks are disabled for this organization. Deliveries are paused, and new endpoints cannot be added. Events produced while disabled are not replayed.';
+  }
+  return key === 'api'
+    ? 'API access is currently unavailable for this organization. Contact your administrator for assistance.'
+    : 'Webhooks are currently unavailable for this organization. Contact your administrator for assistance.';
 }
 
 export function SettingsContent() {
@@ -1092,33 +1116,61 @@ const AVAILABLE_SCOPES = [
   { value: 'meetings:write', label: 'Meetings (write)' },
 ];
 
-function ApiTokensSection() {
+export function ApiTokensSection() {
   const utils = trpc.useUtils();
   const { data: session } = useSession();
-  const { data: tokens } = trpc.apiTokens.list.useQuery();
-  const { data: usage } = trpc.apiTokens.usage.useQuery(); // IMP-REST-01
-  const { data: team } = trpc.team.getAll.useQuery();
+  const entitlements = useEntitlements();
+  const apiModule = entitlements.modules.find((module) => module.key === 'api');
+  const apiEnabled = apiModule?.enabled ?? entitlements.enabledModules.includes('api');
+  const noticeId = 'api-entitlement-notice';
+  const [showCreate, setShowCreate] = useState(false);
+  const [name, setName] = useState('');
+  const [selectedScopes, setSelectedScopes] = useState<string[]>(['*']);
+  const [boundUserId, setBoundUserId] = useState<string>('');
+  const [formError, setFormError] = useState('');
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [newTokenBoundUser, setNewTokenBoundUser] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const tokensQuery = trpc.apiTokens.list.useQuery();
+  const usageQuery = trpc.apiTokens.usage.useQuery(); // IMP-REST-01
+  const teamQuery = trpc.team.getAll.useQuery(undefined, {
+    enabled: apiEnabled && showCreate,
+  });
+  const { data: tokens } = tokensQuery;
+  const { data: usage } = usageQuery;
+  const { data: team } = teamQuery;
   const createToken = trpc.apiTokens.create.useMutation({
     onSuccess: (result) => {
       utils.apiTokens.list.invalidate();
       setNewToken(result.token);
       setNewTokenBoundUser(result.boundUser?.name ?? null);
+      setShowCreate(false);
       setName('');
       setSelectedScopes(['*']);
       setBoundUserId('');
+      setFormError('');
+    },
+    onError: (error) => {
+      const message = readableError(
+        error,
+        'API access is disabled for this organization.',
+        'The token could not be created. Please try again.'
+      );
+      setFormError(message);
+      toast.error(message);
     },
   });
   const revokeToken = trpc.apiTokens.revoke.useMutation({
     onSuccess: () => utils.apiTokens.list.invalidate(),
+    onError: (error) =>
+      toast.error(
+        readableError(
+          error,
+          'API access is disabled for this organization.',
+          'The token could not be revoked. Please try again.'
+        )
+      ),
   });
-
-  const [showCreate, setShowCreate] = useState(false);
-  const [name, setName] = useState('');
-  const [selectedScopes, setSelectedScopes] = useState<string[]>(['*']);
-  const [boundUserId, setBoundUserId] = useState<string>('');
-  const [newToken, setNewToken] = useState<string | null>(null);
-  const [newTokenBoundUser, setNewTokenBoundUser] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   // Smart scope gating: if the token is bound to a non-admin user, hide
   // finance scopes by default. Admin can still enable them manually.
@@ -1142,6 +1194,11 @@ function ApiTokensSection() {
               <Key className="h-3.5 w-3.5 text-blue-500" />
             </div>
             API Tokens
+            {!apiEnabled && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                <Lock className="h-3 w-3" aria-hidden="true" /> Disabled
+              </span>
+            )}
           </CardTitle>
           <Link
             href="/api-docs"
@@ -1156,6 +1213,40 @@ function ApiTokensSection() {
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
+        {!apiEnabled && (
+          <div
+            id={noticeId}
+            className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs leading-5 text-foreground"
+          >
+            <Lock
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-400"
+              aria-hidden="true"
+            />
+            <p>{disabledModuleMessage(apiModule, 'api')}</p>
+          </div>
+        )}
+
+        {tokensQuery.error && (
+          <p
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            {readableError(
+              tokensQuery.error,
+              'API access is disabled for this organization.',
+              'API tokens could not be loaded. Please try again.'
+            )}
+          </p>
+        )}
+        {usageQuery.error && !tokensQuery.error && (
+          <p
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            Token usage could not be loaded. Please try again.
+          </p>
+        )}
+
         {/* Newly created token */}
         {newToken && (
           <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
@@ -1213,6 +1304,11 @@ function ApiTokensSection() {
                     <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary shrink-0">
                       acts as {t.user.name}
                     </span>
+                    {!apiEnabled && (
+                      <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                        Blocked
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] font-mono text-muted-foreground">{t.prefix}...</p>
                   <div className="flex items-center gap-1 mt-1 flex-wrap">
@@ -1258,8 +1354,11 @@ function ApiTokensSection() {
                   )}
                 </div>
                 <button
+                  type="button"
                   onClick={() => revokeToken.mutate({ id: t.id })}
-                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all"
+                  disabled={revokeToken.isPending}
+                  aria-label={`Revoke ${t.name}`}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10 focus-visible:text-red-500 disabled:opacity-50 transition-colors"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -1271,12 +1370,43 @@ function ApiTokensSection() {
         )}
 
         {/* Create form */}
-        {showCreate ? (
+        {!apiEnabled ? (
+          <button
+            type="button"
+            disabled
+            aria-describedby={noticeId}
+            className="flex items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 py-2 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed"
+          >
+            <Lock className="h-3.5 w-3.5" aria-hidden="true" /> API access disabled
+          </button>
+        ) : showCreate ? (
           <div className="rounded-xl border border-primary/20 bg-card p-4 space-y-3">
+            {formError && (
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                {formError}
+              </p>
+            )}
+            {teamQuery.error && (
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                Team members could not be loaded. You can still create a token for yourself.
+              </p>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Token Name</label>
+                <label
+                  htmlFor="api-token-name"
+                  className="block text-xs font-medium text-foreground mb-1"
+                >
+                  Token Name
+                </label>
                 <input
+                  id="api-token-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g. Shehroz · Claude Code"
@@ -1284,10 +1414,14 @@ function ApiTokensSection() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">
+                <label
+                  htmlFor="api-token-user"
+                  className="block text-xs font-medium text-foreground mb-1"
+                >
                   Token acts as
                 </label>
                 <select
+                  id="api-token-user"
                   value={boundUserId}
                   onChange={(e) => setBoundUserId(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -1312,8 +1446,17 @@ function ApiTokensSection() {
               in activity feeds and stats.
             </p>
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1.5">Scopes</label>
-              <div className="flex flex-wrap gap-1.5">
+              <p
+                id="api-token-scopes-label"
+                className="block text-xs font-medium text-foreground mb-1.5"
+              >
+                Scopes
+              </p>
+              <div
+                role="group"
+                aria-labelledby="api-token-scopes-label"
+                className="flex flex-wrap gap-1.5"
+              >
                 {AVAILABLE_SCOPES.map((s) => {
                   const isFinance = s.value.startsWith('finance:');
                   const isBlocked = isEmployeeBinding && isFinance;
@@ -1365,6 +1508,7 @@ function ApiTokensSection() {
               <button
                 onClick={() => {
                   if (name.trim() && selectedScopes.length > 0) {
+                    setFormError('');
                     // Filter out finance scopes if we're binding to a non-admin
                     // (belt-and-suspenders with the server validation)
                     const finalScopes = isEmployeeBinding
@@ -1375,7 +1519,6 @@ function ApiTokensSection() {
                       scopes: finalScopes,
                       userId: boundUserId || undefined,
                     });
-                    setShowCreate(false);
                   }
                 }}
                 disabled={!name.trim() || selectedScopes.length === 0 || createToken.isPending}
@@ -1392,7 +1535,10 @@ function ApiTokensSection() {
           </div>
         ) : (
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => {
+              setFormError('');
+              setShowCreate(true);
+            }}
             className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
           >
             <Plus className="h-3.5 w-3.5" /> New Token
@@ -1425,9 +1571,15 @@ function formatDeliveryTime(d: Date | string) {
   });
 }
 
-function WebhooksSection() {
+export function WebhooksSection() {
   const utils = trpc.useUtils();
-  const { data: webhooks } = trpc.webhooks.list.useQuery();
+  const entitlements = useEntitlements();
+  const webhooksModule = entitlements.modules.find((module) => module.key === 'webhooks');
+  const webhooksEnabled =
+    webhooksModule?.enabled ?? entitlements.enabledModules.includes('webhooks');
+  const noticeId = 'webhooks-entitlement-notice';
+  const webhooksQuery = trpc.webhooks.list.useQuery();
+  const { data: webhooks } = webhooksQuery;
 
   const createWebhook = trpc.webhooks.create.useMutation({
     onSuccess: (result) => {
@@ -1438,13 +1590,37 @@ function WebhooksSection() {
       setShowCreate(false);
       setError('');
     },
-    onError: (e) => setError(e.message),
+    onError: (e) => {
+      const message = readableError(
+        e,
+        'Webhooks are disabled for this organization.',
+        'The webhook could not be created. Please try again.'
+      );
+      setError(message);
+      toast.error(message);
+    },
   });
   const updateWebhook = trpc.webhooks.update.useMutation({
     onSuccess: () => utils.webhooks.list.invalidate(),
+    onError: (e) =>
+      toast.error(
+        readableError(
+          e,
+          'Webhooks are disabled for this organization.',
+          'The webhook could not be updated. Please try again.'
+        )
+      ),
   });
   const deleteWebhook = trpc.webhooks.delete.useMutation({
     onSuccess: () => utils.webhooks.list.invalidate(),
+    onError: (e) =>
+      toast.error(
+        readableError(
+          e,
+          'Webhooks are disabled for this organization.',
+          'The webhook could not be deleted. Please try again.'
+        )
+      ),
   });
 
   const [showCreate, setShowCreate] = useState(false);
@@ -1484,6 +1660,11 @@ function WebhooksSection() {
             <Webhook className="h-3.5 w-3.5 text-fuchsia-500" />
           </div>
           Webhooks
+          {!webhooksEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+              <Lock className="h-3 w-3" aria-hidden="true" /> Disabled
+            </span>
+          )}
         </CardTitle>
         <p className="text-xs text-muted-foreground mt-1">
           Send a signed POST to your endpoint when events happen. Verify each request with the{' '}
@@ -1494,6 +1675,32 @@ function WebhooksSection() {
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
+        {!webhooksEnabled && (
+          <div
+            id={noticeId}
+            className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs leading-5 text-foreground"
+          >
+            <Lock
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-400"
+              aria-hidden="true"
+            />
+            <p>{disabledModuleMessage(webhooksModule, 'webhooks')}</p>
+          </div>
+        )}
+
+        {webhooksQuery.error && (
+          <p
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            {readableError(
+              webhooksQuery.error,
+              'Webhooks are disabled for this organization.',
+              'Webhooks could not be loaded. Please try again.'
+            )}
+          </p>
+        )}
+
         {/* Signing secret — shown exactly once after creation */}
         {newSecret && (
           <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
@@ -1538,6 +1745,7 @@ function WebhooksSection() {
                 key={w.id}
                 webhook={w}
                 busy={updateWebhook.isPending || deleteWebhook.isPending}
+                moduleEnabled={webhooksEnabled}
                 onToggleActive={(active) => updateWebhook.mutate({ id: w.id, active })}
                 onDelete={() => deleteWebhook.mutate({ id: w.id })}
               />
@@ -1548,14 +1756,34 @@ function WebhooksSection() {
         )}
 
         {/* Create form */}
-        {showCreate ? (
+        {!webhooksEnabled ? (
+          <button
+            type="button"
+            disabled
+            aria-describedby={noticeId}
+            className="flex items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 py-2 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed"
+          >
+            <Lock className="h-3.5 w-3.5" aria-hidden="true" /> Webhooks disabled
+          </button>
+        ) : showCreate ? (
           <div className="rounded-xl border border-primary/20 bg-card p-4 space-y-3">
             {error && (
-              <p className="text-sm text-red-500 rounded-lg bg-red-500/10 px-3 py-2">{error}</p>
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                {error}
+              </p>
             )}
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Endpoint URL</label>
+              <label
+                htmlFor="webhook-url"
+                className="block text-xs font-medium text-foreground mb-1"
+              >
+                Endpoint URL
+              </label>
               <input
+                id="webhook-url"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="https://example.com/webhooks/devfathom"
@@ -1563,8 +1791,17 @@ function WebhooksSection() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1.5">Events</label>
-              <div className="flex flex-col gap-1.5">
+              <p
+                id="webhook-events-label"
+                className="block text-xs font-medium text-foreground mb-1.5"
+              >
+                Events
+              </p>
+              <div
+                role="group"
+                aria-labelledby="webhook-events-label"
+                className="flex flex-col gap-1.5"
+              >
                 {WEBHOOK_EVENT_OPTIONS.map((evt) => {
                   const on = selectedEvents.includes(evt.value);
                   return (
@@ -1625,7 +1862,10 @@ function WebhooksSection() {
           </div>
         ) : (
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => {
+              setError('');
+              setShowCreate(true);
+            }}
             className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
           >
             <Plus className="h-3.5 w-3.5" /> New Webhook
@@ -1639,19 +1879,22 @@ function WebhooksSection() {
 function WebhookRow({
   webhook,
   busy,
+  moduleEnabled,
   onToggleActive,
   onDelete,
 }: {
   webhook: WebhookListItem;
   busy: boolean;
+  moduleEnabled: boolean;
   onToggleActive: (active: boolean) => void;
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const { data: deliveries, isLoading } = trpc.webhooks.recentDeliveries.useQuery(
+  const deliveriesQuery = trpc.webhooks.recentDeliveries.useQuery(
     { webhookId: webhook.id },
     { enabled: open }
   );
+  const { data: deliveries, isLoading } = deliveriesQuery;
 
   const latest = webhook.deliveries[0];
 
@@ -1687,19 +1930,27 @@ function WebhookRow({
                 · last {latest.success ? 'OK' : 'failed'}
               </span>
             )}
+            {!moduleEnabled && (
+              <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                · Paused by organization
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <Switch
             size="sm"
             checked={webhook.active}
-            disabled={busy}
+            disabled={busy || !moduleEnabled}
+            aria-label={`${webhook.active ? 'Deactivate' : 'Activate'} ${webhook.url}`}
             onCheckedChange={(v) => onToggleActive(v)}
           />
           <button
+            type="button"
             onClick={onDelete}
             disabled={busy}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all disabled:opacity-50"
+            aria-label={`Delete ${webhook.url}`}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10 focus-visible:text-red-500 disabled:opacity-50 transition-colors"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -1711,6 +1962,10 @@ function WebhookRow({
           {isLoading ? (
             <p className="flex items-center gap-1.5 px-1 py-2 text-[11px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> Loading deliveries…
+            </p>
+          ) : deliveriesQuery.error ? (
+            <p role="alert" className="px-1 py-2 text-[11px] text-destructive">
+              Delivery history could not be loaded. Please try again.
             </p>
           ) : deliveries && deliveries.length > 0 ? (
             <div className="divide-y divide-border/40">

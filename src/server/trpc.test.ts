@@ -40,6 +40,7 @@ vi.mock('@/lib/abac', async () => {
 import {
   adminProcedure,
   capabilityProcedure,
+  entitlementIndependentAdminProcedure,
   hrProcedure,
   protectedProcedure,
   router,
@@ -66,6 +67,10 @@ const probe = router({
   protectedWrite: protectedProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
   adminRead: adminProcedure.query(() => 'ok'),
   adminWrite: adminProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
+  cleanupRead: entitlementIndependentAdminProcedure.query(() => 'ok'),
+  cleanupWrite: entitlementIndependentAdminProcedure
+    .input(z.object({}).optional())
+    .mutation(() => 'ok'),
   hrRead: hrProcedure.query(() => 'ok'),
   hrWrite: hrProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
   capabilityRead: capabilityProcedure('team:view').query(() => 'ok'),
@@ -80,6 +85,8 @@ const CALLS: Array<[string, (caller: ReturnType<typeof probe.createCaller>) => P
     ['protected write', (c) => c.protectedWrite({})],
     ['admin read', (c) => c.adminRead()],
     ['admin write', (c) => c.adminWrite({})],
+    ['entitlement-independent admin read', (c) => c.cleanupRead()],
+    ['entitlement-independent admin write', (c) => c.cleanupWrite({})],
     ['hr read', (c) => c.hrRead()],
     ['hr write', (c) => c.hrWrite({})],
     ['capability read', (c) => c.capabilityRead()],
@@ -179,5 +186,17 @@ describe('procedure guards admit a healthy session', () => {
   it.each(CALLS)('allows %s for an ON_LEAVE session', async (_name, call) => {
     const caller = probe.createCaller(contextFor({ ...ADMIN, status: 'ON_LEAVE' }));
     await expect(call(caller)).resolves.toBe('ok');
+  });
+
+  it('rejects a non-admin from the entitlement-independent admin procedure', async () => {
+    mocks.can.mockResolvedValue(false);
+    const caller = probe.createCaller(
+      contextFor({ id: 'user_2', role: 'EMPLOYEE', department: 'ENGINEERING', status: 'ACTIVE' })
+    );
+
+    await expect(caller.cleanupRead()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
   });
 });

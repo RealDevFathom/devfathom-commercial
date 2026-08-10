@@ -63,7 +63,6 @@ const ROUTE_MODULES: Array<[string, string]> = [
   ['/hr', 'hr'],
   ['/audit-logs', 'audit'],
   ['/email', 'email'],
-  ['/api-docs', 'api'],
   ['/dashboard', 'dashboard'],
 ];
 
