@@ -633,7 +633,7 @@ export const projectsRouter = router({
 
       // IMP-REST-03: outbound webhook for new tasks. Fire-and-forget — never
       // blocks or fails the create.
-      emitEvent(ctx.db, 'task.created', {
+      emitEvent(ctx.db, ctx.entitlements, 'task.created', {
         taskId: task.id,
         title: task.title,
         columnId: task.columnId,
@@ -1354,7 +1354,11 @@ export const projectsRouter = router({
         where: { checklistId: input.checklistId },
       });
       return ctx.db.taskChecklistItem.create({
-        data: { checklistId: input.checklistId, text: input.text, order: (max._max.order ?? -1) + 1 },
+        data: {
+          checklistId: input.checklistId,
+          text: input.text,
+          order: (max._max.order ?? -1) + 1,
+        },
       });
     }),
 
@@ -1367,7 +1371,10 @@ export const projectsRouter = router({
       });
       if (!item) throw new TRPCError({ code: 'NOT_FOUND' });
       await assertTaskAccess(ctx, item.checklist.taskId);
-      return ctx.db.taskChecklistItem.update({ where: { id: input.id }, data: { text: input.text } });
+      return ctx.db.taskChecklistItem.update({
+        where: { id: input.id },
+        data: { text: input.text },
+      });
     }),
 
   deleteChecklistItem: protectedProcedure
@@ -1700,7 +1707,10 @@ export const projectsRouter = router({
       if (!comment) throw new TRPCError({ code: 'NOT_FOUND' });
       await assertTaskAccess(ctx, comment.taskId);
       if (comment.userId !== ctx.session.user.id && ctx.session.user.role !== 'ADMIN') {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only delete your own comment.' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only delete your own comment.',
+        });
       }
       await ctx.db.$transaction([
         ctx.db.taskComment.deleteMany({ where: { parentId: input.id } }),
@@ -1848,9 +1858,7 @@ export const projectsRouter = router({
 
       // Resolve display names for the grouped ids (empty `in: []` returns []).
       const userIds = byUserGroups.map((g) => g.userId);
-      const taskIds = byTaskGroups
-        .map((g) => g.taskId)
-        .filter((id): id is string => id !== null);
+      const taskIds = byTaskGroups.map((g) => g.taskId).filter((id): id is string => id !== null);
       const [users, tasks] = await Promise.all([
         ctx.db.user.findMany({
           where: { id: { in: userIds } },

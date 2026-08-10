@@ -321,6 +321,47 @@ async function main() {
       ]
     );
 
+    const apiTokenA = `api_token_a_${suffix}`;
+    const apiTokenB = `api_token_b_${suffix}`;
+    const webhookA = `webhook_a_${suffix}`;
+    const webhookB = `webhook_b_${suffix}`;
+    const deliveryA = `delivery_a_${suffix}`;
+    const deliveryB = `delivery_b_${suffix}`;
+    await client.query(
+      `INSERT INTO "api_tokens" (
+        "id", "organizationId", "name", "prefix", "tokenHash", "scopes", "userId"
+      ) VALUES
+        ($1, 'org_devfathom', 'Tenant A token', $2, $3, '{}', $4),
+        ($5, $6, 'Tenant B token', $7, $8, '{}', $9)`,
+      [
+        apiTokenA,
+        `df_a_${suffix}`,
+        `hash_a_${suffix}`,
+        userA,
+        apiTokenB,
+        organizationB,
+        `df_b_${suffix}`,
+        `hash_b_${suffix}`,
+        userB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "webhooks" (
+        "id", "organizationId", "url", "secret", "events", "active", "createdById", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', 'https://a.example.test/hook', $2, '{task.created}', true, $3, CURRENT_TIMESTAMP),
+        ($4, $5, 'https://b.example.test/hook', $6, '{task.created}', true, $7, CURRENT_TIMESTAMP)`,
+      [webhookA, `secret_a_${suffix}`, userA, webhookB, organizationB, `secret_b_${suffix}`, userB]
+    );
+    await client.query(
+      `INSERT INTO "webhook_deliveries" (
+        "id", "organizationId", "webhookId", "event", "payload", "success"
+      ) VALUES
+        ($1, 'org_devfathom', $2, 'task.created', '{}', true),
+        ($3, $4, $5, 'task.created', '{}', true)`,
+      [deliveryA, webhookA, deliveryB, organizationB, webhookB]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -342,6 +383,25 @@ async function main() {
       [`ticket_a_${suffix}`, `ticket_b_${suffix}`]
     );
     assertEqual(tenantATicket.rows[0]?.count, 1, 'tenant A must only see its own SSO ticket');
+
+    for (const [table, idA, idB] of [
+      ['api_tokens', apiTokenA, apiTokenB],
+      ['webhooks', webhookA, webhookB],
+      ['webhook_deliveries', deliveryA, deliveryB],
+    ] as const) {
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(visible.rows[0]?.count, 1, `tenant A must only see its own "${table}" row`);
+      const updated = await client.query(
+        `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+        [idB]
+      );
+      assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
+      assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
 
     // MEET-01: one read-isolation case per new meeting table. Each query names
     // both tenants' rows, so seeing exactly one proves isolation rather than an
@@ -553,7 +613,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, and platform-only policies.'
+      'RLS verification passed: forced policies, read isolation, token/webhook isolation, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, and platform-only policies.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);

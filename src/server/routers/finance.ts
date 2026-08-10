@@ -616,7 +616,7 @@ export const financeRouter = router({
       // IMP-REST-03: fan out invoice.paid once the invoice has truly flipped to
       // PAID and the transaction has committed. Fire-and-forget — emitEvent
       // never throws, so it can't affect the recorded payment.
-      if (paidEvent) emitEvent(ctx.db, 'invoice.paid', paidEvent);
+      if (paidEvent) emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
 
       return result;
     }),
@@ -861,17 +861,26 @@ export const financeRouter = router({
         (recurringMonthlyMap.get(e.currency) ?? 0) + Number(e.amount) * factor
       );
     }
-    const recurringMonthly: CurrencyAmount[] = Array.from(recurringMonthlyMap, ([currency, amount]) => ({
-      currency,
-      amount: Math.round(amount * 100) / 100,
-    }));
+    const recurringMonthly: CurrencyAmount[] = Array.from(
+      recurringMonthlyMap,
+      ([currency, amount]) => ({
+        currency,
+        amount: Math.round(amount * 100) / 100,
+      })
+    );
     const recurringYearly: CurrencyAmount[] = recurringMonthly.map((r) => ({
       currency: r.currency,
       amount: Math.round(r.amount * 12 * 100) / 100,
     }));
 
-    const monthlyExpense = sumByCurrency(fromCurrencyGroups(monthlyExpenseG, 'amount'), recurringMonthly);
-    const yearlyExpense = sumByCurrency(fromCurrencyGroups(yearlyExpenseG, 'amount'), recurringYearly);
+    const monthlyExpense = sumByCurrency(
+      fromCurrencyGroups(monthlyExpenseG, 'amount'),
+      recurringMonthly
+    );
+    const yearlyExpense = sumByCurrency(
+      fromCurrencyGroups(yearlyExpenseG, 'amount'),
+      recurringYearly
+    );
 
     return {
       monthlyIncome,
@@ -938,7 +947,9 @@ export const financeRouter = router({
         currency: string
       ) => Number(groups.find((g) => g.currency === currency)?._sum.amount ?? 0);
 
-      const monthIncome = monthRanges.map((_, idx) => fromCurrencyGroups(monthGroups[idx * 2], 'amount'));
+      const monthIncome = monthRanges.map((_, idx) =>
+        fromCurrencyGroups(monthGroups[idx * 2], 'amount')
+      );
       const monthExpense = monthRanges.map((_, idx) =>
         fromCurrencyGroups(monthGroups[idx * 2 + 1], 'amount')
       );
@@ -974,9 +985,7 @@ export const financeRouter = router({
             // (e.g. 0.20000000000000018) from Decimal→Number subtraction.
             profit: round2(incomeAmt - expenseAmt),
             margin:
-              incomeAmt > 0
-                ? Math.round(((incomeAmt - expenseAmt) / incomeAmt) * 10000) / 100
-                : 0,
+              incomeAmt > 0 ? Math.round(((incomeAmt - expenseAmt) / incomeAmt) * 10000) / 100 : 0,
           };
         });
         const categoryBreakdown = categoryGroups

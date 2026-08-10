@@ -1,5 +1,7 @@
 import { createHmac } from 'node:crypto';
 import type { PrismaClient } from '@/generated/prisma/client';
+import { hasModule } from '@/lib/entitlements';
+import type { EntitlementView } from '@/lib/module-catalog';
 
 /**
  * ============================================================================
@@ -30,7 +32,13 @@ const DELIVERY_TIMEOUT_MS = 5_000;
  * the network work + delivery logging run detached. Safe to call inline right
  * after a successful write.
  */
-export function emitEvent(db: PrismaClient, event: string, payload: unknown): void {
+export function emitEvent(
+  db: PrismaClient,
+  entitlements: EntitlementView,
+  event: string,
+  payload: unknown
+): void {
+  if (!hasModule(entitlements, 'webhooks')) return;
   void dispatch(db, event, payload).catch((err) => {
     console.error('[webhooks] dispatch failed for', event, err);
   });

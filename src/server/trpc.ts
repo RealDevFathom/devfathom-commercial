@@ -160,9 +160,10 @@ const requireActiveUser = t.middleware(async ({ ctx, next }) => {
 const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
   const moduleKey = moduleForProcedure(path);
   if (moduleKey && !hasModule(ctx.entitlements, moduleKey)) {
+    const moduleName = ctx.entitlements.modules.find((module) => module.key === moduleKey)?.name;
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: `The ${moduleKey} module is not enabled for this organization.`,
+      message: `The ${moduleName ?? moduleKey} module is not enabled for this organization.`,
     });
   }
   return next();
@@ -211,6 +212,15 @@ export const adminProcedure = t.procedure
   .use(auditAll)
   .use(requireCapability('admin:access'))
   .use(requireLicensedModule);
+
+/**
+ * Admin procedure for entitlement-independent inspection and cleanup only.
+ * Keeps active-session, ADMIN capability, tenant scope, and audit enforcement;
+ * deliberately omits only the module entitlement check.
+ */
+export const entitlementIndependentAdminProcedure = t.procedure
+  .use(auditAll)
+  .use(requireCapability('admin:access'));
 
 // HR console procedure — ADMIN or HR (policy: 'hr:access').
 export const hrProcedure = t.procedure

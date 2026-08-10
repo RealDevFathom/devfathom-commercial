@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
-import { router, adminProcedure } from '../trpc';
+import { router, adminProcedure, entitlementIndependentAdminProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { WEBHOOK_EVENTS } from '@/lib/webhooks';
 
@@ -31,7 +31,7 @@ const PUBLIC_SELECT = {
 } as const;
 
 export const webhooksRouter = router({
-  list: adminProcedure.query(async ({ ctx }) => {
+  list: entitlementIndependentAdminProcedure.query(async ({ ctx }) => {
     return ctx.db.webhook.findMany({
       orderBy: { createdAt: 'desc' },
       select: {
@@ -54,7 +54,7 @@ export const webhooksRouter = router({
     });
   }),
 
-  recentDeliveries: adminProcedure
+  recentDeliveries: entitlementIndependentAdminProcedure
     .input(z.object({ webhookId: z.string() }))
     .query(async ({ ctx, input }) => {
       return ctx.db.webhookDelivery.findMany({
@@ -125,18 +125,20 @@ export const webhooksRouter = router({
       });
     }),
 
-  delete: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
-    const deleted = await ctx.db.webhook.delete({
-      where: { id: input.id },
-      select: PUBLIC_SELECT,
-    });
-    annotateAudit(ctx, {
-      targetType: 'Webhook',
-      targetId: deleted.id,
-      targetLabel: deleted.url,
-      description: `Deleted webhook → ${deleted.url}`,
-      metadata: { events: deleted.events },
-    });
-    return deleted;
-  }),
+  delete: entitlementIndependentAdminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await ctx.db.webhook.delete({
+        where: { id: input.id },
+        select: PUBLIC_SELECT,
+      });
+      annotateAudit(ctx, {
+        targetType: 'Webhook',
+        targetId: deleted.id,
+        targetLabel: deleted.url,
+        description: `Deleted webhook → ${deleted.url}`,
+        metadata: { events: deleted.events },
+      });
+      return deleted;
+    }),
 });
