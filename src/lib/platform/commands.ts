@@ -6,7 +6,9 @@ import { z } from 'zod';
 import {
   Prisma,
   type LifecycleAction,
+  type OrganizationIdentityConnection,
   type OrganizationStatus,
+  type PlatformJob,
   type PrismaClient,
 } from '@/generated/prisma/client';
 import type { PlatformIdentity } from '@/lib/platform/auth';
@@ -84,20 +86,82 @@ const TRANSITIONS: Record<OrganizationStatus, readonly OrganizationStatus[]> = {
   PURGED: [],
 };
 
+/**
+ * One command result, three audiences. They are separate fields because they
+ * are separate decisions, and the old single object made the wrong one twice:
+ * a key-name regex both missed `token` (a live SCIM credential reached the
+ * audit table in cleartext) and matched `encrypted` (ciphertext was replaced
+ * with '[REDACTED]' on its way into the settings row). See issue #10.
+ *
+ *  PERSIST  what the case body writes to the database. Plain `toJson`, never
+ *           rewritten on its way there.
+ *  REVEAL   `data`. Returned to the authorized operator, once. Never audited.
+ *  AUDIT    `audit` / `auditBefore`. The only values written to
+ *           platform_audit_logs. Never a credential, never ciphertext.
+ *
+ * `audit` is required, so a command cannot acquire an audit projection by
+ * accident: a new case that declares none does not compile, and if one reaches
+ * the writer untyped it logs an empty object rather than the reveal payload.
+ */
 type CommandResult = {
   targetType: string;
   targetId?: string | null;
+  /** REVEAL: returned to the operator. Never written to the audit log. */
   data: unknown;
+  /** AUDIT: written verbatim to platform_audit_logs.after. */
+  audit: unknown;
   organizationId?: string | null;
-  before?: unknown;
+  /** AUDIT: written verbatim to platform_audit_logs.before. Omitted logs nothing. */
+  auditBefore?: unknown;
 };
 
-function json(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(
-    JSON.stringify(value, (key, item) =>
-      /password|secret|tokenHash|encrypted/i.test(key) ? '[REDACTED]' : item
-    )
-  ) as Prisma.InputJsonValue;
+/** Structural JSON cast. Redacts nothing: persistence must keep what it stores. */
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+/** Copy of `value` without `keys`. An audit projection names its omissions here. */
+function omit<T extends object, K extends keyof T>(value: T, ...keys: readonly K[]): Omit<T, K> {
+  const dropped = new Set<PropertyKey>(keys);
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !dropped.has(key))) as Omit<
+    T,
+    K
+  >;
+}
+
+/**
+ * Audit projection for an identity connection. The client secret is ciphertext
+ * and `roleMappings` / `configuration` are operator-supplied blobs that can
+ * carry provider credentials; none of the three belongs in the ledger.
+ */
+function identityConnectionAudit(connection: OrganizationIdentityConnection) {
+  return {
+    ...omit(connection, 'encryptedClientSecret', 'roleMappings', 'configuration'),
+    clientSecretConfigured: Boolean(connection.encryptedClientSecret),
+  };
+}
+
+/**
+ * Audit projection for a job the operator supplied a payload for. The payload
+ * and the worker result are arbitrary operator/worker JSON; the jobs table
+ * keeps them, the ledger records the job itself.
+ */
+function jobAudit(job: PlatformJob) {
+  return omit(job, 'payload', 'result');
+}
+
+/**
+ * The audit row's before/after. Fails closed: a result with no declared
+ * projection records an empty object, never the reveal payload.
+ */
+export function auditProjection(result: Pick<CommandResult, 'audit' | 'auditBefore'>): {
+  before: Prisma.InputJsonValue | undefined;
+  after: Prisma.InputJsonValue;
+} {
+  return {
+    before: result.auditBefore === undefined ? undefined : toJson(result.auditBefore),
+    after: toJson(result.audit ?? {}),
+  };
 }
 
 function capabilityFor(action: string): string {
@@ -356,6 +420,7 @@ async function runCommand(
         targetId: organization.id,
         organizationId: organization.id,
         data: organization,
+        audit: organization,
       };
     }
     case 'organization.update': {
@@ -417,8 +482,9 @@ async function runCommand(
         targetType: 'Organization',
         targetId: organization.id,
         organizationId: organization.id,
-        before,
+        auditBefore: before,
         data: organization,
+        audit: organization,
       };
     }
     case 'organization.transition': {
@@ -503,8 +569,9 @@ async function runCommand(
         targetType: 'Organization',
         targetId: input.id,
         organizationId: input.id,
-        before: { status: before.status },
+        auditBefore: { status: before.status },
         data: organization,
+        audit: organization,
       };
     }
     case 'organization.module': {
@@ -547,6 +614,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'organization.module.reset': {
@@ -567,8 +635,9 @@ async function runCommand(
         targetType: 'OrganizationModule',
         targetId: before.id,
         organizationId: input.organizationId,
-        before,
+        auditBefore: before,
         data: { inherited: true },
+        audit: { inherited: true },
       };
     }
     case 'organization.limit': {
@@ -597,6 +666,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'organization.limit.remove': {
@@ -608,8 +678,9 @@ async function runCommand(
         targetType: 'OrganizationLimit',
         targetId: before.id,
         organizationId: before.organizationId,
-        before,
+        auditBefore: before,
         data: { removed: true },
+        audit: { removed: true },
       };
     }
     case 'organization.brand': {
@@ -653,6 +724,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'organization.email': {
@@ -676,7 +748,7 @@ async function runCommand(
           fromAddress: input.fromAddress || null,
           replyTo: input.replyTo || null,
           encryptedApiKey: input.apiKey ? encryptSecret(input.apiKey) : undefined,
-          configuration: input.configuration ? json(input.configuration) : undefined,
+          configuration: input.configuration ? toJson(input.configuration) : undefined,
           domainVerifiedAt: input.markVerified ? new Date() : undefined,
         },
         create: {
@@ -686,15 +758,19 @@ async function runCommand(
           fromAddress: input.fromAddress || null,
           replyTo: input.replyTo || null,
           encryptedApiKey: input.apiKey ? encryptSecret(input.apiKey) : null,
-          configuration: input.configuration ? json(input.configuration) : undefined,
+          configuration: input.configuration ? toJson(input.configuration) : undefined,
           domainVerifiedAt: input.markVerified ? new Date() : null,
         },
       });
+      // `configuration` is operator-supplied provider config and can carry
+      // credentials; `encryptedApiKey` is ciphertext. Neither is auditable.
+      const auditable = omit(saved, 'encryptedApiKey', 'configuration');
       return {
         targetType: 'OrganizationEmailSettings',
         targetId: saved.id,
         organizationId: input.organizationId,
         data: { ...saved, encryptedApiKey: saved.encryptedApiKey ? '[REDACTED]' : null },
+        audit: { ...auditable, apiKeyConfigured: Boolean(saved.encryptedApiKey) },
       };
     }
     case 'organization.domain': {
@@ -726,11 +802,13 @@ async function runCommand(
           payload: { domainId: saved.id, host: saved.host },
         },
       });
+      const auditable = omit(saved, 'verificationToken');
       return {
         targetType: 'OrganizationDomain',
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: auditable,
       };
     }
     case 'organization.domain.status': {
@@ -752,12 +830,15 @@ async function runCommand(
           failureReason: input.status === 'FAILED' ? input.failureReason : null,
         },
       });
+      const auditable = omit(saved, 'verificationToken');
+      const auditableBefore = omit(before, 'verificationToken');
       return {
         targetType: 'OrganizationDomain',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        before,
+        auditBefore: auditableBefore,
         data: saved,
+        audit: auditable,
       };
     }
     case 'organization.domain.retry': {
@@ -781,6 +862,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: domain.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'organization.domain.remove': {
@@ -791,12 +873,14 @@ async function runCommand(
         throw new PlatformSecurityError('Choose another primary domain before removal.', 400);
       }
       await db.organizationDomain.delete({ where: { id: input.id } });
+      const auditableBefore = omit(before, 'verificationToken');
       return {
         targetType: 'OrganizationDomain',
         targetId: before.id,
         organizationId: before.organizationId,
-        before,
+        auditBefore: auditableBefore,
         data: { removed: true, reason: input.reason },
+        audit: { removed: true, reason: input.reason },
       };
     }
     case 'organization.identity': {
@@ -828,8 +912,8 @@ async function runCommand(
       const data = {
         ...connection,
         encryptedClientSecret: clientSecret ? encryptSecret(clientSecret) : undefined,
-        roleMappings: roleMappings ? json(roleMappings) : undefined,
-        configuration: configuration ? json(configuration) : undefined,
+        roleMappings: roleMappings ? toJson(roleMappings) : undefined,
+        configuration: configuration ? toJson(configuration) : undefined,
       };
       const before = connectionId
         ? await db.organizationIdentityConnection.findUnique({ where: { id: connectionId } })
@@ -844,11 +928,12 @@ async function runCommand(
         targetType: 'OrganizationIdentityConnection',
         targetId: saved.id,
         organizationId: input.organizationId,
-        before,
+        auditBefore: before ? identityConnectionAudit(before) : undefined,
         data: {
           ...saved,
           encryptedClientSecret: saved.encryptedClientSecret ? '[REDACTED]' : null,
         },
+        audit: identityConnectionAudit(saved),
       };
     }
     case 'organization.identity.test': {
@@ -874,6 +959,7 @@ async function runCommand(
         targetId: job.id,
         organizationId: connection.organizationId,
         data: job,
+        audit: job,
       };
     }
     case 'organization.identity.remove': {
@@ -887,8 +973,9 @@ async function runCommand(
         targetType: 'OrganizationIdentityConnection',
         targetId: before.id,
         organizationId: before.organizationId,
-        before,
+        auditBefore: identityConnectionAudit(before),
         data: { removed: true, reason: input.reason },
+        audit: { removed: true, reason: input.reason },
       };
     }
     case 'organization.scim.token': {
@@ -909,11 +996,17 @@ async function runCommand(
           expiresAt: input.expiresAt,
         },
       });
+      const credential = omit(saved, 'tokenHash');
       return {
         targetType: 'OrganizationScimToken',
         targetId: saved.id,
         organizationId: input.organizationId,
-        data: { ...saved, tokenHash: undefined, token },
+        // REVEAL: the operator copies the bearer token here, once. This object
+        // is returned by the HTTP command and is never audited.
+        data: { ...credential, token },
+        // AUDIT: identity of the credential, never the credential. `prefix` is
+        // the non-secret handle the console already shows for this token.
+        audit: credential,
       };
     }
     case 'organization.scim.revoke': {
@@ -927,6 +1020,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: { ...saved, tokenHash: undefined },
+        audit: { ...saved, tokenHash: undefined },
       };
     }
     case 'organization.role': {
@@ -980,6 +1074,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: { ...saved, permissions },
+        audit: { ...saved, permissions },
       };
     }
     case 'organization.role.remove': {
@@ -1003,8 +1098,9 @@ async function runCommand(
         targetType: 'OrganizationRole',
         targetId: before.id,
         organizationId: before.organizationId,
-        before,
+        auditBefore: before,
         data: { removed: true },
+        audit: { removed: true },
       };
     }
     case 'organization.permission': {
@@ -1033,6 +1129,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'organization.permission.remove': {
@@ -1044,8 +1141,9 @@ async function runCommand(
         targetType: 'UserPermissionOverride',
         targetId: before.id,
         organizationId: before.organizationId,
-        before,
+        auditBefore: before,
         data: { removed: true },
+        audit: { removed: true },
       };
     }
     case 'organization.user': {
@@ -1064,6 +1162,7 @@ async function runCommand(
       const { id: userId, ...data } = input;
       const before = await db.user.findUnique({ where: { id: userId } });
       if (!before) throw new PlatformSecurityError('Organization user not found.', 400);
+      const auditableBefore = omit(before, 'password', 'twoFactorSecret');
       const saved = await db.user.update({
         where: { id: userId },
         data: {
@@ -1078,8 +1177,9 @@ async function runCommand(
         targetType: 'User',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        before,
+        auditBefore: auditableBefore,
         data: { ...saved, password: undefined, twoFactorSecret: undefined },
+        audit: { ...saved, password: undefined, twoFactorSecret: undefined },
       };
     }
     case 'organization.user.password': {
@@ -1098,6 +1198,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: { id: saved.id, passwordReset: true },
+        audit: { id: saved.id, passwordReset: true },
       };
     }
     case 'organization.usage': {
@@ -1130,6 +1231,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: { ...saved, value: saved.value.toString() },
+        audit: { ...saved, value: saved.value.toString() },
       };
     }
     case 'crm.account.create': {
@@ -1145,7 +1247,7 @@ async function runCommand(
         })
         .parse(payload);
       const saved = await db.platformAccount.create({ data: { ...input, ownerId: actor.id } });
-      return { targetType: 'PlatformAccount', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformAccount', targetId: saved.id, data: saved, audit: saved };
     }
     case 'crm.lead.create': {
       const input = z
@@ -1162,7 +1264,7 @@ async function runCommand(
       const saved = await db.platformLead.create({
         data: { ...input, email: input.email || null, ownerId: actor.id },
       });
-      return { targetType: 'PlatformLead', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformLead', targetId: saved.id, data: saved, audit: saved };
     }
     case 'crm.lead.status': {
       const input = z
@@ -1182,7 +1284,13 @@ async function runCommand(
           convertedAt: input.status === 'CONVERTED' ? new Date() : null,
         },
       });
-      return { targetType: 'PlatformLead', targetId: saved.id, before, data: saved };
+      return {
+        targetType: 'PlatformLead',
+        targetId: saved.id,
+        auditBefore: before,
+        data: saved,
+        audit: saved,
+      };
     }
     case 'crm.contact.create': {
       const input = z
@@ -1204,7 +1312,7 @@ async function runCommand(
       const saved = await db.platformContact.create({
         data: { ...input, email: input.email || null },
       });
-      return { targetType: 'PlatformContact', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformContact', targetId: saved.id, data: saved, audit: saved };
     }
     case 'crm.opportunity.create': {
       const input = z
@@ -1232,7 +1340,7 @@ async function runCommand(
           reason: 'Opportunity created',
         },
       });
-      return { targetType: 'PlatformOpportunity', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformOpportunity', targetId: saved.id, data: saved, audit: saved };
     }
     case 'crm.opportunity.stage': {
       const input = z
@@ -1265,7 +1373,13 @@ async function runCommand(
           reason: input.reason,
         },
       });
-      return { targetType: 'PlatformOpportunity', targetId: saved.id, before, data: saved };
+      return {
+        targetType: 'PlatformOpportunity',
+        targetId: saved.id,
+        auditBefore: before,
+        data: saved,
+        audit: saved,
+      };
     }
     case 'crm.opportunity.convert': {
       const input = organizationInput.parse(payload);
@@ -1278,6 +1392,7 @@ async function runCommand(
         targetId: organization.id,
         organizationId: organization.id,
         data: organization,
+        audit: organization,
       };
     }
     case 'crm.proposal.create': {
@@ -1302,9 +1417,9 @@ async function runCommand(
         })
         .parse(payload);
       const saved = await db.platformProposal.create({
-        data: { ...input, lineItems: json(input.lineItems), createdById: actor.id },
+        data: { ...input, lineItems: toJson(input.lineItems), createdById: actor.id },
       });
-      return { targetType: 'PlatformProposal', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformProposal', targetId: saved.id, data: saved, audit: saved };
     }
     case 'crm.proposal.status': {
       const input = z
@@ -1323,7 +1438,13 @@ async function runCommand(
           acceptedAt: input.status === 'ACCEPTED' ? new Date() : null,
         },
       });
-      return { targetType: 'PlatformProposal', targetId: saved.id, before, data: saved };
+      return {
+        targetType: 'PlatformProposal',
+        targetId: saved.id,
+        auditBefore: before,
+        data: saved,
+        audit: saved,
+      };
     }
     case 'crm.followup.create': {
       const input = z
@@ -1342,7 +1463,7 @@ async function runCommand(
       const saved = await db.platformFollowUp.create({
         data: { ...input, ownerId: actor.id },
       });
-      return { targetType: 'PlatformFollowUp', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformFollowUp', targetId: saved.id, data: saved, audit: saved };
     }
     case 'crm.followup.status': {
       const input = z
@@ -1360,7 +1481,13 @@ async function runCommand(
           completedAt: input.status === 'COMPLETED' ? new Date() : null,
         },
       });
-      return { targetType: 'PlatformFollowUp', targetId: saved.id, before, data: saved };
+      return {
+        targetType: 'PlatformFollowUp',
+        targetId: saved.id,
+        auditBefore: before,
+        data: saved,
+        audit: saved,
+      };
     }
     case 'commercial.contract.create': {
       const input = z
@@ -1404,6 +1531,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'commercial.contract.status': {
@@ -1455,8 +1583,9 @@ async function runCommand(
         targetType: 'PlatformContract',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        before,
+        auditBefore: before,
         data: saved,
+        audit: saved,
       };
     }
     case 'commercial.invoice.create': {
@@ -1487,7 +1616,7 @@ async function runCommand(
       const saved = await db.platformInvoice.create({
         data: {
           ...invoice,
-          lineItems: json(input.lineItems),
+          lineItems: toJson(input.lineItems),
           total: input.subtotal + input.tax,
           status: issueNow ? 'ISSUED' : 'DRAFT',
           issuedAt: issueNow ? new Date() : null,
@@ -1498,6 +1627,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'commercial.invoice.status': {
@@ -1526,8 +1656,9 @@ async function runCommand(
         targetType: 'PlatformInvoice',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        before,
+        auditBefore: before,
         data: saved,
+        audit: saved,
       };
     }
     case 'commercial.payment.record': {
@@ -1572,6 +1703,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: invoice.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'commercial.renewal.create': {
@@ -1593,6 +1725,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'commercial.renewal.status': {
@@ -1617,8 +1750,9 @@ async function runCommand(
         targetType: 'PlatformRenewal',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        before,
+        auditBefore: before,
         data: saved,
+        audit: saved,
       };
     }
     case 'catalog.module.upsert': {
@@ -1644,7 +1778,7 @@ async function runCommand(
       const saved = moduleId
         ? await db.platformModule.update({ where: { id: moduleId }, data })
         : await db.platformModule.create({ data });
-      return { targetType: 'PlatformModule', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformModule', targetId: saved.id, data: saved, audit: saved };
     }
     case 'catalog.package.upsert': {
       const input = z
@@ -1669,7 +1803,7 @@ async function runCommand(
             data: { ...data, version: { increment: 1 } },
           })
         : await db.platformPackage.create({ data });
-      return { targetType: 'PlatformPackage', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformPackage', targetId: saved.id, data: saved, audit: saved };
     }
     case 'catalog.package.module': {
       const input = z
@@ -1684,15 +1818,15 @@ async function runCommand(
         where: {
           packageId_moduleId: { packageId: input.packageId, moduleId: input.moduleId },
         },
-        update: { enabled: input.enabled, limits: input.limits ? json(input.limits) : undefined },
+        update: { enabled: input.enabled, limits: input.limits ? toJson(input.limits) : undefined },
         create: {
           packageId: input.packageId,
           moduleId: input.moduleId,
           enabled: input.enabled,
-          limits: input.limits ? json(input.limits) : undefined,
+          limits: input.limits ? toJson(input.limits) : undefined,
         },
       });
-      return { targetType: 'PlatformPackageModule', targetId: saved.id, data: saved };
+      return { targetType: 'PlatformPackageModule', targetId: saved.id, data: saved, audit: saved };
     }
     case 'deployment.create': {
       const input = z
@@ -1767,6 +1901,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'deployment.update': {
@@ -1803,6 +1938,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
+        audit: saved,
       };
     }
     case 'job.create': {
@@ -1828,7 +1964,7 @@ async function runCommand(
       const saved = await db.platformJob.create({
         data: {
           ...input,
-          payload: input.payload ? json(input.payload) : undefined,
+          payload: input.payload ? toJson(input.payload) : undefined,
           scheduledAt: input.scheduledAt ?? new Date(),
           requestedById: actor.id,
         },
@@ -1838,6 +1974,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
+        audit: jobAudit(saved),
       };
     }
     case 'job.retry': {
@@ -1863,6 +2000,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
+        audit: jobAudit(saved),
       };
     }
     case 'job.cancel': {
@@ -1880,6 +2018,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
+        audit: jobAudit(saved),
       };
     }
     case 'operator.upsert': {
@@ -1938,9 +2077,8 @@ async function runCommand(
           data: { revokedAt: new Date() },
         });
       }
-      const { passwordHash: _passwordHash, ...safe } = saved;
-      void _passwordHash;
-      return { targetType: 'PlatformUser', targetId: saved.id, data: safe };
+      const safe = omit(saved, 'passwordHash', 'encryptedTotpSecret');
+      return { targetType: 'PlatformUser', targetId: saved.id, data: safe, audit: safe };
     }
     case 'operator.mfa.reset': {
       const input = z.object({ id, reason: z.string().trim().min(10).max(500) }).parse(payload);
@@ -1965,8 +2103,9 @@ async function runCommand(
       return {
         targetType: 'PlatformUser',
         targetId: saved.id,
-        before,
+        auditBefore: before,
         data: { mfaReset: true, reason: input.reason, email: saved.email },
+        audit: { mfaReset: true, reason: input.reason, email: saved.email },
       };
     }
     case 'setting.upsert': {
@@ -1996,8 +2135,8 @@ async function runCommand(
             ? Prisma.JsonNull
             : (existing.value as Prisma.InputJsonValue)
           : input.sensitive
-            ? json({ encrypted: encryptSecret(JSON.stringify(input.value)) })
-            : json(input.value);
+            ? toJson({ encrypted: encryptSecret(JSON.stringify(input.value)) })
+            : toJson(input.value);
       const saved = await db.platformSetting.upsert({
         where: { key: input.key },
         update: {
@@ -2016,10 +2155,14 @@ async function runCommand(
           updatedById: actor.id,
         },
       });
+      const { value, ...settingAudit } = saved;
       return {
         targetType: 'PlatformSetting',
         targetId: saved.id,
-        data: { ...saved, value: saved.sensitive ? '[REDACTED]' : saved.value },
+        data: { ...settingAudit, value: saved.sensitive ? '[REDACTED]' : value },
+        // A sensitive setting's stored value is ciphertext, which the ledger
+        // must not carry either. Its metadata still records that it changed.
+        audit: saved.sensitive ? settingAudit : { ...settingAudit, value },
       };
     }
     default:
@@ -2044,6 +2187,9 @@ export async function executePlatformCommand(
 
   return withPlatformDb(async (db) => {
     const result = await runCommand(db, actor, action, payload);
+    // The audit row is built from the command's declared projection only.
+    // `result.data` is the reveal channel and never reaches this table.
+    const { before, after } = auditProjection(result);
     await db.platformAuditLog.create({
       data: {
         organizationId: result.organizationId,
@@ -2051,8 +2197,8 @@ export async function executePlatformCommand(
         action,
         targetType: result.targetType,
         targetId: result.targetId,
-        before: result.before === undefined ? undefined : json(result.before),
-        after: json(result.data),
+        before,
+        after,
         requestId: request.headers.get('x-devfathom-request-id'),
         ip:
           request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
