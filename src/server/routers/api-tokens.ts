@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { router, adminProcedure } from '../trpc';
+import { router, adminProcedure, entitlementIndependentAdminProcedure } from '../trpc';
 import { generateApiToken } from '@/lib/api-auth';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { annotateAudit } from '../audit';
 
 export const apiTokensRouter = router({
-  list: adminProcedure.query(async ({ ctx }) => {
+  list: entitlementIndependentAdminProcedure.query(async ({ ctx }) => {
     return ctx.db.apiToken.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
@@ -19,7 +19,7 @@ export const apiTokensRouter = router({
   // AuditLog.tokenId (recordRestAudit), so request counts, success/failure split,
   // last-used and recent (7-day) volume are derivable without a dedicated
   // counter. Returns a map keyed by tokenId for the token list to render inline.
-  usage: adminProcedure.query(async ({ ctx }) => {
+  usage: entitlementIndependentAdminProcedure.query(async ({ ctx }) => {
     const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const [byOutcome, recent] = await Promise.all([
@@ -46,12 +46,20 @@ export const apiTokensRouter = router({
     for (const row of byOutcome) {
       const id = row.tokenId!;
       const s =
-        stats[id] ?? (stats[id] = { total: 0, success: 0, failure: 0, last7d: recentMap.get(id) ?? 0, lastUsedAt: null });
+        stats[id] ??
+        (stats[id] = {
+          total: 0,
+          success: 0,
+          failure: 0,
+          last7d: recentMap.get(id) ?? 0,
+          lastUsedAt: null,
+        });
       s.total += row._count._all;
       if (row.outcome === 'SUCCESS') s.success += row._count._all;
       else if (row.outcome === 'FAILURE') s.failure += row._count._all;
       const last = row._max.createdAt;
-      if (last && (!s.lastUsedAt || last > new Date(s.lastUsedAt))) s.lastUsedAt = last.toISOString();
+      if (last && (!s.lastUsedAt || last > new Date(s.lastUsedAt)))
+        s.lastUsedAt = last.toISOString();
     }
     return stats;
   }),
@@ -132,15 +140,17 @@ export const apiTokensRouter = router({
       };
     }),
 
-  revoke: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
-    const deleted = await ctx.db.apiToken.delete({ where: { id: input.id } });
-    annotateAudit(ctx, {
-      targetType: 'ApiToken',
-      targetId: deleted.id,
-      targetLabel: deleted.name,
-      description: `Revoked API token "${deleted.name}" (${deleted.prefix}…)`,
-      metadata: { prefix: deleted.prefix, scopes: deleted.scopes },
-    });
-    return deleted;
-  }),
+  revoke: entitlementIndependentAdminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await ctx.db.apiToken.delete({ where: { id: input.id } });
+      annotateAudit(ctx, {
+        targetType: 'ApiToken',
+        targetId: deleted.id,
+        targetLabel: deleted.name,
+        description: `Revoked API token "${deleted.name}" (${deleted.prefix}…)`,
+        metadata: { prefix: deleted.prefix, scopes: deleted.scopes },
+      });
+      return deleted;
+    }),
 });
