@@ -100,10 +100,19 @@ export const auditRouter = router({
         ...(input.cursor && { cursor: { id: input.cursor }, skip: 1 }),
       });
 
+      // The `limit + 1`st row is a has-more probe only: it is never part of the
+      // page, and it is never the cursor. The cursor is the LAST ROW WE RETURN,
+      // which is what the docstring above promises and what `skip: 1` requires —
+      // Prisma's cursor is INCLUSIVE, so the next call re-selects that row and
+      // steps past it.
+      //
+      // #42: handing back the popped probe instead named a row the caller had
+      // NOT been given, and `skip: 1` then discarded it — losing exactly one row
+      // at every page boundary.
       let nextCursor: string | undefined;
       if (rows.length > input.limit) {
-        const next = rows.pop();
-        nextCursor = next?.id;
+        rows.pop();
+        nextCursor = rows[rows.length - 1]?.id;
       }
 
       return { items: rows, nextCursor };
