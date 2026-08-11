@@ -315,10 +315,13 @@ List all active team members. Use this to look up user IDs for assignee operatio
 ## Meetings
 
 ### \`GET /meetings\`
-List the current user's meetings (where the token's user is an attendee).
+List the current user's meetings (where the token's user is an attendee). Returns up to 50 by default, oldest \`startTime\` first.
 
 - **Scope:** \`meetings:read\`
-- **Response:** \`{ data: Meeting[] }\`
+- **Query params:**
+  - \`limit?: number\` — max 100. Omitted, non-numeric or \`0\` falls back to 50; anything lower than 1 is raised to 1; anything above 100 is capped at 100.
+- **Ordering:** \`startTime\` ascending, then \`id\` ascending. The \`id\` tiebreaker makes the order total, so meetings that share a \`startTime\` come back in the same order on every call.
+- **Response:** \`{ data: Meeting[] }\` where each meeting includes \`attendees\`
 
 ### \`POST /meetings\`
 Schedule a meeting. The token's user is auto-added as an attendee.
