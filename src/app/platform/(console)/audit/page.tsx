@@ -36,7 +36,7 @@ export default async function PlatformAuditPage({
       <PlatformPageHeading
         eyebrow="Security / immutable operations record"
         title="Audit ledger"
-        description="Platform commands, support entry, lifecycle changes, denied operations, and actor attribution. Sensitive values are redacted before persistence."
+        description="Platform commands, support entry, lifecycle changes, denied operations, and actor attribution. Every command declares what it records: credentials and ciphertext are never written to this ledger."
       />
       <form className="mt-6 grid gap-3 border border-border-default bg-surface-card p-4 sm:grid-cols-[1fr_200px_auto]">
         <input
