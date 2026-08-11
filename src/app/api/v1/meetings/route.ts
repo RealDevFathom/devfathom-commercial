@@ -5,13 +5,26 @@ import { readJson } from '@/lib/api-json';
 
 export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   const url = new URL(request.url);
-  const limitParam = url.searchParams.get('limit');
-  const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
+  // REST-06 (#45): an omitted ?limit used to mean `take: undefined`, i.e. every
+  // meeting the token's user attends with the full attendee graph in one
+  // response. This route calls Prisma directly rather than the meetings router,
+  // so #38's server-side default never reached it. Same shape as /tasks and
+  // /transactions: NaN-safe, defaults to 50, clamped into [1, 100]. The ceiling
+  // is the tighter of the two siblings because every row here carries its
+  // attendee graph.
+  const limit = Math.min(
+    Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1),
+    100
+  );
   const meetings = await ctx.db.meeting.findMany({
     where: { attendees: { some: { userId: ctx.userId } } },
     take: limit,
     include: { attendees: { include: { user: { select: { id: true, name: true } } } } },
-    orderBy: { startTime: 'asc' },
+    // `startTime` alone is not a total order: meetings that share an instant
+    // could come back in whatever order the plan produced, so a bounded page
+    // over them would vary between identical calls. `id` is unique, which makes
+    // the sort total.
+    orderBy: [{ startTime: 'asc' }, { id: 'asc' }],
   });
   return NextResponse.json({ data: meetings });
 });
