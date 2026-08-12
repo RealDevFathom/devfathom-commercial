@@ -1,14 +1,21 @@
 /**
- * Meetings page pagination (#38).
+ * Meetings page pagination (#38, #44).
  *
- * The page used to stack two silent truncations: `getAll` was fetched with no
- * input (unbounded server-side) and the Past list then cut the result to ten
- * with a bare `.slice(0, 10)`. Nothing told the user either had happened.
+ * #38 replaced two silent truncations — an unbounded `getAll` fetch and a bare
+ * `.slice(0, 10)` on the Past list — with one bounded page plus a control that
+ * reaches the rest.
  *
- * These cases pin the replacement: everything loaded is rendered, and whenever
- * the server says another page exists the control that fetches it is on screen
- * — including on a page that happens to contain no past meeting at all, which
- * is reachable because the list is ordered by start time descending.
+ * #44 replaces where Past comes FROM. It used to be derived client-side from
+ * whatever `getAll` had loaded, and `getAll` is ordered furthest-future first:
+ * on a calendar whose future exceeds one page, every early page was
+ * future-only, so the Past section read "0 past of 50 meetings loaded" until
+ * the user had clicked through the entire future calendar. Past now has its own
+ * server-side query and its own cursor.
+ *
+ * These cases pin the replacement: the first render shows past meetings no
+ * matter how large Upcoming is, everything loaded is rendered, and whenever the
+ * server says another PAST page exists the control that fetches it is on
+ * screen.
  */
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -39,6 +46,7 @@ const meeting = (title: string, startTime: Date): Meeting => ({
 });
 
 const mocks = vi.hoisted(() => ({
+  upcoming: [] as unknown[],
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
@@ -59,12 +67,13 @@ vi.mock('@/lib/trpc', () => {
       useUtils: () => ({
         meetings: {
           getUpcoming: { invalidate: vi.fn() },
-          getAll: { invalidate: vi.fn() },
+          getPast: { invalidate: vi.fn() },
         },
       }),
       meetings: {
-        getUpcoming: { useQuery: () => ({ data: [], isLoading: false }) },
-        getAll: {
+        getUpcoming: { useQuery: () => ({ data: mocks.upcoming, isLoading: false }) },
+        // Past has its own infinite query, entirely separate from Upcoming's.
+        getPast: {
           useInfiniteQuery: () => ({
             data: { pages: mocks.pages },
             fetchNextPage: mocks.fetchNextPage,
@@ -88,11 +97,38 @@ const past = (count: number) =>
     meeting(`Past meeting ${i}`, new Date(Date.now() - (i + 2) * HOUR))
   );
 
+const future = (count: number) =>
+  Array.from({ length: count }, (_, i) =>
+    meeting(`Future meeting ${i}`, new Date(Date.now() + (i + 2) * HOUR))
+  );
+
 describe('MeetingsContent pagination', () => {
   beforeEach(() => {
+    mocks.upcoming = [];
     mocks.pages = [];
     mocks.hasNextPage = false;
     mocks.fetchNextPage.mockClear();
+  });
+
+  // The defect issue #44 reports, at the surface that shows it. A tenant whose
+  // future calendar runs well past one page used to render an empty Past
+  // section, because Past was filtered out of a future-ordered page of
+  // `getAll`. Past now arrives on its own, so the very first render carries it
+  // — with no "Load more" click, and none needed.
+  it('shows past meetings on first render however large the future calendar is', () => {
+    mocks.upcoming = future(120);
+    mocks.pages = [{ items: past(50), nextCursor: 'cursor_1' }];
+    mocks.hasNextPage = true;
+
+    render(<MeetingsContent />);
+
+    expect(screen.getByText('Past meeting 0')).toBeInTheDocument();
+    expect(screen.getByText('Past meeting 49')).toBeInTheDocument();
+    // Nothing was clicked, and nothing had to be.
+    expect(mocks.fetchNextPage).not.toHaveBeenCalled();
+    // The future calendar is genuinely larger than a page — the fixture
+    // reproduces the reported condition rather than dodging it.
+    expect(screen.getByText('Future meeting 119')).toBeInTheDocument();
   });
 
   // The `.slice(0, 10)` this replaces dropped meetings 11..25 with no trace.
@@ -106,7 +142,9 @@ describe('MeetingsContent pagination', () => {
     expect(screen.getByText('Past meeting 24')).toBeInTheDocument();
   });
 
-  it('offers a way past the page when the server reports more', () => {
+  // Past's own continuation control, walking Past's own cursor.
+  it('offers a way past the page when the server reports more past meetings', () => {
+    mocks.upcoming = future(120);
     mocks.pages = [{ items: past(50), nextCursor: 'cursor_1' }];
     mocks.hasNextPage = true;
 
@@ -119,19 +157,20 @@ describe('MeetingsContent pagination', () => {
     expect(mocks.fetchNextPage).toHaveBeenCalledTimes(1);
   });
 
-  // Pages are ordered by start time descending, so the first page of a busy
-  // calendar can be entirely future meetings. If the continuation control
-  // hung off the past list being non-empty, that page would be a dead end.
-  it('keeps the continuation control reachable on a page with no past meeting', () => {
-    mocks.pages = [{ items: [meeting('Future meeting', new Date(Date.now() + 48 * HOUR))] }];
-    mocks.hasNextPage = true;
+  it('renders a second past page alongside the first', () => {
+    mocks.pages = [
+      { items: past(2), nextCursor: 'cursor_1' },
+      { items: [meeting('Older meeting', new Date(Date.now() - 40 * HOUR))] },
+    ];
 
     render(<MeetingsContent />);
 
-    expect(screen.getByRole('button', { name: /load more/i })).toBeInTheDocument();
+    expect(screen.getByText('Past meeting 0')).toBeInTheDocument();
+    expect(screen.getByText('Older meeting')).toBeInTheDocument();
   });
 
-  it('offers nothing more when the last page is loaded', () => {
+  it('offers nothing more when the last past page is loaded', () => {
+    mocks.upcoming = future(120);
     mocks.pages = [{ items: past(3) }];
     mocks.hasNextPage = false;
 

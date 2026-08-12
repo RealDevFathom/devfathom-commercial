@@ -188,6 +188,86 @@ export const meetingsRouter = router({
       };
     }),
 
+  /**
+   * The PAST half of the meeting list, retrieved server-side (#44).
+   *
+   * `getAll` is ordered furthest-future first, so in a tenant whose future
+   * calendar exceeds one page, every early page is future-only. The Past
+   * section used to be derived client-side from whatever `getAll` happened to
+   * have loaded, which meant "0 past of 50 meetings loaded" until the user had
+   * paged through the entire future calendar. No client-side filter over a
+   * future-ordered list can fix that, so the predicate moves here.
+   *
+   * SCOPE: `meetingListScope` — the getAll/#36 policy, organization-wide for an
+   * ADMIN and attendee-scoped for everyone else. Deliberately NOT
+   * `upcomingListScope`: #38 narrowed the UPCOMING surfaces to attendee scope
+   * for every role because they answer "what am I doing next" on every
+   * dashboard load. Past is the other half of organization-wide DISCOVERY,
+   * which #36 put on `getAll` and #38 explicitly left there. Moving Past off
+   * `getAll` must not silently take an admin's organization-wide history with
+   * it, and #38's narrowing is not extended here.
+   *
+   * Tenant scope stays RLS's job, exactly as in `meetingListScope`: no
+   * `organizationId` predicate, so the cross-organization test has row level
+   * security and nothing else between it and another tenant's history.
+   *
+   * Bounded in the shape #38/#40 established — schema default, schema ceiling,
+   * `prefault({})` for the no-input call shape — and paginated by a cursor of
+   * its own, so exhausting Past cannot disturb the upcoming surfaces or
+   * `getAll`.
+   */
+  getPast: protectedProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(MEETINGS_PAGE_SIZE_MAX).default(MEETINGS_PAGE_SIZE),
+          cursor: z.string().optional(),
+        })
+        // As on `getAll`: an absent input is PARSED as `{}` so `limit`'s own
+        // default applies to it, and the bound survives the no-input shape.
+        .prefault({})
+    )
+    .query(async ({ ctx, input }) => {
+      const now = new Date();
+
+      const meetings = await ctx.db.meeting.findMany({
+        where: {
+          ...meetingListScope(ctx.session.user),
+          // The predicate the Past section applied client-side, moved to the
+          // database unchanged: `isPast(startTime) && !recurrence`. A recurring
+          // series is never past — its next occurrence belongs to Upcoming.
+          recurrence: null,
+          startTime: { lt: now },
+        },
+        include: {
+          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+        },
+        // Most recent past first. `startTime` alone is NOT a total order — two
+        // meetings can start at the same instant — and a cursor over a
+        // non-unique ordering skips or repeats rows across the page boundary.
+        // `id` is unique, so (startTime, id) is total and the cursor below is
+        // consistent with it.
+        orderBy: [{ startTime: 'desc' }, { id: 'desc' }],
+        // One row past the page reports whether another page exists without a
+        // second count query, and that extra row IS the next page's cursor.
+        take: input.limit + 1,
+        // Prisma's cursor is INCLUSIVE — the cursor row is the first row of the
+        // next page, which is why it is the popped row and carries no `skip`.
+        ...(input.cursor ? { cursor: { id: input.cursor } } : {}),
+      });
+
+      let nextCursor: string | undefined;
+      if (meetings.length > input.limit) nextCursor = meetings.pop()?.id;
+
+      // No `findRelevantOccurrence` pass: every row here is non-recurring by
+      // the predicate above, so its stored start/end IS the occurrence, and
+      // that is the key the attendance log is written under.
+      return {
+        items: await attachPerOccurrenceJoinedAt(ctx.db, meetings),
+        nextCursor,
+      };
+    }),
+
   create: protectedProcedure
     .input(
       z.object({
