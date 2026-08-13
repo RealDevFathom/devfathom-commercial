@@ -18,15 +18,17 @@
  * variable `test:rls` uses, and never DATABASE_URL). Without it the suite
  * reports itself skipped rather than passing vacuously.
  *
- * The connection role must NOT be a superuser: PostgreSQL lets a superuser
- * bypass row level security outright, FORCE included, which would turn the
- * cross-organization case into a test that passes no matter what. `beforeAll`
- * refuses to run rather than let that happen quietly. `test:rls` solves the
- * same problem with `SET LOCAL ROLE`; Prisma has no equivalent, so the URL
- * itself has to name an unprivileged role.
+ * The connection role must be NEITHER a superuser NOR BYPASSRLS: both bypass
+ * row level security outright, FORCE included, which would leave the
+ * cross-organization case testing nothing it claims to test.
+ * `assertRlsEnforcingRole` refuses to run rather than let that happen quietly.
+ * `test:rls` solves the same problem with `SET LOCAL ROLE`; Prisma has no
+ * equivalent, so the URL itself has to name an unprivileged role.
  */
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
 
 // The router reaches `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: the context here
@@ -114,17 +116,10 @@ describeIfDatabase('meetings list policy, against PostgreSQL', () => {
       meetingsRouter: (await import('./meetings')).meetingsRouter,
     };
 
-    const [{ is_superuser: isSuperuser }] = await deps.withPlatformDb((db) =>
-      db.$queryRawUnsafe<Array<{ is_superuser: string }>>(
-        `SELECT current_setting('is_superuser') AS is_superuser`
-      )
-    );
-    if (isSuperuser === 'on') {
-      throw new Error(
-        'TEST_DATABASE_URL connects as a superuser, which bypasses row level security; ' +
-          'the cross-organization case would pass vacuously. Use an unprivileged role.'
-      );
-    }
+    // The cross-organization case below is decided purely by row level
+    // security, so a role that bypasses it would leave that case proving
+    // nothing.
+    await assertRlsEnforcingRole(deps.withPlatformDb);
 
     await deps.withPlatformDb(async (db) => {
       for (const [organizationId, label] of [

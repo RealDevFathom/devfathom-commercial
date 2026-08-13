@@ -27,6 +27,8 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+
 // REST audit writes are fire-and-forget: `recordRestAudit` starts a detached
 // transaction that would outlive the assertion it belongs to and race teardown.
 // Nothing here tests auditing; PR #41 covers that surface.
@@ -120,24 +122,10 @@ describeIfDatabase('GET /api/v1/meetings bounds, against PostgreSQL', () => {
       GET: (await import('./route')).GET,
     };
 
-    // PostgreSQL lets a SUPERUSER bypass row level security outright, FORCE
-    // included, and a role with BYPASSRLS does the same without being a
-    // superuser. Either would turn the scoping cases below into tests that
-    // pass no matter what the route does. Refuse to run rather than let that
-    // happen quietly.
-    const [role] = await deps.withPlatformDb((db) =>
-      db.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
-        `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
-      )
-    );
-    if (!role) throw new Error('Could not resolve the connection role from pg_roles.');
-    if (role.rolsuper || role.rolbypassrls) {
-      throw new Error(
-        `TEST_DATABASE_URL connects as a role that bypasses row level security ` +
-          `(rolsuper=${role.rolsuper}, rolbypassrls=${role.rolbypassrls}); the attendee ` +
-          `and tenant scoping cases would pass vacuously. Use an unprivileged role.`
-      );
-    }
+    // The attendee and tenant scoping cases below are decided by row level
+    // security, so a role that bypasses it would turn them into tests that
+    // pass no matter what the route does.
+    await assertRlsEnforcingRole(deps.withPlatformDb);
 
     const { generateApiToken } = await import('@/lib/api-auth');
     const minted = {

@@ -30,6 +30,8 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+
 // The router reaches `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: the context here
 // is built by hand. The database, the router and the scoped-db transactions
@@ -219,25 +221,10 @@ describeIfDatabase('past meeting retrieval, against PostgreSQL', () => {
       meetingsRouter: (await import('./meetings')).meetingsRouter,
     };
 
-    // PostgreSQL lets a superuser bypass row level security outright, FORCE
-    // included, and BYPASSRLS does the same without the superuser bit — either
-    // would turn the cross-organization case into a test that passes no matter
-    // what. Refuse to run rather than let that happen quietly.
-    const [role] = await deps.withPlatformDb((db) =>
-      db.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
-        `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
-      )
-    );
-    if (!role) {
-      throw new Error('Could not read the connection role from pg_roles; refusing to continue.');
-    }
-    if (role.rolsuper || role.rolbypassrls) {
-      throw new Error(
-        `TEST_DATABASE_URL connects as a role with rolsuper=${role.rolsuper} ` +
-          `rolbypassrls=${role.rolbypassrls}. Either bypasses row level security, so the ` +
-          'cross-organization case would pass vacuously. Use an unprivileged role.'
-      );
-    }
+    // The cross-organization case is decided purely by row level security, so
+    // a role that bypasses it would turn that case into a test that passes no
+    // matter what.
+    await assertRlsEnforcingRole(deps.withPlatformDb);
 
     await deps.withPlatformDb(async (db) => {
       for (const [organizationId, label] of [
