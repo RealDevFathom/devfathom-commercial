@@ -29,7 +29,7 @@ import { TimePicker } from '@/components/ui/time-picker';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { computePunctuality } from '@/lib/meeting-occurrence';
-import { format, isPast, isToday, isTomorrow } from 'date-fns';
+import { format, isToday, isTomorrow } from 'date-fns';
 
 const recurrenceLabels: Record<string, string> = {
   daily: 'Daily',
@@ -41,27 +41,29 @@ const recurrenceLabels: Record<string, string> = {
 export function MeetingsContent() {
   const utils = trpc.useUtils();
   const { data: upcoming, isLoading: loadingUpcoming } = trpc.meetings.getUpcoming.useQuery();
-  // One page at a time (#38). `getAll` is organization-wide for an admin, so
-  // asking for "all of it" was a request for every meeting in the tenant; the
-  // Past list below renders what is loaded and `fetchNextPage` reaches the rest.
+  // Past is retrieved server-side, one bounded page at a time, and paginates
+  // independently of Upcoming (#44). It used to be derived client-side from
+  // `getAll`, which is ordered furthest-future first: on a busy calendar every
+  // early page was future-only, so the Past section stayed empty until the user
+  // had paged through the whole future calendar.
   const {
-    data: allPages,
+    data: pastPages,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = trpc.meetings.getAll.useInfiniteQuery({}, { getNextPageParam: (last) => last.nextCursor });
+  } = trpc.meetings.getPast.useInfiniteQuery({}, { getNextPageParam: (last) => last.nextCursor });
   const { data: team } = trpc.team.getAll.useQuery();
 
   const deleteMeeting = trpc.meetings.delete.useMutation({
     onSuccess: () => {
       utils.meetings.getUpcoming.invalidate();
-      utils.meetings.getAll.invalidate();
+      utils.meetings.getPast.invalidate();
     },
   });
   const createMeeting = trpc.meetings.create.useMutation({
     onSuccess: () => {
       utils.meetings.getUpcoming.invalidate();
-      utils.meetings.getAll.invalidate();
+      utils.meetings.getPast.invalidate();
       setShowCreate(false);
     },
   });
@@ -72,12 +74,7 @@ export function MeetingsContent() {
   // unrelated piece of parent state changes. mutate is referentially stable.
   const handleDelete = useCallback((id: string) => deleteMeeting.mutate({ id }), [deleteMeeting]);
 
-  const loaded = useMemo(() => allPages?.pages.flatMap((p) => p.items) ?? [], [allPages]);
-
-  const pastMeetings = useMemo(
-    () => loaded.filter((m) => isPast(new Date(m.startTime)) && !m.recurrence),
-    [loaded]
-  );
+  const pastMeetings = useMemo(() => pastPages?.pages.flatMap((p) => p.items) ?? [], [pastPages]);
 
   return (
     <div className="space-y-6">
@@ -138,10 +135,9 @@ export function MeetingsContent() {
         )}
       </div>
 
-      {/* Past meetings. Rendered whenever there is either something to show or
-          another page to fetch: this is one page of the organization's
-          meetings, not all of them, so the control that reaches the rest has to
-          stay reachable even on a page that happens to hold no past meeting. */}
+      {/* Past meetings — their own server-side query and their own cursor, so
+          the first page holds past meetings however large the future calendar
+          is, and paging through them leaves Upcoming untouched. */}
       {(pastMeetings.length > 0 || hasNextPage) && (
         <div>
           <h2 className="font-display text-[15px] font-semibold text-muted-foreground mb-3 flex items-center gap-2">
@@ -158,7 +154,7 @@ export function MeetingsContent() {
           {hasNextPage && (
             <div className="mt-3 flex flex-col items-center gap-1.5">
               <p className="text-xs text-muted-foreground">
-                {pastMeetings.length} past of {loaded.length} meetings loaded — more remain.
+                {pastMeetings.length} past meetings loaded — more remain.
               </p>
               <button
                 onClick={() => fetchNextPage()}
@@ -426,7 +422,7 @@ const MeetingCard = memo(function MeetingCard({
   const updateMeeting = trpc.meetings.update.useMutation({
     onSuccess: () => {
       utils.meetings.getUpcoming.invalidate();
-      utils.meetings.getAll.invalidate();
+      utils.meetings.getPast.invalidate();
       setIsEditing(false);
     },
   });
