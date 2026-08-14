@@ -2,6 +2,7 @@ import { initTRPC, TRPCError } from '@trpc/server';
 import superjson from 'superjson';
 
 import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import { formatValidationError } from '@/lib/validation-error';
 
 /**
  * The answers an anonymous request gets when it could not be routed to a tenant
@@ -24,7 +25,29 @@ import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/an
  * touch tenant data, which is the point — it runs precisely when no tenant has
  * been established.
  */
-const t = initTRPC.create({ transformer: superjson });
+/**
+ * The same `errorFormatter` `@/server/trpc` installs, repeated rather than
+ * imported: this router is deliberately standalone — no context, no database
+ * handle — and importing the tenant-bound instance would give it both. It is
+ * repeated because the error SHAPE is part of "indistinguishable"; a response
+ * carrying `data.validation` and one omitting it tell an anonymous caller which
+ * of the two paths served them. `anonymous-fallback.test.ts` asserts that parity
+ * field by field, so the two cannot drift apart unnoticed.
+ */
+const t = initTRPC.create({
+  transformer: superjson,
+  errorFormatter({ shape, error }) {
+    const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+    return {
+      ...shape,
+      message: validation?.message ?? shape.message,
+      data: {
+        ...shape.data,
+        validation: validation?.fields ?? null,
+      },
+    };
+  },
+});
 
 const unroutableInvitation = () => {
   throw new TRPCError({ code: 'NOT_FOUND', message: INVITATION_GENERIC_MESSAGE });

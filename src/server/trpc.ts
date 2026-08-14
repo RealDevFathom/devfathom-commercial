@@ -10,6 +10,7 @@ import type { SupportIdentity } from '@/lib/tenancy/support-session';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { moduleForProcedure } from '@/lib/module-catalog';
+import { formatValidationError } from '@/lib/validation-error';
 import {
   type AuditDetail,
   ipFromHeaders,
@@ -68,8 +69,21 @@ export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
 
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
-  errorFormatter({ shape }) {
-    return shape;
+  errorFormatter({ shape, error }) {
+    // tRPC sets `cause` to a ZodError for input-validation failures (BAD_REQUEST)
+    // *and* for a raw `schema.parse()` that throws inside a procedure body
+    // (INTERNAL_SERVER_ERROR). Gate on the code so an internal failure never
+    // reaches the client wearing a field-level message, and never publishes
+    // internal schema field names in `data.validation`.
+    const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+    return {
+      ...shape,
+      message: validation?.message ?? shape.message,
+      data: {
+        ...shape.data,
+        validation: validation?.fields ?? null,
+      },
+    };
   },
 });
 
