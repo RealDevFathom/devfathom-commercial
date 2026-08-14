@@ -13,6 +13,13 @@
  * Requires TEST_DATABASE_URL (a migrated, seeded, throwaway database — the same
  * variable `test:rls` uses, and never DATABASE_URL). Without it the suite
  * reports itself skipped rather than passing vacuously.
+ *
+ * DELIBERATELY DOES NOT CALL `assertRlsEnforcingRole` (#39). The property under
+ * test is PostgreSQL row locking under concurrency, not tenancy: there is one
+ * organization, and every read goes through `withTenantDb(organizationId)` for
+ * that same one. A role that bypassed row level security would see exactly the
+ * same rows, so the guard would protect nothing. Add it here the day a
+ * cross-tenant token case is added — not before.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';

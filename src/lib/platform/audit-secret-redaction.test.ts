@@ -15,6 +15,13 @@
  * Requires TEST_DATABASE_URL (a migrated, throwaway database, never
  * DATABASE_URL). Without it the suite reports itself skipped rather than
  * passing vacuously.
+ *
+ * DELIBERATELY DOES NOT CALL `assertRlsEnforcingRole` (#39). Nothing here is
+ * decided by row level security: there is one organization, every read goes
+ * through `withPlatformDb`, which sets `app.is_platform_admin` ON PURPOSE, and
+ * every assertion is scoped by a per-run random suffix, so wider visibility
+ * cannot reach the rows being asserted on. Guarding this file would reject a
+ * superuser database on which it is perfectly valid.
  */
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
