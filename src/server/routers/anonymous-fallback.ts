@@ -31,8 +31,13 @@ import { formatValidationError } from '@/lib/validation-error';
  * handle — and importing the tenant-bound instance would give it both. It is
  * repeated because the error SHAPE is part of "indistinguishable"; a response
  * carrying `data.validation` and one omitting it tell an anonymous caller which
- * of the two paths served them. `anonymous-fallback.test.ts` asserts that parity
- * field by field, so the two cannot drift apart unnoticed.
+ * of the two paths served them. `anonymous-fallback.test.ts` pins exactly that
+ * much and no more: it raises the same refusal through each tRPC INSTANCE — the
+ * real one against a stand-in router that, like this one, declares no `.input()`
+ * schemas — and compares the served bodies, so a formatter that stopped matching
+ * is caught here. It proves nothing about the production `invitations` and
+ * `passwordReset` routers, which do declare `.input()` schemas this router omits;
+ * those router-level differences are not covered by that test.
  */
 const t = initTRPC.create({
   transformer: superjson,

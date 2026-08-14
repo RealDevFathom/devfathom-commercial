@@ -71,10 +71,17 @@ describe('trpc errorFormatter', () => {
   });
 
   it('leaves a ZodError cause alone when the error is not a BAD_REQUEST', async () => {
+    // The message an untouched INTERNAL_SERVER_ERROR carries. tRPC substitutes no
+    // generic text for this code — it passes `error.message` through, and for a
+    // ZodError that is the serialized issues. Asserting equality with it pins the
+    // pass-through itself; reformatted, this would instead read
+    // "Internal Only Field: Invalid input: expected string, received number".
+    const untouched = internalSchema.safeParse({ internalOnlyField: 1 });
+
     const error = await call('internal');
 
     expect(error.data.code).toBe('INTERNAL_SERVER_ERROR');
     expect(error.data.validation).toBeNull();
-    expect(error.message).not.toContain('Internal only field');
+    expect(error.message).toBe(untouched.error?.message);
   });
 });
