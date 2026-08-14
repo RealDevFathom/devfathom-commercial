@@ -100,6 +100,49 @@ TEST_DATABASE_URL='postgresql://postgres:postgres@localhost:5432/devfathom_rls_t
 
 Do not point `test:rls` at a database containing data you need.
 
+### Running the database-backed test suites
+
+`bun run test` **skips** the eight suites that need a real PostgreSQL unless `TEST_DATABASE_URL` is
+set. They report themselves skipped rather than passing vacuously, so a green run without that
+variable has not exercised them.
+
+Five of those suites assert things that are true only because row level security is enforced — that
+one tenant cannot see another's rows. PostgreSQL exempts two kinds of role from row level security,
+and they are separate attributes: `SUPERUSER`, and `BYPASSRLS`, which defeats policies (including
+`FORCE ROW LEVEL SECURITY`) without the role being a superuser. Connected as either, those suites
+are no longer testing what they claim to, so they abort in `beforeAll` and name the attribute they
+found.
+
+`TEST_DATABASE_URL` for `bun run test` therefore has to name a role holding **neither**. Against a
+migrated disposable database:
+
+```sql
+-- Replace the placeholder before running. Do not commit a real password.
+CREATE ROLE devfathom_test LOGIN PASSWORD 'CHANGE_ME' NOSUPERUSER NOBYPASSRLS;
+GRANT USAGE ON SCHEMA public TO devfathom_test;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO devfathom_test;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO devfathom_test;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO devfathom_test;
+```
+
+Then run the suites with that role:
+
+```bash
+TEST_DATABASE_URL='postgresql://devfathom_test:CHANGE_ME@localhost:5432/devfathom_test_db' \
+  bun run test
+```
+
+Verify the role is unprivileged with the same query the guard uses — both columns must read `f`:
+
+```sql
+SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+```
+
+`test:rls` above is **different, and is correct on a superuser URL**: it creates its own unprivileged
+role with `CREATE ROLE … NOLOGIN` and `SET LOCAL ROLE`s into it, so it never asserts through the
+connection role. Do not reuse the superuser URL from that example for `bun run test`.
+
 ## Common problems
 
 ### Port 3000 is already in use

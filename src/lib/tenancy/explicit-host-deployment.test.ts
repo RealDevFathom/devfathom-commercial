@@ -23,6 +23,15 @@
  * variable `test:rls` and `token-single-use.test.ts` use, and never
  * DATABASE_URL). Without it the suite reports itself skipped rather than passing
  * vacuously.
+ *
+ * DELIBERATELY DOES NOT CALL `assertRlsEnforcingRole` (#39). The three
+ * properties above — exact match rather than substring, case insensitivity, and
+ * two organizations resolving to nothing — are decided by the query, not by row
+ * level security, and `resolveExplicitOrganizationByHost` runs inside
+ * `withPlatformDb` anyway. Bypassing row level security WIDENS visibility,
+ * which makes the `resolves.toBeNull()` assertions harder to satisfy, not
+ * easier: a privileged role could only push this file toward failing, never
+ * toward passing vacuously.
  */
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';

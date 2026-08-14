@@ -25,6 +25,25 @@
  * here would evaluate the database client at test-module load, before the
  * override. Injection also leaves this module with no runtime imports at all,
  * which is what keeps it off every production import path.
+ *
+ * NOT EVERY DATABASE-BACKED SUITE WANTS THIS. Four callers are excluded on
+ * purpose, and each says so in its own docblock:
+ *
+ *   - `lib/platform/audit-secret-redaction.test.ts` — one organization, reads
+ *     through `withPlatformDb`, assertions scoped by a per-run random suffix;
+ *   - `server/routers/token-single-use.test.ts` — one organization, one tenant
+ *     scope, and the property under test is row locking under concurrency;
+ *   - `lib/tenancy/explicit-host-deployment.test.ts` — bypassing row level
+ *     security only widens visibility, which makes its `toBeNull()` assertions
+ *     harder to satisfy rather than easier;
+ *   - `scripts/verify-tenant-isolation.ts` — creates its own unprivileged role
+ *     with `CREATE ROLE … NOLOGIN` and `SET LOCAL ROLE`s into it, so it never
+ *     asserts through the connection role. That is strictly stronger than this
+ *     guard, and it stays correct even when TEST_DATABASE_URL is a superuser.
+ *
+ * Apply this only where an assertion's truth DEPENDS ON row level security
+ * being enforced. Applied anywhere else it rejects databases the suite would
+ * have handled correctly.
  */
 
 type WithPlatformDb = (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
