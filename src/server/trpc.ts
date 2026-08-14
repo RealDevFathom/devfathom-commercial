@@ -75,6 +75,14 @@ const t = initTRPC.context<TRPCContext>().create({
     // (INTERNAL_SERVER_ERROR). Gate on the code so an internal failure never
     // reaches the client wearing a field-level message, and never publishes
     // internal schema field names in `data.validation`.
+    //
+    // The first half is narrower than it reads: tRPC has already placed the raw
+    // serialized ZodError into `shape.message` before this formatter runs, and
+    // with `validation` null we pass `shape.message` through unchanged — so the
+    // field name still reaches the client, in raw serialized form (the
+    // errorFormatter test pins exactly that string, `"path": ["internalOnlyField"]`
+    // and all). The gate governs `data.validation` and the FORMATTED message, not
+    // the pass-through. Pre-existing behaviour, out of scope for this change.
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
     return {
       ...shape,
