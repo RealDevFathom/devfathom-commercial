@@ -4,12 +4,14 @@
  * was refused there. That only holds if both tRPC instances serialize an error
  * the same way.
  *
- * `@/server/trpc` builds its instance with an `errorFormatter`, and
- * `anonymous-fallback` builds a second instance without one. Two `initTRPC.create`
- * calls with different options are exactly the kind of thing that drifts silently:
- * nothing fails, the bodies just stop matching, and the difference is a signal an
- * anonymous caller can read. These tests compare the two byte for byte so the
- * drift is caught here rather than by someone diffing responses in the wild.
+ * `@/server/trpc` and `anonymous-fallback` each call `initTRPC.create` with their
+ * OWN copy of the same `errorFormatter` — repeated rather than shared, because the
+ * fallback is deliberately standalone (no context, no database handle). Two
+ * `initTRPC.create` calls holding duplicated options are exactly the kind of thing
+ * that drifts silently: nothing fails, the bodies just stop matching, and the
+ * difference is a signal an anonymous caller can read. These tests compare the two
+ * byte for byte so the drift is caught here rather than by someone diffing
+ * responses in the wild.
  */
 import { TRPCError } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';

@@ -10,7 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
 const inputClass =
-  'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15';
+  'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20';
 const labelClass =
   'mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground';
 
@@ -145,6 +145,9 @@ export function OrganizationAdminContent() {
   }
 
   const { organization, entitlements } = overview.data;
+  const createRoleErrors = !role.variables?.id ? role.error?.data?.validation : null;
+  const createRoleKeyError = createRoleErrors?.key?.[0];
+  const createRolePermissionsError = createRoleErrors?.permissions?.[0];
   const submitProfile = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
@@ -538,7 +541,25 @@ export function OrganizationAdminContent() {
           >
             <label>
               <span className={labelClass}>Role key</span>
-              <Input name="key" placeholder="delivery-lead" required />
+              <Input
+                name="key"
+                placeholder="delivery-lead"
+                aria-invalid={Boolean(createRoleKeyError)}
+                aria-describedby="create-role-key-help"
+                onChange={() => role.reset()}
+                required
+              />
+              <p
+                id="create-role-key-help"
+                className={cn(
+                  'mt-1.5 text-[11px]',
+                  createRoleKeyError ? 'text-destructive' : 'text-muted-foreground'
+                )}
+                role={createRoleKeyError ? 'alert' : undefined}
+              >
+                {createRoleKeyError ??
+                  'Use lowercase letters, numbers, dots, underscores, and hyphens.'}
+              </p>
             </label>
             <label>
               <span className={labelClass}>Role name</span>
@@ -553,8 +574,22 @@ export function OrganizationAdminContent() {
               <textarea
                 className={cn(inputClass, 'min-h-28 py-2 font-mono text-xs')}
                 name="permissions"
+                aria-invalid={Boolean(createRolePermissionsError)}
+                aria-describedby={
+                  createRolePermissionsError ? 'create-role-permissions-error' : undefined
+                }
+                onChange={() => role.reset()}
                 defaultValue={'[{"capability":"projects:*","effect":"ALLOW"}]'}
               />
+              {createRolePermissionsError ? (
+                <p
+                  id="create-role-permissions-error"
+                  className="mt-1.5 text-[11px] text-destructive"
+                  role="alert"
+                >
+                  {createRolePermissionsError}
+                </p>
+              ) : null}
             </label>
             <SubmitButton pending={role.isPending}>Create role</SubmitButton>
           </form>
