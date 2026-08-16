@@ -155,6 +155,24 @@ TXT    asuid.admin.staging  <azure-verification-value>
 
 Tenant routing uses `staging.devfathom.com`; platform routing uses `admin.staging.devfathom.com`. The planned production app uses one Container App with `www.devfathom.com` for the tenant workspace and `admin.devfathom.com` for the platform control desk. The apex domain remains the existing marketing site. Enterprise subdomains, SSO, and dedicated deployments remain later work.
 
+`staging.devfathom.com` **is** the shared application host: it is the apex of the
+configured `PLATFORM_BASE_DOMAIN`, which is what the `shared` host classification
+matches. Standard tenants sign in there with no workspace slug in the URL, choose
+a workspace when they belong to more than one, and remain on that host afterwards
+— the organization travels in the session. Production uses `www.devfathom.com`
+under `PLATFORM_BASE_DOMAIN=devfathom.com` by the same rule.
+
+`AUTH_URL` and `NEXT_PUBLIC_APP_URL` must therefore be set to the shared host so
+reset and invite links land there. Both feed `configuredDefaultHosts()`; the
+shared classification short-circuits the `DEFAULT_ORGANIZATION_ID` fallback before
+it can apply, which is what stops every shared-host login silently authenticating
+against one organization. Do not retune `PLATFORM_BASE_DOMAIN` — it also derives
+the admin host.
+
+Enterprise subdomains, SSO, and dedicated deployments keep their own hosts and are
+unaffected; enterprise SSO runs only on those hosts because its redirect URI and
+audience are registered against them.
+
 `meet.devfathom.com` and `turn.devfathom.com` are reserved future media endpoints. They are not live, are not production dependencies for the current app, and must not be presented as deployed.
 
 Rollback application incidents by redeploying the prior healthy ACR digest; do not rebuild it. Inspect revisions and logs first:

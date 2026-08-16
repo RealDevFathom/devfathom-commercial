@@ -5,7 +5,6 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, MailCheck } from 'lucide-react';
-import { trpc } from '@/lib/trpc';
 
 const schema = z.object({
   email: z.string().email('Please enter a valid email address'),
@@ -21,7 +20,6 @@ const inputClass =
 const CONFIRMATION = "If an account exists for that email, we've sent a reset link.";
 
 export function ForgotPasswordForm() {
-  const requestReset = trpc.passwordReset.request.useMutation();
   const [sent, setSent] = useState(false);
 
   const {
@@ -32,7 +30,15 @@ export function ForgotPasswordForm() {
 
   const onSubmit = async (data: FormData) => {
     try {
-      await requestReset.mutateAsync({ email: data.email });
+      // D19: this used to call the tRPC mutation, but the transport answered 401
+      // before the router ran, so no reset link was ever sent — and the catch
+      // below hid it. The anonymous endpoint carries the email; on the shared
+      // host it fans out across every workspace the address belongs to.
+      await fetch('/api/password-reset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: data.email }),
+      });
     } catch {
       // Swallow errors (e.g. rate limiting) — still show the neutral
       // confirmation so the form can never be used to probe for accounts.
@@ -46,9 +52,9 @@ export function ForgotPasswordForm() {
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#BC8850]/15 text-[#BC8850]">
           <MailCheck className="h-6 w-6" />
         </div>
-        <h2 className="font-display text-xl font-semibold tracking-tight text-white">
+        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
           Check your inbox
-        </h2>
+        </h1>
         <p className="text-sm text-[#8A97A1]">{CONFIRMATION}</p>
         <a
           href="/login"
@@ -63,9 +69,9 @@ export function ForgotPasswordForm() {
   return (
     <>
       <div className="mb-7">
-        <h2 className="font-display text-xl font-semibold tracking-tight text-white">
+        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
           Forgot your password?
-        </h2>
+        </h1>
         <p className="mt-1.5 text-sm text-[#8A97A1]">
           Enter your email and we&apos;ll send you a link to reset it.
         </p>

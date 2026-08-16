@@ -1,5 +1,57 @@
 # Administration Platform Changelog
 
+## 2026-08-02
+
+### Added
+
+- Standard shared-host login. One host (`www` in production, `staging.devfathom.com`
+  on staging) serves every standard tenant with no workspace slug and no
+  `workspace=` parameter in the URL. Credentials are proven first; the eligible
+  workspaces are revealed only afterwards. One workspace continues straight
+  through, several render a selection screen, and the chosen organization travels
+  in the session, never in the address bar. Standard tenants remain on the shared
+  host after selection — see [ADR-003](adr/003-shared-host-login.md).
+- `shared` host classification, checked before the base-domain suffix rule, with
+  `www`, `admin`, `app`, `api` and `staging` reserved as non-assignable
+  organization slugs.
+- `PendingLoginIntent` — a control-plane, single-use, host-bound record of the
+  candidate set the server computed when the password was proven. A submitted
+  organization id is validated against it and is never authority on its own.
+- `login-intent` Auth.js credentials provider, mirroring the enterprise SSO
+  provider: a one-use handle exchanged for a normal JWT carrying `organizationId`.
+- Anonymous endpoints for shared-host credentials (`/api/login`) and password
+  reset (`/api/password-reset`), plus token-scoped anonymous access to the invite
+  and reset tRPC procedures.
+- `SHARED_APP_HOSTS` for naming a shared host that follows no reserved-label rule.
+
+### Fixed
+
+- **Session revocation was not enforced.** A token marked revoked could still read
+  and write tenant data: the guard only fired when `status` was truthy, so a
+  session carrying no status passed straight through. Revocation is now its own
+  claim, `status` only ever holds a real `UserStatus`, and one fail-closed decision
+  point is shared by the API, the page guard and the actor resolver. A revoked
+  session is told its session ended and sent to sign in, not told to contact an
+  administrator. (GitHub #16)
+- **Mixed-case addresses could not sign in.** `users.email` is unique per
+  organization on the raw string with no `citext` and no functional index, and the
+  login query used the raw value. Emails are normalized at the schema layer and
+  constrained to lower case in the database.
+- **SSO JIT silently provisioned duplicates.** A returning user whose IdP asserted
+  a different casing did not match the stored row and got a second account in the
+  same organization. Every user-creation path now pre-checks the normalized
+  address and reports a stated conflict.
+- **Invite and password reset were unreachable anonymously.** The tRPC transport
+  answered 401 before any router ran, and the forgot-password form swallowed the
+  failure and showed its confirmation regardless, so no reset link was ever sent.
+- **The shared apex resolved a random tenant.** Deployment-URL resolution used a
+  substring match with no ordering, so a request for the bare apex matched every
+  tenant deployment row.
+- `safeCallbackUrl` moved server-side and hardened; traversal that resolves into a
+  protocol-relative URL is now refused.
+- `/forgot-password`, `/reset-password/[token]` and `/invite/[token]` had no `<h1>`;
+  the login hero contributed a competing second one.
+
 ## 2026-07-28
 
 ### Added

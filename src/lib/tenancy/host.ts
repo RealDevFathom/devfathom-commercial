@@ -2,9 +2,19 @@ import 'server-only';
 
 import type { OrganizationDeploymentMode, OrganizationStatus } from '@/generated/prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
-import { classifyHost, configuredDefaultHosts, normalizeHost } from '@/lib/tenancy/host-routing';
+import {
+  classifyHost,
+  configuredDefaultHosts,
+  isSharedHost,
+  normalizeHost,
+} from '@/lib/tenancy/host-routing';
 
-export { classifyHost, normalizeHost } from '@/lib/tenancy/host-routing';
+export {
+  classifyHost,
+  isSharedHost,
+  normalizeHost,
+  RESERVED_HOST_LABELS,
+} from '@/lib/tenancy/host-routing';
 export type { HostKind } from '@/lib/tenancy/host-routing';
 
 export const TENANT_HOST_HEADER = 'x-devfathom-host';
@@ -105,6 +115,11 @@ export async function resolveOrganizationByHost(
   hostValue: string | null | undefined
 ): Promise<TenantOrganization | null> {
   const classified = classifyHost(hostValue);
+  // D4: a shared host carries no organization. Returning null here short-circuits
+  // BEFORE the default-organization fallback below — without it every shared-host
+  // login would silently authenticate against DEFAULT_ORGANIZATION_ID, because
+  // AUTH_URL/NEXT_PUBLIC_APP_URL must point at the shared host for reset and
+  // invite emails and both feed configuredDefaultHosts().
   if (classified.kind !== 'tenant') return null;
 
   const defaultOrganizationId = process.env.DEFAULT_ORGANIZATION_ID ?? 'org_devfathom';
@@ -128,7 +143,8 @@ export async function resolveOrganizationByHost(
     if (domain?.verificationStatus === 'VERIFIED') return domain.organization;
 
     const deployment = await tx.organizationDeployment.findFirst({
-      where: { url: { contains: classified.host }, status: 'READY' },
+      where: { url: { in: deploymentUrlCandidates(classified.host) }, status: 'READY' },
+      orderBy: { updatedAt: 'desc' },
       select: { organization: { select: ORGANIZATION_SELECT } },
     });
     if (deployment) return deployment.organization;
@@ -278,6 +294,7 @@ export async function resolveExplicitOrganizationByHost(
 export async function resolveOrganizationById(
   organizationId: string
 ): Promise<TenantOrganization | null> {
+  if (!organizationId) return null;
   return withPlatformDb((tx) =>
     tx.organization.findUnique({
       where: { id: organizationId },
@@ -296,10 +313,32 @@ export class TenantHostError extends Error {
   }
 }
 
+/**
+ * The organization a request may act on.
+ *
+ * Enterprise tenant, custom and dedicated hosts keep the original contract: the
+ * host resolves an organization, and a session for a different one is a 409.
+ *
+ * D13: a shared host resolves no organization, so that cross-check has nothing
+ * to compare and would reject every request. The session's organization becomes
+ * authoritative there — it is an authenticated claim, not request input — and the
+ * lifecycle gate that the host path applied is re-applied explicitly so a
+ * suspended workspace still gets 423 rather than silently working.
+ */
 export async function requireOrganizationForRequest(
   request: Request,
   expectedOrganizationId?: string | null
 ): Promise<TenantOrganization> {
+  if (isSharedHost(requestHost(request))) {
+    if (!expectedOrganizationId) throw new TenantHostError('Workspace not found.', 404);
+    const organization = await resolveOrganizationById(expectedOrganizationId);
+    if (!organization) throw new TenantHostError('Workspace not found.', 404);
+    if (!isTenantLifecycleAccessible(organization.status)) {
+      throw new TenantHostError('This workspace is not currently active.', 423);
+    }
+    return organization;
+  }
+
   const organization = await resolveOrganizationForRequest(request);
   if (!organization) throw new TenantHostError('Workspace not found.', 404);
   if (expectedOrganizationId && expectedOrganizationId !== organization.id) {

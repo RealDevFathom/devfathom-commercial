@@ -12,10 +12,7 @@ const inputClass =
 
 export function ResetPasswordForm({ token }: { token: string }) {
   const router = useRouter();
-  const { data, isLoading } = trpc.passwordReset.validate.useQuery(
-    { token },
-    { retry: false }
-  );
+  const { data, isLoading } = trpc.passwordReset.validate.useQuery({ token }, { retry: false });
   const reset = trpc.passwordReset.reset.useMutation();
 
   const [password, setPassword] = useState('');
@@ -38,9 +35,9 @@ export function ResetPasswordForm({ token }: { token: string }) {
   if (!data?.valid) {
     return (
       <div className="space-y-5 text-center">
-        <h2 className="font-display text-xl font-semibold tracking-tight text-white">
+        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
           Link unavailable
-        </h2>
+        </h1>
         <p className="text-sm text-[#8A97A1]">
           This reset link is invalid or has expired. Request a new one to continue.
         </p>
@@ -61,9 +58,9 @@ export function ResetPasswordForm({ token }: { token: string }) {
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-success/15 text-success">
           <CheckCircle2 className="h-6 w-6" />
         </div>
-        <h2 className="font-display text-xl font-semibold tracking-tight text-white">
+        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
           Password updated
-        </h2>
+        </h1>
         <p className="text-sm text-[#8A97A1]">
           Your password has been changed. You can now sign in with it.
         </p>
@@ -106,9 +103,9 @@ export function ResetPasswordForm({ token }: { token: string }) {
   return (
     <div>
       <div className="mb-7">
-        <h2 className="font-display text-xl font-semibold tracking-tight text-white">
+        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
           Choose a new password
-        </h2>
+        </h1>
         <p className="mt-1.5 text-sm text-[#8A97A1]">
           Pick a strong password you don&apos;t use elsewhere.
         </p>

@@ -31,6 +31,12 @@ Retry is explicit and auditable. Manual status control exists for operational re
 
 The shared canonical slug host remains available while customer DNS is pending.
 
+Standard customers sign in at the shared application host, which carries no slug
+at all; their per-tenant slug host keeps resolving for existing bookmarks but is
+no longer the canonical entry point. The reserved labels `www`, `admin`, `app`,
+`api` and `staging` cannot be assigned as organization slugs, because they would
+shadow the control plane or the shared application.
+
 ## Dedicated domains
 
 Support and host resolution use the ready deployment URL when available. Dedicated Azure domain attachment is **BLOCKED** until that deployment path is implemented and verified; it must use the same DNS proof.
