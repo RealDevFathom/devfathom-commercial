@@ -2251,6 +2251,38 @@ model PlatformSession {
   @@map("platform_sessions")
 }
 
+/// D8 — a pending shared-host login, between "the password is proven" and
+/// "an organization has been chosen".
+///
+/// Control plane, not tenant scope: the row deliberately SPANS organizations
+/// before one is chosen, so there is no single `organizationId` for a tenant RLS
+/// policy to compare against. It carries no tenant business data — only the
+/// candidate set the server itself computed — and is written and read solely by
+/// the authentication path in the explicitly privileged platform scope.
+///
+/// Modelled on `TenantSsoTicket`: 32 random bytes stored only as a SHA-256 hash,
+/// short TTL, single use via a conditional update. `candidates` holds the
+/// server-computed `{ organizationId, userId }` set; a submitted organization id
+/// is authority only if it is a member of THAT set.
+model PendingLoginIntent {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  email      String
+  /// The host the intent was minted on. Consumption on any other host is refused,
+  /// so an intent cannot be replayed across the shared, tenant, or admin hosts.
+  host       String
+  /// [{ organizationId, userId }] — the eligible organizations, server-computed.
+  candidates Json
+  expiresAt  DateTime
+  usedAt     DateTime?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+
+  @@index([expiresAt, usedAt])
+  @@map("pending_login_intents")
+}
+
 model PlatformSetting {
   id          String   @id @default(cuid())
   key         String   @unique

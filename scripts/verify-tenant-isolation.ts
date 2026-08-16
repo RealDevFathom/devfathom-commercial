@@ -600,6 +600,75 @@ async function main() {
       )
     );
 
+    // D8: the pending-login intent spans organizations before one is chosen, so
+    // it lives in the control plane. A tenant scope must not be able to read it
+    // (it would expose which organizations an address belongs to) or write it
+    // (it would forge the candidate set that authorizes workspace selection).
+    await expectDatabaseError('42501', () =>
+      client.query(
+        `INSERT INTO "pending_login_intents" (
+          "id", "tokenHash", "email", "host", "candidates", "expiresAt", "createdAt"
+        ) VALUES ($1, $2, 'forged@example.test', 'www.example.test', $3::jsonb,
+          CURRENT_TIMESTAMP + INTERVAL '5 minutes', CURRENT_TIMESTAMP)`,
+        [
+          `intent_denied_${suffix}`,
+          `hash_denied_${suffix}`,
+          JSON.stringify([{ organizationId: organizationB, userId: userB }]),
+        ]
+      )
+    );
+
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+
+    // The same insert succeeds in the platform scope, and the row it creates is
+    // then invisible again once the request returns to a tenant scope.
+    await client.query(
+      `INSERT INTO "pending_login_intents" (
+        "id", "tokenHash", "email", "host", "candidates", "expiresAt", "createdAt"
+      ) VALUES ($1, $2, 'discovery@example.test', 'www.example.test', $3::jsonb,
+        CURRENT_TIMESTAMP + INTERVAL '5 minutes', CURRENT_TIMESTAMP)`,
+      [
+        `intent_allowed_${suffix}`,
+        `hash_allowed_${suffix}`,
+        JSON.stringify([{ organizationId: organizationB, userId: userB }]),
+      ]
+    );
+    const intentInPlatformScope = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "pending_login_intents" WHERE "id" = $1`,
+      [`intent_allowed_${suffix}`]
+    );
+    assertEqual(
+      intentInPlatformScope.rows[0]?.count,
+      1,
+      'platform scope must be able to read a pending login intent'
+    );
+
+    await client.query(
+      `SELECT set_config('app.current_organization_id', 'org_devfathom', true),
+              set_config('app.is_platform_admin', 'false', true)`
+    );
+    const intentInTenantScope = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "pending_login_intents"`
+    );
+    assertEqual(
+      intentInTenantScope.rows[0]?.count,
+      0,
+      'tenant scope must never see a pending login intent'
+    );
+
+    // findLoginCandidates is the one new cross-tenant read in the login change.
+    // It is only safe because it runs in the platform scope: the same query from
+    // a tenant scope must return nothing for another organization's member.
+    const crossTenantByEmail = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "users" WHERE "organizationId" = $1`,
+      [organizationB]
+    );
+    assertEqual(
+      crossTenantByEmail.rows[0]?.count,
+      0,
+      'a tenant scope must not reach another organization user by email discovery'
+    );
+
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client.query(
       `INSERT INTO "platform_leads" ("id", "name", "status", "createdAt", "updatedAt")
@@ -613,7 +682,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, token/webhook isolation, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, and platform-only policies.'
+      'RLS verification passed: forced policies, read isolation, token/webhook isolation, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);

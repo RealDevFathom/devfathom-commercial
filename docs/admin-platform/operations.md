@@ -50,15 +50,32 @@ Use `.env.example` as the machine-copyable template.
 
 ### Required runtime
 
-| Variable                           | Sensitive | Purpose                                    |
-| ---------------------------------- | --------- | ------------------------------------------ |
-| `DATABASE_URL`                     | yes       | PostgreSQL application connection          |
-| `AUTH_SECRET`                      | yes       | Auth.js JWT encryption/signing secret      |
-| `AUTH_URL` / `NEXT_PUBLIC_APP_URL` | no        | canonical tenant application URL           |
-| `PLATFORM_BASE_DOMAIN`             | no        | base domain; admin host is `admin.<value>` |
-| `PLATFORM_ENCRYPTION_KEY`          | yes       | encrypt SSO/email/MFA/support secrets      |
-| `CRON_SECRET`                      | yes       | job worker bearer credential               |
-| `DEFAULT_ORGANIZATION_ID`          | no        | local/default-host tenant                  |
+| Variable                           | Sensitive | Purpose                                                                                 |
+| ---------------------------------- | --------- | --------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                     | yes       | PostgreSQL application connection                                                       |
+| `AUTH_SECRET`                      | yes       | Auth.js JWT encryption/signing secret                                                   |
+| `AUTH_URL` / `NEXT_PUBLIC_APP_URL` | no        | canonical application URL — set to the SHARED host so reset and invite links land there |
+| `PLATFORM_BASE_DOMAIN`             | no        | base domain; admin host is `admin.<value>`                                              |
+| `SHARED_APP_HOSTS`                 | no        | optional comma-separated shared hosts that follow no reserved-label rule                |
+| `PLATFORM_ENCRYPTION_KEY`          | yes       | encrypt SSO/email/MFA/support secrets                                                   |
+| `CRON_SECRET`                      | yes       | job worker bearer credential                                                            |
+| `DEFAULT_ORGANIZATION_ID`          | no        | local/default-host tenant — see the warning below                                       |
+
+> **`DEFAULT_ORGANIZATION_ID` is dangerous once a shared host exists.** It is a
+> local-development convenience: any host in `configuredDefaultHosts()` that
+> resolves no organization falls back to it. `configuredDefaultHosts()` is built
+> from `NEXT_PUBLIC_APP_URL`, `AUTH_URL`, `VERCEL_URL` and `PLATFORM_BASE_DOMAIN`
+> — and `AUTH_URL`/`NEXT_PUBLIC_APP_URL` must point at the shared host. Without
+> the `shared` host classification short-circuiting that fallback, every
+> shared-host login would silently authenticate against this organization instead
+> of erroring. Do not remove the short-circuit, and do not add a production host
+> here expecting the fallback to be harmless.
+
+> **Do not retune `PLATFORM_BASE_DOMAIN` to point at the shared host.** It
+> simultaneously derives the admin host (`admin.<value>`), feeds
+> `configuredDefaultHosts()`, sets the `df_support_session` cookie domain, and is
+> re-derived independently in `src/proxy.ts`. Changing it relocates the admin host
+> and locks platform operators out.
 
 ### Bootstrap/seed only
 

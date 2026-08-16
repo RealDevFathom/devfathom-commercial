@@ -16,6 +16,7 @@ import { assertPlatformCapability } from '@/lib/platform/auth';
 import { PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { encryptSecret } from '@/lib/secret-crypto';
+import { emailSchema } from '@/lib/email-address';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 
 const id = z
@@ -31,10 +32,9 @@ const optionalText = z
   .max(5_000)
   .nullish()
   .transform((value) => value || null);
-const email = z
-  .email()
-  .max(254)
-  .transform((value) => value.trim().toLowerCase());
+// D10: trims and lower-cases BEFORE validating, so a padded or upper-cased
+// address from an operator form is normalized rather than rejected as malformed.
+const email = emailSchema;
 const currency = z
   .string()
   .trim()
@@ -49,9 +49,13 @@ const money = z.coerce.number().finite().min(0).max(999_999_999_999);
 const slug = z
   .string()
   .trim()
+  .toLowerCase()
   .min(3)
   .max(63)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  // D3: a slug becomes `<slug>.<baseDomain>`. Assigning one of the reserved
+  // labels would shadow the control plane or the shared application host, so it
+  // is refused at creation rather than discovered as a routing collision.
   .refine((value) => !isReservedHostLabel(value), {
     message: `Reserved slug. Choose another: ${RESERVED_HOST_LABELS.join(', ')} are used by the platform.`,
   });
@@ -334,6 +338,17 @@ async function bootstrapOrganization(
       },
     },
   });
+  // D20: the operator onboarding form had no duplicate guard at all — a repeat
+  // submission would have surfaced a raw Prisma unique-constraint error in the
+  // control plane. The organization is new, so a clash can only come from a
+  // concurrent create; report it as a conflict either way.
+  const existingAdmin = await db.user.findFirst({
+    where: { organizationId: organization.id, email: input.adminEmail },
+    select: { id: true },
+  });
+  if (existingAdmin) {
+    throw new PlatformSecurityError('A user with this email already exists.', 409);
+  }
   await db.user.create({
     data: {
       organizationId: organization.id,

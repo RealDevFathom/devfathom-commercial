@@ -1,0 +1,435 @@
+'use client';
+
+import { useId, useRef, useState, type FormEvent } from 'react';
+import { signIn } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
+import { ArrowRight, Building2, Eye, EyeOff, Loader2, ShieldCheck } from 'lucide-react';
+
+type Organization = {
+  id: string;
+  slug: string;
+  displayName: string;
+  ssoEnforced: boolean;
+  /** The workspace's own host, where its SSO flow begins. Null if unconfigured. */
+  ssoUrl: string | null;
+};
+
+type Stage = 'credentials' | 'select' | 'sso-only';
+
+const inputClass =
+  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive/20';
+
+const GENERIC_ERROR = 'Invalid email or password. Please try again.';
+
+/**
+ * The shared-host sign-in.
+ *
+ * The URL carries no workspace slug and no `workspace=` parameter at any point.
+ * Credentials are proven first; only then does the server say anything about
+ * which organizations exist. When there is exactly one, the flow continues
+ * straight to the workspace; when there are several, this renders the selection
+ * screen. The chosen organization travels in the authenticated session, never in
+ * the address bar.
+ */
+export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
+  const router = useRouter();
+  const errorId = useId();
+  const [stage, setStage] = useState<Stage>('credentials');
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingOrganizationId, setPendingOrganizationId] = useState<string | null>(null);
+  // Revealed only after a correct password, when the chosen account has 2FA on.
+  const [twoFactorFor, setTwoFactorFor] = useState<string | null>(null);
+  const totpRef = useRef<HTMLInputElement>(null);
+
+  // Loaded in parallel with the credential request so the workspace transition
+  // does not inherit the login page's bundle cost.
+  const appProvidersReady = useRef<Promise<unknown> | null>(null);
+
+  const selectable = organizations.filter((organization) => !organization.ssoEnforced);
+
+  async function continueInto(organizationId: string, totp?: string) {
+    setPendingOrganizationId(organizationId);
+    setError('');
+    try {
+      const result = await signIn('login-intent', {
+        organizationId,
+        totp: totp ?? '',
+        redirect: false,
+      });
+
+      if (result?.error) {
+        if (result.code === '2fa_required') {
+          setTwoFactorFor(organizationId);
+          setError('Enter the 6-digit code from your authenticator app.');
+        } else if (result.code === '2fa_invalid') {
+          setTwoFactorFor(organizationId);
+          setError('That code is incorrect or expired. Try again, or use a recovery code.');
+        } else if (result.code === 'suspended') {
+          setError('Your account has been suspended. Please contact your workspace administrator.');
+        } else if (result.code === 'sso_required') {
+          setError('This workspace requires enterprise SSO. Use its identity provider to sign in.');
+        } else {
+          setError('That sign-in could not be completed. Please sign in again.');
+          setStage('credentials');
+        }
+        setPendingOrganizationId(null);
+        setIsSubmitting(false);
+        return;
+      }
+
+      await appProvidersReady.current;
+      router.replace(callbackUrl);
+    } catch {
+      setError('Unable to sign in right now. Please check your connection and try again.');
+      setPendingOrganizationId(null);
+      setIsSubmitting(false);
+    }
+  }
+
+  const onSubmitCredentials = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError('');
+    setIsSubmitting(true);
+
+    const formData = new FormData(event.currentTarget);
+    const email = String(formData.get('email') ?? '');
+    const password = String(formData.get('password') ?? '');
+
+    appProvidersReady.current = import('@/components/app-providers');
+
+    try {
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password, callbackUrl }),
+      });
+      const body = (await response.json()) as {
+        outcome?: string;
+        organizations?: Organization[];
+        message?: string;
+      };
+
+      if (!response.ok || body.outcome === 'failed') {
+        setError(body.message ?? GENERIC_ERROR);
+        setIsSubmitting(false);
+        return;
+      }
+
+      const found = body.organizations ?? [];
+      setOrganizations(found);
+
+      if (body.outcome === 'single') {
+        const only = found.find((organization) => !organization.ssoEnforced);
+        if (!only) {
+          setStage('sso-only');
+          setIsSubmitting(false);
+          return;
+        }
+        // Exactly one eligible workspace: continue without an extra step.
+        await continueInto(only.id);
+        return;
+      }
+
+      setStage(body.outcome === 'sso-only' ? 'sso-only' : 'select');
+      setIsSubmitting(false);
+    } catch {
+      setError('Unable to sign in right now. Please check your connection and try again.');
+      setIsSubmitting(false);
+    }
+  };
+
+  const onSubmitTwoFactor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!twoFactorFor) return;
+    setIsSubmitting(true);
+    await continueInto(twoFactorFor, totpRef.current?.value ?? '');
+  };
+
+  const HEADINGS: Record<Stage, { eyebrow: string; title: string; description: string }> = {
+    credentials: {
+      eyebrow: 'Secure workspace access',
+      title: 'Welcome back',
+      description: 'Sign in to pick up the work your team is moving forward.',
+    },
+    select: {
+      eyebrow: 'Choose a workspace',
+      title: 'Where to?',
+      description: 'Your account belongs to more than one workspace. Choose where to continue.',
+    },
+    'sso-only': {
+      eyebrow: 'Single sign-on',
+      title: 'Continue with SSO',
+      description: 'Every workspace on this account signs in through its own identity provider.',
+    },
+  };
+  const heading = HEADINGS[stage];
+
+  const header = (
+    <div className="mb-8">
+      <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+        {heading.eyebrow}
+      </p>
+      <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
+        {heading.title}
+      </h1>
+      <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+        {heading.description}
+      </p>
+    </div>
+  );
+
+  const alert = error ? (
+    <div
+      id={errorId}
+      role="alert"
+      className="mb-5 rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+    >
+      {error}
+    </div>
+  ) : null;
+
+  if (stage === 'credentials') {
+    return (
+      <>
+        {header}
+        {alert}
+        <form method="post" onSubmit={onSubmitCredentials} className="space-y-5">
+          <div className="space-y-2">
+            <label htmlFor="email" className="block text-sm font-semibold text-foreground">
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              placeholder="you@company.com"
+              autoComplete="email"
+              autoFocus
+              name="email"
+              required
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? errorId : undefined}
+              className={inputClass}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="password" className="block text-sm font-semibold text-foreground">
+                Password
+              </label>
+              <a
+                href="/forgot-password"
+                className="rounded-[3px] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                Forgot password?
+              </a>
+            </div>
+            <div className="relative">
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Enter your password"
+                autoComplete="current-password"
+                name="password"
+                required
+                aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
+                className={`${inputClass} pr-10`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-[3px] text-text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(12,29,48,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:translate-y-0 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
+                Signing in...
+              </>
+            ) : (
+              'Sign in'
+            )}
+          </button>
+        </form>
+      </>
+    );
+  }
+
+  if (stage === 'sso-only') {
+    return (
+      <>
+        {header}
+        {alert}
+        <ul className="space-y-3">
+          {organizations.map((organization) => (
+            <li key={organization.id}>
+              <SsoEntry organization={organization} />
+            </li>
+          ))}
+        </ul>
+        <BackToCredentials onBack={() => resetToCredentials()} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      {header}
+      {alert}
+
+      <ul className="space-y-3">
+        {organizations.map((organization) =>
+          organization.ssoEnforced ? (
+            <li key={organization.id}>
+              <SsoEntry organization={organization} />
+            </li>
+          ) : (
+            <li key={organization.id}>
+              <button
+                type="button"
+                onClick={() => continueInto(organization.id)}
+                disabled={Boolean(pendingOrganizationId)}
+                aria-describedby={error ? errorId : undefined}
+                className="group flex w-full items-center justify-between gap-4 rounded-[3px] border border-border-default bg-card px-4 py-4 text-left transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold text-foreground">
+                    {organization.displayName}
+                  </span>
+                  <span className="mt-1 block truncate font-mono text-[10px] uppercase tracking-[0.14em] text-text-faint">
+                    {organization.slug}
+                  </span>
+                </span>
+                {pendingOrganizationId === organization.id ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-text-muted motion-reduce:animate-none" />
+                ) : (
+                  <ArrowRight className="h-4 w-4 shrink-0 text-text-faint transition-colors group-hover:text-primary" />
+                )}
+              </button>
+            </li>
+          )
+        )}
+      </ul>
+
+      {twoFactorFor ? (
+        <form onSubmit={onSubmitTwoFactor} className="mt-6 space-y-2">
+          <label htmlFor="totp" className="block text-sm font-semibold text-foreground">
+            Authentication code
+          </label>
+          <input
+            id="totp"
+            ref={totpRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            placeholder="123456 or a recovery code"
+            autoFocus
+            name="totp"
+            required
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? errorId : undefined}
+            className={inputClass}
+          />
+          <p className="text-xs text-text-muted">
+            Open your authenticator app, or enter one of your recovery codes.
+          </p>
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none"
+          >
+            {isSubmitting ? (
+              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+            ) : (
+              'Continue'
+            )}
+          </button>
+        </form>
+      ) : null}
+
+      {selectable.length === 0 ? (
+        <p className="mt-5 border-l-2 border-accent-brand bg-muted px-4 py-3 text-xs leading-5 text-text-muted">
+          None of these workspaces accept a password. Use the identity provider link on each one.
+        </p>
+      ) : null}
+
+      <BackToCredentials onBack={() => resetToCredentials()} />
+    </>
+  );
+
+  function resetToCredentials() {
+    setStage('credentials');
+    setOrganizations([]);
+    setTwoFactorFor(null);
+    setPendingOrganizationId(null);
+    setError('');
+    setIsSubmitting(false);
+  }
+}
+
+/**
+ * D12 — an SSO-enforced workspace is shown, clearly labelled, and NOT activatable
+ * as a selection. Its "Sign in with SSO" link is keyboard reachable, because a
+ * member of that workspace has to be able to get there.
+ */
+function SsoEntry({ organization }: { organization: Organization }) {
+  const labelId = `sso-${organization.id}`;
+  return (
+    <div
+      aria-labelledby={labelId}
+      className="flex items-center justify-between gap-4 rounded-[3px] border border-border-subtle bg-surface-sunken px-4 py-4"
+    >
+      <span className="min-w-0">
+        <span id={labelId} className="block truncate text-sm font-semibold text-text-muted">
+          {organization.displayName}
+        </span>
+        <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-text-faint">
+          <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+          Single sign-on required
+        </span>
+      </span>
+      {organization.ssoUrl ? (
+        <a
+          href={organization.ssoUrl}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[3px] border border-border-default bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <Building2 className="h-3.5 w-3.5 text-accent-brand" aria-hidden="true" />
+          Sign in with SSO
+          <span className="sr-only"> to {organization.displayName}</span>
+        </a>
+      ) : (
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-text-faint">
+          Contact your administrator
+        </span>
+      )}
+    </div>
+  );
+}
+
+function BackToCredentials({ onBack }: { onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onBack}
+      className="mt-6 rounded-[3px] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
+      Use a different account
+    </button>
+  );
+}

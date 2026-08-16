@@ -8,6 +8,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
+  // A cold `next dev` compiles each route on first request, which can exceed the
+  // 30s default before a page is even interactive. CI runs against a production
+  // build (see webServer below), but keep headroom for a slow runner.
+  timeout: process.env.CI ? 120_000 : 30_000,
   reporter: process.env.CI ? [['html', { open: 'never' }], ['line']] : 'list',
   use: {
     baseURL,
@@ -28,7 +32,10 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: `bun run dev --port ${port}`,
+        // CI has already run `bun run build` as an earlier gate, so serve that
+        // artifact instead of compiling routes on demand — it is both faster and
+        // closer to what staging actually runs.
+        command: process.env.CI ? `bunx next start --port ${port}` : `bun run dev --port ${port}`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
