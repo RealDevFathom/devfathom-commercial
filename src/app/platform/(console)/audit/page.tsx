@@ -10,8 +10,8 @@ export default async function PlatformAuditPage({
   const q = query.q?.trim().slice(0, 100);
   const success =
     query.outcome === 'success' ? true : query.outcome === 'failure' ? false : undefined;
-  const logs = await withPlatformDb((db) =>
-    db.platformAuditLog.findMany({
+  const { logs, platformActorsById, tenantActorsById } = await withPlatformDb(async (db) => {
+    const logs = await db.platformAuditLog.findMany({
       where: {
         ...(success === undefined ? {} : { success }),
         ...(q
@@ -28,8 +28,32 @@ export default async function PlatformAuditPage({
       orderBy: { createdAt: 'desc' },
       include: { organization: { select: { displayName: true } } },
       take: 500,
-    })
-  );
+    });
+    const platformActorIds = logs.flatMap((log) =>
+      log.actorPlatformUserId ? [log.actorPlatformUserId] : []
+    );
+    const tenantActorIds = logs.flatMap((log) =>
+      log.actorTenantUserId ? [log.actorTenantUserId] : []
+    );
+    const platformActors = platformActorIds.length
+      ? await db.platformUser.findMany({
+          where: { id: { in: platformActorIds } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+    const tenantActors = tenantActorIds.length
+      ? await db.user.findMany({
+          where: { id: { in: tenantActorIds } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+
+    return {
+      logs,
+      platformActorsById: new Map(platformActors.map((actor) => [actor.id, actor])),
+      tenantActorsById: new Map(tenantActors.map((actor) => [actor.id, actor])),
+    };
+  });
 
   return (
     <div className="mx-auto max-w-[1480px]">
@@ -72,28 +96,58 @@ export default async function PlatformAuditPage({
             </tr>
           </thead>
           <tbody className="divide-y divide-border-subtle">
-            {logs.map((log) => (
-              <tr key={log.id}>
-                <td className="px-4 py-4 font-mono text-[9px]">{log.createdAt.toLocaleString()}</td>
-                <td className="px-4 py-4 text-xs font-semibold">{log.action}</td>
-                <td className="px-4 py-4 text-xs">{log.organization?.displayName ?? 'Platform'}</td>
-                <td className="px-4 py-4 font-mono text-[9px]">
-                  {log.actorPlatformUserId ?? log.actorTenantUserId ?? 'Anonymous'}
-                </td>
-                <td className="px-4 py-4">
-                  <p className="text-xs">{log.targetType ?? '—'}</p>
-                  <p className="mt-1 max-w-40 truncate font-mono text-[8px] text-text-muted">
-                    {log.targetId}
-                  </p>
-                </td>
-                <td className="px-4 py-4">
-                  <PlatformStatus value={log.success ? 'SUCCEEDED' : 'FAILED'} />
-                </td>
-                <td className="max-w-sm px-4 py-4 text-xs text-text-muted">
-                  {log.error ?? log.reason ?? '—'}
-                </td>
-              </tr>
-            ))}
+            {logs.map((log) => {
+              const actorId = log.actorPlatformUserId ?? log.actorTenantUserId;
+              const actor = log.actorPlatformUserId
+                ? platformActorsById.get(log.actorPlatformUserId)
+                : log.actorTenantUserId
+                  ? tenantActorsById.get(log.actorTenantUserId)
+                  : undefined;
+
+              return (
+                <tr key={log.id}>
+                  <td className="px-4 py-4 font-mono text-[9px]">
+                    {log.createdAt.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-4 text-xs font-semibold">{log.action}</td>
+                  <td className="px-4 py-4 text-xs">
+                    {log.organization?.displayName ?? 'Platform'}
+                  </td>
+                  <td className="px-4 py-4">
+                    {actor ? (
+                      <>
+                        <p className="text-xs font-semibold">{actor.name}</p>
+                        <p className="mt-0.5 text-[10px] text-text-muted">{actor.email}</p>
+                      </>
+                    ) : (
+                      <p className="text-xs text-text-muted">
+                        {actorId ? 'Deleted or unavailable actor' : 'Anonymous'}
+                      </p>
+                    )}
+                    {actorId ? (
+                      <p
+                        className="mt-1 max-w-48 truncate font-mono text-[8px] text-text-muted"
+                        title={`Actor ID: ${actorId}`}
+                      >
+                        {actorId}
+                      </p>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-4">
+                    <p className="text-xs">{log.targetType ?? '—'}</p>
+                    <p className="mt-1 max-w-40 truncate font-mono text-[8px] text-text-muted">
+                      {log.targetId}
+                    </p>
+                  </td>
+                  <td className="px-4 py-4">
+                    <PlatformStatus value={log.success ? 'SUCCEEDED' : 'FAILED'} />
+                  </td>
+                  <td className="max-w-sm px-4 py-4 text-xs text-text-muted">
+                    {log.error ?? log.reason ?? '—'}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
