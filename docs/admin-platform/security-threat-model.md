@@ -15,7 +15,7 @@
 1. browser ↔ tenant/custom/dedicated host;
 2. browser ↔ admin host;
 3. Next.js ↔ PostgreSQL pool;
-4. worker ↔ Vercel/DNS/Blob/IdP;
+4. worker ↔ Azure/DNS/Blob/IdP;
 5. directory ↔ SCIM;
 6. platform operator ↔ audited tenant support identity;
 7. tenant API client ↔ REST scope boundary.
@@ -45,7 +45,7 @@
 
 - `PLATFORM_ENCRYPTION_KEY` rotation requires re-encryption; losing it loses encrypted configuration.
 - Real OIDC/SAML interoperability must be tested per provider.
-- Dedicated provisioning needs a least-privilege Vercel token and controlled Git source.
+- Dedicated provisioning needs a least-privilege Azure identity, isolated resources, and a controlled image source; this path is not yet verified.
 - The in-memory rate limiter is per process unless Upstash configuration is used; production distributed limits should use shared storage.
 - Database purge does not automatically prove deletion in every external provider. The runbook requires reconciliation.
 - Audit is append-oriented through product APIs, but database administrators remain a privileged trust role.

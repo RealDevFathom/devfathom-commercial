@@ -363,7 +363,7 @@ disagrees with this ADR, this ADR governs.
 | 1   | Keep Jitsi as a documented fallback; type the adapter `"livekit" \| "jitsi"`.      | **Rejected.** The union is `"livekit"` only. A two-value union is an invitation to implement the second: it makes every switch look incomplete and turns a decision into an ambient option. The report's fallback **triggers** are kept as the decision-reopening checklist below — prose, never a type.                 |
 | 2   | Extensive native mobile coverage (Swift/Android SDKs, ReplayKit, MediaProjection). | **Out of scope**, prominently. Decision 5.                                                                                                                                                                                                                                                                               |
 | 3   | MVP topology includes Redis and an Egress worker.                                  | **Both deferred.** Neither is needed to hold a call. Recording and export are a separate product decision with their own storage, retention, and consent questions.                                                                                                                                                      |
-| 4   | Public URL `app.devfathom.com/m/{id}`.                                             | **Rejected.** Ours is `www.devfathom.com/meet/<id>` and `company.devfathom.com/meet/<id>` — matching the real deployed hosts (`infra/production.bicepparam:7`). See `docs/meetings/004-join-flow.md`.                                                                                                                    |
+| 4   | Public URL `app.devfathom.com/m/{id}`.                                             | **Rejected.** The target is `www.devfathom.com/meet/<id>` and `company.devfathom.com/meet/<id>` — matching configured host policy (`infra/production.bicepparam:7`), not a claim that production or media endpoints are live. See `docs/meetings/004-join-flow.md`.                                                                                                                    |
 | 5   | Sample schema has no occurrence concept and cannot represent a recurring series.   | **Rejected, and the gap is load-bearing.** Our Meeting/occurrence split is better and must not be diluted: decision 4's "nothing credential-bearing spans a series" is unimplementable without it. Note the split is currently a _plan_ — occurrences are computed, not stored (`src/lib/meeting-occurrence.ts:75-128`). |
 | 6   | 8-vCPU SFU estimate.                                                               | **Rejected as a starting point.** It predates our selective-subscription policy (decision 2), which changes the fan-out the SFU must serve. **We start at four vCPUs and earn eight with measurement.**                                                                                                                  |
 | 7   | UDP mux.                                                                           | **Adopted.** One UDP port for media rather than a wide ephemeral range: a narrower published surface, easier to firewall and easier to reason about.                                                                                                                                                                     |
@@ -430,7 +430,7 @@ Costs:
 
 1. **The transition plan from JaaS.** Feature-flagged per organization, hard cutover at a release
    boundary, or both live for one release. Needs a human decision before implementation starts.
-2. **Occurrence materialisation. — ANSWERED by MEET-01 (PR #23), pending merge.** Decision 4 required
+2. **Occurrence materialisation. — ANSWERED by MEET-01 (PR #23), merged to `main`.** Decision 4 required
    an occurrence record and there was none. `MeetingOccurrence` is now materialised per instance
    (`prisma/migrations/20260803120000_meeting_occurrences/`), identified within its series by an
    immutable `seriesSlotStart` RRULE instant, with per-occurrence exceptions on the row
@@ -442,7 +442,7 @@ Costs:
 3. **The join-token TTL, in minutes.** The entire mitigation for participant re-entry
    (`docs/meetings/001-threat-model.md` T5). Needs a number, informed by reconnect behaviour on a
    flaky mobile network.
-4. **Guest attendance. — ANSWERED by MEET-01 (PR #23), pending merge.** The model changed rather than
+4. **Guest attendance. — ANSWERED by MEET-01 (PR #23), merged to `main`.** The model changed rather than
    excluding guests. `MeetingParticipant` holds series-level invitee metadata with exactly one contact
    reference by CHECK — internal user, client contact, or a bare email for an outsider — and no
    credential column. `MeetingOccurrenceParticipant` is the occurrence-scoped grant and the only place

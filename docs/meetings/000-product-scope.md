@@ -3,6 +3,27 @@
 Status: **Proposed**, 2026-08-03. Documentation only. No code, schema, or infrastructure in this
 phase depends on this document.
 
+Operational status update: Meetings PR #23 merged to `main` at `ac20ca0`, and the latest staging run
+passed build, migration/seed, deploy, and smoke in 7m40s. Controlled browser QA remains **BLOCKED**:
+admin meeting discovery is attendee-filtered even though admin detail/manage authorization is org-wide.
+The planned `meet.devfathom.com` and `turn.devfathom.com` media endpoints are not live.
+
+## Wave-1 browser QA correction — unresolved authorization/list-policy defect
+
+Cowork browser QA on 2026-08-08 confirmed authenticated staging login/dashboard and responsive
+behavior **PASS**, but Meetings discovery **BLOCKED**. On `origin/main` `ffec57b4`, `getAll` and
+both `getUpcoming` queries in `src/server/routers/meetings.ts` always filter for an attendee matching
+the current user, while `canAccessMeeting` and `canManageMeeting` in `src/lib/authz.ts` grant an
+`ADMIN` org-wide access decision. The staging admin is not one of the seeded attendees, so five
+migrated meetings are undiscoverable even though a known meeting ID is accessible.
+
+Proposed repair: within tenant RLS, make `ADMIN` list/upcoming queries org-wide while ordinary users
+remain attendee/creator scoped, then add cross-tenant authorization tests. The five seeded meetings
+are past and non-recurring; after repair, **Past** should show five while **Upcoming** may correctly
+remain zero. The RSC-prefetch 503 burst is linked to existing issue #32. Bad-ID retry-on-`NOT_FOUND`
+is a nonblocking follow-up. Do not call Wave-1 browser QA complete until the list-policy repair and
+browser retest pass.
+
 ## How to read the markings
 
 Every substantive statement in this document set carries one of three markings, and they are never
@@ -102,7 +123,7 @@ starts on it.
 authorization. `MEET-004` specifies the resolution algorithm and why the identifier cannot live on
 the series. The research report's `app.devfathom.com/m/{id}` shape is **not** adopted.
 
-**CODE-VERIFIED** that these hosts are the real ones: production `tenantHost` is
+**CODE-VERIFIED** that these are the configured target hosts: production `tenantHost` is
 `www.devfathom.com` (`infra/production.bicepparam:7`), staging is `staging.devfathom.com`
 (`infra/staging.bicepparam:7`).
 
@@ -172,7 +193,7 @@ stated.
    feature-flagged cutover per organization; a hard cutover at a release boundary; or running both
    for one release. This is a delivery-plan decision and needs a human answer before MEET-01.
 2. **Does an occurrence record get introduced by the meetings work, or by a separate scheduling
-   change? — ANSWERED by MEET-01 (PR #23), pending merge.** By the meetings work. `MeetingOccurrence`
+   change? — ANSWERED by MEET-01 (PR #23), merged to `main`.** By the meetings work. `MeetingOccurrence`
    is materialised per instance (`prisma/migrations/20260803120000_meeting_occurrences/`), keyed
    within its series by an immutable `seriesSlotStart` RRULE instant, with per-occurrence exceptions
    on the row and the series carrying `recurrenceRule` plus a validated IANA `timezone`. The

@@ -23,7 +23,7 @@ Interactive platform endpoints are available only on the admin host.
 | `DELETE /api/platform/support` | `support:write`; exact origin | platform-side revocation when cookie is present |
 | `GET                           | POST /api/platform/jobs/process` | `Authorization: Bearer <CRON_SECRET>` | recover/claim/process jobs |
 
-`/api/platform/jobs/process` is the only platform API allowed on a canonical tenant deployment host because Vercel Cron invokes that host. It does not use a platform cookie.
+`/api/platform/jobs/process` is a bearer-secret-protected worker endpoint. Azure scheduling/trigger configuration is a production gate; it does not use a platform cookie.
 
 ### Platform command envelope
 

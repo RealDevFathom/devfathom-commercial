@@ -426,7 +426,7 @@ changes. Recorded as an open question below.
 
 ## Open Questions
 
-1. **How are guests recorded in attendance? — ANSWERED by MEET-01 (PR #23), pending merge.** In a
+1. **How are guests recorded in attendance? — ANSWERED by MEET-01 (PR #23), merged to `main`.** In a
    separate evidence table, not in the `User`-keyed log. `MeetingParticipantSession` records one
    attendance interval with a nullable `userId`, the provider participant SID, the webhook event ids
    that asserted the join and the leave, and a `source` that separates webhook-verified rows from

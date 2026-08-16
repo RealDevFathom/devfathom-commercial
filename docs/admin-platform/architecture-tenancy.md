@@ -81,7 +81,7 @@ The migration sequence includes:
 Both modes use the same application contract and PostgreSQL boundary.
 
 - `SHARED`: a ready deployment record points to the shared base-domain application.
-- `DEDICATED`: the job worker creates/uses a customer-specific Vercel project and production deployment, while keeping the same tenant-scoped database.
+- `DEDICATED`: a contracted customer receives an isolated Azure environment. The current implementation remains **BLOCKED** pending topology and automation; no dedicated environment is verified.
 
 A dedicated deployment resolves its organization through its recorded deployment URL. The code also injects `DEDICATED_ORGANIZATION_ID` as deployment metadata for future operational hardening, but host plus database resolution remains authoritative.
 
@@ -101,4 +101,4 @@ Browser
              PostgreSQL forced RLS
 ```
 
-External boundaries include Vercel, DNS, customer IdPs/directories, Blob storage, email providers, Ably, and optional AI providers. Their credentials are deployment configuration, never organization input.
+External boundaries include Azure, DNS, customer IdPs/directories, Blob storage, email providers, Ably, and optional AI providers. Their credentials are deployment configuration, never organization input.
