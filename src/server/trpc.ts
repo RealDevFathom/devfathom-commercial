@@ -10,6 +10,7 @@ import type { SupportIdentity } from '@/lib/tenancy/support-session';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { moduleForProcedure } from '@/lib/module-catalog';
+import { formatValidationError } from '@/lib/validation-error';
 import {
   type AuditDetail,
   ipFromHeaders,
@@ -68,8 +69,16 @@ export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
 
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
-  errorFormatter({ shape }) {
-    return shape;
+  errorFormatter({ shape, error }) {
+    const validation = formatValidationError(error.cause);
+    return {
+      ...shape,
+      message: validation?.message ?? shape.message,
+      data: {
+        ...shape.data,
+        validation: validation?.fields ?? null,
+      },
+    };
   },
 });
 

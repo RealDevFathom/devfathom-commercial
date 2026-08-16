@@ -226,7 +226,10 @@ export const organizationAdminRouter = router({
           .trim()
           .min(2)
           .max(80)
-          .regex(/^[a-z0-9._-]+$/),
+          .regex(
+            /^[a-z0-9._-]+$/,
+            'Use lowercase letters, numbers, dots, underscores, and hyphens only.'
+          ),
         name: z.string().trim().min(2).max(150),
         description: z.string().trim().max(500).nullable(),
         permissions: z
