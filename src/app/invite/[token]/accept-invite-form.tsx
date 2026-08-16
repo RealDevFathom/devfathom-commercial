@@ -43,9 +43,9 @@ export function AcceptInviteForm({ token }: { token: string }) {
   if (queryError || !data) {
     return (
       <div className="space-y-5 text-center">
-        <h2 className="font-display text-xl font-semibold tracking-tight text-foreground">
+        <h1 className="font-display text-xl font-semibold tracking-tight text-foreground">
           Invitation unavailable
-        </h2>
+        </h1>
         <p className="text-sm text-muted-foreground">
           This invitation link is invalid or has expired.
         </p>
@@ -121,9 +121,9 @@ export function AcceptInviteForm({ token }: { token: string }) {
   return (
     <div>
       <div className="mb-7">
-        <h2 className="font-display text-xl font-semibold tracking-tight text-foreground">
+        <h1 className="font-display text-xl font-semibold tracking-tight text-foreground">
           Welcome, {data.name.split(' ')[0]}
-        </h2>
+        </h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
           Set a password to activate your DevFathom account.
         </p>

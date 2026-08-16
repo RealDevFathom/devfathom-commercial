@@ -23,3 +23,20 @@ Before planning, designing, reviewing, or implementing any user interface, read
 - Complete the visual QA matrix in the design contract before declaring UI work finished.
 
 <!-- END:devfathom-design-rules -->
+
+<!-- BEGIN:devfathom-cli-contract -->
+
+# DevFathom Commercial CLI contract
+
+- Use Codex Desktop GUI for planning, product decisions, and status only.
+- Run implementation, Git mutations, migrations, QA, builds, and deployment through Codex CLI
+  rooted at this repository with `codex -p devfathom-commercial -C <repo-path>`.
+- Keep Ponytail Ultra and Caveman Ultra active in every CLI session.
+- Keep Claude-Mem active. Retrieve only task-relevant observations; never inject broad history when
+  the repository or current task already provides sufficient context.
+- Keep Codebase Memory active. Prefer graph discovery before file scans; use `rg` for literals,
+  configuration, and non-code files. Refresh the index after structural changes.
+- Do not add Graphify by default. Codebase Memory already provides the required code graph; add a
+  second graph tool only when a concrete uncovered need justifies its token and maintenance cost.
+
+<!-- END:devfathom-cli-contract -->

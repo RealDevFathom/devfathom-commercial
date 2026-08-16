@@ -11,7 +11,9 @@ import pg from 'pg';
 import { hash } from 'bcryptjs';
 import 'dotenv/config';
 
-const EMAIL = process.env.ADMIN_EMAIL;
+// D10: emails are stored lower-cased, so an operator typing `Admin@Company.com`
+// must resolve to the same row rather than creating (or failing to find) another.
+const EMAIL = process.env.ADMIN_EMAIL?.trim().toLowerCase();
 const PASSWORD = process.env.ADMIN_PASSWORD;
 const NAME = process.env.ADMIN_NAME ?? 'Admin';
 const TITLE = process.env.ADMIN_TITLE ?? 'Administrator';

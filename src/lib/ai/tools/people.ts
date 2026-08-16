@@ -16,6 +16,7 @@ import { hash } from 'bcryptjs';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
+import { normalizeEmail } from '@/lib/email-address';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
 
@@ -757,11 +758,14 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       needsApproval: true,
       execute: async ({ name, email, role, department, title, phone, bio, skills }) => {
         if (!h.isAdmin) return { error: 'Only admins can invite members.' };
-        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        // D10: normalize BEFORE validating, so a padded or upper-cased address
+        // the model echoed back from a chat message is accepted and stored in the
+        // one canonical form used by the guard, the create, and the invitation.
+        const lowerEmail = normalizeEmail(email);
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(lowerEmail)) {
           return { error: `"${email}" doesn't look like a valid email address.` };
         }
         const finalRole = role ?? 'EMPLOYEE';
-        const lowerEmail = email.toLowerCase();
 
         const existing = await h.db.user.findFirst({
           where: { email: lowerEmail },

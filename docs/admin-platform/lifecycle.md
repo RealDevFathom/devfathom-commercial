@@ -32,7 +32,7 @@ The control plane exposes only allowed next states. Every transition requires op
 
 ## Access by state
 
-- `ONBOARDING`, `ACTIVE`, `GRACE`: tenant host may authenticate and operate.
+- `ONBOARDING`, `ACTIVE`, `GRACE`: the organization may authenticate and operate. On the shared host these are exactly the states that make a workspace eligible for selection; every other state is excluded before the picker is rendered, and the lifecycle is re-checked again at selection rather than trusted from the pending intent.
 - `PROSPECT`: not a usable workspace.
 - `SUSPENDED`: tenant authentication/actor resolution fails; deployment health is marked unavailable; active support is revoked.
 - `TERMINATED`: data retained but tenant access blocked.

@@ -19,7 +19,10 @@ Operators can enroll TOTP, confirm a valid code, receive one-time recovery codes
 
 ## Tenant authentication
 
-Auth.js credentials sessions include organization ID/slug/status, role, department, title, account status, and token version.
+Auth.js credentials sessions include organization ID/slug/status, role, department, title, account status, session validity, and token version.
+
+Email addresses are normalized — trimmed and lower-cased — at the schema layer, so
+every caller inherits one canonical form for both storage and lookup.
 
 Controls include:
 
@@ -29,10 +32,69 @@ Controls include:
 - organization lifecycle gate;
 - tenant TOTP and single-use recovery codes;
 - token-version revocation after password/reset/deactivation changes;
-- periodic database revalidation;
-- host-to-session organization match.
+- periodic database revalidation, failing CLOSED on database errors;
+- host-to-session organization match on tenant, custom and dedicated hosts;
+  session-claim organization plus an explicit lifecycle gate on the shared host.
 
 SSO enforcement disables password login only after the password is proven, avoiding account enumeration.
+
+### Session validity
+
+Session revocation is its own JWT claim (`sessionRevoked`, with a reason), never a
+value written into `status`. `status` only ever holds a real `UserStatus`
+(`ACTIVE | INACTIVE | ON_LEAVE | INVITED`). Overloading one field with two
+orthogonal facts made a dead _session_ indistinguishable from a deactivated
+_account_ — opposite remedies — and let one guard read a fact another guard did not.
+
+`src/lib/auth/session-state.ts` is the single decision point, used by the tRPC
+middleware, the `/(app)` page guard and the tenant actor resolver, so they cannot
+disagree about one session. It fails CLOSED: a session whose status cannot be
+proven active is rejected. A revoked, deleted or unverifiable session is told
+"Your session has ended. Please sign in again." and redirected to sign-in; only a
+genuinely inactive account is told to contact an administrator.
+
+Revalidation fails closed on database errors. An unverifiable session is not an
+authorized one, and the application cannot serve tenant data without the same
+database anyway, so failing open would buy no availability — only an unrevocable
+window. Recovery is a fresh sign-in, or the next successful revalidation.
+
+### Standard shared-host sign-in
+
+Standard customers sign in at one shared host (`www` in production,
+`staging.devfathom.com` on staging). The URL carries no workspace slug and no
+`workspace=` parameter at any point, and standard tenants remain on that host
+after selection — see [ADR-003](adr/003-shared-host-login.md).
+
+1. Email and password are submitted to `POST /api/login`.
+2. Discovery runs in the explicitly privileged platform scope, with the normalized
+   email as its only predicate, a hard field whitelist, and a cap of ten
+   candidates. Beyond the cap the attempt is audited and treated as a failure.
+3. The password is compared against EVERY candidate. Eligible means the password
+   matched AND the account status is sign-in-allowed AND the organization
+   lifecycle is accessible.
+4. Zero candidates still performs one bcrypt compare against the dummy hash, so
+   response time does not reveal existence. "No such address", "wrong password"
+   and "no eligible organization" return one identical body with no cookie.
+5. Exactly one eligible workspace continues straight through; more than one
+   renders a selection screen.
+6. Selection exchanges a single-use, host-bound login intent for a normal Auth.js
+   session carrying the chosen `organizationId`. A submitted organization id is
+   accepted only if it belongs to the candidate set the server computed in step 3,
+   and a forged id does not consume the intent.
+7. The second factor is enforced at selection, because the user is only known once
+   a workspace is chosen. The intent is consumed after the code verifies, so a
+   mistyped code does not force the password to be re-entered.
+8. Sign-out clears organization-selection state as well as authentication.
+
+An SSO-enforced workspace is shown on the picker, visibly non-selectable and
+labelled, with a link to its own host where its SSO flow begins. It carries no
+intent candidate, so there is no password path into it even if the client is
+bypassed. If every eligible workspace enforces SSO, an SSO-only screen replaces
+the picker.
+
+Pre-selection failures are attributed to the candidate organizations' audit
+ledgers; a failure with no candidates stays org-less rather than being guessed
+into a tenant ledger.
 
 ## Tenant authorization
 
@@ -43,6 +105,12 @@ Rules use exact capabilities or namespace wildcards such as `projects:*`. Evalua
 tRPC procedures use protected/admin/capability/module middleware. REST uses user-bound API token scopes plus module checks. Files, uploads, assistant, and realtime resolve the same tenant actor.
 
 ## OIDC
+
+Enterprise SSO runs on tenant, custom and dedicated hosts only. The redirect URI
+is derived from the request host and registered at the customer IdP, and
+`df_sso_ticket` is host-only with host → organization → `withTenantDb` → RLS as
+its only tenant binding. The shared host therefore never starts an SSO flow; it
+links out to the organization's own host.
 
 An active licensed OIDC connection supports:
 
@@ -61,6 +129,9 @@ An active licensed OIDC connection supports:
 The platform identity “test” job validates discovery endpoints and records `ACTIVE` or `ERROR`.
 
 ## SAML 2.0
+
+The ACS/recipient, issuer and audience are derived from the request host and
+registered at the customer IdP, so SAML is likewise tenant/dedicated-host only.
 
 An active licensed SAML connection supports:
 
@@ -107,4 +178,11 @@ Before enabling enterprise identity for a customer:
 5. run SCIM create/update/deactivate/reactivate/group tests;
 6. rotate and revoke a SCIM token;
 7. verify audit entries;
-8. only then set SSO enforcement.
+8. confirm the customer signs in on their OWN host, not the shared host — SSO is
+   host-bound and the shared picker only links out to it;
+9. only then set SSO enforcement.
+
+After enforcement, verify on the shared host that the workspace still appears on a
+multi-workspace picker, is not selectable, and its SSO link reaches the customer
+host. A member who cannot see their workspace at all will assume access was
+removed.
