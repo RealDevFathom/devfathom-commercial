@@ -1,5 +1,3 @@
-import 'server-only';
-
 /**
  * M3-L1 / C3 — effective-dating & version-immutability primitives.
  *
