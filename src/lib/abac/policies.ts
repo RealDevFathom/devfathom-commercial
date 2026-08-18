@@ -29,6 +29,8 @@ export const ALL_ACTIONS = [
   'resignation:readAll', // see the company-wide resignation queue
   'resignation:review', // approve/decline a resignation (resource: { userId, status, targetRole })
   'staff:manage', // restaurant M2: back-office staff & operator-credential management (org-role driven)
+  'menu:read', // restaurant M3-L2: read canonical catalog, recipes, and costing data
+  'menu:write', // restaurant M3-L2: mutate canonical catalog, recipes, and costing data
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -82,4 +84,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   // platform ADMIN, and an agency admin is not implicitly granted a restaurant
   // capability.
   'staff:manage': [],
+
+  // Restaurant M3-L2: canonical catalog + costing substrate. Granted through
+  // an organization role carrying `menu:read` or `menu:write` (or `*`), evaluated
+  // by the DB `customDecision` path — no static agency-role policy.
+  'menu:read': [],
+  'menu:write': [],
 };
