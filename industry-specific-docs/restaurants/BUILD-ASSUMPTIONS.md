@@ -311,3 +311,55 @@ actor type, so no backfill and no existing row is invalidated. The write path is
 fail-loud under Vitest (`flushAuditWritesForTest`) so a swallowed audit failure can no
 longer produce a phantom pass. · Revisited if a future actor type needs its own dedicated
 actor column, which would extend the same conditional CHECK.
+
+**Menu / price-list / publication surface gates on the optional `restaurant-menu` module
+(M3-L3)** · `module-catalog.ts` maps the `restaurantMenus` router (menu authoring, price
+lists, branch-menu publications, item overrides, and the effective-menu read model) to the
+optional `restaurant-menu` ("Menu and Costing") module — NOT the mandatory `restaurant-core`
+that M2's staff/device routers use. · Conservative because this surface IS the licensed purpose
+of the Menu-and-Costing module, and that module is present in the smallest package (Essentials),
+so no ordinary tenant loses menu management; unlike device revocation (a lockout-safety concern
+that justified `restaurant-core`), menu publishing is exactly the paid feature the module names.
+· Revisited if the POS milestone needs the effective-menu read model reachable by a POS-only
+org that has not licensed `restaurant-menu`, in which case the read model alone could move to a
+`restaurant-core`/`restaurant-pos` gate while authoring stays on `restaurant-menu`.
+
+**Menu capabilities enforced via the ABAC `customDecision` grant path, not registered in
+`ALL_ACTIONS` (M3-L3/C7)** · The four menu capabilities (`menu:read`, `menu:write`,
+`menu:price`, `menu:publish`) are granted to organization roles by L1's `vertical-catalog` role
+templates and enforced by `capabilityProcedure(...)` through the ABAC `customDecision` DB path
+exactly like `staff:manage`; the router asserts each capability string `as Action` because the
+`abac/policies.ts` `ALL_ACTIONS` union (and its off-file location) is outside this lane's exact
+file set. `can()` still default-denies an ungranted subject (a role without the capability, no
+matching override → `null` → empty static policy → deny), and a restaurant GM with `menu:publish`
+is authorized without being a global platform ADMIN. · Conservative because it delivers the exact
+C7 gating behavior strictly inside the lane's file set without editing a shared auth registry that
+the plan did not list as coordinated; the runtime decision is identical to a registered action.
+· Revisited by the supervisor promoting the four actions into `ALL_ACTIONS` + empty `POLICIES`
+entries (a one-line-per-action additive change mirroring `staff:manage`), after which the `as
+Action` assertions are removed — recommended follow-up, flagged in the WHA-33 completion note.
+
+**Money crosses the tRPC boundary as a string (M3-L3/C4)** · Every price in a router response
+(price-list entry, item price override, and each effective-menu item price) is serialized with
+`Prisma.Decimal.toString()`; inputs arrive as strings and are normalized through `Prisma.Decimal`
+(`normalizePrice`) — catalog pricing never touches a JS `number`/float. · Conservative because
+superjson does not carry a `Decimal` across the wire and a float round-trip would silently lose
+cents; a string is exact and reversible. · Revisited only if a shared Decimal superjson transform
+is registered platform-wide, which would let raw Decimals serialize losslessly without per-router
+mapping.
+
+**Effective-menu resolution semantics (M3-L3/C2/C5/D06)** · The read model returns, per
+`(branch, channel, instant T)`: the winning price by precedence **item override → publication
+price list (in force at T) → organization default (base) price list (in force at T)**, with a
+variant falling back to its product's base (null-variant) entry inside a version; and an
+availability boolean = channel published AND override-available AND branch-timezone daypart open.
+Daypart rules (documented + tested in `menu-availability.ts`): an empty publication `channels`
+set = every channel; an empty `daysOfWeek` = every day; windows are half-open `[start, end)`; a
+cross-midnight window (`end <= start`) attributes its early-morning tail to the previous day; an
+exception overrides windows for its branch-local date (`isClosed` closed, else forced open);
+publication-level and item-level window layers are ANDed. A menu delete is refused while a
+non-RETIRED publication references the menu (its cascade would silently remove a live
+publication). · Conservative because these are the least-surprising defaults for the POS §12.3
+seam and each is pinned by a unit/router test rather than left implicit. · Revisited by the POS
+milestone that consumes and caches this read model, which may extend channel/price precedence
+(e.g. per-channel price lists) additively.
