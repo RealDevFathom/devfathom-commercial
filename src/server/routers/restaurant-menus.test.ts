@@ -13,8 +13,8 @@ import { Prisma } from '@/generated/prisma/client';
 const D = (v: string) => new Prisma.Decimal(v);
 
 const mocks = vi.hoisted(() => ({
-  // Variadic so tests can assert the action passed to `can(subject, action, …)`.
-  can: vi.fn(async (..._args: unknown[]) => true),
+  // Typed so tests can assert the action passed to `can(subject, action, …)`.
+  can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
   annotateAudit: vi.fn(),
   branchFindUnique: vi.fn(),
   menuFindUnique: vi.fn(),
