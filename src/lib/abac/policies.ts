@@ -37,6 +37,7 @@ export const ALL_ACTIONS = [
   // L3 lane compiles and tests standalone. Supervisor dedups at merge (the
   // second-merged lane realigns — same adjacency rule as the other coordinated files).
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
+  'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -104,4 +105,5 @@ export const POLICIES: Record<Action, Policy[]> = {
   // policy, so a subject without an explicit grant is denied by default.
   'floor:manage': [],
   'orders:read': [],
+  'orders:manage': [],
 };

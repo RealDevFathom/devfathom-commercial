@@ -66,6 +66,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // module (`restaurant-pos`) — the module whose licensed purpose is running the
   // service floor and kitchen (BUILD-ASSUMPTIONS).
   restaurantFloor: 'restaurant-pos',
+  // M4-L2: orders, kitchen tickets and the back-office order read model gate on the
+  // POS module (`restaurant-pos`) — the module whose licensed purpose is running
+  // service orders and the kitchen (BUILD-ASSUMPTIONS).
+  restaurantOrders: 'restaurant-pos',
 };
 
 export function moduleForProcedure(path: string): string | null {
