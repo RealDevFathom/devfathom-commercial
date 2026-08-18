@@ -166,15 +166,15 @@ describe('createMenuItem — canonical same-org reference validation (C2)', () =
   });
   it('rejects a variant belonging to another product', async () => {
     mocks.variantFindUnique.mockResolvedValue({ id: 'var_x', productId: 'other_prod' });
-    await expect(
-      createMenuItem(db, { ...input, variantId: 'var_x' })
-    ).rejects.toMatchObject({ reason: 'VARIANT_MISMATCH' });
+    await expect(createMenuItem(db, { ...input, variantId: 'var_x' })).rejects.toMatchObject({
+      reason: 'VARIANT_MISMATCH',
+    });
   });
   it('rejects a variant that does not exist in scope', async () => {
     mocks.variantFindUnique.mockResolvedValue(null);
-    await expect(
-      createMenuItem(db, { ...input, variantId: 'gone' })
-    ).rejects.toMatchObject({ reason: 'VARIANT_NOT_FOUND' });
+    await expect(createMenuItem(db, { ...input, variantId: 'gone' })).rejects.toMatchObject({
+      reason: 'VARIANT_NOT_FOUND',
+    });
   });
 });
 

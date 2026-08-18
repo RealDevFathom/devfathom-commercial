@@ -45,7 +45,10 @@ export class MenuError extends Error {
 
 /** A referenced brand must exist in the caller's organization. */
 async function assertBrandInScope(db: ScopedDb, brandId: string): Promise<void> {
-  const brand = await db.restaurantBrand.findUnique({ where: { id: brandId }, select: { id: true } });
+  const brand = await db.restaurantBrand.findUnique({
+    where: { id: brandId },
+    select: { id: true },
+  });
   if (!brand) {
     throw new MenuError('The referenced brand does not exist.', 'BRAND_NOT_FOUND');
   }
