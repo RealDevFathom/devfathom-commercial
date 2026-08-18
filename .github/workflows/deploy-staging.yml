@@ -18,102 +18,11 @@ jobs:
   # and curled /api/health. These are the same gates the release checklist
   # requires locally, so a broken build or a failed isolation check stops here
   # instead of reaching staging.
+  #
+  # The steps now live in verify.yml, which pr-checks.yml calls too. Same suite,
+  # one copy, so the pre-merge gate and the pre-deploy gate cannot diverge.
   gates:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: devfathom_ci
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    env:
-      # A throwaway database created fresh for this run — never a database with
-      # data anyone needs. `test:rls` is destructive by design.
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci
-      SHADOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_shadow
-      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci
-      AUTH_SECRET: ci-only-secret-value-not-used-anywhere-else
-      # The end-to-end step serves the production build, and Auth.js refuses an
-      # untrusted host in production mode. Staging sets both of these on the
-      # Container App for the same reason.
-      AUTH_URL: http://localhost:4319
-      NEXT_PUBLIC_APP_URL: http://localhost:4319
-      AUTH_TRUST_HOST: 'true'
-      PLATFORM_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
-      PLATFORM_BASE_DOMAIN: localhost
-      SEED_PASSWORD: CiSeedPassword!2026
-      # The generated Prisma client is large enough that both `tsc --noEmit` and
-      # the build's internal TypeScript pass exceed Node's default ~2 GB heap on a
-      # GitHub runner and abort with SIGABRT. Runners have 16 GB. Set at job level
-      # so the build's spawned workers inherit it too.
-      NODE_OPTIONS: --max-old-space-size=8192
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - run: bun install --frozen-lockfile
-      - run: bunx prisma generate
-      - name: Generate route types
-        # `PageProps<'/login'>` is a Next-generated global, written during
-        # `next dev`, `next build` or `next typegen`. A clean checkout has none of
-        # them yet, so typecheck must generate them first — locally this passes
-        # only because a previous build left them behind.
-        run: bunx next typegen
-      - run: bun run lint
-      - run: bun run typecheck
-      - name: Prettier check on changed files
-        # The repository-wide `format:check` is not a clean baseline: it reports
-        # legacy source files that predate this work, and mass-reformatting them
-        # would bury product changes in unrelated diff. The documented release
-        # gate is every CHANGED file, which is what this enforces.
-        run: |
-          set -euo pipefail
-          base=$(git rev-parse "${GITHUB_SHA}^" 2>/dev/null || echo '')
-          if [ -z "$base" ]; then
-            echo 'No parent commit; checking the whole source tree instead.'
-            bun run format:check
-            exit 0
-          fi
-          mapfile -t changed < <(git diff --name-only --diff-filter=ACMR "$base" "${GITHUB_SHA}" -- 'src/**/*.ts' 'src/**/*.tsx' 'src/**/*.css')
-          if [ ${#changed[@]} -eq 0 ]; then
-            echo 'No source files changed.'
-            exit 0
-          fi
-          printf '%s\n' "${changed[@]}"
-          bunx prettier --check "${changed[@]}"
-      - run: bun run test
-      - name: Prepare a disposable database
-        run: |
-          set -euo pipefail
-          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c 'CREATE DATABASE devfathom_ci_shadow;'
-          bunx prisma migrate deploy
-          bunx prisma db seed
-      - name: Report any email case collisions
-        # Read-only. The normalization migration aborts on a collision rather
-        # than guessing, so this prints what an operator would need to resolve.
-        run: bun run report:email-collisions
-      - run: bun run test:rls
-      - run: bun run build
-      - name: Playwright end-to-end
-        run: |
-          set -euo pipefail
-          bunx playwright install --with-deps chromium
-          bun run test:e2e
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: |
-            playwright-report
-            test-results
-          retention-days: 7
+    uses: ./.github/workflows/verify.yml
 
   deploy:
     needs: gates

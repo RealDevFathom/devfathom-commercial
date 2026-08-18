@@ -1,0 +1,189 @@
+name: Verify
+
+# THE definition of "the full verification suite", called by both pipelines.
+#
+# The pull request gate (pr-checks.yml) and the staging deploy
+# (deploy-staging.yml) both `uses:` this file. That is the point: a pull request
+# cannot pass a weaker suite than the one guarding staging, and neither pipeline
+# can be strengthened without the other following, because there is only one
+# copy of the steps.
+#
+# Everything here is self-contained — a service PostgreSQL created for the run,
+# a production build served locally for the end-to-end pass. Nothing reaches a
+# deployed environment, which is what makes it usable as a pre-merge gate.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# One copy, shared by both jobs. `static` never opens a connection, so the
+# database URLs are inert there.
+env:
+  # A throwaway database created fresh for this run — never a database with
+  # data anyone needs. `test:rls` is destructive by design.
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci
+  SHADOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_shadow
+  # NOT the superuser URL above. The eight database-backed suites are decided by
+  # row level security, and the #39 guard aborts on a role holding SUPERUSER or
+  # BYPASSRLS. `devfathom_test` is created below, after the migrations, exactly
+  # as docs/LOCAL_SETUP.md prescribes. `test:rls` is the documented exception and
+  # overrides this back to the superuser URL at its own step.
+  TEST_DATABASE_URL: postgresql://devfathom_test:ci_only_unprivileged_role@127.0.0.1:5432/devfathom_ci
+  AUTH_SECRET: ci-only-secret-value-not-used-anywhere-else
+  # The end-to-end step serves the production build, and Auth.js refuses an
+  # untrusted host in production mode. Staging sets both of these on the
+  # Container App for the same reason.
+  AUTH_URL: http://localhost:4319
+  NEXT_PUBLIC_APP_URL: http://localhost:4319
+  AUTH_TRUST_HOST: 'true'
+  PLATFORM_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+  PLATFORM_BASE_DOMAIN: localhost
+  SEED_PASSWORD: CiSeedPassword!2026
+  # The generated Prisma client is large enough that both `tsc --noEmit` and
+  # the build's internal TypeScript pass exceed Node's default ~2 GB heap on a
+  # GitHub runner and abort with SIGABRT. Runners have 16 GB. Set at workflow
+  # level so the build's spawned workers inherit it too.
+  NODE_OPTIONS: --max-old-space-size=8192
+
+jobs:
+  # Split from `suite` purely for wall clock: nothing here needs a database, and
+  # a pull request should learn about a lint error without waiting out a build
+  # and an end-to-end run.
+  static:
+    name: Lint, typecheck and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The Prettier gate below diffs against the parent of the checked-out
+          # commit: the previous main on a push, the base branch tip on a pull
+          # request, where the checkout is a merge commit whose first parent is
+          # the base. The default depth of 1 has no parent at all, so the gate
+          # falls back to the whole tree — which reports 36 legacy files and
+          # fails for reasons no pull request introduced. 207 commits; a full
+          # history costs a couple of seconds and removes the shallow-diff
+          # question entirely.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bunx prisma generate
+      - name: Generate route types
+        # `PageProps<'/login'>` is a Next-generated global, written during
+        # `next dev`, `next build` or `next typegen`. A clean checkout has none of
+        # them yet, so typecheck must generate them first — locally this passes
+        # only because a previous build left them behind.
+        run: bunx next typegen
+      - run: bun run lint
+      - run: bun run typecheck
+      - name: Prettier check on changed files
+        # The repository-wide `format:check` is not a clean baseline: it reports
+        # legacy source files that predate this work, and mass-reformatting them
+        # would bury product changes in unrelated diff. The documented release
+        # gate is every CHANGED file, which is what this enforces.
+        run: |
+          set -euo pipefail
+          base=$(git rev-parse "${GITHUB_SHA}^" 2>/dev/null || echo '')
+          if [ -z "$base" ]; then
+            echo 'No parent commit; checking the whole source tree instead.'
+            bun run format:check
+            exit 0
+          fi
+          mapfile -t changed < <(git diff --name-only --diff-filter=ACMR "$base" "${GITHUB_SHA}" -- 'src/**/*.ts' 'src/**/*.tsx' 'src/**/*.css')
+          if [ ${#changed[@]} -eq 0 ]; then
+            echo 'No source files changed.'
+            exit 0
+          fi
+          printf '%s\n' "${changed[@]}"
+          bunx prettier --check "${changed[@]}"
+
+  suite:
+    name: Tests, RLS, build and end-to-end
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: devfathom_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bunx prisma generate
+      - name: Prepare a disposable database
+        # BEFORE `bun run test`, not after. Eight suites need a migrated and
+        # seeded database and one of them says so by name; run in the other
+        # order they fail on `relation "public.organizations" does not exist`.
+        run: |
+          set -euo pipefail
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c 'CREATE DATABASE devfathom_ci_shadow;'
+          bunx prisma migrate deploy
+          bunx prisma db seed
+      - name: Create the unprivileged test role
+        # docs/LOCAL_SETUP.md, "Running the database-backed test suites", verbatim.
+        # PostgreSQL exempts SUPERUSER and BYPASSRLS from row level security as
+        # two separate attributes, and either one turns a tenant-boundary
+        # assertion into a decoration. The grants have to come after
+        # `migrate deploy` — ON ALL TABLES only reaches tables that already
+        # exist — and ALTER DEFAULT PRIVILEGES covers anything a later migration
+        # adds.
+        run: |
+          set -euo pipefail
+          PGPASSWORD=postgres psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d devfathom_ci <<'SQL'
+          CREATE ROLE devfathom_test LOGIN PASSWORD 'ci_only_unprivileged_role' NOSUPERUSER NOBYPASSRLS;
+          GRANT USAGE ON SCHEMA public TO devfathom_test;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO devfathom_test;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO devfathom_test;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO devfathom_test;
+          SQL
+          # Assert the precondition here rather than discover it eight suites
+          # later. Same query the guard uses; both attributes must read false.
+          privileged=$(PGPASSWORD=postgres psql -tAX -h 127.0.0.1 -U postgres -d devfathom_ci \
+            -c "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = 'devfathom_test'")
+          if [ "$privileged" != 'f' ]; then
+            echo "::error::devfathom_test is not subject to row level security (rolsuper OR rolbypassrls = ${privileged:-<missing>})"
+            exit 1
+          fi
+      - run: bun run test
+      - name: Report any email case collisions
+        # Read-only. The normalization migration aborts on a collision rather
+        # than guessing, so this prints what an operator would need to resolve.
+        run: bun run report:email-collisions
+      - name: Verify tenant isolation
+        env:
+          # The documented exception. `test:rls` creates its own unprivileged
+          # role with `CREATE ROLE … NOLOGIN` and `SET LOCAL ROLE`s into it, so
+          # it never asserts through the connection role — which is why it is
+          # correct on the superuser URL, and needs it to create that role.
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci
+        run: bun run test:rls
+      - run: bun run build
+      - name: Playwright end-to-end
+        # Self-contained: playwright.config.ts starts `next start` against the
+        # build above and the seeded database from this job. It needs no
+        # deployed environment, so it belongs in the pull request gate too.
+        run: |
+          set -euo pipefail
+          bunx playwright install --with-deps chromium
+          bun run test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7

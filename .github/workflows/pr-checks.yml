@@ -1,0 +1,30 @@
+name: PR checks
+
+# The Phase 1 entry criterion (§14.1): the full verification suite runs BEFORE a
+# merge, not after it.
+#
+# Until this existed the only pre-merge check was image-build.yml, which proves
+# the container compiles on amd64 and nothing else. Lint, typecheck, formatting,
+# the unit and database-backed suites, the email-collision report, the row level
+# security verifier, the production build and the end-to-end run were all first
+# exercised by deploy-staging.yml — on main, after the merge, where a failure is
+# already everyone's problem.
+#
+# The steps are not duplicated here. They live in verify.yml, which
+# deploy-staging.yml calls too, so this gate cannot silently drift weaker than
+# the one that guards staging.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
