@@ -2,23 +2,22 @@ import { describe, expect, it } from 'vitest';
 
 import { type StationRoutingRule, resolveStation } from './station-routing';
 
-const productRule = (
-  productId: string,
-  stationId: string,
-  priority = 0
-): StationRoutingRule => ({ stationId, productId, categoryId: null, priority });
+const productRule = (productId: string, stationId: string, priority = 0): StationRoutingRule => ({
+  stationId,
+  productId,
+  categoryId: null,
+  priority,
+});
 
-const categoryRule = (
-  categoryId: string,
-  stationId: string,
-  priority = 0
-): StationRoutingRule => ({ stationId, productId: null, categoryId, priority });
+const categoryRule = (categoryId: string, stationId: string, priority = 0): StationRoutingRule => ({
+  stationId,
+  productId: null,
+  categoryId,
+  priority,
+});
 
 describe('resolveStation — most-specific-wins precedence', () => {
-  const rules = [
-    productRule('burger', 'grill'),
-    categoryRule('mains', 'expo'),
-  ];
+  const rules = [productRule('burger', 'grill'), categoryRule('mains', 'expo')];
 
   it('a product rule outranks a category rule for the same item', () => {
     expect(resolveStation({ productId: 'burger', categoryId: 'mains' }, rules, 'default')).toEqual({
@@ -72,9 +71,9 @@ describe('resolveStation — tie-breaking within a level', () => {
     const forward = [productRule('burger', 'zeta', 3), productRule('burger', 'alpha', 3)];
     const reversed = [productRule('burger', 'alpha', 3), productRule('burger', 'zeta', 3)];
     // Order-independent: both yield the lexicographically smallest station id.
-    expect(resolveStation({ productId: 'burger', categoryId: null }, forward, null)?.stationId).toBe(
-      'alpha'
-    );
+    expect(
+      resolveStation({ productId: 'burger', categoryId: null }, forward, null)?.stationId
+    ).toBe('alpha');
     expect(
       resolveStation({ productId: 'burger', categoryId: null }, reversed, null)?.stationId
     ).toBe('alpha');

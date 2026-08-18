@@ -273,9 +273,9 @@ describe('§11.1 cancellation compensation invariant', () => {
 
 describe('§11.1 remake-resolution invariant', () => {
   it('blocks a terminal order with an unresolved remake', () => {
-    expect(() => assertRemakesResolvedForTerminal('CLOSED', ['SERVED', 'REMAKE_REQUESTED'])).toThrow(
-      OrderInvariantError
-    );
+    expect(() =>
+      assertRemakesResolvedForTerminal('CLOSED', ['SERVED', 'REMAKE_REQUESTED'])
+    ).toThrow(OrderInvariantError);
     expect(() =>
       assertRemakesResolvedForTerminal('CANCELLED', ['VOIDED', 'REMAKE_REQUESTED'])
     ).toThrow(OrderInvariantError);
@@ -288,7 +288,13 @@ describe('§11.1 remake-resolution invariant', () => {
 
 describe('§11.1 / C5 payment gate — pay-before-fulfilment disabled in M4', () => {
   it('rejects PAYMENT_PENDING while any item is unfulfilled by default', () => {
-    for (const unfulfilled of ['HELD', 'QUEUED', 'FIRING', 'PREPARED', 'REMAKE_REQUESTED'] as const) {
+    for (const unfulfilled of [
+      'HELD',
+      'QUEUED',
+      'FIRING',
+      'PREPARED',
+      'REMAKE_REQUESTED',
+    ] as const) {
       expect(() => assertCanEnterPaymentPending(['SERVED', unfulfilled])).toThrow(
         OrderInvariantError
       );
@@ -324,13 +330,17 @@ describe('assertOrderStatusChange composes edge + invariant checks', () => {
   });
 
   it('permits PAYMENT_PENDING only once all items are served', () => {
-    expect(() => assertOrderStatusChange('SERVED', 'PAYMENT_PENDING', ['SERVED', 'SERVED'])).not.toThrow();
+    expect(() =>
+      assertOrderStatusChange('SERVED', 'PAYMENT_PENDING', ['SERVED', 'SERVED'])
+    ).not.toThrow();
     expect(() => assertOrderStatusChange('SERVED', 'PAYMENT_PENDING', ['SERVED', 'HELD'])).toThrow(
       OrderInvariantError
     );
   });
 
   it('permits a clean close from PAYMENT_PENDING with all items resolved', () => {
-    expect(() => assertOrderStatusChange('PAYMENT_PENDING', 'CLOSED', ['SERVED', 'VOIDED'])).not.toThrow();
+    expect(() =>
+      assertOrderStatusChange('PAYMENT_PENDING', 'CLOSED', ['SERVED', 'VOIDED'])
+    ).not.toThrow();
   });
 });

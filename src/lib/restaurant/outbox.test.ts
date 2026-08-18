@@ -23,13 +23,11 @@ function makeTx() {
       .sort((a, b) => b.sequence - a.sequence);
     return forOrder[0] ? { sequence: forOrder[0].sequence } : null;
   });
-  const createEvent = vi.fn(
-    async ({ data }: { data: { orderId: string; sequence: number } }) => {
-      events.push({ orderId: data.orderId, sequence: data.sequence });
-      eventId += 1;
-      return { id: `event-${eventId}` };
-    }
-  );
+  const createEvent = vi.fn(async ({ data }: { data: { orderId: string; sequence: number } }) => {
+    events.push({ orderId: data.orderId, sequence: data.sequence });
+    eventId += 1;
+    return { id: `event-${eventId}` };
+  });
   const createOutbox = vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
     outboxCreates.push(data);
     outboxId += 1;
@@ -94,9 +92,15 @@ describe('appendOrderEvent — ledger + outbox in one transaction (C2)', () => {
 
   it('keeps per-order sequences independent', async () => {
     const { tx } = makeTx();
-    expect((await appendOrderEvent(tx, { orderId: 'A', eventType: 'x', payload: {} })).sequence).toBe(1);
-    expect((await appendOrderEvent(tx, { orderId: 'B', eventType: 'x', payload: {} })).sequence).toBe(1);
-    expect((await appendOrderEvent(tx, { orderId: 'A', eventType: 'y', payload: {} })).sequence).toBe(2);
+    expect(
+      (await appendOrderEvent(tx, { orderId: 'A', eventType: 'x', payload: {} })).sequence
+    ).toBe(1);
+    expect(
+      (await appendOrderEvent(tx, { orderId: 'B', eventType: 'x', payload: {} })).sequence
+    ).toBe(1);
+    expect(
+      (await appendOrderEvent(tx, { orderId: 'A', eventType: 'y', payload: {} })).sequence
+    ).toBe(2);
   });
 
   it('defaults actor references to null for a system-originated event', async () => {

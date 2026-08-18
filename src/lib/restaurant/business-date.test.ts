@@ -57,9 +57,9 @@ describe('resolveBusinessDate — cutoff rolls the early morning back a day', ()
 
   it('attributes at-or-after-cutoff local time to the current business date', () => {
     // 12:00Z -> 07:00 local (New York, EST) >= 06:00 cutoff.
-    expect(
-      resolveBusinessDate(new Date('2026-01-15T12:00:00Z'), 'America/New_York', '06:00')
-    ).toBe('2026-01-15');
+    expect(resolveBusinessDate(new Date('2026-01-15T12:00:00Z'), 'America/New_York', '06:00')).toBe(
+      '2026-01-15'
+    );
   });
 
   it('supports a cross-midnight (after-midnight) cutoff like 02:00', () => {
@@ -77,19 +77,23 @@ describe('resolveBusinessDate — cutoff rolls the early morning back a day', ()
 describe('resolveBusinessDate — DST correctness (Intl-based)', () => {
   it('spring-forward: the skipped 02:00-03:00 hour does not shift the date', () => {
     // New York springs forward 2026-03-08 at 02:00 -> 03:00. 07:30Z is 03:30 EDT.
-    expect(
-      resolveBusinessDate(new Date('2026-03-08T07:30:00Z'), 'America/New_York', '06:00')
-    ).toBe('2026-03-07');
+    expect(resolveBusinessDate(new Date('2026-03-08T07:30:00Z'), 'America/New_York', '06:00')).toBe(
+      '2026-03-07'
+    );
     // 06:30Z is 01:30 EST (still before the jump), same business date.
-    expect(
-      resolveBusinessDate(new Date('2026-03-08T06:30:00Z'), 'America/New_York', '06:00')
-    ).toBe('2026-03-07');
+    expect(resolveBusinessDate(new Date('2026-03-08T06:30:00Z'), 'America/New_York', '06:00')).toBe(
+      '2026-03-07'
+    );
   });
 
   it('fall-back: both occurrences of the repeated 01:30 hour resolve identically', () => {
     // New York falls back 2026-11-01 at 02:00 EDT -> 01:00 EST.
     // 05:30Z = 01:30 EDT (first pass); 06:30Z = 01:30 EST (second pass).
-    const first = resolveBusinessDate(new Date('2026-11-01T05:30:00Z'), 'America/New_York', '06:00');
+    const first = resolveBusinessDate(
+      new Date('2026-11-01T05:30:00Z'),
+      'America/New_York',
+      '06:00'
+    );
     const second = resolveBusinessDate(
       new Date('2026-11-01T06:30:00Z'),
       'America/New_York',
@@ -132,7 +136,11 @@ describe('businessDateToUtcDate', () => {
   });
 
   it('round-trips with resolveBusinessDate', () => {
-    const businessDate = resolveBusinessDate(new Date('2026-03-08T07:30:00Z'), 'America/New_York', '06:00');
+    const businessDate = resolveBusinessDate(
+      new Date('2026-03-08T07:30:00Z'),
+      'America/New_York',
+      '06:00'
+    );
     const utc = businessDateToUtcDate(businessDate);
     expect(utc.toISOString().slice(0, 10)).toBe(businessDate);
   });

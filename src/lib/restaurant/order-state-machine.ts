@@ -56,13 +56,7 @@ export const ORDER_STATUSES = [
 // ---------------------------------------------------------------------------
 
 export type OrderItemStatus =
-  | 'HELD'
-  | 'QUEUED'
-  | 'FIRING'
-  | 'PREPARED'
-  | 'SERVED'
-  | 'REMAKE_REQUESTED'
-  | 'VOIDED';
+  'HELD' | 'QUEUED' | 'FIRING' | 'PREPARED' | 'SERVED' | 'REMAKE_REQUESTED' | 'VOIDED';
 
 export const ORDER_ITEM_STATUSES = [
   'HELD',
@@ -91,13 +85,7 @@ export type KitchenAggregateStatus = Extract<
  * may relabel them for their screens but may never add to or reinterpret them.
  */
 export type KdsDisplayStatus =
-  | 'HELD'
-  | 'NEW'
-  | 'COOKING'
-  | 'READY'
-  | 'RECALLED'
-  | 'SERVED'
-  | 'VOIDED';
+  'HELD' | 'NEW' | 'COOKING' | 'READY' | 'RECALLED' | 'SERVED' | 'VOIDED';
 
 // ---------------------------------------------------------------------------
 // Transition maps — the single authority for legal edges.
@@ -144,7 +132,10 @@ export const ORDER_ITEM_TRANSITIONS = {
 } as const satisfies Record<OrderItemStatus, readonly OrderItemStatus[]>;
 
 /** Order states from which no transition is legal (§11.1 terminal conditions). */
-export const TERMINAL_ORDER_STATUSES = ['CLOSED', 'CANCELLED'] as const satisfies readonly OrderStatus[];
+export const TERMINAL_ORDER_STATUSES = [
+  'CLOSED',
+  'CANCELLED',
+] as const satisfies readonly OrderStatus[];
 
 /** The single terminal item state. */
 export const TERMINAL_ITEM_STATUSES = ['VOIDED'] as const satisfies readonly OrderItemStatus[];
@@ -285,7 +276,8 @@ export function deriveKitchenAggregate(
   const sent = itemStatuses.filter(isSentItem);
   if (sent.length === 0) return null;
   const minRank = sent.reduce(
-    (min, status) => Math.min(min, SENT_ITEM_RANK[status as Exclude<OrderItemStatus, 'HELD' | 'VOIDED'>]),
+    (min, status) =>
+      Math.min(min, SENT_ITEM_RANK[status as Exclude<OrderItemStatus, 'HELD' | 'VOIDED'>]),
     Number.POSITIVE_INFINITY
   );
   return AGGREGATE_BY_RANK[minRank]!;
