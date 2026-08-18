@@ -589,3 +589,47 @@ link (`unlinkedAt` stamped) and creates a `MOVE` link; `mergeTables` adds `MERGE
 links under one order); `unlinkTable` deactivates. Combining two OPEN orders into one order is deferred.
 · Conservative because it models seat/move/merge from the link-history table without a cross-order
 merge, which needs an ownership-transfer design. · Revisited by the check-splitting/merging milestone.
+
+**C7/C8 (terminal + KDS command transport) — Idempotency-Key header; thin routes over L2 (M4-L4)** ·
+The POS-terminal order routes (`src/app/api/restaurant/orders/*`) run under M2 `withTerminalAuth` and the
+KDS routes (`src/app/api/restaurant/kds/*`) under `withDeviceAuth`; both carry the device-scoped
+idempotency key in an `Idempotency-Key` request header (never the body), and every mutating route rejects
+a missing key with a 400. Routes hold no order/kitchen domain logic — they build the attribution envelope
+from trusted transport values only (operator = the session's active staff on an UNLOCKED terminal;
+terminal = the authenticated device; key = the header) and dispatch to the single L2 command layer.
+Domain errors are shaped to HTTP mirroring the L2 tRPC mapping (NOT_FOUND→404, state/precondition
+conflict→409, else→400), leaking no internals; a non-domain throw is a generic 500. · Conservative because
+it reuses the proven M2 device-auth + the L2 command/idempotency contract unchanged. · Revisited if a
+non-header idempotency channel or a per-route capability gate is required.
+
+**C8 (KDS operator attribution) — required at the transport, not optional (M4-L4)** · The KDS bump/ack/recall
+routes require an `operatorStaffProfileId` in the body (verified to be an ACTIVE staff profile) in addition
+to the bound device, because the shared L2 `advanceItem` command records a non-null acting operator on its
+ledger event. This is STRICTER than the C8 "optional operator attribution" aspiration: the transport cannot
+express a null operator without an L2 change (its `CommandActor.staffProfileId` is non-nullable), so this
+lane surfaces the operator rather than fabricating one. · Conservative because attribution is present, not
+absent — safer for audit. · Revisited (via the CoS, owned by the L2 command layer) when a no-login KDS UX
+needs a genuinely operator-less action, which requires L2 to accept a null operator on `advanceItem`.
+
+**§12.5 (KDS read model) — ticket-number sequence cursor + gap detection; level-triggered queue (M4-L4)** ·
+The station queue (`src/lib/restaurant/kds.ts`) is derived purely from durable rows (kitchen tickets + each
+line's current item-domain status). It is LEVEL-TRIGGERED: every poll returns the authoritative current open
+set (tickets with a non-cleared line, oldest-first, bounded by `limit`), each line mapped onto its FIXED L1
+KDS display status. The cursor is the station's ticket-number high-water mark for the business date
+(`ticketNumber` is sequential per (station, businessDate), so it is the natural per-station sequence). A gap
+(full-reconcile signal) is raised when either the client's `sinceCursor` exceeds the current max — the
+sequence regressed, e.g. the screen was offline across the business-day cutoff — or the open queue overflows
+the poll window (`hasMore`). The business date defaults to the branch's current one (server-time, DST-safe,
+C5). · Conservative because a level-triggered read is always correct regardless of cursor, and the gap flag
+only advises reconciliation; no incremental diff can drift. · Revisited when the outbox nudge transport is
+selected and an item-state-change cursor (beyond new-ticket detection) is needed.
+
+**C9/C10 (device-authed effective-menu read) — re-composed from M3 primitives, no M3 edit (M4-L4)** · A POS
+pad has no web session, so it cannot reach the M3 `effectiveMenu` tRPC read. `resolveTerminalEffectiveMenu`
+(`terminal-orders.ts`) resolves the branch's live PUBLISHED publication (or an explicit one) and re-composes
+the winning price (override > publication list > base list) and branch-timezone availability from the SAME
+exported M3 primitives (`resolveEffectiveEntries`/`pickEntry`, `channelPublished`/`isItemAvailableAt`/
+`partitionWindows`) that the back-office read uses — the established `order-pricing.ts` precedent — without
+modifying an M3-owned file (C9). · Conservative because it reuses the M3 resolution contract rather than
+forking it, at the cost of a parallel projection that must track the M3 read's shape. · Revisited if the M3
+menu resolution is extracted into a shared exported lib both surfaces call.
