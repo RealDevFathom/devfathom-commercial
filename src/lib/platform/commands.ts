@@ -362,17 +362,11 @@ async function bootstrapOrganization(
       status: 'ACTIVE',
     },
   });
-  if (packageRecord.moduleLinks.length) {
-    await db.organizationModule.createMany({
-      data: packageRecord.moduleLinks.map((link) => ({
-        organizationId: organization.id,
-        moduleId: link.moduleId,
-        status: 'ENABLED' as const,
-        changedById: actor.id,
-        reason: `Included with ${packageRecord.name}`,
-      })),
-    });
-  }
+  // §2.3: onboarding no longer copies the package's enabled modules into
+  // OrganizationModule. Those rows behave as permanent OVERRIDEs in the resolver
+  // (src/lib/entitlements.ts) and stranded when the package later changed. The
+  // package baseline is inherited live from platform_package_modules instead;
+  // only operator/contract deviations write OrganizationModule rows.
   await db.organizationBrand.create({ data: { organizationId: organization.id } });
   await db.organizationEmailSettings.create({ data: { organizationId: organization.id } });
   await db.organizationDeployment.create({

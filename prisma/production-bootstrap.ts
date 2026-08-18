@@ -116,20 +116,9 @@ export async function bootstrapProduction(
       update: {},
       create: { packageId: suite.id, moduleId: platformModule.id },
     });
-    await tx.organizationModule.upsert({
-      where: {
-        organizationId_moduleId: {
-          organizationId: input.organizationId,
-          moduleId: platformModule.id,
-        },
-      },
-      update: {},
-      create: {
-        organizationId: input.organizationId,
-        moduleId: platformModule.id,
-        status: 'ENABLED',
-      },
-    });
+    // §2.3: the bootstrap org inherits its modules live from the package
+    // (platform_package_modules); no OrganizationModule copy. assertActivationReady
+    // remains satisfied by the package's moduleLinks.
   }
 
   const adminRole = await tx.organizationRole.upsert({

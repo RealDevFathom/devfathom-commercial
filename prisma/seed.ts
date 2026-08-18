@@ -1531,20 +1531,8 @@ async function main() {
           update: { enabled: true },
           create: { packageId: suite.id, moduleId: module.id },
         });
-        await tx.organizationModule.upsert({
-          where: {
-            organizationId_moduleId: {
-              organizationId: 'org_devfathom',
-              moduleId: module.id,
-            },
-          },
-          update: { status: 'ENABLED', expiresAt: null },
-          create: {
-            organizationId: 'org_devfathom',
-            moduleId: module.id,
-            status: 'ENABLED',
-          },
-        });
+        // §2.3: org_devfathom inherits its modules live from the Agency Suite
+        // package (platform_package_modules); no OrganizationModule copy.
       }
 
       const adminRole = await tx.organizationRole.upsert({
