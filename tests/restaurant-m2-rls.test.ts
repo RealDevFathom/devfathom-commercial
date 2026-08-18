@@ -60,8 +60,10 @@ describeIfDatabase('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
 
     await client!.connect();
     await client!.query('BEGIN');
-    await client!.query(`CREATE ROLE "${role}" NOLOGIN`);
+    await client!.query(`CREATE ROLE "${role}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+    await client!.query(`GRANT "${role}" TO CURRENT_USER`);
     await client!.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
+    await client!.query(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "${role}"`);
     await client!.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON
         "restaurant_staff_profiles", "restaurant_operator_credentials",
@@ -69,6 +71,7 @@ describeIfDatabase('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
         "restaurant_co_authorizations" TO "${role}"`
     );
 
+    await client!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client!.query(
       `INSERT INTO "organizations" (
         "id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt"
