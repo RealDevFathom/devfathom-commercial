@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { bootstrapProduction, PLATFORM_MODULES } from '../prisma/production-bootstrap';
+import { RESTAURANT_MODULES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog';
 
 const INPUT = {
   organizationId: 'org_devfathom',
@@ -50,6 +51,11 @@ function fakeTransaction() {
       id: `module_${args.where.key}`,
     })),
   };
+  const platformPackage = {
+    upsert: vi.fn(async (args: { where: { key: string } }) => ({
+      id: `package_${args.where.key}`,
+    })),
+  };
   const organizationDeployment = {
     upsert: vi.fn(
       async (args: {
@@ -70,10 +76,20 @@ function fakeTransaction() {
   };
   const allowed = {
     $executeRawUnsafe: vi.fn(async () => undefined),
-    platformPackage: { upsert: vi.fn(async () => ({ id: 'package_agency_suite' })) },
+    platformPackage,
     organization: { upsert: vi.fn(async () => undefined) },
     platformModule,
-    platformPackageModule: { upsert: vi.fn(async () => undefined) },
+    platformPackageModule: {
+      upsert: vi.fn(
+        async (_args: {
+          create: {
+            packageId: string;
+            moduleId: string;
+            limits?: Readonly<Record<string, number>>;
+          };
+        }) => undefined
+      ),
+    },
     organizationModule: {
       upsert: vi.fn(
         async (args: {
@@ -165,7 +181,85 @@ describe('production bootstrap', () => {
       role: 'SUPER_ADMIN',
       active: true,
     });
-    expect(platformModule.upsert).toHaveBeenCalledTimes(PLATFORM_MODULES.length);
+    expect(platformModule.upsert).toHaveBeenCalledTimes(
+      PLATFORM_MODULES.length + RESTAURANT_MODULES.length
+    );
+    expect(delegates.platformPackage.upsert).toHaveBeenCalledTimes(1 + RESTAURANT_PACKAGES.length);
+    expect(delegates.platformPackageModule.upsert).toHaveBeenCalledTimes(
+      PLATFORM_MODULES.length +
+        RESTAURANT_PACKAGES.reduce(
+          (total, restaurantPackage) => total + restaurantPackage.moduleKeys.length,
+          0
+        )
+    );
+    expect(delegates.platformPackage.upsert).toHaveBeenCalledWith({
+      where: { key: 'agency-suite' },
+      update: {},
+      create: expect.objectContaining({
+        key: 'agency-suite',
+        vertical: 'AGENCY',
+        defaultSeats: 25,
+      }),
+    });
+    for (const module of RESTAURANT_MODULES) {
+      expect(platformModule.upsert).toHaveBeenCalledWith({
+        where: { key: module.key },
+        update: {},
+        create: {
+          key: module.key,
+          name: module.name,
+          category: module.category,
+          routePrefix: module.routePrefix,
+        },
+      });
+    }
+    for (const restaurantPackage of RESTAURANT_PACKAGES) {
+      const packageId = `package_${restaurantPackage.key}`;
+      expect(delegates.platformPackage.upsert).toHaveBeenCalledWith({
+        where: { key: restaurantPackage.key },
+        update: {},
+        create: {
+          key: restaurantPackage.key,
+          name: restaurantPackage.name,
+          vertical: 'RESTAURANT',
+        },
+      });
+      for (const moduleKey of restaurantPackage.moduleKeys) {
+        expect(delegates.platformPackageModule.upsert).toHaveBeenCalledWith({
+          where: {
+            packageId_moduleId: { packageId, moduleId: `module_${moduleKey}` },
+          },
+          update: {},
+          create: {
+            packageId,
+            moduleId: `module_${moduleKey}`,
+            limits: moduleKey === 'restaurant-core' ? restaurantPackage.defaultLimits : undefined,
+          },
+        });
+      }
+      const limitLink = delegates.platformPackageModule.upsert.mock.calls.find(
+        ([args]) => args.create.packageId === packageId && args.create.limits
+      );
+      expect(limitLink?.[0].create.limits).toEqual(restaurantPackage.defaultLimits);
+      expect(Object.keys(limitLink?.[0].create.limits ?? {})).toEqual(
+        Object.keys(restaurantPackage.defaultLimits)
+      );
+    }
+    for (const [key] of PLATFORM_MODULES) {
+      expect(delegates.platformPackageModule.upsert).toHaveBeenCalledWith({
+        where: {
+          packageId_moduleId: {
+            packageId: 'package_agency-suite',
+            moduleId: `module_${key}`,
+          },
+        },
+        update: {},
+        create: {
+          packageId: 'package_agency-suite',
+          moduleId: `module_${key}`,
+        },
+      });
+    }
     expect(organizationDeployment.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({
