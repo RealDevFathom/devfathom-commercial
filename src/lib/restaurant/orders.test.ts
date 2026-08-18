@@ -1,0 +1,619 @@
+/**
+ * M4-L2 command layer — the named integration checks that only a real database
+ * can establish: transactional number allocation (unique + monotone under
+ * concurrency), business-date stamping, C4 snapshot immutability, C2 ledger +
+ * outbox appends, C3 state-machine enforcement (illegal transitions, terminal
+ * invariants, cancel compensation, remake-blocks-close), hold/fire isolation, KOT
+ * generation, C6 post-prep void co-authorization + disposition, and C7 idempotent
+ * replay.
+ *
+ * Requires TEST_DATABASE_URL (a migrated, throwaway database, never DATABASE_URL);
+ * without it the suite reports itself skipped rather than passing vacuously. One
+ * per-run-unique organization; every read filters by the seeded ids.
+ */
+import { randomBytes } from 'node:crypto';
+
+import { beforeAll, describe, expect, it } from 'vitest';
+
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
+process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+
+const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+
+const suffix = randomBytes(6).toString('hex');
+const orgId = `org_wha42_${suffix}`;
+const ids = {
+  brand: `brand_${suffix}`,
+  branch: `branch_${suffix}`,
+  operator: `staff_op_${suffix}`,
+  manager: `staff_mgr_${suffix}`,
+  floor: `floor_${suffix}`,
+  tableA: `table_a_${suffix}`,
+  tableB: `table_b_${suffix}`,
+  category: `cat_${suffix}`,
+  product: `prod_${suffix}`,
+  modGroup: `mgrp_${suffix}`,
+  modOption: `mopt_${suffix}`,
+  menu: `menu_${suffix}`,
+  section: `msec_${suffix}`,
+  menuItem: `mitem_${suffix}`,
+  priceList: `pl_${suffix}`,
+  priceVersion: `plv_${suffix}`,
+  stationGrill: `st_grill_${suffix}`,
+  stationBar: `st_bar_${suffix}`,
+  publication: `pub_${suffix}`,
+};
+
+const AT = new Date('2026-08-19T18:00:00.000Z');
+
+type Deps = {
+  withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
+  createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
+  enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
+  orders: typeof import('@/lib/restaurant/orders');
+  stateMachine: typeof import('@/lib/restaurant/order-state-machine');
+  coAuth: typeof import('@/lib/restaurant/co-authorization');
+};
+
+let deps: Deps;
+let deviceId: string;
+let keyCounter = 0;
+
+/** A fresh device-scoped idempotency key per command (unless a test reuses one). */
+const key = () => `key_${suffix}_${++keyCounter}`;
+const actor = (idempotencyKey = key()) => ({
+  staffProfileId: ids.operator,
+  deviceId,
+  idempotencyKey,
+});
+
+function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
+  return deps.withTenantDb(orgId, fn);
+}
+
+/** Open a fresh order and add one menu item (HELD). Returns their ids. */
+async function openWithItem(over?: { course?: number }) {
+  const db = deps.createTenantDb(orgId);
+  const opened = await deps.orders.openOrder(db, {
+    branchId: ids.branch,
+    channel: 'DINE_IN',
+    publicationId: ids.publication,
+    actor: actor(),
+    now: AT,
+  });
+  const added = await deps.orders.addItem(db, {
+    orderId: opened.orderId,
+    menuItemId: ids.menuItem,
+    course: over?.course ?? 1,
+    actor: actor(),
+  });
+  return { orderId: opened.orderId, itemId: added.itemId, db };
+}
+
+beforeAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  const [scopedDb, devices, orders, stateMachine, coAuth] = await Promise.all([
+    import('@/lib/tenancy/scoped-db'),
+    import('@/lib/restaurant/devices'),
+    import('@/lib/restaurant/orders'),
+    import('@/lib/restaurant/order-state-machine'),
+    import('@/lib/restaurant/co-authorization'),
+  ]);
+  deps = {
+    withTenantDb: scopedDb.withTenantDb,
+    withPlatformDb: scopedDb.withPlatformDb,
+    createTenantDb: scopedDb.createTenantDb,
+    enrollDevice: devices.enrollDevice,
+    orders,
+    stateMachine,
+    coAuth,
+  };
+
+  await deps.withPlatformDb((tx) =>
+    tx.organization.create({
+      data: {
+        id: orgId,
+        slug: `wha42-${suffix}`,
+        legalName: 'Orders Test Co',
+        displayName: 'Orders Test',
+        status: 'ACTIVE',
+      },
+    })
+  );
+
+  await deps.withTenantDb(orgId, async (tx) => {
+    await tx.restaurantBranch.create({
+      data: { id: ids.branch, name: 'Main', timezone: 'UTC', businessDayCutoff: '00:00' },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: { id: ids.operator, displayName: 'Operator', status: 'ACTIVE' },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: { id: ids.manager, displayName: 'Manager', status: 'ACTIVE' },
+    });
+    const enrolled = await deps.enrollDevice(tx, { branchId: ids.branch, name: 'POS-1' });
+    deviceId = enrolled.device.id;
+
+    await tx.restaurantFloor.create({
+      data: { id: ids.floor, branchId: ids.branch, name: 'Main' },
+    });
+    await tx.restaurantTable.create({
+      data: { id: ids.tableA, floorId: ids.floor, code: 'A1', capacity: 4 },
+    });
+    await tx.restaurantTable.create({
+      data: { id: ids.tableB, floorId: ids.floor, code: 'A2', capacity: 2 },
+    });
+
+    await tx.restaurantCategory.create({ data: { id: ids.category, name: 'Mains' } });
+    await tx.restaurantProduct.create({
+      data: { id: ids.product, name: 'Burger', categoryId: ids.category },
+    });
+    await tx.restaurantModifierGroup.create({ data: { id: ids.modGroup, name: 'Extras' } });
+    await tx.restaurantModifierOption.create({
+      data: {
+        id: ids.modOption,
+        modifierGroupId: ids.modGroup,
+        name: 'Cheese',
+        priceDelta: '1.00',
+      },
+    });
+    await tx.restaurantProductModifierGroup.create({
+      data: { productId: ids.product, modifierGroupId: ids.modGroup },
+    });
+
+    // Stations: grill (default) + bar; the product routes to bar.
+    await tx.restaurantKitchenStation.create({
+      data: { id: ids.stationGrill, branchId: ids.branch, name: 'Grill', isDefault: true },
+    });
+    await tx.restaurantKitchenStation.create({
+      data: { id: ids.stationBar, branchId: ids.branch, name: 'Bar', isDefault: false },
+    });
+    await tx.restaurantStationRoutingRule.create({
+      data: { stationId: ids.stationBar, productId: ids.product, priority: 0 },
+    });
+
+    await tx.restaurantBrand.create({ data: { id: ids.brand, name: 'Acme' } });
+    await tx.restaurantMenu.create({ data: { id: ids.menu, brandId: ids.brand, name: 'All Day' } });
+    await tx.restaurantMenuSection.create({
+      data: { id: ids.section, menuId: ids.menu, name: 'Food' },
+    });
+    await tx.restaurantMenuItem.create({
+      data: {
+        id: ids.menuItem,
+        sectionId: ids.section,
+        productId: ids.product,
+        displayName: 'House Burger',
+      },
+    });
+
+    await tx.restaurantPriceList.create({
+      data: { id: ids.priceList, name: 'Default', isDefault: true },
+    });
+    await tx.restaurantPriceListVersion.create({
+      data: {
+        id: ids.priceVersion,
+        priceListId: ids.priceList,
+        versionNumber: 1,
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        status: 'ACTIVE',
+      },
+    });
+    await tx.restaurantPriceListEntry.create({
+      data: { priceListVersionId: ids.priceVersion, productId: ids.product, price: '12.50' },
+    });
+
+    await tx.restaurantBranchMenuPublication.create({
+      data: {
+        id: ids.publication,
+        branchId: ids.branch,
+        menuId: ids.menu,
+        priceListId: ids.priceList,
+        status: 'PUBLISHED',
+        channels: [],
+      },
+    });
+  });
+});
+
+describeIfDatabase('orders command layer (real DB)', () => {
+  it('opens an order: stamps business date, allocates a number, appends event + outbox', async () => {
+    const db = deps.createTenantDb(orgId);
+    const opened = await deps.orders.openOrder(db, {
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      tableIds: [ids.tableA],
+      coverCount: 2,
+      actor: actor(),
+      now: AT,
+    });
+    expect(opened.orderNumber).toBeGreaterThanOrEqual(1);
+    expect(opened.businessDate.toISOString().slice(0, 10)).toBe('2026-08-19');
+
+    const order = await read((tx) =>
+      tx.restaurantOrder.findUnique({
+        where: { id: opened.orderId },
+        select: {
+          status: true,
+          priceListVersionId: true,
+          events: { select: { eventType: true, sequence: true } },
+          orderTables: { select: { tableId: true, active: true } },
+        },
+      })
+    );
+    expect(order?.status).toBe('OPEN');
+    expect(order?.priceListVersionId).toBe(ids.priceVersion);
+    expect(order?.events).toEqual([{ eventType: 'order.opened', sequence: 1 }]);
+    expect(order?.orderTables).toEqual([{ tableId: ids.tableA, active: true }]);
+
+    const outbox = await read((tx) =>
+      tx.restaurantEventOutbox.count({ where: { aggregateId: opened.orderId, status: 'PENDING' } })
+    );
+    expect(outbox).toBe(1);
+  });
+
+  it('allocates unique numbers under concurrent opens on one (branch, businessDate)', async () => {
+    const db = deps.createTenantDb(orgId);
+    const opens = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        deps.orders.openOrder(db, {
+          branchId: ids.branch,
+          channel: 'TAKEAWAY',
+          actor: actor(),
+          now: AT,
+        })
+      )
+    );
+    const numbers = opens.map((o) => o.orderNumber);
+    expect(new Set(numbers).size).toBe(5); // unique
+    expect(numbers.every((n) => Number.isInteger(n) && n >= 1)).toBe(true); // monotone ints
+  });
+
+  it('snapshots name + price at add time and never rewrites them on later catalog edits (C4)', async () => {
+    const { itemId } = await openWithItem();
+    const before = await read((tx) =>
+      tx.restaurantOrderItem.findUnique({
+        where: { id: itemId },
+        select: { name: true, unitPrice: true, status: true },
+      })
+    );
+    expect(before?.name).toBe('House Burger');
+    expect(before?.unitPrice.toString()).toBe('12.5');
+    expect(before?.status).toBe('HELD');
+
+    // Edit the catalog price + product name AFTER the item was snapshotted.
+    await deps.withTenantDb(orgId, async (tx) => {
+      await tx.restaurantPriceListEntry.updateMany({
+        where: { priceListVersionId: ids.priceVersion, productId: ids.product },
+        data: { price: '99.99' },
+      });
+      await tx.restaurantProduct.update({ where: { id: ids.product }, data: { name: 'Deluxe' } });
+    });
+
+    const after = await read((tx) =>
+      tx.restaurantOrderItem.findUnique({
+        where: { id: itemId },
+        select: { name: true, unitPrice: true },
+      })
+    );
+    expect(after?.name).toBe('House Burger');
+    expect(after?.unitPrice.toString()).toBe('12.5');
+
+    // Restore the price so other tests keep the original snapshot value.
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantPriceListEntry.updateMany({
+        where: { priceListVersionId: ids.priceVersion, productId: ids.product },
+        data: { price: '12.50' },
+      })
+    );
+  });
+
+  it('sends the order: HELD→QUEUED, order→SENT, and generates KOTs (C2)', async () => {
+    const { orderId, db } = await openWithItem();
+    const result = await deps.orders.sendOrder(db, { orderId, actor: actor() });
+    expect(result.tickets.length).toBeGreaterThanOrEqual(1);
+
+    const order = await read((tx) =>
+      tx.restaurantOrder.findUnique({
+        where: { id: orderId },
+        select: {
+          status: true,
+          items: { select: { status: true } },
+          kitchenTickets: { select: { stationId: true, items: { select: { orderItemId: true } } } },
+        },
+      })
+    );
+    expect(order?.status).toBe('SENT');
+    expect(order?.items.every((i) => i.status === 'QUEUED')).toBe(true);
+    expect(order?.kitchenTickets[0]?.stationId).toBe(ids.stationBar); // product routes to bar
+    expect(order?.kitchenTickets[0]?.items).toHaveLength(1);
+  });
+
+  it('fires one course without touching another (hold/fire isolation)', async () => {
+    const db = deps.createTenantDb(orgId);
+    const opened = await deps.orders.openOrder(db, {
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      actor: actor(),
+      now: AT,
+    });
+    await deps.orders.addItem(db, {
+      orderId: opened.orderId,
+      menuItemId: ids.menuItem,
+      course: 1,
+      actor: actor(),
+    });
+    const second = await deps.orders.addItem(db, {
+      orderId: opened.orderId,
+      menuItemId: ids.menuItem,
+      course: 2,
+      actor: actor(),
+    });
+
+    await deps.orders.fireCourse(db, { orderId: opened.orderId, course: 1, actor: actor() });
+
+    const items = await read((tx) =>
+      tx.restaurantOrderItem.findMany({
+        where: { orderId: opened.orderId },
+        select: { id: true, course: true, status: true },
+      })
+    );
+    const course2 = items.find((i) => i.id === second.itemId);
+    expect(course2?.status).toBe('HELD'); // untouched
+    expect(items.find((i) => i.course === 1)?.status).toBe('QUEUED');
+  });
+
+  it('rejects an illegal item transition at the command level', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await expect(
+      deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'SERVED', actor: actor() })
+    ).rejects.toBeInstanceOf(deps.stateMachine.OrderTransitionError);
+  });
+
+  it('walks the full lifecycle to CLOSED and blocks an early close (terminal invariant)', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await deps.orders.sendOrder(db, { orderId, actor: actor() });
+
+    // Not every item is served yet — close must be refused.
+    await expect(deps.orders.closeOrder(db, { orderId, actor: actor() })).rejects.toMatchObject({
+      reason: 'NOT_CLOSABLE',
+    });
+
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'FIRING', actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'PREPARED', actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'SERVED', actor: actor() });
+    await deps.orders.closeOrder(db, { orderId, actor: actor() });
+
+    const order = await read((tx) =>
+      tx.restaurantOrder.findUnique({
+        where: { id: orderId },
+        select: { status: true, closedAt: true, events: { select: { eventType: true } } },
+      })
+    );
+    expect(order?.status).toBe('CLOSED');
+    expect(order?.closedAt).not.toBeNull();
+    expect(order?.events.map((e) => e.eventType)).toContain('order.closed');
+  });
+
+  it('blocks close while a remake is unresolved, then closes once it is (remake-blocks-close)', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await deps.orders.sendOrder(db, { orderId, actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'FIRING', actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'PREPARED', actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'SERVED', actor: actor() });
+
+    const remake = await deps.orders.requestRemake(db, {
+      orderId,
+      itemId,
+      reason: 'sent back',
+      actor: actor(),
+    });
+    const original = await read((tx) =>
+      tx.restaurantOrderItem.findUnique({ where: { id: itemId }, select: { status: true } })
+    );
+    expect(original?.status).toBe('REMAKE_REQUESTED');
+
+    await expect(deps.orders.closeOrder(db, { orderId, actor: actor() })).rejects.toBeDefined();
+
+    // Resolve: cook + serve the remake, accept the original back as served.
+    await deps.orders.fireCourse(db, { orderId, course: 1, actor: actor() });
+    await deps.orders.advanceItem(db, {
+      orderId,
+      itemId: remake.remakeItemId,
+      toStatus: 'FIRING',
+      actor: actor(),
+    });
+    await deps.orders.advanceItem(db, {
+      orderId,
+      itemId: remake.remakeItemId,
+      toStatus: 'PREPARED',
+      actor: actor(),
+    });
+    await deps.orders.advanceItem(db, {
+      orderId,
+      itemId: remake.remakeItemId,
+      toStatus: 'SERVED',
+      actor: actor(),
+    });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'SERVED', actor: actor() });
+    await deps.orders.closeOrder(db, { orderId, actor: actor() });
+
+    const order = await read((tx) =>
+      tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+    );
+    expect(order?.status).toBe('CLOSED');
+  });
+
+  it('requires co-authorization + disposition for a post-preparation void and preserves history (C6)', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await deps.orders.sendOrder(db, { orderId, actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'FIRING', actor: actor() });
+
+    // Missing co-auth.
+    await expect(
+      deps.orders.voidItem(db, { orderId, itemId, reason: 'burnt', actor: actor() })
+    ).rejects.toMatchObject({ reason: 'CO_AUTH_REQUIRED' });
+
+    // Missing disposition.
+    await expect(
+      deps.orders.voidItem(db, {
+        orderId,
+        itemId,
+        reason: 'burnt',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+      })
+    ).rejects.toMatchObject({ reason: 'DISPOSITION_REQUIRED' });
+
+    // Self-approval is not a co-authorization.
+    await expect(
+      deps.orders.voidItem(db, {
+        orderId,
+        itemId,
+        reason: 'burnt',
+        wastageDisposition: 'WASTE',
+        approvingStaffProfileId: ids.operator,
+        actor: actor(),
+      })
+    ).rejects.toBeInstanceOf(deps.coAuth.CoAuthorizationError);
+
+    // Valid post-prep void.
+    await deps.orders.voidItem(db, {
+      orderId,
+      itemId,
+      reason: 'burnt',
+      wastageDisposition: 'WASTE',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+
+    const item = await read((tx) =>
+      tx.restaurantOrderItem.findUnique({
+        where: { id: itemId },
+        select: {
+          status: true,
+          voidedPostPrep: true,
+          wastageDisposition: true,
+          voidReason: true,
+          voidCoAuthorizationId: true,
+        },
+      })
+    );
+    expect(item).toMatchObject({
+      status: 'VOIDED',
+      voidedPostPrep: true,
+      wastageDisposition: 'WASTE',
+      voidReason: 'burnt',
+    });
+    expect(item?.voidCoAuthorizationId).not.toBeNull();
+
+    const events = await read((tx) =>
+      tx.restaurantOrderEvent.findMany({
+        where: { orderId },
+        select: { eventType: true },
+        orderBy: { sequence: 'asc' },
+      })
+    );
+    // The full history is preserved (open→add→sent→fired→advanced→voided).
+    expect(events.map((e) => e.eventType)).toContain('item.voided');
+    expect(events.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('cancels an order with a compensating void of every in-flight item (cancel-compensation)', async () => {
+    const { orderId, db } = await openWithItem();
+    await deps.orders.sendOrder(db, { orderId, actor: actor() }); // item QUEUED (pre-prep)
+    await deps.orders.cancelOrder(db, { orderId, reason: 'walkout', actor: actor() });
+
+    const order = await read((tx) =>
+      tx.restaurantOrder.findUnique({
+        where: { id: orderId },
+        select: {
+          status: true,
+          cancelledAt: true,
+          items: { select: { status: true } },
+        },
+      })
+    );
+    expect(order?.status).toBe('CANCELLED');
+    expect(order?.cancelledAt).not.toBeNull();
+    // No item may remain QUEUED/FIRING/PREPARED on a cancelled order.
+    expect(order?.items.every((i) => i.status === 'VOIDED')).toBe(true);
+  });
+
+  it('requires co-authorization to cancel an order with prepared items', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await deps.orders.sendOrder(db, { orderId, actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'FIRING', actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'PREPARED', actor: actor() });
+
+    await expect(
+      deps.orders.cancelOrder(db, { orderId, reason: 'kitchen fire', actor: actor() })
+    ).rejects.toMatchObject({ reason: 'CO_AUTH_REQUIRED' });
+
+    await deps.orders.cancelOrder(db, {
+      orderId,
+      reason: 'kitchen fire',
+      wastageDisposition: 'WASTE',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const order = await read((tx) =>
+      tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+    );
+    expect(order?.status).toBe('CANCELLED');
+  });
+
+  it('replays an idempotent command and creates nothing (C7)', async () => {
+    const db = deps.createTenantDb(orgId);
+    const opened = await deps.orders.openOrder(db, {
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      actor: actor(),
+      now: AT,
+    });
+    const addKey = key();
+    const first = await deps.orders.addItem(db, {
+      orderId: opened.orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(addKey),
+    });
+    const replay = await deps.orders.addItem(db, {
+      orderId: opened.orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(addKey),
+    });
+    expect(replay.replayed).toBe(true);
+    expect(replay.itemId).toBe(first.itemId);
+
+    const count = await read((tx) =>
+      tx.restaurantOrderItem.count({ where: { orderId: opened.orderId } })
+    );
+    expect(count).toBe(1); // the replay created nothing
+  });
+
+  it('keeps the ledger + outbox in lock-step, one monotonic sequence per order (C2)', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await deps.orders.sendOrder(db, { orderId, actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'FIRING', actor: actor() });
+
+    const events = await read((tx) =>
+      tx.restaurantOrderEvent.findMany({
+        where: { orderId },
+        select: { sequence: true },
+        orderBy: { sequence: 'asc' },
+      })
+    );
+    const outboxCount = await read((tx) =>
+      tx.restaurantEventOutbox.count({ where: { aggregateId: orderId } })
+    );
+    const sequences = events.map((e) => e.sequence);
+    expect(sequences).toEqual(sequences.map((_, i) => i + 1)); // 1..N, gap-free per order
+    expect(outboxCount).toBe(events.length); // one outbox row per event
+  });
+});

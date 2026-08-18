@@ -118,7 +118,11 @@ function mapDomainError(err: unknown): never {
       err.reason === 'PUBLICATION_NOT_FOUND' ||
       err.reason === 'ITEM_NOT_ON_MENU' ||
       err.reason === 'MODIFIER_NOT_FOUND';
-    const code = notFound ? 'NOT_FOUND' : err.reason === 'ITEM_UNAVAILABLE' ? 'CONFLICT' : 'BAD_REQUEST';
+    const code = notFound
+      ? 'NOT_FOUND'
+      : err.reason === 'ITEM_UNAVAILABLE'
+        ? 'CONFLICT'
+        : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
   }
   if (err instanceof OrderTransitionError || err instanceof OrderInvariantError) {
@@ -286,7 +290,9 @@ export const restaurantOrdersRouter = router({
     }),
 
   removeItem: manageProcedure
-    .input(z.object({ orderId: ID, itemId: ID, reason: z.string().nullish(), actor: ACTOR }).strict())
+    .input(
+      z.object({ orderId: ID, itemId: ID, reason: z.string().nullish(), actor: ACTOR }).strict()
+    )
     .mutation(async ({ ctx, input }) => {
       const result = await run(() =>
         removeItem(ctx.db, {
@@ -308,7 +314,9 @@ export const restaurantOrdersRouter = router({
   send: manageProcedure
     .input(z.object({ orderId: ID, actor: ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
-      const result = await run(() => sendOrder(ctx.db, { orderId: input.orderId, actor: toActor(input.actor) }));
+      const result = await run(() =>
+        sendOrder(ctx.db, { orderId: input.orderId, actor: toActor(input.actor) })
+      );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
@@ -322,7 +330,11 @@ export const restaurantOrdersRouter = router({
     .input(z.object({ orderId: ID, course: z.number().int().min(1), actor: ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
       const result = await run(() =>
-        fireCourse(ctx.db, { orderId: input.orderId, course: input.course, actor: toActor(input.actor) })
+        fireCourse(ctx.db, {
+          orderId: input.orderId,
+          course: input.course,
+          actor: toActor(input.actor),
+        })
       );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
@@ -337,7 +349,11 @@ export const restaurantOrdersRouter = router({
     .input(z.object({ orderId: ID, course: z.number().int().min(1), actor: ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
       const result = await run(() =>
-        holdCourse(ctx.db, { orderId: input.orderId, course: input.course, actor: toActor(input.actor) })
+        holdCourse(ctx.db, {
+          orderId: input.orderId,
+          course: input.course,
+          actor: toActor(input.actor),
+        })
       );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
@@ -392,7 +408,11 @@ export const restaurantOrdersRouter = router({
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
         description: 'Requested a remake',
-        metadata: { itemId: input.itemId, remakeItemId: result.remakeItemId, replayed: result.replayed },
+        metadata: {
+          itemId: input.itemId,
+          remakeItemId: result.remakeItemId,
+          replayed: result.replayed,
+        },
       });
       return result;
     }),
@@ -464,7 +484,9 @@ export const restaurantOrdersRouter = router({
   close: manageProcedure
     .input(z.object({ orderId: ID, actor: ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
-      const result = await run(() => closeOrder(ctx.db, { orderId: input.orderId, actor: toActor(input.actor) }));
+      const result = await run(() =>
+        closeOrder(ctx.db, { orderId: input.orderId, actor: toActor(input.actor) })
+      );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
@@ -489,7 +511,11 @@ export const restaurantOrdersRouter = router({
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
         description: 'Moved an order to another table',
-        metadata: { fromTableId: input.fromTableId, toTableId: input.toTableId, replayed: result.replayed },
+        metadata: {
+          fromTableId: input.fromTableId,
+          toTableId: input.toTableId,
+          replayed: result.replayed,
+        },
       });
       return result;
     }),
@@ -498,7 +524,11 @@ export const restaurantOrdersRouter = router({
     .input(z.object({ orderId: ID, tableIds: z.array(ID).min(1), actor: ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
       const result = await run(() =>
-        mergeTables(ctx.db, { orderId: input.orderId, tableIds: input.tableIds, actor: toActor(input.actor) })
+        mergeTables(ctx.db, {
+          orderId: input.orderId,
+          tableIds: input.tableIds,
+          actor: toActor(input.actor),
+        })
       );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
@@ -513,7 +543,11 @@ export const restaurantOrdersRouter = router({
     .input(z.object({ orderId: ID, tableId: ID, actor: ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
       const result = await run(() =>
-        unlinkTable(ctx.db, { orderId: input.orderId, tableId: input.tableId, actor: toActor(input.actor) })
+        unlinkTable(ctx.db, {
+          orderId: input.orderId,
+          tableId: input.tableId,
+          actor: toActor(input.actor),
+        })
       );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',

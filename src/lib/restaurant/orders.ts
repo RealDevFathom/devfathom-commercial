@@ -136,9 +136,7 @@ function runInTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): 
 
 // ── Idempotency (C7) ───────────────────────────────────────────────────────────
 
-type IdempotencyOutcome =
-  | { replay: false }
-  | { replay: true; resultRef: string | null };
+type IdempotencyOutcome = { replay: false } | { replay: true; resultRef: string | null };
 
 /**
  * Begin an idempotent command. If this (deviceId, key) has already run, returns a

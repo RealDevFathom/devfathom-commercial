@@ -520,3 +520,72 @@ promotion loses surfaces as `DEFAULT_CONFLICT`. Routing-rule re-targeting is del
 default, so a branch with stations always has exactly one and never an unrouteable gap, and a single
 XOR-validation path is simpler. · Revisited by per-station-group defaults or in-place rule
 re-targeting.
+
+**§11.1 / D14 (order & item command vocabulary — provisional) — send fires the whole order, fireCourse
+fires one course, both print KOTs (M4-L2)** · The concrete command/transition set is the interim
+authority pending D14's ADR (`order-state-machine.ts` owns the edges; `orders.ts` owns the commands):
+items are added `HELD`; `send` moves every `HELD` item across all courses to `QUEUED`, `fireCourse(n)`
+moves only course `n`'s `HELD` items to `QUEUED`, and BOTH generate kitchen tickets at that moment;
+`holdCourse(n)` recalls a course's `QUEUED` items back to `HELD`; `advanceItem` walks
+`QUEUED→FIRING→PREPARED→SERVED` (and `REMAKE_REQUESTED→SERVED` to accept a remake back). · Conservative
+because it exercises every §11.1 item state with the fewest commands, keeps KOT generation in one
+shared primitive reachable by both send and fire, and reads the "KOT at fire time" rule as "at
+send-to-kitchen time". · Revisited by the D14 order/item invariant + transition ADR.
+
+**§11.1 (order opens directly as OPEN) — DRAFT is a reserved seam (M4-L2)** · `openOrder` creates the
+order already `OPEN` (schema default `DRAFT` is bypassed) with `openedAt` stamped and one `order.opened`
+ledger event. · Conservative because M4 has no pre-open draft-cart surface, so a two-step
+`DRAFT→OPEN` would only add a second event with no behaviour; `DRAFT` stays available for a future
+draft-cart flow. · Revisited when a draft-cart/quote surface needs the `DRAFT` state.
+
+**C4 (order-level price-list-version ref) — publication's list version stamped at open; per-item price
+frozen at add (M4-L2)** · An order stamps `publicationId` + `priceListVersionId` at open, where the
+version is the publication's own price list's effective version at the open instant (null when the
+publication carries no list). Each item independently freezes its winning unit price at add time via
+the M3 effective-menu precedence (item override > publication list > org base list), so an item priced
+from the base list or an override still carries its exact snapshot even though the order-level
+`priceListVersionId` names the publication list. Adding menu items requires the order to carry a
+`publicationId` (`NO_PUBLICATION` otherwise). · Conservative because the schema holds one
+version ref on the order, and snapshot-on-write on the item is what actually guarantees immutability. ·
+Revisited when tax/service-charge config (which the zero-valued item fields reserve) lands.
+
+**KOT ticket numbering — per-(station, businessDate) compute-max + unique-index backstop (M4-L2)** ·
+Unlike order numbers (a locked sequence row), a kitchen ticket's number is `max(ticketNumber)+1` for
+its `(station, businessDate)`; the unique `(stationId, businessDate, ticketNumber)` index is the
+concurrency backstop — a losing concurrent fire to the same station rolls back and the client retries.
+Numbers are unique + monotone, not gap-free. · Conservative because tickets are far lower-contention
+than order numbers and reusing the same fail-closed discipline avoids a second sequence table. ·
+Revisited if a busy pass shows ticket-number contention worth a dedicated sequence row.
+
+**C7 (idempotency) — findUnique-first, fail-closed on the concurrent duplicate (M4-L2)** · A
+terminal-submitted command looks up its `(deviceId, key)` first; a hit replays (re-reads the original
+result, creates nothing), a miss records the key and proceeds. A genuinely concurrent duplicate that
+loses the unique-index race rolls its whole transaction back; the client's retry then observes the
+committed key and replays. · Conservative because sequential replay (the common terminal retry) is
+exact and the concurrent case degrades to a safe retry rather than a double-write. · Revisited if a
+savepoint-based in-transaction replay is needed.
+
+**C6/C8 (M4-L2 back-office router surface) — session-capability gate; attribution passed explicitly**
+· `restaurant-orders.ts` is the manager/back-office surface: reads gate on `orders:read`, mutations on
+`orders:manage`, both org-role-driven (no static policy). Every mutating call carries the acting
+`staffProfileId`, the registered `deviceId` and the device-scoped `idempotencyKey` explicitly in its
+input (C6/C7), rather than deriving them from the session. The device-authenticated terminal/KDS
+transport (M2 `withDeviceAuth`, capabilities `orders:take`/`kitchen:operate`) is a separate surface not
+shipped in this lane. · Conservative because it keeps the command layer's attribution contract intact
+and lets a console drive the full lifecycle now without inventing a session→staff-profile binding. ·
+Revisited when the terminal/KDS device routes are built.
+
+**§11.1 (post-preparation boundary) — FIRING onward requires co-auth to void/cancel (M4-L2)** · An item
+is "post preparation" once it is `FIRING`, `PREPARED`, `SERVED` or `REMAKE_REQUESTED`; voiding one (or
+cancelling an order that still holds one) requires a co-authorization + a recorded wastage disposition.
+Pre-prep items (`HELD`/`QUEUED`) void on a reason alone. The disposition + outbox event are recorded;
+no inventory mutation exists until the inventory milestone. · Conservative because `FIRING` is the
+first state in which the kitchen has committed effort/cost, so it is the earliest defensible co-auth
+boundary. · Revisited by the inventory/stock-policy milestone.
+
+**§11.2 (table attribution) — tables only on dine-in; merge adds links; move keeps history (M4-L2)** ·
+Tables attach only to a `DINE_IN` order (`CHANNEL_TABLE` otherwise); `moveTable` deactivates the source
+link (`unlinkedAt` stamped) and creates a `MOVE` link; `mergeTables` adds `MERGE` links (several active
+links under one order); `unlinkTable` deactivates. Combining two OPEN orders into one order is deferred.
+· Conservative because it models seat/move/merge from the link-history table without a cross-order
+merge, which needs an ownership-transfer design. · Revisited by the check-splitting/merging milestone.
