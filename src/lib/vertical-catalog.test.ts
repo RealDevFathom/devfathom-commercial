@@ -116,6 +116,61 @@ describe('role templates and capabilities (§8)', () => {
     expect(roleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_ROLE_TEMPLATES);
     expect(roleTemplatesForVertical('AGENCY')).toEqual([]);
   });
+
+  it('every catalog capability draws its namespace from the namespace list', () => {
+    const namespaces = new Set(RESTAURANT_CAPABILITY_NAMESPACES);
+    for (const capability of RESTAURANT_CAPABILITIES) {
+      expect(namespaces.has(capability.split(':')[0]!)).toBe(true);
+    }
+  });
+
+  it('capability keys and namespaces are unique (no duplicate reconciliation)', () => {
+    expect(new Set(RESTAURANT_CAPABILITIES).size).toBe(RESTAURANT_CAPABILITIES.length);
+    expect(new Set(RESTAURANT_CAPABILITY_NAMESPACES).size).toBe(
+      RESTAURANT_CAPABILITY_NAMESPACES.length
+    );
+  });
+});
+
+describe('M2-L1 capability reconciliation (additive-only)', () => {
+  it('adds exactly the five M2-L1 capability keys', () => {
+    for (const capability of [
+      'staff:manage',
+      'devices:manage',
+      'devices:revoke',
+      'terminal:operate',
+      'coauth:approve',
+    ]) {
+      expect(RESTAURANT_CAPABILITIES).toContain(capability);
+    }
+  });
+
+  it('adds the staff/devices/terminal/coauth namespaces', () => {
+    for (const namespace of ['staff', 'devices', 'terminal', 'coauth']) {
+      expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain(namespace);
+    }
+  });
+
+  it('preserves the 14 M1 namespaces (no removal or rename)', () => {
+    for (const namespace of [
+      'restaurant',
+      'branches',
+      'pos',
+      'orders',
+      'payments',
+      'cash',
+      'menu',
+      'inventory',
+      'purchasing',
+      'sop',
+      'customers',
+      'loyalty',
+      'reports',
+      'workforce',
+    ]) {
+      expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain(namespace);
+    }
+  });
 });
 
 describe('commercial packages (§13)', () => {

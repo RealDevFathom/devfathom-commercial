@@ -148,6 +148,7 @@ enum AuditActorType {
   API_TOKEN // a df_ REST API token acting on behalf of a user
   ANONYMOUS // no authenticated identity (e.g. a failed login attempt)
   SYSTEM // an automated/internal process
+  RESTAURANT_OPERATOR // a restaurant staff operator acting at a terminal (M2 — not a User)
 }
 
 enum AuditSource {
@@ -487,6 +488,10 @@ model User {
   meetingSessions             MeetingParticipantSession[]
   // §4.1: restaurant branch assignments (branch-level authorization seam).
   restaurantBranchAssignments RestaurantBranchAssignment[]
+  // M2-L1/C3: optional one-way link from an operator staff profile back to a
+  // web-login User. A User may back zero or many staff profiles; a staff
+  // profile need not have one at all.
+  restaurantStaffProfiles     RestaurantStaffProfile[]       @relation("RestaurantStaffUser")
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -2229,7 +2234,11 @@ model RestaurantBranch {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  assignments RestaurantBranchAssignment[]
+  assignments       RestaurantBranchAssignment[]
+  // M2-L1: staff pinned to this branch as their primary, and devices registered
+  // to this branch. Both are org-scoped and branch-scoped seams (§4.1/D12).
+  staffProfiles     RestaurantStaffProfile[]     @relation("RestaurantStaffPrimaryBranch")
+  registeredDevices RestaurantRegisteredDevice[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
@@ -2254,6 +2263,189 @@ model RestaurantBranchAssignment {
   @@index([organizationId])
   @@index([userId])
   @@map("restaurant_branch_assignments")
+}
+
+// ===========================================================================
+// M2 — Restaurant staff, operator credentials, devices, terminal sessions and
+// co-authorization. Every model below is org-scoped under forced RLS (C1); the
+// credential/token/secret material is stored hashed-at-rest only (C2/C4/C5);
+// the co-authorization record is the C7 evidence primitive shared by the L2
+// back-office and L3 terminal paths.
+// ===========================================================================
+
+/// M2/C4/§9: lifecycle of a staff operator profile. A profile is never a User —
+/// suspension and archival gate operator sign-in without touching any web login.
+enum RestaurantStaffStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+/// M2/C4: the two operator credential kinds. PIN is a short numeric secret;
+/// BADGE is a scanned/tapped token. Both are stored only as a salted slow hash.
+/// No WebAuthn/biometric kind exists (C4 — deferred).
+enum RestaurantOperatorCredentialType {
+  PIN
+  BADGE
+}
+
+/// M2/C5: a registered device is either trusted (ACTIVE) or de-authorized
+/// (REVOKED). Revocation is re-checked in the DB on every terminal call.
+enum RestaurantRegisteredDeviceStatus {
+  ACTIVE
+  REVOKED
+}
+
+/// §4.1/§9/C3: a restaurant staff operator. Deliberately NOT a `User`: an
+/// operator can exist with no web-login identity at all, so `userId` is an
+/// optional, one-way link and `email` is optional (unique within the
+/// organization only when present — a partial unique index enforces that in the
+/// migration, since Prisma cannot express a filtered unique). Org-scoped under
+/// forced RLS; the operator's credentials and sessions hang off this row.
+model RestaurantStaffProfile {
+  id              String                @id @default(cuid())
+  organizationId  String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId          String?
+  email           String?
+  displayName     String
+  primaryBranchId String?
+  status          RestaurantStaffStatus @default(ACTIVE)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  user             User?                          @relation("RestaurantStaffUser", fields: [userId], references: [id], onDelete: SetNull)
+  primaryBranch    RestaurantBranch?              @relation("RestaurantStaffPrimaryBranch", fields: [primaryBranchId], references: [id], onDelete: SetNull)
+  credentials      RestaurantOperatorCredential[]
+  terminalSessions RestaurantTerminalSession[]    @relation("TerminalSessionActiveStaff")
+  actingCoAuths    RestaurantCoAuthorization[]    @relation("CoAuthActingStaff")
+  approvingCoAuths RestaurantCoAuthorization[]    @relation("CoAuthApprovingStaff")
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([primaryBranchId])
+  @@map("restaurant_staff_profiles")
+}
+
+/// §9/C2/C4: an operator credential. Structurally unreachable from web login —
+/// it references a staff profile, never a `User`, and carries no plaintext
+/// column: only `credentialHash` (a salted slow hash) is stored. `deviceId` is
+/// the optional device scope (null = valid across the organization's terminals
+/// for this operator). The lockout counters (`failedAttempts`, `lockedUntil`)
+/// and `revokedAt` are durable on the row (C4 — never a per-instance cache);
+/// exactly one active (non-revoked) credential may exist per
+/// (organization, staff, type, device) — enforced by a partial unique index in
+/// the migration.
+model RestaurantOperatorCredential {
+  id             String                           @id @default(cuid())
+  organizationId String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  staffProfileId String
+  deviceId       String?
+  type           RestaurantOperatorCredentialType
+  credentialHash String
+  failedAttempts Int                              @default(0)
+  lockedUntil    DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime                         @default(now())
+  updatedAt      DateTime                         @updatedAt
+
+  staffProfile RestaurantStaffProfile      @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+  device       RestaurantRegisteredDevice? @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([staffProfileId])
+  @@index([deviceId])
+  @@map("restaurant_operator_credentials")
+}
+
+/// §5/C5: a device trusted to act as a POS/KDS terminal. Enrollment mints a
+/// high-entropy device secret; only its hash (`deviceSecretHash`, globally
+/// unique like other secret hashes) is stored. A device belongs to one branch;
+/// `status`/`revokedAt` are re-checked in the DB on every terminal call so a
+/// revoked device cannot keep operating from a stale client cache.
+model RestaurantRegisteredDevice {
+  id               String                           @id @default(cuid())
+  organizationId   String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  name             String
+  deviceSecretHash String                           @unique
+  status           RestaurantRegisteredDeviceStatus @default(ACTIVE)
+  lastSeenAt       DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @updatedAt
+
+  branch           RestaurantBranch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  credentials      RestaurantOperatorCredential[]
+  terminalSessions RestaurantTerminalSession[]
+  coAuthorizations RestaurantCoAuthorization[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([status])
+  @@map("restaurant_registered_devices")
+}
+
+/// §5/C5: an established terminal session on a registered device. The session
+/// token is stored only as a hash (`tokenHash`, globally unique for lookup).
+/// `activeStaffProfileId` is nullable — a terminal can be established and locked
+/// with no operator bound. Validity is re-derived in the DB every call from the
+/// device status, session end state, and credential revocation; client time is
+/// never trusted (C5).
+model RestaurantTerminalSession {
+  id                   String    @id @default(cuid())
+  organizationId       String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  deviceId             String
+  activeStaffProfileId String?
+  tokenHash            String    @unique
+  establishedAt        DateTime  @default(now())
+  lastActivityAt       DateTime  @default(now())
+  endedAt              DateTime?
+  updatedAt            DateTime  @updatedAt
+
+  device             RestaurantRegisteredDevice  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  activeStaffProfile RestaurantStaffProfile?     @relation("TerminalSessionActiveStaff", fields: [activeStaffProfileId], references: [id], onDelete: SetNull)
+  coAuthorizations   RestaurantCoAuthorization[]
+
+  @@index([organizationId])
+  @@index([deviceId])
+  @@index([activeStaffProfileId])
+  @@index([endedAt])
+  @@map("restaurant_terminal_sessions")
+}
+
+/// C6/C7: the co-authorization evidence record. A sensitive action taken by the
+/// acting operator is authorized by a distinct approving manager — approval
+/// ADDS the manager's identity, it never replaces the actor (C6). The record
+/// pins both staff identities, the capability/action, the target, the reason,
+/// the device and terminal session (present for the L3 terminal path, null for
+/// the L2 back-office path), and a SERVER timestamp (`createdAt` — client time
+/// is untrusted). The two staff foreign keys use ON DELETE RESTRICT so this
+/// evidence cannot be silently erased by deleting a profile (archival is the
+/// intended path). Append-only by contract; L1 owns no mutation of it.
+model RestaurantCoAuthorization {
+  id                      String   @id @default(cuid())
+  organizationId          String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  actingStaffProfileId    String
+  approvingStaffProfileId String
+  capability              String
+  targetType              String?
+  targetId                String?
+  reason                  String
+  deviceId                String?
+  terminalSessionId       String?
+  createdAt               DateTime @default(now())
+
+  actingStaffProfile    RestaurantStaffProfile      @relation("CoAuthActingStaff", fields: [actingStaffProfileId], references: [id], onDelete: Restrict)
+  approvingStaffProfile RestaurantStaffProfile      @relation("CoAuthApprovingStaff", fields: [approvingStaffProfileId], references: [id], onDelete: Restrict)
+  device                RestaurantRegisteredDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  terminalSession       RestaurantTerminalSession?  @relation(fields: [terminalSessionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([actingStaffProfileId])
+  @@index([approvingStaffProfileId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("restaurant_co_authorizations")
 }
 
 model PlatformUser {

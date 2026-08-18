@@ -237,6 +237,13 @@ export const RESTAURANT_CAPABILITY_NAMESPACES: readonly string[] = [
   'loyalty',
   'reports',
   'workforce',
+  // M2-L1 (additive): staff-operator, device, terminal and co-authorization
+  // namespaces. Reconciled against the 14 M1 namespaces above — appended, never
+  // renaming or removing an existing one.
+  'staff',
+  'devices',
+  'terminal',
+  'coauth',
 ];
 
 /** The example capability set from §8 (namespace:action), plus the restricted
@@ -271,6 +278,15 @@ export const RESTAURANT_CAPABILITIES: readonly string[] = [
   'reports:operational',
   'reports:financial',
   'workforce:rates',
+  // M2-L1 (additive): the staff/operator/device/terminal/co-authorization
+  // capabilities the M2 surfaces enforce. Additive-only — no existing capability
+  // is removed, renamed, or reassigned. Wiring them onto role templates is a
+  // downstream decision (L2/L3); L1 only reconciles the capability keys here.
+  'staff:manage',
+  'devices:manage',
+  'devices:revoke',
+  'terminal:operate',
+  'coauth:approve',
 ];
 
 export type RoleTemplate = {

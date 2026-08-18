@@ -331,6 +331,20 @@ async function main() {
     const branchB = `branch_b_${suffix}`;
     const assignmentA = `assignment_a_${suffix}`;
     const assignmentB = `assignment_b_${suffix}`;
+    // M2-L1: staff/operator/device/session/co-authorization ids. Two staff
+    // profiles per tenant so the co-authorization can pin two distinct identities.
+    const staffA1 = `staff_a1_${suffix}`;
+    const staffA2 = `staff_a2_${suffix}`;
+    const staffB1 = `staff_b1_${suffix}`;
+    const staffB2 = `staff_b2_${suffix}`;
+    const deviceA = `device_a_${suffix}`;
+    const deviceB = `device_b_${suffix}`;
+    const credentialA = `credential_a_${suffix}`;
+    const credentialB = `credential_b_${suffix}`;
+    const sessionA = `terminal_session_a_${suffix}`;
+    const sessionB = `terminal_session_b_${suffix}`;
+    const coAuthA = `coauth_a_${suffix}`;
+    const coAuthB = `coauth_b_${suffix}`;
     await client.query(
       `INSERT INTO "api_tokens" (
         "id", "organizationId", "name", "prefix", "tokenHash", "scopes", "userId"
@@ -386,6 +400,85 @@ async function main() {
       [assignmentA, branchA, userA, assignmentB, organizationB, branchB, userB]
     );
 
+    // M2-L1: staff operators, devices, credentials, terminal sessions and
+    // co-authorizations. One (or two, for staff) mirrored row per tenant per
+    // table so every read below distinguishes "isolated" from "empty".
+    await client.query(
+      `INSERT INTO "restaurant_staff_profiles" (
+        "id", "organizationId", "displayName", "primaryBranchId", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', 'Tenant A Operator', $2, CURRENT_TIMESTAMP),
+        ($3, 'org_devfathom', 'Tenant A Manager', $2, CURRENT_TIMESTAMP),
+        ($4, $5, 'Tenant B Operator', $6, CURRENT_TIMESTAMP),
+        ($7, $5, 'Tenant B Manager', $6, CURRENT_TIMESTAMP)`,
+      [staffA1, branchA, staffA2, staffB1, organizationB, branchB, staffB2]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_registered_devices" (
+        "id", "organizationId", "branchId", "name", "deviceSecretHash", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, 'Tenant A POS', $3, CURRENT_TIMESTAMP),
+        ($4, $5, $6, 'Tenant B POS', $7, CURRENT_TIMESTAMP)`,
+      [deviceA, branchA, `device-hash-a-${suffix}`, deviceB, organizationB, branchB, `device-hash-b-${suffix}`]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_operator_credentials" (
+        "id", "organizationId", "staffProfileId", "deviceId", "type", "credentialHash", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, 'PIN', $4, CURRENT_TIMESTAMP),
+        ($5, $6, $7, $8, 'PIN', $9, CURRENT_TIMESTAMP)`,
+      [
+        credentialA,
+        staffA1,
+        deviceA,
+        `pin-hash-a-${suffix}`,
+        credentialB,
+        organizationB,
+        staffB1,
+        deviceB,
+        `pin-hash-b-${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_terminal_sessions" (
+        "id", "organizationId", "deviceId", "activeStaffProfileId", "tokenHash", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, $4, CURRENT_TIMESTAMP),
+        ($5, $6, $7, $8, $9, CURRENT_TIMESTAMP)`,
+      [
+        sessionA,
+        deviceA,
+        staffA1,
+        `session-hash-a-${suffix}`,
+        sessionB,
+        organizationB,
+        deviceB,
+        staffB1,
+        `session-hash-b-${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_co_authorizations" (
+        "id", "organizationId", "actingStaffProfileId", "approvingStaffProfileId",
+        "capability", "reason", "deviceId", "terminalSessionId"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, 'orders:void', 'Tenant A void', $4, $5),
+        ($6, $7, $8, $9, 'orders:void', 'Tenant B void', $10, $11)`,
+      [
+        coAuthA,
+        staffA1,
+        staffA2,
+        deviceA,
+        sessionA,
+        coAuthB,
+        organizationB,
+        staffB1,
+        staffB2,
+        deviceB,
+        sessionB,
+      ]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -414,6 +507,12 @@ async function main() {
       ['webhook_deliveries', deliveryA, deliveryB],
       ['restaurant_branches', branchA, branchB],
       ['restaurant_branch_assignments', assignmentA, assignmentB],
+      // M2-L1: explicit read/update/delete isolation for the five new tables.
+      ['restaurant_staff_profiles', staffA1, staffB1],
+      ['restaurant_registered_devices', deviceA, deviceB],
+      ['restaurant_operator_credentials', credentialA, credentialB],
+      ['restaurant_terminal_sessions', sessionA, sessionB],
+      ['restaurant_co_authorizations', coAuthA, coAuthB],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -528,6 +627,58 @@ async function main() {
         [`branch_escape_${suffix}`, organizationB]
       )
     );
+
+    // M2-L1: each new table's WITH CHECK must fail closed — a tenant A scope may
+    // not mint a staff profile, device, credential, terminal session, or
+    // co-authorization owned by another organization. The referenced parents are
+    // real org-B rows, so the 42501 is the RLS policy firing, not a dangling FK.
+    const restaurantWriteDenied: Array<[sql: string, values: unknown[]]> = [
+      [
+        `INSERT INTO "restaurant_staff_profiles" ("id", "organizationId", "displayName", "updatedAt")
+         VALUES ($1, $2, 'Escape Operator', CURRENT_TIMESTAMP)`,
+        [`deny_staff_${suffix}`, organizationB],
+      ],
+      [
+        `INSERT INTO "restaurant_registered_devices" (
+          "id", "organizationId", "branchId", "name", "deviceSecretHash", "updatedAt"
+        ) VALUES ($1, $2, $3, 'Escape POS', $4, CURRENT_TIMESTAMP)`,
+        [`deny_device_${suffix}`, organizationB, branchB, `device-hash-escape-${suffix}`],
+      ],
+      [
+        `INSERT INTO "restaurant_operator_credentials" (
+          "id", "organizationId", "staffProfileId", "type", "credentialHash", "updatedAt"
+        ) VALUES ($1, $2, $3, 'PIN', $4, CURRENT_TIMESTAMP)`,
+        [`deny_credential_${suffix}`, organizationB, staffB1, `pin-hash-escape-${suffix}`],
+      ],
+      [
+        `INSERT INTO "restaurant_terminal_sessions" (
+          "id", "organizationId", "deviceId", "tokenHash", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+        [`deny_session_${suffix}`, organizationB, deviceB, `session-hash-escape-${suffix}`],
+      ],
+      [
+        `INSERT INTO "restaurant_co_authorizations" (
+          "id", "organizationId", "actingStaffProfileId", "approvingStaffProfileId", "capability", "reason"
+        ) VALUES ($1, $2, $3, $4, 'orders:void', 'escape')`,
+        [`deny_coauth_${suffix}`, organizationB, staffB1, staffB2],
+      ],
+    ];
+    for (const [sql, values] of restaurantWriteDenied) {
+      await expectDatabaseError('42501', () => client.query(sql, values));
+    }
+
+    // M2-L1: owning the organizationId is not enough — the staff profile a
+    // credential points at must be the same tenant's too. A tenant A credential
+    // referencing tenant B's operator trips the deferred composite tenant FK.
+    await expectDatabaseError('23503', async () => {
+      await client.query(
+        `INSERT INTO "restaurant_operator_credentials" (
+          "id", "organizationId", "staffProfileId", "type", "credentialHash", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', $2, 'PIN', $3, CURRENT_TIMESTAMP)`,
+        [`cross_credential_${suffix}`, staffB1, `pin-hash-cross-${suffix}`]
+      );
+      await client.query(`SET CONSTRAINTS "tenant_rest_cred_staffProfileId_fk" IMMEDIATE`);
+    });
 
     // MEET-01: a tenant scope may not insert a meeting row that belongs to
     // another organization.
@@ -718,7 +869,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);
