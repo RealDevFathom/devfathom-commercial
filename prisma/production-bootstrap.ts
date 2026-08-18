@@ -1,6 +1,7 @@
 import { hash } from 'bcryptjs';
 
 import type { Prisma } from '../src/generated/prisma/client.js';
+import { RESTAURANT_MODULES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
 
 export const PLATFORM_MODULES = [
   ['dashboard', 'Dashboard', 'Core', '/dashboard'],
@@ -82,6 +83,7 @@ export async function bootstrapProduction(
       key: 'agency-suite',
       name: 'Agency Suite',
       description: 'Complete DevFathom agency operating system.',
+      vertical: 'AGENCY',
       defaultSeats: 25,
     },
   });
@@ -119,6 +121,47 @@ export async function bootstrapProduction(
     // §2.3: the bootstrap org inherits its modules live from the package
     // (platform_package_modules); no OrganizationModule copy. assertActivationReady
     // remains satisfied by the package's moduleLinks.
+  }
+
+  const restaurantModuleIds = new Map<string, string>();
+  for (const module of RESTAURANT_MODULES) {
+    const platformModule = await tx.platformModule.upsert({
+      where: { key: module.key },
+      update: {},
+      create: {
+        key: module.key,
+        name: module.name,
+        category: module.category,
+        routePrefix: module.routePrefix,
+      },
+    });
+    restaurantModuleIds.set(module.key, platformModule.id);
+  }
+
+  for (const restaurantPackage of RESTAURANT_PACKAGES) {
+    const platformPackage = await tx.platformPackage.upsert({
+      where: { key: restaurantPackage.key },
+      update: {},
+      create: {
+        key: restaurantPackage.key,
+        name: restaurantPackage.name,
+        vertical: restaurantPackage.vertical,
+      },
+    });
+
+    for (const moduleKey of restaurantPackage.moduleKeys) {
+      const moduleId = restaurantModuleIds.get(moduleKey);
+      if (!moduleId) throw new Error(`Unknown restaurant module: ${moduleKey}`);
+      await tx.platformPackageModule.upsert({
+        where: { packageId_moduleId: { packageId: platformPackage.id, moduleId } },
+        update: {},
+        create: {
+          packageId: platformPackage.id,
+          moduleId,
+          limits: moduleKey === 'restaurant-core' ? restaurantPackage.defaultLimits : undefined,
+        },
+      });
+    }
   }
 
   const adminRole = await tx.organizationRole.upsert({

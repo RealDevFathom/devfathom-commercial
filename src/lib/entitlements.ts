@@ -34,6 +34,10 @@ export async function resolveOrganizationEntitlements(
           id: true,
           seatLimit: true,
           packageId: true,
+          // §2.3 — additive: surfaced on the view below. Selecting one more
+          // scalar does not affect the package → contract → override resolution
+          // order applied further down.
+          vertical: true,
         },
       }),
       db.organizationModule.findMany({
@@ -193,6 +197,7 @@ export async function resolveOrganizationEntitlements(
   }));
   return {
     organizationId,
+    vertical: organization.vertical,
     seatLimit: effectiveSeatLimit,
     activeSeats,
     enabledModules: serializedModules

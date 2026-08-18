@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { moduleForApiScope, moduleForPath, moduleForProcedure } from './module-catalog';
+import {
+  moduleForApiScope,
+  moduleForPath,
+  moduleForProcedure,
+  verticalForModuleKey,
+} from './module-catalog';
 
 describe('module catalog routing', () => {
   it.each([
@@ -32,5 +37,25 @@ describe('module catalog routing', () => {
     expect(moduleForPath('/project-settings')).toBeNull();
     expect(moduleForPath('/organization')).toBeNull();
     expect(moduleForPath('/api-docs')).toBeNull();
+  });
+});
+
+describe('module vertical ownership', () => {
+  it.each([
+    ['restaurant-core', 'RESTAURANT'],
+    ['restaurant-pos', 'RESTAURANT'],
+    ['restaurant-integrations', 'RESTAURANT'],
+  ])('maps restaurant module %s to %s', (key, expected) => {
+    expect(verticalForModuleKey(key)).toBe(expected);
+  });
+
+  it.each([
+    ['dashboard'],
+    ['projects'],
+    ['finance'],
+    ['hr'],
+    ['not-a-real-module'],
+  ])('treats non-restaurant module %s as AGENCY', (key) => {
+    expect(verticalForModuleKey(key)).toBe('AGENCY');
   });
 });

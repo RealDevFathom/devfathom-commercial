@@ -27,6 +27,15 @@ The seeded catalog maps product surfaces and API scopes to keys such as:
 
 `src/lib/module-catalog.ts` is authoritative for navigation, tRPC procedure, and REST scope mappings.
 
+## Package vertical metadata
+
+Every package records one organization vertical. Production bootstrap creates `agency-suite` as
+`AGENCY` and the three package definitions from `src/lib/vertical-catalog.ts` as `RESTAURANT`.
+Package assignment must match the organization vertical.
+
+Restaurant package rows, module links, and provisional D10 limits are catalog metadata only. They
+do not seed restaurant tenant data or claim that linked restaurant features are implemented.
+
 ## Enforcement layers
 
 - Sidebar items are hidden through `EntitlementsProvider`.

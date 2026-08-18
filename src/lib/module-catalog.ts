@@ -1,5 +1,15 @@
+import { isRestaurantModuleKey, type OrganizationVertical } from '@/lib/vertical-catalog';
+
 export type EntitlementView = {
   organizationId: string;
+  /**
+   * §2.3 — the organization's operating vertical, surfaced additively so
+   * downstream consumers can branch on it via the L1 catalog instead of
+   * re-deriving it. Optional to keep the shape strictly additive: every
+   * pre-existing `EntitlementView` literal (including agency tests) stays valid,
+   * while `resolveOrganizationEntitlements` always populates it.
+   */
+  vertical?: OrganizationVertical;
   seatLimit: number;
   activeSeats: number;
   enabledModules: string[];
@@ -13,6 +23,17 @@ export type EntitlementView = {
   }>;
   limits: Record<string, number>;
 };
+
+/**
+ * §2.3 / §6 — the vertical that owns a platform-module key. Restaurant module
+ * keys are defined by the single server-owned vertical catalog; every other
+ * catalog module belongs to the AGENCY platform registry. The enablement guard
+ * consults this rather than branching on the vertical inline, so the key list
+ * lives only in the catalog.
+ */
+export function verticalForModuleKey(key: string): OrganizationVertical {
+  return isRestaurantModuleKey(key) ? 'RESTAURANT' : 'AGENCY';
+}
 
 const PROCEDURE_MODULES: Record<string, string> = {
   dashboard: 'dashboard',

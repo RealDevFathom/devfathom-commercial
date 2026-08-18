@@ -18,6 +18,14 @@ import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
+import { OrganizationVertical } from '@/generated/prisma/enums';
+import {
+  isPackageCompatibleWithVertical,
+  mandatoryModulesForVertical,
+  modulesForVertical,
+  roleTemplatesForVertical,
+} from '@/lib/vertical-catalog';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 
 const id = z
   .string()
@@ -66,6 +74,9 @@ const hostname = z
   .max(253)
   .regex(/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/);
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+// §2 — the organization operating model. The literal values come from the
+// generated Prisma enum, so the vertical list is never re-typed here.
+const vertical = z.enum(OrganizationVertical);
 
 const COMMAND_CAPABILITY: Record<string, string> = {
   organization: 'organizations:write',
@@ -220,6 +231,77 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
   if (missing.length) {
     throw new PlatformSecurityError(`Activation preflight failed: add ${missing.join(', ')}.`, 400);
   }
+
+  // §9 Step 7 — restaurant activation preflight (the implementable subset). The
+  // agency path is complete above and returns here with byte-identical behavior;
+  // the checks below only run for restaurant organizations. Operator credential
+  // and device-policy checks are deferred with D11.
+  if (organization.vertical !== 'RESTAURANT') return;
+
+  const restaurantMissing: string[] = [];
+
+  // §2.3 — the assigned package must belong to the restaurant vertical.
+  if (
+    !organization.package ||
+    !isPackageCompatibleWithVertical(organization.package.vertical ?? 'AGENCY', organization.vertical)
+  ) {
+    restaurantMissing.push('a restaurant-compatible commercial package');
+  }
+
+  // Resolve the effective set of enabled restaurant module keys: the package
+  // baseline (inherited live) with organization overrides layered on top, in the
+  // resolver's package → override order. Only restaurant modules are relevant, so
+  // ids are mapped to keys through the catalog's restaurant module set.
+  const restaurantModuleKeys = modulesForVertical('RESTAURANT').map((module) => module.key);
+  const restaurantCatalogModules = await db.platformModule.findMany({
+    where: { key: { in: restaurantModuleKeys } },
+    select: { id: true, key: true },
+  });
+  const keyByModuleId = new Map(
+    restaurantCatalogModules.map((module) => [module.id, module.key] as const)
+  );
+  const enabledKeys = new Set<string>();
+  for (const link of organization.package?.moduleLinks ?? []) {
+    const key = keyByModuleId.get(link.moduleId);
+    if (key) enabledKeys.add(key);
+  }
+  const moduleOverrides = await db.organizationModule.findMany({
+    where: { organizationId },
+    select: { moduleId: true, status: true },
+  });
+  for (const override of moduleOverrides) {
+    const key = keyByModuleId.get(override.moduleId);
+    if (!key) continue;
+    if (override.status === 'ENABLED' || override.status === 'TRIAL') enabledKeys.add(key);
+    else enabledKeys.delete(key);
+  }
+
+  // §6.1 — Restaurant Core is mandatory; §9 Step 7 additionally requires at least
+  // one operational module enabled beyond it.
+  const coreKeys = mandatoryModulesForVertical('RESTAURANT').map((module) => module.key);
+  if (!coreKeys.every((key) => enabledKeys.has(key))) {
+    restaurantMissing.push('the mandatory Restaurant Core module');
+  }
+  const additionalOperational = [...enabledKeys].filter((key) => !coreKeys.includes(key));
+  if (additionalOperational.length === 0) {
+    restaurantMissing.push('at least one additional restaurant operational module');
+  }
+
+  // §4 / §9 Steps 3/5 — exactly one active default branch.
+  const defaultBranches = await db.restaurantBranch.findMany({
+    where: { organizationId, isDefault: true, active: true },
+    select: { id: true },
+  });
+  if (defaultBranches.length !== 1) {
+    restaurantMissing.push('exactly one active default restaurant branch');
+  }
+
+  if (restaurantMissing.length) {
+    throw new PlatformSecurityError(
+      `Activation preflight failed: add ${restaurantMissing.join(', ')}.`,
+      400
+    );
+  }
 }
 
 async function syncContractEntitlements(
@@ -274,6 +356,8 @@ async function syncContractEntitlements(
 }
 
 const organizationInput = z.object({
+  // §2 — default AGENCY keeps every existing onboarding payload valid.
+  vertical: vertical.default('AGENCY'),
   slug,
   legalName: requiredText,
   displayName: requiredText,
@@ -306,12 +390,23 @@ async function bootstrapOrganization(
   if (!packageRecord?.active) {
     throw new PlatformSecurityError('Choose an active commercial package.', 400);
   }
+  // §2.3 — the package must belong to the chosen vertical. Onboarding filters the
+  // choices, but the server rejects a mismatch even from a crafted request. The
+  // vertical column is NOT NULL DEFAULT 'AGENCY', so a nullish value is read as
+  // AGENCY (faithful to the schema default).
+  if (!isPackageCompatibleWithVertical(packageRecord.vertical ?? 'AGENCY', input.vertical)) {
+    throw new PlatformSecurityError(
+      `The selected package is not available for the ${input.vertical} vertical.`,
+      400
+    );
+  }
   const password = await hash(input.adminPassword, 12);
   const organization = await db.organization.create({
     data: {
       slug: input.slug,
       legalName: input.legalName,
       displayName: input.displayName,
+      vertical: input.vertical,
       status: 'ONBOARDING',
       deploymentMode: input.deploymentMode,
       packageId: input.packageId,
@@ -349,7 +444,7 @@ async function bootstrapOrganization(
   if (existingAdmin) {
     throw new PlatformSecurityError('A user with this email already exists.', 409);
   }
-  await db.user.create({
+  const admin = await db.user.create({
     data: {
       organizationId: organization.id,
       organizationRoleId: adminRole.id,
@@ -362,6 +457,44 @@ async function bootstrapOrganization(
       status: 'ACTIVE',
     },
   });
+  // §9 Steps 3/5/6 — restaurant onboarding is branch-first. Create the single
+  // default branch (organization timezone, conservative name), assign the
+  // bootstrap administrator to it, and instantiate the restaurant role templates
+  // from the catalog. Guarded so the AGENCY path is byte-identical.
+  if (input.vertical === 'RESTAURANT') {
+    const defaultBranch = await db.restaurantBranch.create({
+      data: {
+        organizationId: organization.id,
+        name: 'Main Branch',
+        timezone: input.timezone,
+        isDefault: true,
+      },
+    });
+    await db.restaurantBranchAssignment.create({
+      data: {
+        organizationId: organization.id,
+        branchId: defaultBranch.id,
+        userId: admin.id,
+      },
+    });
+    for (const template of roleTemplatesForVertical(input.vertical)) {
+      await db.organizationRole.create({
+        data: {
+          organizationId: organization.id,
+          key: template.key,
+          name: template.name,
+          isSystem: template.isSystem,
+          permissions: {
+            create: template.capabilities.map((capability) => ({
+              organizationId: organization.id,
+              capability,
+              effect: 'ALLOW',
+            })),
+          },
+        },
+      });
+    }
+  }
   // §2.3: onboarding no longer copies the package's enabled modules into
   // OrganizationModule. Those rows behave as permanent OVERRIDEs in the resolver
   // (src/lib/entitlements.ts) and stranded when the package later changed. The
@@ -451,6 +584,7 @@ async function runCommand(
           id,
           displayName: requiredText.optional(),
           legalName: requiredText.optional(),
+          vertical: vertical.optional(),
           packageId: optionalId.optional(),
           deploymentMode: z.enum(['SHARED', 'DEDICATED']).optional(),
           timezone: z.string().min(1).max(100).optional(),
@@ -467,6 +601,34 @@ async function runCommand(
       const { id: organizationId, ...data } = input;
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      // §2.2 — the vertical is immutable once the organization has been activated;
+      // a pre-activation correction is still permitted.
+      if (data.vertical && data.vertical !== before.vertical && before.activatedAt) {
+        throw new PlatformSecurityError(
+          'The organization vertical is immutable once the organization is activated.',
+          400
+        );
+      }
+      // §2.3 — a package (being changed now or already assigned) must match the
+      // organization's resulting vertical. Rejected server-side even when a
+      // crafted request bypasses the operator UI's filtered choices.
+      const nextVertical = data.vertical ?? before.vertical;
+      const nextPackageId = data.packageId !== undefined ? data.packageId : before.packageId;
+      if (nextPackageId && (data.packageId !== undefined || data.vertical !== undefined)) {
+        const nextPackage = await db.platformPackage.findUnique({
+          where: { id: nextPackageId },
+          select: { vertical: true },
+        });
+        if (!nextPackage) {
+          throw new PlatformSecurityError('Choose an active commercial package.', 400);
+        }
+        if (!isPackageCompatibleWithVertical(nextPackage.vertical ?? 'AGENCY', nextVertical)) {
+          throw new PlatformSecurityError(
+            `The selected package is not available for the ${nextVertical} vertical.`,
+            400
+          );
+        }
+      }
       const organization = await db.organization.update({
         where: { id: organizationId },
         data: {
@@ -607,6 +769,27 @@ async function runCommand(
           reason: z.string().trim().min(5).max(500),
         })
         .parse(payload);
+      // §6 — enablement guard: a module may only be attached to an organization
+      // whose vertical owns it. The key → vertical mapping is delegated to the
+      // catalog (verticalForModuleKey), so no vertical is branched on inline.
+      const [targetOrg, targetModule] = await Promise.all([
+        db.organization.findUnique({
+          where: { id: input.organizationId },
+          select: { vertical: true },
+        }),
+        db.platformModule.findUnique({
+          where: { id: input.moduleId },
+          select: { key: true },
+        }),
+      ]);
+      if (!targetOrg) throw new PlatformSecurityError('Organization not found.', 400);
+      if (!targetModule) throw new PlatformSecurityError('Module not found.', 400);
+      if (verticalForModuleKey(targetModule.key) !== targetOrg.vertical) {
+        throw new PlatformSecurityError(
+          `The ${targetModule.key} module does not belong to the ${targetOrg.vertical} vertical.`,
+          400
+        );
+      }
       const saved = await db.organizationModule.upsert({
         where: {
           organizationId_moduleId: {
@@ -1815,6 +1998,10 @@ async function runCommand(
           name: requiredText,
           description: optionalText.optional(),
           active: z.boolean().default(true),
+          // §2.3 — package vertical metadata. Left optional (no default) so an
+          // omitted value keeps the column's existing value on update and falls
+          // back to the schema default (AGENCY) on create.
+          vertical: vertical.optional(),
           defaultSeats: z.coerce.number().int().min(1).max(100_000),
         })
         .parse(payload);
