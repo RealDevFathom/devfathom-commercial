@@ -209,10 +209,13 @@ genuine second-person second factor rather than two identifiers typed by one adm
 exercises C4+C7 together. · Revisited if a back-office approver must instead be attributed
 to a web-login `User` (already flagged by the C6/C7 approver-identity seam above).
 
-**Operator-attributed terminal audit deferred to L4a (M2-L3)** · Ordinary terminal calls
-(unlock/switch/lock/heartbeat) are not written to the `User`-centric REST audit log; the
-durable `RestaurantCoAuthorization` and device rows are the evidence for the sensitive
-actions. · Conservative because an operator is deliberately not a `User` (C3), so forcing
-operator actions through the user-keyed audit path would misattribute them; the additive
-`RESTAURANT_OPERATOR` actor value already routes richer operator audit treatment to L4a. ·
-Revisited by the L4a operator audit-attribution decision.
+**Operator-attributed terminal audit durability blocked by User FK (M2-L3)** · Sensitive
+unlock/switch/active-operator lock/co-authorize routes now call
+`recordTerminalOperatorAudit` with `AuditActorType.RESTAURANT_OPERATOR` and the acting
+`RestaurantStaffProfile` id; device/session/approver metadata is server-derived, and credential
+secrets are excluded. · However, the current `audit_logs_actorId_fkey` still references
+`users.id`; the real PostgreSQL milestone run at `f15d579` rejects these staff-profile actor IDs
+with Prisma `P2003`, so routing exists but durable rows are not yet verified. · Conservative
+because it neither misattributes operators as `User`s nor silently weakens the User FK. ·
+Revisited via an owned schema/storage decision making operator actor IDs valid plus a real-DB
+assertion.
