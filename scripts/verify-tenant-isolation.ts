@@ -345,6 +345,34 @@ async function main() {
     const sessionB = `terminal_session_b_${suffix}`;
     const coAuthA = `coauth_a_${suffix}`;
     const coAuthB = `coauth_b_${suffix}`;
+    // M3-L1: representative catalog/menu ids per tenant. The probe covers a
+    // canonical row (product), a versioned row (recipe version), an effective-
+    // dated priced row (price-list entry), the branch-linked publication, and a
+    // per-publication override — plus the intermediate rows they hang off.
+    const brandA = `rbrand_a_${suffix}`;
+    const brandB = `rbrand_b_${suffix}`;
+    const productA = `rprod_a_${suffix}`;
+    const productB = `rprod_b_${suffix}`;
+    const recipeA = `rrecipe_a_${suffix}`;
+    const recipeB = `rrecipe_b_${suffix}`;
+    const recipeVersionA = `rrecver_a_${suffix}`;
+    const recipeVersionB = `rrecver_b_${suffix}`;
+    const priceListA = `rplist_a_${suffix}`;
+    const priceListB = `rplist_b_${suffix}`;
+    const priceListVersionA = `rplver_a_${suffix}`;
+    const priceListVersionB = `rplver_b_${suffix}`;
+    const priceEntryA = `rplentry_a_${suffix}`;
+    const priceEntryB = `rplentry_b_${suffix}`;
+    const menuA = `rmenu_a_${suffix}`;
+    const menuB = `rmenu_b_${suffix}`;
+    const menuSectionA = `rmsec_a_${suffix}`;
+    const menuSectionB = `rmsec_b_${suffix}`;
+    const menuItemA = `rmitem_a_${suffix}`;
+    const menuItemB = `rmitem_b_${suffix}`;
+    const publicationA = `rpub_a_${suffix}`;
+    const publicationB = `rpub_b_${suffix}`;
+    const itemOverrideA = `rovr_a_${suffix}`;
+    const itemOverrideB = `rovr_b_${suffix}`;
     await client.query(
       `INSERT INTO "api_tokens" (
         "id", "organizationId", "name", "prefix", "tokenHash", "scopes", "userId"
@@ -479,6 +507,108 @@ async function main() {
       ]
     );
 
+    // M3-L1: brand -> product -> (recipe version | price-list entry) and
+    // brand -> menu -> section -> item plus branch -> publication -> item
+    // override, one mirrored graph per tenant. Parents precede children so the
+    // immediate single-column FKs pass during seeding; the deferred composite
+    // tenant FKs are validated at COMMIT.
+    await client.query(
+      `INSERT INTO "restaurant_brands" (
+        "id", "organizationId", "name", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', 'Tenant A Brand', CURRENT_TIMESTAMP),
+        ($2, $3, 'Tenant B Brand', CURRENT_TIMESTAMP)`,
+      [brandA, brandB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_products" (
+        "id", "organizationId", "type", "status", "name", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', 'ITEM', 'ACTIVE', 'Tenant A Product', CURRENT_TIMESTAMP),
+        ($2, $3, 'ITEM', 'ACTIVE', 'Tenant B Product', CURRENT_TIMESTAMP)`,
+      [productA, productB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_recipes" (
+        "id", "organizationId", "productId", "name", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, 'Tenant A Recipe', CURRENT_TIMESTAMP),
+        ($3, $4, $5, 'Tenant B Recipe', CURRENT_TIMESTAMP)`,
+      [recipeA, productA, recipeB, organizationB, productB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_recipe_versions" (
+        "id", "organizationId", "recipeId", "versionNumber", "status", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, 1, 'ACTIVE', CURRENT_TIMESTAMP),
+        ($3, $4, $5, 1, 'ACTIVE', CURRENT_TIMESTAMP)`,
+      [recipeVersionA, recipeA, recipeVersionB, organizationB, recipeB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_price_lists" (
+        "id", "organizationId", "name", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', 'Tenant A List', CURRENT_TIMESTAMP),
+        ($2, $3, 'Tenant B List', CURRENT_TIMESTAMP)`,
+      [priceListA, priceListB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_price_list_versions" (
+        "id", "organizationId", "priceListId", "versionNumber", "effectiveFrom", "status", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, 1, CURRENT_TIMESTAMP, 'ACTIVE', CURRENT_TIMESTAMP),
+        ($3, $4, $5, 1, CURRENT_TIMESTAMP, 'ACTIVE', CURRENT_TIMESTAMP)`,
+      [priceListVersionA, priceListA, priceListVersionB, organizationB, priceListB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_price_list_entries" (
+        "id", "organizationId", "priceListVersionId", "productId", "price", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, 9.99, CURRENT_TIMESTAMP),
+        ($4, $5, $6, $7, 9.99, CURRENT_TIMESTAMP)`,
+      [priceEntryA, priceListVersionA, productA, priceEntryB, organizationB, priceListVersionB, productB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_menus" (
+        "id", "organizationId", "brandId", "name", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, 'Tenant A Menu', CURRENT_TIMESTAMP),
+        ($3, $4, $5, 'Tenant B Menu', CURRENT_TIMESTAMP)`,
+      [menuA, brandA, menuB, organizationB, brandB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_menu_sections" (
+        "id", "organizationId", "menuId", "name", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, 'Tenant A Section', CURRENT_TIMESTAMP),
+        ($3, $4, $5, 'Tenant B Section', CURRENT_TIMESTAMP)`,
+      [menuSectionA, menuA, menuSectionB, organizationB, menuB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_menu_items" (
+        "id", "organizationId", "sectionId", "productId", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, CURRENT_TIMESTAMP),
+        ($4, $5, $6, $7, CURRENT_TIMESTAMP)`,
+      [menuItemA, menuSectionA, productA, menuItemB, organizationB, menuSectionB, productB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_branch_menu_publications" (
+        "id", "organizationId", "branchId", "menuId", "status", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, 'PUBLISHED', CURRENT_TIMESTAMP),
+        ($4, $5, $6, $7, 'PUBLISHED', CURRENT_TIMESTAMP)`,
+      [publicationA, branchA, menuA, publicationB, organizationB, branchB, menuB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_branch_menu_item_overrides" (
+        "id", "organizationId", "publicationId", "menuItemId", "isAvailable", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, true, CURRENT_TIMESTAMP),
+        ($4, $5, $6, $7, true, CURRENT_TIMESTAMP)`,
+      [itemOverrideA, publicationA, menuItemA, itemOverrideB, organizationB, publicationB, menuItemB]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -513,6 +643,13 @@ async function main() {
       ['restaurant_operator_credentials', credentialA, credentialB],
       ['restaurant_terminal_sessions', sessionA, sessionB],
       ['restaurant_co_authorizations', coAuthA, coAuthB],
+      // M3-L1: explicit read/update/delete isolation for representative catalog,
+      // recipe, pricing, publication and override rows (beyond auto-discovery).
+      ['restaurant_products', productA, productB],
+      ['restaurant_recipe_versions', recipeVersionA, recipeVersionB],
+      ['restaurant_price_list_entries', priceEntryA, priceEntryB],
+      ['restaurant_branch_menu_publications', publicationA, publicationB],
+      ['restaurant_branch_menu_item_overrides', itemOverrideA, itemOverrideB],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
