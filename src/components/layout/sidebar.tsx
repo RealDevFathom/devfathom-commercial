@@ -26,6 +26,8 @@ import {
   Monitor,
   BookOpen,
   UtensilsCrossed,
+  LayoutGrid,
+  ReceiptText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -132,6 +134,20 @@ const navigation: NavItem[] = [
     icon: UtensilsCrossed,
     group: 'Firm',
     module: 'restaurant-menu',
+  },
+  {
+    label: 'Floor',
+    href: '/restaurant/floor',
+    icon: LayoutGrid,
+    group: 'Firm',
+    module: 'restaurant-pos',
+  },
+  {
+    label: 'Orders',
+    href: '/restaurant/orders',
+    icon: ReceiptText,
+    group: 'Firm',
+    module: 'restaurant-pos',
   },
   {
     label: 'Reviews',
