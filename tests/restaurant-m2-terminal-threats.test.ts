@@ -153,7 +153,11 @@ const db = {
   },
   auditLog: {
     create: async ({ data }: { data: Row }) => {
-      const row = { id: `audit_${h.store.auditLogs.length + 1}`, ...data };
+      const row = {
+        id: `audit_${h.store.auditLogs.length + 1}`,
+        createdAt: new Date(),
+        ...data,
+      };
       h.store.auditLogs.push(row);
       return copy(row);
     },
@@ -473,6 +477,7 @@ describe('operator attribution and secret containment', () => {
     const { token } = await establish(secret);
     addOperator(ACTING, device.id);
     addOperator(INCOMING, device.id);
+    addOperator(MANAGER, device.id);
 
     expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
     expect(
@@ -489,23 +494,70 @@ describe('operator attribution and secret containment', () => {
       ).response.status
     ).toBe(200);
     expect(
+      (
+        await call(
+          coAuthorizeRoute,
+          terminalRequest(
+            secret,
+            token,
+            {
+              approvingStaffProfileId: MANAGER,
+              type: 'PIN',
+              secret: PINS[MANAGER],
+              capability: 'orders:void',
+              targetType: 'Order',
+              targetId: 'order_audit_25',
+              reason: 'guest complaint',
+            },
+            'co-authorize'
+          )
+        )
+      ).response.status
+    ).toBe(201);
+    expect(
       (await call(lockRoute, terminalRequest(secret, token, undefined, 'lock'))).response.status
     ).toBe(200);
 
     const terminalAudits = h.store.auditLogs.filter(
       (row) => row.actorType === 'RESTAURANT_OPERATOR'
     );
-    expect(terminalAudits).toHaveLength(3);
-    expect(terminalAudits.map((row) => row.actorId)).toEqual([ACTING, INCOMING, INCOMING]);
+    expect(terminalAudits).toHaveLength(4);
+    expect(terminalAudits.map((row) => row.actorId)).toEqual([
+      ACTING,
+      INCOMING,
+      INCOMING,
+      INCOMING,
+    ]);
     for (const row of terminalAudits) {
-      expect(row).toMatchObject({
+      const context = {
+        ...row,
+        ...(typeof row.metadata === 'object' && row.metadata !== null ? row.metadata : {}),
+      };
+      expect(context).toMatchObject({
         organizationId: ORG,
         actorType: 'RESTAURANT_OPERATOR',
         source: 'REST_API',
         deviceId: device.id,
+        terminalSessionId: expect.any(String),
       });
       expect(row.createdAt).toBeInstanceOf(Date);
-      expect(JSON.stringify(row)).not.toMatch(/2468|1357/);
+      expect(JSON.stringify(row)).not.toMatch(/2468|1357|9999/);
     }
+    const approvalAudit = terminalAudits
+      .map((row) => ({
+        ...row,
+        ...(typeof row.metadata === 'object' && row.metadata !== null ? row.metadata : {}),
+      }))
+      .find((row) => row.capability === 'orders:void');
+    expect(approvalAudit).toMatchObject({
+      actorId: INCOMING,
+      actingStaffProfileId: INCOMING,
+      approvingStaffProfileId: MANAGER,
+      capability: 'orders:void',
+      targetType: 'Order',
+      targetId: 'order_audit_25',
+      reason: 'guest complaint',
+      deviceId: device.id,
+    });
   });
 });
