@@ -373,6 +373,32 @@ async function main() {
     const publicationB = `rpub_b_${suffix}`;
     const itemOverrideA = `rovr_a_${suffix}`;
     const itemOverrideB = `rovr_b_${suffix}`;
+    // M4-L1: representative order/kitchen/floor ids per tenant. The probe covers
+    // an order, an order item, an append-only order event, a kitchen ticket, a
+    // floor table, a section assignment, an outbox row, and a device idempotency
+    // key — plus the floor/station/section parents they hang off.
+    const floorA = `rfloor_a_${suffix}`;
+    const floorB = `rfloor_b_${suffix}`;
+    const tableA = `rtable_a_${suffix}`;
+    const tableB = `rtable_b_${suffix}`;
+    const sectionA = `rsection_a_${suffix}`;
+    const sectionB = `rsection_b_${suffix}`;
+    const sectionAssignmentA = `rsecassign_a_${suffix}`;
+    const sectionAssignmentB = `rsecassign_b_${suffix}`;
+    const stationA = `rstation_a_${suffix}`;
+    const stationB = `rstation_b_${suffix}`;
+    const orderA = `rorder_a_${suffix}`;
+    const orderB = `rorder_b_${suffix}`;
+    const orderItemA = `roitem_a_${suffix}`;
+    const orderItemB = `roitem_b_${suffix}`;
+    const orderEventA = `roevent_a_${suffix}`;
+    const orderEventB = `roevent_b_${suffix}`;
+    const ticketA = `rticket_a_${suffix}`;
+    const ticketB = `rticket_b_${suffix}`;
+    const outboxA = `routbox_a_${suffix}`;
+    const outboxB = `routbox_b_${suffix}`;
+    const idempotencyA = `ridem_a_${suffix}`;
+    const idempotencyB = `ridem_b_${suffix}`;
     await client.query(
       `INSERT INTO "api_tokens" (
         "id", "organizationId", "name", "prefix", "tokenHash", "scopes", "userId"
@@ -633,6 +659,93 @@ async function main() {
       ]
     );
 
+    // M4-L1: floor/service, station, section, order graph + kitchen ticket,
+    // outbox, and idempotency key — one mirrored set per tenant. Parents precede
+    // children so the immediate single-column FKs pass during seeding; the
+    // deferred composite tenant FKs are validated at COMMIT (rolled back here).
+    await client.query(
+      `INSERT INTO "restaurant_floors" ("id", "organizationId", "branchId", "name", "updatedAt")
+       VALUES ($1, 'org_devfathom', $2, 'Tenant A Floor', CURRENT_TIMESTAMP),
+              ($3, $4, $5, 'Tenant B Floor', CURRENT_TIMESTAMP)`,
+      [floorA, branchA, floorB, organizationB, branchB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_tables" ("id", "organizationId", "floorId", "code", "capacity", "updatedAt")
+       VALUES ($1, 'org_devfathom', $2, 'A1', 4, CURRENT_TIMESTAMP),
+              ($3, $4, $5, 'B1', 4, CURRENT_TIMESTAMP)`,
+      [tableA, floorA, tableB, organizationB, floorB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_server_sections" ("id", "organizationId", "branchId", "name", "updatedAt")
+       VALUES ($1, 'org_devfathom', $2, 'Tenant A Section', CURRENT_TIMESTAMP),
+              ($3, $4, $5, 'Tenant B Section', CURRENT_TIMESTAMP)`,
+      [sectionA, branchA, sectionB, organizationB, branchB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_server_section_assignments" (
+        "id", "organizationId", "sectionId", "staffProfileId", "businessDate", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, DATE '2030-01-01', CURRENT_TIMESTAMP),
+               ($4, $5, $6, $7, DATE '2030-01-01', CURRENT_TIMESTAMP)`,
+      [sectionAssignmentA, sectionA, staffA1, sectionAssignmentB, organizationB, sectionB, staffB1]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_kitchen_stations" ("id", "organizationId", "branchId", "name", "updatedAt")
+       VALUES ($1, 'org_devfathom', $2, 'Tenant A Grill', CURRENT_TIMESTAMP),
+              ($3, $4, $5, 'Tenant B Grill', CURRENT_TIMESTAMP)`,
+      [stationA, branchA, stationB, organizationB, branchB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_orders" (
+        "id", "organizationId", "branchId", "orderNumber", "businessDate", "channel",
+        "staffProfileId", "deviceId", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 1, DATE '2030-01-01', 'DINE_IN', $3, $4, CURRENT_TIMESTAMP),
+               ($5, $6, $7, 1, DATE '2030-01-01', 'DINE_IN', $8, $9, CURRENT_TIMESTAMP)`,
+      [orderA, branchA, staffA1, deviceA, orderB, organizationB, branchB, staffB1, deviceB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_order_items" (
+        "id", "organizationId", "orderId", "productId", "name", "unitPrice", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 'Tenant A Item', 9.99, CURRENT_TIMESTAMP),
+               ($4, $5, $6, $7, 'Tenant B Item', 9.99, CURRENT_TIMESTAMP)`,
+      [orderItemA, orderA, productA, orderItemB, organizationB, orderB, productB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_order_events" (
+        "id", "organizationId", "orderId", "sequence", "eventType", "payload"
+      ) VALUES ($1, 'org_devfathom', $2, 1, 'order.opened', '{}'),
+               ($3, $4, $5, 1, 'order.opened', '{}')`,
+      [orderEventA, orderA, orderEventB, organizationB, orderB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_kitchen_tickets" (
+        "id", "organizationId", "orderId", "stationId", "businessDate", "ticketNumber", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, DATE '2030-01-01', 1, CURRENT_TIMESTAMP),
+               ($4, $5, $6, $7, DATE '2030-01-01', 1, CURRENT_TIMESTAMP)`,
+      [ticketA, orderA, stationA, ticketB, organizationB, orderB, stationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_event_outbox" (
+        "id", "organizationId", "eventType", "aggregateType", "aggregateId", "payload", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 'order.opened', 'restaurant.order', $2, '{}', CURRENT_TIMESTAMP),
+               ($3, $4, 'order.opened', 'restaurant.order', $5, '{}', CURRENT_TIMESTAMP)`,
+      [outboxA, orderA, outboxB, organizationB, orderB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_order_idempotency_keys" (
+        "id", "organizationId", "deviceId", "key", "commandType", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 'order.open', CURRENT_TIMESTAMP),
+               ($4, $5, $6, $7, 'order.open', CURRENT_TIMESTAMP)`,
+      [
+        idempotencyA,
+        deviceA,
+        `idem-a-${suffix}`,
+        idempotencyB,
+        organizationB,
+        deviceB,
+        `idem-b-${suffix}`,
+      ]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -674,6 +787,17 @@ async function main() {
       ['restaurant_price_list_entries', priceEntryA, priceEntryB],
       ['restaurant_branch_menu_publications', publicationA, publicationB],
       ['restaurant_branch_menu_item_overrides', itemOverrideA, itemOverrideB],
+      // M4-L1: explicit read/update/delete isolation for the representative
+      // order, item, event, kitchen ticket, floor table, section assignment,
+      // outbox, and idempotency-key rows.
+      ['restaurant_orders', orderA, orderB],
+      ['restaurant_order_items', orderItemA, orderItemB],
+      ['restaurant_order_events', orderEventA, orderEventB],
+      ['restaurant_kitchen_tickets', ticketA, ticketB],
+      ['restaurant_tables', tableA, tableB],
+      ['restaurant_server_section_assignments', sectionAssignmentA, sectionAssignmentB],
+      ['restaurant_event_outbox', outboxA, outboxB],
+      ['restaurant_order_idempotency_keys', idempotencyA, idempotencyB],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -822,6 +946,60 @@ async function main() {
           "id", "organizationId", "actingStaffProfileId", "approvingStaffProfileId", "capability", "reason"
         ) VALUES ($1, $2, $3, $4, 'orders:void', 'escape')`,
         [`deny_coauth_${suffix}`, organizationB, staffB1, staffB2],
+      ],
+      // M4-L1: each new table's WITH CHECK must fail closed — a tenant A scope may
+      // not mint an order/item/event/ticket/table/assignment/outbox/idempotency
+      // row owned by another organization. The referenced parents are real org-B
+      // rows, so the 42501 is the RLS policy firing, not a dangling FK. Distinct
+      // values on unique columns avoid a 23505 masking the RLS check.
+      [
+        `INSERT INTO "restaurant_orders" (
+          "id", "organizationId", "branchId", "orderNumber", "businessDate", "channel",
+          "staffProfileId", "deviceId", "updatedAt"
+        ) VALUES ($1, $2, $3, 2, DATE '2030-01-02', 'DINE_IN', $4, $5, CURRENT_TIMESTAMP)`,
+        [`deny_order_${suffix}`, organizationB, branchB, staffB1, deviceB],
+      ],
+      [
+        `INSERT INTO "restaurant_order_items" (
+          "id", "organizationId", "orderId", "productId", "name", "unitPrice", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'Escape Item', 1.00, CURRENT_TIMESTAMP)`,
+        [`deny_oitem_${suffix}`, organizationB, orderB, productB],
+      ],
+      [
+        `INSERT INTO "restaurant_order_events" (
+          "id", "organizationId", "orderId", "sequence", "eventType", "payload"
+        ) VALUES ($1, $2, $3, 2, 'order.escape', '{}')`,
+        [`deny_oevent_${suffix}`, organizationB, orderB],
+      ],
+      [
+        `INSERT INTO "restaurant_kitchen_tickets" (
+          "id", "organizationId", "orderId", "stationId", "businessDate", "ticketNumber", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, DATE '2030-01-02', 2, CURRENT_TIMESTAMP)`,
+        [`deny_ticket_${suffix}`, organizationB, orderB, stationB],
+      ],
+      [
+        `INSERT INTO "restaurant_tables" (
+          "id", "organizationId", "floorId", "code", "capacity", "updatedAt"
+        ) VALUES ($1, $2, $3, 'DENY', 2, CURRENT_TIMESTAMP)`,
+        [`deny_table_${suffix}`, organizationB, floorB],
+      ],
+      [
+        `INSERT INTO "restaurant_server_section_assignments" (
+          "id", "organizationId", "sectionId", "staffProfileId", "businessDate", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, DATE '2030-01-02', CURRENT_TIMESTAMP)`,
+        [`deny_secassign_${suffix}`, organizationB, sectionB, staffB1],
+      ],
+      [
+        `INSERT INTO "restaurant_event_outbox" (
+          "id", "organizationId", "eventType", "aggregateType", "aggregateId", "payload", "updatedAt"
+        ) VALUES ($1, $2, 'order.escape', 'restaurant.order', $3, '{}', CURRENT_TIMESTAMP)`,
+        [`deny_outbox_${suffix}`, organizationB, orderB],
+      ],
+      [
+        `INSERT INTO "restaurant_order_idempotency_keys" (
+          "id", "organizationId", "deviceId", "key", "commandType", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'order.open', CURRENT_TIMESTAMP)`,
+        [`deny_idem_${suffix}`, organizationB, deviceB, `deny-idem-${suffix}`],
       ],
     ];
     for (const [sql, values] of restaurantWriteDenied) {
@@ -1030,7 +1208,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, restaurant order/order-item/order-event/kitchen-ticket/floor-table/section-assignment/outbox/idempotency-key isolation + fail-closed WITH CHECK, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);
