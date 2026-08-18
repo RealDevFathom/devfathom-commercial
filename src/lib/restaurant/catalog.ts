@@ -751,3 +751,67 @@ export async function detachProductAllergen(db: ScopedDb, productId: string, all
   if (!link) throw new CatalogError('That allergen is not declared on this product.', 'NOT_FOUND');
   await db.restaurantProductAllergen.delete({ where: { id: link.id } });
 }
+
+// ── Read models (catalog console read-contract) ───────────────────────────────
+// Capability-gated (menu:read) list/read surfaces the brands/catalog consoles
+// need. All are tenant-scoped by the RLS `organizationId` default (C1); none
+// carry monetary Decimal fields at the returned level, so no C4 serialization is
+// required here (recipe/costing reads that do are serialized at the router).
+
+/** All brands for the organization, default brand first then alphabetical. */
+export async function listBrands(db: ScopedDb) {
+  return db.restaurantBrand.findMany({ orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
+}
+
+/** A single brand by id (any status). Missing id is NOT_FOUND. */
+export async function getBrand(db: ScopedDb, id: string) {
+  const brand = await db.restaurantBrand.findUnique({ where: { id } });
+  if (!brand) throw new CatalogError('Brand not found.', 'NOT_FOUND');
+  return brand;
+}
+
+/** All catalog categories, ordered for tree display (sortOrder then name). */
+export async function listCategories(db: ScopedDb) {
+  return db.restaurantCategory.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
+}
+
+/**
+ * The relations the catalog console renders alongside a product: its category,
+ * its variants, and the modifier groups attached to it. Modifier *options*
+ * (which carry a Decimal `priceDelta`) are intentionally not expanded here — a
+ * console fetches those per group — so product reads stay Decimal-free.
+ */
+const PRODUCT_CONSOLE_INCLUDE = {
+  category: true,
+  variants: { orderBy: { sortOrder: 'asc' } },
+  modifierGroups: { orderBy: { sortOrder: 'asc' }, include: { modifierGroup: true } },
+} satisfies Prisma.RestaurantProductInclude;
+
+export type ListProductsFilter = {
+  categoryId?: string | null;
+  status?: RestaurantProductStatus;
+  type?: ProductType;
+};
+
+/** Canonical products (with category/variants/modifier groups) for the console. */
+export async function listProducts(db: ScopedDb, filter: ListProductsFilter = {}) {
+  const where: Prisma.RestaurantProductWhereInput = {};
+  if (filter.categoryId !== undefined) where.categoryId = filter.categoryId;
+  if (filter.status !== undefined) where.status = filter.status;
+  if (filter.type !== undefined) where.type = filter.type;
+  return db.restaurantProduct.findMany({
+    where,
+    include: PRODUCT_CONSOLE_INCLUDE,
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
+}
+
+/** A single product with its category, variants, and attached modifier groups. */
+export async function getProduct(db: ScopedDb, id: string) {
+  const product = await db.restaurantProduct.findUnique({
+    where: { id },
+    include: PRODUCT_CONSOLE_INCLUDE,
+  });
+  if (!product) throw new CatalogError('Product not found.', 'NOT_FOUND');
+  return product;
+}

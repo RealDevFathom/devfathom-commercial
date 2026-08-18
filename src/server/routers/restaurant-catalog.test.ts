@@ -121,26 +121,108 @@ function caller() {
   } as unknown as TRPCContext);
 }
 
-// ── C2 shadow-copy guard — no branchId field on canonical inputs ──────────────
+// ── C2 shadow-copy guard — STRICT rejection of branch-scoped/shadow fields ─────
+// The canonical creation schemas are `.strict()`: a branch-scoped or shadow-copy
+// field is REJECTED (BAD_REQUEST at the schema edge), not silently stripped, and
+// the db create is never reached. Branches cannot shadow-copy canonical records.
 
-describe('C2 shadow-copy guard', () => {
-  it('createProduct schema rejects branchId field', async () => {
-    (db.restaurantProduct as Delegate).findUnique.mockResolvedValue({ id: 'p1' });
-    // Providing branchId must be rejected by zod (extra key stripped or error).
-    // In strict mode zod would reject unknown fields; our inputs don't define branchId.
-    // This test verifies the SCHEMA has no branchId by ensuring the call succeeds
-    // WITHOUT ever writing branchId to the db — i.e. the field is absent in the input type.
+describe('C2 shadow-copy guard (strict canonical creation)', () => {
+  it('createBrand rejects branch-scoped/shadow-copy fields (BAD_REQUEST)', async () => {
+    (db.restaurantBrand as Delegate).count.mockResolvedValue(0);
+    // A plain object (not a literal) carries the extra props past the compiler;
+    // `.strict()` rejects them at runtime.
+    const input = { name: 'Branch Shadow', branchId: 'branch_1', shadowCopyOfId: 'brand_root' };
+    await expect(caller().createBrand(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect((db.restaurantBrand as Delegate).create).not.toHaveBeenCalled();
+  });
+
+  it('createProduct rejects shadow-copy fields (BAD_REQUEST)', async () => {
+    const input = { name: 'Shadow Burger', sourceCanonicalId: 'product_root' };
+    await expect(caller().createProduct(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect((db.restaurantProduct as Delegate).create).not.toHaveBeenCalled();
+  });
+
+  it('createProduct still writes no branchId for a clean input', async () => {
     (db.restaurantCategory as Delegate).findUnique.mockResolvedValue({ id: 'cat1' });
     await caller().createProduct({ name: 'Burger', categoryId: 'cat1' });
     const createCall = (db.restaurantProduct as Delegate).create.mock.calls[0][0];
     expect(createCall.data).not.toHaveProperty('branchId');
   });
+});
 
-  it('createBrand schema rejects branchId field', async () => {
-    (db.restaurantBrand as Delegate).count.mockResolvedValue(0);
-    await caller().createBrand({ name: 'My Brand' });
-    const createCall = (db.restaurantBrand as Delegate).create.mock.calls[0][0];
-    expect(createCall.data).not.toHaveProperty('branchId');
+// ── Product localization round-trip through the router ────────────────────────
+
+describe('createProduct localization round-trip', () => {
+  it('persists and returns nameLocalized/descriptionLocalized', async () => {
+    const nameLocalized = { 'ar-SA': 'شاي' };
+    const descriptionLocalized = { 'ar-SA': 'شاي ساخن' };
+    const result = await caller().createProduct({
+      name: 'Tea',
+      nameLocalized,
+      description: 'Hot tea',
+      descriptionLocalized,
+    });
+    expect(result).toMatchObject({ nameLocalized, descriptionLocalized });
+    const createData = (db.restaurantProduct as Delegate).create.mock.calls[0][0].data;
+    expect(createData.nameLocalized).toEqual(nameLocalized);
+    expect(createData.descriptionLocalized).toEqual(descriptionLocalized);
+  });
+});
+
+// ── Historical + list read models (GOV-2 / console read-contract) ─────────────
+
+describe('read models', () => {
+  it('registers getRecipeVersion as a procedure', () => {
+    expect(Object.keys(restaurantCatalogRouter._def.procedures)).toContain('getRecipeVersion');
+  });
+
+  it('getRecipeVersion reads a SUPERSEDED version and serializes yieldQuantity (C4)', async () => {
+    (db.restaurantRecipeVersion as Delegate).findUnique.mockResolvedValue({
+      id: 'v1',
+      recipeId: 'r1',
+      status: 'SUPERSEDED',
+      versionNumber: 1,
+      yieldQuantity: new Prisma.Decimal('2.5'),
+      notes: 'original',
+    });
+    const result = await caller().getRecipeVersion({ id: 'v1' });
+    expect(result).toMatchObject({ id: 'v1', status: 'SUPERSEDED', notes: 'original' });
+    expect(result?.yieldQuantity).toBe('2.5');
+  });
+
+  it('listRecipeVersions serializes each version yield and obeys the recipe scope', async () => {
+    (db.restaurantRecipe as Delegate).findUnique.mockResolvedValue({ id: 'r1' });
+    (db.restaurantRecipeVersion as Delegate).findMany.mockResolvedValue([
+      { id: 'v2', recipeId: 'r1', status: 'ACTIVE', versionNumber: 2, yieldQuantity: new Prisma.Decimal('3') },
+      { id: 'v1', recipeId: 'r1', status: 'SUPERSEDED', versionNumber: 1, yieldQuantity: null },
+    ]);
+    const result = await caller().listRecipeVersions({ recipeId: 'r1' });
+    expect(result?.map((v) => v.id)).toEqual(['v2', 'v1']);
+    expect(result?.[0]?.yieldQuantity).toBe('3');
+    expect(result?.[1]?.yieldQuantity).toBeNull();
+  });
+
+  it('listProducts passes filters and the console include shape', async () => {
+    (db.restaurantProduct as Delegate).findMany.mockResolvedValue([]);
+    await caller().listProducts({ categoryId: 'cat1' });
+    const call = (db.restaurantProduct as Delegate).findMany.mock.calls[0][0];
+    expect(call.where).toMatchObject({ categoryId: 'cat1' });
+    expect(call.include).toHaveProperty('variants');
+    expect(call.include).toHaveProperty('modifierGroups');
+    expect(call.include).toHaveProperty('category');
+  });
+
+  it('getProduct surfaces NOT_FOUND for a missing product', async () => {
+    (db.restaurantProduct as Delegate).findUnique.mockResolvedValue(null);
+    await expect(caller().getProduct({ id: 'missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('listBrands returns the brand list', async () => {
+    (db.restaurantBrand as Delegate).findMany.mockResolvedValue([{ id: 'b1', name: 'A' }]);
+    const result = await caller().listBrands();
+    expect(result).toHaveLength(1);
   });
 });
 
