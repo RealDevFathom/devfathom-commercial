@@ -175,6 +175,78 @@ right primitive for a high-entropy token and is REQUIRED for the C5 per-call
 revalidation (one indexed lookup every request, no trust cache). · Revisited if a device
 secret ever becomes low-entropy or human-chosen.
 
+**D20 (localization fields) — locale-keyed JSON, no locale-management UI (M3-L1)** ·
+Customer-facing catalog/menu text (product name/description, and category/brand/menu/
+section/menu-item names) carries a nullable companion `Json` column (`nameLocalized`,
+`descriptionLocalized`) alongside the plain scalar; the scalar is the default-locale
+value and the JSON holds a `{ locale: value }` override map. No locale-management UI, no
+RTL rendering work, and no receipt content ship — fields only. · Conservative because a
+locale-keyed JSON column round-trips through the API and unblocks a future second-language
+input without committing to a locale registry, RTL layout, or receipt formatting before
+D20 closes. · Revisited by D20 closing — a pilot locale list posted on the routing issue
+would let L4b render a concrete second-language input instead of schema-only fields.
+
+**D06 (channel dimension) — fixed additive enum (M3-L1)** · Order channel is the additive
+enum `RestaurantOrderChannel (DINE_IN | TAKEAWAY | DELIVERY)`, stored as a channel-set on
+a branch-menu publication and (implicitly) evaluated by the effective-menu read model. No
+per-channel pricing, tax, or menu-variant machinery exists beyond the enum tag. ·
+Conservative because an additive enum is the smallest seam that lets publications and
+availability distinguish service channels, and enum values are appended (never
+renumbered), so a later channel (e.g. `CATERING`) cannot break stored rows. · Revisited
+when a channel needs its own pricing/tax behaviour rather than a tag.
+
+**C6 (default-brand bootstrap) — lazy, idempotent, no onboarding edit (M3-L1)** · Every
+restaurant organization has exactly one default `RestaurantBrand`, enforced by a partial
+unique index (`WHERE "isDefault"`). The default is ensured lazily and idempotently by the
+catalog server on first catalog use — NOT during onboarding (`src/lib/platform/commands.ts`
+is untouched) and with NO SQL backfill of existing organizations. · Conservative because a
+lazy ensure keeps the brand invariant in one server path and avoids both an onboarding
+coupling and a data migration over live tenants; an org that never opens the catalog simply
+has no brand yet, which is harmless. · Revisited if onboarding must present a brand step, or
+if a backfill becomes necessary for a reporting surface.
+
+**C5 (timezone evaluation) — `Intl` only, no tz dependency (M3-L1)** · Availability windows
+store branch-local wall-clock minutes-of-day (`startMinutes`/`endMinutes`, a CHECK bounds
+them to `[0,1439]`) plus a day-of-week set; a cross-midnight window is `endMinutes <=
+startMinutes`. The effective-menu evaluator (L3) derives branch-local time from
+`RestaurantBranch.timezone` using the platform `Intl` APIs only — no `date-fns-tz` or other
+timezone library is added. · Conservative because integer minutes + `Intl` DST-aware
+conversion is dependency-free and keeps client-supplied time untrusted; a wall-clock string
+or a `time`-with-zone column would invite tz confusion. · Revisited if the evaluator
+genuinely needs a tz library, in which case adding `date-fns-tz` is a recorded deviation
+(this entry) rather than a silent dependency.
+
+**Ingredient identity vs future stock item (M3-L1)** · `RestaurantIngredient` is catalog-side
+identity only — name, base unit, allergens, and a nullable `referenceCost` — and carries NO
+stock fields (movements, counts, batches, or stock locations). The later Inventory milestone
+layers stock behaviour onto this identity by FK. · Conservative because catalog costing and
+BOM composition need a stable ingredient identity now, while stock modelling is a separate
+milestone; shipping identity-without-stock avoids pre-committing an inventory schema. ·
+Revisited by the Inventory milestone, which adds the stock item/movement tables.
+
+**Theoretical-cost deferral (M3-L1)** · `RestaurantIngredient.referenceCost` is a nullable
+`Decimal` seam; M3 computes no cost rollups, recipe/BOM costing, or margin reporting. ·
+Conservative because a reference-cost column lets recipes and price lists be authored now,
+while cost computation depends on the Inventory/Purchasing money-path that has not landed. ·
+Revisited by Inventory/Purchasing, which owns theoretical-cost reporting.
+
+**Ingredient substitution deferred — no schema seam (M3-L1/A-substitution)** · The combo
+structure ships as a schema + minimal-CRUD seam (`RestaurantComboComponentGroup`/`Option`),
+but ingredient/menu-item SUBSTITUTION execution is deferred entirely to the POS milestone and
+L1 adds NO substitution schema (the seam was not free without pre-committing a substitution
+model). · Conservative because substitution semantics belong with order fulfilment, and an
+unused substitution schema now would likely be reworked when POS defines them. · Revisited by
+the POS milestone, which owns substitution modelling and execution.
+
+**Price override is a capability gate, not a co-authorization (M3-L1/C7)** · A per-publication
+item price override (`RestaurantBranchMenuItemOverride.priceOverride`) is gated by the
+`menu:price` capability alone; it does NOT require an M2 co-authorization (distinct-approver
+second-person record). · Conservative because a branch price override is a routine
+menu-management action, not a till-side exception like an order void; requiring co-auth for
+every override would overload the M2 approval primitive. · Revisited if an approved price
+override must become a co-authorized action, in which case the existing
+`RestaurantCoAuthorization` primitive applies unchanged.
+
 **Default terminal transport = REST route handlers (M2-L3, explicit deviation)** · The
 terminal transport is `src/app/api/restaurant/terminal/*` REST handlers wrapped by
 `withTerminalAuth`/`withDeviceAuth`, authenticated by a device secret

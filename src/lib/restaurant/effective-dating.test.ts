@@ -52,7 +52,9 @@ describe('assertVersionMutable (C3 immutability guard)', () => {
   });
 
   it('rejects editing a SUPERSEDED version', () => {
-    expect(() => assertVersionMutable(version('a', 'SUPERSEDED'))).toThrow(VersionImmutabilityError);
+    expect(() => assertVersionMutable(version('a', 'SUPERSEDED'))).toThrow(
+      VersionImmutabilityError
+    );
   });
 });
 
@@ -118,7 +120,10 @@ describe('resolveEffectiveVersion (effective-dated records, e.g. price lists)', 
 
 describe('activateVersion (DRAFT -> ACTIVE)', () => {
   it('returns the ACTIVE patch with the server timestamp', () => {
-    expect(activateVersion(version('a', 'DRAFT'), at)).toEqual({ status: 'ACTIVE', activatedAt: at });
+    expect(activateVersion(version('a', 'DRAFT'), at)).toEqual({
+      status: 'ACTIVE',
+      activatedAt: at,
+    });
   });
 
   it('rejects activating a non-DRAFT version', () => {
@@ -147,9 +152,9 @@ describe('nextVersionNumber', () => {
   });
 
   it('is one past the current maximum', () => {
-    expect(nextVersionNumber([{ versionNumber: 1 }, { versionNumber: 3 }, { versionNumber: 2 }])).toBe(
-      4
-    );
+    expect(
+      nextVersionNumber([{ versionNumber: 1 }, { versionNumber: 3 }, { versionNumber: 2 }])
+    ).toBe(4);
   });
 });
 
@@ -158,7 +163,10 @@ describe('planActivation (single-active: supersede prior + activate target)', ()
     const versions = [version('old', 'ACTIVE'), version('new', 'DRAFT')];
     const plan = planActivation(versions, 'new', at);
     expect(plan.activate).toEqual({ id: 'new', patch: { status: 'ACTIVE', activatedAt: at } });
-    expect(plan.supersede).toEqual({ id: 'old', patch: { status: 'SUPERSEDED', supersededAt: at } });
+    expect(plan.supersede).toEqual({
+      id: 'old',
+      patch: { status: 'SUPERSEDED', supersededAt: at },
+    });
   });
 
   it('activates the first version with nothing to supersede', () => {

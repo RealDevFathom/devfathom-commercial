@@ -112,9 +112,7 @@ export function assertVersionMutable(version: VersionRecord): void {
  * `VersionResolutionError` if more than one version is ACTIVE — a defense in
  * depth beyond the one-ACTIVE-per-recipe partial unique index.
  */
-export function resolveActiveVersion<T extends VersionRecord>(
-  versions: readonly T[]
-): T | null {
+export function resolveActiveVersion<T extends VersionRecord>(versions: readonly T[]): T | null {
   const active = versions.filter((version) => version.status === 'ACTIVE');
   if (active.length > 1) {
     throw new VersionResolutionError(
@@ -178,9 +176,7 @@ export function supersedeVersion(version: VersionRecord, at: Date): Supersession
 
 /** The next monotonic version number for a record: one past the current max
  * (versions start at 1). Used when forking a new DRAFT. */
-export function nextVersionNumber(
-  versions: readonly { versionNumber: number }[]
-): number {
+export function nextVersionNumber(versions: readonly { versionNumber: number }[]): number {
   return versions.reduce((max, version) => Math.max(max, version.versionNumber), 0) + 1;
 }
 

@@ -190,8 +190,7 @@ describe('M3-L1 capability reconciliation (additive-only, C7)', () => {
   });
 
   it('grants the M3 menu capabilities to owner (via *), GM, and branch-manager only', () => {
-    const roleFor = (key: string) =>
-      RESTAURANT_ROLE_TEMPLATES.find((role) => role.key === key)!;
+    const roleFor = (key: string) => RESTAURANT_ROLE_TEMPLATES.find((role) => role.key === key)!;
 
     // Owner holds full administration (['*']) and is not enumerated per-capability.
     expect(roleFor('owner').capabilities).toEqual(['*']);

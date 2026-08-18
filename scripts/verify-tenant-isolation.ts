@@ -447,7 +447,15 @@ async function main() {
       ) VALUES
         ($1, 'org_devfathom', $2, 'Tenant A POS', $3, CURRENT_TIMESTAMP),
         ($4, $5, $6, 'Tenant B POS', $7, CURRENT_TIMESTAMP)`,
-      [deviceA, branchA, `device-hash-a-${suffix}`, deviceB, organizationB, branchB, `device-hash-b-${suffix}`]
+      [
+        deviceA,
+        branchA,
+        `device-hash-a-${suffix}`,
+        deviceB,
+        organizationB,
+        branchB,
+        `device-hash-b-${suffix}`,
+      ]
     );
     await client.query(
       `INSERT INTO "restaurant_operator_credentials" (
@@ -566,7 +574,15 @@ async function main() {
       ) VALUES
         ($1, 'org_devfathom', $2, $3, 9.99, CURRENT_TIMESTAMP),
         ($4, $5, $6, $7, 9.99, CURRENT_TIMESTAMP)`,
-      [priceEntryA, priceListVersionA, productA, priceEntryB, organizationB, priceListVersionB, productB]
+      [
+        priceEntryA,
+        priceListVersionA,
+        productA,
+        priceEntryB,
+        organizationB,
+        priceListVersionB,
+        productB,
+      ]
     );
     await client.query(
       `INSERT INTO "restaurant_menus" (
@@ -606,7 +622,15 @@ async function main() {
       ) VALUES
         ($1, 'org_devfathom', $2, $3, true, CURRENT_TIMESTAMP),
         ($4, $5, $6, $7, true, CURRENT_TIMESTAMP)`,
-      [itemOverrideA, publicationA, menuItemA, itemOverrideB, organizationB, publicationB, menuItemB]
+      [
+        itemOverrideA,
+        publicationA,
+        menuItemA,
+        itemOverrideB,
+        organizationB,
+        publicationB,
+        menuItemB,
+      ]
     );
 
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
