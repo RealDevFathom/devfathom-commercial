@@ -17,15 +17,21 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
   annotateAudit: vi.fn(),
   branchFindUnique: vi.fn(),
+  menuFindMany: vi.fn(),
   menuFindUnique: vi.fn(),
   itemFindUnique: vi.fn(),
+  priceListFindMany: vi.fn(),
   priceListFindFirst: vi.fn(),
   priceListFindUnique: vi.fn(),
   versionFindMany: vi.fn(),
   entryFindMany: vi.fn(),
+  pubFindMany: vi.fn(),
   pubFindUnique: vi.fn(),
   pubCreate: vi.fn(),
   pubUpdate: vi.fn(),
+  windowFindMany: vi.fn(),
+  exceptionFindMany: vi.fn(),
+  overrideFindMany: vi.fn(),
   overrideUpsert: vi.fn(),
 }));
 
@@ -54,20 +60,27 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const db = {
   restaurantBranch: { findUnique: mocks.branchFindUnique },
-  restaurantMenu: { findUnique: mocks.menuFindUnique },
+  restaurantMenu: { findMany: mocks.menuFindMany, findUnique: mocks.menuFindUnique },
   restaurantMenuItem: { findUnique: mocks.itemFindUnique },
   restaurantPriceList: {
+    findMany: mocks.priceListFindMany,
     findFirst: mocks.priceListFindFirst,
     findUnique: mocks.priceListFindUnique,
   },
   restaurantPriceListVersion: { findMany: mocks.versionFindMany },
   restaurantPriceListEntry: { findMany: mocks.entryFindMany },
   restaurantBranchMenuPublication: {
+    findMany: mocks.pubFindMany,
     findUnique: mocks.pubFindUnique,
     create: mocks.pubCreate,
     update: mocks.pubUpdate,
   },
-  restaurantBranchMenuItemOverride: { upsert: mocks.overrideUpsert },
+  restaurantMenuAvailabilityWindow: { findMany: mocks.windowFindMany },
+  restaurantMenuAvailabilityException: { findMany: mocks.exceptionFindMany },
+  restaurantBranchMenuItemOverride: {
+    findMany: mocks.overrideFindMany,
+    upsert: mocks.overrideUpsert,
+  },
 } as unknown as ScopedDb;
 
 function caller() {
@@ -94,16 +107,22 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
+  mocks.menuFindMany.mockResolvedValue([]);
   mocks.menuFindUnique.mockResolvedValue({ id: 'menu_1' });
   mocks.itemFindUnique.mockResolvedValue({ id: 'item_1', section: { menuId: 'menu_1' } });
+  mocks.priceListFindMany.mockResolvedValue([]);
   mocks.priceListFindFirst.mockResolvedValue(null);
   mocks.priceListFindUnique.mockResolvedValue({ id: 'pl_1' });
+  mocks.pubFindMany.mockResolvedValue([]);
   mocks.pubFindUnique.mockResolvedValue({
     id: 'pub_1',
     status: 'DRAFT',
     branchId: 'branch_1',
     menuId: 'menu_1',
   });
+  mocks.windowFindMany.mockResolvedValue([]);
+  mocks.exceptionFindMany.mockResolvedValue([]);
+  mocks.overrideFindMany.mockResolvedValue([]);
   mocks.pubCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'pub_new',
     ...data,
@@ -145,6 +164,67 @@ describe('capability gating & wiring (C7)', () => {
       priceOverride: '2.50',
     });
     expect(mocks.can.mock.calls[0][1]).toBe('menu:price');
+  });
+});
+
+describe('console read models (menu:read)', () => {
+  it('lists menus, price lists, and publications through menu:read', async () => {
+    await caller().listMenus();
+    await caller().listPriceLists();
+    await caller().listPublications();
+
+    expect(mocks.menuFindMany).toHaveBeenCalledOnce();
+    expect(mocks.priceListFindMany).toHaveBeenCalledOnce();
+    expect(mocks.pubFindMany).toHaveBeenCalledOnce();
+    expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+      'menu:read',
+      'menu:read',
+      'menu:read',
+    ]);
+  });
+
+  it('returns menu sections and items from the detail read', async () => {
+    mocks.menuFindUnique.mockResolvedValue({
+      id: 'menu_1',
+      name: 'Dinner',
+      sections: [{ id: 'section_1', items: [{ id: 'item_1' }] }],
+    });
+
+    await expect(caller().getMenu({ id: 'menu_1' })).resolves.toMatchObject({
+      sections: [{ items: [{ id: 'item_1' }] }],
+    });
+  });
+
+  it('serializes price-list entry money in the detail read', async () => {
+    mocks.priceListFindUnique.mockResolvedValue({
+      id: 'pl_1',
+      versions: [{ id: 'version_1', entries: [{ id: 'entry_1', price: D('12.50') }] }],
+    });
+
+    const result = await caller().getPriceList({ id: 'pl_1' });
+    expect(result.versions[0].entries[0].price).toBe('12.5');
+  });
+
+  it('reads publication scheduling and stringifies override money', async () => {
+    mocks.pubFindUnique.mockResolvedValue({
+      id: 'pub_1',
+      windows: [{ id: 'window_1' }],
+      exceptions: [{ id: 'exception_1' }],
+      itemOverrides: [{ id: 'override_1', priceOverride: D('3.50') }],
+    });
+    mocks.windowFindMany.mockResolvedValue([{ id: 'window_1' }]);
+    mocks.exceptionFindMany.mockResolvedValue([{ id: 'exception_1' }]);
+    mocks.overrideFindMany.mockResolvedValue([{ id: 'override_1', priceOverride: D('4.25') }]);
+
+    const publication = await caller().getPublication({ id: 'pub_1' });
+    const windows = await caller().listAvailabilityWindows({ publicationId: 'pub_1' });
+    const exceptions = await caller().listAvailabilityExceptions({ publicationId: 'pub_1' });
+    const overrides = await caller().listItemOverrides({ publicationId: 'pub_1' });
+
+    expect(publication.itemOverrides[0].priceOverride).toBe('3.5');
+    expect(windows).toHaveLength(1);
+    expect(exceptions).toHaveLength(1);
+    expect(overrides[0].priceOverride).toBe('4.25');
   });
 });
 

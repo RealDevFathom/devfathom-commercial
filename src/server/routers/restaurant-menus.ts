@@ -144,6 +144,168 @@ function publicationError(reason: PublicationErrorReason, message: string): neve
 }
 
 export const restaurantMenusRouter = router({
+  // ── Console read models (menu:read) ────────────────────────────────────────
+  listMenus: readProcedure.query(({ ctx }) =>
+    ctx.db.restaurantMenu.findMany({
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
+      include: {
+        brand: true,
+        _count: { select: { sections: true, publications: true } },
+      },
+    })
+  ),
+
+  getMenu: readProcedure
+    .input(z.object({ id: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const menu = await ctx.db.restaurantMenu.findUnique({
+        where: { id: input.id },
+        include: {
+          brand: true,
+          sections: {
+            orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+            include: {
+              items: {
+                orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+                include: { product: true, variant: true },
+              },
+            },
+          },
+        },
+      });
+      if (!menu) publicationError('MENU_NOT_FOUND', 'The menu does not exist.');
+      return menu;
+    }),
+
+  listPriceLists: readProcedure.query(({ ctx }) =>
+    ctx.db.restaurantPriceList.findMany({
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      include: { _count: { select: { versions: true, publications: true } } },
+    })
+  ),
+
+  getPriceList: readProcedure
+    .input(z.object({ id: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const priceList = await ctx.db.restaurantPriceList.findUnique({
+        where: { id: input.id },
+        include: {
+          versions: {
+            orderBy: { versionNumber: 'desc' },
+            include: {
+              entries: {
+                orderBy: { createdAt: 'asc' },
+                include: { product: true, variant: true },
+              },
+            },
+          },
+        },
+      });
+      if (!priceList) publicationError('PRICE_LIST_NOT_FOUND', 'The price list does not exist.');
+      return {
+        ...priceList,
+        versions: priceList.versions.map((version) => ({
+          ...version,
+          entries: version.entries.map((entry) => ({
+            ...entry,
+            price: entry.price.toString(),
+          })),
+        })),
+      };
+    }),
+
+  listPublications: readProcedure.query(({ ctx }) =>
+    ctx.db.restaurantBranchMenuPublication.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        branch: true,
+        menu: true,
+        priceList: true,
+        _count: { select: { windows: true, exceptions: true, itemOverrides: true } },
+      },
+    })
+  ),
+
+  getPublication: readProcedure
+    .input(z.object({ id: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const publication = await ctx.db.restaurantBranchMenuPublication.findUnique({
+        where: { id: input.id },
+        include: {
+          branch: true,
+          menu: {
+            include: {
+              sections: {
+                orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+                include: {
+                  items: {
+                    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+                    include: { product: true, variant: true },
+                  },
+                },
+              },
+            },
+          },
+          priceList: true,
+          windows: {
+            orderBy: { createdAt: 'asc' },
+            include: { menuItem: { include: { product: true, variant: true } } },
+          },
+          exceptions: { orderBy: { date: 'asc' } },
+          itemOverrides: {
+            orderBy: { createdAt: 'asc' },
+            include: { menuItem: { include: { product: true, variant: true } } },
+          },
+        },
+      });
+      if (!publication) {
+        publicationError('PUBLICATION_NOT_FOUND', 'The publication does not exist.');
+      }
+      return {
+        ...publication,
+        itemOverrides: publication.itemOverrides.map((override) => ({
+          ...override,
+          priceOverride: serializePrice(override.priceOverride),
+        })),
+      };
+    }),
+
+  listAvailabilityWindows: readProcedure
+    .input(z.object({ publicationId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      await loadPublication(ctx.db, input.publicationId);
+      return ctx.db.restaurantMenuAvailabilityWindow.findMany({
+        where: { publicationId: input.publicationId },
+        orderBy: { createdAt: 'asc' },
+        include: { menuItem: { include: { product: true, variant: true } } },
+      });
+    }),
+
+  listAvailabilityExceptions: readProcedure
+    .input(z.object({ publicationId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      await loadPublication(ctx.db, input.publicationId);
+      return ctx.db.restaurantMenuAvailabilityException.findMany({
+        where: { publicationId: input.publicationId },
+        orderBy: { date: 'asc' },
+      });
+    }),
+
+  listItemOverrides: readProcedure
+    .input(z.object({ publicationId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      await loadPublication(ctx.db, input.publicationId);
+      const overrides = await ctx.db.restaurantBranchMenuItemOverride.findMany({
+        where: { publicationId: input.publicationId },
+        orderBy: { createdAt: 'asc' },
+        include: { menuItem: { include: { product: true, variant: true } } },
+      });
+      return overrides.map((override) => ({
+        ...override,
+        priceOverride: serializePrice(override.priceOverride),
+      }));
+    }),
+
   // ── Menu authoring (menu:write) ─────────────────────────────────────────────
   createMenu: writeProcedure
     .input(
@@ -621,12 +783,14 @@ export const restaurantMenusRouter = router({
   // BUILD-ASSUMPTIONS: a price override is gated by `menu:price` alone (no co-auth).
   setItemOverride: priceProcedure
     .input(
-      z.object({
-        publicationId: z.string().min(1),
-        menuItemId: z.string().min(1),
-        isAvailable: z.boolean().optional(),
-        priceOverride: MONEY.nullable().optional(),
-      }).strict()
+      z
+        .object({
+          publicationId: z.string().min(1),
+          menuItemId: z.string().min(1),
+          isAvailable: z.boolean().optional(),
+          priceOverride: MONEY.nullable().optional(),
+        })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const publication = await loadPublication(ctx.db, input.publicationId);
