@@ -374,3 +374,101 @@ publication). · Conservative because these are the least-surprising defaults fo
 seam and each is pinned by a unit/router test rather than left implicit. · Revisited by the POS
 milestone that consumes and caches this read model, which may extend channel/price precedence
 (e.g. per-channel price lists) additively.
+
+### M4 — orders, kitchen, floor & service
+
+**C5 (business date) — cutoff default `00:00`, per-branch wall-clock (M4-L1)** · The business
+date is stamped once at order creation from `RestaurantBranch.timezone` + the additive
+`businessDayCutoff` wall-clock column, which defaults to `"00:00"` (midnight = the branch-local
+calendar date). Resolution is `Intl`-based and DST-safe (`src/lib/restaurant/business-date.ts`);
+it is never recomputed later from a UTC timestamp. · Conservative because a midnight cutoff is
+the least-surprising default that still exposes the column an operator sets when their day closes
+after midnight; a wrong cutoff only shifts a few late-night orders, and the value is corrected in
+branch settings without a data migration. · Revisited by the branch-settings surface that lets an
+operator set a non-midnight cutoff, and by any accepted cross-day-close rule (A05).
+
+**C5 (order numbering) — unique + monotone, not gap-free (M4-L1)** · The human order number is
+allocated from a per-`(branch, businessDate)` sequence row by a transactional row-locked upsert
+(`src/lib/restaurant/order-numbers.ts`). Uniqueness and monotonicity are guaranteed; gap-free is
+NOT — a rolled-back or cancelled order consumes a number. Order numbers are not receipt numbers;
+receipt/fiscal numbering is out of scope. · Conservative because gap-free numbering would require
+either serializing all order creation or a compensating renumber, both of which trade throughput
+or history-integrity for a property no accepted requirement asks of an order number (as opposed to
+a fiscal receipt). · Revisited by the payments/fiscalization milestone defining receipt numbering,
+where jurisdiction rules may demand gap-free sequences on the receipt — a separate concern.
+
+**C2/§12.5 (KDS transport) — bounded polling + outbox nudge, no external channel (M4-L1)** · The
+kitchen ledger (events + tickets + item states) is authoritative; the KDS read model derives from
+those durable rows. Realtime is only ever a nudge to read durable state: no SSE/websocket/external
+channel is built or claimed. The transport is bounded polling with a sequence cursor + gap
+detection; the outbox is a transactional seam (interface + `PENDING/DISPATCHED/DEAD` + attempt/
+backoff fields, `src/lib/restaurant/outbox.ts`). · Conservative because a durable-read + polling
+model is correct and testable without committing to a push transport before D19 selects one, and
+it cannot silently drop a kitchen event the way a process-local emission can. · Revisited by D19
+selecting the KDS notification transport (acknowledgement, replay, station routing), which layers
+onto the same durable rows.
+
+**§12.2 (dispatch worker) — outbox dispatch remains a seam; no scheduler exists (M4-L1)** · No
+durable scheduler/worker mechanism exists yet, so nothing dispatches the outbox in M4. The outbox
+append is real and transactional; the dispatcher is an interface with pure retry/backoff/dead-letter
+planning and NO implementation. This is flagged §12.2 debt, not a delivery claim. · Conservative
+because writing the durable rows now (and leaving dispatch unimplemented) is honest and unblocks
+downstream read models, whereas an uninvoked cron route would falsely read as a working pipeline. ·
+Revisited by the Phase-1 scheduler/worker milestone that provisions durable execution with
+overlap protection, retry, and dead-letter recovery.
+
+**C6 (post-prep void) — wastage disposition recorded, no stock mutation (M4-L1)** · A
+post-preparation void / cancel-with-prepared-items records the wastage disposition
+(`RestaurantWastageDisposition (WASTE | RESTOCK | NONE)`), a reason, and the co-authorization
+reference on the order item, and emits an outbox event. NO inventory mutation exists — there is no
+stock model yet. · Conservative because capturing the disposition + event now preserves the audit
+trail and the exact hook the inventory milestone consumes, without inventing stock semantics before
+that milestone. · Revisited by the inventory/purchasing milestone, which reads the disposition and
+applies the actual stock movement.
+
+**C4 (tax/service-charge) — zero-valued snapshot fields (M4-L1)** · Order items carry `taxAmount`
+and `serviceChargeAmount` `Decimal` columns that are structurally present and default to `0`. Tax
+and service-charge configuration does not exist yet, so nothing computes them. All money is
+`Decimal`; no floats. · Conservative because the columns must exist for the snapshot-on-write
+contract to be stable across the tax milestone, and a zero default is the only honest value before
+a tax engine exists. · Revisited by the payments/tax milestone that introduces tax/service-charge
+configuration and fills these snapshots at order time.
+
+**§11.2 (merge) — multi-table link to one order; combining two open orders deferred (M4-L1)** · A
+table merge is modelled as several active `RestaurantOrderTable` links (reason `MERGE`) pointing at
+ONE order — the order spans multiple tables. Combining two already-open orders into one is deferred.
+· Conservative because the multi-table-link shape covers the common "seat a party across two tables"
+case with the existing link-history table, while merging two open orders raises payment/ownership
+questions that belong with the bills/checks milestone. · Revisited by the payments/bills milestone
+that defines how two open orders (and their pending items) reconcile when combined.
+
+**§11.1 (courses) — plain integers; named-course config deferred (M4-L1)** · An order item's
+`course` is a plain `Int` (default `1`); hold-and-fire works by course number. Named/configurable
+course definitions (e.g. "Starter", "Main") are deferred. · Conservative because integer courses
+deliver the fire-sequencing behaviour the state machine needs without a course-configuration
+surface, and a later named-course map layers on without changing stored order history. · Revisited
+by a course-configuration feature that maps integers to names/labels.
+
+**§11.2 (section assignment) — per business date; shift granularity deferred (M4-L1)** · A server
+section assignment is keyed by `(section, staffProfileId, businessDate)` — one assignment per
+operator per section per day. Intra-day shift granularity is deferred. · Conservative because
+per-day assignment matches the business-date spine already used for orders and numbering, and
+covers routing/attribution without a shift-scheduling model. · Revisited by a workforce/shift
+scheduling feature that needs sub-day assignment windows.
+
+**C8 (KDS attribution) — device + optional operator (M4-L1)** · KDS/kitchen actions are attributable
+to the bound registered device (`kind = KDS`, `stationId`) with OPTIONAL operator attribution; a KDS
+need not have an operator signed in to act on a ticket. · Conservative because a station display is
+frequently shared and unattended, so requiring an operator would block legitimate kitchen action;
+the device identity is always present and sufficient for the ledger. · Revisited by a kitchen
+operator sign-in requirement, should an accepted policy demand per-action operator attribution.
+
+**C3/§11.1 (payment gate) — `PAYMENT_PENDING -> CLOSED` gated on all items resolved; settlement
+deferred (M4-L1)** · Pay-before-fulfilment is DISABLED in M4: an order reaches `PAYMENT_PENDING`
+only once every non-voided item is `SERVED`, and `CLOSED` is an explicit close from
+`PAYMENT_PENDING` (`src/lib/restaurant/order-state-machine.ts`). No settlement/tender/bill wiring
+exists — the transition is reachable but records no payment. · Conservative because it keeps the
+order lifecycle complete and testable now while leaving money movement to the milestone that owns
+it, and the QSR pay-before-fulfilment policy flag is present but off until an accepted service-mode
+policy enables it. · Revisited by the payments milestone that wires settlement and may enable
+pay-before-fulfilment for accepted QSR service modes.
