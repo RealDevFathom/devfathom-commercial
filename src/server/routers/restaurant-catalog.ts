@@ -16,6 +16,11 @@ import {
   createProduct,
   updateProduct,
   setProductStatus,
+  listBrands,
+  getBrand,
+  listCategories,
+  listProducts,
+  getProduct,
   createVariant,
   updateVariant,
   deleteVariant,
@@ -55,6 +60,8 @@ import {
   updateRecipeVersion,
   activateRecipeVersion,
   getActiveRecipeVersion,
+  getRecipeVersion,
+  listRecipeVersions,
   createRecipeLine,
   updateRecipeLine,
   deleteRecipeLine,
@@ -108,12 +115,26 @@ function serializeDecimal(value: { toString(): string } | null | undefined): str
   return value != null ? value.toString() : null;
 }
 
+/** Serialize the Decimal `yieldQuantity` on a recipe version for transport (C4). */
+function serializeRecipeVersion<T extends { yieldQuantity: { toString(): string } | null }>(
+  version: T
+): Omit<T, 'yieldQuantity'> & { yieldQuantity: string | null } {
+  return { ...version, yieldQuantity: serializeDecimal(version.yieldQuantity) };
+}
+
+/** Locale-keyed companion for a customer-facing string (D20), matching the L3 menus surface. */
+const LOCALIZED = z.record(z.string(), z.string());
+
 const BRAND_STATUS = z.enum(['ACTIVE', 'ARCHIVED']);
 const PRODUCT_STATUS = z.enum(['ACTIVE', 'ARCHIVED']);
 
 // ── Shared no-branchId assertion (C2) ────────────────────────────────────────
-// All canonical mutation inputs are defined without a `branchId` field.
-// The zod schemas below are the schema-level C2 guard: they accept no such field.
+// All canonical mutation inputs are defined without a `branchId` field. The
+// canonical *creation* schemas (createBrand, createProduct) go further and are
+// `.strict()`: a caller that tries to smuggle a branch-scoped or shadow-copy
+// field (`branchId`, `shadowCopyOfId`, `sourceCanonicalId`, …) is rejected with
+// BAD_REQUEST rather than having the field silently stripped — branches cannot
+// shadow-copy canonical records.
 
 export const restaurantCatalogRouter = router({
   // ── Brands ──────────────────────────────────────────────────────────────────
@@ -130,7 +151,17 @@ export const restaurantCatalogRouter = router({
     }),
 
   createBrand: writeProcedure
-    .input(z.object({ name: z.string().min(1).max(200) }))
+    .input(
+      z
+        .object({
+          name: z.string().min(1).max(200),
+          nameLocalized: LOCALIZED.nullable().optional(),
+        })
+        // C2: canonical brands cannot shadow-copy a branch record. `.strict()`
+        // rejects (not strips) any branch-scoped/shadow-copy field such as
+        // `branchId` or `shadowCopyOfId` with a BAD_REQUEST at the schema edge.
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       try {
         const brandsMax =
@@ -178,6 +209,58 @@ export const restaurantCatalogRouter = router({
         mapCatalogError(err);
       }
     }),
+
+  // ── Read models (menu:read) — catalog console read-contract ───────────────────
+
+  listBrands: readProcedure.query(async ({ ctx }) => {
+    try {
+      return await listBrands(ctx.db);
+    } catch (err) {
+      mapCatalogError(err);
+    }
+  }),
+
+  getBrand: readProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    try {
+      return await getBrand(ctx.db, input.id);
+    } catch (err) {
+      mapCatalogError(err);
+    }
+  }),
+
+  listCategories: readProcedure.query(async ({ ctx }) => {
+    try {
+      return await listCategories(ctx.db);
+    } catch (err) {
+      mapCatalogError(err);
+    }
+  }),
+
+  listProducts: readProcedure
+    .input(
+      z
+        .object({
+          categoryId: z.string().nullable().optional(),
+          status: PRODUCT_STATUS.optional(),
+          type: z.enum(['ITEM', 'COMBO']).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await listProducts(ctx.db, input ?? {});
+      } catch (err) {
+        mapCatalogError(err);
+      }
+    }),
+
+  getProduct: readProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    try {
+      return await getProduct(ctx.db, input.id);
+    } catch (err) {
+      mapCatalogError(err);
+    }
+  }),
 
   // ── Categories ───────────────────────────────────────────────────────────────
 
@@ -229,13 +312,20 @@ export const restaurantCatalogRouter = router({
 
   createProduct: writeProcedure
     .input(
-      z.object({
-        name: z.string().min(1).max(200),
-        description: z.string().nullable().optional(),
-        type: z.enum(['ITEM', 'COMBO']).optional(),
-        categoryId: z.string().nullable().optional(),
-        sortOrder: z.number().int().optional(),
-      })
+      z
+        .object({
+          name: z.string().min(1).max(200),
+          nameLocalized: LOCALIZED.nullable().optional(),
+          description: z.string().nullable().optional(),
+          descriptionLocalized: LOCALIZED.nullable().optional(),
+          type: z.enum(['ITEM', 'COMBO']).optional(),
+          categoryId: z.string().nullable().optional(),
+          sortOrder: z.number().int().optional(),
+        })
+        // C2: canonical products cannot shadow-copy a branch/source record.
+        // `.strict()` rejects fields like `sourceCanonicalId` or `branchId`
+        // rather than silently stripping them.
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
@@ -788,6 +878,32 @@ export const restaurantCatalogRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         return await getActiveRecipeVersion(ctx.db, input.recipeId);
+      } catch (err) {
+        mapCatalogError(err);
+      }
+    }),
+
+  /**
+   * Public historical read (GOV-2): fetch a recipe version by id whatever its
+   * status. A SUPERSEDED version is never deleted, so this stays readable; the
+   * read is capability-gated (menu:read) like every other catalog read.
+   */
+  getRecipeVersion: readProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      try {
+        return serializeRecipeVersion(await getRecipeVersion(ctx.db, input.id));
+      } catch (err) {
+        mapCatalogError(err);
+      }
+    }),
+
+  listRecipeVersions: readProcedure
+    .input(z.object({ recipeId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      try {
+        const versions = await listRecipeVersions(ctx.db, input.recipeId);
+        return versions.map(serializeRecipeVersion);
       } catch (err) {
         mapCatalogError(err);
       }

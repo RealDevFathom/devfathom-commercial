@@ -533,7 +533,7 @@ async function assertNoRecipeCycle(db: ScopedDb, parentRecipeId: string, subReci
   }
 }
 
-// ── Convenience query: resolved active version for a recipe ───────────────────
+// ── Read models: version history (GOV-2) ──────────────────────────────────────
 
 export async function getActiveRecipeVersion(db: ScopedDb, recipeId: string) {
   await requireRecipe(db, recipeId);
@@ -542,4 +542,29 @@ export async function getActiveRecipeVersion(db: ScopedDb, recipeId: string) {
     select: { id: true, status: true, versionNumber: true },
   });
   return resolveActiveVersion(versions as VersionRecord[]);
+}
+
+/**
+ * Read a single recipe version by id, whatever its status. SUPERSEDED versions
+ * are never deleted (GOV-2), so this is the public, capability-gated path a
+ * console uses to render historical recipe state; it does not resolve the active
+ * version — it returns exactly the version asked for. Missing id is NOT_FOUND.
+ */
+export async function getRecipeVersion(db: ScopedDb, id: string) {
+  const version = await db.restaurantRecipeVersion.findUnique({ where: { id } });
+  if (!version) throw new RecipeError('Recipe version not found.', 'NOT_FOUND');
+  return version;
+}
+
+/**
+ * List every version of a recipe, newest version number first. Superseded and
+ * draft versions are included so a console can render the full history/timeline
+ * (GOV-2); the recipe must exist in scope.
+ */
+export async function listRecipeVersions(db: ScopedDb, recipeId: string) {
+  await requireRecipe(db, recipeId);
+  return db.restaurantRecipeVersion.findMany({
+    where: { recipeId },
+    orderBy: { versionNumber: 'desc' },
+  });
 }
