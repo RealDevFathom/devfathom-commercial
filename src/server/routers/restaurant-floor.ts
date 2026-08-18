@@ -313,11 +313,7 @@ export const restaurantFloorRouter = router({
     }),
 
   setSectionTables: manageProcedure
-    .input(
-      z
-        .object({ sectionId: z.string(), tableIds: z.array(z.string()).max(500) })
-        .strict()
-    )
+    .input(z.object({ sectionId: z.string(), tableIds: z.array(z.string()).max(500) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
         const membership = await setSectionTables(ctx.db, input.sectionId, input.tableIds);

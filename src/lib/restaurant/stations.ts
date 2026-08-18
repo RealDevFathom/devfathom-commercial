@@ -312,10 +312,7 @@ export type ListStationsInput = {
  * The `listStations` read contract: a branch's stations (default first, then by
  * name) each with its routing rules ordered by descending priority.
  */
-export async function listStations(
-  db: ScopedDb,
-  input: ListStationsInput
-): Promise<StationView[]> {
+export async function listStations(db: ScopedDb, input: ListStationsInput): Promise<StationView[]> {
   const stations = await db.restaurantKitchenStation.findMany({
     where: { branchId: input.branchId, ...(input.includeInactive ? {} : { active: true }) },
     orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],

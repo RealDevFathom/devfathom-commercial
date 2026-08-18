@@ -137,7 +137,10 @@ async function assertCodeAvailable(
     select: { id: true },
   });
   if (clash) {
-    throw new FloorError(`A table with code "${code}" already exists on this floor.`, 'DUPLICATE_CODE');
+    throw new FloorError(
+      `A table with code "${code}" already exists on this floor.`,
+      'DUPLICATE_CODE'
+    );
   }
 }
 
