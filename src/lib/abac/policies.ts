@@ -31,6 +31,12 @@ export const ALL_ACTIONS = [
   'staff:manage', // restaurant M2: back-office staff & operator-credential management (org-role driven)
   'menu:read', // restaurant M3-L2: read canonical catalog, recipes, and costing data
   'menu:write', // restaurant M3-L2: mutate canonical catalog, recipes, and costing data
+  'floor:manage', // restaurant M4-L3: floor/table/section/station configuration (org-role driven)
+  // restaurant M4-L2 (COORDINATED): the order-read capability L3's floor/section/
+  // station reads gate on. L2 owns this additive entry; declared here too so the
+  // L3 lane compiles and tests standalone. Supervisor dedups at merge (the
+  // second-merged lane realigns — same adjacency rule as the other coordinated files).
+  'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -90,4 +96,12 @@ export const POLICIES: Record<Action, Policy[]> = {
   // by the DB `customDecision` path — no static agency-role policy.
   'menu:read': [],
   'menu:write': [],
+
+  // Restaurant M4: floor configuration (`floor:manage`, M4-L3) and order reads
+  // (`orders:read`, coordinated with L2). Both are org-role-driven — granted
+  // through an organization role/override carrying the capability (or `*`),
+  // evaluated by the DB `customDecision` path in `can()`; no static agency-role
+  // policy, so a subject without an explicit grant is denied by default.
+  'floor:manage': [],
+  'orders:read': [],
 };

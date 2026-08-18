@@ -62,6 +62,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // "Menu and Costing" module (`restaurant-menu`) — the module whose licensed
   // purpose is exactly this surface (BUILD-ASSUMPTIONS).
   restaurantMenus: 'restaurant-menu',
+  // M4-L3: floors, tables, server sections and kitchen stations gate on the POS
+  // module (`restaurant-pos`) — the module whose licensed purpose is running the
+  // service floor and kitchen (BUILD-ASSUMPTIONS).
+  restaurantFloor: 'restaurant-pos',
 };
 
 export function moduleForProcedure(path: string): string | null {
