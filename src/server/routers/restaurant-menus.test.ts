@@ -13,7 +13,8 @@ import { Prisma } from '@/generated/prisma/client';
 const D = (v: string) => new Prisma.Decimal(v);
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn(async () => true),
+  // Variadic so tests can assert the action passed to `can(subject, action, …)`.
+  can: vi.fn(async (..._args: unknown[]) => true),
   annotateAudit: vi.fn(),
   branchFindUnique: vi.fn(),
   menuFindUnique: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock('@/lib/abac', async () => {
 
 import { restaurantMenusRouter } from './restaurant-menus';
 import type { TRPCContext } from '../trpc';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const db = {
   restaurantBranch: { findUnique: mocks.branchFindUnique },
@@ -66,8 +68,7 @@ const db = {
     update: mocks.pubUpdate,
   },
   restaurantBranchMenuItemOverride: { upsert: mocks.overrideUpsert },
-} as unknown as ScopedDbLike;
-type ScopedDbLike = Parameters<typeof restaurantMenusRouter.createCaller>[0]['db'];
+} as unknown as ScopedDb;
 
 function caller() {
   return restaurantMenusRouter.createCaller({
