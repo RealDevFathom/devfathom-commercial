@@ -57,6 +57,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // sessions are foundational to running any restaurant terminal, so they gate on
   // the mandatory Restaurant Core module (BUILD-ASSUMPTIONS), not an optional add-on.
   restaurantDevices: 'restaurant-core',
+  // M3-L3: menus, price lists and branch-menu publications gate on the optional
+  // "Menu and Costing" module (`restaurant-menu`) — the module whose licensed
+  // purpose is exactly this surface (BUILD-ASSUMPTIONS).
+  restaurantMenus: 'restaurant-menu',
 };
 
 export function moduleForProcedure(path: string): string | null {

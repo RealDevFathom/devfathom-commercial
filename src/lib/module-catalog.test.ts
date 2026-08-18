@@ -15,6 +15,7 @@ describe('module catalog routing', () => {
     ['finance.summary', 'finance'],
     ['apiTokens.create', 'api'],
     ['restaurantStaff.issueCredential', 'restaurant-core'],
+    ['restaurantMenus.publishPublication', 'restaurant-menu'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
