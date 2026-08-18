@@ -1,0 +1,191 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  ALL_VERTICALS,
+  RESTAURANT_CAPABILITIES,
+  RESTAURANT_CAPABILITY_NAMESPACES,
+  RESTAURANT_LIMIT_KEYS,
+  RESTAURANT_MODULES,
+  RESTAURANT_PACKAGES,
+  RESTAURANT_ROLE_TEMPLATES,
+  VERTICALS,
+  assertPackageCompatibleWithVertical,
+  isPackageCompatibleWithVertical,
+  isRestaurantModuleKey,
+  limitKeysForVertical,
+  mandatoryModulesForVertical,
+  modulesForVertical,
+  packageByKey,
+  packagesForVertical,
+  restaurantModuleByKey,
+  roleTemplatesForVertical,
+} from './vertical-catalog';
+
+describe('vertical definitions (§2)', () => {
+  it('defines exactly the two verticals with UI labels', () => {
+    expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT']);
+    expect(VERTICALS.AGENCY.label).toBe('Agency');
+    expect(VERTICALS.RESTAURANT.label).toBe('Restaurant');
+  });
+});
+
+describe('restaurant module map (§6)', () => {
+  it('lists exactly the ten commercial modules', () => {
+    expect(RESTAURANT_MODULES).toHaveLength(10);
+  });
+
+  it('every module has a name, category, and /restaurant route prefix', () => {
+    for (const mod of RESTAURANT_MODULES) {
+      expect(mod.name.length).toBeGreaterThan(0);
+      expect(mod.category.length).toBeGreaterThan(0);
+      expect(mod.vertical).toBe('RESTAURANT');
+      expect(mod.routePrefix.startsWith('/restaurant')).toBe(true);
+    }
+  });
+
+  it('uses unique module keys and route prefixes', () => {
+    const keys = RESTAURANT_MODULES.map((module) => module.key);
+    const routes = RESTAURANT_MODULES.map((module) => module.routePrefix);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(new Set(routes).size).toBe(routes.length);
+  });
+
+  it('marks Restaurant Core as the single mandatory module (§6.1)', () => {
+    const mandatory = RESTAURANT_MODULES.filter((module) => module.mandatory);
+    expect(mandatory.map((module) => module.key)).toEqual(['restaurant-core']);
+  });
+
+  it('modulesForVertical returns restaurant modules only for RESTAURANT', () => {
+    expect(modulesForVertical('RESTAURANT')).toEqual(RESTAURANT_MODULES);
+    expect(modulesForVertical('AGENCY')).toEqual([]);
+  });
+
+  it('mandatoryModulesForVertical returns Restaurant Core for RESTAURANT', () => {
+    expect(mandatoryModulesForVertical('RESTAURANT').map((m) => m.key)).toEqual([
+      'restaurant-core',
+    ]);
+    expect(mandatoryModulesForVertical('AGENCY')).toEqual([]);
+  });
+
+  it('resolves modules by key', () => {
+    expect(restaurantModuleByKey('restaurant-pos')?.name).toBe('POS and Fulfilment');
+    expect(restaurantModuleByKey('nope')).toBeUndefined();
+    expect(isRestaurantModuleKey('restaurant-core')).toBe(true);
+    expect(isRestaurantModuleKey('projects')).toBe(false);
+  });
+});
+
+describe('limit keys (§7)', () => {
+  it('defines the thirteen limit keys with counting contracts', () => {
+    expect(RESTAURANT_LIMIT_KEYS).toHaveLength(13);
+    for (const limit of RESTAURANT_LIMIT_KEYS) {
+      expect(limit.countedUnit.length).toBeGreaterThan(0);
+    }
+    expect(RESTAURANT_LIMIT_KEYS.map((l) => l.key)).toContain('restaurant.locations.max');
+  });
+
+  it('limitKeysForVertical is restaurant-only', () => {
+    expect(limitKeysForVertical('RESTAURANT')).toEqual(RESTAURANT_LIMIT_KEYS);
+    expect(limitKeysForVertical('AGENCY')).toEqual([]);
+  });
+});
+
+describe('role templates and capabilities (§8)', () => {
+  it('defines the eleven role templates', () => {
+    expect(RESTAURANT_ROLE_TEMPLATES).toHaveLength(11);
+    expect(RESTAURANT_ROLE_TEMPLATES.map((role) => role.key)).toContain('owner');
+  });
+
+  it('the owner template holds full administration', () => {
+    const owner = RESTAURANT_ROLE_TEMPLATES.find((role) => role.key === 'owner');
+    expect(owner?.capabilities).toEqual(['*']);
+  });
+
+  it('every non-owner capability is a namespaced action drawn from the catalog', () => {
+    for (const role of RESTAURANT_ROLE_TEMPLATES) {
+      for (const capability of role.capabilities) {
+        if (capability === '*') continue;
+        expect(RESTAURANT_CAPABILITIES).toContain(capability);
+        const namespace = capability.split(':')[0];
+        expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain(namespace);
+      }
+    }
+  });
+
+  it('roleTemplatesForVertical is restaurant-only', () => {
+    expect(roleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_ROLE_TEMPLATES);
+    expect(roleTemplatesForVertical('AGENCY')).toEqual([]);
+  });
+});
+
+describe('commercial packages (§13)', () => {
+  it('defines the three restaurant packages, all restaurant-vertical', () => {
+    expect(RESTAURANT_PACKAGES).toHaveLength(3);
+    expect(RESTAURANT_PACKAGES.map((pkg) => pkg.key)).toEqual([
+      'restaurant-essentials',
+      'restaurant-operations',
+      'restaurant-enterprise',
+    ]);
+    for (const pkg of RESTAURANT_PACKAGES) {
+      expect(pkg.vertical).toBe('RESTAURANT');
+    }
+  });
+
+  it('every package includes mandatory Restaurant Core and only real module keys', () => {
+    for (const pkg of RESTAURANT_PACKAGES) {
+      expect(pkg.moduleKeys).toContain('restaurant-core');
+      for (const key of pkg.moduleKeys) {
+        expect(isRestaurantModuleKey(key)).toBe(true);
+      }
+    }
+  });
+
+  it('Essentials caps locations at one branch (D10)', () => {
+    const essentials = packageByKey('restaurant-essentials');
+    expect(essentials?.defaultLimits['restaurant.locations.max']).toBe(1);
+  });
+
+  it('package tiers widen: Essentials ⊆ Operations ⊆ Enterprise modules', () => {
+    const [essentials, operations, enterprise] = RESTAURANT_PACKAGES;
+    expect(operations.moduleKeys.length).toBeGreaterThan(essentials.moduleKeys.length);
+    expect(enterprise.moduleKeys).toHaveLength(RESTAURANT_MODULES.length);
+    for (const key of essentials.moduleKeys) expect(operations.moduleKeys).toContain(key);
+    for (const key of operations.moduleKeys) expect(enterprise.moduleKeys).toContain(key);
+  });
+
+  it('every default limit uses a defined §7 limit key', () => {
+    const validKeys = new Set(RESTAURANT_LIMIT_KEYS.map((limit) => limit.key));
+    for (const pkg of RESTAURANT_PACKAGES) {
+      for (const key of Object.keys(pkg.defaultLimits)) {
+        expect(validKeys.has(key)).toBe(true);
+      }
+    }
+  });
+
+  it('packagesForVertical filters by vertical', () => {
+    expect(packagesForVertical('RESTAURANT')).toEqual(RESTAURANT_PACKAGES);
+    expect(packagesForVertical('AGENCY')).toEqual([]);
+  });
+});
+
+describe('package compatibility (§2.3 / D10)', () => {
+  it('is a single vertical-column equality', () => {
+    expect(isPackageCompatibleWithVertical('RESTAURANT', 'RESTAURANT')).toBe(true);
+    expect(isPackageCompatibleWithVertical('AGENCY', 'AGENCY')).toBe(true);
+    expect(isPackageCompatibleWithVertical('RESTAURANT', 'AGENCY')).toBe(false);
+    expect(isPackageCompatibleWithVertical('AGENCY', 'RESTAURANT')).toBe(false);
+  });
+
+  it('assertPackageCompatibleWithVertical passes on a match', () => {
+    expect(() => assertPackageCompatibleWithVertical('RESTAURANT', 'RESTAURANT')).not.toThrow();
+  });
+
+  it('assertPackageCompatibleWithVertical rejects a mismatch (server-side bypass guard)', () => {
+    expect(() => assertPackageCompatibleWithVertical('RESTAURANT', 'AGENCY')).toThrow(
+      /not compatible/
+    );
+    expect(() => assertPackageCompatibleWithVertical('AGENCY', 'RESTAURANT')).toThrow(
+      /not compatible/
+    );
+  });
+});

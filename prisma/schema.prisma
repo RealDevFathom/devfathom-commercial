@@ -434,57 +434,59 @@ model User {
   updatedAt          DateTime   @updatedAt
 
   // Relations
-  organization         Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationRole     OrganizationRole?              @relation(fields: [organizationRoleId], references: [id], onDelete: SetNull)
-  permissionOverrides  UserPermissionOverride[]
-  projectMembers       ProjectMember[]
-  assignedTasks        TaskAssignee[]
-  taskComments         TaskComment[]
-  createdTasks         Task[]                         @relation("TaskCreator")
-  sentMessages         Message[]
-  channelMembers       ChannelMember[]
-  createdChannels      Channel[]
-  messageMentions      MessageMention[]
-  pinnedMessages       PinnedMessage[]
-  savedMessages        SavedMessage[]
-  leaveRequests        LeaveRequest[]                 @relation("LeaveRequester")
-  approvedLeaves       LeaveRequest[]                 @relation("LeaveApprover")
-  performanceNotes     PerformanceNote[]              @relation("NoteSubject")
-  writtenNotes         PerformanceNote[]              @relation("NoteAuthor")
-  activities           Activity[]
-  notifications        Notification[]
-  uploadedFiles        ProjectFile[]
-  uploadedDocs         Document[]
-  timeEntries          TimeEntry[]
-  meetingAttendees     MeetingAttendee[]
-  apiTokens            ApiToken[]
-  authoredNotes        Note[]                         @relation("NoteAuthor")
-  noteShares           NoteShare[]
-  columnDefaults       ColumnDefaultAssignee[]
-  attendanceLog        MeetingAttendanceLog[]
-  invitation           Invitation?                    @relation("UserInvitation")
-  invitationsSent      Invitation[]                   @relation("InvitationsSent")
-  passwordResetTokens  PasswordResetToken[]
+  organization                Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationRole            OrganizationRole?              @relation(fields: [organizationRoleId], references: [id], onDelete: SetNull)
+  permissionOverrides         UserPermissionOverride[]
+  projectMembers              ProjectMember[]
+  assignedTasks               TaskAssignee[]
+  taskComments                TaskComment[]
+  createdTasks                Task[]                         @relation("TaskCreator")
+  sentMessages                Message[]
+  channelMembers              ChannelMember[]
+  createdChannels             Channel[]
+  messageMentions             MessageMention[]
+  pinnedMessages              PinnedMessage[]
+  savedMessages               SavedMessage[]
+  leaveRequests               LeaveRequest[]                 @relation("LeaveRequester")
+  approvedLeaves              LeaveRequest[]                 @relation("LeaveApprover")
+  performanceNotes            PerformanceNote[]              @relation("NoteSubject")
+  writtenNotes                PerformanceNote[]              @relation("NoteAuthor")
+  activities                  Activity[]
+  notifications               Notification[]
+  uploadedFiles               ProjectFile[]
+  uploadedDocs                Document[]
+  timeEntries                 TimeEntry[]
+  meetingAttendees            MeetingAttendee[]
+  apiTokens                   ApiToken[]
+  authoredNotes               Note[]                         @relation("NoteAuthor")
+  noteShares                  NoteShare[]
+  columnDefaults              ColumnDefaultAssignee[]
+  attendanceLog               MeetingAttendanceLog[]
+  invitation                  Invitation?                    @relation("UserInvitation")
+  invitationsSent             Invitation[]                   @relation("InvitationsSent")
+  passwordResetTokens         PasswordResetToken[]
   // IMP-HR-04 performance reviews + IMP-NOTE-02 note mentions
-  reviewCyclesCreated  ReviewCycle[]                  @relation("ReviewCycleCreator")
-  reviewsAbout         Review[]                       @relation("ReviewSubject")
-  reviewsWritten       Review[]                       @relation("ReviewReviewer")
-  noteMentions         NoteMention[]
+  reviewCyclesCreated         ReviewCycle[]                  @relation("ReviewCycleCreator")
+  reviewsAbout                Review[]                       @relation("ReviewSubject")
+  reviewsWritten              Review[]                       @relation("ReviewReviewer")
+  noteMentions                NoteMention[]
   // Big Bets: NOTE-01 versioning, HR-01 leave balances, AUTH-02 recovery codes
-  noteRevisions        NoteRevision[]                 @relation("NoteRevisionEditor")
-  leaveBalances        LeaveBalance[]                 @relation("UserLeaveBalances")
-  recoveryCodes        TwoFactorRecoveryCode[]
-  webhooksCreated      Webhook[]                      @relation("WebhookCreator")
-  auditLogs            AuditLog[]                     @relation("UserAuditLogs")
-  resignations         Resignation[]                  @relation("UserResignations")
-  resignationsReviewed Resignation[]                  @relation("ResignationsReviewed")
+  noteRevisions               NoteRevision[]                 @relation("NoteRevisionEditor")
+  leaveBalances               LeaveBalance[]                 @relation("UserLeaveBalances")
+  recoveryCodes               TwoFactorRecoveryCode[]
+  webhooksCreated             Webhook[]                      @relation("WebhookCreator")
+  auditLogs                   AuditLog[]                     @relation("UserAuditLogs")
+  resignations                Resignation[]                  @relation("UserResignations")
+  resignationsReviewed        Resignation[]                  @relation("ResignationsReviewed")
   // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
-  mailboxes            Mailbox[]
-  ssoTickets           TenantSsoTicket[]
+  mailboxes                   Mailbox[]
+  ssoTickets                  TenantSsoTicket[]
   // MEET-01
-  meetingParticipants  MeetingParticipant[]
-  meetingAdmissions    MeetingOccurrenceParticipant[]
-  meetingSessions      MeetingParticipantSession[]
+  meetingParticipants         MeetingParticipant[]
+  meetingAdmissions           MeetingOccurrenceParticipant[]
+  meetingSessions             MeetingParticipantSession[]
+  // §4.1: restaurant branch assignments (branch-level authorization seam).
+  restaurantBranchAssignments RestaurantBranchAssignment[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -2141,11 +2143,23 @@ model EmailMessage {
 // PLATFORM CONTROL PLANE — commercial, tenant configuration, identity and ops
 // ===========================================================================
 
+/// §2: the operating model an organization runs under. Deliberately a two-value
+/// enum, not a generic vertical builder — a new vertical still needs purpose-built
+/// routes, models, authorization, and dashboards. Existing organizations and
+/// packages are migrated to AGENCY (§2.2). The single server-owned catalog in
+/// src/lib/vertical-catalog.ts (§2.3) — not per-screen conditionals — decides
+/// package/module/route compatibility from this enum.
+enum OrganizationVertical {
+  AGENCY
+  RESTAURANT
+}
+
 model Organization {
   id                  String                     @id @default(cuid())
   slug                String                     @unique
   legalName           String
   displayName         String
+  vertical            OrganizationVertical       @default(AGENCY)
   status              OrganizationStatus         @default(ONBOARDING)
   deploymentMode      OrganizationDeploymentMode @default(SHARED)
   packageId           String?
@@ -2195,7 +2209,51 @@ model Organization {
   @@index([status])
   @@index([deploymentMode])
   @@index([packageId])
+  @@index([vertical])
   @@map("organizations")
+}
+
+/// §4/§4.1: branch-first schema. A restaurant company is one organization; its
+/// operating locations are branches beneath it. Modeled from the first restaurant
+/// release even when a package allows one branch only. Tenant-scoped exactly like
+/// the operational tables (bare RLS-guarded organizationId, no cross-org
+/// aggregation — D09); a partial unique index enforces one default branch per org.
+model RestaurantBranch {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  timezone       String   @default("UTC")
+  address        String?
+  active         Boolean  @default(true)
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  assignments RestaurantBranchAssignment[]
+
+  @@index([organizationId])
+  @@map("restaurant_branches")
+}
+
+/// §4.1/§8/D12: branch authorization is an additional boundary above organization
+/// RLS, expressed as explicit user-to-branch assignment rows enforced server-side.
+/// The branchId column and this table are the policy-ready seams for a later
+/// branch-scope DB decision (D12); no branch-level DB policy is invented here.
+model RestaurantBranchAssignment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  userId         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("restaurant_branch_assignments")
 }
 
 model PlatformUser {
@@ -2320,15 +2378,19 @@ model PlatformModule {
 }
 
 model PlatformPackage {
-  id           String   @id @default(cuid())
-  key          String   @unique
+  id           String               @id @default(cuid())
+  key          String               @unique
   name         String
   description  String?
-  version      Int      @default(1)
-  active       Boolean  @default(true)
-  defaultSeats Int      @default(1)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  // §2.3: package stamping. Onboarding shows only packages whose vertical matches
+  // the organization type, and the server rejects a mismatched package even if the
+  // UI is bypassed. Existing packages migrate to AGENCY.
+  vertical     OrganizationVertical @default(AGENCY)
+  version      Int                  @default(1)
+  active       Boolean              @default(true)
+  defaultSeats Int                  @default(1)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
 
   moduleLinks   PlatformPackageModule[]
   organizations Organization[]

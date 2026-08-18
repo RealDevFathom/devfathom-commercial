@@ -327,6 +327,10 @@ async function main() {
     const webhookB = `webhook_b_${suffix}`;
     const deliveryA = `delivery_a_${suffix}`;
     const deliveryB = `delivery_b_${suffix}`;
+    const branchA = `branch_a_${suffix}`;
+    const branchB = `branch_b_${suffix}`;
+    const assignmentA = `assignment_a_${suffix}`;
+    const assignmentB = `assignment_b_${suffix}`;
     await client.query(
       `INSERT INTO "api_tokens" (
         "id", "organizationId", "name", "prefix", "tokenHash", "scopes", "userId"
@@ -362,6 +366,26 @@ async function main() {
       [deliveryA, webhookA, deliveryB, organizationB, webhookB]
     );
 
+    // M1-L1: restaurant branch tables carry a bare organizationId and forced
+    // org-level RLS. One branch + one user-to-branch assignment per tenant, so
+    // each read below distinguishes "isolated" from "empty".
+    await client.query(
+      `INSERT INTO "restaurant_branches" (
+        "id", "organizationId", "name", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', 'Tenant A Branch', CURRENT_TIMESTAMP),
+        ($2, $3, 'Tenant B Branch', CURRENT_TIMESTAMP)`,
+      [branchA, branchB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_branch_assignments" (
+        "id", "organizationId", "branchId", "userId", "updatedAt"
+      ) VALUES
+        ($1, 'org_devfathom', $2, $3, CURRENT_TIMESTAMP),
+        ($4, $5, $6, $7, CURRENT_TIMESTAMP)`,
+      [assignmentA, branchA, userA, assignmentB, organizationB, branchB, userB]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -388,6 +412,8 @@ async function main() {
       ['api_tokens', apiTokenA, apiTokenB],
       ['webhooks', webhookA, webhookB],
       ['webhook_deliveries', deliveryA, deliveryB],
+      ['restaurant_branches', branchA, branchB],
+      ['restaurant_branch_assignments', assignmentA, assignmentB],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -490,6 +516,16 @@ async function main() {
       ) VALUES ($1, $2, 'RLS Escape', $3, 'EMPLOYEE', 'ENGINEERING', 'Engineer',
         CURRENT_TIMESTAMP, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [`escape_${suffix}`, organizationB, `escape-${suffix}@example.test`]
+      )
+    );
+
+    // M1-L1: the branch table's WITH CHECK must fail closed too — a tenant A
+    // scope cannot mint a branch owned by another organization.
+    await expectDatabaseError('42501', () =>
+      client.query(
+        `INSERT INTO "restaurant_branches" ("id", "organizationId", "name", "updatedAt")
+         VALUES ($1, $2, 'Escape Branch', CURRENT_TIMESTAMP)`,
+        [`branch_escape_${suffix}`, organizationB]
       )
     );
 
@@ -682,7 +718,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, token/webhook isolation, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);
