@@ -162,7 +162,7 @@ describeIfDatabase('M3 cross-tenant RLS probes (real PostgreSQL)', () => {
   beforeAll(async () => {
     const parsed = new URL(TEST_DATABASE_URL!);
     if (
-      !['localhost', '127.0.0.1', '::1'].includes(parsed.hostname) &&
+      !['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname) &&
       process.env.ALLOW_REMOTE_RLS_TEST !== 'true'
     ) {
       throw new Error('Refusing to run M3 RLS probes against a non-local database.');
@@ -229,12 +229,20 @@ describeIfDatabase('M3 cross-tenant RLS probes (real PostgreSQL)', () => {
     );
   });
 
-  it.each(M3_TABLES)('%s hides tenant B from read, update, and delete', async (table) => {
+  it.each(M3_TABLES)('%s permits tenant A writes and hides tenant B', async (table) => {
     const visible = await client!.query<{ id: string; organizationId: string }>(
       `SELECT "id", "organizationId" FROM "${table}" WHERE "id" IN ($1, $2)`,
       [ids.rowA, ids.rowB]
     );
     expect(visible.rows).toEqual([{ id: ids.rowA, organizationId: ids.orgA }]);
+    expect(
+      (
+        await client!.query(
+          `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+          [ids.rowA]
+        )
+      ).rowCount
+    ).toBe(1);
     expect(
       (
         await client!.query(
@@ -270,6 +278,14 @@ describeIfDatabase('M3 cross-tenant RLS probes (real PostgreSQL)', () => {
           [ids.rowA, ids.rowB]
         );
         expect(visible.rows).toEqual([{ id: ids.rowA }, { id: ids.rowB }]);
+        expect(
+          (
+            await client!.query(
+              `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+              [ids.rowB]
+            )
+          ).rowCount
+        ).toBe(1);
       } finally {
         await client!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
       }

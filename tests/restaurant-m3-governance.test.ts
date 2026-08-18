@@ -315,7 +315,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
   beforeAll(async () => {
     const parsed = new URL(TEST_DATABASE_URL!);
     if (
-      !['localhost', '127.0.0.1', '::1'].includes(parsed.hostname) &&
+      !['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname) &&
       process.env.ALLOW_REMOTE_RLS_TEST !== 'true'
     ) {
       throw new Error('Refusing to run M3 governance probes against a non-local database.');
@@ -395,6 +395,8 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
          FROM pg_catalog.pg_constraint constraint_row
          JOIN pg_catalog.pg_class child ON child.oid = constraint_row.conrelid
          JOIN pg_catalog.pg_class parent ON parent.oid = constraint_row.confrelid
+         JOIN pg_catalog.pg_namespace child_namespace ON child_namespace.oid = child.relnamespace
+         JOIN pg_catalog.pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
          CROSS JOIN LATERAL unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, ordinality)
          JOIN pg_catalog.pg_attribute child_column
            ON child_column.attrelid = constraint_row.conrelid AND child_column.attnum = key.attnum
@@ -402,6 +404,8 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
            ON parent_column.attrelid = constraint_row.confrelid
           AND parent_column.attnum = constraint_row.confkey[key.ordinality]
         WHERE constraint_row.contype = 'f'
+          AND child_namespace.nspname = 'public'
+          AND parent_namespace.nspname = 'public'
           AND child.relname = ANY($1::text[])
         GROUP BY child.relname, parent.relname, constraint_row.oid,
                  constraint_row.condeferrable, constraint_row.condeferred`,
@@ -441,7 +445,11 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
          FROM pg_catalog.pg_index index_row
          JOIN pg_catalog.pg_class table_row ON table_row.oid = index_row.indrelid
          JOIN pg_catalog.pg_class index_name ON index_name.oid = index_row.indexrelid
-        WHERE table_row.relname = 'restaurant_brands'
+         JOIN pg_catalog.pg_namespace table_namespace ON table_namespace.oid = table_row.relnamespace
+         JOIN pg_catalog.pg_namespace index_namespace ON index_namespace.oid = index_name.relnamespace
+        WHERE table_namespace.nspname = 'public'
+          AND index_namespace.nspname = 'public'
+          AND table_row.relname = 'restaurant_brands'
           AND index_name.relname = 'restaurant_brands_organizationId_default_key'`
     );
     expect(index.rows).toEqual([{ indisunique: true, predicate: '"isDefault"' }]);
@@ -449,11 +457,22 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
     const first = new pg.Client({ connectionString: TEST_DATABASE_URL });
     const second = new pg.Client({ connectionString: TEST_DATABASE_URL });
     const organizationId = `org_m3_default_${suffix}`;
-    let firstCommitted = false;
+    let firstConnected = false;
+    let secondConnected = false;
+    let firstTransaction = false;
+    let secondTransaction = false;
+    let fixtureInserted = false;
+    let secondAttempt: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
 
-    await Promise.all([first.connect(), second.connect()]);
     try {
-      await Promise.all([first.query('BEGIN'), second.query('BEGIN')]);
+      await first.connect();
+      firstConnected = true;
+      await second.connect();
+      secondConnected = true;
+      await first.query('BEGIN');
+      firstTransaction = true;
+      await second.query('BEGIN');
+      secondTransaction = true;
       await Promise.all([
         first.query(`SELECT set_config('app.is_platform_admin', 'true', true)`),
         second.query(`SELECT set_config('app.is_platform_admin', 'true', true)`),
@@ -464,8 +483,10 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ) VALUES ($1, $2, 'Default A', true, CURRENT_TIMESTAMP)`,
         [`brand_default_a_${suffix}`, organizationId]
       );
+      fixtureInserted = true;
+      const secondBackend = await second.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
 
-      const secondAttempt = second
+      secondAttempt = second
         .query(
           `INSERT INTO "restaurant_brands" (
             "id", "organizationId", "name", "isDefault", "updatedAt"
@@ -476,22 +497,81 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
           () => ({ ok: true as const }),
           (error: unknown) => ({ ok: false as const, error })
         );
+
+      const waitDeadline = Date.now() + 5_000;
+      let lastWaitEvent: string | null = null;
+      let lockObserved = false;
+      while (Date.now() < waitDeadline) {
+        const activity = await client!.query<{
+          wait_event_type: string | null;
+          wait_event: string | null;
+        }>(
+          `SELECT wait_event_type, wait_event
+             FROM pg_catalog.pg_stat_activity
+            WHERE pid = $1`,
+          [secondBackend.rows[0]!.pid]
+        );
+        lastWaitEvent = activity.rows[0]?.wait_event ?? null;
+        if (activity.rows[0]?.wait_event_type === 'Lock') {
+          lockObserved = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!lockObserved) {
+        throw new Error(
+          `Second default-brand insert did not wait on a lock within 5000ms (last event: ${lastWaitEvent ?? 'none'})`
+        );
+      }
+
       await first.query('COMMIT');
-      firstCommitted = true;
+      firstTransaction = false;
 
       expect(await secondAttempt).toMatchObject({ ok: false, error: { code: '23505' } });
+      secondAttempt = undefined;
     } finally {
-      await second.query('ROLLBACK').catch(() => undefined);
-      await first.query('ROLLBACK').catch(() => undefined);
-      if (firstCommitted) {
-        await first.query('BEGIN');
-        await first.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
-        await first.query(`DELETE FROM "restaurant_brands" WHERE "organizationId" = $1`, [
-          organizationId,
-        ]);
-        await first.query('COMMIT');
+      if (firstConnected && firstTransaction) {
+        const rolledBack = await first.query('ROLLBACK').then(
+          () => true,
+          () => false
+        );
+        if (!rolledBack) {
+          await first.end().catch(() => undefined);
+          firstConnected = false;
+        }
+        firstTransaction = false;
       }
-      await Promise.all([first.end(), second.end()]);
+      if (secondAttempt) {
+        await secondAttempt;
+        secondAttempt = undefined;
+      }
+      if (secondConnected && secondTransaction) {
+        await second.query('ROLLBACK').catch(() => undefined);
+        secondTransaction = false;
+      }
+
+      let cleanupError: unknown;
+      if (fixtureInserted) {
+        try {
+          await client!.query('BEGIN');
+          await client!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+          await client!.query(`DELETE FROM "restaurant_brands" WHERE "organizationId" = $1`, [
+            organizationId,
+          ]);
+          await client!.query('COMMIT');
+        } catch (error) {
+          cleanupError = error;
+          await client!.query('ROLLBACK').catch(() => undefined);
+        }
+      }
+
+      const closed = await Promise.allSettled([
+        ...(firstConnected ? [first.end()] : []),
+        ...(secondConnected ? [second.end()] : []),
+      ]);
+      const closeError = closed.find((result) => result.status === 'rejected');
+      if (cleanupError) throw cleanupError;
+      if (closeError?.status === 'rejected') throw closeError.reason;
     }
-  });
+  }, 20_000);
 });
