@@ -397,12 +397,14 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
          JOIN pg_catalog.pg_class parent ON parent.oid = constraint_row.confrelid
          JOIN pg_catalog.pg_namespace child_namespace ON child_namespace.oid = child.relnamespace
          JOIN pg_catalog.pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
-         CROSS JOIN LATERAL unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, ordinality)
+         CROSS JOIN LATERAL unnest(constraint_row.conkey, constraint_row.confkey)
+           WITH ORDINALITY AS key(child_attnum, parent_attnum, ordinality)
          JOIN pg_catalog.pg_attribute child_column
-           ON child_column.attrelid = constraint_row.conrelid AND child_column.attnum = key.attnum
+           ON child_column.attrelid = constraint_row.conrelid
+          AND child_column.attnum = key.child_attnum
          JOIN pg_catalog.pg_attribute parent_column
            ON parent_column.attrelid = constraint_row.confrelid
-          AND parent_column.attnum = constraint_row.confkey[key.ordinality]
+          AND parent_column.attnum = key.parent_attnum
         WHERE constraint_row.contype = 'f'
           AND child_namespace.nspname = 'public'
           AND parent_namespace.nspname = 'public'
