@@ -6,7 +6,7 @@ describe('password policy', () => {
   it('keeps the live checklist and server schema aligned for valid passwords', () => {
     const password = 'Control9!';
 
-    expect(passwordMeetsPolicy(password)).toBe(false);
+    expect(passwordMeetsPolicy(password)).toBe(true);
     expect(passwordRules.every((rule) => rule.test(password))).toBe(true);
     expect(passwordSchema.safeParse(password).success).toBe(true);
   });
