@@ -522,7 +522,8 @@ describe('operator attribution and secret containment', () => {
       (row) => row.actorType === 'RESTAURANT_OPERATOR'
     );
     expect(terminalAudits).toHaveLength(4);
-    expect(terminalAudits.map((row) => row.actorId)).toEqual([
+    expect(terminalAudits.map((row) => row.actorId)).toEqual([null, null, null, null]);
+    expect(terminalAudits.map((row) => row.actorStaffProfileId)).toEqual([
       ACTING,
       INCOMING,
       INCOMING,
@@ -550,7 +551,8 @@ describe('operator attribution and secret containment', () => {
       }))
       .find((row) => row.capability === 'orders:void');
     expect(approvalAudit).toMatchObject({
-      actorId: INCOMING,
+      actorId: null,
+      actorStaffProfileId: INCOMING,
       actingStaffProfileId: INCOMING,
       approvingStaffProfileId: MANAGER,
       capability: 'orders:void',

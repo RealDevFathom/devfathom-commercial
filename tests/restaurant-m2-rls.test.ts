@@ -71,6 +71,7 @@ describeIfDatabase('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
         "restaurant_co_authorizations" TO "${role}"`
     );
 
+    await client!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client!.query(
       `INSERT INTO "organizations" (
         "id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt"
