@@ -20,7 +20,7 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 // ---- String-literal mirrors of the Prisma enums (avoids importing generated
 // enums before `prisma generate` has run). Prisma accepts these strings. ----
-export type AuditActorTypeT = 'USER' | 'API_TOKEN' | 'ANONYMOUS' | 'SYSTEM';
+export type AuditActorTypeT = 'USER' | 'API_TOKEN' | 'ANONYMOUS' | 'SYSTEM' | 'RESTAURANT_OPERATOR'; // a restaurant staff operator acting at a terminal (M2) — not a User
 export type AuditSourceT = 'TRPC' | 'REST_API' | 'AUTH' | 'SYSTEM';
 export type AuditOperationT =
   | 'CREATE'

@@ -7,6 +7,7 @@ import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
 } from '@/lib/restaurant/co-authorization';
+import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 
 const bodySchema = z.object({
@@ -98,6 +99,21 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   }
 
   const created = await ctx.db.restaurantCoAuthorization.create({ data: record });
+  // C7 attribution: the actor stays the ACTING operator (approval never changes
+  // who acts); the approving manager and the evidence are pinned in metadata.
+  recordTerminalOperatorAudit(ctx, {
+    action: 'restaurant.terminal.co-authorize',
+    actingStaffProfileId: record.actingStaffProfileId,
+    operation: 'EXECUTE',
+    targetType: record.targetType,
+    targetId: record.targetId,
+    metadata: {
+      coAuthorizationId: created.id,
+      approvingStaffProfileId: record.approvingStaffProfileId,
+      capability: record.capability,
+      reason: record.reason,
+    },
+  });
   return NextResponse.json(
     {
       coAuthorization: {

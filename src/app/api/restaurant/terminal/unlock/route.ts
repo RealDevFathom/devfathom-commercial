@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
+import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 import { bindOperator } from '@/lib/restaurant/terminal-session';
 
@@ -67,6 +68,11 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   }
 
   const session = await bindOperator(ctx.db, ctx.session.id, staffProfileId, now);
+  // C6/C7 attribution: the operator who just bound to the terminal is the actor.
+  recordTerminalOperatorAudit(ctx, {
+    action: 'restaurant.terminal.unlock',
+    actingStaffProfileId: staffProfileId,
+  });
   return NextResponse.json({
     session: {
       id: session.id,

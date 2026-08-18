@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
+import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 import { bindOperator } from '@/lib/restaurant/terminal-session';
 
@@ -66,7 +67,15 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
   }
 
+  const previousStaffProfileId = ctx.session.activeStaffProfileId;
   const session = await bindOperator(ctx.db, ctx.session.id, staffProfileId, now);
+  // C6 attribution: the INCOMING operator becomes the actor; the operator they
+  // took over from is pinned for the handover trail.
+  recordTerminalOperatorAudit(ctx, {
+    action: 'restaurant.terminal.switch',
+    actingStaffProfileId: staffProfileId,
+    metadata: { previousStaffProfileId },
+  });
   return NextResponse.json({
     session: {
       id: session.id,
