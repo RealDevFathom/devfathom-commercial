@@ -626,7 +626,7 @@ export const restaurantMenusRouter = router({
         menuItemId: z.string().min(1),
         isAvailable: z.boolean().optional(),
         priceOverride: MONEY.nullable().optional(),
-      })
+      }).strict()
     )
     .mutation(async ({ ctx, input }) => {
       const publication = await loadPublication(ctx.db, input.publicationId);

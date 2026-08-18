@@ -213,6 +213,18 @@ describe('publication lifecycle (menu:publish)', () => {
 });
 
 describe('setItemOverride (menu:price, C2 — availability + price only)', () => {
+  it('rejects canonical content fields instead of stripping them', async () => {
+    await expect(
+      caller().setItemOverride({
+        publicationId: 'pub_1',
+        menuItemId: 'item_1',
+        name: 'Branch-only rename',
+        composition: [{ productId: 'shadow_component' }],
+      } as Parameters<ReturnType<typeof caller>['setItemOverride']>[0])
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.overrideUpsert).not.toHaveBeenCalled();
+  });
+
   it('rejects an item that does not belong to the published menu', async () => {
     mocks.itemFindUnique.mockResolvedValue({ id: 'item_x', section: { menuId: 'other_menu' } });
     await expect(
