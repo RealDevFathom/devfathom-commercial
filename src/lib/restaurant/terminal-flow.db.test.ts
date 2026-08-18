@@ -44,6 +44,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   revokeDevice: (typeof import('@/lib/restaurant/devices'))['revokeDevice'];
   endSession: (typeof import('@/lib/restaurant/terminal-session'))['endSession'];
+  flushAuditWrites: (typeof import('@/server/audit'))['flushAuditWritesForTest'];
   routes: {
     establish: RouteModule;
     unlock: RouteModule;
@@ -96,6 +97,7 @@ beforeAll(async () => {
     devices,
     session,
     credentials,
+    audit,
     establishR,
     unlockR,
     switchR,
@@ -107,6 +109,7 @@ beforeAll(async () => {
     import('@/lib/restaurant/devices'),
     import('@/lib/restaurant/terminal-session'),
     import('@/lib/restaurant/operator-credentials'),
+    import('@/server/audit'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
     import('@/app/api/restaurant/terminal/switch/route'),
@@ -121,6 +124,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     revokeDevice: devices.revokeDevice,
     endSession: session.endSession,
+    flushAuditWrites: audit.flushAuditWritesForTest,
     routes: {
       establish: establishR,
       unlock: unlockR,
@@ -312,5 +316,92 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
       tx.restaurantOperatorCredential.findFirst({ where: { staffProfileId: STAFF.L.id } })
     );
     expect(credential!.lockedUntil).toBeInstanceOf(Date);
+  });
+
+  it('writes one attributable RESTAURANT_OPERATOR audit row per sensitive mutation (C6/C7)', async () => {
+    const { deviceId, secret } = await enroll('audit');
+    const { token, sessionId } = await establish(secret);
+
+    // Drive the four sensitive mutations that must each leave one attributable
+    // audit row: unlock (A), switch (A -> B), co-authorize (acting B + approver M),
+    // lock (B). Each returns success only after the mutation committed.
+    const unlocked = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+    });
+    expect(unlocked.status).toBe(200);
+    const switched = await call(deps.routes.switchOperator, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.B.id, type: 'PIN', secret: STAFF.B.pin },
+    });
+    expect(switched.status).toBe(200);
+    const approved = await call(deps.routes.coAuthorize, {
+      secret,
+      session: token,
+      body: {
+        approvingStaffProfileId: STAFF.M.id,
+        type: 'PIN',
+        secret: STAFF.M.pin,
+        capability: 'orders:void',
+        reason: 'audit attribution',
+        targetType: 'Order',
+        targetId: `ord_audit_${suffix}`,
+      },
+    });
+    expect(approved.status).toBe(201);
+    const locked = await call(deps.routes.lock, { secret, session: token });
+    expect(locked.status).toBe(200);
+
+    // The audit writes are fire-and-forget; under Vitest they are tracked, not
+    // swallowed, so this await surfaces any failure (the original P2003 FK
+    // violation would reject HERE instead of vanishing) and guarantees the rows
+    // are committed before we read them back.
+    await deps.flushAuditWrites();
+
+    const rows = await deps.withTenantDb(orgId, (tx) =>
+      tx.auditLog.findMany({
+        where: { organizationId: orgId, actorType: 'RESTAURANT_OPERATOR' },
+        orderBy: { createdAt: 'asc' },
+      })
+    );
+    // Scope to THIS run's session (a globally-unique id pinned in metadata) so a
+    // reused throwaway database cannot surface a prior run's rows.
+    const mine = rows.filter(
+      (r) => (r.metadata as { terminalSessionId?: string } | null)?.terminalSessionId === sessionId
+    );
+    const byAction = new Map(mine.map((r) => [r.action, r]));
+
+    // Exactly one durable, attributable row per sensitive mutation.
+    expect([...byAction.keys()].sort()).toEqual([
+      'restaurant.terminal.co-authorize',
+      'restaurant.terminal.lock',
+      'restaurant.terminal.switch',
+      'restaurant.terminal.unlock',
+    ]);
+    expect(mine).toHaveLength(4);
+
+    // Every operator row attributes to a staff profile, NEVER a User, and pins the
+    // exact device it was taken on.
+    for (const r of mine) {
+      expect(r.actorStaffProfileId).toBeTruthy();
+      expect(r.actorId).toBeNull();
+      expect((r.metadata as { deviceId?: string }).deviceId).toBe(deviceId);
+    }
+
+    // The acting operator on each row is the one bound at the time of the action.
+    expect(byAction.get('restaurant.terminal.unlock')!.actorStaffProfileId).toBe(STAFF.A.id);
+    expect(byAction.get('restaurant.terminal.switch')!.actorStaffProfileId).toBe(STAFF.B.id);
+    expect(byAction.get('restaurant.terminal.co-authorize')!.actorStaffProfileId).toBe(STAFF.B.id);
+    expect(byAction.get('restaurant.terminal.lock')!.actorStaffProfileId).toBe(STAFF.B.id);
+
+    // Co-authorization ADDS the approving manager (C6 — approval never replaces
+    // the actor); the approver is pinned in metadata, not the actor column.
+    expect(
+      (byAction.get('restaurant.terminal.co-authorize')!.metadata as {
+        approvingStaffProfileId?: string;
+      }).approvingStaffProfileId
+    ).toBe(STAFF.M.id);
   });
 });

@@ -209,13 +209,33 @@ genuine second-person second factor rather than two identifiers typed by one adm
 exercises C4+C7 together. · Revisited if a back-office approver must instead be attributed
 to a web-login `User` (already flagged by the C6/C7 approver-identity seam above).
 
-**Operator-attributed terminal audit durability blocked by User FK (M2-L3)** · Sensitive
-unlock/switch/active-operator lock/co-authorize routes now call
-`recordTerminalOperatorAudit` with `AuditActorType.RESTAURANT_OPERATOR` and the acting
-`RestaurantStaffProfile` id; device/session/approver metadata is server-derived, and credential
-secrets are excluded. · However, the current `audit_logs_actorId_fkey` still references
-`users.id`; the real PostgreSQL milestone run at `f15d579` rejects these staff-profile actor IDs
-with Prisma `P2003`, so routing exists but durable rows are not yet verified. · Conservative
-because it neither misattributes operators as `User`s nor silently weakens the User FK. ·
-Revisited via an owned schema/storage decision making operator actor IDs valid plus a real-DB
-assertion.
+**Operator-attributed terminal audit — durable, staff-profile-keyed (M2-L3, supervisor
+correction)** · Each of the four sensitive terminal mutations (unlock/switch/co-authorize/
+lock) writes exactly one durable, attributable `RESTAURANT_OPERATOR` audit row; the passive
+`heartbeat` is not audited. Attribution does NOT go through the `User`-centric `actorId`
+(FK → `users`) — an operator is a `RestaurantStaffProfile`, not a `User` (C2/C3), so the row
+uses the additive `AuditLog.actorStaffProfileId` column (FK → `restaurant_staff_profiles`).
+The two actor columns are mutually exclusive and a DB CHECK
+(`audit_logs_operator_actor_ck`) requires a `RESTAURANT_OPERATOR` row to set
+`actorStaffProfileId` and leave `actorId` NULL. · Conservative because the earlier revision
+attributed operators through `actorId`, which failed with a foreign-key violation (P2003)
+against a real Postgres and was silently swallowed by the fire-and-forget audit core —
+leaving ZERO durable rows while a mock battery passed. A dedicated staff-profile FK plus a
+CHECK makes the attribution correct AND makes a future mis-route fail loudly at write time
+rather than vanish. `RestaurantCoAuthorization` and device rows remain the primary evidence;
+these audit rows are the attribution trail the M2 acceptance battery mandates. · Revisited by
+the L4a operator audit-attribution/viewer decision if operator rows need richer treatment.
+
+**Audit actor-column CHECK is actor-type-conditional, not a blanket "exactly one" (M2-L3
+supervisor correction)** · The `audit_logs_operator_actor_ck` constraint enforces
+"`RESTAURANT_OPERATOR` ⇒ `actorStaffProfileId` set and `actorId` NULL; every other actor
+type ⇒ `actorStaffProfileId` NULL", rather than the literally-suggested "exactly one actor
+column is set". · Conservative because `ANONYMOUS` rows (a failed login, an unauthenticated
+REST call) legitimately have NEITHER actor id set — a blanket "exactly one non-null" CHECK
+would reject those existing, valid rows and re-break the audit path in a new way, violating
+the additive/backward-compatible requirement. The conditional form pins the operator
+invariant (the actual fix) without touching the nullability contract of any pre-existing
+actor type, so no backfill and no existing row is invalidated. The write path is also made
+fail-loud under Vitest (`flushAuditWritesForTest`) so a swallowed audit failure can no
+longer produce a phantom pass. · Revisited if a future actor type needs its own dedicated
+actor column, which would extend the same conditional CHECK.
