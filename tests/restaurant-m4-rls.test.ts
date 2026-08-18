@@ -49,9 +49,15 @@ type FixtureColumn = {
 const fixtureColumns = new Map<M4Table, FixtureColumn[]>();
 const enumValues = new Map<string, string>();
 
-function fixtureValue(column: FixtureColumn, organizationId: string, rowId: string) {
+function fixtureValue(
+  column: FixtureColumn,
+  organizationId: string,
+  rowId: string,
+  referenceId: string
+) {
   if (column.column_name === 'organizationId') return organizationId;
-  if (column.column_name === 'id' || column.column_name.endsWith('Id')) return rowId;
+  if (column.column_name === 'id') return rowId;
+  if (column.column_name.endsWith('Id')) return referenceId;
   if (column.data_type === 'USER-DEFINED') {
     const value = enumValues.get(column.udt_name);
     if (!value) throw new Error(`No enum fixture value for ${column.udt_name}`);
@@ -64,9 +70,9 @@ function fixtureValue(column: FixtureColumn, organizationId: string, rowId: stri
       column.data_type
     )
   ) {
-    return 1;
+    return rowId === referenceId ? 1 : 2;
   }
-  if (column.data_type === 'date') return '2030-01-01';
+  if (column.data_type === 'date') return rowId === referenceId ? '2030-01-01' : '2030-01-02';
   if (column.data_type.startsWith('timestamp')) return new Date('2030-01-01T00:00:00Z');
   if (column.data_type.startsWith('time')) return '12:00:00';
   if (['json', 'jsonb'].includes(column.data_type)) return {};
@@ -101,6 +107,7 @@ async function loadFixtureMetadata() {
       table,
       tableColumns.filter(
         (column) =>
+          column.column_name === 'organizationId' ||
           (column.is_nullable === 'NO' &&
             column.column_default === null &&
             column.is_identity === 'NO' &&
@@ -115,11 +122,12 @@ async function insertFixture(
   database: pg.Client,
   table: M4Table,
   organizationId: string,
-  rowId: string
+  rowId: string,
+  referenceId = rowId
 ) {
   const columns = fixtureColumns.get(table);
   if (!columns) throw new Error(`Missing M4 fixture metadata for ${table}`);
-  const values = columns.map((column) => fixtureValue(column, organizationId, rowId));
+  const values = columns.map((column) => fixtureValue(column, organizationId, rowId, referenceId));
   await database.query(
     `INSERT INTO "${table}" (${columns.map((column) => `"${column.column_name}"`).join(', ')})
      VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')})`,
@@ -298,7 +306,7 @@ describeIfDatabase('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
   });
 
   it.each(M4_TABLES)(
-    '%s permits tenant A and hides tenant B reads, updates, and deletes',
+    '%s permits tenant A reads, inserts, updates, and deletes and hides tenant B',
     async (table) => {
       const visible = await client!.query<{ id: string; organizationId: string }>(
         `SELECT "id", "organizationId" FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -324,12 +332,17 @@ describeIfDatabase('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
       expect(
         (await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ids.rowB])).rowCount
       ).toBe(0);
+      const allowedId = `allow_${table}_${suffix}`;
+      await insertFixture(client!, table, ids.orgA, allowedId, ids.rowA);
+      expect(
+        (await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [allowedId])).rowCount
+      ).toBe(1);
     }
   );
 
   it.each(M4_TABLES)('%s rejects INSERT and UPDATE tenant escape via WITH CHECK', async (table) => {
     await expectDatabaseError('42501', () =>
-      insertFixture(client!, table, ids.orgB, `deny_${table}_${suffix}`)
+      insertFixture(client!, table, ids.orgB, `deny_${table}_${suffix}`, ids.rowB)
     );
     await expectDatabaseError('42501', () =>
       client!.query(`UPDATE "${table}" SET "organizationId" = $1 WHERE "id" = $2`, [

@@ -30,6 +30,25 @@ async function uniqueColumnSets(table: string) {
   return result.rows.map((row) => row.columns);
 }
 
+function normalizeCheckDefinition(definition: string) {
+  let expression = definition.replace(/^CHECK\s*/i, '').replaceAll(/\s+/g, '');
+  while (expression.startsWith('(') && expression.endsWith(')')) {
+    let depth = 0;
+    let wrapsExpression = true;
+    for (let index = 0; index < expression.length - 1; index += 1) {
+      if (expression[index] === '(') depth += 1;
+      if (expression[index] === ')') depth -= 1;
+      if (depth === 0) {
+        wrapsExpression = false;
+        break;
+      }
+    }
+    if (!wrapsExpression) break;
+    expression = expression.slice(1, -1);
+  }
+  return expression.replaceAll(/\(("(?:productId|categoryId)"IS(?:NOT)?NULL)\)/g, '$1');
+}
+
 describeIfDatabase('M4 schema governance (real PostgreSQL)', () => {
   beforeAll(async () => {
     const parsed = new URL(TEST_DATABASE_URL!);
@@ -102,7 +121,7 @@ describeIfDatabase('M4 schema governance (real PostgreSQL)', () => {
       .map((row) => row.column_name);
 
     expect(orderColumns.filter((column) => /total|aggregate/i.test(column))).toEqual([]);
-    expect(itemColumns).toEqual(expect.arrayContaining(['nameSnapshot', 'unitPrice']));
+    expect(itemColumns).toEqual(expect.arrayContaining(['name', 'unitPrice']));
   });
 
   it('enforces one default kitchen station per branch with a partial unique index', async () => {
@@ -133,8 +152,7 @@ describeIfDatabase('M4 schema governance (real PostgreSQL)', () => {
         (row) =>
           row.columns.length === 1 &&
           row.columns[0] === 'branchId' &&
-          row.predicate !== null &&
-          /"isDefault"/.test(row.predicate)
+          row.predicate === '"isDefault"'
       )
     ).toBe(true);
   });
@@ -146,17 +164,20 @@ describeIfDatabase('M4 schema governance (real PostgreSQL)', () => {
         WHERE constraint_row.conrelid = 'public.restaurant_station_routing_rules'::regclass
           AND constraint_row.contype = 'c'`
     );
-    const definitions = result.rows
-      .map((row) => row.definition.replaceAll(/\s+/g, ' '))
-      .filter(
-        (definition) => definition.includes('"productId"') && definition.includes('"categoryId"')
-      );
+    const exactXorDefinitions = new Set([
+      'num_nonnulls("productId","categoryId")=1',
+      'num_nonnulls("categoryId","productId")=1',
+      '"productId"ISNULL<>"categoryId"ISNULL',
+      '"categoryId"ISNULL<>"productId"ISNULL',
+      '"productId"ISNOTNULL<>"categoryId"ISNOTNULL',
+      '"categoryId"ISNOTNULL<>"productId"ISNOTNULL',
+      '("productId"ISNULLAND"categoryId"ISNOTNULL)OR("productId"ISNOTNULLAND"categoryId"ISNULL)',
+      '("categoryId"ISNULLAND"productId"ISNOTNULL)OR("categoryId"ISNOTNULLAND"productId"ISNULL)',
+      '"productId"ISNULLAND"categoryId"ISNOTNULLOR"productId"ISNOTNULLAND"categoryId"ISNULL',
+      '"categoryId"ISNULLAND"productId"ISNOTNULLOR"categoryId"ISNOTNULLAND"productId"ISNULL',
+    ]);
     expect(
-      definitions.some(
-        (definition) =>
-          (/num_nonnulls/i.test(definition) && /= 1/.test(definition)) ||
-          (/IS NULL/i.test(definition) && /IS NOT NULL/i.test(definition))
-      )
+      result.rows.some((row) => exactXorDefinitions.has(normalizeCheckDefinition(row.definition)))
     ).toBe(true);
   });
 
