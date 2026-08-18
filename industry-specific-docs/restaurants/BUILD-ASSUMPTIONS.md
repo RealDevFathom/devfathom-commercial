@@ -15,6 +15,12 @@ D-id · assumption · why conservative · what revisits it
 
 ## Entries
 
+Entries are grouped by the milestone that recorded them; within a milestone
+they appear in the order they were decided. Text is unchanged from the
+originating lane — this final pass only regroups and separates entries.
+
+### M1 — vertical foundation
+
 **D09 (franchise/legal isolation)** · Restaurant branches live strictly inside
 the existing organization RLS boundary; there is no cross-organization
 aggregation or consolidated franchisor reporting. `RestaurantBranch` and
@@ -50,6 +56,8 @@ and fail-closed cases are decided — risks a wrong, hard-to-reverse boundary; o
 RLS already fails closed. · Revisited by D12 closing — an accepted ADR plus a live
 non-superuser cross-branch harness deciding whether sensitive branch-owned tables
 also get database-enforced branch policies.
+
+### M2 — staff, operators & devices
 
 **D11 (operator credential policy floor)** · The operator credential policy in
 `src/lib/restaurant/operator-credentials.ts` is the conservative C4 default: a PIN
@@ -156,6 +164,7 @@ double-invocation, rotating in place avoids racing the unique index, resetting c
 on rotation prevents a stale lock outliving the secret it applied to, and skip-input on
 every credential mutation is the strictest reading of C4. · Revisited by D11 closing or
 an L2/L3 flow that needs credential history rows rather than in-place rotation.
+
 **Enrollment token = the first device secret, no separate table (M2-L3/§5)** · The L1
 schema stores only `RestaurantRegisteredDevice.deviceSecretHash`; there is no
 enrollment-token table. So `devices.ts` enrollment mints the device secret directly and
@@ -174,6 +183,73 @@ salted hash only buys anything for low-entropy secrets; a fast deterministic has
 right primitive for a high-entropy token and is REQUIRED for the C5 per-call
 revalidation (one indexed lookup every request, no trust cache). · Revisited if a device
 secret ever becomes low-entropy or human-chosen.
+
+**Default terminal transport = REST route handlers (M2-L3, explicit deviation)** · The
+terminal transport is `src/app/api/restaurant/terminal/*` REST handlers wrapped by
+`withTerminalAuth`/`withDeviceAuth`, authenticated by a device secret
+(`Authorization: Bearer`) plus a session token (`X-Terminal-Session`) — NOT NextAuth. ·
+Conservative because it mirrors the existing `src/lib/api-auth.ts` REST transport and
+keeps operator credentials structurally unreachable from web login (C2); the device's
+organization is resolved once in the platform scope, then every op runs tenant-scoped. ·
+Revisited if a push transport (WebSocket/SSE) or tRPC terminal channel is chosen.
+
+**Terminal session idle-expiry and device-staleness defaults (M2-L3/C5)** ·
+`SESSION_IDLE_TIMEOUT_MS = 12h` (one operating shift) bounds a session token's life;
+`DEVICE_STALE_AFTER_MS = 5 × 60s` marks a device STALE after five missed heartbeats.
+Both are computed from SERVER time only (client time untrusted). · Conservative because
+an unbounded session token would live forever if leaked, and a staleness signal aids
+health without failing closed on a brief network blip. · Revisited by an operations
+tuning decision (per-tenant shift length, heartbeat cadence).
+
+**Back-office device admin gates on the mandatory `restaurant-core` module (M2-L3)** ·
+`module-catalog.ts` maps the `restaurantDevices` router to `restaurant-core`, not the
+optional `restaurant-integrations` ("Integrations and Devices") module. · Conservative
+because device trust and terminal sessions are foundational to operating any restaurant
+terminal, so every restaurant org must be able to manage its own devices; gating them
+behind an optional add-on could lock a tenant out of revoking a lost device. · Revisited
+if device administration should become a separately-licensed capability.
+
+**Back-office revocation requires the approving manager's operator credential (M2-L3/C7)**
+· The representative co-authorized action (`restaurantDevices.revoke`) verifies the
+approving manager's PIN/BADGE against the durable lockout counters IN ADDITION to writing
+the distinct-identity co-authorization record, and runs with `skipInput: true` so the
+secret never enters the audit log. · Conservative because it makes co-authorization a
+genuine second-person second factor rather than two identifiers typed by one admin, and
+exercises C4+C7 together. · Revisited if a back-office approver must instead be attributed
+to a web-login `User` (already flagged by the C6/C7 approver-identity seam above).
+
+**Operator-attributed terminal audit — durable, staff-profile-keyed (M2-L3, supervisor
+correction)** · Each of the four sensitive terminal mutations (unlock/switch/co-authorize/
+lock) writes exactly one durable, attributable `RESTAURANT_OPERATOR` audit row; the passive
+`heartbeat` is not audited. Attribution does NOT go through the `User`-centric `actorId`
+(FK → `users`) — an operator is a `RestaurantStaffProfile`, not a `User` (C2/C3), so the row
+uses the additive `AuditLog.actorStaffProfileId` column (FK → `restaurant_staff_profiles`).
+The two actor columns are mutually exclusive and a DB CHECK
+(`audit_logs_operator_actor_ck`) requires a `RESTAURANT_OPERATOR` row to set
+`actorStaffProfileId` and leave `actorId` NULL. · Conservative because the earlier revision
+attributed operators through `actorId`, which failed with a foreign-key violation (P2003)
+against a real Postgres and was silently swallowed by the fire-and-forget audit core —
+leaving ZERO durable rows while a mock battery passed. A dedicated staff-profile FK plus a
+CHECK makes the attribution correct AND makes a future mis-route fail loudly at write time
+rather than vanish. `RestaurantCoAuthorization` and device rows remain the primary evidence;
+these audit rows are the attribution trail the M2 acceptance battery mandates. · Revisited by
+the L4a operator audit-attribution/viewer decision if operator rows need richer treatment.
+
+**Audit actor-column CHECK is actor-type-conditional, not a blanket "exactly one" (M2-L3
+supervisor correction)** · The `audit_logs_operator_actor_ck` constraint enforces
+"`RESTAURANT_OPERATOR` ⇒ `actorStaffProfileId` set and `actorId` NULL; every other actor
+type ⇒ `actorStaffProfileId` NULL", rather than the literally-suggested "exactly one actor
+column is set". · Conservative because `ANONYMOUS` rows (a failed login, an unauthenticated
+REST call) legitimately have NEITHER actor id set — a blanket "exactly one non-null" CHECK
+would reject those existing, valid rows and re-break the audit path in a new way, violating
+the additive/backward-compatible requirement. The conditional form pins the operator
+invariant (the actual fix) without touching the nullability contract of any pre-existing
+actor type, so no backfill and no existing row is invalidated. The write path is also made
+fail-loud under Vitest (`flushAuditWritesForTest`) so a swallowed audit failure can no
+longer produce a phantom pass. · Revisited if a future actor type needs its own dedicated
+actor column, which would extend the same conditional CHECK.
+
+### M3 — brands, catalog & menus
 
 **D20 (localization fields) — locale-keyed JSON, no locale-management UI (M3-L1)** ·
 Customer-facing catalog/menu text (product name/description, and category/brand/menu/
@@ -246,71 +322,6 @@ menu-management action, not a till-side exception like an order void; requiring 
 every override would overload the M2 approval primitive. · Revisited if an approved price
 override must become a co-authorized action, in which case the existing
 `RestaurantCoAuthorization` primitive applies unchanged.
-
-**Default terminal transport = REST route handlers (M2-L3, explicit deviation)** · The
-terminal transport is `src/app/api/restaurant/terminal/*` REST handlers wrapped by
-`withTerminalAuth`/`withDeviceAuth`, authenticated by a device secret
-(`Authorization: Bearer`) plus a session token (`X-Terminal-Session`) — NOT NextAuth. ·
-Conservative because it mirrors the existing `src/lib/api-auth.ts` REST transport and
-keeps operator credentials structurally unreachable from web login (C2); the device's
-organization is resolved once in the platform scope, then every op runs tenant-scoped. ·
-Revisited if a push transport (WebSocket/SSE) or tRPC terminal channel is chosen.
-
-**Terminal session idle-expiry and device-staleness defaults (M2-L3/C5)** ·
-`SESSION_IDLE_TIMEOUT_MS = 12h` (one operating shift) bounds a session token's life;
-`DEVICE_STALE_AFTER_MS = 5 × 60s` marks a device STALE after five missed heartbeats.
-Both are computed from SERVER time only (client time untrusted). · Conservative because
-an unbounded session token would live forever if leaked, and a staleness signal aids
-health without failing closed on a brief network blip. · Revisited by an operations
-tuning decision (per-tenant shift length, heartbeat cadence).
-
-**Back-office device admin gates on the mandatory `restaurant-core` module (M2-L3)** ·
-`module-catalog.ts` maps the `restaurantDevices` router to `restaurant-core`, not the
-optional `restaurant-integrations` ("Integrations and Devices") module. · Conservative
-because device trust and terminal sessions are foundational to operating any restaurant
-terminal, so every restaurant org must be able to manage its own devices; gating them
-behind an optional add-on could lock a tenant out of revoking a lost device. · Revisited
-if device administration should become a separately-licensed capability.
-
-**Back-office revocation requires the approving manager's operator credential (M2-L3/C7)**
-· The representative co-authorized action (`restaurantDevices.revoke`) verifies the
-approving manager's PIN/BADGE against the durable lockout counters IN ADDITION to writing
-the distinct-identity co-authorization record, and runs with `skipInput: true` so the
-secret never enters the audit log. · Conservative because it makes co-authorization a
-genuine second-person second factor rather than two identifiers typed by one admin, and
-exercises C4+C7 together. · Revisited if a back-office approver must instead be attributed
-to a web-login `User` (already flagged by the C6/C7 approver-identity seam above).
-
-**Operator-attributed terminal audit — durable, staff-profile-keyed (M2-L3, supervisor
-correction)** · Each of the four sensitive terminal mutations (unlock/switch/co-authorize/
-lock) writes exactly one durable, attributable `RESTAURANT_OPERATOR` audit row; the passive
-`heartbeat` is not audited. Attribution does NOT go through the `User`-centric `actorId`
-(FK → `users`) — an operator is a `RestaurantStaffProfile`, not a `User` (C2/C3), so the row
-uses the additive `AuditLog.actorStaffProfileId` column (FK → `restaurant_staff_profiles`).
-The two actor columns are mutually exclusive and a DB CHECK
-(`audit_logs_operator_actor_ck`) requires a `RESTAURANT_OPERATOR` row to set
-`actorStaffProfileId` and leave `actorId` NULL. · Conservative because the earlier revision
-attributed operators through `actorId`, which failed with a foreign-key violation (P2003)
-against a real Postgres and was silently swallowed by the fire-and-forget audit core —
-leaving ZERO durable rows while a mock battery passed. A dedicated staff-profile FK plus a
-CHECK makes the attribution correct AND makes a future mis-route fail loudly at write time
-rather than vanish. `RestaurantCoAuthorization` and device rows remain the primary evidence;
-these audit rows are the attribution trail the M2 acceptance battery mandates. · Revisited by
-the L4a operator audit-attribution/viewer decision if operator rows need richer treatment.
-
-**Audit actor-column CHECK is actor-type-conditional, not a blanket "exactly one" (M2-L3
-supervisor correction)** · The `audit_logs_operator_actor_ck` constraint enforces
-"`RESTAURANT_OPERATOR` ⇒ `actorStaffProfileId` set and `actorId` NULL; every other actor
-type ⇒ `actorStaffProfileId` NULL", rather than the literally-suggested "exactly one actor
-column is set". · Conservative because `ANONYMOUS` rows (a failed login, an unauthenticated
-REST call) legitimately have NEITHER actor id set — a blanket "exactly one non-null" CHECK
-would reject those existing, valid rows and re-break the audit path in a new way, violating
-the additive/backward-compatible requirement. The conditional form pins the operator
-invariant (the actual fix) without touching the nullability contract of any pre-existing
-actor type, so no backfill and no existing row is invalidated. The write path is also made
-fail-loud under Vitest (`flushAuditWritesForTest`) so a swallowed audit failure can no
-longer produce a phantom pass. · Revisited if a future actor type needs its own dedicated
-actor column, which would extend the same conditional CHECK.
 
 **Menu / price-list / publication surface gates on the optional `restaurant-menu` module
 (M3-L3)** · `module-catalog.ts` maps the `restaurantMenus` router (menu authoring, price
