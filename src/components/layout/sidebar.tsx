@@ -24,6 +24,8 @@ import {
   ClipboardList,
   Building2,
   Monitor,
+  BookOpen,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -116,6 +118,20 @@ const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Firm',
     module: 'restaurant-core',
+  },
+  {
+    label: 'Catalog',
+    href: '/restaurant/catalog',
+    icon: BookOpen,
+    group: 'Firm',
+    module: 'restaurant-menu',
+  },
+  {
+    label: 'Menus',
+    href: '/restaurant/menus',
+    icon: UtensilsCrossed,
+    group: 'Firm',
+    module: 'restaurant-menu',
   },
   {
     label: 'Reviews',
