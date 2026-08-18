@@ -28,6 +28,7 @@ export const ALL_ACTIONS = [
   'resignation:request', // submit your own resignation
   'resignation:readAll', // see the company-wide resignation queue
   'resignation:review', // approve/decline a resignation (resource: { userId, status, targetRole })
+  'staff:manage', // restaurant M2: back-office staff & operator-credential management (org-role driven)
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -71,4 +72,14 @@ export const POLICIES: Record<Action, Policy[]> = {
       resource?.userId !== subject.id &&
       !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
   ],
+
+  // Restaurant M2 (§8): staff & operator-credential management is granted through
+  // an organization role/override carrying the `staff:manage` capability (or `*`,
+  // e.g. the restaurant Owner template), evaluated by the DB `customDecision` path
+  // in `can()` — not by a coarse agency role. No static policy is registered, so a
+  // subject without an explicit grant is denied by default. A restaurant General
+  // Manager granted `staff:manage` is therefore authorized without being a global
+  // platform ADMIN, and an agency admin is not implicitly granted a restaurant
+  // capability.
+  'staff:manage': [],
 };

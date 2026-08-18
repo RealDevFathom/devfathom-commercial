@@ -108,3 +108,51 @@ silently erased by deleting a profile (archival is the intended path). · Revisi
 the L2/L3 flows if a back-office approver must be attributed to a `User` rather than
 a staff profile — a fix-up that funnels back through the Chief of Staff to this lane
 (L1 owns the schema).
+
+**M2-L2 base self-alignment (fast-forward, supervisor-authorized)** · The M2-L2 lane
+branch started at the pre-M1 `main` state (`5c4b48c`) — a strict ancestor of the
+milestone branch head `restaurant/m2-staff-operators-devices` @ `1114a1b` (post-M1 +
+the full M2-L1 security-core). Per the supervisor's explicit authorization the lane
+was aligned with `git merge --ff-only 1114a1b` (fast-forward only — no rebase, no
+history rewrite) before any L2 code. · Conservative because a fast-forward moves the
+branch pointer onto an existing, already-reviewed commit without creating a merge or
+rewriting history; the ancestry was verified (`git merge-base --is-ancestor`) first,
+and engineers still never merge lanes back — the supervisor does. · Revisited by the
+supervisor at final merge; if the milestone head advances again the same ff-only
+alignment repeats.
+
+**M2-L2 authorization gating — `staff:manage` ABAC action (third coordinated file)**
+· The `capabilityProcedure('staff:manage')`-gated router requires `staff:manage` to be
+a typed ABAC `Action`. L1 declared `staff:manage` only as a role-template capability
+string in `vertical-catalog.ts`; it was NOT registered in the ABAC engine. This lane
+therefore adds `staff:manage` to `ALL_ACTIONS` and a POLICIES entry in
+`src/lib/abac/policies.ts` — a file beyond the lane's two declared coordinated files
+(`_app.ts`, `module-catalog.ts`). The addition is additive-only and its static policy
+list is EMPTY: authorization flows exclusively through the DB org-role `customDecision`
+path in `can()` (the Owner template's `*` or an explicit `staff:manage` grant), so a
+restaurant General Manager granted `staff:manage` is authorized without being a global
+platform ADMIN, and an agency admin is not implicitly granted a restaurant capability
+(default-deny otherwise). · Conservative because gating on an existing coarse action
+(e.g. `admin:access`) would be semantically wrong (§8: restaurant authorization is
+org-role/capability driven, C1) and would lock out non-ADMIN restaurant managers; an
+empty static policy grants nothing by default. · Revisited by the supervisor at merge
+resolving adjacency on `abac/policies.ts` (M2-L3 will similarly append
+`devices:manage`, `terminal:operate`, `coauth:approve`), and by the Phase-0 capability
+matrix that may attach explicit predicates.
+
+**M2-L2 credential lifecycle semantics (C4)** · `issueOperatorCredential` refuses a
+second active credential for the same (staff, type, device) scope (rotate the existing
+one instead) — aligning with the schema's partial unique index; `rotateOperatorCredential`
+edits the row in place, writing the new hash and resetting the durable
+`failedAttempts`/`lockedUntil` counters (a fresh secret starts with a clean slate) and
+refuses to rotate a revoked credential; `revokeOperatorCredential` is idempotent and
+immediate (stamps `revokedAt` with a server timestamp, C5; re-revoking is a no-op that
+returns the existing row). All three credential-bearing mutations set
+`annotateAudit(..., { skipInput: true })` as their FIRST statement so the plaintext
+PIN/badge is never captured on the success OR failure audit path, and no response ever
+includes `credentialHash`. The router is licensed under the mandatory `restaurant-core`
+module. · Conservative because a security kill-switch (revoke) must never error on a
+double-invocation, rotating in place avoids racing the unique index, resetting counters
+on rotation prevents a stale lock outliving the secret it applied to, and skip-input on
+every credential mutation is the strictest reading of C4. · Revisited by D11 closing or
+an L2/L3 flow that needs credential history rows rather than in-place rotation.

@@ -20,6 +20,7 @@ import { twoFactorRouter } from './two-factor';
 import { webhooksRouter } from './webhooks';
 import { emailRouter } from './email';
 import { organizationAdminRouter } from './organization-admin';
+import { restaurantStaffRouter } from './restaurant-staff';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -43,6 +44,7 @@ export const appRouter = router({
   webhooks: webhooksRouter,
   email: emailRouter,
   organizationAdmin: organizationAdminRouter,
+  restaurantStaff: restaurantStaffRouter,
 });
 
 export type AppRouter = typeof appRouter;

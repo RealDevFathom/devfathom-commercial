@@ -52,6 +52,7 @@ const PROCEDURE_MODULES: Record<string, string> = {
   audit: 'audit',
   email: 'email',
   webhooks: 'webhooks',
+  restaurantStaff: 'restaurant-core', // M2-L2 back-office staff & operator-credential surface
 };
 
 export function moduleForProcedure(path: string): string | null {
