@@ -52,6 +52,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   audit: 'audit',
   email: 'email',
   webhooks: 'webhooks',
+  // M2-L3: back-office terminal-device administration. Device trust and terminal
+  // sessions are foundational to running any restaurant terminal, so they gate on
+  // the mandatory Restaurant Core module (BUILD-ASSUMPTIONS), not an optional add-on.
+  restaurantDevices: 'restaurant-core',
 };
 
 export function moduleForProcedure(path: string): string | null {

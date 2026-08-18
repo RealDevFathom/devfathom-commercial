@@ -108,3 +108,64 @@ silently erased by deleting a profile (archival is the intended path). · Revisi
 the L2/L3 flows if a back-office approver must be attributed to a `User` rather than
 a staff profile — a fix-up that funnels back through the Chief of Staff to this lane
 (L1 owns the schema).
+
+**Enrollment token = the first device secret, no separate table (M2-L3/§5)** · The L1
+schema stores only `RestaurantRegisteredDevice.deviceSecretHash`; there is no
+enrollment-token table. So `devices.ts` enrollment mints the device secret directly and
+returns it exactly once (hashed at rest, per `invite-token.ts`) — that one-time delivery
+IS the "single-use enrollment token". · Conservative because it reuses the proven
+single-delivery/hash-at-rest pattern and does not invent schema (L1 owns it); the raw
+secret is never persisted or re-shown. · Revisited if a two-phase enrolment (short
+pairing code redeemed for a device secret) is required — which would need an L1 schema
+addition routed through the Chief of Staff.
+
+**High-entropy bearer secrets hash with deterministic SHA-256, not bcrypt (M2-L3/C5)** ·
+Device secrets (`rdk_…`) and terminal-session tokens (`rts_…`) are 256-bit random values
+stored in UNIQUE hash columns and hashed with SHA-256, exactly like `invite-token.ts`.
+Operator PINs keep bcrypt (`operator-credentials.ts`). · Conservative because a slow
+salted hash only buys anything for low-entropy secrets; a fast deterministic hash is the
+right primitive for a high-entropy token and is REQUIRED for the C5 per-call
+revalidation (one indexed lookup every request, no trust cache). · Revisited if a device
+secret ever becomes low-entropy or human-chosen.
+
+**Default terminal transport = REST route handlers (M2-L3, explicit deviation)** · The
+terminal transport is `src/app/api/restaurant/terminal/*` REST handlers wrapped by
+`withTerminalAuth`/`withDeviceAuth`, authenticated by a device secret
+(`Authorization: Bearer`) plus a session token (`X-Terminal-Session`) — NOT NextAuth. ·
+Conservative because it mirrors the existing `src/lib/api-auth.ts` REST transport and
+keeps operator credentials structurally unreachable from web login (C2); the device's
+organization is resolved once in the platform scope, then every op runs tenant-scoped. ·
+Revisited if a push transport (WebSocket/SSE) or tRPC terminal channel is chosen.
+
+**Terminal session idle-expiry and device-staleness defaults (M2-L3/C5)** ·
+`SESSION_IDLE_TIMEOUT_MS = 12h` (one operating shift) bounds a session token's life;
+`DEVICE_STALE_AFTER_MS = 5 × 60s` marks a device STALE after five missed heartbeats.
+Both are computed from SERVER time only (client time untrusted). · Conservative because
+an unbounded session token would live forever if leaked, and a staleness signal aids
+health without failing closed on a brief network blip. · Revisited by an operations
+tuning decision (per-tenant shift length, heartbeat cadence).
+
+**Back-office device admin gates on the mandatory `restaurant-core` module (M2-L3)** ·
+`module-catalog.ts` maps the `restaurantDevices` router to `restaurant-core`, not the
+optional `restaurant-integrations` ("Integrations and Devices") module. · Conservative
+because device trust and terminal sessions are foundational to operating any restaurant
+terminal, so every restaurant org must be able to manage its own devices; gating them
+behind an optional add-on could lock a tenant out of revoking a lost device. · Revisited
+if device administration should become a separately-licensed capability.
+
+**Back-office revocation requires the approving manager's operator credential (M2-L3/C7)**
+· The representative co-authorized action (`restaurantDevices.revoke`) verifies the
+approving manager's PIN/BADGE against the durable lockout counters IN ADDITION to writing
+the distinct-identity co-authorization record, and runs with `skipInput: true` so the
+secret never enters the audit log. · Conservative because it makes co-authorization a
+genuine second-person second factor rather than two identifiers typed by one admin, and
+exercises C4+C7 together. · Revisited if a back-office approver must instead be attributed
+to a web-login `User` (already flagged by the C6/C7 approver-identity seam above).
+
+**Operator-attributed terminal audit deferred to L4a (M2-L3)** · Ordinary terminal calls
+(unlock/switch/lock/heartbeat) are not written to the `User`-centric REST audit log; the
+durable `RestaurantCoAuthorization` and device rows are the evidence for the sensitive
+actions. · Conservative because an operator is deliberately not a `User` (C3), so forcing
+operator actions through the user-keyed audit path would misattribute them; the additive
+`RESTAURANT_OPERATOR` actor value already routes richer operator audit treatment to L4a. ·
+Revisited by the L4a operator audit-attribution decision.
