@@ -14,7 +14,11 @@ import { withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 export const POST = withTerminalAuth(async (ctx) => {
   const now = new Date();
   return NextResponse.json({
-    session: { id: ctx.session.id, state: ctx.state },
+    session: {
+      id: ctx.session.id,
+      state: ctx.state,
+      activeStaffProfileId: ctx.session.activeStaffProfileId,
+    },
     device: { id: ctx.device.id, health: deviceHealth(ctx.device, now) },
     serverTime: now.toISOString(),
   });
