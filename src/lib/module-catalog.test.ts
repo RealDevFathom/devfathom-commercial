@@ -49,13 +49,10 @@ describe('module vertical ownership', () => {
     expect(verticalForModuleKey(key)).toBe(expected);
   });
 
-  it.each([
-    ['dashboard'],
-    ['projects'],
-    ['finance'],
-    ['hr'],
-    ['not-a-real-module'],
-  ])('treats non-restaurant module %s as AGENCY', (key) => {
-    expect(verticalForModuleKey(key)).toBe('AGENCY');
-  });
+  it.each([['dashboard'], ['projects'], ['finance'], ['hr'], ['not-a-real-module']])(
+    'treats non-restaurant module %s as AGENCY',
+    (key) => {
+      expect(verticalForModuleKey(key)).toBe('AGENCY');
+    }
+  );
 });

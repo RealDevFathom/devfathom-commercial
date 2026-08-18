@@ -195,9 +195,16 @@ describe('§2.3 contract item 3 — mismatched package rejected', () => {
   });
 
   it('rejects RESTAURANT create with an AGENCY package', async () => {
-    mocks.pkgFindUnique.mockResolvedValue({ id: 'pkg_a', active: true, vertical: 'AGENCY', moduleLinks: [] });
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_a',
+      active: true,
+      vertical: 'AGENCY',
+      moduleLinks: [],
+    });
 
-    const error = await caught(run('organization.create', restaurantPayload({ packageId: 'pkg_a' })));
+    const error = await caught(
+      run('organization.create', restaurantPayload({ packageId: 'pkg_a' }))
+    );
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -205,7 +212,12 @@ describe('§2.3 contract item 3 — mismatched package rejected', () => {
   });
 
   it('rejects AGENCY create with a RESTAURANT package', async () => {
-    mocks.pkgFindUnique.mockResolvedValue({ id: 'pkg_r', active: true, vertical: 'RESTAURANT', moduleLinks: [] });
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_r',
+      active: true,
+      vertical: 'RESTAURANT',
+      moduleLinks: [],
+    });
 
     const agencyPayload = {
       slug: 'acme',
@@ -365,7 +377,11 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
     });
     mocks.orgUpdate.mockResolvedValue({ id: 'org_r' });
 
-    await run('organization.update', { id: 'org_r', vertical: 'RESTAURANT', displayName: 'Updated' });
+    await run('organization.update', {
+      id: 'org_r',
+      vertical: 'RESTAURANT',
+      displayName: 'Updated',
+    });
 
     expect(mocks.orgUpdate).toHaveBeenCalledTimes(1);
   });
@@ -481,7 +497,9 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
 
   it('fails when an org-level override disables Restaurant Core (condition: restaurant-core active)', async () => {
     mocks.orgFindUnique.mockResolvedValue(fullyProvisionedState());
-    mocks.orgModuleFindMany.mockResolvedValue([{ moduleId: 'restaurant-core', status: 'DISABLED' }]);
+    mocks.orgModuleFindMany.mockResolvedValue([
+      { moduleId: 'restaurant-core', status: 'DISABLED' },
+    ]);
 
     const error = await caught(activate());
     expect(error).toBeInstanceOf(PlatformSecurityError);

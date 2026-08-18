@@ -66,7 +66,10 @@ const platformDb = {
   restaurantBranch: { create: mocks.branchCreate, findMany: mocks.branchFindMany },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   organizationModule: { upsert: mocks.moduleUpsert, findMany: mocks.orgModuleFindMany },
-  platformModule: { findUnique: mocks.platformModuleFindUnique, findMany: mocks.platformModuleFindMany },
+  platformModule: {
+    findUnique: mocks.platformModuleFindUnique,
+    findMany: mocks.platformModuleFindMany,
+  },
 };
 
 import { executePlatformCommand } from './commands';
@@ -254,9 +257,7 @@ describe('organization.update vertical immutability + package compatibility', ()
       deploymentMode: 'SHARED',
     });
 
-    const error = await caught(
-      run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' })
-    );
+    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' }));
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -274,7 +275,11 @@ describe('organization.update vertical immutability + package compatibility', ()
       deploymentMode: 'SHARED',
     });
 
-    await run('organization.update', { id: 'org_1', vertical: 'RESTAURANT', displayName: 'Acme 2' });
+    await run('organization.update', {
+      id: 'org_1',
+      vertical: 'RESTAURANT',
+      displayName: 'Acme 2',
+    });
 
     expect(mocks.orgUpdate).toHaveBeenCalledTimes(1);
   });
@@ -290,9 +295,7 @@ describe('organization.update vertical immutability + package compatibility', ()
     });
     mocks.pkgFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
 
-    const error = await caught(
-      run('organization.update', { id: 'org_1', packageId: 'pkg_a' })
-    );
+    const error = await caught(run('organization.update', { id: 'org_1', packageId: 'pkg_a' }));
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -310,9 +313,7 @@ describe('organization.update vertical immutability + package compatibility', ()
     });
     mocks.pkgFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
 
-    const error = await caught(
-      run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' })
-    );
+    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' }));
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });

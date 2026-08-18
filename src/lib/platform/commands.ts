@@ -243,7 +243,10 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
   // §2.3 — the assigned package must belong to the restaurant vertical.
   if (
     !organization.package ||
-    !isPackageCompatibleWithVertical(organization.package.vertical ?? 'AGENCY', organization.vertical)
+    !isPackageCompatibleWithVertical(
+      organization.package.vertical ?? 'AGENCY',
+      organization.vertical
+    )
   ) {
     restaurantMissing.push('a restaurant-compatible commercial package');
   }
