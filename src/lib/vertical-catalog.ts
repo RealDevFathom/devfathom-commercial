@@ -244,6 +244,10 @@ export const RESTAURANT_CAPABILITY_NAMESPACES: readonly string[] = [
   'devices',
   'terminal',
   'coauth',
+  // M4-L1 (additive): the kitchen namespace for KDS/KOT operation. `orders:take`
+  // reuses the existing `orders` namespace; only `kitchen` is new. Appended, no
+  // rename or removal.
+  'kitchen',
 ];
 
 /** The example capability set from §8 (namespace:action), plus the restricted
@@ -294,6 +298,11 @@ export const RESTAURANT_CAPABILITIES: readonly string[] = [
   // `menu:read`/`menu:write` are untouched.
   'menu:publish',
   'menu:price',
+  // M4-L1 (additive): `orders:take` gates POS order taking on the existing
+  // `orders` namespace; `kitchen:operate` gates KDS/kitchen-ticket operation on
+  // the new `kitchen` namespace. Additive-only — no existing capability changes.
+  'orders:take',
+  'kitchen:operate',
 ];
 
 export type RoleTemplate = {
@@ -344,6 +353,9 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'loyalty:redeem',
       'reports:operational',
       'reports:financial',
+      // M4-L1 (additive): the GM oversees both floor order-taking and the kitchen.
+      'orders:take',
+      'kitchen:operate',
     ],
   },
   {
@@ -387,6 +399,8 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     capabilities: [
       'pos:operate',
       'orders:read',
+      // M4-L1 (additive): a cashier takes orders at the POS.
+      'orders:take',
       'payments:collect',
       'cash:open',
       'cash:close',
@@ -397,19 +411,29 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'server',
     name: 'Server',
     isSystem: true,
-    capabilities: ['pos:operate', 'orders:read', 'menu:read'],
+    // M4-L1 (additive): a server takes orders on the floor.
+    capabilities: ['pos:operate', 'orders:read', 'orders:take', 'menu:read'],
   },
   {
     key: 'kitchen',
     name: 'Kitchen',
     isSystem: true,
-    capabilities: ['orders:read', 'menu:read', 'sop:complete'],
+    // M4-L1 (additive): kitchen staff operate the KDS.
+    capabilities: ['orders:read', 'kitchen:operate', 'menu:read', 'sop:complete'],
   },
   {
     key: 'bar-barista',
     name: 'Bar / Barista',
     isSystem: true,
-    capabilities: ['pos:operate', 'orders:read', 'menu:read', 'sop:complete'],
+    // M4-L1 (additive): the bar both takes orders and operates its KDS.
+    capabilities: [
+      'pos:operate',
+      'orders:read',
+      'orders:take',
+      'kitchen:operate',
+      'menu:read',
+      'sop:complete',
+    ],
   },
   {
     key: 'inventory-controller',

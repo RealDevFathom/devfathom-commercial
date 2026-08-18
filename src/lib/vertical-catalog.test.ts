@@ -208,6 +208,56 @@ describe('M3-L1 capability reconciliation (additive-only, C7)', () => {
   });
 });
 
+describe('M4-L1 capability reconciliation (additive-only)', () => {
+  const roleFor = (key: string) => RESTAURANT_ROLE_TEMPLATES.find((role) => role.key === key)!;
+
+  it('adds exactly the two M4 capability keys', () => {
+    for (const capability of ['orders:take', 'kitchen:operate']) {
+      expect(RESTAURANT_CAPABILITIES).toContain(capability);
+    }
+  });
+
+  it('adds the kitchen namespace; orders reuses the existing namespace', () => {
+    expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain('kitchen');
+    expect('orders:take'.split(':')[0]).toBe('orders');
+    expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain('orders');
+  });
+
+  it('preserves the M2 namespaces (no removal or rename)', () => {
+    for (const namespace of ['staff', 'devices', 'terminal', 'coauth']) {
+      expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain(namespace);
+    }
+  });
+
+  it('grants order-taking to owner (via *), GM, cashier, server, and bar', () => {
+    expect(roleFor('owner').capabilities).toEqual(['*']);
+    for (const key of ['general-manager', 'cashier', 'server', 'bar-barista']) {
+      expect(roleFor(key).capabilities).toContain('orders:take');
+    }
+  });
+
+  it('grants kitchen operation to owner (via *), GM, kitchen, and bar', () => {
+    for (const key of ['general-manager', 'kitchen', 'bar-barista']) {
+      expect(roleFor(key).capabilities).toContain('kitchen:operate');
+    }
+  });
+
+  it('scopes the wiring: unrelated roles gain neither capability', () => {
+    for (const key of [
+      'accountant',
+      'inventory-controller',
+      'purchasing-officer',
+      'sop-compliance-auditor',
+    ]) {
+      expect(roleFor(key).capabilities).not.toContain('orders:take');
+      expect(roleFor(key).capabilities).not.toContain('kitchen:operate');
+    }
+    // A cashier takes orders but does not operate the kitchen; kitchen staff the reverse.
+    expect(roleFor('cashier').capabilities).not.toContain('kitchen:operate');
+    expect(roleFor('kitchen').capabilities).not.toContain('orders:take');
+  });
+});
+
 describe('commercial packages (§13)', () => {
   it('defines the three restaurant packages, all restaurant-vertical', () => {
     expect(RESTAURANT_PACKAGES).toHaveLength(3);
