@@ -46,12 +46,14 @@ function makeDb() {
       id: 'generated_id',
       ...data,
     })),
-    update: vi.fn().mockImplementation(
-      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
-        id: where.id,
-        ...data,
-      })
-    ),
+    update: vi
+      .fn()
+      .mockImplementation(
+        async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
+          id: where.id,
+          ...data,
+        })
+      ),
     updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     delete: vi.fn().mockResolvedValue({}),
   });
@@ -176,9 +178,9 @@ describe('setBrandStatus (default protection)', () => {
 describe('category hierarchy (cycle guard)', () => {
   it('rejects making a category its own parent', async () => {
     db.restaurantCategory.findUnique.mockResolvedValue({ id: 'cat_1' });
-    await expect(
-      updateCategory(scoped(), 'cat_1', { parentId: 'cat_1' })
-    ).rejects.toMatchObject({ reason: 'CATEGORY_CYCLE' });
+    await expect(updateCategory(scoped(), 'cat_1', { parentId: 'cat_1' })).rejects.toMatchObject({
+      reason: 'CATEGORY_CYCLE',
+    });
   });
 
   it('rejects reparenting under a descendant (walks the ancestor chain)', async () => {
@@ -354,7 +356,11 @@ describe('read models (console read-contract)', () => {
   });
 
   it('getProduct returns the product with relations or NOT_FOUND', async () => {
-    db.restaurantProduct.findUnique.mockResolvedValue({ id: 'prod_1', variants: [], modifierGroups: [] });
+    db.restaurantProduct.findUnique.mockResolvedValue({
+      id: 'prod_1',
+      variants: [],
+      modifierGroups: [],
+    });
     expect(await getProduct(scoped(), 'prod_1')).toMatchObject({ id: 'prod_1' });
     db.restaurantProduct.findUnique.mockResolvedValue(null);
     await expect(getProduct(scoped(), 'missing')).rejects.toMatchObject({ reason: 'NOT_FOUND' });

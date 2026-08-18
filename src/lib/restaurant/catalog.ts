@@ -257,10 +257,7 @@ async function assertNoCategoryCycle(db: ScopedDb, childId: string, fromParentId
   const seen = new Set<string>();
   while (cursor) {
     if (cursor === childId) {
-      throw new CatalogError(
-        'Reparenting there would create a category cycle.',
-        'CATEGORY_CYCLE'
-      );
+      throw new CatalogError('Reparenting there would create a category cycle.', 'CATEGORY_CYCLE');
     }
     if (seen.has(cursor)) break; // pre-existing cycle guard — never loop forever
     seen.add(cursor);
@@ -478,7 +475,10 @@ export async function updateModifierGroup(
 }
 
 export async function deleteModifierGroup(db: ScopedDb, id: string) {
-  const group = await db.restaurantModifierGroup.findUnique({ where: { id }, select: { id: true } });
+  const group = await db.restaurantModifierGroup.findUnique({
+    where: { id },
+    select: { id: true },
+  });
   if (!group) throw new CatalogError('Modifier group not found.', 'NOT_FOUND');
   // Options and product attachments cascade (schema onDelete: Cascade).
   await db.restaurantModifierGroup.delete({ where: { id } });
@@ -573,7 +573,11 @@ export async function attachModifierGroup(
   });
 }
 
-export async function detachModifierGroup(db: ScopedDb, productId: string, modifierGroupId: string) {
+export async function detachModifierGroup(
+  db: ScopedDb,
+  productId: string,
+  modifierGroupId: string
+) {
   const attachment = await db.restaurantProductModifierGroup.findUnique({
     where: { productId_modifierGroupId: { productId, modifierGroupId } },
     select: { id: true },
@@ -738,7 +742,10 @@ export async function attachProductAllergen(db: ScopedDb, productId: string, all
     select: { id: true },
   });
   if (existing) {
-    throw new CatalogError('That allergen is already declared on this product.', 'ALREADY_ATTACHED');
+    throw new CatalogError(
+      'That allergen is already declared on this product.',
+      'ALREADY_ATTACHED'
+    );
   }
   return db.restaurantProductAllergen.create({ data: { productId, allergenId } });
 }

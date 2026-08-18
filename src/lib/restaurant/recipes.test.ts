@@ -42,12 +42,14 @@ function makeDb() {
       id: 'generated_id',
       ...data,
     })),
-    update: vi.fn().mockImplementation(
-      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
-        id: where.id,
-        ...data,
-      })
-    ),
+    update: vi
+      .fn()
+      .mockImplementation(
+        async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
+          id: where.id,
+          ...data,
+        })
+      ),
     updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     delete: vi.fn().mockResolvedValue({}),
     upsert: vi.fn().mockImplementation(async ({ create }: { create: Record<string, unknown> }) => ({
@@ -84,7 +86,9 @@ describe('createUnit', () => {
   it('trims and persists the name and abbreviation', async () => {
     await createUnit(scoped(), { name: '  gram  ', abbreviation: 'g' });
     expect(db.restaurantUnit.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ name: 'gram', abbreviation: 'g' }) })
+      expect.objectContaining({
+        data: expect.objectContaining({ name: 'gram', abbreviation: 'g' }),
+      })
     );
   });
 
@@ -118,9 +122,11 @@ describe('upsertConversion', () => {
 
   it('rejects when new edge closes a cycle', async () => {
     // Existing edges: A→B, B→C. Adding C→A would close A→B→C→A.
-    db.restaurantUnit.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
-      id: where.id,
-    }));
+    db.restaurantUnit.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({
+        id: where.id,
+      })
+    );
     // fromUnitId = C, toUnitId = A; walking out from A finds B then C → cycle
     db.restaurantUnitConversion.findMany
       .mockResolvedValueOnce([{ toUnitId: 'B' }]) // from A
@@ -132,9 +138,11 @@ describe('upsertConversion', () => {
   });
 
   it('upserts when no cycle', async () => {
-    db.restaurantUnit.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
-      id: where.id,
-    }));
+    db.restaurantUnit.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({
+        id: where.id,
+      })
+    );
     db.restaurantUnitConversion.findMany.mockResolvedValue([]);
     await upsertConversion(scoped(), 'A', 'B', '1000');
     expect(db.restaurantUnitConversion.upsert).toHaveBeenCalled();
@@ -167,7 +175,9 @@ describe('createAllergen', () => {
 
 describe('deleteAllergen', () => {
   it('throws NOT_FOUND when absent', async () => {
-    await expect(deleteAllergen(scoped(), 'missing')).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+    await expect(deleteAllergen(scoped(), 'missing')).rejects.toMatchObject({
+      reason: 'NOT_FOUND',
+    });
   });
 
   it('deletes when present', async () => {
@@ -229,9 +239,11 @@ describe('createRecipe', () => {
 
   it('rejects missing product', async () => {
     db.restaurantProduct.findUnique.mockResolvedValue(null);
-    await expect(createRecipe(scoped(), { productId: 'missing', name: 'X' })).rejects.toMatchObject({
-      reason: 'NOT_FOUND',
-    });
+    await expect(createRecipe(scoped(), { productId: 'missing', name: 'X' })).rejects.toMatchObject(
+      {
+        reason: 'NOT_FOUND',
+      }
+    );
   });
 });
 
@@ -303,7 +315,9 @@ describe('activateRecipeVersion', () => {
     await activateRecipeVersion(scoped(), 'r1', 'v2');
     // Two updates inside the transaction: supersede v1, activate v2
     expect(db.restaurantRecipeVersion.update).toHaveBeenCalledTimes(2);
-    const calls = db.restaurantRecipeVersion.update.mock.calls as Array<[{ where: { id: string }; data: { status: string } }]>;
+    const calls = db.restaurantRecipeVersion.update.mock.calls as Array<
+      [{ where: { id: string }; data: { status: string } }]
+    >;
     const statuses = calls.map((c) => c[0].data.status);
     expect(statuses).toContain('SUPERSEDED');
     expect(statuses).toContain('ACTIVE');

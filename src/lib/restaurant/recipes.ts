@@ -273,7 +273,10 @@ export async function attachIngredientAllergen(
     select: { id: true },
   });
   if (existing) {
-    throw new RecipeError('That allergen is already declared on this ingredient.', 'ALREADY_ATTACHED');
+    throw new RecipeError(
+      'That allergen is already declared on this ingredient.',
+      'ALREADY_ATTACHED'
+    );
   }
   return db.restaurantIngredientAllergen.create({ data: { ingredientId, allergenId } });
 }
@@ -287,7 +290,8 @@ export async function detachIngredientAllergen(
     where: { ingredientId_allergenId: { ingredientId, allergenId } },
     select: { id: true },
   });
-  if (!link) throw new RecipeError('That allergen is not declared on this ingredient.', 'NOT_FOUND');
+  if (!link)
+    throw new RecipeError('That allergen is not declared on this ingredient.', 'NOT_FOUND');
   await db.restaurantIngredientAllergen.delete({ where: { id: link.id } });
 }
 
@@ -419,8 +423,22 @@ async function requireRecipeVersion(db: ScopedDb, id: string) {
 // ── Recipe lines (BOM) ────────────────────────────────────────────────────────
 
 export type CreateRecipeLineInput =
-  | { recipeVersionId: string; ingredientId: string; subRecipeId?: never; quantity: string; unitId: string; sortOrder?: number }
-  | { recipeVersionId: string; subRecipeId: string; ingredientId?: never; quantity: string; unitId: string; sortOrder?: number };
+  | {
+      recipeVersionId: string;
+      ingredientId: string;
+      subRecipeId?: never;
+      quantity: string;
+      unitId: string;
+      sortOrder?: number;
+    }
+  | {
+      recipeVersionId: string;
+      subRecipeId: string;
+      ingredientId?: never;
+      quantity: string;
+      unitId: string;
+      sortOrder?: number;
+    };
 
 /**
  * Append a BOM line to a DRAFT version. Exactly one of `ingredientId` or
@@ -429,10 +447,7 @@ export type CreateRecipeLineInput =
  */
 export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInput) {
   if ((!input.ingredientId && !input.subRecipeId) || (input.ingredientId && input.subRecipeId)) {
-    throw new RecipeError(
-      'Exactly one of ingredientId or subRecipeId must be set.',
-      'INVALID'
-    );
+    throw new RecipeError('Exactly one of ingredientId or subRecipeId must be set.', 'INVALID');
   }
   const version = await requireRecipeVersion(db, input.recipeVersionId);
   assertVersionMutable(version);

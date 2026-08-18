@@ -48,12 +48,14 @@ function model(): Delegate {
       id: 'generated_id',
       ...data,
     })),
-    update: vi.fn().mockImplementation(
-      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
-        id: where.id,
-        ...data,
-      })
-    ),
+    update: vi
+      .fn()
+      .mockImplementation(
+        async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
+          id: where.id,
+          ...data,
+        })
+      ),
     updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     delete: vi.fn().mockResolvedValue({}),
     upsert: vi.fn().mockImplementation(async ({ create }: { create: Record<string, unknown> }) => ({
@@ -193,7 +195,13 @@ describe('read models', () => {
   it('listRecipeVersions serializes each version yield and obeys the recipe scope', async () => {
     (db.restaurantRecipe as Delegate).findUnique.mockResolvedValue({ id: 'r1' });
     (db.restaurantRecipeVersion as Delegate).findMany.mockResolvedValue([
-      { id: 'v2', recipeId: 'r1', status: 'ACTIVE', versionNumber: 2, yieldQuantity: new Prisma.Decimal('3') },
+      {
+        id: 'v2',
+        recipeId: 'r1',
+        status: 'ACTIVE',
+        versionNumber: 2,
+        yieldQuantity: new Prisma.Decimal('3'),
+      },
       { id: 'v1', recipeId: 'r1', status: 'SUPERSEDED', versionNumber: 1, yieldQuantity: null },
     ]);
     const result = await caller().listRecipeVersions({ recipeId: 'r1' });
@@ -254,7 +262,11 @@ describe('C4 Decimal serialization', () => {
       baseUnitId: 'u1',
       referenceCost: new Prisma.Decimal('2.75'),
     });
-    const result = await caller().createIngredient({ name: 'Flour', baseUnitId: 'u1', referenceCost: '2.75' });
+    const result = await caller().createIngredient({
+      name: 'Flour',
+      baseUnitId: 'u1',
+      referenceCost: '2.75',
+    });
     expect(typeof result?.referenceCost).toBe('string');
   });
 
@@ -269,7 +281,11 @@ describe('C4 Decimal serialization', () => {
       toUnitId: 'B',
       factor: new Prisma.Decimal('1000'),
     });
-    const result = await caller().upsertConversion({ fromUnitId: 'A', toUnitId: 'B', factor: '1000' });
+    const result = await caller().upsertConversion({
+      fromUnitId: 'A',
+      toUnitId: 'B',
+      factor: '1000',
+    });
     expect(typeof result?.factor).toBe('string');
   });
 });

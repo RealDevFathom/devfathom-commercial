@@ -66,7 +66,10 @@ import {
   updateRecipeLine,
   deleteRecipeLine,
 } from '@/lib/restaurant/recipes';
-import { VersionImmutabilityError, VersionTransitionError } from '@/lib/restaurant/effective-dating';
+import {
+  VersionImmutabilityError,
+  VersionTransitionError,
+} from '@/lib/restaurant/effective-dating';
 
 /**
  * M3-L2 — back-office server surface for canonical catalog + costing substrate.
@@ -508,10 +511,21 @@ export const restaurantCatalogRouter = router({
     }),
 
   attachModifierGroup: writeProcedure
-    .input(z.object({ productId: z.string(), modifierGroupId: z.string(), sortOrder: z.number().int().optional() }))
+    .input(
+      z.object({
+        productId: z.string(),
+        modifierGroupId: z.string(),
+        sortOrder: z.number().int().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await attachModifierGroup(ctx.db, input.productId, input.modifierGroupId, input.sortOrder);
+        return await attachModifierGroup(
+          ctx.db,
+          input.productId,
+          input.modifierGroupId,
+          input.sortOrder
+        );
       } catch (err) {
         mapCatalogError(err);
       }
@@ -648,7 +662,12 @@ export const restaurantCatalogRouter = router({
   // ── Units ────────────────────────────────────────────────────────────────────
 
   createUnit: writeProcedure
-    .input(z.object({ name: z.string().min(1).max(100), abbreviation: z.string().max(20).nullable().optional() }))
+    .input(
+      z.object({
+        name: z.string().min(1).max(100),
+        abbreviation: z.string().max(20).nullable().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       try {
         return await createUnit(ctx.db, input);
@@ -658,7 +677,13 @@ export const restaurantCatalogRouter = router({
     }),
 
   updateUnit: writeProcedure
-    .input(z.object({ id: z.string(), name: z.string().min(1).max(100).optional(), abbreviation: z.string().max(20).nullable().optional() }))
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).max(100).optional(),
+        abbreviation: z.string().max(20).nullable().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       try {
@@ -924,7 +949,10 @@ export const restaurantCatalogRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const line = await createRecipeLine(ctx.db, input as Parameters<typeof createRecipeLine>[1]);
+        const line = await createRecipeLine(
+          ctx.db,
+          input as Parameters<typeof createRecipeLine>[1]
+        );
         return { ...line, quantity: serializeDecimal(line.quantity) };
       } catch (err) {
         mapCatalogError(err);
