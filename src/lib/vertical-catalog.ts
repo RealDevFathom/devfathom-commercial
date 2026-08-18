@@ -287,6 +287,13 @@ export const RESTAURANT_CAPABILITIES: readonly string[] = [
   'devices:revoke',
   'terminal:operate',
   'coauth:approve',
+  // M3-L1 (additive, C7): the two menu capabilities the M3 surfaces enforce, on
+  // the existing `menu` namespace. `menu:publish` gates branch-menu publications;
+  // `menu:price` gates price lists and approved price overrides. Additive-only —
+  // no existing capability is removed, renamed, or reassigned; the base
+  // `menu:read`/`menu:write` are untouched.
+  'menu:publish',
+  'menu:price',
 ];
 
 export type RoleTemplate = {
@@ -321,6 +328,9 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'cash:close',
       'menu:read',
       'menu:write',
+      // M3-L1 (additive, C7): the GM authors and publishes menus and sets prices.
+      'menu:publish',
+      'menu:price',
       'inventory:read',
       'inventory:count',
       'inventory:adjust',
@@ -353,6 +363,11 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'cash:adjust',
       'cash:close',
       'menu:read',
+      // M3-L1 (additive, C7): the branch manager publishes menus to their branch
+      // and applies approved price overrides; they do not author the brand catalog
+      // (no menu:write).
+      'menu:publish',
+      'menu:price',
       'inventory:read',
       'inventory:count',
       'inventory:adjust',

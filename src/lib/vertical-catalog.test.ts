@@ -173,6 +173,42 @@ describe('M2-L1 capability reconciliation (additive-only)', () => {
   });
 });
 
+describe('M3-L1 capability reconciliation (additive-only, C7)', () => {
+  it('adds exactly the two M3 menu capability keys on the existing menu namespace', () => {
+    for (const capability of ['menu:publish', 'menu:price']) {
+      expect(RESTAURANT_CAPABILITIES).toContain(capability);
+      expect(capability.split(':')[0]).toBe('menu');
+    }
+    // The namespace pre-exists (M1) — no new namespace is introduced.
+    expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain('menu');
+  });
+
+  it('preserves the base menu capabilities (no rename or removal)', () => {
+    for (const capability of ['menu:read', 'menu:write']) {
+      expect(RESTAURANT_CAPABILITIES).toContain(capability);
+    }
+  });
+
+  it('grants the M3 menu capabilities to owner (via *), GM, and branch-manager only', () => {
+    const roleFor = (key: string) =>
+      RESTAURANT_ROLE_TEMPLATES.find((role) => role.key === key)!;
+
+    // Owner holds full administration (['*']) and is not enumerated per-capability.
+    expect(roleFor('owner').capabilities).toEqual(['*']);
+
+    for (const key of ['general-manager', 'branch-manager']) {
+      expect(roleFor(key).capabilities).toContain('menu:publish');
+      expect(roleFor(key).capabilities).toContain('menu:price');
+    }
+
+    // The additive wiring is scoped: operational roles do NOT gain publish/price.
+    for (const key of ['cashier', 'server', 'kitchen', 'bar-barista', 'inventory-controller']) {
+      expect(roleFor(key).capabilities).not.toContain('menu:publish');
+      expect(roleFor(key).capabilities).not.toContain('menu:price');
+    }
+  });
+});
+
 describe('commercial packages (§13)', () => {
   it('defines the three restaurant packages, all restaurant-vertical', () => {
     expect(RESTAURANT_PACKAGES).toHaveLength(3);
