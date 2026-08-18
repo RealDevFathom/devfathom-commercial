@@ -23,6 +23,7 @@ import {
   ScrollText,
   ClipboardList,
   Building2,
+  Monitor,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -101,6 +102,21 @@ const navigation: NavItem[] = [
     module: 'finance',
   },
   { label: 'Team', href: '/team', icon: Users, group: 'Firm', module: 'hr' },
+  {
+    label: 'Restaurant staff',
+    href: '/restaurant/staff',
+    icon: Users,
+    group: 'Firm',
+    module: 'restaurant-core',
+  },
+  {
+    label: 'Restaurant devices',
+    href: '/restaurant/devices',
+    icon: Monitor,
+    adminOnly: true,
+    group: 'Firm',
+    module: 'restaurant-core',
+  },
   {
     label: 'Reviews',
     href: '/reviews',

@@ -1,0 +1,740 @@
+'use client';
+
+import { useMemo, useState, type FormEvent } from 'react';
+import type { inferRouterOutputs } from '@trpc/server';
+import { toast } from 'sonner';
+
+import { useEntitlements } from '@/components/entitlements-provider';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
+import { SectionCard } from '@/components/ui/section-card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { StatusPill } from '@/components/ui/status-pill';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { trpc } from '@/lib/trpc';
+import type { AppRouter } from '@/server/routers/_app';
+
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type StaffProfile = RouterOutputs['restaurantStaff']['list'][number];
+type StaffStatus = StaffProfile['status'];
+type Credential = RouterOutputs['restaurantStaff']['listCredentials'][number];
+type UiError = { message: string; data?: { code?: string } | null };
+
+const statuses: StaffStatus[] = ['ACTIVE', 'SUSPENDED', 'ARCHIVED'];
+const labelClass =
+  'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
+const selectClass =
+  'h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
+const dateFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' });
+
+function isPermissionError(error?: UiError | null) {
+  return error?.data?.code === 'FORBIDDEN' || error?.data?.code === 'UNAUTHORIZED';
+}
+
+function formText(data: FormData, name: string) {
+  return String(data.get(name) ?? '').trim();
+}
+
+function StaffTableSkeleton() {
+  return (
+    <div role="status" aria-label="Loading restaurant staff" className="space-y-3 py-2">
+      {[0, 1, 2, 3].map((row) => (
+        <Skeleton key={row} className="h-12 w-full" />
+      ))}
+    </div>
+  );
+}
+
+export function RestaurantStaffConsole() {
+  const entitlements = useEntitlements();
+  const restaurantModule = entitlements.modules.find((module) => module.key === 'restaurant-core');
+  const restaurantEnabled =
+    restaurantModule?.enabled ?? entitlements.enabledModules.includes('restaurant-core');
+  const utils = trpc.useUtils();
+  const staffQuery = trpc.restaurantStaff.list.useQuery(undefined, { enabled: restaurantEnabled });
+
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
+  const [branchFilter, setBranchFilter] = useState('');
+  const [staffFormOpen, setStaffFormOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
+  const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
+  const [credentialError, setCredentialError] = useState('');
+  const [revokeCredential, setRevokeCredential] = useState<Pick<Credential, 'id' | 'type'> | null>(
+    null
+  );
+
+  const credentialsQuery = trpc.restaurantStaff.listCredentials.useQuery(
+    { staffProfileId: selectedStaff?.id ?? '', includeRevoked: true },
+    { enabled: restaurantEnabled && selectedStaff != null }
+  );
+
+  const refreshStaff = () => void utils.restaurantStaff.list.invalidate();
+  const refreshCredentials = () => {
+    if (selectedStaff) {
+      void utils.restaurantStaff.listCredentials.invalidate({
+        staffProfileId: selectedStaff.id,
+        includeRevoked: true,
+      });
+    }
+  };
+  const mutationFailure = (error: { message: string }) => toast.error(error.message);
+
+  const createStaff = trpc.restaurantStaff.create.useMutation({
+    onSuccess: () => {
+      refreshStaff();
+      setStaffFormOpen(false);
+      toast.success('Staff profile created.');
+    },
+    onError: mutationFailure,
+  });
+  const updateStaff = trpc.restaurantStaff.update.useMutation({
+    onSuccess: () => {
+      refreshStaff();
+      setStaffFormOpen(false);
+      toast.success('Staff profile updated.');
+    },
+    onError: mutationFailure,
+  });
+  const setStatus = trpc.restaurantStaff.setStatus.useMutation({
+    onSuccess: () => {
+      refreshStaff();
+      toast.success('Staff status updated.');
+    },
+    onError: mutationFailure,
+  });
+  const issueCredential = trpc.restaurantStaff.issueCredential.useMutation({
+    onSuccess: () => {
+      setCredentialError('');
+      refreshCredentials();
+      toast.success('Credential issued.');
+    },
+    onError: (error) => {
+      setCredentialError(error.message);
+      toast.error(error.message);
+    },
+  });
+  const rotateCredential = trpc.restaurantStaff.rotateCredential.useMutation({
+    onSuccess: () => {
+      setCredentialError('');
+      refreshCredentials();
+      toast.success('Credential rotated.');
+    },
+    onError: (error) => {
+      setCredentialError(error.message);
+      toast.error(error.message);
+    },
+  });
+  const revokeCredentialMutation = trpc.restaurantStaff.revokeCredential.useMutation({
+    onSuccess: () => {
+      setRevokeCredential(null);
+      refreshCredentials();
+      toast.success('Credential revoked.');
+    },
+    onError: mutationFailure,
+  });
+
+  const branches = useMemo(() => {
+    const values = new Map<string, string>();
+    for (const staff of staffQuery.data ?? []) {
+      if (staff.primaryBranch) values.set(staff.primaryBranch.id, staff.primaryBranch.name);
+    }
+    return [...values.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [staffQuery.data]);
+
+  const filteredStaff = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const branchNeedle = branchFilter.trim().toLowerCase();
+    return (staffQuery.data ?? []).filter((staff) => {
+      const matchesSearch =
+        needle.length === 0 ||
+        staff.displayName.toLowerCase().includes(needle) ||
+        staff.email?.toLowerCase().includes(needle);
+      const matchesStatus = statusFilter === 'ALL' || staff.status === statusFilter;
+      const matchesBranch =
+        branchNeedle.length === 0 ||
+        staff.primaryBranchId?.toLowerCase().includes(branchNeedle) ||
+        staff.primaryBranch?.name.toLowerCase().includes(branchNeedle);
+      return matchesSearch && matchesStatus && matchesBranch;
+    });
+  }, [branchFilter, search, staffQuery.data, statusFilter]);
+
+  const permissionDenied = isPermissionError(staffQuery.error);
+  const staffFormPending = createStaff.isPending || updateStaff.isPending;
+  const credentialsPending = issueCredential.isPending || rotateCredential.isPending;
+
+  const openCreate = () => {
+    setEditingStaff(null);
+    createStaff.reset();
+    updateStaff.reset();
+    setStaffFormOpen(true);
+  };
+
+  const openEdit = (staff: StaffProfile) => {
+    setEditingStaff(staff);
+    createStaff.reset();
+    updateStaff.reset();
+    setStaffFormOpen(true);
+  };
+
+  const submitStaff = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const payload = {
+      displayName: formText(data, 'displayName'),
+      email: formText(data, 'email') || null,
+      userId: formText(data, 'userId') || null,
+      primaryBranchId: formText(data, 'primaryBranchId') || null,
+      status: formText(data, 'status') as StaffStatus,
+    };
+    if (editingStaff) updateStaff.mutate({ id: editingStaff.id, ...payload });
+    else createStaff.mutate(payload);
+  };
+
+  const submitCredential = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedStaff) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const secret = formText(data, 'secret');
+    const type = formText(data, 'type') as 'PIN' | 'BADGE';
+    const deviceId = formText(data, 'deviceId') || null;
+    const secretInput = form.elements.namedItem('secret');
+    if (secretInput instanceof HTMLInputElement) secretInput.value = '';
+    setCredentialError('');
+    issueCredential.mutate(
+      { staffProfileId: selectedStaff.id, type, secret, deviceId },
+      {
+        onSuccess: () => form.reset(),
+        onSettled: () => issueCredential.reset(),
+      }
+    );
+  };
+
+  const submitRotation = (event: FormEvent<HTMLFormElement>, credentialId: string) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const secret = formText(new FormData(form), 'secret');
+    form.reset();
+    setCredentialError('');
+    rotateCredential.mutate(
+      { credentialId, secret },
+      { onSettled: () => rotateCredential.reset() }
+    );
+  };
+
+  return (
+    <div className="min-w-0 space-y-6">
+      <PageHeader
+        eyebrow="Restaurant operations"
+        heading="Staff"
+        description="Manage restaurant staff profiles, access status, and operator credentials."
+        actions={
+          restaurantEnabled && !permissionDenied ? (
+            <Button className="min-h-11" onClick={openCreate}>
+              Add staff member
+            </Button>
+          ) : null
+        }
+      />
+
+      {!restaurantEnabled ? (
+        <SectionCard title="Restaurant module disabled">
+          <div className="space-y-3" role="status">
+            <StatusPill status="Disabled" tone="warning" />
+            <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
+              Restaurant staff tools are unavailable for this organization. Enable Restaurant Core
+              to load staff data or manage credentials.
+            </p>
+          </div>
+        </SectionCard>
+      ) : permissionDenied ? (
+        <SectionCard title="Staff access unavailable">
+          <p role="alert" className="text-sm text-destructive">
+            You do not have permission to manage restaurant staff.
+          </p>
+        </SectionCard>
+      ) : (
+        <SectionCard
+          eyebrow="Directory"
+          title={
+            staffQuery.isLoading
+              ? 'Loading staff…'
+              : `${filteredStaff.length} staff member${filteredStaff.length === 1 ? '' : 's'}`
+          }
+        >
+          <div className="mb-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_14rem]">
+            <label className="space-y-1.5">
+              <span className={labelClass}>Search name or email</span>
+              <Input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search staff"
+                className="h-11"
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className={labelClass}>Status</span>
+              <select
+                className={selectClass}
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as 'ALL' | StaffStatus)}
+              >
+                <option value="ALL">All statuses</option>
+                {statuses.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="space-y-1.5">
+              <label htmlFor="staff-branch-filter" className={labelClass}>
+                Branch
+              </label>
+              <Input
+                id="staff-branch-filter"
+                value={branchFilter}
+                onChange={(event) => setBranchFilter(event.target.value)}
+                placeholder="Branch name or ID"
+                list="staff-branch-filters"
+                className="h-11"
+              />
+              <datalist id="staff-branch-filters">
+                {branches.map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </datalist>
+            </div>
+          </div>
+
+          {staffQuery.isLoading ? (
+            <StaffTableSkeleton />
+          ) : staffQuery.error ? (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/10 p-4 text-sm text-destructive"
+            >
+              <span>Staff could not be loaded.</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void staffQuery.refetch()}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : filteredStaff.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border-default px-5 py-10 text-center">
+              <p className="font-medium text-text-strong">No staff match these filters.</p>
+              <p className="mt-1 text-sm text-text-muted">
+                Clear the filters or add the first restaurant staff profile.
+              </p>
+            </div>
+          ) : (
+            <Table className="min-w-[900px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Branch</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredStaff.map((staff) => (
+                  <TableRow key={staff.id}>
+                    <TableCell className="font-medium text-text-strong">
+                      {staff.displayName}
+                    </TableCell>
+                    <TableCell className="text-text-muted">{staff.email ?? '—'}</TableCell>
+                    <TableCell>
+                      <span className="block text-text-strong">
+                        {staff.primaryBranch?.name ?? 'Unassigned'}
+                      </span>
+                      {staff.primaryBranchId ? (
+                        <span className="block font-mono text-[0.6875rem] text-text-faint">
+                          {staff.primaryBranchId}
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>
+                      <select
+                        aria-label={`Status for ${staff.displayName}`}
+                        className="h-8 rounded-md border border-input bg-surface-raised px-2 text-xs text-text-strong outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+                        value={staff.status}
+                        disabled={setStatus.isPending}
+                        onChange={(event) =>
+                          setStatus.mutate({
+                            id: staff.id,
+                            status: event.target.value as StaffStatus,
+                          })
+                        }
+                      >
+                        {statuses.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                    </TableCell>
+                    <TableCell className="text-text-muted">
+                      {dateFormat.format(new Date(staff.createdAt))}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => openEdit(staff)}>
+                          Edit
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setCredentialError('');
+                            setSelectedStaff(staff);
+                          }}
+                        >
+                          Credentials
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </SectionCard>
+      )}
+
+      <Dialog
+        open={staffFormOpen}
+        onOpenChange={(open) => {
+          if (!staffFormPending) setStaffFormOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{editingStaff ? 'Edit staff member' : 'Add staff member'}</DialogTitle>
+            <DialogDescription>
+              Profile details control restaurant access and branch assignment.
+            </DialogDescription>
+          </DialogHeader>
+          <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
+            {(createStaff.error || updateStaff.error) && (
+              <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                {(createStaff.error ?? updateStaff.error)?.message}
+              </p>
+            )}
+            <label className="space-y-1.5">
+              <span className={labelClass}>Display name</span>
+              <Input
+                name="displayName"
+                defaultValue={editingStaff?.displayName}
+                required
+                maxLength={200}
+                className="h-11"
+              />
+            </label>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className={labelClass}>Email</span>
+                <Input
+                  name="email"
+                  type="email"
+                  defaultValue={editingStaff?.email ?? ''}
+                  className="h-11"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className={labelClass}>Linked user ID</span>
+                <Input name="userId" defaultValue={editingStaff?.userId ?? ''} className="h-11" />
+              </label>
+              <div className="space-y-1.5">
+                <label htmlFor="staff-primary-branch" className={labelClass}>
+                  Primary branch ID
+                </label>
+                <Input
+                  id="staff-primary-branch"
+                  name="primaryBranchId"
+                  defaultValue={editingStaff?.primaryBranchId ?? ''}
+                  list="staff-form-branches"
+                  className="h-11"
+                />
+                <datalist id="staff-form-branches">
+                  {branches.map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+                </datalist>
+              </div>
+              <label className="space-y-1.5">
+                <span className={labelClass}>Status</span>
+                <select
+                  name="status"
+                  defaultValue={editingStaff?.status ?? 'ACTIVE'}
+                  className={selectClass}
+                >
+                  {statuses.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11"
+                disabled={staffFormPending}
+                onClick={() => setStaffFormOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" className="min-h-11" disabled={staffFormPending}>
+                {staffFormPending ? 'Saving…' : 'Save staff member'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={selectedStaff != null}
+        onOpenChange={(open) => {
+          if (!open && !credentialsPending) {
+            setSelectedStaff(null);
+            setRevokeCredential(null);
+            setCredentialError('');
+          }
+        }}
+      >
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{selectedStaff?.displayName} credentials</DialogTitle>
+            <DialogDescription>
+              Issue, rotate, or revoke PIN and badge credentials. Secrets are never shown here.
+            </DialogDescription>
+          </DialogHeader>
+
+          {credentialError ? (
+            <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              {credentialError}
+            </p>
+          ) : null}
+
+          <form
+            className="grid gap-3 rounded-md bg-surface-sunken p-4 sm:grid-cols-2"
+            onSubmit={submitCredential}
+          >
+            <label className="space-y-1.5">
+              <span className={labelClass}>Credential type</span>
+              <select name="type" className={selectClass} defaultValue="PIN">
+                <option value="PIN">PIN</option>
+                <option value="BADGE">Badge</option>
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className={labelClass}>Device ID (optional)</span>
+              <Input name="deviceId" className="h-11" autoComplete="off" />
+            </label>
+            <label className="space-y-1.5 sm:col-span-2">
+              <span className={labelClass}>New operator secret</span>
+              <Input
+                name="secret"
+                type="password"
+                required
+                aria-invalid={credentialError ? true : undefined}
+                autoComplete="new-password"
+                className="h-11"
+              />
+            </label>
+            <Button type="submit" className="min-h-11 sm:col-span-2" disabled={credentialsPending}>
+              {issueCredential.isPending ? 'Issuing…' : 'Issue credential'}
+            </Button>
+          </form>
+
+          {credentialsQuery.isLoading ? (
+            <div role="status" aria-label="Loading credentials" className="space-y-2">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : credentialsQuery.error ? (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              <span>
+                {isPermissionError(credentialsQuery.error)
+                  ? 'You do not have permission to view operator credentials.'
+                  : 'Credentials could not be loaded.'}
+              </span>
+              {!isPermissionError(credentialsQuery.error) ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void credentialsQuery.refetch()}
+                >
+                  Try again
+                </Button>
+              ) : null}
+            </div>
+          ) : credentialsQuery.data?.length ? (
+            <div className="space-y-3">
+              {credentialsQuery.data.map((credential) => {
+                const credentialStatus = credential.revokedAt
+                  ? 'REVOKED'
+                  : credential.lockedUntil && new Date(credential.lockedUntil) > new Date()
+                    ? 'LOCKED'
+                    : 'ACTIVE';
+                return (
+                  <div key={credential.id} className="rounded-md border border-border-subtle p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-text-strong">{credential.type}</span>
+                          <StatusPill
+                            status={credentialStatus}
+                            tone={
+                              credentialStatus === 'ACTIVE'
+                                ? 'success'
+                                : credentialStatus === 'LOCKED'
+                                  ? 'warning'
+                                  : 'danger'
+                            }
+                          />
+                        </div>
+                        <p className="font-mono text-[0.6875rem] text-text-faint">
+                          {credential.id}
+                        </p>
+                        <p className="text-xs text-text-muted">
+                          Failed attempts: {credential.failedAttempts}
+                          {credential.deviceId ? ` · Device ${credential.deviceId}` : ''}
+                        </p>
+                      </div>
+                      {!credential.revokedAt ? (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          disabled={revokeCredentialMutation.isPending}
+                          onClick={() => {
+                            revokeCredentialMutation.reset();
+                            setRevokeCredential({ id: credential.id, type: credential.type });
+                          }}
+                        >
+                          Revoke
+                        </Button>
+                      ) : null}
+                    </div>
+                    {!credential.revokedAt ? (
+                      <form
+                        className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+                        onSubmit={(event) => submitRotation(event, credential.id)}
+                      >
+                        <label className="space-y-1.5">
+                          <span className={labelClass}>Replacement {credential.type} secret</span>
+                          <Input
+                            name="secret"
+                            type="password"
+                            required
+                            aria-invalid={credentialError ? true : undefined}
+                            autoComplete="new-password"
+                            className="h-11"
+                          />
+                        </label>
+                        <Button
+                          type="submit"
+                          variant="outline"
+                          className="min-h-11"
+                          disabled={credentialsPending}
+                        >
+                          {rotateCredential.isPending ? 'Rotating…' : 'Rotate'}
+                        </Button>
+                      </form>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-border-default p-6 text-center">
+              <p className="font-medium text-text-strong">No credentials issued.</p>
+              <p className="mt-1 text-sm text-text-muted">Use the form above to issue one.</p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={revokeCredential != null}
+        onOpenChange={(open) => {
+          if (!open && !revokeCredentialMutation.isPending) setRevokeCredential(null);
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Revoke {revokeCredential?.type} credential?</DialogTitle>
+            <DialogDescription>
+              This credential will stop authenticating immediately. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          {revokeCredentialMutation.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {revokeCredentialMutation.error.message}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11"
+              disabled={revokeCredentialMutation.isPending}
+              onClick={() => setRevokeCredential(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              className="min-h-11"
+              disabled={revokeCredentialMutation.isPending}
+              onClick={() => {
+                if (revokeCredential) {
+                  revokeCredentialMutation.mutate({ credentialId: revokeCredential.id });
+                }
+              }}
+            >
+              {revokeCredentialMutation.isPending ? 'Revoking…' : 'Revoke credential'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
