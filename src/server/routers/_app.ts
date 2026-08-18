@@ -23,6 +23,7 @@ import { organizationAdminRouter } from './organization-admin';
 import { restaurantStaffRouter } from './restaurant-staff';
 import { restaurantDevicesRouter } from './restaurant-devices';
 import { restaurantCatalogRouter } from './restaurant-catalog';
+import { restaurantMenusRouter } from './restaurant-menus';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -49,6 +50,7 @@ export const appRouter = router({
   restaurantStaff: restaurantStaffRouter,
   restaurantDevices: restaurantDevicesRouter,
   restaurantCatalog: restaurantCatalogRouter,
+  restaurantMenus: restaurantMenusRouter,
 });
 
 export type AppRouter = typeof appRouter;
