@@ -1,13 +1,28 @@
 import 'server-only';
 
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+
+import type { RestaurantRegisteredDevice } from '@/generated/prisma/client';
+import { readJson } from '@/lib/api-json';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
+import { advanceItem } from './orders';
 import {
   KDS_DISPLAY_BY_ITEM_STATUS,
   toKdsDisplayStatus,
   type KdsDisplayStatus,
   type OrderItemStatus,
 } from './order-state-machine';
+import {
+  buildActor,
+  idempotencyKeyFromRequest,
+  invalidBody,
+  missingIdempotencyKey,
+  orderErrorResponse,
+} from './terminal-orders';
+import { withDeviceAuth } from './terminal-auth';
 
 /**
  * M4-L4 — the KDS read-model projection + the fixed KDS action mapping.
@@ -65,6 +80,38 @@ export const KDS_ACTION_TRANSITIONS = {
 
 export function kdsActionToStatus(action: KdsAction): 'FIRING' | 'PREPARED' {
   return KDS_ACTION_TRANSITIONS[action];
+}
+
+// ── KDS device gate (C8) ─────────────────────────────────────────────────────
+
+/**
+ * A KDS route requires a device of `kind = KDS` bound to a station (C8). The
+ * device is already proven un-revoked by `withDeviceAuth` on every call; this adds
+ * the KDS-specific gate and returns the bound station id for the handler. A POS
+ * device, or a KDS device with no station binding, is refused with a 403.
+ */
+export function requireKdsStation(
+  device: Pick<RestaurantRegisteredDevice, 'kind' | 'stationId'>
+): { ok: true; stationId: string } | { ok: false; response: NextResponse } {
+  if (device.kind !== 'KDS') {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'This device is not registered as a kitchen display (KDS).' },
+        { status: 403 }
+      ),
+    };
+  }
+  if (!device.stationId) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'This KDS device is not bound to a kitchen station.' },
+        { status: 403 }
+      ),
+    };
+  }
+  return { ok: true, stationId: device.stationId };
 }
 
 // ── Station-queue projection (pure) ──────────────────────────────────────────
@@ -266,19 +313,112 @@ export async function readStationQueue(
 }
 
 /**
- * Whether an order item is fired to a given station — i.e. it has a kitchen-ticket
- * line on a ticket routed to that station. A KDS device may only act on lines for
- * its own bound station, so its bump/ack/recall routes gate on this (C8). RLS
- * already scopes the read to the device's organization.
+ * Resolve an order item to its order, but ONLY if it was fired to the given station
+ * (it has a kitchen-ticket line on a ticket routed there). A KDS device may only
+ * act on lines for its own bound station (C8), so its bump/ack/recall routes gate on
+ * this; the resolved `orderId` is what the L2 `advanceItem` command needs. Returns
+ * null when the item is not on the station's queue. RLS scopes the read to the
+ * device's organization.
  */
-export async function isOrderItemOnStation(
+export async function resolveStationOrderItem(
   db: ScopedDb,
   orderItemId: string,
   stationId: string
-): Promise<boolean> {
+): Promise<{ orderId: string } | null> {
   const line = await db.restaurantKitchenTicketItem.findFirst({
     where: { orderItemId, ticket: { stationId } },
-    select: { id: true },
+    select: { orderItem: { select: { orderId: true } } },
   });
-  return line !== null;
+  return line ? { orderId: line.orderItem.orderId } : null;
+}
+
+/**
+ * The business date to query a station's queue for. An explicit `YYYY-MM-DD` wins;
+ * otherwise it is derived server-side from the branch timezone + business-day cutoff
+ * at the server instant (C5, DST-safe) — the KDS never has to compute it or trust a
+ * client clock.
+ */
+export async function resolveStationBusinessDate(
+  db: ScopedDb,
+  branchId: string,
+  explicit: string | undefined,
+  now: Date
+): Promise<Date> {
+  if (explicit) return businessDateToUtcDate(explicit);
+  const branch = await db.restaurantBranch.findUnique({
+    where: { id: branchId },
+    select: { timezone: true, businessDayCutoff: true },
+  });
+  // The device's branch always exists (FK), but stay defensive on the read.
+  const timezone = branch?.timezone ?? 'UTC';
+  const cutoff = branch?.businessDayCutoff ?? '00:00';
+  return businessDateToUtcDate(resolveBusinessDate(now, timezone, cutoff));
+}
+
+// ── KDS command transport (bump / ack / recall) ──────────────────────────────
+
+/** The KDS mutating-action body. `operatorStaffProfileId` is required: the shared
+ * L2 item-advance command records a non-null acting operator, so the KDS carries the
+ * acting kitchen operator (BUILD-ASSUMPTIONS — stronger than the domain's "optional"
+ * operator; loosening to null is an L2-owned change). */
+export const kdsAdvanceBody = z
+  .object({
+    orderItemId: z.string().min(1),
+    operatorStaffProfileId: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * Build the POST handler for a KDS action (ack / bump / recall). Thin transport:
+ * gate the KDS device + bound station (C8), require the idempotency key (C7), parse
+ * the STRICT body, verify the acting operator and that the line is on THIS station,
+ * then dispatch to the single L2 `advanceItem` command with the FIXED target status.
+ * `advanceItem` routes the move through the L1 state machine, so an out-of-order
+ * action (e.g. a bump of a still-queued line) is rejected there as a 409 — a KDS
+ * action can only ever be a legal item transition.
+ */
+export function kdsAdvanceRoute(action: KdsAction) {
+  return withDeviceAuth(async (ctx, request) => {
+    const station = requireKdsStation(ctx.device);
+    if (!station.ok) return station.response;
+
+    const key = idempotencyKeyFromRequest(request);
+    if (!key) return missingIdempotencyKey();
+
+    const parsedJson = await readJson(request);
+    if (!parsedJson.ok) return parsedJson.response;
+    const parsed = kdsAdvanceBody.safeParse(parsedJson.data);
+    if (!parsed.success) return invalidBody(parsed.error.issues);
+
+    const operator = await ctx.db.restaurantStaffProfile.findUnique({
+      where: { id: parsed.data.operatorStaffProfileId },
+      select: { status: true },
+    });
+    if (!operator || operator.status !== 'ACTIVE') {
+      return NextResponse.json({ error: 'Unknown or inactive operator.' }, { status: 400 });
+    }
+
+    const line = await resolveStationOrderItem(ctx.db, parsed.data.orderItemId, station.stationId);
+    if (!line) {
+      return NextResponse.json(
+        { error: "That item is not on this station's queue." },
+        { status: 404 }
+      );
+    }
+
+    const actor = buildActor(parsed.data.operatorStaffProfileId, ctx.device.id, key);
+    try {
+      const result = await advanceItem(ctx.db, {
+        orderId: line.orderId,
+        itemId: parsed.data.orderItemId,
+        toStatus: kdsActionToStatus(action),
+        actor,
+      });
+      return NextResponse.json({ ...result, action }, { status: 200 });
+    } catch (err) {
+      const response = orderErrorResponse(err);
+      if (response) return response;
+      throw err;
+    }
+  });
 }

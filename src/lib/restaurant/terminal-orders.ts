@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
+import { readJson } from '@/lib/api-json';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { CoAuthorizationError } from './co-authorization';
@@ -22,6 +23,7 @@ import { OrderInvariantError, OrderTransitionError } from './order-state-machine
 import { pickEntry, resolveEffectiveEntries, type ResolvedPriceList } from './price-lists';
 import {
   authenticateOperator,
+  withTerminalAuth,
   type OperatorAuthResult,
   type TerminalContext,
 } from './terminal-auth';
@@ -119,9 +121,7 @@ export const cancelBody = z
 
 export const closeBody = z.object({ orderId: ID }).strict();
 
-export const moveTableBody = z
-  .object({ orderId: ID, fromTableId: ID, toTableId: ID })
-  .strict();
+export const moveTableBody = z.object({ orderId: ID, fromTableId: ID, toTableId: ID }).strict();
 
 export const mergeTablesBody = z.object({ orderId: ID, tableIds: z.array(ID).min(1) }).strict();
 
@@ -211,6 +211,45 @@ export async function authenticateApprover(
     return { ok: false, response: json({ error: 'Invalid approving credential.' }, 401) };
   }
   return { ok: true, staffProfileId: auth.staffProfileId };
+}
+
+/**
+ * The shared shape of a POS terminal command route: authenticate device + session
+ * (via `withTerminalAuth`), require an acting operator (C6) and an idempotency key
+ * (C7), parse the STRICT body, build the attribution envelope, dispatch to the
+ * command layer, and shape any domain error. `run` receives the trusted context,
+ * the parsed body and the actor, and returns the command result to serialise. A
+ * non-domain throw is rethrown so the transport wrapper answers a generic 500
+ * (no internals leaked). Commands with their own pre-dispatch handshake (a post-
+ * prep void / cancel co-authorization) are written out longhand instead.
+ */
+export function terminalCommandRoute<S extends z.ZodTypeAny>(
+  schema: S,
+  run: (args: { ctx: TerminalContext; data: z.infer<S>; actor: CommandActor }) => Promise<unknown>,
+  successStatus = 200
+) {
+  return withTerminalAuth(async (ctx, request) => {
+    const operator = requireActingOperator(ctx);
+    if (!operator.ok) return operator.response;
+
+    const key = idempotencyKeyFromRequest(request);
+    if (!key) return missingIdempotencyKey();
+
+    const parsedJson = await readJson(request);
+    if (!parsedJson.ok) return parsedJson.response;
+    const parsed = schema.safeParse(parsedJson.data);
+    if (!parsed.success) return invalidBody(parsed.error.issues);
+
+    const actor = buildActor(operator.staffProfileId, ctx.device.id, key);
+    try {
+      const result = await run({ ctx, data: parsed.data, actor });
+      return NextResponse.json(result as Record<string, unknown>, { status: successStatus });
+    } catch (err) {
+      const response = orderErrorResponse(err);
+      if (response) return response;
+      throw err;
+    }
+  });
 }
 
 // ── Domain-error → HTTP shaping (no internals leaked) ─────────────────────────
@@ -378,7 +417,14 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       },
       orderTables: {
         orderBy: { linkedAt: 'asc' },
-        select: { id: true, tableId: true, active: true, linkReason: true, linkedAt: true, unlinkedAt: true },
+        select: {
+          id: true,
+          tableId: true,
+          active: true,
+          linkReason: true,
+          linkedAt: true,
+          unlinkedAt: true,
+        },
       },
       kitchenTickets: {
         orderBy: { createdAt: 'asc' },

@@ -43,7 +43,10 @@ function ticket(
   };
 }
 
-function project(tickets: StationTicketInput[], opts: { sinceCursor?: number; limit?: number } = {}) {
+function project(
+  tickets: StationTicketInput[],
+  opts: { sinceCursor?: number; limit?: number } = {}
+) {
   return projectStationQueue({
     stationId: 'stn_1',
     businessDate: DATE,
@@ -85,7 +88,11 @@ describe('projectStationQueue — open queue projection', () => {
   });
 
   it('sets the cursor to the station ticket-number high-water mark', () => {
-    const queue = project([ticket(1, ['QUEUED']), ticket(5, ['SERVED', 'VOIDED']), ticket(3, ['FIRING'])]);
+    const queue = project([
+      ticket(1, ['QUEUED']),
+      ticket(5, ['SERVED', 'VOIDED']),
+      ticket(3, ['FIRING']),
+    ]);
     // Even the fully-cleared #5 counts toward the high-water mark.
     expect(queue.cursor).toBe(5);
   });

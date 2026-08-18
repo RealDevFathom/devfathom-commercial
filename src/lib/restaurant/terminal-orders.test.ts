@@ -120,7 +120,9 @@ describe('orderErrorResponse — domain error → HTTP status (no internals leak
   });
 
   it('maps OrderPricingError reasons to 404 / 409 / 400', () => {
-    expect(orderErrorResponse(new OrderPricingError('x', 'PUBLICATION_NOT_FOUND'))!.status).toBe(404);
+    expect(orderErrorResponse(new OrderPricingError('x', 'PUBLICATION_NOT_FOUND'))!.status).toBe(
+      404
+    );
     expect(orderErrorResponse(new OrderPricingError('x', 'ITEM_NOT_ON_MENU'))!.status).toBe(404);
     expect(orderErrorResponse(new OrderPricingError('x', 'ITEM_UNAVAILABLE'))!.status).toBe(409);
     expect(orderErrorResponse(new OrderPricingError('x', 'ITEM_NOT_PRICED'))!.status).toBe(400);
@@ -139,7 +141,9 @@ describe('orderErrorResponse — domain error → HTTP status (no internals leak
   });
 
   it('carries the authored domain message through, verbatim', async () => {
-    const res = orderErrorResponse(new OrderCommandError('The order does not exist.', 'ORDER_NOT_FOUND'))!;
+    const res = orderErrorResponse(
+      new OrderCommandError('The order does not exist.', 'ORDER_NOT_FOUND')
+    )!;
     expect(await res.json()).toEqual({ error: 'The order does not exist.' });
   });
 });
