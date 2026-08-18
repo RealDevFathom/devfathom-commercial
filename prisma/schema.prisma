@@ -1429,18 +1429,18 @@ model AuditLog {
   createdAt      DateTime @default(now()) // WHEN
 
   // WHO — snapshotted at the time of the action for durability
-  actorType  AuditActorType @default(USER)
-  actorId    String? // the acting User (FK -> users). null for anonymous (e.g. failed login)
+  actorType           AuditActorType @default(USER)
+  actorId             String? // the acting User (FK -> users). null for anonymous (e.g. failed login)
   // A restaurant terminal operator is a staff profile, NOT a User (C2/C3), so its
   // audit rows attribute here instead of `actorId` — the two are mutually exclusive
   // and a RESTAURANT_OPERATOR row must set this one (enforced by a DB CHECK). Used
   // by the M2 terminal mutations (unlock/switch/co-authorize/lock).
   actorStaffProfileId String? // the acting RestaurantStaffProfile, when actorType = RESTAURANT_OPERATOR
-  actorName  String?
-  actorEmail String?
-  actorRole  String?
-  tokenId    String? // the ApiToken used, when actorType = API_TOKEN
-  tokenName  String?
+  actorName           String?
+  actorEmail          String?
+  actorRole           String?
+  tokenId             String? // the ApiToken used, when actorType = API_TOKEN
+  tokenName           String?
 
   // WHAT
   source      AuditSource
@@ -2244,8 +2244,12 @@ model RestaurantBranch {
   assignments       RestaurantBranchAssignment[]
   // M2-L1: staff pinned to this branch as their primary, and devices registered
   // to this branch. Both are org-scoped and branch-scoped seams (§4.1/D12).
-  staffProfiles     RestaurantStaffProfile[]     @relation("RestaurantStaffPrimaryBranch")
+  staffProfiles     RestaurantStaffProfile[]          @relation("RestaurantStaffPrimaryBranch")
   registeredDevices RestaurantRegisteredDevice[]
+  // M3-L1: branch-menu publications binding this branch to a brand-owned menu
+  // (§6.3). Publications are the only branch-linked catalog surface (C2); the
+  // canonical catalog itself carries no branchId.
+  menuPublications  RestaurantBranchMenuPublication[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
@@ -2454,6 +2458,719 @@ model RestaurantCoAuthorization {
   @@index([targetType, targetId])
   @@index([createdAt])
   @@map("restaurant_co_authorizations")
+}
+
+// ===========================================================================
+// M3-L1 — Brands, canonical catalog, recipes/BOM, effective-dated pricing,
+// brand-owned menus and branch-menu publications for the Restaurant vertical.
+//
+// Binding design constraints realised in this model set:
+//   C1  Every table is org-scoped (bare RLS-guarded organizationId defaulting
+//       from the transaction-local setting) and gets forced org RLS in the
+//       migration.
+//   C2  Structural shadow-copy prevention: canonical tables (brand, category,
+//       product, variant, modifier group/option, combo seam, unit, conversion,
+//       ingredient, allergen, recipe + versions + lines, price list + versions
+//       + entries, menu + sections + items) carry NO branchId. Branch linkage
+//       lives only on the publication side, which references canonical rows by
+//       FK. Override rows carry only availability + price — never content.
+//   C3  Versioned records (recipe versions, price-list versions) are immutable
+//       once ACTIVE; editing forks a new version (DRAFT -> ACTIVE -> SUPERSEDED)
+//       and superseded versions stay readable forever. The transition/immutability
+//       primitives live in src/lib/restaurant/effective-dating.ts.
+//   C4  All monetary values are Decimal(12,2); no floats in catalog pricing.
+//   C5  Availability windows are branch-local wall-clock (minutes-of-day + a
+//       day-of-week set) evaluated server-side against RestaurantBranch.timezone;
+//       exception rows are branch-local calendar dates. Channel is an additive
+//       enum (D06 seam).
+//   C6  Exactly one default RestaurantBrand per organization (partial unique
+//       index in the migration); the default brand is ensured lazily by the
+//       catalog server (no onboarding edit, no SQL backfill).
+// ===========================================================================
+
+/// M3/C6: brand lifecycle. Archived brands are retained (history), not deleted.
+enum RestaurantBrandStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// M3: a product is a simple ITEM or a COMBO (whose component structure lives in
+/// RestaurantComboComponentGroup). Additive enum (A08 seam).
+enum RestaurantProductType {
+  ITEM
+  COMBO
+}
+
+/// M3: product lifecycle. A referenced product is ARCHIVED, never hard-deleted.
+enum RestaurantProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// M3/C3: shared lifecycle for immutable versioned records (recipe versions and
+/// price-list versions). A version is editable only while DRAFT; activation makes
+/// it immutable; a new active version SUPERSEDES the prior one, which stays
+/// readable forever (GOV-2).
+enum RestaurantVersionStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+}
+
+/// M3/§6.3: branch-menu publication lifecycle. RETIRED publications keep their
+/// history (GOV-2).
+enum RestaurantBranchMenuPublicationStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+/// M3/C5/D06: order-channel dimension for publications and availability. Additive
+/// seam — extended, never renumbered.
+enum RestaurantOrderChannel {
+  DINE_IN
+  TAKEAWAY
+  DELIVERY
+}
+
+/// M3/C6: a customer-facing restaurant/virtual brand. A brand owns menus (§6.3);
+/// the canonical catalog itself is organization-owned, not brand-owned. Exactly
+/// one default brand exists per organization (a partial unique index enforces it
+/// in the migration, since Prisma cannot express a filtered unique); the catalog
+/// server ensures the default lazily and idempotently.
+model RestaurantBrand {
+  id             String                @id @default(cuid())
+  organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  nameLocalized  Json?
+  status         RestaurantBrandStatus @default(ACTIVE)
+  isDefault      Boolean               @default(false)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  menus RestaurantMenu[]
+
+  @@index([organizationId])
+  @@map("restaurant_brands")
+}
+
+/// M3: a catalog category. `parentId` is a nullable self-reference for
+/// subcategories; deleting a parent detaches (SetNull), it does not cascade a
+/// subtree away. Organization-owned — NO branchId (C2).
+model RestaurantCategory {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  parentId       String?
+  name           String
+  nameLocalized  Json?
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  parent   RestaurantCategory?  @relation("RestaurantCategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children RestaurantCategory[] @relation("RestaurantCategoryTree")
+  products RestaurantProduct[]
+
+  @@index([organizationId])
+  @@index([parentId])
+  @@map("restaurant_categories")
+}
+
+/// M3: a sellable catalog product. `type` distinguishes a simple ITEM from a
+/// COMBO (whose component structure lives in RestaurantComboComponentGroup).
+/// Customer-facing text carries D20 locale-keyed JSON companions
+/// (`nameLocalized`, `descriptionLocalized`). Organization-owned — NO branchId
+/// (C2). Products are archived (status ARCHIVED), not deleted, once referenced.
+model RestaurantProduct {
+  id                   String                  @id @default(cuid())
+  organizationId       String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  categoryId           String?
+  type                 RestaurantProductType   @default(ITEM)
+  status               RestaurantProductStatus @default(ACTIVE)
+  name                 String
+  nameLocalized        Json?
+  description          String?
+  descriptionLocalized Json?
+  sortOrder            Int                     @default(0)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  category             RestaurantCategory?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variants             RestaurantProductVariant[]
+  modifierGroups       RestaurantProductModifierGroup[]
+  comboComponentGroups RestaurantComboComponentGroup[]
+  comboUsages          RestaurantComboComponentOption[]
+  allergens            RestaurantProductAllergen[]
+  recipes              RestaurantRecipe[]
+  menuItems            RestaurantMenuItem[]
+  priceListEntries     RestaurantPriceListEntry[]
+
+  @@index([organizationId])
+  @@index([categoryId])
+  @@index([type])
+  @@index([status])
+  @@map("restaurant_products")
+}
+
+/// M3: a size/variant of a product (e.g. Small/Large). Carries no price — the
+/// price of a (product, variant) pair lives in effective-dated price-list
+/// entries (C4). Organization-owned — NO branchId (C2).
+model RestaurantProductVariant {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  productId      String
+  name           String
+  nameLocalized  Json?
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  product          RestaurantProduct                @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceListEntries RestaurantPriceListEntry[]
+  menuItems        RestaurantMenuItem[]
+  comboUsages      RestaurantComboComponentOption[]
+  recipes          RestaurantRecipe[]
+
+  @@index([organizationId])
+  @@index([productId])
+  @@map("restaurant_product_variants")
+}
+
+/// M3: a modifier group (e.g. "Choose a sauce") with min/max selection rules
+/// (`maxSelect` null = unbounded). Attached to products via the join table.
+/// Organization-owned — NO branchId (C2).
+model RestaurantModifierGroup {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  nameLocalized  Json?
+  minSelect      Int      @default(0)
+  maxSelect      Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  options            RestaurantModifierOption[]
+  productAttachments RestaurantProductModifierGroup[]
+
+  @@index([organizationId])
+  @@map("restaurant_modifier_groups")
+}
+
+/// M3: an option within a modifier group, with a Decimal price delta (C4).
+model RestaurantModifierOption {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  modifierGroupId String
+  name            String
+  nameLocalized   Json?
+  priceDelta      Decimal  @default(0) @db.Decimal(12, 2)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  modifierGroup RestaurantModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([modifierGroupId])
+  @@map("restaurant_modifier_options")
+}
+
+/// M3: attachment of a modifier group to a product (many-to-many with ordering).
+model RestaurantProductModifierGroup {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  productId       String
+  modifierGroupId String
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  product       RestaurantProduct       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  modifierGroup RestaurantModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, modifierGroupId])
+  @@index([organizationId])
+  @@index([modifierGroupId])
+  @@map("restaurant_product_modifier_groups")
+}
+
+/// M3/A08 (combo seam — schema + minimal CRUD only, no UI): a choose-group on a
+/// COMBO product (e.g. "Choose a side", choose 1..N).
+model RestaurantComboComponentGroup {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  comboProductId String
+  name           String
+  nameLocalized  Json?
+  minChoose      Int      @default(1)
+  maxChoose      Int?
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  comboProduct RestaurantProduct                @relation(fields: [comboProductId], references: [id], onDelete: Cascade)
+  options      RestaurantComboComponentOption[]
+
+  @@index([organizationId])
+  @@index([comboProductId])
+  @@map("restaurant_combo_component_groups")
+}
+
+/// M3/A08: a selectable component within a combo group, referencing a component
+/// product (and optional variant) with a Decimal price delta (C4). Referenced
+/// catalog rows are protected from deletion (Restrict); archival is the path.
+model RestaurantComboComponentOption {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  componentGroupId String
+  productId        String
+  variantId        String?
+  priceDelta       Decimal  @default(0) @db.Decimal(12, 2)
+  sortOrder        Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  componentGroup RestaurantComboComponentGroup @relation(fields: [componentGroupId], references: [id], onDelete: Cascade)
+  product        RestaurantProduct             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant        RestaurantProductVariant?     @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([componentGroupId])
+  @@index([productId])
+  @@map("restaurant_combo_component_options")
+}
+
+/// M3: a unit of measure (e.g. gram, each). Conversions between units are
+/// separate rows. Organization-owned.
+model RestaurantUnit {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  abbreviation   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversionsFrom RestaurantUnitConversion[] @relation("RestaurantUnitConversionFrom")
+  conversionsTo   RestaurantUnitConversion[] @relation("RestaurantUnitConversionTo")
+  ingredients     RestaurantIngredient[]
+  recipeLines     RestaurantRecipeLine[]
+  recipeVersions  RestaurantRecipeVersion[]
+
+  @@index([organizationId])
+  @@map("restaurant_units")
+}
+
+/// M3: a directed unit conversion (`factor` such that 1 fromUnit = factor toUnit),
+/// stored as a high-precision Decimal. The consistency/cycle guard is server-side
+/// (L2). One row per ordered (fromUnit, toUnit) pair.
+model RestaurantUnitConversion {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  fromUnitId     String
+  toUnitId       String
+  factor         Decimal  @db.Decimal(18, 6)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  fromUnit RestaurantUnit @relation("RestaurantUnitConversionFrom", fields: [fromUnitId], references: [id], onDelete: Cascade)
+  toUnit   RestaurantUnit @relation("RestaurantUnitConversionTo", fields: [toUnitId], references: [id], onDelete: Cascade)
+
+  @@unique([fromUnitId, toUnitId])
+  @@index([organizationId])
+  @@index([toUnitId])
+  @@map("restaurant_unit_conversions")
+}
+
+/// M3: an allergen the organization tracks. Attached to products and ingredients
+/// via join tables.
+model RestaurantAllergen {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  nameLocalized  Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  productAllergens    RestaurantProductAllergen[]
+  ingredientAllergens RestaurantIngredientAllergen[]
+
+  @@index([organizationId])
+  @@map("restaurant_allergens")
+}
+
+/// M3: product-to-allergen link (declared allergens on a product).
+model RestaurantProductAllergen {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  productId      String
+  allergenId     String
+  createdAt      DateTime @default(now())
+
+  product  RestaurantProduct  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  allergen RestaurantAllergen @relation(fields: [allergenId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, allergenId])
+  @@index([organizationId])
+  @@index([allergenId])
+  @@map("restaurant_product_allergens")
+}
+
+/// M3: ingredient-to-allergen link (allergens carried by an ingredient).
+model RestaurantIngredientAllergen {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ingredientId   String
+  allergenId     String
+  createdAt      DateTime @default(now())
+
+  ingredient RestaurantIngredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  allergen   RestaurantAllergen   @relation(fields: [allergenId], references: [id], onDelete: Cascade)
+
+  @@unique([ingredientId, allergenId])
+  @@index([organizationId])
+  @@index([allergenId])
+  @@map("restaurant_ingredient_allergens")
+}
+
+/// M3: a catalog-side ingredient identity. `referenceCost` is a nullable Decimal
+/// seam only (theoretical costing arrives with the Inventory/Purchasing
+/// milestone); NO stock fields (movements/counts/batches) exist here.
+model RestaurantIngredient {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  nameLocalized  Json?
+  baseUnitId     String
+  referenceCost  Decimal? @db.Decimal(12, 4)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  baseUnit    RestaurantUnit                 @relation(fields: [baseUnitId], references: [id], onDelete: Restrict)
+  allergens   RestaurantIngredientAllergen[]
+  recipeLines RestaurantRecipeLine[]
+
+  @@index([organizationId])
+  @@index([baseUnitId])
+  @@map("restaurant_ingredients")
+}
+
+/// M3/C3: a recipe attached to a product (nullable variant seam). Its content
+/// lives in immutable versions; the recipe row is the stable identity that
+/// versions hang off. Sub-recipe references from other recipes' lines point at
+/// this row.
+model RestaurantRecipe {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  productId      String
+  variantId      String?
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  product        RestaurantProduct         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant        RestaurantProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  versions       RestaurantRecipeVersion[]
+  subRecipeLines RestaurantRecipeLine[]    @relation("RecipeLineSubRecipe")
+
+  @@index([organizationId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("restaurant_recipes")
+}
+
+/// M3/C3: an immutable-once-ACTIVE recipe version. Editing an ACTIVE version
+/// forks a new DRAFT (see effective-dating.ts); a partial unique index in the
+/// migration enforces at most one ACTIVE version per recipe. Superseded versions
+/// remain readable forever (GOV-2).
+model RestaurantRecipeVersion {
+  id             String                  @id @default(cuid())
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  recipeId       String
+  versionNumber  Int
+  status         RestaurantVersionStatus @default(DRAFT)
+  yieldQuantity  Decimal?                @db.Decimal(12, 3)
+  yieldUnitId    String?
+  portionCount   Int?
+  notes          String?
+  activatedAt    DateTime?
+  supersededAt   DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  recipe    RestaurantRecipe       @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  yieldUnit RestaurantUnit?        @relation(fields: [yieldUnitId], references: [id], onDelete: SetNull)
+  lines     RestaurantRecipeLine[]
+
+  @@unique([recipeId, versionNumber])
+  @@index([organizationId])
+  @@index([recipeId])
+  @@index([status])
+  @@map("restaurant_recipe_versions")
+}
+
+/// M3/C3: a version-owned bill-of-materials line. Exactly one of `ingredientId`
+/// or `subRecipeId` is set (a CHECK enforces the XOR in the migration); cycle
+/// detection over sub-recipes is server-side (L2). Quantity + unit are the BOM
+/// measure.
+model RestaurantRecipeLine {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  recipeVersionId String
+  ingredientId    String?
+  subRecipeId     String?
+  quantity        Decimal  @db.Decimal(12, 4)
+  unitId          String
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  recipeVersion RestaurantRecipeVersion @relation(fields: [recipeVersionId], references: [id], onDelete: Cascade)
+  ingredient    RestaurantIngredient?   @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  subRecipe     RestaurantRecipe?       @relation("RecipeLineSubRecipe", fields: [subRecipeId], references: [id], onDelete: Restrict)
+  unit          RestaurantUnit          @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([recipeVersionId])
+  @@index([ingredientId])
+  @@index([subRecipeId])
+  @@map("restaurant_recipe_lines")
+}
+
+/// M3/C4: a named price list. `isDefault` marks the organization's base list
+/// (the fallback in the winning-price precedence item override > publication
+/// price list > base list); a partial unique index enforces one default per org.
+model RestaurantPriceList {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  versions     RestaurantPriceListVersion[]
+  publications RestaurantBranchMenuPublication[]
+
+  @@index([organizationId])
+  @@map("restaurant_price_lists")
+}
+
+/// M3/C3/C4: an effective-dated, immutable-once-ACTIVE price-list version. The
+/// active version at an instant T is the ACTIVE version with the greatest
+/// `effectiveFrom <= T` (see effective-dating.ts); superseded versions remain
+/// readable. One version per (list, effectiveFrom).
+model RestaurantPriceListVersion {
+  id             String                  @id @default(cuid())
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  priceListId    String
+  versionNumber  Int
+  effectiveFrom  DateTime
+  status         RestaurantVersionStatus @default(DRAFT)
+  activatedAt    DateTime?
+  supersededAt   DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  priceList RestaurantPriceList        @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  entries   RestaurantPriceListEntry[]
+
+  @@unique([priceListId, effectiveFrom])
+  @@index([organizationId])
+  @@index([priceListId])
+  @@index([status])
+  @@map("restaurant_price_list_versions")
+}
+
+/// M3/C4: a version-owned price for a (product, optional variant) pair. Money is
+/// Decimal(12,2). A migration-only COALESCE unique index enforces one entry per
+/// (version, product, variant) including the null-variant (base) row.
+model RestaurantPriceListEntry {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  priceListVersionId String
+  productId          String
+  variantId          String?
+  price              Decimal  @db.Decimal(12, 2)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  priceListVersion RestaurantPriceListVersion @relation(fields: [priceListVersionId], references: [id], onDelete: Cascade)
+  product          RestaurantProduct          @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant          RestaurantProductVariant?  @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([priceListVersionId])
+  @@index([productId])
+  @@map("restaurant_price_list_entries")
+}
+
+/// M3/§6.3: a brand-owned menu. Sections and items are its canonical structure;
+/// branches publish a menu via RestaurantBranchMenuPublication. NO branchId (C2).
+model RestaurantMenu {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  brandId        String
+  name           String
+  nameLocalized  Json?
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  brand        RestaurantBrand                   @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  sections     RestaurantMenuSection[]
+  publications RestaurantBranchMenuPublication[]
+
+  @@index([organizationId])
+  @@index([brandId])
+  @@map("restaurant_menus")
+}
+
+/// M3: a section within a menu (ordered grouping of items).
+model RestaurantMenuSection {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  menuId         String
+  name           String
+  nameLocalized  Json?
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  menu  RestaurantMenu       @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  items RestaurantMenuItem[]
+
+  @@index([organizationId])
+  @@index([menuId])
+  @@map("restaurant_menu_sections")
+}
+
+/// M3: a menu item scoping a product (and optional variant) into a section.
+/// `displayName`/`nameLocalized` are optional menu-specific naming; the referenced
+/// product is protected from deletion (Restrict).
+model RestaurantMenuItem {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sectionId      String
+  productId      String
+  variantId      String?
+  displayName    String?
+  nameLocalized  Json?
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  section   RestaurantMenuSection              @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  product   RestaurantProduct                  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   RestaurantProductVariant?          @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  windows   RestaurantMenuAvailabilityWindow[]
+  overrides RestaurantBranchMenuItemOverride[]
+
+  @@index([organizationId])
+  @@index([sectionId])
+  @@index([productId])
+  @@map("restaurant_menu_items")
+}
+
+/// M3/§6.3/C5: a publication binding one branch to one brand-owned menu, with an
+/// optional price-list reference and a set of order channels (D06). Its status
+/// lifecycle is DRAFT -> PUBLISHED -> RETIRED; retired publications keep their
+/// history (GOV-2). Availability windows/exceptions and item overrides hang off
+/// it — the only branch-linked catalog surface (C2).
+model RestaurantBranchMenuPublication {
+  id             String                                @id @default(cuid())
+  organizationId String                                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  menuId         String
+  priceListId    String?
+  status         RestaurantBranchMenuPublicationStatus @default(DRAFT)
+  channels       RestaurantOrderChannel[]              @default([])
+  publishedAt    DateTime?
+  retiredAt      DateTime?
+  createdAt      DateTime                              @default(now())
+  updatedAt      DateTime                              @updatedAt
+
+  branch        RestaurantBranch                      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  menu          RestaurantMenu                        @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  priceList     RestaurantPriceList?                  @relation(fields: [priceListId], references: [id], onDelete: SetNull)
+  windows       RestaurantMenuAvailabilityWindow[]
+  exceptions    RestaurantMenuAvailabilityException[]
+  itemOverrides RestaurantBranchMenuItemOverride[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([menuId])
+  @@index([status])
+  @@map("restaurant_branch_menu_publications")
+}
+
+/// M3/C5: a publication-owned availability window. Stored as branch-local
+/// wall-clock minutes-of-day (`startMinutes`/`endMinutes`) plus a day-of-week set
+/// (`daysOfWeek`, 0=Sunday..6=Saturday); a cross-midnight window has
+/// endMinutes <= startMinutes. Evaluated server-side against the branch timezone
+/// (client time is untrusted). Optional `menuItemId` scopes the window to a single
+/// item; null = whole publication.
+model RestaurantMenuAvailabilityWindow {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  publicationId  String
+  menuItemId     String?
+  label          String?
+  daysOfWeek     Int[]    @default([])
+  startMinutes   Int
+  endMinutes     Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  publication RestaurantBranchMenuPublication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  menuItem    RestaurantMenuItem?             @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([publicationId])
+  @@index([menuItemId])
+  @@map("restaurant_menu_availability_windows")
+}
+
+/// M3/C5: a publication-owned exception for a single branch-local calendar date.
+/// `isClosed` true closes an otherwise-open date; false opens an otherwise-closed
+/// one. One exception per (publication, date).
+model RestaurantMenuAvailabilityException {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  publicationId  String
+  date           DateTime @db.Date
+  isClosed       Boolean  @default(true)
+  label          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  publication RestaurantBranchMenuPublication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+
+  @@unique([publicationId, date])
+  @@index([organizationId])
+  @@index([publicationId])
+  @@map("restaurant_menu_availability_exceptions")
+}
+
+/// M3/C2: a per-publication override of a menu item. Carries ONLY an availability
+/// flag and a nullable Decimal price override — never content (name/composition).
+/// One override per (publication, menuItem).
+model RestaurantBranchMenuItemOverride {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  publicationId  String
+  menuItemId     String
+  isAvailable    Boolean  @default(true)
+  priceOverride  Decimal? @db.Decimal(12, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  publication RestaurantBranchMenuPublication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  menuItem    RestaurantMenuItem              @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([publicationId, menuItemId])
+  @@index([organizationId])
+  @@index([publicationId])
+  @@index([menuItemId])
+  @@map("restaurant_branch_menu_item_overrides")
 }
 
 model PlatformUser {
