@@ -342,6 +342,27 @@ describe('GOV-1 canonical ownership', () => {
     ).toEqual([]);
   });
 
+  it('denies canonical creation to a branch actor without menu:write', async () => {
+    const fixture = makeFixture();
+    const branchCapabilities = new Set(['menu:publish', 'menu:price']);
+    mocks.can.mockImplementation(async (_subject, action) =>
+      branchCapabilities.has(String(action))
+    );
+
+    await expect(
+      api(fixture).restaurantCatalog.createBrand({ name: 'Branch Brand' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'menu:write',
+      undefined,
+      expect.anything()
+    );
+    expect(fixture.spies.brandCreate).not.toHaveBeenCalled();
+  });
+
   it('rejects branch-scoped fields on canonical brand creation', async () => {
     const fixture = makeFixture();
     const input = { name: 'Branch Shadow', branchId: 'branch_1', shadowCopyOfId: 'brand_root' };
@@ -428,6 +449,10 @@ describe('GOV-1 canonical ownership', () => {
 });
 
 describe('GOV-2 history', () => {
+  it('exposes a public historical recipe-version read', () => {
+    expect(Object.keys(restaurantCatalogRouter._def.procedures)).toContain('getRecipeVersion');
+  });
+
   it('supersedes recipe v1 without making it mutable while v2 becomes active', async () => {
     const fixture = makeFixture();
     const caller = api(fixture);
@@ -541,6 +566,22 @@ describe('brand, localization, and module contracts', () => {
     expect(menu.nameLocalized).toEqual(localized);
     expect(section.nameLocalized).toEqual(localized);
     expect(item.nameLocalized).toEqual(localized);
+  });
+
+  it('round-trips product catalog localization fields', async () => {
+    const fixture = makeFixture();
+    const localized = { 'ar-SA': 'شاي', 'ur-PK': 'چائے' };
+    const descriptionLocalized = { 'ar-SA': 'شاي ساخن', 'ur-PK': 'گرم چائے' };
+    const input = {
+      name: 'Tea',
+      nameLocalized: localized,
+      description: 'Hot tea',
+      descriptionLocalized,
+    };
+
+    const product = await api(fixture).restaurantCatalog.createProduct(input);
+
+    expect(product).toMatchObject({ nameLocalized: localized, descriptionLocalized });
   });
 
   it('denies both public router surfaces without restaurant-menu entitlement', async () => {
