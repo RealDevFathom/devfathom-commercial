@@ -115,17 +115,12 @@ export async function resolveOrganizationByHost(
   hostValue: string | null | undefined
 ): Promise<TenantOrganization | null> {
   const classified = classifyHost(hostValue);
-  // D4: a shared host carries no organization. Returning null here short-circuits
-  // BEFORE the default-organization fallback below — without it every shared-host
-  // login would silently authenticate against DEFAULT_ORGANIZATION_ID, because
-  // AUTH_URL/NEXT_PUBLIC_APP_URL must point at the shared host for reset and
-  // invite emails and both feed configuredDefaultHosts().
-  if (classified.kind !== 'tenant') return null;
+  if (classified.kind === 'platform' || classified.kind === 'unknown') return null;
 
   const defaultOrganizationId = process.env.DEFAULT_ORGANIZATION_ID ?? 'org_devfathom';
 
   return withPlatformDb(async (tx) => {
-    if (classified.slug) {
+    if (classified.kind === 'tenant' && classified.slug) {
       const bySlug = await tx.organization.findUnique({
         where: { slug: classified.slug },
         select: ORGANIZATION_SELECT,
@@ -167,7 +162,9 @@ export async function resolveOrganizationByHost(
 export async function resolveOrganizationForRequest(
   request: Request
 ): Promise<TenantOrganization | null> {
-  return resolveOrganizationByHost(requestHost(request));
+  const host = requestHost(request);
+  if (classifyHost(host).kind === 'shared') return null;
+  return resolveOrganizationByHost(host);
 }
 
 /**
