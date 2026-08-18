@@ -15,6 +15,8 @@ import {
   deleteConversion,
   deleteUnit,
   getActiveRecipeVersion,
+  getRecipeVersion,
+  listRecipeVersions,
   updateRecipeVersion,
   upsertConversion,
 } from './recipes';
@@ -319,6 +321,56 @@ describe('activateRecipeVersion', () => {
   });
 });
 
+// ── Historical reads (GOV-2) ──────────────────────────────────────────────────
+
+describe('getRecipeVersion', () => {
+  it('reads a SUPERSEDED version by id (history stays readable)', async () => {
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'v1',
+      recipeId: 'r1',
+      status: 'SUPERSEDED',
+      versionNumber: 1,
+      notes: 'original',
+    });
+    const version = await getRecipeVersion(scoped(), 'v1');
+    expect(version).toMatchObject({ id: 'v1', status: 'SUPERSEDED', notes: 'original' });
+    // findUnique fetches the full row (no field select) so history is complete.
+    expect(db.restaurantRecipeVersion.findUnique).toHaveBeenCalledWith({ where: { id: 'v1' } });
+  });
+
+  it('throws NOT_FOUND for a missing version', async () => {
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue(null);
+    await expect(getRecipeVersion(scoped(), 'missing')).rejects.toMatchObject({
+      reason: 'NOT_FOUND',
+    });
+  });
+});
+
+describe('listRecipeVersions', () => {
+  it('lists every version newest-first, requiring the recipe in scope', async () => {
+    db.restaurantRecipe.findUnique.mockResolvedValue({ id: 'r1' });
+    db.restaurantRecipeVersion.findMany.mockResolvedValue([
+      { id: 'v2', recipeId: 'r1', status: 'ACTIVE', versionNumber: 2 },
+      { id: 'v1', recipeId: 'r1', status: 'SUPERSEDED', versionNumber: 1 },
+    ]);
+    const versions = await listRecipeVersions(scoped(), 'r1');
+    expect(versions.map((v) => v.id)).toEqual(['v2', 'v1']);
+    expect(db.restaurantRecipeVersion.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { recipeId: 'r1' },
+        orderBy: { versionNumber: 'desc' },
+      })
+    );
+  });
+
+  it('throws NOT_FOUND when the recipe is absent', async () => {
+    db.restaurantRecipe.findUnique.mockResolvedValue(null);
+    await expect(listRecipeVersions(scoped(), 'missing')).rejects.toMatchObject({
+      reason: 'NOT_FOUND',
+    });
+  });
+});
+
 // ── Recipe-line cycle detection ───────────────────────────────────────────────
 
 describe('createRecipeLine — recipe cycle detection', () => {
@@ -372,7 +424,6 @@ describe('createRecipeLine — recipe cycle detection', () => {
       recipeId: 'r1',
     });
     await expect(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       createRecipeLine(scoped(), {
         recipeVersionId: 'v1',
         ingredientId: 'i1',

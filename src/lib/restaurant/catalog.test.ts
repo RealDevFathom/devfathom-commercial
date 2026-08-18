@@ -14,6 +14,11 @@ import {
   createVariant,
   deleteVariant,
   ensureDefaultBrand,
+  getBrand,
+  getProduct,
+  listBrands,
+  listCategories,
+  listProducts,
   setBrandStatus,
   setDefaultBrand,
   setProductStatus,
@@ -307,5 +312,51 @@ describe('product-allergen attachment', () => {
     expect(db.restaurantProductAllergen.create).toHaveBeenCalledWith({
       data: { productId: 'prod_1', allergenId: 'alg_1' },
     });
+  });
+});
+
+describe('read models (console read-contract)', () => {
+  it('listBrands orders default brand first, then by name', async () => {
+    db.restaurantBrand.findMany.mockResolvedValue([{ id: 'b1', isDefault: true, name: 'A' }]);
+    const brands = await listBrands(scoped());
+    expect(brands).toHaveLength(1);
+    expect(db.restaurantBrand.findMany).toHaveBeenCalledWith({
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    });
+  });
+
+  it('getBrand returns the row or throws NOT_FOUND', async () => {
+    db.restaurantBrand.findUnique.mockResolvedValue({ id: 'b1', name: 'A' });
+    expect(await getBrand(scoped(), 'b1')).toMatchObject({ id: 'b1' });
+    db.restaurantBrand.findUnique.mockResolvedValue(null);
+    await expect(getBrand(scoped(), 'missing')).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+  });
+
+  it('listCategories orders by sortOrder then name', async () => {
+    db.restaurantCategory.findMany.mockResolvedValue([]);
+    await listCategories(scoped());
+    expect(db.restaurantCategory.findMany).toHaveBeenCalledWith({
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  });
+
+  it('listProducts includes category/variants/modifier groups and filters', async () => {
+    db.restaurantProduct.findMany.mockResolvedValue([]);
+    await listProducts(scoped(), { categoryId: 'cat_1', status: 'ACTIVE' });
+    const call = db.restaurantProduct.findMany.mock.calls[0][0] as {
+      where: Record<string, unknown>;
+      include: Record<string, unknown>;
+    };
+    expect(call.where).toMatchObject({ categoryId: 'cat_1', status: 'ACTIVE' });
+    expect(call.include).toHaveProperty('category');
+    expect(call.include).toHaveProperty('variants');
+    expect(call.include).toHaveProperty('modifierGroups');
+  });
+
+  it('getProduct returns the product with relations or NOT_FOUND', async () => {
+    db.restaurantProduct.findUnique.mockResolvedValue({ id: 'prod_1', variants: [], modifierGroups: [] });
+    expect(await getProduct(scoped(), 'prod_1')).toMatchObject({ id: 'prod_1' });
+    db.restaurantProduct.findUnique.mockResolvedValue(null);
+    await expect(getProduct(scoped(), 'missing')).rejects.toMatchObject({ reason: 'NOT_FOUND' });
   });
 });
