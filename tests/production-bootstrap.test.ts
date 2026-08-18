@@ -175,9 +175,16 @@ describe('production bootstrap', () => {
       })
     );
 
-    const dashboardEntitlement = state.organizationModules.get('module_dashboard')!;
-    dashboardEntitlement.status = 'DISABLED';
-    dashboardEntitlement.expiresAt = '2026-09-01T00:00:00.000Z';
+    // §2.3: bootstrap no longer copies package modules into OrganizationModule rows —
+    // the bootstrap org inherits its modules live from the Agency Suite package
+    // (platform_package_modules). A deliberate org-level entitlement change is now an
+    // explicit operator override row (created the new way, i.e. an OrganizationModule
+    // row with a reason via `organization.module`), which must survive re-bootstrap
+    // unchanged because bootstrap never touches OrganizationModule.
+    expect(state.organizationModules.size).toBe(0);
+    expect(delegates.organizationModule.upsert).not.toHaveBeenCalled();
+    const dashboardEntitlement = { status: 'DISABLED', expiresAt: '2026-09-01T00:00:00.000Z' };
+    state.organizationModules.set('module_dashboard', dashboardEntitlement);
     state.permission!.effect = 'DENY';
     Object.assign(state.deployment!, {
       mode: 'DEDICATED',
@@ -246,7 +253,6 @@ describe('production bootstrap', () => {
       delegates.organization.upsert,
       delegates.platformModule.upsert,
       delegates.platformPackageModule.upsert,
-      delegates.organizationModule.upsert,
       delegates.organizationRole.upsert,
       delegates.organizationRolePermission.upsert,
       delegates.organizationBrand.upsert,
