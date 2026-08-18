@@ -2231,25 +2231,38 @@ model Organization {
 /// the operational tables (bare RLS-guarded organizationId, no cross-org
 /// aggregation — D09); a partial unique index enforces one default branch per org.
 model RestaurantBranch {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  name           String
-  timezone       String   @default("UTC")
-  address        String?
-  active         Boolean  @default(true)
-  isDefault      Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name              String
+  timezone          String   @default("UTC")
+  // M4-L1/C5: the branch-local wall-clock time (24h "HH:MM") at which one
+  // business day rolls into the next. Additive with a conservative "00:00"
+  // default (midnight = calendar day); the order business date is resolved from
+  // timezone + this cutoff (src/lib/restaurant/business-date.ts) and stamped
+  // explicitly, never recomputed later from UTC (§11.1 / BUILD-ASSUMPTIONS).
+  businessDayCutoff String   @default("00:00")
+  address           String?
+  active            Boolean  @default(true)
+  isDefault         Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  assignments       RestaurantBranchAssignment[]
+  assignments          RestaurantBranchAssignment[]
   // M2-L1: staff pinned to this branch as their primary, and devices registered
   // to this branch. Both are org-scoped and branch-scoped seams (§4.1/D12).
-  staffProfiles     RestaurantStaffProfile[]          @relation("RestaurantStaffPrimaryBranch")
-  registeredDevices RestaurantRegisteredDevice[]
+  staffProfiles        RestaurantStaffProfile[]          @relation("RestaurantStaffPrimaryBranch")
+  registeredDevices    RestaurantRegisteredDevice[]
   // M3-L1: branch-menu publications binding this branch to a brand-owned menu
   // (§6.3). Publications are the only branch-linked catalog surface (C2); the
   // canonical catalog itself carries no branchId.
-  menuPublications  RestaurantBranchMenuPublication[]
+  menuPublications     RestaurantBranchMenuPublication[]
+  // M4-L1: floor/service, section, kitchen-station, order, and number-sequence
+  // aggregates hanging off the branch (all org-scoped under forced RLS, C1).
+  floors               RestaurantFloor[]
+  serverSections       RestaurantServerSection[]
+  kitchenStations      RestaurantKitchenStation[]
+  orders               RestaurantOrder[]
+  orderNumberSequences RestaurantOrderNumberSequence[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
@@ -2324,13 +2337,20 @@ model RestaurantStaffProfile {
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
 
-  user             User?                          @relation("RestaurantStaffUser", fields: [userId], references: [id], onDelete: SetNull)
-  primaryBranch    RestaurantBranch?              @relation("RestaurantStaffPrimaryBranch", fields: [primaryBranchId], references: [id], onDelete: SetNull)
-  credentials      RestaurantOperatorCredential[]
-  terminalSessions RestaurantTerminalSession[]    @relation("TerminalSessionActiveStaff")
-  actingCoAuths    RestaurantCoAuthorization[]    @relation("CoAuthActingStaff")
-  approvingCoAuths RestaurantCoAuthorization[]    @relation("CoAuthApprovingStaff")
-  auditLogs        AuditLog[]                     @relation("StaffProfileAuditLogs")
+  user               User?                               @relation("RestaurantStaffUser", fields: [userId], references: [id], onDelete: SetNull)
+  primaryBranch      RestaurantBranch?                   @relation("RestaurantStaffPrimaryBranch", fields: [primaryBranchId], references: [id], onDelete: SetNull)
+  credentials        RestaurantOperatorCredential[]
+  terminalSessions   RestaurantTerminalSession[]         @relation("TerminalSessionActiveStaff")
+  actingCoAuths      RestaurantCoAuthorization[]         @relation("CoAuthActingStaff")
+  approvingCoAuths   RestaurantCoAuthorization[]         @relation("CoAuthApprovingStaff")
+  auditLogs          AuditLog[]                          @relation("StaffProfileAuditLogs")
+  // M4-L1: section assignments (per business date) and order/kitchen attribution
+  // (the operator who opened an order, the assigned server, and the acting
+  // operator on an order event). Attribution is preserved on archival (§11.6).
+  sectionAssignments RestaurantServerSectionAssignment[]
+  ordersOpened       RestaurantOrder[]                   @relation("OrderOpeningStaff")
+  ordersServed       RestaurantOrder[]                   @relation("OrderServerStaff")
+  actedOrderEvents   RestaurantOrderEvent[]              @relation("OrderEventActorStaff")
 
   @@index([organizationId])
   @@index([userId])
@@ -2381,19 +2401,31 @@ model RestaurantRegisteredDevice {
   name             String
   deviceSecretHash String                           @unique
   status           RestaurantRegisteredDeviceStatus @default(ACTIVE)
+  // M4-L1 (additive): what kind of terminal this device acts as. Defaults to POS
+  // so every M2-enrolled device keeps its existing behaviour; a KDS device is
+  // bound to exactly one kitchen station via the nullable `stationId` seam (C8).
+  kind             RestaurantDeviceKind             @default(POS)
+  stationId        String?
   lastSeenAt       DateTime?
   revokedAt        DateTime?
   createdAt        DateTime                         @default(now())
   updatedAt        DateTime                         @updatedAt
 
-  branch           RestaurantBranch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branch           RestaurantBranch                @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  station          RestaurantKitchenStation?       @relation(fields: [stationId], references: [id], onDelete: SetNull)
   credentials      RestaurantOperatorCredential[]
   terminalSessions RestaurantTerminalSession[]
   coAuthorizations RestaurantCoAuthorization[]
+  // M4-L1: orders opened from this terminal, order events attributed to it, and
+  // the device-scoped idempotency keys guarding its command replays (C7).
+  ordersOpened     RestaurantOrder[]               @relation("OrderOpeningDevice")
+  actedOrderEvents RestaurantOrderEvent[]          @relation("OrderEventActorDevice")
+  idempotencyKeys  RestaurantOrderIdempotencyKey[]
 
   @@index([organizationId])
   @@index([branchId])
   @@index([status])
+  @@index([stationId])
   @@map("restaurant_registered_devices")
 }
 
@@ -2567,9 +2599,12 @@ model RestaurantCategory {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  parent   RestaurantCategory?  @relation("RestaurantCategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children RestaurantCategory[] @relation("RestaurantCategoryTree")
-  products RestaurantProduct[]
+  parent              RestaurantCategory?            @relation("RestaurantCategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children            RestaurantCategory[]           @relation("RestaurantCategoryTree")
+  products            RestaurantProduct[]
+  // M4-L1: station routing rules that target this category (category-level
+  // routing is the fallback below a product-level rule, above the branch default).
+  stationRoutingRules RestaurantStationRoutingRule[]
 
   @@index([organizationId])
   @@index([parentId])
@@ -2604,6 +2639,10 @@ model RestaurantProduct {
   recipes              RestaurantRecipe[]
   menuItems            RestaurantMenuItem[]
   priceListEntries     RestaurantPriceListEntry[]
+  // M4-L1: order items snapshotted from this product, and station routing rules
+  // that target it (product-level routing outranks category-level, C-list).
+  orderItems           RestaurantOrderItem[]
+  stationRoutingRules  RestaurantStationRoutingRule[]
 
   @@index([organizationId])
   @@index([categoryId])
@@ -2630,6 +2669,8 @@ model RestaurantProductVariant {
   menuItems        RestaurantMenuItem[]
   comboUsages      RestaurantComboComponentOption[]
   recipes          RestaurantRecipe[]
+  // M4-L1: order items snapshotted from this variant.
+  orderItems       RestaurantOrderItem[]
 
   @@index([organizationId])
   @@index([productId])
@@ -2668,7 +2709,11 @@ model RestaurantModifierOption {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  modifierGroup RestaurantModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  modifierGroup      RestaurantModifierGroup       @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  // M4-L1: order-item modifier snapshots that were selected from this option.
+  // The snapshot copies name + price delta; the option link is a nullable
+  // convenience ref (SetNull) — the frozen snapshot is authoritative (C4).
+  orderItemModifiers RestaurantOrderItemModifier[]
 
   @@index([organizationId])
   @@index([modifierGroupId])
@@ -2972,6 +3017,10 @@ model RestaurantPriceListVersion {
 
   priceList RestaurantPriceList        @relation(fields: [priceListId], references: [id], onDelete: Cascade)
   entries   RestaurantPriceListEntry[]
+  // M4-L1/C4: orders that snapshotted this price-list version as the price
+  // configuration used for calculation (§11.1). SetNull on removal — the item
+  // unit-price snapshots are authoritative, never rewritten by later edits.
+  orders    RestaurantOrder[]
 
   @@unique([priceListId, effectiveFrom])
   @@index([organizationId])
@@ -3094,6 +3143,10 @@ model RestaurantBranchMenuPublication {
   windows       RestaurantMenuAvailabilityWindow[]
   exceptions    RestaurantMenuAvailabilityException[]
   itemOverrides RestaurantBranchMenuItemOverride[]
+  // M4-L1/C4: orders that snapshotted this publication as the effective-menu
+  // source used for calculation (§11.1). SetNull keeps the order if the
+  // publication is later retired/removed — the snapshot columns are authoritative.
+  orders        RestaurantOrder[]
 
   @@index([organizationId])
   @@index([branchId])
@@ -3171,6 +3224,567 @@ model RestaurantBranchMenuItemOverride {
   @@index([publicationId])
   @@index([menuItemId])
   @@map("restaurant_branch_menu_item_overrides")
+}
+
+// ===========================================================================
+// M4-L1 — Orders, kitchen (KOT/KDS), floor & service sections/stations, the
+// append-only order event ledger + transactional outbox, device idempotency,
+// and per-branch business-day order numbering for the Restaurant vertical
+// (restaurant/m4).
+//
+// Binding design constraints realised in this model set:
+//   C1  Every table is org-scoped (bare RLS-guarded organizationId defaulting
+//       from the transaction-local setting) and gets forced org RLS in the
+//       migration. No M4 table lives outside tenant RLS.
+//   C2  Ledger-first: every order/item state change appends a
+//       RestaurantOrderEvent (append-only, per-order monotonic `sequence`) and a
+//       RestaurantEventOutbox row in the SAME transaction as the change (see
+//       src/lib/restaurant/outbox.ts). KOT/KDS read models derive from durable
+//       rows (events + tickets + item states), never from process-local
+//       emission. The outbox dispatcher is a seam (interface + PENDING/
+//       DISPATCHED/DEAD + attempt fields); no external consumer ships in M4.
+//   C3  Single-authority state machines: the exact RestaurantOrderStatus and
+//       RestaurantOrderItemStatus enums live here; transition maps + §11.1
+//       invariants live in src/lib/restaurant/order-state-machine.ts; only the
+//       L2 command layer writes the status columns. No stored aggregate/total on
+//       the order — order aggregates are derived (governance-testable).
+//   C4  Snapshot-on-write: an order item freezes name, unit
+//       price, quantity, and tax/service-charge fields (structurally present,
+//       zero-valued until the tax milestone), plus the publication +
+//       price-list-version references used. All money is Decimal; no floats.
+//       Modifier selections snapshot name + price delta. A nullable seatNumber
+//       is the §11.2 seat seam.
+//   C5  Business date is stamped explicitly at creation from branch timezone +
+//       businessDayCutoff (Intl-based, DST-safe); the human order number is
+//       allocated transactionally from a per-(branch, businessDate) sequence
+//       row (uniqueness + monotonicity guaranteed; gap-free NOT promised). Order
+//       numbers are not receipt numbers.
+//   C6  Attribution: every order/item command records the acting operator
+//       (staffProfileId) and terminal (deviceId); server time (createdAt) is
+//       authoritative. Post-preparation void / cancel-with-prepared-items
+//       require a co-authorization (M2 primitive) + reason + wastage
+//       disposition; the disposition is recorded with NO inventory mutation in
+//       M4 (BUILD-ASSUMPTIONS).
+//   C7  Every terminal-submitted mutating command carries a device-scoped
+//       idempotency key (unique (deviceId, key)); replays return the original
+//       result and create nothing.
+// ===========================================================================
+
+/// M4/C3/§11.1: the EXACT order status domain (no additions, renames, or
+/// omissions). The four kitchen-facing states (SENT/IN_PREPARATION/READY/SERVED)
+/// are DERIVED from item facts by the single derivation function in
+/// order-state-machine.ts and written only by the L2 command layer.
+enum RestaurantOrderStatus {
+  DRAFT
+  OPEN
+  SENT
+  IN_PREPARATION
+  READY
+  SERVED
+  PAYMENT_PENDING
+  CLOSED
+  CANCELLED
+}
+
+/// M4/C3/§11.1: the EXACT order-item status domain. VOIDED is the single
+/// terminal state; KDS display statuses are a fixed mapping onto these
+/// (order-state-machine.ts), never a third authoritative machine.
+enum RestaurantOrderItemStatus {
+  HELD
+  QUEUED
+  FIRING
+  PREPARED
+  SERVED
+  REMAKE_REQUESTED
+  VOIDED
+}
+
+/// M4/C6: the stock policy hook recorded on a post-preparation void/waste. The
+/// disposition + outbox event are persisted; NO inventory mutation exists until
+/// the inventory milestone (BUILD-ASSUMPTIONS). NONE = no stock effect recorded.
+enum RestaurantWastageDisposition {
+  WASTE
+  RESTOCK
+  NONE
+}
+
+/// M4/§11.2: why a table was linked to an order — the guest was seated, an order
+/// was moved to a different table, or two tables were merged under one order.
+enum RestaurantOrderTableLinkReason {
+  SEATED
+  MOVE
+  MERGE
+}
+
+/// M4/C2: transactional-outbox dispatch lifecycle. PENDING awaits dispatch,
+/// DISPATCHED has been handed to a consumer, DEAD has exhausted its attempts
+/// (dead-letter). The dispatcher itself is a seam in M4 — no external consumer
+/// ships (§12.2 debt flagged, not claimed).
+enum RestaurantOutboxStatus {
+  PENDING
+  DISPATCHED
+  DEAD
+}
+
+/// M4/C8: what role a registered device plays. POS is a register/terminal; KDS
+/// is a kitchen display bound to one station. Additive seam — extended, never
+/// renumbered.
+enum RestaurantDeviceKind {
+  POS
+  KDS
+}
+
+/// M4/§4: a physical floor/area within a branch that holds tables. Org-scoped
+/// under forced RLS (C1).
+model RestaurantFloor {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  name           String
+  sortOrder      Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch RestaurantBranch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  tables RestaurantTable[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_floors")
+}
+
+/// M4/§4: a table on a floor. `code` is the human table label, unique within its
+/// floor. `capacity` is the seat count. Org-scoped under forced RLS (C1).
+model RestaurantTable {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  floorId        String
+  code           String
+  capacity       Int
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  floor        RestaurantFloor                @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  sectionLinks RestaurantServerSectionTable[]
+  orderLinks   RestaurantOrderTable[]
+
+  @@unique([floorId, code])
+  @@index([organizationId])
+  @@index([floorId])
+  @@map("restaurant_tables")
+}
+
+/// M4 (Restaurant Core): a server section — a grouping of tables assigned to a
+/// server. Membership is a join table; per-business-date staffing is a separate
+/// assignment table. Org-scoped under forced RLS (C1).
+model RestaurantServerSection {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  name           String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch      RestaurantBranch                    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  tableLinks  RestaurantServerSectionTable[]
+  assignments RestaurantServerSectionAssignment[]
+  orders      RestaurantOrder[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_server_sections")
+}
+
+/// M4: section ↔ table membership. One row per (section, table).
+model RestaurantServerSectionTable {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sectionId      String
+  tableId        String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  section RestaurantServerSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  table   RestaurantTable         @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  // Membership is a plain join (no (sectionId, tableId) unique): a section may be
+  // re-seeded and L2 dedups at the command layer; the batteries probe a second
+  // membership row referencing the same parents.
+  @@index([organizationId])
+  @@index([sectionId])
+  @@index([tableId])
+  @@map("restaurant_server_section_tables")
+}
+
+/// M4: the staff operator assigned to a section for a given business date. Shift
+/// granularity is deferred (BUILD-ASSUMPTIONS); one assignment per
+/// (section, staff, businessDate).
+model RestaurantServerSectionAssignment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sectionId      String
+  staffProfileId String
+  businessDate   DateTime @db.Date
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  section      RestaurantServerSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  staffProfile RestaurantStaffProfile  @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionId, staffProfileId, businessDate])
+  @@index([organizationId])
+  @@index([sectionId])
+  @@index([staffProfileId])
+  @@index([businessDate])
+  @@map("restaurant_server_section_assignments")
+}
+
+/// M4 (Restaurant Core): a kitchen/prep station (grill, bar, expo). Exactly one
+/// default station per branch is enforced by a partial unique index in the
+/// migration (Prisma cannot express a filtered unique). Order items route to a
+/// station via the routing rules; unmatched items fall through to the default.
+model RestaurantKitchenStation {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  name           String
+  active         Boolean  @default(true)
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch       RestaurantBranch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  routingRules RestaurantStationRoutingRule[]
+  tickets      RestaurantKitchenTicket[]
+  devices      RestaurantRegisteredDevice[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_kitchen_stations")
+}
+
+/// M4: a routing rule targeting a station. Exactly one of `productId` or
+/// `categoryId` is set (a CHECK enforces the XOR in the migration). Resolution is
+/// most-specific-wins (product rule > category rule > branch default) with
+/// `priority` breaking ties within a level (src/lib/restaurant/station-routing.ts).
+model RestaurantStationRoutingRule {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  stationId      String
+  productId      String?
+  categoryId     String?
+  priority       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  station  RestaurantKitchenStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  product  RestaurantProduct?       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category RestaurantCategory?      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([stationId])
+  @@index([productId])
+  @@index([categoryId])
+  @@map("restaurant_station_routing_rules")
+}
+
+/// M4/§11.1: an order — the kitchen & fulfilment scope (the financial Bill/Check
+/// scope is a later milestone). Immutable `id`; the human `orderNumber` is
+/// allocated per (branch, businessDate); `businessDate` is stamped explicitly
+/// (C5). The opening operator + terminal are recorded (C6); the effective-menu
+/// publication and price-list-version used for calculation are snapshotted (C4).
+/// There is NO stored total/aggregate column — aggregates are derived (C3).
+model RestaurantOrder {
+  id                   String                 @id @default(cuid())
+  organizationId       String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  orderNumber          Int
+  businessDate         DateTime               @db.Date
+  status               RestaurantOrderStatus  @default(DRAFT)
+  channel              RestaurantOrderChannel
+  coverCount           Int?
+  sectionId            String?
+  serverStaffProfileId String?
+  staffProfileId       String
+  deviceId             String
+  publicationId        String?
+  priceListVersionId   String?
+  openedAt             DateTime?
+  closedAt             DateTime?
+  cancelledAt          DateTime?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  branch           RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  section          RestaurantServerSection?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  serverStaff      RestaurantStaffProfile?          @relation("OrderServerStaff", fields: [serverStaffProfileId], references: [id], onDelete: SetNull)
+  openingStaff     RestaurantStaffProfile           @relation("OrderOpeningStaff", fields: [staffProfileId], references: [id], onDelete: Restrict)
+  openingDevice    RestaurantRegisteredDevice       @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
+  publication      RestaurantBranchMenuPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
+  priceListVersion RestaurantPriceListVersion?      @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
+  items            RestaurantOrderItem[]
+  orderTables      RestaurantOrderTable[]
+  events           RestaurantOrderEvent[]
+  kitchenTickets   RestaurantKitchenTicket[]
+
+  @@unique([branchId, businessDate, orderNumber])
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([status])
+  @@index([businessDate])
+  @@index([sectionId])
+  @@index([serverStaffProfileId])
+  @@index([staffProfileId])
+  @@index([deviceId])
+  @@map("restaurant_orders")
+}
+
+/// M4/C4/§11.1: an order item with SNAPSHOT columns frozen at add time —
+/// `name`, `unitPrice`, `quantity`, and zero-valued tax/service-charge
+/// fields (structurally present; the tax milestone fills them). `course` and the
+/// nullable `seatNumber` (§11.2 seat seam) support hold-and-fire table service.
+/// `remakeOfItemId` keeps a remake linked to its original (must resolve before
+/// the order's terminal condition, §11.1). Post-preparation void records the
+/// post-prep flag, wastage disposition (C6 — no stock mutation in M4), the
+/// co-authorization reference, and a reason.
+model RestaurantOrderItem {
+  id                    String                        @id @default(cuid())
+  organizationId        String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId               String
+  course                Int                           @default(1)
+  seatNumber            Int?
+  productId             String
+  variantId             String?
+  name                  String
+  unitPrice             Decimal                       @db.Decimal(12, 2)
+  quantity              Int                           @default(1)
+  taxAmount             Decimal                       @default(0) @db.Decimal(12, 2)
+  serviceChargeAmount   Decimal                       @default(0) @db.Decimal(12, 2)
+  status                RestaurantOrderItemStatus     @default(HELD)
+  remakeOfItemId        String?
+  voidedPostPrep        Boolean                       @default(false)
+  wastageDisposition    RestaurantWastageDisposition?
+  voidCoAuthorizationId String?
+  voidReason            String?
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+
+  order       RestaurantOrder               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     RestaurantProduct             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant     RestaurantProductVariant?     @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  remakeOf    RestaurantOrderItem?          @relation("OrderItemRemake", fields: [remakeOfItemId], references: [id], onDelete: SetNull)
+  remakes     RestaurantOrderItem[]         @relation("OrderItemRemake")
+  modifiers   RestaurantOrderItemModifier[]
+  ticketItems RestaurantKitchenTicketItem[]
+
+  @@index([organizationId])
+  @@index([orderId])
+  @@index([productId])
+  @@index([variantId])
+  @@index([status])
+  @@index([remakeOfItemId])
+  @@map("restaurant_order_items")
+}
+
+/// M4/C4: an item-owned modifier SNAPSHOT. Copies the option's name
+/// (`name`) and `priceDelta` at add time; the `modifierOptionId` link is
+/// a nullable convenience reference (SetNull) — the snapshot is authoritative and
+/// is never rewritten by later catalog edits. (No composite tenant FK: the M3
+/// modifier-option table carries no (organizationId, id) unique and is consumed,
+/// never modified — C9.)
+model RestaurantOrderItemModifier {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderItemId      String
+  modifierOptionId String?
+  name             String
+  priceDelta       Decimal  @db.Decimal(12, 2)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  orderItem      RestaurantOrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  modifierOption RestaurantModifierOption? @relation(fields: [modifierOptionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([orderItemId])
+  @@index([modifierOptionId])
+  @@map("restaurant_order_item_modifiers")
+}
+
+/// M4/§11.2: order ↔ table link history. `active` marks the current link; the
+/// `linkReason` records why it was made (seated, moved, merged). Merge = several
+/// active table links under one order; combining two OPEN orders into one is
+/// deferred (BUILD-ASSUMPTIONS). At most one active link per (order, table) is
+/// enforced by a partial unique index in the migration.
+model RestaurantOrderTable {
+  id             String                         @id @default(cuid())
+  organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId        String
+  tableId        String
+  active         Boolean                        @default(true)
+  linkReason     RestaurantOrderTableLinkReason @default(SEATED)
+  linkedAt       DateTime                       @default(now())
+  unlinkedAt     DateTime?
+  createdAt      DateTime                       @default(now())
+  updatedAt      DateTime                       @updatedAt
+
+  order RestaurantOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  table RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([orderId])
+  @@index([tableId])
+  @@map("restaurant_order_tables")
+}
+
+/// M4/C2/§12.1: the append-only order event ledger. Each order/item state change
+/// appends one row with a per-order monotonically increasing `sequence` (unique
+/// (orderId, sequence)) inside the same transaction as the change. The acting
+/// operator/terminal are recorded; server `createdAt` is authoritative. This
+/// model has no updatedAt — rows are append-only by contract (L1 owns no
+/// mutation of it); the KDS read model is derived from these rows + tickets +
+/// item states, never from process-local emission.
+model RestaurantOrderEvent {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId             String
+  sequence            Int
+  eventType           String
+  actorStaffProfileId String?
+  actorDeviceId       String?
+  payload             Json
+  createdAt           DateTime @default(now())
+
+  order       RestaurantOrder             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actorStaff  RestaurantStaffProfile?     @relation("OrderEventActorStaff", fields: [actorStaffProfileId], references: [id], onDelete: SetNull)
+  actorDevice RestaurantRegisteredDevice? @relation("OrderEventActorDevice", fields: [actorDeviceId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, sequence])
+  @@index([organizationId])
+  @@index([orderId])
+  @@index([actorStaffProfileId])
+  @@index([actorDeviceId])
+  @@map("restaurant_order_events")
+}
+
+/// M4/C2/§12.1: the transactional event outbox. Written in the same transaction
+/// as the durable state change it advertises; a dispatcher (a SEAM in M4 — no
+/// external consumer ships) later moves PENDING rows to DISPATCHED or, after
+/// exhausting attempts, DEAD (dead-letter). `aggregateType`/`aggregateId` are a
+/// soft reference (the outbox outlives its aggregate and spans aggregate kinds);
+/// `nextAttemptAt` carries the backoff schedule.
+model RestaurantEventOutbox {
+  id             String                 @id @default(cuid())
+  organizationId String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  eventType      String
+  aggregateType  String
+  aggregateId    String
+  payload        Json
+  status         RestaurantOutboxStatus @default(PENDING)
+  attempts       Int                    @default(0)
+  nextAttemptAt  DateTime?
+  lastError      String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@index([organizationId])
+  @@index([status, nextAttemptAt])
+  @@index([aggregateType, aggregateId])
+  @@map("restaurant_event_outbox")
+}
+
+/// M4/C7/§12.1: a device-scoped idempotency key. A terminal-submitted mutating
+/// command carries a `key`; the first occurrence records the `commandType` and
+/// the `resultRef` of what it created, and any replay of the same (deviceId, key)
+/// returns that original result and creates nothing. Unique (deviceId, key).
+model RestaurantOrderIdempotencyKey {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  deviceId       String
+  key            String
+  commandType    String
+  resultRef      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  device RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, key])
+  @@index([organizationId])
+  @@index([deviceId])
+  @@map("restaurant_order_idempotency_keys")
+}
+
+/// M4 (KOT): a kitchen ticket routed to one station for one order. `ticketNumber`
+/// is sequential per (station, businessDate). The KDS read model derives its
+/// display from these tickets + the linked item states (C2/§12.5); realtime is
+/// only a nudge to read this durable state — no external channel ships in M4.
+model RestaurantKitchenTicket {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId        String
+  stationId      String
+  businessDate   DateTime @db.Date
+  ticketNumber   Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  order   RestaurantOrder               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  station RestaurantKitchenStation      @relation(fields: [stationId], references: [id], onDelete: Restrict)
+  items   RestaurantKitchenTicketItem[]
+
+  @@unique([stationId, businessDate, ticketNumber])
+  @@index([organizationId])
+  @@index([orderId])
+  @@index([stationId])
+  @@map("restaurant_kitchen_tickets")
+}
+
+/// M4 (KOT): a ticket line linking a kitchen ticket to an order item with the
+/// quantity fired to that station. One line per (ticket, orderItem).
+model RestaurantKitchenTicketItem {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ticketId       String
+  orderItemId    String
+  quantity       Int
+  createdAt      DateTime @default(now())
+
+  ticket    RestaurantKitchenTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  orderItem RestaurantOrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  // Plain ticket line (no (ticketId, orderItemId) unique): a fired quantity may
+  // be split across lines and L2 composes them; the batteries probe a second
+  // line referencing the same ticket + item.
+  @@index([organizationId])
+  @@index([ticketId])
+  @@index([orderItemId])
+  @@map("restaurant_kitchen_ticket_items")
+}
+
+/// M4/C5: the per-(branch, businessDate) order-number sequence. `nextNumber`
+/// holds the most recently allocated number; allocation is a transactional
+/// row-locked upsert (INSERT … ON CONFLICT DO UPDATE SET nextNumber = nextNumber
+/// + 1 RETURNING) — see src/lib/restaurant/order-numbers.ts. Uniqueness +
+/// monotonicity are guaranteed; gap-free is NOT promised (BUILD-ASSUMPTIONS).
+model RestaurantOrderNumberSequence {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  businessDate   DateTime @db.Date
+  nextNumber     Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, businessDate])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_order_number_sequences")
 }
 
 model PlatformUser {
