@@ -1,0 +1,316 @@
+/**
+ * End-to-end terminal transport, against a REAL PostgreSQL, driving the actual
+ * route handlers exactly as an HTTP request would.
+ *
+ * These are the M2-L3 named integration checks that only a database can
+ * establish: the C5 per-call revalidation (a device revoked MID-SESSION is
+ * rejected on the very next call, and a post-revocation replay of a still-"valid"
+ * session token is refused), the C6 operator state machine (unlock → switch →
+ * lock), the C7 co-authorization evidence (acting + approving pinned, self-
+ * approval refused), and the C4 durable lockout (five failures lock the
+ * credential across calls).
+ *
+ * Requires TEST_DATABASE_URL (a migrated, throwaway database, never
+ * DATABASE_URL); without it the suite reports itself skipped rather than passing
+ * vacuously. One per-run-unique organization; every read filters by id, so it is
+ * valid on a superuser TEST_DATABASE_URL too. No Auth.js is involved — the
+ * terminal transport is device-authenticated, not NextAuth.
+ */
+import { randomBytes } from 'node:crypto';
+
+import { beforeAll, describe, expect, it } from 'vitest';
+
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
+process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+
+const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+
+const suffix = randomBytes(6).toString('hex');
+const orgId = `org_wha22_term_${suffix}`;
+const branchId = `branch_${suffix}`;
+const STAFF = {
+  A: { id: `staff_a_${suffix}`, pin: '111111' },
+  B: { id: `staff_b_${suffix}`, pin: '222222' },
+  M: { id: `staff_m_${suffix}`, pin: '999999' },
+  L: { id: `staff_l_${suffix}`, pin: '555555' },
+};
+
+type RouteModule = { POST: (request: Request) => Promise<Response> };
+
+type Deps = {
+  withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
+  enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
+  revokeDevice: (typeof import('@/lib/restaurant/devices'))['revokeDevice'];
+  endSession: (typeof import('@/lib/restaurant/terminal-session'))['endSession'];
+  routes: {
+    establish: RouteModule;
+    unlock: RouteModule;
+    switchOperator: RouteModule;
+    lock: RouteModule;
+    coAuthorize: RouteModule;
+    heartbeat: RouteModule;
+  };
+};
+
+let deps: Deps;
+
+async function call(
+  route: RouteModule,
+  opts: { secret?: string; session?: string; body?: unknown }
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (opts.secret) headers.authorization = `Bearer ${opts.secret}`;
+  if (opts.session) headers['x-terminal-session'] = opts.session;
+  const request = new Request('https://tenant.test/api/restaurant/terminal', {
+    method: 'POST',
+    headers,
+    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+  });
+  const res = await route.POST(request);
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return { status: res.status, json };
+}
+
+/** Enroll a fresh device (isolates per-test rate-limit keys and revocation). */
+async function enroll(name: string): Promise<{ deviceId: string; secret: string }> {
+  const { device, secret } = await deps.withTenantDb(orgId, (tx) =>
+    deps.enrollDevice(tx, { branchId, name })
+  );
+  return { deviceId: device.id, secret };
+}
+
+/** Establish a session on a device and return the one-time session token + id. */
+async function establish(secret: string): Promise<{ token: string; sessionId: string }> {
+  const res = await call(deps.routes.establish, { secret });
+  expect(res.status).toBe(201);
+  const session = res.json.session as { id: string };
+  return { token: res.json.sessionToken as string, sessionId: session.id };
+}
+
+beforeAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  const [
+    scopedDb,
+    devices,
+    session,
+    credentials,
+    establishR,
+    unlockR,
+    switchR,
+    lockR,
+    coAuthR,
+    heartbeatR,
+  ] = await Promise.all([
+    import('@/lib/tenancy/scoped-db'),
+    import('@/lib/restaurant/devices'),
+    import('@/lib/restaurant/terminal-session'),
+    import('@/lib/restaurant/operator-credentials'),
+    import('@/app/api/restaurant/terminal/establish/route'),
+    import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/terminal/switch/route'),
+    import('@/app/api/restaurant/terminal/lock/route'),
+    import('@/app/api/restaurant/terminal/co-authorize/route'),
+    import('@/app/api/restaurant/terminal/heartbeat/route'),
+  ]);
+
+  deps = {
+    withTenantDb: scopedDb.withTenantDb,
+    withPlatformDb: scopedDb.withPlatformDb,
+    enrollDevice: devices.enrollDevice,
+    revokeDevice: devices.revokeDevice,
+    endSession: session.endSession,
+    routes: {
+      establish: establishR,
+      unlock: unlockR,
+      switchOperator: switchR,
+      lock: lockR,
+      coAuthorize: coAuthR,
+      heartbeat: heartbeatR,
+    },
+  };
+
+  // A minimal, ACTIVE organization so the transport's org-status gate passes.
+  await deps.withPlatformDb((tx) =>
+    tx.organization.create({
+      data: {
+        id: orgId,
+        slug: `wha22-term-${suffix}`,
+        legalName: 'Terminal Test Co',
+        displayName: 'Terminal Test',
+        status: 'ACTIVE',
+      },
+    })
+  );
+
+  await deps.withTenantDb(orgId, async (tx) => {
+    await tx.restaurantBranch.create({ data: { id: branchId, name: 'Main' } });
+    for (const staff of Object.values(STAFF)) {
+      await tx.restaurantStaffProfile.create({
+        data: { id: staff.id, displayName: staff.id, status: 'ACTIVE' },
+      });
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: staff.id,
+          type: 'PIN',
+          credentialHash: await credentials.hashOperatorCredential('PIN', staff.pin),
+        },
+      });
+    }
+  });
+});
+
+describeIfDatabase('terminal transport end-to-end (real DB)', () => {
+  it('establishes, unlocks, switches operator, and locks (C6 state machine)', async () => {
+    const { secret } = await enroll('lifecycle');
+    const { token } = await establish(secret);
+
+    const locked = await call(deps.routes.heartbeat, { secret, session: token });
+    expect(locked.status).toBe(200);
+    expect((locked.json.session as { state: string }).state).toBe('LOCKED');
+
+    const unlocked = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+    });
+    expect(unlocked.status).toBe(200);
+    expect((unlocked.json.session as { activeStaffProfileId: string }).activeStaffProfileId).toBe(
+      STAFF.A.id
+    );
+
+    // Unlocking an already-unlocked terminal is a 409 (use switch instead).
+    const reUnlock = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.B.id, type: 'PIN', secret: STAFF.B.pin },
+    });
+    expect(reUnlock.status).toBe(409);
+
+    const switched = await call(deps.routes.switchOperator, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.B.id, type: 'PIN', secret: STAFF.B.pin },
+    });
+    expect(switched.status).toBe(200);
+    expect((switched.json.session as { activeStaffProfileId: string }).activeStaffProfileId).toBe(
+      STAFF.B.id
+    );
+
+    const relocked = await call(deps.routes.lock, { secret, session: token });
+    expect(relocked.status).toBe(200);
+    expect((relocked.json.session as { state: string }).state).toBe('LOCKED');
+  });
+
+  it('records a manager co-authorization and refuses a self-approval (C7)', async () => {
+    const { deviceId, secret } = await enroll('coauth');
+    const { token, sessionId } = await establish(secret);
+    await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+    });
+
+    const approved = await call(deps.routes.coAuthorize, {
+      secret,
+      session: token,
+      body: {
+        approvingStaffProfileId: STAFF.M.id,
+        type: 'PIN',
+        secret: STAFF.M.pin,
+        capability: 'orders:void',
+        reason: 'guest complaint',
+        targetType: 'Order',
+        targetId: `ord_${suffix}`,
+      },
+    });
+    expect(approved.status).toBe(201);
+
+    // Scope the lookup to THIS run's session (a globally-unique id) so a reused
+    // throwaway database cannot surface a prior run's row.
+    const record = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantCoAuthorization.findFirst({ where: { terminalSessionId: sessionId } })
+    );
+    expect(record).toMatchObject({
+      actingStaffProfileId: STAFF.A.id, // acting operator, unchanged by approval (C6)
+      approvingStaffProfileId: STAFF.M.id,
+      capability: 'orders:void',
+      deviceId,
+      terminalSessionId: sessionId,
+    });
+
+    // A self-approval (approver == acting operator) is refused with 400.
+    const selfApprove = await call(deps.routes.coAuthorize, {
+      secret,
+      session: token,
+      body: {
+        approvingStaffProfileId: STAFF.A.id,
+        type: 'PIN',
+        secret: STAFF.A.pin,
+        capability: 'orders:void',
+        reason: 'self',
+      },
+    });
+    expect(selfApprove.status).toBe(400);
+  });
+
+  it('rejects a revoked device mid-session and refuses replay of its session token (C5)', async () => {
+    const { deviceId, secret } = await enroll('revoke');
+    const { token } = await establish(secret);
+    await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+    });
+
+    // Revoke the device MID-SESSION (back-office action).
+    await deps.withTenantDb(orgId, (tx) => deps.revokeDevice(tx, deviceId, new Date()));
+
+    // Replaying the still-"valid" session token is rejected on the next call,
+    // because the transport re-reads the device FRESH every time (no trust cache).
+    const replay = await call(deps.routes.heartbeat, { secret, session: token });
+    expect(replay.status).toBe(403);
+
+    // Even establishing a new session on the revoked device is refused.
+    const reEstablish = await call(deps.routes.establish, { secret });
+    expect(reEstablish.status).toBe(403);
+  });
+
+  it('rejects replay of an ended session (C5)', async () => {
+    const { secret } = await enroll('ended');
+    const { token, sessionId } = await establish(secret);
+    await deps.withTenantDb(orgId, (tx) => deps.endSession(tx, sessionId, new Date()));
+
+    const replay = await call(deps.routes.heartbeat, { secret, session: token });
+    expect(replay.status).toBe(401);
+  });
+
+  it('locks an operator credential after five failed unlocks and honours the durable lock (C4)', async () => {
+    const { secret } = await enroll('lockout');
+    const { token } = await establish(secret);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const wrong = await call(deps.routes.unlock, {
+        secret,
+        session: token,
+        body: { staffProfileId: STAFF.L.id, type: 'PIN', secret: '000000' },
+      });
+      expect(wrong.status).toBe(401);
+    }
+
+    // The sixth attempt — even with the CORRECT pin — is locked out (423).
+    const locked = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.L.id, type: 'PIN', secret: STAFF.L.pin },
+    });
+    expect(locked.status).toBe(423);
+
+    // The lock is durable on the credential row (C4), not a per-instance cache.
+    const credential = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOperatorCredential.findFirst({ where: { staffProfileId: STAFF.L.id } })
+    );
+    expect(credential!.lockedUntil).toBeInstanceOf(Date);
+  });
+});

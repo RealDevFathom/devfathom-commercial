@@ -21,6 +21,7 @@ import { webhooksRouter } from './webhooks';
 import { emailRouter } from './email';
 import { organizationAdminRouter } from './organization-admin';
 import { restaurantStaffRouter } from './restaurant-staff';
+import { restaurantDevicesRouter } from './restaurant-devices';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -45,6 +46,7 @@ export const appRouter = router({
   email: emailRouter,
   organizationAdmin: organizationAdminRouter,
   restaurantStaff: restaurantStaffRouter,
+  restaurantDevices: restaurantDevicesRouter,
 });
 
 export type AppRouter = typeof appRouter;
