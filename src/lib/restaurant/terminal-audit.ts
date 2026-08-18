@@ -36,7 +36,10 @@ export function recordTerminalOperatorAudit(
   recordAudit({
     organizationId: ctx.organizationId,
     actorType: 'RESTAURANT_OPERATOR',
-    actorId: entry.actingStaffProfileId,
+    // An operator is a staff profile, NOT a User — attribute via
+    // `actorStaffProfileId` (FK -> restaurant_staff_profiles), never `actorId`
+    // (FK -> users), which would fail with a foreign-key violation.
+    actorStaffProfileId: entry.actingStaffProfileId,
     source: 'REST_API',
     category: 'TERMINAL',
     operation: entry.operation ?? 'UPDATE',

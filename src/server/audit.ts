@@ -300,6 +300,13 @@ export interface AuditRowInput {
   organizationId?: string | null;
   actorType?: AuditActorTypeT;
   actorId?: string | null;
+  /**
+   * The acting RestaurantStaffProfile id, set INSTEAD of `actorId` when the actor
+   * is a terminal operator (`actorType = 'RESTAURANT_OPERATOR'`). An operator is
+   * not a User, so it must not go through the `actorId` -> users FK. Mutually
+   * exclusive with `actorId` (a DB CHECK enforces this).
+   */
+  actorStaffProfileId?: string | null;
   actorName?: string | null;
   actorEmail?: string | null;
   actorRole?: string | null;
@@ -329,6 +336,29 @@ export interface AuditRowInput {
 }
 
 /**
+ * In production/development an audit write is fire-and-forget: a failure is
+ * logged and swallowed so it can never roll back or fail the user's action.
+ * In tests that swallow is a footgun — a broken write (e.g. an actor foreign-key
+ * violation) would let a mutation "pass" while leaving ZERO durable audit rows.
+ * Under Vitest we therefore DO NOT swallow: each write promise is tracked so a
+ * test can `await flushAuditWritesForTest()` and see any rejection, and an
+ * un-flushed failure surfaces as an unhandled rejection rather than vanishing.
+ */
+const AUDIT_FAIL_LOUD = process.env.NODE_ENV === 'test' || !!process.env.VITEST;
+
+const pendingAuditWrites: Promise<unknown>[] = [];
+
+/**
+ * Test-only: await every audit write recorded since the last flush. Rejects with
+ * the underlying error if any write failed (e.g. a P2003 FK violation), so a
+ * DB-backed test can prove the row was actually persisted. No-op in production.
+ */
+export async function flushAuditWritesForTest(): Promise<void> {
+  const inflight = pendingAuditWrites.splice(0);
+  await Promise.all(inflight);
+}
+
+/**
  * Append one row to the audit log. Fire-and-forget — never blocks or rejects
  * the caller. The `as never` casts let us pass plain JSON into Prisma's `Json`
  * columns (same pattern as logActivity).
@@ -341,6 +371,7 @@ export function recordAudit(row: AuditRowInput): void {
             organizationId: row.organizationId!,
             actorType: row.actorType ?? 'USER',
             actorId: row.actorId ?? null,
+            actorStaffProfileId: row.actorStaffProfileId ?? null,
             actorName: row.actorName ?? null,
             actorEmail: row.actorEmail ?? null,
             actorRole: row.actorRole ?? null,
@@ -393,6 +424,13 @@ export function recordAudit(row: AuditRowInput): void {
           },
         })
       );
+
+  if (AUDIT_FAIL_LOUD) {
+    // Tests: do not swallow. Track so `flushAuditWritesForTest()` can await and
+    // surface a rejection; an un-flushed failure still raises as unhandled.
+    pendingAuditWrites.push(write);
+    return;
+  }
 
   void write.catch((err) => {
     console.error('[audit] failed to record', row.action, err);

@@ -1430,7 +1430,12 @@ model AuditLog {
 
   // WHO — snapshotted at the time of the action for durability
   actorType  AuditActorType @default(USER)
-  actorId    String? // null for anonymous (e.g. failed login)
+  actorId    String? // the acting User (FK -> users). null for anonymous (e.g. failed login)
+  // A restaurant terminal operator is a staff profile, NOT a User (C2/C3), so its
+  // audit rows attribute here instead of `actorId` — the two are mutually exclusive
+  // and a RESTAURANT_OPERATOR row must set this one (enforced by a DB CHECK). Used
+  // by the M2 terminal mutations (unlock/switch/co-authorize/lock).
+  actorStaffProfileId String? // the acting RestaurantStaffProfile, when actorType = RESTAURANT_OPERATOR
   actorName  String?
   actorEmail String?
   actorRole  String?
@@ -1468,10 +1473,12 @@ model AuditLog {
   errorMessage String?
   durationMs   Int?
 
-  actor User? @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+  actor             User?                   @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+  actorStaffProfile RestaurantStaffProfile? @relation("StaffProfileAuditLogs", fields: [actorStaffProfileId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
   @@index([actorId, createdAt])
+  @@index([actorStaffProfileId, createdAt])
   @@index([category, createdAt])
   @@index([source, createdAt])
   @@index([operation, createdAt])
@@ -2319,6 +2326,7 @@ model RestaurantStaffProfile {
   terminalSessions RestaurantTerminalSession[]    @relation("TerminalSessionActiveStaff")
   actingCoAuths    RestaurantCoAuthorization[]    @relation("CoAuthActingStaff")
   approvingCoAuths RestaurantCoAuthorization[]    @relation("CoAuthApprovingStaff")
+  auditLogs        AuditLog[]                     @relation("StaffProfileAuditLogs")
 
   @@index([organizationId])
   @@index([userId])
