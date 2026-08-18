@@ -387,9 +387,9 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
       condeferred: boolean;
     }>(
       `SELECT child.relname AS table_name,
-              array_agg(child_column.attname ORDER BY key.ordinality) AS columns,
+              array_agg(child_column.attname::text ORDER BY key.ordinality) AS columns,
               parent.relname AS referenced_table,
-              array_agg(parent_column.attname ORDER BY key.ordinality) AS referenced_columns,
+              array_agg(parent_column.attname::text ORDER BY key.ordinality) AS referenced_columns,
               constraint_row.condeferrable,
               constraint_row.condeferred
          FROM pg_catalog.pg_constraint constraint_row
