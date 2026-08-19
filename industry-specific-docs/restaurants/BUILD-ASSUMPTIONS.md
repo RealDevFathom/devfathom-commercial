@@ -800,3 +800,47 @@ order already at PAYMENT_PENDING that is asked to close while unsettled is rejec
 state machine and its edges are unchanged. · Conservative because it keeps the single declared cross-milestone
 `orders.ts` edit bounded to a pre-transition guard and avoids a chicken-and-egg where an order can never reach
 the state in which it is tendered. · Revisited if a distinct explicit "request payment" command is introduced.
+
+**C6 (MOCK adapter — pure execute, deterministic refs, scriptable declines) (M5-L4)** · The payment adapter
+`execute` is PURE (no I/O, clock, or RNG): it returns a normalized outcome + an append-only event DRAFT that
+the caller persists inside its own money transaction. Provider references are a SHA-256 of the capability +
+a caller-supplied operation seed (deterministic and reproducible), and outcomes are scripted through
+DESIGNATED DECLINE AMOUNTS — a SALE/AUTH whose amount ends in a designated cent code (13 GENERIC_DECLINE,
+51 INSUFFICIENT_FUNDS, 54 EXPIRED_CARD) declines; post-authorization ops (CAPTURE/ADJUST/VOID/REFUND) always
+approve against a valid prior reference. ADJUST is contract-level only (C5) — implemented + conformance-tested,
+not wired into a tender command. · Conservative because deterministic refs + amount-scripted declines keep the
+suite and any checkout demo reproducible without a real PSP, and a pure operation lets a decline roll back with
+nothing persisted. · Revisited when a real provider (D23) is scoped — the registry (`getPaymentProvider`) and
+capability interface are the seam.
+
+**C6 (declined SALE aborts the whole tender transaction) (M5-L4)** · A card SALE decline THROWS, rolling back
+the entire tender transaction, so a decline leaves NO tender, drawer movement, payment, event, receipt, or
+idempotency key. A persisted decline-audit trail is deferred. · Conservative because it is the simplest form of
+the atomicity the plan requires (declined SALE leaves nothing) and never half-writes money state. · Revisited
+if a durable declined-attempt audit trail is scoped (it would commit a DECLINED payment + event instead of
+rolling back).
+
+**C5 (cash tenders carry no tip; net CASH_SALE movement = the applied amount) (M5-L4)** · A CASH tender records
+`cashReceived` (≥ amount) and `changeGiven = cashReceived − amount`; its `tipAmount` is always zero and the
+paired CASH_SALE drawer movement equals the applied `amount` (the net cash retained), so the drawer fold
+reconciles to the cent. Tips are a CARD/OTHER concept in M5. · Conservative because it keeps drawer
+accountability exact (net cash in = sale amount) without modelling cash-tip pooling. · Revisited if cash tips /
+tip-outs are scoped (the tender `tipAmount` column already exists).
+
+**C4/C10 (settle-exactly-once via a bill-row lock) (M5-L4)** · A tender may never be applied for more than the
+bill's outstanding balance (the only over-payment is cash change), and the applied tenders settling the bill is
+serialized by a `SELECT … FOR UPDATE` lock on the bill row: concurrent FINAL tenders block on the lock, so
+exactly one settles + allocates the receipt and the loser observes the SETTLED bill and is rejected
+(BILL_NOT_OPEN). The same bill lock serializes concurrent refunds so Σ(refunds) can never overshoot the tender.
+· Conservative because the append-only tender/refund tables cannot be row-locked to serialize, so the
+UPDATE-capable bill row is the serialization point; receipts stay gap-tolerant but allocated-once. · Revisited
+if a queue/outbox settlement path replaces synchronous settlement.
+
+**C7 (VOID_REVERSAL is same-day full only; refunds post to the processing day) (M5-L4)** · A VOID_REVERSAL is
+accepted only for a SAME-DAY FULL reversal with no prior refund (CARD → adapter VOID → VOIDED; CASH →
+CASH_REFUND movement); anything partial or cross-day is a REFUND (CARD → adapter REFUND → PARTIALLY_REFUNDED /
+REFUNDED). Every refund posts to the register's CURRENT processing business date, so a cross-business-date
+correction lands on today and never mutates a prior day's immutable close. Cash refunds require an OPEN drawer
+and write exactly one CASH_REFUND movement. · Conservative because it keeps corrections append-only and the
+daily close immutable while still allowing next-day returns. · Revisited if same-day partial voids or
+provider-side settlement batching are scoped.
