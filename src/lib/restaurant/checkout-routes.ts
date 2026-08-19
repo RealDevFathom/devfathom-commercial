@@ -1,0 +1,694 @@
+import 'server-only';
+
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+
+import type { Prisma } from '@/generated/prisma/client';
+import { readJson } from '@/lib/api-json';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+import { BillCommandError, evaluateOrderSettlement, type MoneyCommandActor } from './bills';
+import { CoAuthorizationError } from './co-authorization';
+import {
+  DailyCloseError,
+  type ClosePreview,
+  type CloseTotals,
+  type CorrectCloseResult,
+  type CutCloseResult,
+  type TenderTypeTotal,
+} from './daily-close';
+import {
+  DrawerSessionError,
+  type CloseDrawerSessionResult,
+  type OpenDrawerSessionResult,
+} from './drawer-sessions';
+import { PaymentAdapterError } from './payment-adapter';
+import { RefundError, type RefundTenderResult } from './refunds';
+import { TenderError, type ApplyTenderResult } from './tenders';
+import {
+  authenticateApprover,
+  buildActor,
+  idempotencyKeyFromRequest,
+  invalidBody,
+  missingIdempotencyKey,
+  requireActingOperator,
+} from './terminal-orders';
+import { withTerminalAuth, type TerminalContext } from './terminal-auth';
+
+/**
+ * M5-L5 — the register (POS-terminal) transport glue over the L2/L3/L4 money command
+ * layer: bills & splits (`bills.ts`), tenders & refunds (`tenders.ts`/`refunds.ts`)
+ * and drawer sessions + the daily close (`drawer-sessions.ts`/`daily-close.ts`).
+ *
+ * Routes stay THIN (the M2/M4 terminal pattern): authenticate the device + session
+ * (`withTerminalAuth`, unchanged — C12), require an acting operator (C6), GATE the
+ * operator on the route's money capability (C11), require an idempotency key on every
+ * mutation (C11), parse a STRICT body (C11 — unknown fields rejected, never stripped),
+ * build the attribution + idempotency envelope from trusted transport values (operator
+ * = the session's active staff, device = the authenticated device, key = the
+ * `Idempotency-Key` header — never the untrusted body), dispatch to the single command
+ * layer, and shape any domain error into a clean HTTP status WITHOUT leaking internals.
+ * No money domain logic lives here — the command layer owns the ledger append, the
+ * settlement/receipt seam and the device-scoped `restaurant_money_idempotency_keys`
+ * replay record (C11); this file only wires transport.
+ *
+ * Capability gate (C11). Terminal money routes gate on the EXISTING pos/payments/cash
+ * capabilities, resolved from the acting operator's staff profile via its linked
+ * `User`'s effective capabilities — the org-role permissions + non-expired per-user
+ * overrides, evaluated exactly like the ABAC `customDecision` path that the back-office
+ * `money:read` reads use (org-role-driven; policies.ts: "Terminal money mutations gate
+ * on the existing pos/payments/cash capabilities"). Resolution is default-DENY: an
+ * operator whose staff profile has no linked user, or whose user lacks the capability,
+ * is refused (403). A co-authorized action additionally verifies the approving
+ * manager's own credential AND that the approver carries `coauth:approve`. The
+ * operator↔capability store is the platform's org-role model (no restaurant operator
+ * capability column exists to date, and none is added — no schema change, C12); this
+ * coupling is recorded in BUILD-ASSUMPTIONS for the console + reconciliation lanes.
+ *
+ * Read contract (C12, consumed by L7a): the register's settled-bill receipt payload
+ * (`buildReceiptForBranch`, display data only) and per-order settlement state
+ * (`getOrderSettlementForBranch`) are shipped here; the day-close preview reuses L3's
+ * `closePreview`. A console lane missing a read routes the defect back through the CoS
+ * to this lane — UI lanes never write server queries.
+ */
+
+// ── Strict input schemas (C11) ───────────────────────────────────────────────
+
+const ID = z.string().min(1);
+
+/** A non-negative money amount as an exact decimal string (C2 — never a float, at most
+ * the money scale of 2 fraction digits). The command layer performs domain validation
+ * (over-tender, insufficient cash, refund caps); the schema only guarantees `money()`
+ * receives a parseable Decimal so a malformed amount is a clean 400, not a 500. */
+const MONEY = z
+  .string()
+  .regex(/^\d+(\.\d{1,2})?$/, 'Expected a non-negative money amount with up to 2 decimal places.');
+
+const BUSINESS_DATE = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a "YYYY-MM-DD" business date.');
+
+/** A manager co-authorization presented inline for a comp / re-cut / refund / close
+ * correction (C6). The manager proves their OWN credential at the terminal and must
+ * carry `coauth:approve`; the command layer records the co-authorization evidence. */
+const APPROVING = z
+  .object({
+    staffProfileId: ID,
+    type: z.enum(['PIN', 'BADGE']),
+    secret: z.string().min(1),
+  })
+  .strict();
+
+/** How to split an order into bills (mirrors `bills.ts` `SplitSpec`). */
+const SPLIT = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('NONE') }).strict(),
+  z.object({ kind: z.literal('BY_ITEM'), groups: z.array(z.array(ID).min(1)).min(1) }).strict(),
+  z.object({ kind: z.literal('BY_SEAT') }).strict(),
+  z
+    .object({ kind: z.literal('FRACTIONAL'), weights: z.array(z.number().positive()).min(1) })
+    .strict(),
+]);
+
+export const billBody = z
+  .object({
+    orderId: ID,
+    split: SPLIT,
+    /** Present only when re-cutting an order that already has live bills: the reason and
+     * the co-authorizing manager for the void-and-recut (C4). */
+    recut: z
+      .object({ reason: z.string().min(1), approving: APPROVING })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const compBody = z
+  .object({
+    billId: ID,
+    billLineId: ID,
+    reason: z.string().min(1),
+    approving: APPROVING,
+  })
+  .strict();
+
+const CASH_TENDER = z
+  .object({ type: z.literal('CASH'), amount: MONEY, cashReceived: MONEY })
+  .strict();
+const CARD_TENDER = z
+  .object({ type: z.literal('CARD'), amount: MONEY, tipAmount: MONEY.optional() })
+  .strict();
+const OTHER_TENDER = z
+  .object({ type: z.literal('OTHER'), amount: MONEY, tipAmount: MONEY.optional() })
+  .strict();
+
+export const tenderBody = z
+  .object({
+    billId: ID,
+    tender: z.discriminatedUnion('type', [CASH_TENDER, CARD_TENDER, OTHER_TENDER]),
+  })
+  .strict();
+
+export const refundBody = z
+  .object({
+    originalTenderId: ID,
+    amount: MONEY,
+    tipRefundAmount: MONEY.optional(),
+    kind: z.enum(['REFUND', 'VOID_REVERSAL']).optional(),
+    reason: z.string().min(1),
+    approving: APPROVING,
+  })
+  .strict();
+
+export const drawerOpenBody = z.object({ openingFloat: MONEY }).strict();
+
+export const drawerMovementBody = z
+  .object({
+    drawerSessionId: ID,
+    kind: z.enum(['PAID_IN', 'PAID_OUT', 'DROP']),
+    amount: MONEY,
+    reason: z.string().min(1),
+  })
+  .strict();
+
+export const drawerCloseBody = z.object({ drawerSessionId: ID, countedCash: MONEY }).strict();
+
+export const dayCloseBody = z.object({ businessDate: BUSINESS_DATE }).strict();
+
+export const dayCorrectBody = z
+  .object({
+    businessDate: BUSINESS_DATE,
+    supersedesCloseId: ID,
+    reason: z.string().min(1),
+    approving: APPROVING,
+  })
+  .strict();
+
+// ── Capability gate (C11) ────────────────────────────────────────────────────
+
+/** The five money capabilities a terminal route may gate on, plus the approver's
+ * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
+export type MoneyCapability =
+  'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
+
+/** Wildcard-aware capability match, identical to the ABAC engine's rule (`*`, an exact
+ * match, or a `namespace:*` prefix). Kept local because the ABAC helper is private and
+ * its `can()` only accepts registered ABAC actions, which these vertical capabilities
+ * are not. */
+function capabilityMatches(rule: string, capability: string): boolean {
+  if (rule === '*' || rule === capability) return true;
+  if (!rule.endsWith(':*')) return false;
+  return capability.startsWith(rule.slice(0, -1));
+}
+
+type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
+
+/** Resolve whether the acting operator holds `capability`, via its staff profile's
+ * linked `User` effective capabilities (per-user overrides win over org-role rules; a
+ * DENY beats an ALLOW at each layer; default-DENY). No linked user ⇒ denied. Mirrors
+ * `customDecision` in `src/lib/abac/index.ts` but for the vertical capability strings. */
+export async function operatorHasCapability(
+  db: ScopedDb,
+  staffProfileId: string,
+  capability: string,
+  now: Date
+): Promise<boolean> {
+  const profile = await db.restaurantStaffProfile.findUnique({
+    where: { id: staffProfileId },
+    select: {
+      user: {
+        select: {
+          organizationRole: {
+            select: { permissions: { select: { capability: true, effect: true } } },
+          },
+          permissionOverrides: {
+            where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+            select: { capability: true, effect: true },
+          },
+        },
+      },
+    },
+  });
+  const user = profile?.user;
+  if (!user) return false;
+
+  const decide = (rules: readonly CapabilityRule[]): boolean | null => {
+    const matching = rules.filter((rule) => capabilityMatches(rule.capability, capability));
+    if (matching.some((rule) => rule.effect === 'DENY')) return false;
+    if (matching.some((rule) => rule.effect === 'ALLOW')) return true;
+    return null;
+  };
+
+  const overrideDecision = decide(user.permissionOverrides);
+  if (overrideDecision !== null) return overrideDecision;
+  const roleDecision = decide(user.organizationRole?.permissions ?? []);
+  if (roleDecision !== null) return roleDecision;
+  return false;
+}
+
+function forbidden(message: string): NextResponse {
+  return NextResponse.json({ error: message }, { status: 403 });
+}
+
+/** Gate the acting operator on `capability`; returns a 403 response when denied, or
+ * null when the operator may proceed. */
+async function requireCapability(
+  db: ScopedDb,
+  staffProfileId: string,
+  capability: MoneyCapability,
+  now: Date
+): Promise<NextResponse | null> {
+  const allowed = await operatorHasCapability(db, staffProfileId, capability, now);
+  return allowed ? null : forbidden(`This operator lacks the "${capability}" capability.`);
+}
+
+/**
+ * Authenticate an inline co-authorizing manager for a comp / re-cut / refund / close
+ * correction: verify the manager's OWN credential (reusing the M4 approver check) and
+ * that they carry `coauth:approve` (C11). Returns the approving staff id, or a ready
+ * HTTP response (401/403/423) to short-circuit the route.
+ */
+async function resolveApprover(
+  ctx: TerminalContext,
+  approving: z.infer<typeof APPROVING>,
+  now: Date
+): Promise<{ ok: true; staffProfileId: string } | { ok: false; response: NextResponse }> {
+  const auth = await authenticateApprover(ctx.db, ctx.device.id, approving, now);
+  if (!auth.ok) return auth;
+  const canApprove = await operatorHasCapability(
+    ctx.db,
+    auth.staffProfileId,
+    'coauth:approve',
+    now
+  );
+  if (!canApprove) {
+    return {
+      ok: false,
+      response: forbidden('The approving manager lacks the "coauth:approve" capability.'),
+    };
+  }
+  return { ok: true, staffProfileId: auth.staffProfileId };
+}
+
+// ── Domain-error → HTTP shaping (no internals leaked) ─────────────────────────
+
+const json = (body: unknown, status: number): NextResponse => NextResponse.json(body, { status });
+
+/**
+ * Map a money-domain error onto the right HTTP status without leaking internals: a
+ * not-found onto 404, a state/precondition conflict onto 409, a declined card onto 402,
+ * everything else onto a 400 with the authored domain message. Returns null for a
+ * non-domain error so the route can rethrow it and let the transport wrapper answer a
+ * generic 500.
+ */
+export function moneyErrorResponse(err: unknown): NextResponse | null {
+  if (err instanceof BillCommandError) {
+    const notFound =
+      err.reason === 'ORDER_NOT_FOUND' ||
+      err.reason === 'BILL_NOT_FOUND' ||
+      err.reason === 'LINE_NOT_FOUND';
+    const conflict =
+      err.reason === 'ORDER_NOT_BILLABLE' ||
+      err.reason === 'BILL_NOT_OPEN' ||
+      err.reason === 'RESPLIT_LOCKED' ||
+      err.reason === 'ALREADY_COMPED';
+    return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
+  }
+  if (err instanceof TenderError) {
+    if (err.reason === 'CARD_DECLINED') return json({ error: err.message }, 402);
+    const notFound = err.reason === 'BILL_NOT_FOUND';
+    const conflict =
+      err.reason === 'BILL_NOT_OPEN' ||
+      err.reason === 'OVER_TENDER' ||
+      err.reason === 'DRAWER_NOT_OPEN';
+    return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
+  }
+  if (err instanceof RefundError) {
+    const notFound = err.reason === 'TENDER_NOT_FOUND' || err.reason === 'PAYMENT_NOT_FOUND';
+    const conflict =
+      err.reason === 'REFUND_EXCEEDS_TENDER' ||
+      err.reason === 'TIP_REFUND_EXCEEDS_TENDER' ||
+      err.reason === 'INVALID_REVERSAL' ||
+      err.reason === 'DRAWER_NOT_OPEN';
+    return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
+  }
+  if (err instanceof DrawerSessionError) {
+    const notFound =
+      err.reason === 'BRANCH_NOT_FOUND' ||
+      err.reason === 'DEVICE_NOT_FOUND' ||
+      err.reason === 'DRAWER_NOT_FOUND';
+    const conflict =
+      err.reason === 'DRAWER_NOT_OPEN' ||
+      err.reason === 'DRAWER_ALREADY_OPEN' ||
+      err.reason === 'ALREADY_CLOSED' ||
+      err.reason === 'DEVICE_BRANCH_MISMATCH';
+    return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
+  }
+  if (err instanceof DailyCloseError) {
+    const notFound = err.reason === 'CLOSE_NOT_FOUND';
+    const conflict =
+      err.reason === 'UNSETTLED_BILL' ||
+      err.reason === 'OPEN_DRAWER' ||
+      err.reason === 'CLOSE_EXISTS' ||
+      err.reason === 'NOTHING_TO_CORRECT' ||
+      err.reason === 'NOT_TIP';
+    return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
+  }
+  if (err instanceof PaymentAdapterError) {
+    return json({ error: err.message }, 400);
+  }
+  if (err instanceof CoAuthorizationError) {
+    return json({ error: err.message }, 400);
+  }
+  return null;
+}
+
+// ── Route factories ──────────────────────────────────────────────────────────
+
+/** Build the money command attribution + idempotency envelope from trusted transport
+ * values only (never the request body). Structurally the `MoneyCommandActor`/`MoneyActor`
+ * the command layer expects. */
+function buildMoneyActor(staffProfileId: string, deviceId: string, key: string): MoneyCommandActor {
+  return buildActor(staffProfileId, deviceId, key);
+}
+
+/** The arguments a money command handler receives from `moneyMutationRoute`. */
+export type MoneyCommandArgs<S extends z.ZodTypeAny> = {
+  ctx: TerminalContext;
+  data: z.infer<S>;
+  actor: MoneyCommandActor;
+  now: Date;
+};
+
+/**
+ * The shared shape of a money MUTATION route: `withTerminalAuth` (device + live
+ * session, revoked-device rejected — C12), require an acting operator (C6), gate on the
+ * route capability (C11), require an idempotency key (C11), parse the STRICT body,
+ * build the attribution envelope, dispatch, and shape any domain error. `run` returns
+ * the command result to serialise, OR a `Response` to short-circuit (e.g. a failed
+ * co-authorization). A non-domain throw is rethrown so the transport wrapper answers a
+ * generic 500 (no internals leaked).
+ */
+export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
+  schema: S;
+  capability: MoneyCapability;
+  run: (args: MoneyCommandArgs<S>) => Promise<unknown>;
+  successStatus?: number;
+}) {
+  return withTerminalAuth(async (ctx, request) => {
+    const operator = requireActingOperator(ctx);
+    if (!operator.ok) return operator.response;
+
+    const now = new Date();
+    const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+    if (denied) return denied;
+
+    const key = idempotencyKeyFromRequest(request);
+    if (!key) return missingIdempotencyKey();
+
+    const parsedJson = await readJson(request);
+    if (!parsedJson.ok) return parsedJson.response;
+    const parsed = opts.schema.safeParse(parsedJson.data);
+    if (!parsed.success) return invalidBody(parsed.error.issues);
+
+    const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key);
+    try {
+      const out = await opts.run({ ctx, data: parsed.data, actor, now });
+      if (out instanceof Response) return out;
+      return NextResponse.json(out as Record<string, unknown>, {
+        status: opts.successStatus ?? 200,
+      });
+    } catch (err) {
+      const response = moneyErrorResponse(err);
+      if (response) return response;
+      throw err;
+    }
+  });
+}
+
+/**
+ * The shared shape of a money READ route (register display data): `withTerminalAuth`,
+ * require an acting operator, gate on the route capability (C11 — financial reads are
+ * capability-gated too), then run the read. No idempotency key (nothing is written).
+ */
+export function moneyReadRoute(opts: {
+  capability: MoneyCapability;
+  run: (ctx: TerminalContext, request: Request) => Promise<Response>;
+}) {
+  return withTerminalAuth(async (ctx, request) => {
+    const operator = requireActingOperator(ctx);
+    if (!operator.ok) return operator.response;
+
+    const now = new Date();
+    const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+    if (denied) return denied;
+
+    try {
+      return await opts.run(ctx, request);
+    } catch (err) {
+      const response = moneyErrorResponse(err);
+      if (response) return response;
+      throw err;
+    }
+  });
+}
+
+// ── Register read model (C12 — read contract, consumed by L7a) ────────────────
+
+const money = (value: Prisma.Decimal): string => value.toString();
+
+/**
+ * The per-order bill/settlement state for the register, scoped to the device's branch
+ * (a cross-branch or cross-tenant order id is indistinguishable from "not found").
+ * Mirrors the back-office `getOrderSettlement` serialisation (Decimals as strings, C2).
+ * Returns null when the order is not in the device's branch (route → 404).
+ */
+export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string, branchId: string) {
+  const order = await db.restaurantOrder.findFirst({
+    where: { id: orderId, branchId },
+    select: { id: true },
+  });
+  if (!order) return null;
+
+  const settlement = await evaluateOrderSettlement(db, orderId);
+  return {
+    orderId: settlement.orderId,
+    settled: settlement.settled,
+    blocker: settlement.blocker,
+    derivedOrderTotal: money(settlement.derivedOrderTotal),
+    accountedTotal: money(settlement.accountedTotal),
+    unbilledItemIds: settlement.unbilledItemIds,
+    bills: settlement.bills.map((b) => ({
+      id: b.id,
+      status: b.status,
+      splitKind: b.splitKind,
+      grandTotal: money(b.grandTotal),
+      compTotal: money(b.compTotal),
+      receiptNumber: b.receiptNumber,
+    })),
+  };
+}
+
+/**
+ * The settled-bill receipt payload for the register — DISPLAY DATA ONLY (C6/C10). Scoped
+ * to the device's branch and returned only for a SETTLED bill (a receipt number is
+ * allocated exactly once, at settlement). Carries the receipt number seam, the bill's
+ * lines and totals, and the tenders with their change/tip — never PAN/CVV/track data
+ * (only the provider reference is stored on the payment, and it is not surfaced here).
+ * Returns null when the bill is not a settled bill in the device's branch (route → 404).
+ */
+export async function buildReceiptForBranch(db: ScopedDb, billId: string, branchId: string) {
+  const bill = await db.restaurantBill.findFirst({
+    where: { id: billId, branchId, status: 'SETTLED' },
+    select: {
+      id: true,
+      orderId: true,
+      branchId: true,
+      businessDate: true,
+      status: true,
+      splitKind: true,
+      fractionNumerator: true,
+      fractionDenominator: true,
+      subtotal: true,
+      compTotal: true,
+      roundingAdjustment: true,
+      grandTotal: true,
+      receiptNumber: true,
+      settledAt: true,
+      branch: { select: { name: true, timezone: true } },
+      order: { select: { orderNumber: true, channel: true } },
+      lines: {
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          quantity: true,
+          unitPrice: true,
+          lineSubtotal: true,
+          compAmount: true,
+          lineTotal: true,
+        },
+      },
+      tenders: {
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          type: true,
+          amount: true,
+          tipAmount: true,
+          changeGiven: true,
+          createdAt: true,
+        },
+      },
+    },
+  });
+  if (!bill) return null;
+
+  return {
+    billId: bill.id,
+    orderId: bill.orderId,
+    orderNumber: bill.order.orderNumber,
+    channel: bill.order.channel,
+    branchId: bill.branchId,
+    branchName: bill.branch.name,
+    businessDate: bill.businessDate.toISOString().slice(0, 10),
+    receiptNumber: bill.receiptNumber,
+    settledAt: bill.settledAt,
+    splitKind: bill.splitKind,
+    fractionNumerator: bill.fractionNumerator,
+    fractionDenominator: bill.fractionDenominator,
+    lines: bill.lines.map((line) => ({
+      id: line.id,
+      name: line.name,
+      quantity: line.quantity,
+      unitPrice: money(line.unitPrice),
+      lineSubtotal: money(line.lineSubtotal),
+      compAmount: money(line.compAmount),
+      lineTotal: money(line.lineTotal),
+    })),
+    tenders: bill.tenders.map((t) => ({
+      id: t.id,
+      type: t.type,
+      amount: money(t.amount),
+      tipAmount: money(t.tipAmount),
+      changeGiven: t.changeGiven === null ? null : money(t.changeGiven),
+    })),
+    totals: {
+      subtotal: money(bill.subtotal),
+      compTotal: money(bill.compTotal),
+      roundingAdjustment: money(bill.roundingAdjustment),
+      grandTotal: money(bill.grandTotal),
+    },
+  };
+}
+
+// ── Command-result serialisers (Decimals → strings, C2) ──────────────────────
+
+/** A tender result for the register: the applied amount, tip, cash change, whether this
+ * tender settled the bill (+ receipt number), and the remaining balance — all Decimals
+ * as strings. */
+export function serializeTenderResult(result: ApplyTenderResult) {
+  return {
+    tenderId: result.tenderId,
+    billId: result.billId,
+    type: result.type,
+    amount: money(result.amount),
+    tipAmount: money(result.tipAmount),
+    changeGiven: result.changeGiven === null ? null : money(result.changeGiven),
+    paymentId: result.paymentId,
+    drawerSessionId: result.drawerSessionId,
+    settled: result.settled,
+    receiptNumber: result.receiptNumber,
+    remainingDue: money(result.remainingDue),
+    replayed: result.replayed,
+  };
+}
+
+export function serializeRefundResult(result: RefundTenderResult) {
+  return {
+    refundId: result.refundId,
+    originalTenderId: result.originalTenderId,
+    billId: result.billId,
+    kind: result.kind,
+    amount: money(result.amount),
+    tipRefundAmount: money(result.tipRefundAmount),
+    businessDate: result.businessDate.toISOString().slice(0, 10),
+    paymentId: result.paymentId,
+    drawerSessionId: result.drawerSessionId,
+    paymentStatus: result.paymentStatus,
+    replayed: result.replayed,
+  };
+}
+
+export function serializeDrawerOpenResult(result: OpenDrawerSessionResult) {
+  return {
+    drawerSessionId: result.drawerSessionId,
+    businessDate: result.businessDate.toISOString().slice(0, 10),
+    openingFloat: money(result.openingFloat),
+    replayed: result.replayed,
+  };
+}
+
+export function serializeDrawerCloseResult(result: CloseDrawerSessionResult) {
+  return {
+    drawerSessionId: result.drawerSessionId,
+    expectedCash: money(result.expectedCash),
+    countedCash: money(result.countedCash),
+    variance: money(result.variance),
+    replayed: result.replayed,
+  };
+}
+
+function serializeCloseTotals(totals: CloseTotals) {
+  return {
+    grossSales: money(totals.grossSales),
+    netSales: money(totals.netSales),
+    taxTotal: money(totals.taxTotal),
+    serviceChargeTotal: money(totals.serviceChargeTotal),
+    tipTotal: money(totals.tipTotal),
+    compTotal: money(totals.compTotal),
+    discountTotal: money(totals.discountTotal),
+    refundTotal: money(totals.refundTotal),
+    voidTotal: money(totals.voidTotal),
+    cashExpected: money(totals.cashExpected),
+    cashCounted: money(totals.cashCounted),
+    cashVariance: money(totals.cashVariance),
+  };
+}
+
+function serializeTenderTotals(totals: readonly TenderTypeTotal[]) {
+  return totals.map((t) => ({
+    tenderType: t.tenderType,
+    amount: money(t.amount),
+    tipAmount: money(t.tipAmount),
+    count: t.count,
+  }));
+}
+
+/** The day-close preview for the register: the folded totals + per-tender-type totals,
+ * the close readiness guards, and the current chain-tip close id (if any). */
+export function serializeClosePreview(preview: ClosePreview) {
+  return {
+    branchId: preview.branchId,
+    businessDate: preview.businessDate.toISOString().slice(0, 10),
+    totals: serializeCloseTotals(preview),
+    tenderTotals: serializeTenderTotals(preview.tenderTotals),
+    readiness: preview.readiness,
+    existingCloseId: preview.existingCloseId,
+  };
+}
+
+export function serializeCutCloseResult(result: CutCloseResult) {
+  return {
+    dailyCloseId: result.dailyCloseId,
+    totals: serializeCloseTotals(result.totals),
+    tenderTotals: serializeTenderTotals(result.tenderTotals),
+    replayed: result.replayed,
+  };
+}
+
+export function serializeCorrectCloseResult(result: CorrectCloseResult) {
+  return { ...serializeCutCloseResult(result), supersedesCloseId: result.supersedesCloseId };
+}
+
+// Re-exported for the co-authorization routes that resolve an approving manager inline.
+export { resolveApprover };
