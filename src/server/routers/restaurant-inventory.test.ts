@@ -131,16 +131,21 @@ describe('restaurantInventoryRouter', () => {
   it('rejects wastage mutations when ABAC denies inventory:waste', async () => {
     mocks.can.mockResolvedValue(false);
     await expect(
-      caller().postWastage({ stockItemId: 'si_1', locationId: 'loc_1', reason: 'WASTAGE', quantity: '1' })
+      caller().postWastage({
+        stockItemId: 'si_1',
+        locationId: 'loc_1',
+        reason: 'WASTAGE',
+        quantity: '1',
+      })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   // ── Strict input ─────────────────────────────────────────────────────────────
 
   it('rejects unknown fields on listStockOnHand', async () => {
-    await expect(
-      caller().listStockOnHand({ unknownField: true } as never)
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(caller().listStockOnHand({ unknownField: true } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
   });
 
   it('rejects unknown fields on createStockCount', async () => {
@@ -209,7 +214,10 @@ describe('restaurantInventoryRouter', () => {
     await caller().createStockCount({ locationId: 'loc_1' });
     expect(mocks.createStockCount).toHaveBeenCalledWith(
       db,
-      expect.objectContaining({ locationId: 'loc_1', actor: expect.objectContaining({ staffProfileId: 'user_test' }) })
+      expect.objectContaining({
+        locationId: 'loc_1',
+        actor: expect.objectContaining({ staffProfileId: 'user_test' }),
+      })
     );
   });
 

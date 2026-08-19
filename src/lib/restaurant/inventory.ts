@@ -99,13 +99,15 @@ export async function addStockCountLine(db: ScopedDb, input: AddStockCountLineIn
     select: { id: true, status: true },
   });
   if (!count) throw new InventoryError('Stock count not found.', 'NOT_FOUND');
-  if (count.status !== 'DRAFT') throw new InventoryError('Count is not in DRAFT.', 'COUNT_NOT_DRAFT');
+  if (count.status !== 'DRAFT')
+    throw new InventoryError('Count is not in DRAFT.', 'COUNT_NOT_DRAFT');
 
   const existing = await db.restaurantStockCountLine.findFirst({
     where: { stockCountId: input.stockCountId, stockItemId: input.stockItemId },
     select: { id: true },
   });
-  if (existing) throw new InventoryError('Duplicate count line for this stock item.', 'DUPLICATE_COUNT_LINE');
+  if (existing)
+    throw new InventoryError('Duplicate count line for this stock item.', 'DUPLICATE_COUNT_LINE');
 
   const countedQty = dec(input.countedQuantity);
   // snapshotQuantity and varianceQuantity are filled at submit time.
@@ -137,10 +139,16 @@ export async function submitStockCount(
   return runStockTransaction(db, async (tx) => {
     const count = await tx.restaurantStockCount.findUnique({
       where: { id: input.stockCountId },
-      select: { id: true, status: true, locationId: true, lines: { select: { id: true, stockItemId: true, countedQuantity: true } } },
+      select: {
+        id: true,
+        status: true,
+        locationId: true,
+        lines: { select: { id: true, stockItemId: true, countedQuantity: true } },
+      },
     });
     if (!count) throw new InventoryError('Stock count not found.', 'NOT_FOUND');
-    if (count.status !== 'DRAFT') throw new InventoryError('Count is not in DRAFT.', 'COUNT_NOT_DRAFT');
+    if (count.status !== 'DRAFT')
+      throw new InventoryError('Count is not in DRAFT.', 'COUNT_NOT_DRAFT');
 
     const now = new Date();
     for (const line of count.lines) {
@@ -186,7 +194,8 @@ export async function postStockCount(
       },
     });
     if (!count) throw new InventoryError('Stock count not found.', 'NOT_FOUND');
-    if (count.status !== 'SUBMITTED') throw new InventoryError('Count is not SUBMITTED.', 'COUNT_NOT_SUBMITTED');
+    if (count.status !== 'SUBMITTED')
+      throw new InventoryError('Count is not SUBMITTED.', 'COUNT_NOT_SUBMITTED');
 
     const at = input.now ?? new Date();
     const nonZeroLines = count.lines.filter((l) => !dec(l.varianceQuantity).equals(ZERO));
@@ -248,7 +257,8 @@ export async function addStockTransferLine(db: ScopedDb, input: AddStockTransfer
     select: { id: true, status: true },
   });
   if (!transfer) throw new InventoryError('Stock transfer not found.', 'NOT_FOUND');
-  if (transfer.status !== 'DRAFT') throw new InventoryError('Transfer is not in DRAFT.', 'TRANSFER_NOT_DRAFT');
+  if (transfer.status !== 'DRAFT')
+    throw new InventoryError('Transfer is not in DRAFT.', 'TRANSFER_NOT_DRAFT');
 
   return db.restaurantStockTransferLine.create({
     data: {
@@ -287,7 +297,10 @@ export async function completeStockTransfer(
     });
     if (!transfer) throw new InventoryError('Stock transfer not found.', 'NOT_FOUND');
     if (transfer.status === 'RECEIVED' || transfer.status === 'CANCELLED') {
-      throw new InventoryError('Transfer is already complete or cancelled.', 'TRANSFER_ALREADY_COMPLETE');
+      throw new InventoryError(
+        'Transfer is already complete or cancelled.',
+        'TRANSFER_ALREADY_COMPLETE'
+      );
     }
     if (transfer.status !== 'DRAFT') {
       throw new InventoryError('Transfer is not in DRAFT.', 'TRANSFER_NOT_DRAFT');
@@ -427,14 +440,13 @@ export async function createLowStockRule(db: ScopedDb, input: CreateLowStockRule
 
 export type UpdateLowStockRuleInput = { threshold: Prisma.Decimal | string | number };
 
-export async function updateLowStockRule(
-  db: ScopedDb,
-  id: string,
-  patch: UpdateLowStockRuleInput
-) {
+export async function updateLowStockRule(db: ScopedDb, id: string, patch: UpdateLowStockRuleInput) {
   const rule = await db.restaurantLowStockRule.findUnique({ where: { id }, select: { id: true } });
   if (!rule) throw new InventoryError('Low-stock rule not found.', 'NOT_FOUND');
-  return db.restaurantLowStockRule.update({ where: { id }, data: { threshold: dec(patch.threshold) } });
+  return db.restaurantLowStockRule.update({
+    where: { id },
+    data: { threshold: dec(patch.threshold) },
+  });
 }
 
 export async function deleteLowStockRule(db: ScopedDb, id: string) {
@@ -470,9 +482,7 @@ export async function evaluateLowStockRules(
     stockItemIds: [...new Set(rules.map((r) => r.stockItemId))],
     locationIds: [...new Set(rules.map((r) => r.locationId))],
   });
-  const balanceMap = new Map(
-    balances.map((b) => [`${b.stockItemId}::${b.locationId}`, b.onHand])
-  );
+  const balanceMap = new Map(balances.map((b) => [`${b.stockItemId}::${b.locationId}`, b.onHand]));
 
   return rules.map((r) => {
     const onHand = balanceMap.get(`${r.stockItemId}::${r.locationId}`) ?? ZERO;
@@ -648,9 +658,7 @@ export async function listStockOnHand(
 
   const balances = await deriveBalances(db, {
     stockItemIds: filter.stockItemId ? [filter.stockItemId] : undefined,
-    locationIds: filter.locationId
-      ? [filter.locationId]
-      : locationIds,
+    locationIds: filter.locationId ? [filter.locationId] : locationIds,
   });
   if (balances.length === 0) return [];
 
@@ -776,7 +784,9 @@ export async function listStockTransfers(db: ScopedDb, input: ListTransfersInput
   const rows = await db.restaurantStockTransfer.findMany({
     where: {
       ...(input.sourceLocationId ? { sourceLocationId: input.sourceLocationId } : {}),
-      ...(input.destinationLocationId ? { destinationLocationId: input.destinationLocationId } : {}),
+      ...(input.destinationLocationId
+        ? { destinationLocationId: input.destinationLocationId }
+        : {}),
       ...(input.status ? { status: input.status } : {}),
       ...(input.cursor ? { id: { lt: input.cursor } } : {}),
     },

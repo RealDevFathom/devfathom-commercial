@@ -25,8 +25,6 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const D = (v: string | number | Prisma.Decimal) => new Prisma.Decimal(v);
 const eq = (actual: Prisma.Decimal | null | undefined, expected: string) =>
   expect((actual ?? D('0')).equals(D(expected))).toBe(true);
-const eqStr = (actual: Prisma.Decimal | null | undefined, expected: string) =>
-  expect(actual?.toString()).toBe(expected);
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];

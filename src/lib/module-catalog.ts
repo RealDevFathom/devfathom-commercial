@@ -82,6 +82,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // trail — gate on the POS module (`restaurant-pos`), the licensed surface that
   // runs checkout and settlement.
   restaurantPayments: 'restaurant-pos',
+  // M6-L2: inventory operations console — stock on hand, movement ledger, physical
+  // counts, transfers, wastage and low-stock rules — gate on the POS module
+  // (`restaurant-pos`), the licensed surface that runs inventory and procurement.
+  restaurantInventory: 'restaurant-pos',
   // M6-L3: purchasing & suppliers console — suppliers, purchase-order lifecycle,
   // goods receiving and supplier returns — gate on the POS module
   // (`restaurant-pos`), the licensed surface that runs procurement and inventory.
