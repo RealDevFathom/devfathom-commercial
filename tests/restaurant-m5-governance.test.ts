@@ -311,14 +311,13 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
     );
   });
 
-  it('uses no floating-point type for money columns in any restaurant table', async () => {
+  it('uses no floating-point type in any restaurant table', async () => {
     const result = await client!.query<{ table_name: string; column_name: string }>(
       `SELECT table_name, column_name
          FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name LIKE 'restaurant\_%' ESCAPE '\\'
-          AND (data_type IN ('real', 'double precision') OR udt_name IN ('float4', 'float8'))
-          AND column_name ~* '(amount|total|price|cost|cash|tip|comp|discount|refund|void|variance|adjustment|float)'`
+          AND (data_type IN ('real', 'double precision') OR udt_name IN ('float4', 'float8'))`
     );
     expect(result.rows).toEqual([]);
   });
@@ -330,8 +329,26 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
         WHERE table_schema = 'public' AND table_name = 'restaurant_orders'
         ORDER BY ordinal_position`
     );
-    expect(
-      result.rows.map((row) => row.column_name).filter((column) => /total|aggregate/i.test(column))
-    ).toEqual([]);
+    expect(result.rows.map((row) => row.column_name)).toEqual([
+      'id',
+      'organizationId',
+      'branchId',
+      'orderNumber',
+      'businessDate',
+      'status',
+      'channel',
+      'coverCount',
+      'sectionId',
+      'serverStaffProfileId',
+      'staffProfileId',
+      'deviceId',
+      'publicationId',
+      'priceListVersionId',
+      'openedAt',
+      'closedAt',
+      'cancelledAt',
+      'createdAt',
+      'updatedAt',
+    ]);
   });
 });
