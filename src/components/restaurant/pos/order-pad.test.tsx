@@ -63,6 +63,8 @@ function transport({
   let openAttempts = 0;
   let addAttempts = 0;
   let openOrderReads = 0;
+  let closed = false;
+  let billCut = false;
   const fetch: typeof globalThis.fetch = async (input) => {
     const path = String(input);
     if (path.endsWith('/terminal/establish')) {
@@ -95,7 +97,7 @@ function transport({
     }
     if (path.includes('/orders/detail')) {
       await detailGate;
-      return json(detailResponse);
+      return json({ ...detailResponse, status: closed ? 'PAYMENT_PENDING' : detailResponse.status });
     }
     if (path.endsWith('/orders/open')) {
       openAttempts += 1;
@@ -108,6 +110,36 @@ function transport({
       addAttempts += 1;
       if (addAttempts <= failedAddAttempts) throw new TypeError('network failed');
       return json({ itemId: 'item-1' }, 201);
+    }
+    if (path.endsWith('/orders/close')) {
+      closed = true;
+      return json({ orderId: 'order-1', status: 'PAYMENT_PENDING' });
+    }
+    if (path.includes('/checkout/summary')) {
+      return json({
+        orderId: 'order-1',
+        settled: false,
+        blocker: billCut ? 'OPEN_BILLS' : 'UNBILLED_ITEMS',
+        derivedOrderTotal: '24.00',
+        accountedTotal: billCut ? '24.00' : '0.00',
+        unbilledItemIds: billCut ? [] : ['item-1'],
+        bills: billCut
+          ? [
+              {
+                id: 'bill-1',
+                status: 'OPEN',
+                splitKind: 'NONE',
+                grandTotal: '24.00',
+                compTotal: '0.00',
+                receiptNumber: null,
+              },
+            ]
+          : [],
+      });
+    }
+    if (path.endsWith('/checkout/bill')) {
+      billCut = true;
+      return json({ billIds: ['bill-1'] }, 201);
     }
     throw new Error(`Unexpected request: ${path}`);
   };
@@ -293,5 +325,56 @@ describe('OrderPad transport', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
     await screen.findByRole('heading', { name: 'Establish device' });
     expect(screen.getByText(/Device revoked:/)).toBeVisible();
+  });
+
+  it('opens checkout only after close refreshes the order into payment pending', async () => {
+    const fetch = transport();
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+
+    expect(await screen.findByRole('heading', { name: 'Collect payment' })).toBeVisible();
+    const closeIndex = fetch.mock.calls.findIndex(([input]) =>
+      String(input).endsWith('/orders/close')
+    );
+    const refreshedDetailIndex = fetch.mock.calls.findLastIndex(([input]) =>
+      String(input).includes('/orders/detail')
+    );
+    const summaryIndex = fetch.mock.calls.findIndex(([input]) =>
+      String(input).includes('/checkout/summary')
+    );
+    expect(closeIndex).toBeGreaterThan(-1);
+    expect(refreshedDetailIndex).toBeGreaterThan(closeIndex);
+    expect(summaryIndex).toBeGreaterThan(refreshedDetailIndex);
+  });
+
+  it('opens payment pending directly and carries auth plus idempotency to checkout bill', async () => {
+    const fetch = transport({ detailResponse: { ...detail, status: 'PAYMENT_PENDING' } });
+    vi.spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000061')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000062');
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collect payment' }));
+    await screen.findByRole('button', { name: 'Cut single bill' });
+    expect(
+      fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+    ).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cut single bill' }));
+    await screen.findByText('Bill total');
+    const bill = fetch.mock.calls.find(([input]) => String(input).endsWith('/checkout/bill'));
+    expect(JSON.parse(String(bill?.[1]?.body))).toEqual({
+      orderId: 'order-1',
+      split: { kind: 'NONE' },
+    });
+    const headers = new Headers(bill?.[1]?.headers);
+    expect(headers.get('Authorization')).toBe('Bearer device-secret');
+    expect(headers.get('X-Terminal-Session')).toBe('session-token');
+    expect(headers.get('Idempotency-Key')).toBe('00000000-0000-4000-8000-000000000062');
   });
 });

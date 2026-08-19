@@ -37,6 +37,7 @@ function handlers() {
     onMove: vi.fn(),
     onMerge: vi.fn(),
     onClose: vi.fn(),
+    onCollectPayment: vi.fn(),
   };
 }
 
@@ -155,5 +156,22 @@ describe('OrderTicketPanel', () => {
     expect(actions.onServed).toHaveBeenCalledWith('item-1');
     expect(screen.queryByText('Move table')).not.toBeInTheDocument();
     expect(screen.queryByText('Merge tables')).not.toBeInTheDocument();
+  });
+
+  it('collects payment directly without closing a payment-pending order again', () => {
+    const actions = handlers();
+    render(
+      <OrderTicketPanel
+        order={{ ...order, status: 'PAYMENT_PENDING' }}
+        actingOperatorId="staff-1"
+        pending={false}
+        {...actions}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collect payment' }));
+    expect(actions.onCollectPayment).toHaveBeenCalledOnce();
+    expect(actions.onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Close order' })).not.toBeInTheDocument();
   });
 });

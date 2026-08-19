@@ -1,7 +1,9 @@
 'use client';
 
-import { type FormEvent, type ReactNode, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, useCallback, useRef, useState } from 'react';
 
+import { CheckoutPanel, type TerminalRequest } from './checkout-panel';
+import { DrawerPanel } from './drawer-panel';
 import { MenuGrid, type AddMenuItemInput, type EffectiveMenu } from './menu-grid';
 import { OrderTicketPanel, type OrderDetail, type VoidItemInput } from './order-ticket-panel';
 import { FathomMark } from '@/components/brand/logo';
@@ -108,20 +110,22 @@ export function OrderPad() {
   const [orderMenu, setOrderMenu] = useState<EffectiveMenu | null>(null);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [order, setOrder] = useState<OrderDetail | null>(null);
+  const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
   const stateEpoch = useRef(0);
 
-  function clearTerminalState() {
+  const clearTerminalState = useCallback(() => {
     stateEpoch.current += 1;
     setRuntime(null);
     setDraftMenu(null);
     setOrderMenu(null);
     setOrder(null);
+    setCheckoutOrderId(null);
     setOpenOrders([]);
     idempotencyKeys.current.clear();
-  }
+  }, []);
 
   function keyFor(intent: string) {
     const existing = idempotencyKeys.current.get(intent);
@@ -130,6 +134,45 @@ export function OrderPad() {
     idempotencyKeys.current.set(intent, key);
     return key;
   }
+
+  const checkoutRequest = useCallback<TerminalRequest>(
+    async <T,>(path: string, options = {}): Promise<T> => {
+      if (!runtime || runtime.state !== 'UNLOCKED') {
+        throw new RequestError(401, 'An unlocked terminal session is required.');
+      }
+      const mutation = options.method === 'POST';
+      const intent = options.intent ?? `${options.method ?? 'GET'}:${path}:${JSON.stringify(options.body ?? {})}`;
+      let idempotencyKey: string | null = null;
+      if (mutation) {
+        idempotencyKey = idempotencyKeys.current.get(intent) ?? crypto.randomUUID();
+        idempotencyKeys.current.set(intent, idempotencyKey);
+      }
+      try {
+        const data = await request<T>(path, {
+          method: options.method,
+          headers: {
+            ...authHeaders(runtime, options.body !== undefined),
+            ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+          },
+          ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+        });
+        if (mutation) idempotencyKeys.current.delete(intent);
+        return data;
+      } catch (error) {
+        if (mutation && error instanceof RequestError) idempotencyKeys.current.delete(intent);
+        if (
+          error instanceof RequestError &&
+          ((error.status === 403 && /device.+revoked/i.test(error.message)) ||
+            (error.status === 401 && /session|device/i.test(error.message)))
+        ) {
+          clearTerminalState();
+          setNotice({ tone: 'danger', message: `Terminal access ended: ${error.message}` });
+        }
+        throw error;
+      }
+    },
+    [clearTerminalState, runtime]
+  );
 
   function handleError(error: unknown) {
     if (error instanceof RequestError) {
@@ -294,6 +337,7 @@ export function OrderPad() {
       setDraftMenu(null);
       setOrderMenu(null);
       setOrder(null);
+      setCheckoutOrderId(null);
       setOpenOrders([]);
       idempotencyKeys.current.clear();
       setNotice({ tone: 'success', message: 'Terminal locked.' });
@@ -377,6 +421,24 @@ export function OrderPad() {
       handleError(error);
     } finally {
       setPending(null);
+    }
+  }
+
+  async function closeForPayment() {
+    const activeOrder = order;
+    if (!activeOrder || pending) return;
+    if (activeOrder.status === 'PAYMENT_PENDING') {
+      setCheckoutOrderId(activeOrder.id);
+      return;
+    }
+    if (
+      await mutate(
+        'close',
+        { orderId: activeOrder.id },
+        'Order ready for payment.'
+      )
+    ) {
+      setCheckoutOrderId(activeOrder.id);
     }
   }
 
@@ -482,6 +544,7 @@ export function OrderPad() {
           actions={
             <div className="flex flex-wrap items-center justify-end gap-2">
               <StatusPill status="active" label={`Operator ${runtime.operatorId}`} />
+              <DrawerPanel request={checkoutRequest} disabled={busy} />
               <Button
                 type="button"
                 variant="outline"
@@ -677,13 +740,18 @@ export function OrderPad() {
                   'Tables merged.'
                 )
               }
-              onClose={() =>
-                order && void mutate('close', { orderId: order.id }, 'Order closed.', false)
-              }
+              onClose={() => void closeForPayment()}
+              onCollectPayment={() => order && setCheckoutOrderId(order.id)}
             />
           </div>
         </div>
       </div>
+      <CheckoutPanel
+        open={checkoutOrderId !== null}
+        orderId={checkoutOrderId}
+        request={checkoutRequest}
+        onClose={() => setCheckoutOrderId(null)}
+      />
     </PosShell>
   );
 }

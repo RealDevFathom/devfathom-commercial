@@ -58,6 +58,7 @@ type OrderTicketPanelProps = {
   onMove: (fromTableId: string, toTableId: string) => void;
   onMerge: (tableIds: string[]) => void;
   onClose: () => void;
+  onCollectPayment: () => void;
 };
 
 const POST_PREP = new Set(['FIRING', 'PREPARED', 'SERVED', 'REMAKE_REQUESTED']);
@@ -89,6 +90,7 @@ export function OrderTicketPanel({
   onMove,
   onMerge,
   onClose,
+  onCollectPayment,
 }: OrderTicketPanelProps) {
   const [voidItem, setVoidItem] = useState<OrderItem | null>(null);
   const [voidReason, setVoidReason] = useState('');
@@ -357,12 +359,12 @@ export function OrderTicketPanel({
           </div>
           <Button
             type="button"
-            variant="outline"
-            onClick={onClose}
+            variant={order.status === 'PAYMENT_PENDING' ? 'default' : 'outline'}
+            onClick={order.status === 'PAYMENT_PENDING' ? onCollectPayment : onClose}
             disabled={pending}
             className="h-11"
           >
-            Close order
+            {order.status === 'PAYMENT_PENDING' ? 'Collect payment' : 'Close order'}
           </Button>
         </div>
       </SectionCard>
