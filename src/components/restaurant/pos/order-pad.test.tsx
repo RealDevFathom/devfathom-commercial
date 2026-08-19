@@ -1,0 +1,297 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { OrderPad } from './order-pad';
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+const detail = {
+  id: 'order-1',
+  orderNumber: 42,
+  status: 'OPEN',
+  channel: 'DINE_IN',
+  publicationId: 'publication-1',
+  coverCount: 2,
+  items: [],
+  tables: [{ id: 'link-1', tableId: 'table-1', active: true }],
+  totals: { subtotal: '0.00', tax: '0.00', serviceCharge: '0.00' },
+};
+
+function menu(publicationId: string, itemName: string) {
+  return {
+    publicationId,
+    channelOpen: true,
+    menu: { id: 'menu-1', name: 'Dinner' },
+    sections: [
+      {
+        id: 'section-1',
+        name: 'Drinks',
+        items: [
+          {
+            id: 'menu-item-1',
+            displayName: itemName,
+            product: { name: itemName },
+            price: '4.00',
+            available: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function transport({
+  failedOpenAttempts = 0,
+  openErrors = [],
+  detailResponse = detail,
+  detailGate,
+  failedAddAttempts = 0,
+  refreshGate,
+}: {
+  failedOpenAttempts?: number;
+  openErrors?: { status: number; error: string }[];
+  detailResponse?: typeof detail;
+  detailGate?: Promise<void>;
+  failedAddAttempts?: number;
+  refreshGate?: Promise<void>;
+} = {}) {
+  let openAttempts = 0;
+  let addAttempts = 0;
+  let openOrderReads = 0;
+  const fetch: typeof globalThis.fetch = async (input) => {
+    const path = String(input);
+    if (path.endsWith('/terminal/establish')) {
+      return json(
+        {
+          sessionToken: 'session-token',
+          session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-19T00:00:00Z' },
+          device: { id: 'device-1', branchId: 'branch-1' },
+        },
+        201
+      );
+    }
+    if (path.endsWith('/terminal/unlock')) {
+      return json({
+        session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-1' },
+      });
+    }
+    if (path.includes('/orders/effective-menu')) {
+      const publicationId = new URL(path, 'http://localhost').searchParams.get('publicationId');
+      return json(
+        publicationId
+          ? menu(publicationId, 'Pinned coffee')
+          : menu(`draft-${new URL(path, 'http://localhost').searchParams.get('channel')}`, 'Coffee')
+      );
+    }
+    if (path.endsWith('/orders/open-orders')) {
+      openOrderReads += 1;
+      if (openOrderReads > 1) await refreshGate;
+      return json({ orders: [] });
+    }
+    if (path.includes('/orders/detail')) {
+      await detailGate;
+      return json(detailResponse);
+    }
+    if (path.endsWith('/orders/open')) {
+      openAttempts += 1;
+      if (openAttempts <= failedOpenAttempts) throw new TypeError('network failed');
+      const responseError = openErrors[openAttempts - failedOpenAttempts - 1];
+      if (responseError) return json({ error: responseError.error }, responseError.status);
+      return json({ orderId: 'order-1', orderNumber: 42 }, 201);
+    }
+    if (path.endsWith('/orders/add-item')) {
+      addAttempts += 1;
+      if (addAttempts <= failedAddAttempts) throw new TypeError('network failed');
+      return json({ itemId: 'item-1' }, 201);
+    }
+    throw new Error(`Unexpected request: ${path}`);
+  };
+  return vi.fn(fetch);
+}
+
+async function unlock(fetch: ReturnType<typeof transport>) {
+  vi.stubGlobal('fetch', fetch);
+  render(<OrderPad />);
+
+  fireEvent.change(screen.getByLabelText('Bearer device secret'), {
+    target: { value: 'device-secret' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Establish session' }));
+  await screen.findByRole('heading', { name: 'Terminal locked' });
+  fireEvent.change(screen.getByLabelText('Operator profile ID'), {
+    target: { value: 'staff-1' },
+  });
+  fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Unlock terminal' }));
+  await screen.findByRole('heading', { name: 'Order pad' });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe('OrderPad transport', () => {
+  it('reuses an uncertain retry key, creates a fresh later key, and pins the active menu', async () => {
+    const fetch = transport({ failedOpenAttempts: 1 });
+    vi.spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000046')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000047');
+    await unlock(fetch);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Network request failed. Retry this action.');
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+    expect(screen.getByRole('button', { name: /Pinned coffee/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /^Coffee/ })).not.toBeInTheDocument();
+    expect(
+      fetch.mock.calls.some(([input]) =>
+        String(input).includes('/orders/effective-menu?channel=DINE_IN&publicationId=publication-1')
+      )
+    ).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.some(([input]) =>
+          String(input).includes('/orders/effective-menu?channel=DELIVERY')
+        )
+      ).toBe(true)
+    );
+    expect(screen.getByRole('button', { name: /Pinned coffee/ })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DINE_IN' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'))
+      ).toHaveLength(3)
+    );
+
+    const opens = fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'));
+    expect(opens.map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
+      '00000000-0000-4000-8000-000000000046',
+      '00000000-0000-4000-8000-000000000046',
+      '00000000-0000-4000-8000-000000000047',
+    ]);
+    expect(new Headers(opens[0]?.[1]?.headers).get('X-Terminal-Session')).toBe('session-token');
+  });
+
+  it('omits stale tables when opening a non-dine-in order', async () => {
+    const fetch = transport();
+    await unlock(fetch);
+
+    fireEvent.change(screen.getByLabelText('Table IDs'), { target: { value: 'table-stale' } });
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'TAKEAWAY' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+
+    await waitFor(() =>
+      expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/orders/open'))).toBe(true)
+    );
+    const open = fetch.mock.calls.find(([input]) => String(input).endsWith('/orders/open'));
+    expect(JSON.parse(String(open?.[1]?.body))).toEqual({
+      channel: 'TAKEAWAY',
+      publicationId: 'draft-TAKEAWAY',
+    });
+  });
+
+  it('reuses a mutation retry key and refreshes it after completion', async () => {
+    const fetch = transport({ failedAddAttempts: 1 });
+    vi.spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000045')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000046')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000047');
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+    fireEvent.click(screen.getByRole('button', { name: /Pinned coffee/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    await screen.findByText('Network request failed. Retry this action.');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/add-item'))
+      ).toHaveLength(2)
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add to order' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/add-item'))
+      ).toHaveLength(3)
+    );
+
+    const adds = fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/add-item'));
+    expect(adds.map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
+      '00000000-0000-4000-8000-000000000046',
+      '00000000-0000-4000-8000-000000000046',
+      '00000000-0000-4000-8000-000000000047',
+    ]);
+  });
+
+  it('keeps the outer command pending through detail and menu reconciliation', async () => {
+    let releaseDetail = () => {};
+    const detailGate = new Promise<void>((resolve) => {
+      releaseDetail = resolve;
+    });
+    const fetch = transport({ detailGate });
+    await unlock(fetch);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await waitFor(() =>
+      expect(fetch.mock.calls.some(([input]) => String(input).includes('/orders/detail'))).toBe(
+        true
+      )
+    );
+    expect(screen.getByRole('button', { name: 'Opening…' })).toBeDisabled();
+    expect(screen.getByText('Request pending. Controls are paused.')).toBeVisible();
+
+    releaseDetail();
+    await screen.findByText('Order 42');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
+  });
+
+  it('exposes pending state for a standalone refresh', async () => {
+    let releaseRefresh = () => {};
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const fetch = transport({ refreshGate });
+    await unlock(fetch);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
+    expect(screen.getByText('Request pending. Controls are paused.')).toBeVisible();
+
+    releaseRefresh();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled());
+  });
+
+  it('keeps ordinary permission denial in session but resets immediately on device revocation', async () => {
+    const fetch = transport({
+      openErrors: [
+        { status: 403, error: 'Missing order.open capability.' },
+        { status: 403, error: 'This device has been revoked.' },
+      ],
+    });
+    await unlock(fetch);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Permission denied: Missing order.open capability.');
+    expect(screen.getByRole('heading', { name: 'Order pad' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByRole('heading', { name: 'Establish device' });
+    expect(screen.getByText(/Device revoked:/)).toBeVisible();
+  });
+});

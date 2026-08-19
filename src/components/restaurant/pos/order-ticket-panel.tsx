@@ -31,6 +31,7 @@ export type OrderDetail = {
   orderNumber: number;
   status: string;
   channel: string;
+  publicationId: string | null;
   coverCount: number | null;
   items: OrderItem[];
   tables: { id: string; tableId: string; active: boolean }[];
@@ -46,13 +47,14 @@ export type VoidItemInput = {
 
 type OrderTicketPanelProps = {
   order: OrderDetail | null;
+  actingOperatorId: string;
   pending: boolean;
   onHold: (course: number) => void;
   onFire: (course: number) => void;
   onSend: () => void;
   onServed: (itemId: string) => void;
   onRemake: (itemId: string, reason: string) => void;
-  onVoid: (input: VoidItemInput) => void;
+  onVoid: (input: VoidItemInput) => Promise<boolean>;
   onMove: (fromTableId: string, toTableId: string) => void;
   onMerge: (tableIds: string[]) => void;
   onClose: () => void;
@@ -76,6 +78,7 @@ function ids(value: string) {
 
 export function OrderTicketPanel({
   order,
+  actingOperatorId,
   pending,
   onHold,
   onFire,
@@ -115,7 +118,7 @@ export function OrderTicketPanel({
     setVoidError(null);
   }
 
-  function submitVoid(event: FormEvent<HTMLFormElement>) {
+  async function submitVoid(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!voidItem || !voidReason.trim() || pending) return;
     const postPrep = POST_PREP.has(voidItem.status);
@@ -123,17 +126,27 @@ export function OrderTicketPanel({
       setVoidError('Enter manager profile ID and a 4–8 digit PIN.');
       return;
     }
-    onVoid({
+    if (postPrep && managerId.trim() === actingOperatorId) {
+      setVoidError('The acting operator cannot approve their own void.');
+      return;
+    }
+    setVoidError(null);
+    const succeeded = await onVoid({
       itemId: voidItem.id,
       reason: voidReason.trim(),
       ...(postPrep
         ? {
             wastageDisposition: disposition,
-            approving: { staffProfileId: managerId.trim(), type: 'PIN' as const, secret: managerPin },
+            approving: {
+              staffProfileId: managerId.trim(),
+              type: 'PIN' as const,
+              secret: managerPin,
+            },
           }
         : {}),
     });
-    setVoidItem(null);
+    if (succeeded) setVoidItem(null);
+    else setVoidError('Void was not completed. Review the error and try again.');
   }
 
   if (!order) {
@@ -163,11 +176,16 @@ export function OrderTicketPanel({
         </div>
 
         {courses.length === 0 ? (
-          <p className="py-6 text-center text-sm text-text-muted">Ticket empty. Select menu items.</p>
+          <p className="py-6 text-center text-sm text-text-muted">
+            Ticket empty. Select menu items.
+          </p>
         ) : (
           <div className="space-y-4">
             {courses.map(([course, items]) => (
-              <section key={course} className="rounded-lg border border-border-subtle bg-surface-sunken p-3">
+              <section
+                key={course}
+                className="rounded-lg border border-border-subtle bg-surface-sunken p-3"
+              >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="font-mono text-xs font-semibold tracking-wide text-text-muted uppercase">
                     Course {course}
@@ -213,7 +231,7 @@ export function OrderTicketPanel({
                           <StatusPill status={item.status} tone={tone(item.status)} />
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          {item.status === 'PREPARED' ? (
+                          {['PREPARED', 'REMAKE_REQUESTED'].includes(item.status) ? (
                             <Button
                               type="button"
                               variant="outline"
@@ -273,62 +291,64 @@ export function OrderTicketPanel({
           </div>
         )}
 
-        <div className="mt-5 grid gap-3 border-t border-border-subtle pt-5 md:grid-cols-2">
-          <div className="space-y-2 rounded-lg border border-border-subtle p-3">
-            <p className="text-sm font-semibold text-text-strong">Move table</p>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <Label htmlFor="move-from">From table ID</Label>
-                <Input
-                  id="move-from"
-                  value={fromTableId}
-                  onChange={(event) => setFromTableId(event.target.value)}
-                  placeholder={activeTables[0] ?? 'table-id'}
-                  className="mt-1.5 h-11"
-                />
+        {order.channel === 'DINE_IN' ? (
+          <div className="mt-5 grid gap-3 border-t border-border-subtle pt-5 md:grid-cols-2">
+            <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+              <p className="text-sm font-semibold text-text-strong">Move table</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label htmlFor="move-from">From table ID</Label>
+                  <Input
+                    id="move-from"
+                    value={fromTableId}
+                    onChange={(event) => setFromTableId(event.target.value)}
+                    placeholder={activeTables[0] ?? 'table-id'}
+                    className="mt-1.5 h-11"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="move-to">To table ID</Label>
+                  <Input
+                    id="move-to"
+                    value={toTableId}
+                    onChange={(event) => setToTableId(event.target.value)}
+                    placeholder="table-id"
+                    className="mt-1.5 h-11"
+                  />
+                </div>
               </div>
-              <div>
-                <Label htmlFor="move-to">To table ID</Label>
-                <Input
-                  id="move-to"
-                  value={toTableId}
-                  onChange={(event) => setToTableId(event.target.value)}
-                  placeholder="table-id"
-                  className="mt-1.5 h-11"
-                />
-              </div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || !fromTableId.trim() || !toTableId.trim()}
+                onClick={() => onMove(fromTableId.trim(), toTableId.trim())}
+                className="h-11 w-full"
+              >
+                Move order
+              </Button>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !fromTableId.trim() || !toTableId.trim()}
-              onClick={() => onMove(fromTableId.trim(), toTableId.trim())}
-              className="h-11 w-full"
-            >
-              Move order
-            </Button>
+            <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+              <p className="text-sm font-semibold text-text-strong">Merge tables</p>
+              <Label htmlFor="merge-tables">Additional table IDs</Label>
+              <Input
+                id="merge-tables"
+                value={mergeIds}
+                onChange={(event) => setMergeIds(event.target.value)}
+                placeholder="table-id-2, table-id-3"
+                className="h-11"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || ids(mergeIds).length === 0}
+                onClick={() => onMerge(ids(mergeIds))}
+                className="h-11 w-full"
+              >
+                Merge tables
+              </Button>
+            </div>
           </div>
-          <div className="space-y-2 rounded-lg border border-border-subtle p-3">
-            <p className="text-sm font-semibold text-text-strong">Merge tables</p>
-            <Label htmlFor="merge-tables">Additional table IDs</Label>
-            <Input
-              id="merge-tables"
-              value={mergeIds}
-              onChange={(event) => setMergeIds(event.target.value)}
-              placeholder="table-id-2, table-id-3"
-              className="h-11"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || ids(mergeIds).length === 0}
-              onClick={() => onMerge(ids(mergeIds))}
-              className="h-11 w-full"
-            >
-              Merge tables
-            </Button>
-          </div>
-        </div>
+        ) : null}
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle pt-4">
           <div className="font-mono text-sm tabular-nums text-text-muted">
@@ -353,7 +373,7 @@ export function OrderTicketPanel({
           if (!open && !pending) setVoidItem(null);
         }}
       >
-        <DialogContent showCloseButton={!pending} className="sm:max-w-lg">
+        <DialogContent showCloseButton={false} className="sm:max-w-lg">
           <form onSubmit={submitVoid}>
             <DialogHeader>
               <DialogTitle>Void {voidItem?.name}</DialogTitle>

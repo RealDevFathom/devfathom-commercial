@@ -1,13 +1,10 @@
 'use client';
 
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type ReactNode, useRef, useState } from 'react';
 
 import { MenuGrid, type AddMenuItemInput, type EffectiveMenu } from './menu-grid';
-import {
-  OrderTicketPanel,
-  type OrderDetail,
-  type VoidItemInput,
-} from './order-ticket-panel';
+import { OrderTicketPanel, type OrderDetail, type VoidItemInput } from './order-ticket-panel';
+import { FathomMark } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -91,6 +88,12 @@ function splitIds(value: string) {
     .filter(Boolean);
 }
 
+function effectiveMenuPath(channel: Channel, publicationId?: string | null) {
+  const query = new URLSearchParams({ channel });
+  if (publicationId) query.set('publicationId', publicationId);
+  return `/api/restaurant/orders/effective-menu?${query}`;
+}
+
 export function OrderPad() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [deviceSecret, setDeviceSecret] = useState('');
@@ -101,74 +104,118 @@ export function OrderPad() {
   const [covers, setCovers] = useState('');
   const [sectionId, setSectionId] = useState('');
   const [serverId, setServerId] = useState('');
-  const [menu, setMenu] = useState<EffectiveMenu | null>(null);
+  const [draftMenu, setDraftMenu] = useState<EffectiveMenu | null>(null);
+  const [orderMenu, setOrderMenu] = useState<EffectiveMenu | null>(null);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const idempotencyKeys = useRef(new Map<string, string>());
+  const stateEpoch = useRef(0);
+
+  function clearTerminalState() {
+    stateEpoch.current += 1;
+    setRuntime(null);
+    setDraftMenu(null);
+    setOrderMenu(null);
+    setOrder(null);
+    setOpenOrders([]);
+    idempotencyKeys.current.clear();
+  }
+
+  function keyFor(intent: string) {
+    const existing = idempotencyKeys.current.get(intent);
+    if (existing) return existing;
+    const key = crypto.randomUUID();
+    idempotencyKeys.current.set(intent, key);
+    return key;
+  }
 
   function handleError(error: unknown) {
     if (error instanceof RequestError) {
+      const revoked = error.status === 403 && /device.+revoked/i.test(error.message);
+      if (revoked) clearTerminalState();
       if (error.status === 401 && /session|device/i.test(error.message)) {
-        setRuntime(null);
-        setMenu(null);
-        setOrder(null);
-        setOpenOrders([]);
+        clearTerminalState();
       }
       setNotice({
         tone: error.status === 403 ? 'danger' : 'warning',
-        message:
-          error.status === 403 ? `Permission denied: ${error.message}` : error.message,
+        message: revoked
+          ? `Device revoked: ${error.message}`
+          : error.status === 403
+            ? `Permission denied: ${error.message}`
+            : error.message,
       });
       return;
     }
-    setNotice({ tone: 'warning', message: 'Network request failed. No queued change was created.' });
+    setNotice({
+      tone: 'warning',
+      message: 'Network request failed. Retry this action.',
+    });
   }
 
-  async function loadMenu(nextChannel: Channel, activeRuntime = runtime) {
+  async function loadMenu(nextChannel: Channel, activeRuntime = runtime, standalone = true) {
     if (!activeRuntime) return;
-    setPending('menu');
+    const epoch = stateEpoch.current;
+    if (standalone) setPending('menu');
     try {
-      const data = await request<EffectiveMenu>(
-        `/api/restaurant/orders/effective-menu?channel=${encodeURIComponent(nextChannel)}`,
-        { headers: authHeaders(activeRuntime) }
-      );
-      setMenu(data);
+      const data = await request<EffectiveMenu>(effectiveMenuPath(nextChannel), {
+        headers: authHeaders(activeRuntime),
+      });
+      if (epoch !== stateEpoch.current) return;
+      setDraftMenu(data);
       setNotice({ tone: 'success', message: `${data.menu.name} loaded.` });
     } catch (error) {
-      setMenu(null);
+      if (epoch !== stateEpoch.current) return;
+      setDraftMenu(null);
       handleError(error);
     } finally {
-      setPending(null);
+      if (standalone) setPending(null);
     }
   }
 
-  async function loadOpenOrders(activeRuntime = runtime) {
+  async function loadOpenOrders(activeRuntime = runtime, standalone = true) {
     if (!activeRuntime) return;
+    const epoch = stateEpoch.current;
+    if (standalone) setPending('orders');
     try {
       const data = await request<{ orders: OpenOrder[] }>('/api/restaurant/orders/open-orders', {
         headers: authHeaders(activeRuntime),
       });
+      if (epoch !== stateEpoch.current) return;
       setOpenOrders(data.orders);
     } catch (error) {
+      if (epoch !== stateEpoch.current) return;
       handleError(error);
+    } finally {
+      if (standalone) setPending(null);
     }
   }
 
-  async function loadDetail(orderId: string, activeRuntime = runtime) {
+  async function loadDetail(orderId: string, activeRuntime = runtime, standalone = true) {
     if (!activeRuntime) return;
-    setPending('detail');
+    const epoch = stateEpoch.current;
+    if (standalone) setPending('detail');
     try {
       const data = await request<OrderDetail>(
         `/api/restaurant/orders/detail?orderId=${encodeURIComponent(orderId)}`,
         { headers: authHeaders(activeRuntime) }
       );
+      if (epoch !== stateEpoch.current) return;
       setOrder(data);
+      setOrderMenu(null);
+      const activeMenu = await request<EffectiveMenu>(
+        effectiveMenuPath(data.channel as Channel, data.publicationId),
+        { headers: authHeaders(activeRuntime) }
+      );
+      if (epoch !== stateEpoch.current) return;
+      setOrderMenu(activeMenu);
       setNotice({ tone: 'success', message: `Order ${data.orderNumber} active.` });
     } catch (error) {
+      if (epoch !== stateEpoch.current) return;
       handleError(error);
     } finally {
-      setPending(null);
+      if (standalone) setPending(null);
     }
   }
 
@@ -223,7 +270,7 @@ export function OrderPad() {
       setRuntime(unlocked);
       setOperatorPin('');
       setNotice({ tone: 'success', message: 'Terminal unlocked.' });
-      await Promise.all([loadMenu(channel, unlocked), loadOpenOrders(unlocked)]);
+      await Promise.all([loadMenu(channel, unlocked, false), loadOpenOrders(unlocked, false)]);
     } catch (error) {
       setOperatorPin('');
       handleError(error);
@@ -241,9 +288,14 @@ export function OrderPad() {
         headers: authHeaders(runtime),
       });
       setRuntime({ ...runtime, state: data.session.state, operatorId: null });
+      stateEpoch.current += 1;
       setOperatorId('');
       setOperatorPin('');
+      setDraftMenu(null);
+      setOrderMenu(null);
       setOrder(null);
+      setOpenOrders([]);
+      idempotencyKeys.current.clear();
       setNotice({ tone: 'success', message: 'Terminal locked.' });
     } catch (error) {
       handleError(error);
@@ -258,7 +310,8 @@ export function OrderPad() {
     success: string,
     refreshOrder = true
   ) {
-    if (!runtime || pending) return;
+    if (!runtime || pending) return false;
+    const intent = `mutation:${path}:${JSON.stringify(body)}`;
     setPending(path);
     setNotice(null);
     try {
@@ -266,15 +319,23 @@ export function OrderPad() {
         method: 'POST',
         headers: {
           ...authHeaders(runtime, true),
-          'Idempotency-Key': crypto.randomUUID(),
+          'Idempotency-Key': keyFor(intent),
         },
         body: JSON.stringify(body),
       });
+      idempotencyKeys.current.delete(intent);
       setNotice({ tone: 'success', message: success });
-      if (refreshOrder && order) await loadDetail(order.id, runtime);
-      await loadOpenOrders(runtime);
+      if (refreshOrder && order) await loadDetail(order.id, runtime, false);
+      if (!refreshOrder) {
+        setOrder(null);
+        setOrderMenu(null);
+      }
+      await loadOpenOrders(runtime, false);
+      return true;
     } catch (error) {
+      if (error instanceof RequestError) idempotencyKeys.current.delete(intent);
       handleError(error);
+      return false;
     } finally {
       setPending(null);
     }
@@ -282,7 +343,18 @@ export function OrderPad() {
 
   async function openOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!runtime || !menu || pending) return;
+    if (!runtime || !draftMenu || pending) return;
+    const body = {
+      channel,
+      publicationId: draftMenu.publicationId,
+      ...(channel === 'DINE_IN' && splitIds(tableIds).length
+        ? { tableIds: splitIds(tableIds) }
+        : {}),
+      ...(covers ? { coverCount: Number.parseInt(covers, 10) } : {}),
+      ...(sectionId.trim() ? { sectionId: sectionId.trim() } : {}),
+      ...(serverId.trim() ? { serverStaffProfileId: serverId.trim() } : {}),
+    };
+    const intent = `open:${JSON.stringify(body)}`;
     setPending('open');
     setNotice(null);
     try {
@@ -292,21 +364,16 @@ export function OrderPad() {
           method: 'POST',
           headers: {
             ...authHeaders(runtime, true),
-            'Idempotency-Key': crypto.randomUUID(),
+            'Idempotency-Key': keyFor(intent),
           },
-          body: JSON.stringify({
-            channel,
-            publicationId: menu.publicationId,
-            ...(splitIds(tableIds).length ? { tableIds: splitIds(tableIds) } : {}),
-            ...(covers ? { coverCount: Number.parseInt(covers, 10) } : {}),
-            ...(sectionId.trim() ? { sectionId: sectionId.trim() } : {}),
-            ...(serverId.trim() ? { serverStaffProfileId: serverId.trim() } : {}),
-          }),
+          body: JSON.stringify(body),
         }
       );
+      idempotencyKeys.current.delete(intent);
       setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
-      await Promise.all([loadDetail(data.orderId, runtime), loadOpenOrders(runtime)]);
+      await Promise.all([loadDetail(data.orderId, runtime, false), loadOpenOrders(runtime, false)]);
     } catch (error) {
+      if (error instanceof RequestError) idempotencyKeys.current.delete(intent);
       handleError(error);
     } finally {
       setPending(null);
@@ -317,11 +384,11 @@ export function OrderPad() {
 
   if (!runtime) {
     return (
-      <main className="min-h-dvh overflow-x-hidden bg-surface-page px-4 py-8 text-text-body sm:px-6">
+      <PosShell status="not enrolled" tone="neutral" busy={busy}>
         <div className="mx-auto max-w-xl space-y-6">
           <PageHeader
             eyebrow="Restaurant POS"
-            title="Establish device"
+            heading="Establish device"
             description="Start a device-authenticated session. Secret stays only in memory."
           />
           {notice ? <Notice notice={notice} /> : null}
@@ -345,21 +412,24 @@ export function OrderPad() {
             </form>
           </SectionCard>
         </div>
-      </main>
+      </PosShell>
     );
   }
 
   if (runtime.state === 'LOCKED') {
     return (
-      <main className="min-h-dvh overflow-x-hidden bg-surface-page px-4 py-8 text-text-body sm:px-6">
+      <PosShell status="locked" tone="warning" busy={busy}>
         <div className="mx-auto max-w-xl space-y-6">
           <PageHeader
             eyebrow="Restaurant POS"
-            title="Terminal locked"
+            heading="Terminal locked"
             description={`Device session active for branch ${runtime.branchId}.`}
           />
           {notice ? <Notice notice={notice} /> : null}
-          <SectionCard title="Unlock terminal" actions={<StatusPill status="locked" tone="warning" />}>
+          <SectionCard
+            title="Unlock terminal"
+            actions={<StatusPill status="locked" tone="warning" />}
+          >
             <form onSubmit={unlock} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="operator-id">Operator profile ID</Label>
@@ -398,27 +468,37 @@ export function OrderPad() {
             </form>
           </SectionCard>
         </div>
-      </main>
+      </PosShell>
     );
   }
 
   return (
-    <main className="min-h-dvh overflow-x-hidden bg-surface-page px-4 py-5 text-text-body sm:px-6 lg:px-8">
+    <PosShell status="active" tone="success" busy={busy}>
       <div className="mx-auto max-w-[1600px] space-y-4">
         <PageHeader
           eyebrow="Restaurant POS"
-          title="Order pad"
+          heading="Order pad"
           description="Live menu, open checks, kitchen pacing, and table service."
           actions={
             <div className="flex flex-wrap items-center justify-end gap-2">
               <StatusPill status="active" label={`Operator ${runtime.operatorId}`} />
-              <Button type="button" variant="outline" onClick={() => void lock()} disabled={busy} className="h-11">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void lock()}
+                disabled={busy}
+                className="h-11"
+              >
                 {pending === 'lock' ? 'Locking…' : 'Lock terminal'}
               </Button>
             </div>
           }
         />
-        {notice ? <Notice notice={notice} /> : null}
+        {pending ? (
+          <Notice notice={{ tone: 'warning', message: 'Request pending. Controls are paused.' }} />
+        ) : notice ? (
+          <Notice notice={notice} />
+        ) : null}
 
         <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(18rem,0.8fr)_minmax(0,2.2fr)]">
           <div className="min-w-0 space-y-4">
@@ -486,11 +566,11 @@ export function OrderPad() {
                   />
                 </div>
                 <p className="break-all font-mono text-xs text-text-faint">
-                  Publication: {menu?.publicationId ?? 'Loading current publication…'}
+                  Publication: {draftMenu?.publicationId ?? 'Loading current publication…'}
                 </p>
                 <Button
                   type="submit"
-                  disabled={busy || !menu?.channelOpen}
+                  disabled={busy || !draftMenu?.channelOpen}
                   className="h-11 w-full"
                 >
                   {pending === 'open' ? 'Opening…' : 'Open order'}
@@ -527,7 +607,9 @@ export function OrderPad() {
                       disabled={busy}
                       className="min-h-11 h-auto w-full min-w-0 justify-between px-3 py-2"
                     >
-                      <span className="truncate">#{openOrder.orderNumber} · {openOrder.itemCount} items</span>
+                      <span className="truncate">
+                        #{openOrder.orderNumber} · {openOrder.itemCount} items
+                      </span>
                       <span className="shrink-0 font-mono text-xs">{openOrder.subtotal}</span>
                     </Button>
                   ))}
@@ -538,11 +620,14 @@ export function OrderPad() {
 
           <div className="grid min-w-0 gap-4 lg:grid-cols-2 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <MenuGrid
-              menu={menu}
+              menu={order ? orderMenu : draftMenu}
               pending={busy}
               onAdd={(input: AddMenuItemInput) => {
                 if (!order) {
-                  setNotice({ tone: 'warning', message: 'Open or resume an order before adding items.' });
+                  setNotice({
+                    tone: 'warning',
+                    message: 'Open or resume an order before adding items.',
+                  });
                   return;
                 }
                 void mutate('add-item', { orderId: order.id, ...input }, 'Item added.');
@@ -550,21 +635,102 @@ export function OrderPad() {
             />
             <OrderTicketPanel
               order={order}
+              actingOperatorId={runtime.operatorId ?? ''}
               pending={busy}
-              onHold={(course) => order && void mutate('hold', { orderId: order.id, course }, `Course ${course} held.`)}
-              onFire={(course) => order && void mutate('fire', { orderId: order.id, course }, `Course ${course} fired.`)}
-              onSend={() => order && void mutate('fire', { orderId: order.id }, 'Order sent to kitchen.')}
-              onServed={(itemId) => order && void mutate('mark-served', { orderId: order.id, itemId }, 'Item marked served.')}
-              onRemake={(itemId, reason) => order && void mutate('remake', { orderId: order.id, itemId, reason }, 'Remake requested.')}
-              onVoid={(input: VoidItemInput) => order && void mutate('void', { orderId: order.id, ...input }, 'Item voided.')}
-              onMove={(fromTableId, toTableId) => order && void mutate('move-table', { orderId: order.id, fromTableId, toTableId }, 'Order moved.')}
-              onMerge={(nextTableIds) => order && void mutate('merge-tables', { orderId: order.id, tableIds: nextTableIds }, 'Tables merged.')}
-              onClose={() => order && void mutate('close', { orderId: order.id }, 'Order closed.', false)}
+              onHold={(course) =>
+                order &&
+                void mutate('hold', { orderId: order.id, course }, `Course ${course} held.`)
+              }
+              onFire={(course) =>
+                order &&
+                void mutate('fire', { orderId: order.id, course }, `Course ${course} fired.`)
+              }
+              onSend={() =>
+                order && void mutate('fire', { orderId: order.id }, 'Order sent to kitchen.')
+              }
+              onServed={(itemId) =>
+                order &&
+                void mutate('mark-served', { orderId: order.id, itemId }, 'Item marked served.')
+              }
+              onRemake={(itemId, reason) =>
+                order &&
+                void mutate('remake', { orderId: order.id, itemId, reason }, 'Remake requested.')
+              }
+              onVoid={(input: VoidItemInput) =>
+                order
+                  ? mutate('void', { orderId: order.id, ...input }, 'Item voided.')
+                  : Promise.resolve(false)
+              }
+              onMove={(fromTableId, toTableId) =>
+                order &&
+                void mutate(
+                  'move-table',
+                  { orderId: order.id, fromTableId, toTableId },
+                  'Order moved.'
+                )
+              }
+              onMerge={(nextTableIds) =>
+                order &&
+                void mutate(
+                  'merge-tables',
+                  { orderId: order.id, tableIds: nextTableIds },
+                  'Tables merged.'
+                )
+              }
+              onClose={() =>
+                order && void mutate('close', { orderId: order.id }, 'Order closed.', false)
+              }
             />
           </div>
         </div>
       </div>
-    </main>
+    </PosShell>
+  );
+}
+
+function PosShell({
+  status,
+  tone,
+  busy,
+  children,
+}: {
+  status: string;
+  tone: 'success' | 'warning' | 'neutral';
+  busy: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="studio-viewport h-dvh overflow-hidden text-text-strong">
+      <a
+        href="#pos-main"
+        className="sr-only fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
+      >
+        Skip to order pad
+      </a>
+      <div className="studio-shell flex h-full min-w-0 flex-col overflow-hidden">
+        <header className="studio-topbar flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card px-4 sm:px-6 xl:px-8">
+          <FathomMark className="size-10" variant="brand" />
+          <div className="min-w-0 leading-tight">
+            <p className="truncate text-sm font-semibold tracking-[-0.03em] text-text-strong">
+              DevFathom
+            </p>
+            <p className="truncate text-xs text-text-muted">Restaurant POS</p>
+          </div>
+          <div className="ml-auto shrink-0" aria-live="polite">
+            <StatusPill status={status} tone={tone} />
+          </div>
+        </header>
+        <main
+          id="pos-main"
+          aria-busy={busy}
+          className="studio-canvas relative min-h-0 flex-1 overflow-y-auto"
+        >
+          <div className="studio-stage mx-auto min-h-full w-full max-w-[1600px] px-4 py-5 sm:px-6 sm:py-7 xl:px-8 xl:pb-8">
+            {children}
+          </div>
+        </main>
+      </div>
+    </div>
   );
 }
 
