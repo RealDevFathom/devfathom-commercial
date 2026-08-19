@@ -95,7 +95,8 @@ describe('KdsBoard transport', () => {
       queue([ticket(2, 'Gap response', 'COOKING')], { cursor: 9, gap: true, hasMore: true }),
       queue([ticket(3, 'Fresh risotto', 'READY')], { cursor: 9 }),
     ];
-    const fetch = vi.fn(async () => json(payloads.shift()));
+    const fetchImplementation: typeof globalThis.fetch = async () => json(payloads.shift());
+    const fetch = vi.fn(fetchImplementation);
     vi.stubGlobal('fetch', fetch);
 
     render(<KdsBoard />);
@@ -120,7 +121,7 @@ describe('KdsBoard transport', () => {
     vi.useFakeTimers();
     const activeQueue = queue([ticket(2, 'Burger', 'COOKING'), ticket(3, 'Soup', 'READY')]);
     let bumpAttempts = 0;
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchImplementation: typeof globalThis.fetch = async (input) => {
       const path = String(input);
       if (path.includes('/queue?')) return json(activeQueue);
       if (path.endsWith('/bump')) {
@@ -130,7 +131,8 @@ describe('KdsBoard transport', () => {
       }
       if (path.endsWith('/recall')) return json({ action: 'RECALL' });
       throw new Error(`Unexpected request: ${path}`);
-    });
+    };
+    const fetch = vi.fn(fetchImplementation);
     vi.stubGlobal('fetch', fetch);
     vi.spyOn(globalThis.crypto, 'randomUUID')
       .mockReturnValueOnce('00000000-0000-4000-8000-000000000047')
