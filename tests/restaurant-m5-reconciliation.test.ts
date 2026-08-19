@@ -82,9 +82,7 @@ async function call(
       method,
       headers,
       body:
-        method === 'GET' || options.body === undefined
-          ? undefined
-          : JSON.stringify(options.body),
+        method === 'GET' || options.body === undefined ? undefined : JSON.stringify(options.body),
     })
   );
   return {
@@ -157,8 +155,17 @@ beforeAll(async () => {
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
   ]);
-  const [bill, tender, refund, drawerOpen, drawerMovement, drawerClose, dayClose, establish, unlockRoute] =
-    routeModules as RouteModule[];
+  const [
+    bill,
+    tender,
+    refund,
+    drawerOpen,
+    drawerMovement,
+    drawerClose,
+    dayClose,
+    establish,
+    unlockRoute,
+  ] = routeModules as RouteModule[];
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
@@ -444,9 +451,9 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
     for (const order of raw.orders) {
       const derivedOrderTotal = sum(
         order.items.map((item) =>
-          item.unitPrice.plus(sum(item.modifiers.map((modifier) => modifier.priceDelta))).times(
-            item.quantity
-          )
+          item.unitPrice
+            .plus(sum(item.modifiers.map((modifier) => modifier.priceDelta)))
+            .times(item.quantity)
         )
       );
       const billedTotal = sum(
@@ -469,12 +476,12 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
         drawer.movements.map((movement) => movement.amount.times(signs[movement.kind]!))
       )
     );
-    const storedDrawerExpected = sum(
-      raw.drawers.map((drawer) => D(drawer.expectedCash ?? '0'))
-    );
+    const storedDrawerExpected = sum(raw.drawers.map((drawer) => D(drawer.expectedCash ?? '0')));
     eqMoney(movementFold, storedDrawerExpected);
     expect(
-      raw.drawers.flatMap((drawer) => drawer.movements).filter((row) => row.kind === 'CLOSING_COUNT')
+      raw.drawers
+        .flatMap((drawer) => drawer.movements)
+        .filter((row) => row.kind === 'CLOSING_COUNT')
     ).toHaveLength(2);
 
     const settledBills = raw.bills.filter((bill) => bill.status === 'SETTLED');

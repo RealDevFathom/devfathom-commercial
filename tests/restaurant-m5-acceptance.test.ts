@@ -89,9 +89,7 @@ async function call(
       method,
       headers,
       body:
-        method === 'GET' || options.body === undefined
-          ? undefined
-          : JSON.stringify(options.body),
+        method === 'GET' || options.body === undefined ? undefined : JSON.stringify(options.body),
     })
   );
   return {
@@ -269,12 +267,7 @@ beforeAll(async () => {
       });
     }
 
-    for (const branchId of [
-      ids.splitBranch,
-      ids.moneyBranch,
-      ids.crossBranch,
-      ids.receiptBranch,
-    ]) {
+    for (const branchId of [ids.splitBranch, ids.moneyBranch, ids.crossBranch, ids.receiptBranch]) {
       const { device, secret } = await deps.enrollDevice(tx, {
         branchId,
         name: `POS ${branchId}`,
@@ -580,13 +573,9 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     const orderNumbers = [9001, 7, 500, 42, 8100];
     const billIds: string[] = [];
     for (const orderNumber of orderNumbers) {
-      const order = await seedOrder(
-        ids.receiptBranch,
-        device.deviceId,
-        businessDate,
-        orderNumber,
-        ['12.50']
-      );
+      const order = await seedOrder(ids.receiptBranch, device.deviceId, businessDate, orderNumber, [
+        '12.50',
+      ]);
       const [billId] = await cutBills(device, session, order.orderId, { kind: 'NONE' });
       billIds.push(billId!);
     }
