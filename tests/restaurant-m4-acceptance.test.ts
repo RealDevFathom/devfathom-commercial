@@ -18,6 +18,8 @@ const ids = {
   branchA: `branch_a_${suffix}`,
   branchB: `branch_b_${suffix}`,
   operatorA: `staff_a_${suffix}`,
+  operatorAUser: `user_a_${suffix}`,
+  settleRole: `role_settle_${suffix}`,
   managerA: `manager_a_${suffix}`,
   operatorB: `staff_b_${suffix}`,
   category: `category_${suffix}`,
@@ -227,6 +229,8 @@ beforeAll(async () => {
     import('@/app/api/restaurant/kds/bump/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/checkout/bill/route'),
+    import('@/app/api/restaurant/checkout/tender/route'),
   ]);
   const [
     open,
@@ -244,6 +248,8 @@ beforeAll(async () => {
     bump,
     establish,
     unlock,
+    bill,
+    tender,
   ] = routeModules as RouteModule[];
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -266,6 +272,8 @@ beforeAll(async () => {
       bump,
       establish,
       unlock,
+      bill,
+      tender,
     },
   };
 
@@ -295,12 +303,33 @@ beforeAll(async () => {
         businessDayCutoff: '04:00',
       },
     });
-    for (const [id, displayName, pin] of [
-      [ids.operatorA, 'Operator A', PIN],
-      [ids.managerA, 'Manager A', MANAGER_PIN],
+    // Operator A settles bills through the M5 checkout routes, which gate on
+    // `payments:collect` (the M4 order routes do not); grant it via the standard
+    // user + organization-role linkage. Manager A stays a bare profile.
+    await tx.organizationRole.create({
+      data: {
+        id: ids.settleRole,
+        key: `wha49_settle_${suffix}`,
+        name: 'WHA-49 Settlement',
+        permissions: { create: [{ capability: 'payments:collect', effect: 'ALLOW' }] },
+      },
+    });
+    await tx.user.create({
+      data: {
+        id: ids.operatorAUser,
+        name: 'Operator A',
+        email: `operator_a_${suffix}@test.local`,
+        department: 'LEADERSHIP',
+        title: 'Operator',
+        organizationRoleId: ids.settleRole,
+      },
+    });
+    for (const [id, displayName, pin, userId] of [
+      [ids.operatorA, 'Operator A', PIN, ids.operatorAUser],
+      [ids.managerA, 'Manager A', MANAGER_PIN, undefined],
     ] as const) {
       await tx.restaurantStaffProfile.create({
-        data: { id, displayName, status: 'ACTIVE' },
+        data: { id, displayName, status: 'ACTIVE', ...(userId ? { userId } : {}) },
       });
       await tx.restaurantOperatorCredential.create({
         data: {
@@ -441,6 +470,20 @@ describeIfDatabase('WHA-49 M4 restaurant acceptance (real DB/routes)', () => {
       'item.advanced',
     ]);
     expect((await orderState(orderId))?.status).toBe('SERVED');
+
+    // M5-L2 settlement guard (C12): settle the served order — cut a bill and tender it to
+    // full coverage through the real checkout routes — before the terminal close. The
+    // money commands append no order events, so the single close below still walks
+    // SERVED → PAYMENT_PENDING → CLOSED in one shot, emitting both order events.
+    const billed = await postPos('bill', { orderId, split: { kind: 'NONE' } });
+    expect(billed.status).toBe(200);
+    const settleBillId = (billed.json.billIds as string[])[0];
+    const tendered = await postPos('tender', {
+      billId: settleBillId,
+      tender: { type: 'CARD', amount: '12.50' },
+    });
+    expect(tendered.status).toBe(200);
+    expect(tendered.json.settled).toBe(true);
 
     expect((await postPos('close', { orderId })).status).toBe(200);
     await expectLedger(orderId, [
