@@ -127,7 +127,12 @@ describe('tender reads (C12)', () => {
   });
 
   it('passes branch/businessDate/billId/type filters to the query', async () => {
-    await caller().listTenders({ branchId: 'b1', businessDate: '2026-08-19', billId: 'bill_1', type: 'CARD' });
+    await caller().listTenders({
+      branchId: 'b1',
+      businessDate: '2026-08-19',
+      billId: 'bill_1',
+      type: 'CARD',
+    });
     const where = mocks.tenderFindMany.mock.calls[0][0].where;
     expect(where.bill).toEqual({ branchId: 'b1' });
     expect(where.billId).toBe('bill_1');
@@ -199,10 +204,24 @@ describe('getPayment (full event trail, C12)', () => {
         },
       ],
       tenders: [
-        { id: 't1', type: 'CARD', amount: D('12.50'), tipAmount: D('2.00'), businessDate: new Date('2026-08-19T00:00:00.000Z'), createdAt: new Date() },
+        {
+          id: 't1',
+          type: 'CARD',
+          amount: D('12.50'),
+          tipAmount: D('2.00'),
+          businessDate: new Date('2026-08-19T00:00:00.000Z'),
+          createdAt: new Date(),
+        },
       ],
       refunds: [
-        { id: 'r1', kind: 'REFUND', amount: D('12.50'), tipRefundAmount: D('0.00'), businessDate: new Date('2026-08-19T00:00:00.000Z'), createdAt: new Date() },
+        {
+          id: 'r1',
+          kind: 'REFUND',
+          amount: D('12.50'),
+          tipRefundAmount: D('0.00'),
+          businessDate: new Date('2026-08-19T00:00:00.000Z'),
+          createdAt: new Date(),
+        },
       ],
     });
     const result = await caller().getPayment({ paymentId: 'pay_1' });
@@ -218,7 +237,9 @@ describe('getPayment (full event trail, C12)', () => {
 
   it('throws NOT_FOUND for a missing payment', async () => {
     mocks.paymentFindUnique.mockResolvedValue(null);
-    await expect(caller().getPayment({ paymentId: 'nope' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(caller().getPayment({ paymentId: 'nope' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
   });
 });
 
@@ -230,10 +251,18 @@ describe('getTenderTypeTotals (per-date summary, C12)', () => {
       { type: 'CARD', amount: D('30.00'), tipAmount: D('4.00') },
       { type: 'CARD', amount: D('0.05'), tipAmount: D('0.01') },
     ]);
-    const result = await caller().getTenderTypeTotals({ branchId: 'b1', businessDate: '2026-08-19' });
+    const result = await caller().getTenderTypeTotals({
+      branchId: 'b1',
+      businessDate: '2026-08-19',
+    });
     expect(result.tenderTypes.map((t) => t.tenderType)).toEqual(['CASH', 'CARD', 'OTHER']);
     expect(result.tenderTypes[0]).toMatchObject({ tenderType: 'CASH', amount: '19.75', count: 2 });
-    expect(result.tenderTypes[1]).toMatchObject({ tenderType: 'CARD', amount: '30.05', tipAmount: '4.01', count: 2 });
+    expect(result.tenderTypes[1]).toMatchObject({
+      tenderType: 'CARD',
+      amount: '30.05',
+      tipAmount: '4.01',
+      count: 2,
+    });
     expect(result.tenderTypes[2]).toMatchObject({ tenderType: 'OTHER', amount: '0', count: 0 });
     expect(result.totals).toMatchObject({ amount: '49.8', tipAmount: '4.01', count: 4 });
   });

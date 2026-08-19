@@ -71,7 +71,9 @@ describe('MOCK conformance — all six capabilities', () => {
       expect(outcome.approved).toBe(true);
       expect(outcome.status).toBe(status);
       expect(outcome.declineCode).toBeNull();
-      expect(outcome.providerRef).toMatch(new RegExp(`^mock_${capability.toLowerCase()}_[0-9a-f]{20}$`));
+      expect(outcome.providerRef).toMatch(
+        new RegExp(`^mock_${capability.toLowerCase()}_[0-9a-f]{20}$`)
+      );
       expect(outcome.event.capability).toBe(capability);
       expect(outcome.event.eventType).toBe(`${capability}_APPROVED`);
       expect(outcome.event.amount?.toString()).toBe('20');
@@ -80,7 +82,11 @@ describe('MOCK conformance — all six capabilities', () => {
   }
 
   it('AUTH → CAPTURE is a distinct two-step path against the prior reference', () => {
-    const auth = MOCK_PROVIDER.execute({ capability: 'AUTH', amount: '48.00', operationRef: 'seed_ac' });
+    const auth = MOCK_PROVIDER.execute({
+      capability: 'AUTH',
+      amount: '48.00',
+      operationRef: 'seed_ac',
+    });
     expect(auth.status).toBe('AUTHORIZED');
     const capture = MOCK_PROVIDER.execute({
       capability: 'CAPTURE',
@@ -116,27 +122,42 @@ describe('MOCK conformance — all six capabilities', () => {
 
 describe('MOCK — deterministic references and scriptable declines', () => {
   it('produces byte-identical references for identical inputs and different ones otherwise', () => {
-    const a = MOCK_PROVIDER.execute({ capability: 'SALE', amount: '20.00', operationRef: 'stable' });
-    const b = MOCK_PROVIDER.execute({ capability: 'SALE', amount: '20.00', operationRef: 'stable' });
+    const a = MOCK_PROVIDER.execute({
+      capability: 'SALE',
+      amount: '20.00',
+      operationRef: 'stable',
+    });
+    const b = MOCK_PROVIDER.execute({
+      capability: 'SALE',
+      amount: '20.00',
+      operationRef: 'stable',
+    });
     const c = MOCK_PROVIDER.execute({ capability: 'SALE', amount: '20.00', operationRef: 'other' });
     expect(a.providerRef).toBe(b.providerRef);
     expect(a.providerRef).not.toBe(c.providerRef);
   });
 
   it('declines a SALE/AUTH on a designated decline amount, with a normalized code + event', () => {
-    const declined = MOCK_PROVIDER.execute({ capability: 'SALE', amount: '10.13', operationRef: 'd' });
+    const declined = MOCK_PROVIDER.execute({
+      capability: 'SALE',
+      amount: '10.13',
+      operationRef: 'd',
+    });
     expect(declined.approved).toBe(false);
     expect(declined.status).toBe('DECLINED');
     expect(declined.declineCode).toBe('GENERIC_DECLINE');
     expect(declined.event.eventType).toBe('SALE_DECLINED');
-    expect(declined.event.payload).toMatchObject({ approved: false, declineCode: 'GENERIC_DECLINE' });
+    expect(declined.event.payload).toMatchObject({
+      approved: false,
+      declineCode: 'GENERIC_DECLINE',
+    });
 
-    expect(MOCK_PROVIDER.execute({ capability: 'AUTH', amount: '5.51', operationRef: 'd' }).declineCode).toBe(
-      'INSUFFICIENT_FUNDS'
-    );
-    expect(MOCK_PROVIDER.execute({ capability: 'SALE', amount: '99.54', operationRef: 'd' }).declineCode).toBe(
-      'EXPIRED_CARD'
-    );
+    expect(
+      MOCK_PROVIDER.execute({ capability: 'AUTH', amount: '5.51', operationRef: 'd' }).declineCode
+    ).toBe('INSUFFICIENT_FUNDS');
+    expect(
+      MOCK_PROVIDER.execute({ capability: 'SALE', amount: '99.54', operationRef: 'd' }).declineCode
+    ).toBe('EXPIRED_CARD');
   });
 
   it('never declines a post-authorization operation on a designated amount', () => {
@@ -153,7 +174,11 @@ describe('MOCK — deterministic references and scriptable declines', () => {
   });
 
   it('carries no cardholder data on its event payloads', () => {
-    const outcome = MOCK_PROVIDER.execute({ capability: 'SALE', amount: '20.00', operationRef: 's' });
+    const outcome = MOCK_PROVIDER.execute({
+      capability: 'SALE',
+      amount: '20.00',
+      operationRef: 's',
+    });
     const keys = Object.keys(outcome.event.payload).map((k) => k.toLowerCase());
     for (const forbidden of ['pan', 'cardnumber', 'cvv', 'cvc', 'track', 'pin']) {
       expect(keys).not.toContain(forbidden);
@@ -290,7 +315,12 @@ beforeAll(async () => {
       data: { id: ids.section, menuId: ids.menu, name: 'Food' },
     });
     await tx.restaurantMenuItem.create({
-      data: { id: ids.menuItem, sectionId: ids.section, productId: ids.product, displayName: 'Burger' },
+      data: {
+        id: ids.menuItem,
+        sectionId: ids.section,
+        productId: ids.product,
+        displayName: 'Burger',
+      },
     });
     await tx.restaurantPriceList.create({
       data: { id: ids.priceList, name: 'Default', isDefault: true },
@@ -341,7 +371,13 @@ describeIfDatabase('appendPaymentEvent (append-only trail, real DB)', () => {
     const event = await read((tx) =>
       tx.restaurantPaymentEvent.findUnique({
         where: { id: eventId },
-        select: { paymentId: true, capability: true, eventType: true, amount: true, providerRef: true },
+        select: {
+          paymentId: true,
+          capability: true,
+          eventType: true,
+          amount: true,
+          providerRef: true,
+        },
       })
     );
     expect(event?.paymentId).toBe(paymentId);

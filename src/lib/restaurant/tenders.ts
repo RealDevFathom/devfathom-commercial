@@ -139,7 +139,10 @@ type PersistedTender = {
  * Apply one tender to a bill and, when coverage is reached, settle it + allocate its
  * receipt — atomically and idempotently. See the module doc for the full contract.
  */
-export async function applyTender(db: ScopedDb, input: ApplyTenderInput): Promise<ApplyTenderResult> {
+export async function applyTender(
+  db: ScopedDb,
+  input: ApplyTenderInput
+): Promise<ApplyTenderResult> {
   const at = input.now ?? new Date();
   const commandType = `tender.${input.tender.type.toLowerCase()}`;
   return runMoneyTransaction(db, async (tx) => {
@@ -182,7 +185,7 @@ export async function applyTender(db: ScopedDb, input: ApplyTenderInput): Promis
       );
     }
 
-    const persisted = await persistTender(tx, bill, input, amount, at);
+    const persisted = await persistTender(tx, bill, input, amount);
 
     const nowTendered = add(alreadyTendered, amount);
     const remainingDue = sub(bill.grandTotal, nowTendered);
@@ -222,8 +225,7 @@ function persistTender(
   tx: ScopedDb,
   bill: BillForTender,
   input: ApplyTenderInput,
-  amount: Prisma.Decimal,
-  at: Date
+  amount: Prisma.Decimal
 ): Promise<PersistedTender> {
   switch (input.tender.type) {
     case 'CASH':

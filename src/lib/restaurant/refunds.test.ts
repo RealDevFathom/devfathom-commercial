@@ -84,7 +84,11 @@ async function openBill(count: number): Promise<string> {
     now: AT,
   });
   for (let i = 0; i < count; i += 1) {
-    await deps.orders.addItem(db, { orderId: opened.orderId, menuItemId: ids.menuItem, actor: actor() });
+    await deps.orders.addItem(db, {
+      orderId: opened.orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(),
+    });
   }
   const cut = await deps.bills.cutBills(db, {
     orderId: opened.orderId,
@@ -95,7 +99,9 @@ async function openBill(count: number): Promise<string> {
 }
 
 /** Settle a single-item (12.50) bill with a card tender and return the tender id. */
-async function cardTender(tip = '0.00'): Promise<{ billId: string; tenderId: string; paymentId: string }> {
+async function cardTender(
+  tip = '0.00'
+): Promise<{ billId: string; tenderId: string; paymentId: string }> {
   const billId = await openBill(1);
   const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
     billId,
@@ -181,9 +187,16 @@ beforeAll(async () => {
     });
     await tx.restaurantBrand.create({ data: { id: ids.brand, name: 'Acme' } });
     await tx.restaurantMenu.create({ data: { id: ids.menu, brandId: ids.brand, name: 'All Day' } });
-    await tx.restaurantMenuSection.create({ data: { id: ids.section, menuId: ids.menu, name: 'Food' } });
+    await tx.restaurantMenuSection.create({
+      data: { id: ids.section, menuId: ids.menu, name: 'Food' },
+    });
     await tx.restaurantMenuItem.create({
-      data: { id: ids.menuItem, sectionId: ids.section, productId: ids.product, displayName: 'Burger' },
+      data: {
+        id: ids.menuItem,
+        sectionId: ids.section,
+        productId: ids.product,
+        displayName: 'Burger',
+      },
     });
     await tx.restaurantPriceList.create({
       data: { id: ids.priceList, name: 'Default', isDefault: true },
@@ -257,7 +270,10 @@ describeIfDatabase('card refunds (real DB)', () => {
 
     // Σ refunds equals the tender exactly; a further refund is capped out.
     const agg = await read((tx) =>
-      tx.restaurantRefund.aggregate({ where: { originalTenderId: tenderId }, _sum: { amount: true } })
+      tx.restaurantRefund.aggregate({
+        where: { originalTenderId: tenderId },
+        _sum: { amount: true },
+      })
     );
     expect(agg._sum.amount?.toString()).toBe('12.5');
     await expect(
@@ -363,7 +379,10 @@ describeIfDatabase('cash refunds + co-authorization (real DB)', () => {
     const { tenderId } = await cashTender(device);
     // Close the drawer, then a cash refund cannot post a movement.
     const openSession = await read((tx) =>
-      tx.restaurantDrawerSession.findFirst({ where: { deviceId: device, status: 'OPEN' }, select: { id: true } })
+      tx.restaurantDrawerSession.findFirst({
+        where: { deviceId: device, status: 'OPEN' },
+        select: { id: true },
+      })
     );
     await deps.drawer.closeDrawerSession(deps.createTenantDb(orgId), {
       drawerSessionId: openSession!.id,

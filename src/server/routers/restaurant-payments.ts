@@ -235,7 +235,14 @@ async function getPayment(db: ScopedDb, paymentId: string) {
       },
       tenders: {
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { id: true, type: true, amount: true, tipAmount: true, businessDate: true, createdAt: true },
+        select: {
+          id: true,
+          type: true,
+          amount: true,
+          tipAmount: true,
+          businessDate: true,
+          createdAt: true,
+        },
       },
       refunds: {
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -298,15 +305,25 @@ type TenderTypeName = z.infer<typeof TENDER_TYPE>;
 /** Fixed order so the console summary is deterministic regardless of what tendered. */
 const TENDER_TYPE_ORDER: readonly TenderTypeName[] = ['CASH', 'CARD', 'OTHER'];
 
-async function getTenderTypeTotals(db: ScopedDb, input: { branchId: string; businessDate: string }) {
+async function getTenderTypeTotals(
+  db: ScopedDb,
+  input: { branchId: string; businessDate: string }
+) {
   const rows = await db.restaurantTender.findMany({
-    where: { bill: { branchId: input.branchId }, businessDate: businessDateToUtcDate(input.businessDate) },
+    where: {
+      bill: { branchId: input.branchId },
+      businessDate: businessDateToUtcDate(input.businessDate),
+    },
     select: { type: true, amount: true, tipAmount: true },
   });
 
   // Fold each type with the exact Decimal path (C2) — never a float sum.
-  const byType = new Map<TenderTypeName, { amount: Prisma.Decimal; tipAmount: Prisma.Decimal; count: number }>();
-  for (const type of TENDER_TYPE_ORDER) byType.set(type, { amount: ZERO, tipAmount: ZERO, count: 0 });
+  const byType = new Map<
+    TenderTypeName,
+    { amount: Prisma.Decimal; tipAmount: Prisma.Decimal; count: number }
+  >();
+  for (const type of TENDER_TYPE_ORDER)
+    byType.set(type, { amount: ZERO, tipAmount: ZERO, count: 0 });
   let grandAmount = ZERO;
   let grandTip = ZERO;
   for (const row of rows) {

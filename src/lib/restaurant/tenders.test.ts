@@ -74,7 +74,9 @@ async function newDevice(label: string): Promise<string> {
 
 /** Open an order with `count` burger items and cut one NONE bill; return its id +
  * grand total (12.50 per item). */
-async function openBill(count: number): Promise<{ orderId: string; billId: string; grandTotal: string }> {
+async function openBill(
+  count: number
+): Promise<{ orderId: string; billId: string; grandTotal: string }> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
     branchId: ids.branch,
@@ -98,7 +100,11 @@ async function openBill(count: number): Promise<{ orderId: string; billId: strin
   const bill = await read((tx) =>
     tx.restaurantBill.findUnique({ where: { id: cut.billIds[0]! }, select: { grandTotal: true } })
   );
-  return { orderId: opened.orderId, billId: cut.billIds[0]!, grandTotal: bill!.grandTotal.toString() };
+  return {
+    orderId: opened.orderId,
+    billId: cut.billIds[0]!,
+    grandTotal: bill!.grandTotal.toString(),
+  };
 }
 
 async function openDrawer(device = deviceId): Promise<string> {
@@ -167,7 +173,12 @@ beforeAll(async () => {
       data: { id: ids.section, menuId: ids.menu, name: 'Food' },
     });
     await tx.restaurantMenuItem.create({
-      data: { id: ids.menuItem, sectionId: ids.section, productId: ids.product, displayName: 'Burger' },
+      data: {
+        id: ids.menuItem,
+        sectionId: ids.section,
+        productId: ids.product,
+        displayName: 'Burger',
+      },
     });
     await tx.restaurantPriceList.create({
       data: { id: ids.priceList, name: 'Default', isDefault: true },
@@ -216,7 +227,13 @@ describeIfDatabase('cash tenders (real DB)', () => {
     const tender = await read((tx) =>
       tx.restaurantTender.findUnique({
         where: { id: result.tenderId },
-        select: { type: true, amount: true, cashReceived: true, changeGiven: true, drawerSessionId: true },
+        select: {
+          type: true,
+          amount: true,
+          cashReceived: true,
+          changeGiven: true,
+          drawerSessionId: true,
+        },
       })
     );
     expect(tender).toMatchObject({ type: 'CASH', drawerSessionId: drawerId });
@@ -234,7 +251,10 @@ describeIfDatabase('cash tenders (real DB)', () => {
     expect(movements[0]!.amount.toString()).toBe('12.5');
 
     const bill = await read((tx) =>
-      tx.restaurantBill.findUnique({ where: { id: billId }, select: { status: true, receiptNumber: true } })
+      tx.restaurantBill.findUnique({
+        where: { id: billId },
+        select: { status: true, receiptNumber: true },
+      })
     );
     expect(bill?.status).toBe('SETTLED');
     expect(bill?.receiptNumber).toBe(result.receiptNumber);
@@ -332,7 +352,10 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
     expect(counts).toEqual({ tenders: 0, payments: 0, events: 0 });
 
     const bill = await read((tx) =>
-      tx.restaurantBill.findUnique({ where: { id: billId }, select: { status: true, receiptNumber: true } })
+      tx.restaurantBill.findUnique({
+        where: { id: billId },
+        select: { status: true, receiptNumber: true },
+      })
     );
     expect(bill?.status).toBe('OPEN');
     expect(bill?.receiptNumber).toBeNull();
@@ -406,13 +429,18 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     const rejected = results.filter((r) => r.status === 'rejected');
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ reason: 'BILL_NOT_OPEN' });
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      reason: 'BILL_NOT_OPEN',
+    });
 
     // Exactly one tender and one receipt survived.
     const tenderCount = await read((tx) => tx.restaurantTender.count({ where: { billId } }));
     expect(tenderCount).toBe(1);
     const bill = await read((tx) =>
-      tx.restaurantBill.findUnique({ where: { id: billId }, select: { status: true, receiptNumber: true } })
+      tx.restaurantBill.findUnique({
+        where: { id: billId },
+        select: { status: true, receiptNumber: true },
+      })
     );
     expect(bill?.status).toBe('SETTLED');
     expect(bill?.receiptNumber).toBeGreaterThan(0);

@@ -119,7 +119,10 @@ function requireReason(reason: string | null | undefined): string {
 /**
  * Refund (or reverse) an original tender. See the module doc for the full contract.
  */
-export async function refundTender(db: ScopedDb, input: RefundTenderInput): Promise<RefundTenderResult> {
+export async function refundTender(
+  db: ScopedDb,
+  input: RefundTenderInput
+): Promise<RefundTenderResult> {
   const at = input.now ?? new Date();
   const kind: RefundKind = input.kind ?? 'REFUND';
   return runMoneyTransaction(db, async (tx) => {
@@ -131,7 +134,8 @@ export async function refundTender(db: ScopedDb, input: RefundTenderInput): Prom
     if (isZero(amount) || isNegative(amount)) {
       throw new RefundError('A refund amount must be positive.', 'INVALID_AMOUNT');
     }
-    const tipRefundAmount = input.tipRefundAmount === undefined ? ZERO : money(input.tipRefundAmount);
+    const tipRefundAmount =
+      input.tipRefundAmount === undefined ? ZERO : money(input.tipRefundAmount);
     if (isNegative(tipRefundAmount)) {
       throw new RefundError('A tip refund must not be negative.', 'INVALID_AMOUNT');
     }
@@ -198,7 +202,8 @@ export async function refundTender(db: ScopedDb, input: RefundTenderInput): Prom
     });
 
     // Resolve the channel-specific attachment (open cash drawer / card payment).
-    const drawerSessionId = tender.type === 'CASH' ? await requireOpenDrawer(tx, input.actor) : null;
+    const drawerSessionId =
+      tender.type === 'CASH' ? await requireOpenDrawer(tx, input.actor) : null;
     const paymentId = tender.type === 'CARD' ? tender.paymentId : null;
     if (tender.type === 'CARD' && !paymentId) {
       throw new RefundError('The card tender has no payment to refund.', 'PAYMENT_NOT_FOUND');
