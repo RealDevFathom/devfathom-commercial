@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { KdsBoard } from './kds-board';
 
+type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
+type ItemDisplayStatus = TicketDisplayStatus | 'SERVED';
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -10,11 +13,33 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function ticket(
-  ticketNumber: number,
-  name: string,
-  displayStatus: 'NEW' | 'COOKING' | 'READY' | 'RECALLED'
-) {
+function ticket(ticketNumber: number, name: string, displayStatus: TicketDisplayStatus) {
+  const items: Array<{
+    orderItemId: string;
+    name: string;
+    course: number;
+    seatNumber: number;
+    quantity: number;
+    itemStatus: string;
+    displayStatus: ItemDisplayStatus;
+  }> = [
+    {
+      orderItemId: `item-${ticketNumber}`,
+      name,
+      course: 1,
+      seatNumber: ticketNumber,
+      quantity: 1,
+      itemStatus:
+        displayStatus === 'NEW'
+          ? 'QUEUED'
+          : displayStatus === 'READY'
+            ? 'PREPARED'
+            : displayStatus === 'RECALLED'
+              ? 'REMAKE_REQUESTED'
+              : 'FIRING',
+      displayStatus,
+    },
+  ];
   return {
     ticketId: `ticket-${ticketNumber}`,
     ticketNumber,
@@ -22,24 +47,7 @@ function ticket(
     orderNumber: 40 + ticketNumber,
     createdAt: '2026-08-19T08:00:00.000Z',
     displayStatus,
-    items: [
-      {
-        orderItemId: `item-${ticketNumber}`,
-        name,
-        course: 1,
-        seatNumber: ticketNumber,
-        quantity: 1,
-        itemStatus:
-          displayStatus === 'NEW'
-            ? 'QUEUED'
-            : displayStatus === 'READY'
-              ? 'PREPARED'
-              : displayStatus === 'RECALLED'
-                ? 'REMAKE_REQUESTED'
-                : 'FIRING',
-        displayStatus,
-      },
-    ],
+    items,
   };
 }
 
@@ -188,5 +196,28 @@ describe('KdsBoard transport', () => {
       screen.getByText('Device authorization failed. Reconnect with valid KDS credentials.')
     ).toBeVisible();
     expect(screen.queryByText('top-secret-value')).not.toBeInTheDocument();
+  });
+
+  it('renders a served sibling without offering another action', async () => {
+    vi.useFakeTimers();
+    const mixedTicket = ticket(4, 'New pasta', 'NEW');
+    mixedTicket.items.push({
+      orderItemId: 'served-item',
+      name: 'Served salad',
+      course: 1,
+      seatNumber: 4,
+      quantity: 1,
+      itemStatus: 'SERVED',
+      displayStatus: 'SERVED',
+    });
+    const fetchImplementation: typeof globalThis.fetch = async () => json(queue([mixedTicket]));
+    vi.stubGlobal('fetch', vi.fn(fetchImplementation));
+
+    render(<KdsBoard />);
+    await connect();
+
+    expect(screen.getByText('Served salad')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Start New pasta for order 44' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Served salad/ })).not.toBeInTheDocument();
   });
 });

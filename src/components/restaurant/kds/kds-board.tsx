@@ -11,7 +11,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
-type DisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
+type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
+type ItemDisplayStatus = 'HELD' | TicketDisplayStatus | 'SERVED' | 'VOIDED';
 type Runtime = { deviceSecret: string; operatorStaffProfileId: string };
 type QueueItem = {
   orderItemId: string;
@@ -20,7 +21,7 @@ type QueueItem = {
   seatNumber: number | null;
   quantity: number;
   itemStatus: string;
-  displayStatus: DisplayStatus;
+  displayStatus: ItemDisplayStatus;
 };
 type QueueTicket = {
   ticketId: string;
@@ -28,7 +29,7 @@ type QueueTicket = {
   orderId: string;
   orderNumber: number;
   createdAt: string;
-  displayStatus: DisplayStatus;
+  displayStatus: TicketDisplayStatus;
   items: QueueItem[];
 };
 type QueuePayload = {
@@ -43,18 +44,23 @@ type QueuePayload = {
 type NoticeState = { tone: StatusTone; message: string };
 
 const LANES = ['NEW', 'COOKING', 'READY', 'RECALLED'] as const;
-const LANE_TONES: Record<DisplayStatus, StatusTone> = {
+const DISPLAY_TONES: Record<ItemDisplayStatus, StatusTone> = {
+  HELD: 'neutral',
   NEW: 'info',
   COOKING: 'warning',
   READY: 'success',
   RECALLED: 'danger',
+  SERVED: 'success',
+  VOIDED: 'danger',
 };
-const ACTIONS = {
+const ACTIONS: Partial<
+  Record<ItemDisplayStatus, { path: 'ack' | 'bump' | 'recall'; label: string; success: string }>
+> = {
   NEW: { path: 'ack', label: 'Start', success: 'Item started.' },
   COOKING: { path: 'bump', label: 'Mark ready', success: 'Item marked ready.' },
   READY: { path: 'recall', label: 'Recall', success: 'Item recalled.' },
   RECALLED: { path: 'bump', label: 'Mark ready', success: 'Recalled item marked ready.' },
-} as const;
+};
 const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: 'numeric',
   minute: '2-digit',
@@ -217,6 +223,7 @@ export function KdsBoard() {
   async function mutate(item: QueueItem) {
     if (!runtime || pendingMutation.current) return;
     const action = ACTIONS[item.displayStatus];
+    if (!action) return;
     const intent = `${action.path}:${item.orderItemId}`;
     pendingMutation.current = true;
     setPending(intent);
@@ -395,7 +402,7 @@ export function KdsBoard() {
                     title={lane}
                     className="min-w-0 p-4"
                     actions={
-                      <StatusPill status={lane} tone={LANE_TONES[lane]} label={tickets.length} />
+                      <StatusPill status={lane} tone={DISPLAY_TONES[lane]} label={tickets.length} />
                     }
                   >
                     {tickets.length === 0 ? (
@@ -473,20 +480,22 @@ function TicketCard({
                 </div>
                 <StatusPill
                   status={item.displayStatus}
-                  tone={LANE_TONES[item.displayStatus]}
+                  tone={DISPLAY_TONES[item.displayStatus]}
                   className="shrink-0"
                 />
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="min-h-11 w-full"
-                disabled={pending}
-                aria-label={`${action.label} ${item.name} for order ${ticket.orderNumber}`}
-                onClick={() => onAction(item)}
-              >
-                {action.label}
-              </Button>
+              {action ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 w-full"
+                  disabled={pending}
+                  aria-label={`${action.label} ${item.name} for order ${ticket.orderNumber}`}
+                  onClick={() => onAction(item)}
+                >
+                  {action.label}
+                </Button>
+              ) : null}
             </div>
           );
         })}
