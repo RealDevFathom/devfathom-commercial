@@ -38,6 +38,7 @@ export const ALL_ACTIONS = [
   // second-merged lane realigns — same adjacency rule as the other coordinated files).
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
   'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
+  'money:read', // restaurant M5-L1: back-office money reads (bills/tenders/refunds/drawers/close) — org-role driven
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -106,4 +107,13 @@ export const POLICIES: Record<Action, Policy[]> = {
   'floor:manage': [],
   'orders:read': [],
   'orders:manage': [],
+
+  // Restaurant M5-L1: back-office money reads (bills/splits/comps, tenders +
+  // refunds with payment event trails, drawer-session review, daily-close
+  // review). Granted through an organization role/override carrying `money:read`
+  // (or `*`), evaluated by the DB `customDecision` path in `can()`; no static
+  // agency-role policy, so a subject without an explicit grant is denied by
+  // default. Terminal money mutations gate on the existing pos/payments/cash
+  // capabilities, not on this back-office read action (C11).
+  'money:read': [],
 };

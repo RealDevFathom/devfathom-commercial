@@ -40,6 +40,25 @@ const M4_TABLES = [
   'restaurant_server_section_assignments',
 ] as const;
 
+// M5 (money: bills, tenders, payments, refunds, drawers, daily close, receipt
+// numbering, money idempotency) tables. Flat allowlist alongside the earlier
+// sets so the table-pinning probe fails deliberately whenever the restaurant
+// schema grows without review (directive 7).
+const M5_TABLES = [
+  'restaurant_bills',
+  'restaurant_bill_lines',
+  'restaurant_payments',
+  'restaurant_payment_events',
+  'restaurant_tenders',
+  'restaurant_refunds',
+  'restaurant_drawer_sessions',
+  'restaurant_drawer_movements',
+  'restaurant_daily_closes',
+  'restaurant_daily_close_tender_totals',
+  'restaurant_receipt_number_sequences',
+  'restaurant_money_idempotency_keys',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -358,7 +377,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ORDER BY table_name`
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual(
-      [...BASE_RESTAURANT_TABLES, ...M3_TABLES, ...M4_TABLES].sort()
+      [...BASE_RESTAURANT_TABLES, ...M3_TABLES, ...M4_TABLES, ...M5_TABLES].sort()
     );
 
     expect(await readM3Columns()).toEqual(M3_COLUMNS);
