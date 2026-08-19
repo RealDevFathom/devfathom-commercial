@@ -556,7 +556,10 @@ export default async function PurchasingPage({
               <TableBody>
                 {loaded.orders.length ? (
                   loaded.orders.map((order) => (
-                    <TableRow key={order.id}>
+                    <TableRow
+                      data-state={order.id === loaded.selectedOrder?.id ? 'selected' : undefined}
+                      key={order.id}
+                    >
                       <TableCell className="font-mono text-xs">
                         {order.reference || order.id}
                       </TableCell>
@@ -566,10 +569,11 @@ export default async function PurchasingPage({
                       </TableCell>
                       <TableCell className="text-right">
                         <Link
+                          aria-current={order.id === loaded.selectedOrder?.id ? 'true' : undefined}
                           className={buttonVariants({ variant: 'secondary', size: 'sm' })}
                           href={`${route}?selected=${order.id}`}
                         >
-                          Review
+                          {order.id === loaded.selectedOrder?.id ? 'Selected' : 'Review'}
                         </Link>
                       </TableCell>
                     </TableRow>
