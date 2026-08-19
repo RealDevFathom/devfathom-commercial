@@ -937,7 +937,51 @@ inserts, then `SET LOCAL ROLE`s to a self-made NOLOGIN role for the isolation pr
   **zero M5-authored files are format-dirty.** Studio visual-QA matrix (§12.7) is an L7a/L7b lane deliverable,
   not independently re-run by VE.
 
-**Consolidated verdict: FAIL** on exactly one criterion (AC1) — a single NEW, precisely-scoped test failure
-whose fix is a test-only reconciliation of `tests/restaurant-m4-acceptance.test.ts` to the documented M5-L2
-settle-then-close flow. AC2–AC13 all PASS. Correction routes through the CoS to the owning lane; one VE
-recheck follows the correction pass.
+**Consolidated verdict (first pass): FAIL** on exactly one criterion (AC1) — a single NEW, precisely-scoped
+test failure whose fix is a test-only reconciliation of `tests/restaurant-m4-acceptance.test.ts` to the
+documented M5-L2 settle-then-close flow. AC2–AC13 all PASS. Correction routes through the CoS to the owning
+lane; one VE recheck follows the correction pass.
+
+### Recheck after the correction pass (WHA-65, tip `9d62f6a`)
+
+**Correction landed:** child issue **WHA-65** reconciled the sole failing test — `tests/restaurant-m4-acceptance.test.ts`
+@ `9d62f6a` — with a **test-only** change (no `src/**`, no schema, no `orders.ts`; delta from `da0b383` is
+exactly this file + this doc). The fix is a genuine reconciliation, not a weakening: between `markServed` and
+the terminal close it now SETTLES the served order through the real checkout routes (cut a `{ kind: NONE }`
+bill via `POST /checkout/bill`, then `POST /checkout/tender` a CARD tender to full coverage), granting
+`operatorA` `payments:collect` via a real `User` + `OrganizationRole` link (the money routes gate on it; the
+M4 order routes do not). The `expectLedger` assertion is PRESERVED and STRENGTHENED — it still asserts the
+full chain ending `… order.payment_pending → order.closed` (the money commands append no order events, so the
+single close still walks `SERVED → PAYMENT_PENDING → CLOSED` in one shot), matching the intended/documented
+M5-L2 guard (C12 note above). VE modified no `src/**` or `tests/**` — this doc is the only write.
+
+**Fresh evidence (re-reproduced at `9d62f6a`, same 0-skip recipe):**
+- **Full suite** (fresh unprivileged `devfathom_test`-owned DB, `TEST_DATABASE_URL` = that role) =
+  **1 failed | 1749 passed | 0 skipped** (138 files: 137 passed, 1 failed). The single failure is the
+  sanctioned baseline `src/lib/tenancy/explicit-host.test.ts`; the previously-NEW `restaurant-m4-acceptance`
+  failure is resolved (1748 → 1749 passed, 2 → 1 failed). **Zero NEW failures vs baseline `1|1534|0`.**
+- **RLS:** all 12 M5 tables `relrowsecurity=t AND relforcerowsecurity=t` (pg_class); `test:rls`
+  (`verify-tenant-isolation.ts`, privileged seed URL) GREEN — explicitly confirms restaurant-money
+  bill/line/payment/event/tender/refund/drawer/close/receipt-sequence isolation **+ DB-enforced append-only
+  ledgers (UPDATE/DELETE denied even to the owner)**; the 6 append-only ledgers carry SELECT+INSERT policies
+  ONLY (pg_policies).
+- **Migration/governance:** `migrate diff` shows no `restaurant_` drift; `tests/restaurant-m3-governance.test.ts`
+  `M5_TABLES` allowlist = exactly the 12 shipped tables.
+- **Money discipline / PCI:** no `toBeCloseTo` on any money path (the only matches are comments asserting its
+  absence); no float money arithmetic (`Number(`/`.toNumber()` hits are integer-cent, business-date, or
+  version-count, never money values — money math is `Prisma.Decimal` via `money.ts`); information_schema probe
+  finds NO PAN/CVV/CVC/track/card-number/expiry column on any `restaurant_%` table.
+- **Read contract:** neither console tree (`src/components/restaurant/pos/**` + `(terminal)/pos`, L7a;
+  `src/components/restaurant/money/**`, L7b) issues any direct `prisma`/`withTenantDb`/`@/lib/db` query — they
+  consume only their named server-lane reads.
+- **Code quality:** `typecheck` exit 0, `lint` exit 0, `build` exit 0. (`format:check` note unchanged: the
+  pre-existing dirty files are disjoint from the M5 change set — environmental drift, zero M5-authored files
+  format-dirty.)
+
+**Per-AC after recheck:** **AC1 — PASS** (was FAIL); **AC2–AC13 — PASS** (unchanged — the correction delta
+touches no `src/**`, schema, money path, governance allowlist, or read contract). AC5/AC10 carry the same
+documented nits (both PASS).
+
+**Final consolidated verdict: PASS.** All 13 acceptance criteria met at milestone tip `9d62f6a`; the single
+remaining suite failure is the sanctioned explicit-host baseline. The correction pass (WHA-65) is complete and
+independently re-verified. M5 rollup verification closed.
