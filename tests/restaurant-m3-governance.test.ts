@@ -18,6 +18,28 @@ const BASE_RESTAURANT_TABLES = [
   'restaurant_co_authorizations',
 ] as const;
 
+// M4 (orders, kitchen, floor) tables. Kept as a flat allowlist alongside the base set so the
+// table-pinning probe fails deliberately whenever the restaurant schema grows without review.
+const M4_TABLES = [
+  'restaurant_orders',
+  'restaurant_order_items',
+  'restaurant_order_item_modifiers',
+  'restaurant_order_tables',
+  'restaurant_order_events',
+  'restaurant_order_idempotency_keys',
+  'restaurant_order_number_sequences',
+  'restaurant_event_outbox',
+  'restaurant_kitchen_tickets',
+  'restaurant_kitchen_ticket_items',
+  'restaurant_kitchen_stations',
+  'restaurant_station_routing_rules',
+  'restaurant_floors',
+  'restaurant_tables',
+  'restaurant_server_sections',
+  'restaurant_server_section_tables',
+  'restaurant_server_section_assignments',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -336,7 +358,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ORDER BY table_name`
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual(
-      [...BASE_RESTAURANT_TABLES, ...M3_TABLES].sort()
+      [...BASE_RESTAURANT_TABLES, ...M3_TABLES, ...M4_TABLES].sort()
     );
 
     expect(await readM3Columns()).toEqual(M3_COLUMNS);
