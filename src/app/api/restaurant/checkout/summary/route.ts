@@ -19,7 +19,10 @@ export const GET = moneyReadRoute({
   run: async (ctx, request) => {
     const parsed = query.safeParse(Object.fromEntries(new URL(request.url).searchParams));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'A non-empty orderId query is required.' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'A non-empty orderId query is required.' },
+        { status: 400 }
+      );
     }
     const summary = await getOrderSettlementForBranch(
       ctx.db,

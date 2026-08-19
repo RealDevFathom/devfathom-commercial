@@ -102,9 +102,7 @@ const APPROVING = z
 /** How to split an order into bills (mirrors `bills.ts` `SplitSpec`). */
 const SPLIT = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('NONE') }).strict(),
-  z
-    .object({ kind: z.literal('BY_ITEM'), groups: z.array(z.array(ID).min(1)).min(1) })
-    .strict(),
+  z.object({ kind: z.literal('BY_ITEM'), groups: z.array(z.array(ID).min(1)).min(1) }).strict(),
   z.object({ kind: z.literal('BY_SEAT') }).strict(),
   z
     .object({ kind: z.literal('FRACTIONAL'), weights: z.array(z.number().positive()).min(1) })
@@ -117,7 +115,10 @@ export const billBody = z
     split: SPLIT,
     /** Present only when re-cutting an order that already has live bills: the reason and
      * the co-authorizing manager for the void-and-recut (C4). */
-    recut: z.object({ reason: z.string().min(1), approving: APPROVING }).strict().optional(),
+    recut: z
+      .object({ reason: z.string().min(1), approving: APPROVING })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -169,9 +170,7 @@ export const drawerMovementBody = z
   })
   .strict();
 
-export const drawerCloseBody = z
-  .object({ drawerSessionId: ID, countedCash: MONEY })
-  .strict();
+export const drawerCloseBody = z.object({ drawerSessionId: ID, countedCash: MONEY }).strict();
 
 export const dayCloseBody = z.object({ businessDate: BUSINESS_DATE }).strict();
 
@@ -189,11 +188,7 @@ export const dayCorrectBody = z
 /** The five money capabilities a terminal route may gate on, plus the approver's
  * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
 export type MoneyCapability =
-  | 'payments:collect'
-  | 'payments:refund'
-  | 'cash:open'
-  | 'cash:adjust'
-  | 'cash:close';
+  'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
 
 /** Wildcard-aware capability match, identical to the ABAC engine's rule (`*`, an exact
  * match, or a `namespace:*` prefix). Kept local because the ABAC helper is private and
@@ -279,9 +274,17 @@ async function resolveApprover(
 ): Promise<{ ok: true; staffProfileId: string } | { ok: false; response: NextResponse }> {
   const auth = await authenticateApprover(ctx.db, ctx.device.id, approving, now);
   if (!auth.ok) return auth;
-  const canApprove = await operatorHasCapability(ctx.db, auth.staffProfileId, 'coauth:approve', now);
+  const canApprove = await operatorHasCapability(
+    ctx.db,
+    auth.staffProfileId,
+    'coauth:approve',
+    now
+  );
   if (!canApprove) {
-    return { ok: false, response: forbidden('The approving manager lacks the "coauth:approve" capability.') };
+    return {
+      ok: false,
+      response: forbidden('The approving manager lacks the "coauth:approve" capability.'),
+    };
   }
   return { ok: true, staffProfileId: auth.staffProfileId };
 }
@@ -299,7 +302,10 @@ const json = (body: unknown, status: number): NextResponse => NextResponse.json(
  */
 export function moneyErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof BillCommandError) {
-    const notFound = err.reason === 'ORDER_NOT_FOUND' || err.reason === 'BILL_NOT_FOUND' || err.reason === 'LINE_NOT_FOUND';
+    const notFound =
+      err.reason === 'ORDER_NOT_FOUND' ||
+      err.reason === 'BILL_NOT_FOUND' ||
+      err.reason === 'LINE_NOT_FOUND';
     const conflict =
       err.reason === 'ORDER_NOT_BILLABLE' ||
       err.reason === 'BILL_NOT_OPEN' ||
@@ -311,7 +317,9 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     if (err.reason === 'CARD_DECLINED') return json({ error: err.message }, 402);
     const notFound = err.reason === 'BILL_NOT_FOUND';
     const conflict =
-      err.reason === 'BILL_NOT_OPEN' || err.reason === 'OVER_TENDER' || err.reason === 'DRAWER_NOT_OPEN';
+      err.reason === 'BILL_NOT_OPEN' ||
+      err.reason === 'OVER_TENDER' ||
+      err.reason === 'DRAWER_NOT_OPEN';
     return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
   }
   if (err instanceof RefundError) {
@@ -325,7 +333,9 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
   }
   if (err instanceof DrawerSessionError) {
     const notFound =
-      err.reason === 'BRANCH_NOT_FOUND' || err.reason === 'DEVICE_NOT_FOUND' || err.reason === 'DRAWER_NOT_FOUND';
+      err.reason === 'BRANCH_NOT_FOUND' ||
+      err.reason === 'DEVICE_NOT_FOUND' ||
+      err.reason === 'DRAWER_NOT_FOUND';
     const conflict =
       err.reason === 'DRAWER_NOT_OPEN' ||
       err.reason === 'DRAWER_ALREADY_OPEN' ||
@@ -404,7 +414,9 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
     try {
       const out = await opts.run({ ctx, data: parsed.data, actor, now });
       if (out instanceof Response) return out;
-      return NextResponse.json(out as Record<string, unknown>, { status: opts.successStatus ?? 200 });
+      return NextResponse.json(out as Record<string, unknown>, {
+        status: opts.successStatus ?? 200,
+      });
     } catch (err) {
       const response = moneyErrorResponse(err);
       if (response) return response;
@@ -450,11 +462,7 @@ const money = (value: Prisma.Decimal): string => value.toString();
  * Mirrors the back-office `getOrderSettlement` serialisation (Decimals as strings, C2).
  * Returns null when the order is not in the device's branch (route → 404).
  */
-export async function getOrderSettlementForBranch(
-  db: ScopedDb,
-  orderId: string,
-  branchId: string
-) {
+export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string, branchId: string) {
   const order = await db.restaurantOrder.findFirst({
     where: { id: orderId, branchId },
     select: { id: true },
@@ -522,7 +530,14 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       },
       tenders: {
         orderBy: { createdAt: 'asc' },
-        select: { id: true, type: true, amount: true, tipAmount: true, changeGiven: true, createdAt: true },
+        select: {
+          id: true,
+          type: true,
+          amount: true,
+          tipAmount: true,
+          changeGiven: true,
+          createdAt: true,
+        },
       },
     },
   });
