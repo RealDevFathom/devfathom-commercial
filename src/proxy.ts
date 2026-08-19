@@ -11,6 +11,7 @@ const publicPaths = [
   '/sso',
   '/terminal',
   '/pos',
+  '/kds',
   '/api/auth',
   '/brand',
 ];
