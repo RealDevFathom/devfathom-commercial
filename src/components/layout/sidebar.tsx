@@ -150,6 +150,13 @@ const navigation: NavItem[] = [
     module: 'restaurant-pos',
   },
   {
+    label: 'Money',
+    href: '/restaurant/money',
+    icon: DollarSign,
+    group: 'Firm',
+    module: 'restaurant-pos',
+  },
+  {
     label: 'Reviews',
     href: '/reviews',
     icon: ClipboardList,

@@ -8,10 +8,19 @@ export default function RestaurantMoneyLoading() {
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Money"
-        description="Loading money ledgers…"
+        description="Loading bills, payments, drawers, and daily-close ledgers…"
       />
+      <SectionCard eyebrow="Money ledger" title="Filters">
+        <div className="grid gap-4 md:grid-cols-2">
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+        </div>
+      </SectionCard>
       <SectionCard title="Loading money ledgers…">
-        <Skeleton className="h-32 w-full" />
+        <div className="space-y-3">
+          <Skeleton className="h-11 w-full max-w-xl" />
+          <Skeleton className="h-56 w-full" />
+        </div>
       </SectionCard>
     </div>
   );
