@@ -844,3 +844,31 @@ correction lands on today and never mutates a prior day's immutable close. Cash 
 and write exactly one CASH_REFUND movement. · Conservative because it keeps corrections append-only and the
 daily close immutable while still allowing next-day returns. · Revisited if same-day partial voids or
 provider-side settlement batching are scoped.
+
+**C11 (terminal money capability gate resolves via the operator's linked-user org-role) (M5-L5)** · Every
+checkout + cash route gates the ACTING operator on its C11 capability — `payments:collect` (bill cut/split/
+re-cut, comp, tender, the settlement + receipt reads), `payments:refund` (refund), `cash:open` (drawer open),
+`cash:adjust` (drawer movement), `cash:close` (drawer close, day preview/close/correct) — and a co-authorized
+action (comp, re-cut, refund, close correction) additionally requires the APPROVING manager to carry
+`coauth:approve` on top of proving their own credential. No restaurant-operator capability store exists (a
+`RestaurantStaffProfile` has no role/capability column and none is added — C12 forbids pre-M5 schema changes,
+and `abac/policies.ts` + the schema are L1-only), so an operator's capabilities are resolved from its linked
+`User`'s effective org-role permissions + non-expired per-user overrides (default-DENY; no linked user ⇒
+denied; wildcard `*` / `namespace:*` honoured), the SAME store and rule the back-office `money:read` reads use
+(`operatorHasCapability` mirrors ABAC `customDecision`). **Downstream contract:** a money operator — and any
+co-auth approver — must therefore be a staff profile LINKED to a user whose org role grants the capability; a
+credential-only operator with no linked user is refused every money route. L7a/L6b seed money operators
+accordingly. · Conservative because it reuses the platform's only capability model (org-role-driven, symmetric
+with the back-office money reads) rather than inventing a parallel operator-capability table or touching the
+L1-only schema/ABAC registry. · Revisited if a first-class restaurant-operator role/capability assignment is
+scoped (an L1 schema seam) — `operatorHasCapability` is the single swap point.
+
+**C12 (register read surface — settlement summary + settled-bill receipt, capability-gated) (M5-L5)** · The
+read contract ships two device-scoped register reads on the L5 REST surface — `getOrderSettlementForBranch`
+(per-order bill/settlement state) and `buildReceiptForBranch` (the settled-bill receipt, DISPLAY DATA ONLY:
+branch/receipt-number, lines, totals, and each tender's amount/tip/change — never PAN/CVV/track data, C6) —
+plus the L3 `closePreview` for the day. All three are branch-scoped (a cross-branch or cross-tenant id is
+indistinguishable from 404) and require an acting operator + the sibling money capability, so financial display
+data is gated (unlike the ungated M4 order reads). · Conservative because financial reads are held to the
+checkout/close operator rather than any device session, and the receipt exposes no card data. · Revisited if a
+read-only floor/customer-display surface is scoped.
