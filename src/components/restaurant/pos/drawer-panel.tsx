@@ -5,6 +5,7 @@ import { type FormEvent, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -145,10 +146,16 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
 
   return (
     <Dialog>
-      <DialogTrigger render={<Button type="button" variant="outline" className="h-11" />} disabled={disabled}>
+      <DialogTrigger
+        render={<Button type="button" variant="outline" className="h-11" />}
+        disabled={disabled}
+      >
         Cash drawer
       </DialogTrigger>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
+      <DialogContent
+        showCloseButton={false}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl"
+      >
         <DialogHeader>
           <DialogTitle>Cash drawer</DialogTitle>
           <DialogDescription>
@@ -187,15 +194,11 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
               <dl className="mb-4 grid gap-2 text-sm sm:grid-cols-3">
                 <div>
                   <dt className="text-text-muted">Expected</dt>
-                  <dd className="font-mono tabular-nums text-text-strong">
-                    {closed.expectedCash}
-                  </dd>
+                  <dd className="font-mono tabular-nums text-text-strong">{closed.expectedCash}</dd>
                 </div>
                 <div>
                   <dt className="text-text-muted">Counted</dt>
-                  <dd className="font-mono tabular-nums text-text-strong">
-                    {closed.countedCash}
-                  </dd>
+                  <dd className="font-mono tabular-nums text-text-strong">{closed.countedCash}</dd>
                 </div>
                 <div>
                   <dt className="text-text-muted">Variance</dt>
@@ -299,7 +302,11 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
           </div>
         )}
 
-        <DialogFooter showCloseButton />
+        <DialogFooter>
+          <DialogClose render={<Button type="button" variant="outline" className="h-11" />}>
+            Close drawer panel
+          </DialogClose>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

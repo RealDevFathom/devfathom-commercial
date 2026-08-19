@@ -43,7 +43,12 @@ export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBil
     if (kind === 'BY_ITEM') {
       const parsed = groups
         .split('\n')
-        .map((group) => group.split(',').map((id) => id.trim()).filter(Boolean))
+        .map((group) =>
+          group
+            .split(',')
+            .map((id) => id.trim())
+            .filter(Boolean)
+        )
         .filter((group) => group.length > 0);
       const assigned = parsed.flat();
       if (
@@ -79,7 +84,10 @@ export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBil
 
   return (
     <Dialog open={open} onOpenChange={(next) => !pending && setOpen(next)}>
-      <DialogTrigger render={<Button type="button" variant="outline" className="h-11" />} disabled={disabled}>
+      <DialogTrigger
+        render={<Button type="button" variant="outline" className="h-11" />}
+        disabled={disabled}
+      >
         Split bill
       </DialogTrigger>
       <DialogContent showCloseButton={false} className="sm:max-w-lg">

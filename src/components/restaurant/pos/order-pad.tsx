@@ -2,7 +2,7 @@
 
 import { type FormEvent, type ReactNode, useCallback, useRef, useState } from 'react';
 
-import { CheckoutPanel, type TerminalRequest } from './checkout-panel';
+import { CheckoutPanel, type TerminalRequest, type TerminalRequestOptions } from './checkout-panel';
 import { DrawerPanel } from './drawer-panel';
 import { MenuGrid, type AddMenuItemInput, type EffectiveMenu } from './menu-grid';
 import { OrderTicketPanel, type OrderDetail, type VoidItemInput } from './order-ticket-panel';
@@ -136,12 +136,14 @@ export function OrderPad() {
   }
 
   const checkoutRequest = useCallback<TerminalRequest>(
-    async <T,>(path: string, options = {}): Promise<T> => {
+    async <T,>(path: string, options: TerminalRequestOptions = {}): Promise<T> => {
       if (!runtime || runtime.state !== 'UNLOCKED') {
         throw new RequestError(401, 'An unlocked terminal session is required.');
       }
       const mutation = options.method === 'POST';
-      const intent = options.intent ?? `${options.method ?? 'GET'}:${path}:${JSON.stringify(options.body ?? {})}`;
+      const intent =
+        options.intent ??
+        `${options.method ?? 'GET'}:${path}:${JSON.stringify(options.body ?? {})}`;
       let idempotencyKey: string | null = null;
       if (mutation) {
         idempotencyKey = idempotencyKeys.current.get(intent) ?? crypto.randomUUID();
@@ -431,13 +433,7 @@ export function OrderPad() {
       setCheckoutOrderId(activeOrder.id);
       return;
     }
-    if (
-      await mutate(
-        'close',
-        { orderId: activeOrder.id },
-        'Order ready for payment.'
-      )
-    ) {
+    if (await mutate('close', { orderId: activeOrder.id }, 'Order ready for payment.')) {
       setCheckoutOrderId(activeOrder.id);
     }
   }

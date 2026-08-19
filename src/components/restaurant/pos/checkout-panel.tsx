@@ -7,6 +7,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -15,7 +16,7 @@ import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
 import { ReceiptView } from './receipt-view';
 import { SplitBillDialog, type BillSplit } from './split-bill-dialog';
-import { TenderPad, type TenderResult } from './tender-pad';
+import { TenderPad } from './tender-pad';
 
 export type TerminalRequestOptions = {
   method?: 'GET' | 'POST';
@@ -23,10 +24,7 @@ export type TerminalRequestOptions = {
   intent?: string;
 };
 
-export type TerminalRequest = <T>(
-  path: string,
-  options?: TerminalRequestOptions
-) => Promise<T>;
+export type TerminalRequest = <T>(path: string, options?: TerminalRequestOptions) => Promise<T>;
 
 type CheckoutSummary = {
   orderId: string;
@@ -54,7 +52,10 @@ type CheckoutPanelProps = {
 
 function errorDetails(error: unknown) {
   const status =
-    typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
+    typeof error === 'object' &&
+    error !== null &&
+    'status' in error &&
+    typeof error.status === 'number'
       ? error.status
       : null;
   const message = error instanceof Error ? error.message : 'Checkout request failed.';
@@ -73,10 +74,20 @@ function billTone(status: string): StatusTone {
 
 export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanelProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const fetchSummary = useCallback(
+    () =>
+      orderId
+        ? request<CheckoutSummary>(
+            `/api/restaurant/checkout/summary?orderId=${encodeURIComponent(orderId)}`
+          )
+        : Promise.reject(new Error('An order is required for checkout.')),
+    [orderId, request]
+  );
 
   const loadSummary = useCallback(async () => {
     if (!open || !orderId) return;
@@ -84,11 +95,7 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
     setPermissionDenied(false);
     setError(null);
     try {
-      setSummary(
-        await request<CheckoutSummary>(
-          `/api/restaurant/checkout/summary?orderId=${encodeURIComponent(orderId)}`
-        )
-      );
+      setSummary(await fetchSummary());
     } catch (requestError) {
       const details = errorDetails(requestError);
       setSummary(null);
@@ -97,11 +104,32 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
     } finally {
       setLoading(false);
     }
-  }, [open, orderId, request]);
+  }, [fetchSummary, open, orderId]);
 
   useEffect(() => {
-    void loadSummary();
-  }, [loadSummary]);
+    if (!open || !orderId) return;
+    let active = true;
+    void fetchSummary()
+      .then((next) => {
+        if (!active) return;
+        setSummary(next);
+        setPermissionDenied(false);
+        setError(null);
+      })
+      .catch((requestError: unknown) => {
+        if (!active) return;
+        const details = errorDetails(requestError);
+        setSummary(null);
+        setPermissionDenied(details.status === 403);
+        setError(details.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [fetchSummary, open, orderId]);
 
   async function cut(split: { kind: 'NONE' } | BillSplit) {
     if (!orderId || busy) return false;
@@ -126,18 +154,28 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
     }
   }
 
-  async function tenderApplied(_result: TenderResult) {
+  async function tenderApplied() {
     await loadSummary();
+  }
+
+  function closePanel() {
+    setSummary(null);
+    setError(null);
+    setLoading(true);
+    onClose();
   }
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next && !busy) onClose();
+        if (!next && !busy) closePanel();
       }}
     >
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-4xl">
+      <DialogContent
+        showCloseButton={false}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-4xl"
+      >
         <DialogHeader>
           <DialogTitle>Collect payment</DialogTitle>
           <DialogDescription>
@@ -161,7 +199,12 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
               <p role="alert" className="text-sm text-destructive">
                 {error}
               </p>
-              <Button type="button" variant="outline" onClick={() => void loadSummary()} className="h-11">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void loadSummary()}
+                className="h-11"
+              >
                 Retry checkout
               </Button>
             </div>
@@ -245,7 +288,11 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
               <SectionCard
                 key={bill.id}
                 eyebrow={`Bill ${index + 1}`}
-                title={bill.receiptNumber ? `Receipt ${bill.receiptNumber}` : bill.splitKind.replaceAll('_', ' ')}
+                title={
+                  bill.receiptNumber
+                    ? `Receipt ${bill.receiptNumber}`
+                    : bill.splitKind.replaceAll('_', ' ')
+                }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >
                 <dl className="mb-4 grid gap-3 sm:grid-cols-2">
@@ -281,6 +328,17 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
             ))}
           </div>
         ) : null}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={closePanel}
+            disabled={busy}
+            className="h-11"
+          >
+            Close checkout
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

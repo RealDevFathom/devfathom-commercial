@@ -1,11 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  CheckoutPanel,
-  type TerminalRequest,
-  type TerminalRequestOptions,
-} from './checkout-panel';
+import { CheckoutPanel, type TerminalRequest, type TerminalRequestOptions } from './checkout-panel';
 
 const unbilled = {
   orderId: 'order-1',
@@ -47,9 +43,7 @@ describe('CheckoutPanel', () => {
       return {} as T;
     };
 
-    render(
-      <CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />
-    );
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
     expect(await screen.findByRole('button', { name: 'Cut single bill' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Cut single bill' }));
 
@@ -69,12 +63,10 @@ describe('CheckoutPanel', () => {
     const denied = Object.assign(new Error('Missing payments:collect capability.'), {
       status: 403,
     });
-    const request: TerminalRequest = async <T,>() => {
+    const request: TerminalRequest = async () => {
       throw denied;
     };
-    render(
-      <CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />
-    );
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
     expect(await screen.findByText('Payment access denied')).toBeVisible();
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -86,9 +78,7 @@ describe('CheckoutPanel', () => {
   it('renders an empty checkout without inventing payment actions', async () => {
     const request: TerminalRequest = async <T,>() =>
       ({ ...unbilled, blocker: null, unbilledItemIds: [] }) as T;
-    render(
-      <CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />
-    );
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
     expect(await screen.findByText('Nothing to collect')).toBeVisible();
     await waitFor(() =>

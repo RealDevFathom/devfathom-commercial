@@ -54,26 +54,44 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const fetchReceipt = useCallback(
+    () => request<Receipt>(`/api/restaurant/checkout/receipt?billId=${encodeURIComponent(billId)}`),
+    [billId, request]
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setReceipt(
-        await request<Receipt>(
-          `/api/restaurant/checkout/receipt?billId=${encodeURIComponent(billId)}`
-        )
-      );
+      setReceipt(await fetchReceipt());
     } catch (requestError) {
       setReceipt(null);
       setError(message(requestError));
     } finally {
       setLoading(false);
     }
-  }, [billId, request]);
+  }, [fetchReceipt]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+    void fetchReceipt()
+      .then((next) => {
+        if (!active) return;
+        setReceipt(next);
+        setError(null);
+      })
+      .catch((requestError: unknown) => {
+        if (!active) return;
+        setReceipt(null);
+        setError(message(requestError));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [fetchReceipt]);
 
   if (loading) {
     return <p className="text-sm text-text-muted">Loading settled receipt…</p>;
@@ -149,17 +167,13 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
             {tender.tipAmount !== '0' && tender.tipAmount !== '0.00' ? (
               <>
                 <span className="text-text-muted">Tip</span>
-                <span className="font-mono tabular-nums text-text-muted">
-                  {tender.tipAmount}
-                </span>
+                <span className="font-mono tabular-nums text-text-muted">{tender.tipAmount}</span>
               </>
             ) : null}
             {tender.changeGiven !== null ? (
               <>
                 <span className="text-text-muted">Change</span>
-                <span className="font-mono tabular-nums text-text-muted">
-                  {tender.changeGiven}
-                </span>
+                <span className="font-mono tabular-nums text-text-muted">{tender.changeGiven}</span>
               </>
             ) : null}
           </div>

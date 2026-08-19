@@ -97,7 +97,10 @@ function transport({
     }
     if (path.includes('/orders/detail')) {
       await detailGate;
-      return json({ ...detailResponse, status: closed ? 'PAYMENT_PENDING' : detailResponse.status });
+      return json({
+        ...detailResponse,
+        status: closed ? 'PAYMENT_PENDING' : detailResponse.status,
+      });
     }
     if (path.endsWith('/orders/open')) {
       openAttempts += 1;

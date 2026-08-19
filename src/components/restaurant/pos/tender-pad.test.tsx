@@ -25,14 +25,7 @@ describe('TenderPad', () => {
     };
     const onApplied = vi.fn();
 
-    render(
-      <TenderPad
-        billId="bill-1"
-        amountDue="10.00"
-        request={request}
-        onApplied={onApplied}
-      />
-    );
+    render(<TenderPad billId="bill-1" amountDue="10.00" request={request} onApplied={onApplied} />);
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '8.00' } });
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '20.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
@@ -57,14 +50,7 @@ describe('TenderPad', () => {
 
   it('blocks malformed decimal strings before request', () => {
     const request = vi.fn();
-    render(
-      <TenderPad
-        billId="bill-1"
-        amountDue="10.00"
-        request={request}
-        onApplied={vi.fn()}
-      />
-    );
+    render(<TenderPad billId="bill-1" amountDue="10.00" request={request} onApplied={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10.001' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
 
