@@ -473,54 +473,6 @@ it, and the QSR pay-before-fulfilment policy flag is present but off until an ac
 policy enables it. · Revisited by the payments milestone that wires settlement and may enable
 pay-before-fulfilment for accepted QSR service modes.
 
-**§4 (table occupancy) — derived from active order-table links, no status column (M4-L3)** · A
-table's occupancy is DERIVED — occupied iff it has one or more active `RestaurantOrderTable` links
-(`listFloors` in `src/lib/restaurant/floor.ts`) — never stored as an occupancy column. · Conservative
-because it keeps one source of truth in the seating links the order layer maintains (C3 spirit) and
-avoids a second status to keep in sync. · Revisited by a feature needing richer table lifecycle
-states (reserved/dirty/held) beyond occupied/free.
-
-**§4 (deactivate-not-delete once referenced) — floors/tables/sections/stations (M4-L3)** · A floor
-or table with order-table history, a section referenced by orders, or a station referenced by
-kitchen tickets is deactivated (`active = false`), not hard-deleted; delete is refused with a domain
-error that steers to deactivate. · Conservative because the history FKs cascade (order-table links)
-or restrict (kitchen tickets), so a hard delete would erase history or fail; deactivation preserves
-the order/ledger trail. · Revisited by an admin purge tool that archives dependent history first.
-
-**§8 (`floor:manage` grant) — Owner `*` until wired onto manager templates (M4-L3)** · The floor-
-config capability `floor:manage` is a new ABAC action (`src/lib/abac/policies.ts`, org-role-driven,
-no static policy). It is granted today only via the Owner `*` wildcard (or an explicit role/override
-grant); it is NOT yet on the GM/branch-manager templates in the L1-owned `src/lib/vertical-catalog.ts`.
-· Conservative because template capability wiring is an L1-owned file-lane decision out of L3's
-scope, and the Owner grant keeps the surface reachable and testable now. · Revisited by the
-capability-matrix pass that adds `floor:manage` to the manager role templates.
-
-**C10 (floor reads gate on `orders:read`) — coordinated ABAC action shared with L2 (M4-L3)** ·
-`listFloors`/`listSections`/`listStations` gate on `orders:read`, not `floor:manage` — the floor plan
-is read by any order-reading operator (POS/KDS consoles), not only floor managers. `orders:read` is a
-coordinated additive `ALL_ACTIONS` entry (L2 owns it; L3 declared it too so the lane compiles and
-tests standalone; the supervisor dedups at merge). · Conservative because it matches the read-consumer
-model and keeps the coordinated-file dedup a supervisor step. · Revisited if a finer floor-read
-capability is introduced.
-
-**§11.2 (section staffing branch match) — via staff `primaryBranchId` (M4-L3)** · A server may be
-assigned to a section only when the staff profile is ACTIVE and its `primaryBranchId` equals the
-section's branch. "Branch-assigned" is read from the staff profile's primary branch — staff profiles
-are not necessarily Users, so the user↔branch `RestaurantBranchAssignment` table does not apply. ·
-Conservative because `primaryBranchId` is the staff-profile-level branch pin that exists today, and
-it enforces same-branch staffing without inventing a new staff-to-branch table. · Revisited by a
-multi-branch staff assignment model.
-
-**§4 (kitchen station default) — auto-default first; promotion transfers; delete of default refused
-(M4-L3)** · A branch's first kitchen station is auto-marked default; promoting another transfers the
-default (clearing the incumbent in the same transaction); deactivating the current default is
-refused. "At most one default per branch" is a partial unique index and the P2002 a concurrent
-promotion loses surfaces as `DEFAULT_CONFLICT`. Routing-rule re-targeting is delete + create
-(`updateRoutingRule` edits only `priority`). · Conservative because routing falls through to the
-default, so a branch with stations always has exactly one and never an unrouteable gap, and a single
-XOR-validation path is simpler. · Revisited by per-station-group defaults or in-place rule
-re-targeting.
-
 **§11.1 / D14 (order & item command vocabulary — provisional) — send fires the whole order, fireCourse
 fires one course, both print KOTs (M4-L2)** · The concrete command/transition set is the interim
 authority pending D14's ADR (`order-state-machine.ts` owns the edges; `orders.ts` owns the commands):
@@ -589,6 +541,54 @@ link (`unlinkedAt` stamped) and creates a `MOVE` link; `mergeTables` adds `MERGE
 links under one order); `unlinkTable` deactivates. Combining two OPEN orders into one order is deferred.
 · Conservative because it models seat/move/merge from the link-history table without a cross-order
 merge, which needs an ownership-transfer design. · Revisited by the check-splitting/merging milestone.
+
+**§4 (table occupancy) — derived from active order-table links, no status column (M4-L3)** · A
+table's occupancy is DERIVED — occupied iff it has one or more active `RestaurantOrderTable` links
+(`listFloors` in `src/lib/restaurant/floor.ts`) — never stored as an occupancy column. · Conservative
+because it keeps one source of truth in the seating links the order layer maintains (C3 spirit) and
+avoids a second status to keep in sync. · Revisited by a feature needing richer table lifecycle
+states (reserved/dirty/held) beyond occupied/free.
+
+**§4 (deactivate-not-delete once referenced) — floors/tables/sections/stations (M4-L3)** · A floor
+or table with order-table history, a section referenced by orders, or a station referenced by
+kitchen tickets is deactivated (`active = false`), not hard-deleted; delete is refused with a domain
+error that steers to deactivate. · Conservative because the history FKs cascade (order-table links)
+or restrict (kitchen tickets), so a hard delete would erase history or fail; deactivation preserves
+the order/ledger trail. · Revisited by an admin purge tool that archives dependent history first.
+
+**§8 (`floor:manage` grant) — Owner `*` until wired onto manager templates (M4-L3)** · The floor-
+config capability `floor:manage` is a new ABAC action (`src/lib/abac/policies.ts`, org-role-driven,
+no static policy). It is granted today only via the Owner `*` wildcard (or an explicit role/override
+grant); it is NOT yet on the GM/branch-manager templates in the L1-owned `src/lib/vertical-catalog.ts`.
+· Conservative because template capability wiring is an L1-owned file-lane decision out of L3's
+scope, and the Owner grant keeps the surface reachable and testable now. · Revisited by the
+capability-matrix pass that adds `floor:manage` to the manager role templates.
+
+**C10 (floor reads gate on `orders:read`) — coordinated ABAC action shared with L2 (M4-L3)** ·
+`listFloors`/`listSections`/`listStations` gate on `orders:read`, not `floor:manage` — the floor plan
+is read by any order-reading operator (POS/KDS consoles), not only floor managers. `orders:read` is a
+coordinated additive `ALL_ACTIONS` entry (L2 owns it; L3 declared it too so the lane compiles and
+tests standalone; the supervisor dedups at merge). · Conservative because it matches the read-consumer
+model and keeps the coordinated-file dedup a supervisor step. · Revisited if a finer floor-read
+capability is introduced.
+
+**§11.2 (section staffing branch match) — via staff `primaryBranchId` (M4-L3)** · A server may be
+assigned to a section only when the staff profile is ACTIVE and its `primaryBranchId` equals the
+section's branch. "Branch-assigned" is read from the staff profile's primary branch — staff profiles
+are not necessarily Users, so the user↔branch `RestaurantBranchAssignment` table does not apply. ·
+Conservative because `primaryBranchId` is the staff-profile-level branch pin that exists today, and
+it enforces same-branch staffing without inventing a new staff-to-branch table. · Revisited by a
+multi-branch staff assignment model.
+
+**§4 (kitchen station default) — auto-default first; promotion transfers; delete of default refused
+(M4-L3)** · A branch's first kitchen station is auto-marked default; promoting another transfers the
+default (clearing the incumbent in the same transaction); deactivating the current default is
+refused. "At most one default per branch" is a partial unique index and the P2002 a concurrent
+promotion loses surfaces as `DEFAULT_CONFLICT`. Routing-rule re-targeting is delete + create
+(`updateRoutingRule` edits only `priority`). · Conservative because routing falls through to the
+default, so a branch with stations always has exactly one and never an unrouteable gap, and a single
+XOR-validation path is simpler. · Revisited by per-station-group defaults or in-place rule
+re-targeting.
 
 **C7/C8 (terminal + KDS command transport) — Idempotency-Key header; thin routes over L2 (M4-L4)** ·
 The POS-terminal order routes (`src/app/api/restaurant/orders/*`) run under M2 `withTerminalAuth` and the
