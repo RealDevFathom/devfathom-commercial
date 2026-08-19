@@ -2247,22 +2247,26 @@ model RestaurantBranch {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  assignments          RestaurantBranchAssignment[]
+  assignments            RestaurantBranchAssignment[]
   // M2-L1: staff pinned to this branch as their primary, and devices registered
   // to this branch. Both are org-scoped and branch-scoped seams (§4.1/D12).
-  staffProfiles        RestaurantStaffProfile[]          @relation("RestaurantStaffPrimaryBranch")
-  registeredDevices    RestaurantRegisteredDevice[]
+  staffProfiles          RestaurantStaffProfile[]          @relation("RestaurantStaffPrimaryBranch")
+  registeredDevices      RestaurantRegisteredDevice[]
   // M3-L1: branch-menu publications binding this branch to a brand-owned menu
   // (§6.3). Publications are the only branch-linked catalog surface (C2); the
   // canonical catalog itself carries no branchId.
-  menuPublications     RestaurantBranchMenuPublication[]
+  menuPublications       RestaurantBranchMenuPublication[]
   // M4-L1: floor/service, section, kitchen-station, order, and number-sequence
   // aggregates hanging off the branch (all org-scoped under forced RLS, C1).
-  floors               RestaurantFloor[]
-  serverSections       RestaurantServerSection[]
-  kitchenStations      RestaurantKitchenStation[]
-  orders               RestaurantOrder[]
-  orderNumberSequences RestaurantOrderNumberSequence[]
+  floors                 RestaurantFloor[]
+  serverSections         RestaurantServerSection[]
+  kitchenStations        RestaurantKitchenStation[]
+  orders                 RestaurantOrder[]
+  orderNumberSequences   RestaurantOrderNumberSequence[]
+  bills                  RestaurantBill[]
+  drawerSessions         RestaurantDrawerSession[]
+  dailyCloses            RestaurantDailyClose[]
+  receiptNumberSequences RestaurantReceiptNumberSequence[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
@@ -2351,6 +2355,13 @@ model RestaurantStaffProfile {
   ordersOpened       RestaurantOrder[]                   @relation("OrderOpeningStaff")
   ordersServed       RestaurantOrder[]                   @relation("OrderServerStaff")
   actedOrderEvents   RestaurantOrderEvent[]              @relation("OrderEventActorStaff")
+  billsOpened        RestaurantBill[]
+  payments           RestaurantPayment[]
+  tenders            RestaurantTender[]
+  refunds            RestaurantRefund[]
+  drawerSessions     RestaurantDrawerSession[]
+  drawerMovements    RestaurantDrawerMovement[]
+  dailyClosesCut     RestaurantDailyClose[]
 
   @@index([organizationId])
   @@index([userId])
@@ -2411,16 +2422,24 @@ model RestaurantRegisteredDevice {
   createdAt        DateTime                         @default(now())
   updatedAt        DateTime                         @updatedAt
 
-  branch           RestaurantBranch                @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  station          RestaurantKitchenStation?       @relation(fields: [stationId], references: [id], onDelete: SetNull)
-  credentials      RestaurantOperatorCredential[]
-  terminalSessions RestaurantTerminalSession[]
-  coAuthorizations RestaurantCoAuthorization[]
+  branch               RestaurantBranch                @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  station              RestaurantKitchenStation?       @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  credentials          RestaurantOperatorCredential[]
+  terminalSessions     RestaurantTerminalSession[]
+  coAuthorizations     RestaurantCoAuthorization[]
   // M4-L1: orders opened from this terminal, order events attributed to it, and
   // the device-scoped idempotency keys guarding its command replays (C7).
-  ordersOpened     RestaurantOrder[]               @relation("OrderOpeningDevice")
-  actedOrderEvents RestaurantOrderEvent[]          @relation("OrderEventActorDevice")
-  idempotencyKeys  RestaurantOrderIdempotencyKey[]
+  ordersOpened         RestaurantOrder[]               @relation("OrderOpeningDevice")
+  actedOrderEvents     RestaurantOrderEvent[]          @relation("OrderEventActorDevice")
+  idempotencyKeys      RestaurantOrderIdempotencyKey[]
+  bills                RestaurantBill[]
+  payments             RestaurantPayment[]
+  tenders              RestaurantTender[]
+  refunds              RestaurantRefund[]
+  drawerSessions       RestaurantDrawerSession[]
+  drawerMovements      RestaurantDrawerMovement[]
+  dailyCloses          RestaurantDailyClose[]
+  moneyIdempotencyKeys RestaurantMoneyIdempotencyKey[]
 
   @@index([organizationId])
   @@index([branchId])
@@ -2483,6 +2502,10 @@ model RestaurantCoAuthorization {
   approvingStaffProfile RestaurantStaffProfile      @relation("CoAuthApprovingStaff", fields: [approvingStaffProfileId], references: [id], onDelete: Restrict)
   device                RestaurantRegisteredDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
   terminalSession       RestaurantTerminalSession?  @relation(fields: [terminalSessionId], references: [id], onDelete: SetNull)
+  billVoids             RestaurantBill[]
+  billLineComps         RestaurantBillLine[]
+  refunds               RestaurantRefund[]
+  dailyCloses           RestaurantDailyClose[]
 
   @@index([organizationId])
   @@index([actingStaffProfileId])
@@ -3529,6 +3552,7 @@ model RestaurantOrder {
   orderTables      RestaurantOrderTable[]
   events           RestaurantOrderEvent[]
   kitchenTickets   RestaurantKitchenTicket[]
+  bills            RestaurantBill[]
 
   @@unique([branchId, businessDate, orderNumber])
   @@index([organizationId])
@@ -3579,6 +3603,7 @@ model RestaurantOrderItem {
   remakes     RestaurantOrderItem[]         @relation("OrderItemRemake")
   modifiers   RestaurantOrderItemModifier[]
   ticketItems RestaurantKitchenTicketItem[]
+  billLines   RestaurantBillLine[]
 
   @@index([organizationId])
   @@index([orderId])
@@ -3785,6 +3810,540 @@ model RestaurantOrderNumberSequence {
   @@index([organizationId])
   @@index([branchId])
   @@map("restaurant_order_number_sequences")
+}
+
+// ===========================================================================
+// M5-L1 — Money: bills & splits, tenders & tips, a capability-shaped MOCK
+// payment adapter, refunds, register drawer sessions, the immutable daily
+// close, and the receipt-number seam for the Restaurant vertical
+// (restaurant/m5-money).
+//
+// Additive and org-scoped. Every new table carries a bare, RLS-guarded
+// organizationId (defaulting from the transaction-local setting) and gets
+// forced org-level RLS with the exact clause used since M1-L1. No pre-M5 table
+// gains a column; the only edits to earlier models are virtual back-relation
+// fields (which emit no DDL), matching the M4 precedent.
+//
+// Binding design constraints (WHA-52 plan) realised here:
+//   C1  Forced org RLS on ALL 12 new tables.
+//   C2  Every monetary column is Decimal(12,2); ALL arithmetic goes through
+//       src/lib/restaurant/money.ts (no floats anywhere).
+//   C3  Append-only ledgers — restaurant_tenders, restaurant_payment_events,
+//       restaurant_refunds, restaurant_drawer_movements, restaurant_daily_closes,
+//       restaurant_daily_close_tender_totals — are DB-enforced append-only: the
+//       migration grants them SELECT+INSERT RLS policies ONLY (no UPDATE/DELETE
+//       policy ⇒ forced RLS denies mutation). These six models carry NO
+//       updatedAt. Corrections are NEW records referencing the original.
+//   C4  A bill belongs to exactly one order; split kinds NONE|BY_ITEM|BY_SEAT|
+//       FRACTIONAL; a comp nets a line to zero via compAmount while retaining the
+//       original snapshot price. Totals snapshot at bill-cut time.
+//   C5  tipAmount lives on tenders/refunds only, never merged into the
+//       (still-zero) service-charge snapshot; the close reports tipTotal and
+//       serviceChargeTotal separately.
+//   C10 Receipt numbers allocate from restaurant_receipt_number_sequences,
+//       unique (branchId, businessDate) — a seam SEPARATE from order numbers.
+//   C11 Money commands carry a device-scoped idempotency key in
+//       restaurant_money_idempotency_keys (unique (deviceId, key)); every money
+//       record carries operator (staffProfile) + device attribution.
+// ===========================================================================
+
+/// M5/C4: bill lifecycle. OPEN checks accept splits/comps/tenders; a bill flips
+/// to SETTLED (receipt allocated) once covered, or VOID (reason + co-auth). A
+/// financial amount is never rewritten after SETTLED — corrections are new
+/// records (C3).
+enum RestaurantBillStatus {
+  OPEN
+  SETTLED
+  VOID
+}
+
+/// M5/C4/§11.2: how an order's items/total are divided into bills. NONE = one
+/// bill for the whole order; BY_ITEM/BY_SEAT allocate whole non-voided items to
+/// bills (per-quantity fractioning deferred — BUILD-ASSUMPTIONS); FRACTIONAL
+/// divides the order total by integer fraction pairs via the money.ts
+/// largest-remainder allocation.
+enum RestaurantBillSplitKind {
+  NONE
+  BY_ITEM
+  BY_SEAT
+  FRACTIONAL
+}
+
+/// M5/§11.2: the settlement channel of a tender. CASH carries change + a drawer
+/// movement; CARD carries a payment (adapter) reference; OTHER is the seam for
+/// non-cash/non-card (gift/voucher/loyalty deferred).
+enum RestaurantTenderType {
+  CASH
+  CARD
+  OTHER
+}
+
+/// M5/C6: the payment adapter provider registry — MOCK only in M5 (no real PSP
+/// network I/O; D23 not built).
+enum RestaurantPaymentProvider {
+  MOCK
+}
+
+/// M5/C6: the capability set a provider declares and an operation exercises. The
+/// MOCK provider implements all six.
+enum RestaurantPaymentCapability {
+  SALE
+  AUTH
+  CAPTURE
+  ADJUST
+  VOID
+  REFUND
+}
+
+/// M5/C6: the normalized payment status the adapter maps every provider outcome
+/// onto. Transitions run through the command layer (C3); a settled amount is
+/// never rewritten.
+enum RestaurantPaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  VOIDED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  DECLINED
+  FAILED
+}
+
+/// M5/C7: a refund is a NEW record referencing the original tender. REFUND is a
+/// post-capture return; VOID_REVERSAL reverses an uncaptured/same-day full
+/// tender via the adapter VOID path.
+enum RestaurantRefundKind {
+  REFUND
+  VOID_REVERSAL
+}
+
+/// M5/C8: a register drawer session is OPEN (one per register) or CLOSED
+/// (counted cash + variance written once at close).
+enum RestaurantDrawerSessionStatus {
+  OPEN
+  CLOSED
+}
+
+/// M5/C8: the append-only drawer ledger kinds. expectedCash is DERIVED by
+/// folding these: opening float + cash sales − cash refunds + paid-ins −
+/// paid-outs − drops.
+enum RestaurantDrawerMovementKind {
+  OPENING_FLOAT
+  CASH_SALE
+  CASH_REFUND
+  PAID_IN
+  PAID_OUT
+  DROP
+  CLOSING_COUNT
+}
+
+/// M5/C4/§11.2: a bill (check) cut from exactly one order. Totals are SNAPSHOT
+/// columns frozen at bill-cut time from the order-item snapshots (tax/service
+/// charge carry through structurally at zero until the tax milestone; discounts
+/// are zero in M5). `splitKind` records how the order was divided;
+/// `fractionNumerator`/`fractionDenominator` are set only for FRACTIONAL bills.
+/// `roundingAdjustment` records this bill's share of the deterministic
+/// largest-remainder remainder so Σ(grandTotal) ≡ the order derived total
+/// exactly (C4). A settled bill receives its `receiptNumber` exactly once, from
+/// the separate receipt seam (C10); uniqueness lives on a partial unique
+/// (branchId, businessDate, receiptNumber) in the migration. Void records a
+/// reason + co-authorization (C4). Opener operator + device attribute the cut.
+model RestaurantBill {
+  id                    String                  @id @default(cuid())
+  organizationId        String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId               String
+  branchId              String
+  businessDate          DateTime                @db.Date
+  status                RestaurantBillStatus    @default(OPEN)
+  splitKind             RestaurantBillSplitKind @default(NONE)
+  fractionNumerator     Int?
+  fractionDenominator   Int?
+  subtotal              Decimal                 @default(0) @db.Decimal(12, 2)
+  taxTotal              Decimal                 @default(0) @db.Decimal(12, 2)
+  serviceChargeTotal    Decimal                 @default(0) @db.Decimal(12, 2)
+  compTotal             Decimal                 @default(0) @db.Decimal(12, 2)
+  roundingAdjustment    Decimal                 @default(0) @db.Decimal(12, 2)
+  grandTotal            Decimal                 @default(0) @db.Decimal(12, 2)
+  receiptNumber         Int?
+  settledAt             DateTime?
+  voidReason            String?
+  voidCoAuthorizationId String?
+  openerStaffProfileId  String
+  deviceId              String
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  order               RestaurantOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch              RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  openerStaff         RestaurantStaffProfile     @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
+  device              RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  voidCoAuthorization RestaurantCoAuthorization? @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
+  lines               RestaurantBillLine[]
+  payments            RestaurantPayment[]
+  tenders             RestaurantTender[]
+  refunds             RestaurantRefund[]
+
+  @@index([organizationId])
+  @@index([orderId])
+  @@index([branchId])
+  @@index([status])
+  @@index([businessDate])
+  @@map("restaurant_bills")
+}
+
+/// M5/C4: a bill line places ONE non-voided order item on ONE bill and SNAPSHOTS
+/// its charge (name, unitPrice, quantity, line totals; tax/service-charge carry
+/// through at zero). A comp retains the original `unitPrice`/`lineSubtotal` and
+/// records `compAmount` (bringing the effective `lineTotal` to zero) with a
+/// reason + co-authorization (C4). No DB unique on orderItemId: void-and-recut
+/// leaves old lines behind; the command layer (L2) asserts the one-bill-per-item
+/// partition across a bill set's OPEN bills.
+model RestaurantBillLine {
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  billId                String
+  orderItemId           String
+  name                  String
+  quantity              Int      @default(1)
+  unitPrice             Decimal  @db.Decimal(12, 2)
+  lineSubtotal          Decimal  @db.Decimal(12, 2)
+  taxAmount             Decimal  @default(0) @db.Decimal(12, 2)
+  serviceChargeAmount   Decimal  @default(0) @db.Decimal(12, 2)
+  compAmount            Decimal  @default(0) @db.Decimal(12, 2)
+  lineTotal             Decimal  @db.Decimal(12, 2)
+  compReason            String?
+  compCoAuthorizationId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  bill                RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  orderItem           RestaurantOrderItem        @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  compCoAuthorization RestaurantCoAuthorization? @relation(fields: [compCoAuthorizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([billId])
+  @@index([orderItemId])
+  @@map("restaurant_bill_lines")
+}
+
+/// M5/C6: the adapter-side payment record for a CARD tender. `provider` is MOCK;
+/// `capability` records which operation opened it; `status` is the normalized
+/// outcome (transitions via the command layer). `tipAmount` is DISTINCT from any
+/// service charge (C5). `providerRef` holds the provider's reference only — never
+/// PAN/CVV/track data (C6). The event trail is append-only.
+model RestaurantPayment {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  billId         String
+  provider       RestaurantPaymentProvider   @default(MOCK)
+  capability     RestaurantPaymentCapability
+  status         RestaurantPaymentStatus     @default(PENDING)
+  amount         Decimal                     @db.Decimal(12, 2)
+  tipAmount      Decimal                     @default(0) @db.Decimal(12, 2)
+  providerRef    String?
+  staffProfileId String
+  deviceId       String
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  bill    RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  staff   RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device  RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  events  RestaurantPaymentEvent[]
+  tenders RestaurantTender[]
+  refunds RestaurantRefund[]
+
+  @@index([organizationId])
+  @@index([billId])
+  @@index([status])
+  @@index([providerRef])
+  @@map("restaurant_payments")
+}
+
+/// M5/C3/C6: the APPEND-ONLY payment event trail. Every adapter operation appends
+/// one row (capability, eventType, optional amount, providerRef, sanitized
+/// payload — never PAN/CVV/track data). No updatedAt; DB-enforced append-only
+/// (SELECT+INSERT RLS only). Corrections are new events/records, never edits.
+model RestaurantPaymentEvent {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  paymentId      String
+  capability     RestaurantPaymentCapability
+  eventType      String
+  amount         Decimal?                    @db.Decimal(12, 2)
+  providerRef    String?
+  payload        Json
+  createdAt      DateTime                    @default(now())
+
+  payment RestaurantPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([paymentId])
+  @@map("restaurant_payment_events")
+}
+
+/// M5/C3/§11.2: an APPEND-ONLY tender applied to a bill. CASH carries
+/// `cashReceived`/`changeGiven` and a `drawerSessionId` (required-for-CASH at the
+/// command layer) with a paired CASH_SALE drawer movement in the SAME
+/// transaction; CARD carries a `paymentId` (required-for-CARD). `tipAmount` is
+/// recorded here, distinct from service charges (C5). No updatedAt; DB-enforced
+/// append-only. Business date + operator + device are stamped server-side.
+model RestaurantTender {
+  id              String               @id @default(cuid())
+  organizationId  String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  billId          String
+  type            RestaurantTenderType
+  amount          Decimal              @db.Decimal(12, 2)
+  tipAmount       Decimal              @default(0) @db.Decimal(12, 2)
+  cashReceived    Decimal?             @db.Decimal(12, 2)
+  changeGiven     Decimal?             @db.Decimal(12, 2)
+  drawerSessionId String?
+  paymentId       String?
+  businessDate    DateTime             @db.Date
+  staffProfileId  String
+  deviceId        String
+  createdAt       DateTime             @default(now())
+
+  bill            RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  drawerSession   RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment         RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff           RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device          RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  refunds         RestaurantRefund[]
+  drawerMovements RestaurantDrawerMovement[]
+
+  @@index([organizationId])
+  @@index([billId])
+  @@index([businessDate])
+  @@index([drawerSessionId])
+  @@index([paymentId])
+  @@index([type])
+  @@map("restaurant_tenders")
+}
+
+/// M5/C3/C7: an APPEND-ONLY refund referencing the original tender (and bill).
+/// Requires a reason + manager co-authorization; the command layer caps
+/// Σ(refunds) ≤ the tender amount. `businessDate` is the PROCESSING date — a
+/// cross-business-date correction posts to the current day and NEVER mutates a
+/// prior day's close (C7). Cash refunds carry a `drawerSessionId` + a CASH_REFUND
+/// movement; card refunds carry a `paymentId`. No updatedAt; DB-enforced
+/// append-only.
+model RestaurantRefund {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  originalTenderId  String
+  billId            String
+  amount            Decimal              @db.Decimal(12, 2)
+  tipRefundAmount   Decimal              @default(0) @db.Decimal(12, 2)
+  kind              RestaurantRefundKind
+  businessDate      DateTime             @db.Date
+  reason            String
+  coAuthorizationId String
+  drawerSessionId   String?
+  paymentId         String?
+  staffProfileId    String
+  deviceId          String
+  createdAt         DateTime             @default(now())
+
+  originalTender  RestaurantTender           @relation(fields: [originalTenderId], references: [id], onDelete: Cascade)
+  bill            RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  coAuthorization RestaurantCoAuthorization  @relation(fields: [coAuthorizationId], references: [id], onDelete: Restrict)
+  drawerSession   RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment         RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff           RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device          RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  drawerMovements RestaurantDrawerMovement[]
+
+  @@index([organizationId])
+  @@index([originalTenderId])
+  @@index([billId])
+  @@index([businessDate])
+  @@index([drawerSessionId])
+  @@index([paymentId])
+  @@map("restaurant_refunds")
+}
+
+/// M5/C8: a register(device) × operator × business-date drawer session. At most
+/// one OPEN session per register (partial unique in the migration). Opened with
+/// an opening float (and an OPENING_FLOAT movement); `expectedCash` is DERIVED by
+/// folding the movement ledger; close writes `countedCash`/`variance` once. This
+/// row legitimately transitions OPEN→CLOSED, so it keeps UPDATE (it is NOT one of
+/// the append-only ledgers) — but a settled/closed session's counts are written
+/// exactly once by the command layer.
+model RestaurantDrawerSession {
+  id             String                        @id @default(cuid())
+  organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  deviceId       String
+  staffProfileId String
+  businessDate   DateTime                      @db.Date
+  status         RestaurantDrawerSessionStatus @default(OPEN)
+  openedAt       DateTime                      @default(now())
+  closedAt       DateTime?
+  openingFloat   Decimal                       @db.Decimal(12, 2)
+  expectedCash   Decimal?                      @db.Decimal(12, 2)
+  countedCash    Decimal?                      @db.Decimal(12, 2)
+  variance       Decimal?                      @db.Decimal(12, 2)
+  createdAt      DateTime                      @default(now())
+  updatedAt      DateTime                      @updatedAt
+
+  branch    RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  device    RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  operator  RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  movements RestaurantDrawerMovement[]
+  tenders   RestaurantTender[]
+  refunds   RestaurantRefund[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([deviceId])
+  @@index([staffProfileId])
+  @@index([businessDate])
+  @@index([status])
+  @@map("restaurant_drawer_sessions")
+}
+
+/// M5/C3/C8: the APPEND-ONLY drawer ledger. Every cash event writes exactly one
+/// movement (OPENING_FLOAT/CASH_SALE/CASH_REFUND/PAID_IN/PAID_OUT/DROP/
+/// CLOSING_COUNT); paid-in/out require a reason (+ cash:adjust). `amount` is a
+/// non-negative magnitude — the fold in daily-close/drawer code applies the sign
+/// by `kind`. Optional `tenderId`/`refundId` link the movement to the money
+/// record that produced it. No updatedAt; DB-enforced append-only.
+model RestaurantDrawerMovement {
+  id              String                       @id @default(cuid())
+  organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  drawerSessionId String
+  kind            RestaurantDrawerMovementKind
+  amount          Decimal                      @db.Decimal(12, 2)
+  reason          String?
+  tenderId        String?
+  refundId        String?
+  staffProfileId  String
+  deviceId        String
+  createdAt       DateTime                     @default(now())
+
+  drawerSession RestaurantDrawerSession    @relation(fields: [drawerSessionId], references: [id], onDelete: Cascade)
+  tender        RestaurantTender?          @relation(fields: [tenderId], references: [id], onDelete: SetNull)
+  refund        RestaurantRefund?          @relation(fields: [refundId], references: [id], onDelete: SetNull)
+  staff         RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device        RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([drawerSessionId])
+  @@index([tenderId])
+  @@index([refundId])
+  @@index([kind])
+  @@map("restaurant_drawer_movements")
+}
+
+/// M5/C3/C9/§11.3: the IMMUTABLE daily close — a branch × businessDate snapshot
+/// of gross/net sales, tax, service charge, tips, comps, discounts
+/// (structurally-zero in M5), refunds, voids, and cash expectation/counted/
+/// variance. Cutting requires every drawer session for the date CLOSED and every
+/// bill SETTLED or VOID. Once cut the row is immutable (append-only,
+/// SELECT+INSERT RLS only, no updatedAt). "Reopen"/correction = a NEW row with
+/// `supersedesCloseId` + `correctionReason` + manager co-authorization; the chain
+/// tip is authoritative in every read.
+model RestaurantDailyClose {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  businessDate        DateTime @db.Date
+  supersedesCloseId   String?
+  correctionReason    String?
+  coAuthorizationId   String?
+  cutByStaffProfileId String
+  deviceId            String?
+  grossSales          Decimal  @default(0) @db.Decimal(12, 2)
+  netSales            Decimal  @default(0) @db.Decimal(12, 2)
+  taxTotal            Decimal  @default(0) @db.Decimal(12, 2)
+  serviceChargeTotal  Decimal  @default(0) @db.Decimal(12, 2)
+  tipTotal            Decimal  @default(0) @db.Decimal(12, 2)
+  compTotal           Decimal  @default(0) @db.Decimal(12, 2)
+  discountTotal       Decimal  @default(0) @db.Decimal(12, 2)
+  refundTotal         Decimal  @default(0) @db.Decimal(12, 2)
+  voidTotal           Decimal  @default(0) @db.Decimal(12, 2)
+  cashExpected        Decimal  @default(0) @db.Decimal(12, 2)
+  cashCounted         Decimal  @default(0) @db.Decimal(12, 2)
+  cashVariance        Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt           DateTime @default(now())
+
+  branch          RestaurantBranch                  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  supersedesClose RestaurantDailyClose?             @relation("DailyCloseSupersede", fields: [supersedesCloseId], references: [id], onDelete: SetNull)
+  supersededBy    RestaurantDailyClose[]            @relation("DailyCloseSupersede")
+  coAuthorization RestaurantCoAuthorization?        @relation(fields: [coAuthorizationId], references: [id], onDelete: SetNull)
+  cutByStaff      RestaurantStaffProfile            @relation(fields: [cutByStaffProfileId], references: [id], onDelete: Restrict)
+  device          RestaurantRegisteredDevice?       @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  tenderTotals    RestaurantDailyCloseTenderTotal[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([businessDate])
+  @@index([supersedesCloseId])
+  @@map("restaurant_daily_closes")
+}
+
+/// M5/C3/C9: the APPEND-ONLY per-tender-type child of a daily close (amount,
+/// tips, count per CASH/CARD/OTHER). No updatedAt; DB-enforced append-only.
+model RestaurantDailyCloseTenderTotal {
+  id             String               @id @default(cuid())
+  organizationId String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  dailyCloseId   String
+  tenderType     RestaurantTenderType
+  amount         Decimal              @default(0) @db.Decimal(12, 2)
+  tipAmount      Decimal              @default(0) @db.Decimal(12, 2)
+  count          Int                  @default(0)
+  createdAt      DateTime             @default(now())
+
+  dailyClose RestaurantDailyClose @relation(fields: [dailyCloseId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([dailyCloseId])
+  @@map("restaurant_daily_close_tender_totals")
+}
+
+/// M5/C10/§11.1: the per-(branch, businessDate) receipt-number sequence — a seam
+/// SEPARATE from restaurant_order_number_sequences. `nextNumber` holds the most
+/// recently allocated receipt number; allocation is a transactional row-locked
+/// upsert (see src/lib/restaurant/receipt-numbers.ts). Uniqueness + monotonicity
+/// are guaranteed; gap-free is NOT promised; non-fiscal (BUILD-ASSUMPTIONS).
+model RestaurantReceiptNumberSequence {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  businessDate   DateTime @db.Date
+  nextNumber     Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, businessDate])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_receipt_number_sequences")
+}
+
+/// M5/C11: a device-scoped idempotency key for money commands — a SEPARATE replay
+/// domain from restaurant_order_idempotency_keys. The first occurrence records
+/// the commandType + resultRef; any replay of the same (deviceId, key) returns
+/// that original result and creates nothing. Unique (deviceId, key).
+model RestaurantMoneyIdempotencyKey {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  deviceId       String
+  key            String
+  commandType    String
+  resultRef      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  device RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, key])
+  @@index([organizationId])
+  @@index([deviceId])
+  @@map("restaurant_money_idempotency_keys")
 }
 
 model PlatformUser {
