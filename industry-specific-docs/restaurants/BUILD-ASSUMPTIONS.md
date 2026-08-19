@@ -633,3 +633,96 @@ exported M3 primitives (`resolveEffectiveEntries`/`pickEntry`, `channelPublished
 modifying an M3-owned file (C9). · Conservative because it reuses the M3 resolution contract rather than
 forking it, at the cost of a parallel projection that must track the M3 read's shape. · Revisited if the M3
 menu resolution is extracted into a shared exported lib both surfaces call.
+
+### M5 — money (bills, tenders, payments, refunds, drawers, close, receipts)
+
+**C2 (rounding mode) — ROUND_HALF_UP at 2 decimal places (M5-L1)** · All money rounding goes through the
+single `roundMoney` in `src/lib/restaurant/money.ts`, which rounds to 2dp ROUND_HALF_UP (halves away from
+zero, symmetric for negatives). Every monetary column is `DECIMAL(12,2)`; there is no float, `parseFloat`,
+`Number()` arithmetic, or `toBeCloseTo` on any money path, and money tests assert exact Decimal string
+equality. · Conservative because ROUND_HALF_UP is the common retail/hospitality rounding and a single
+rounding function keeps every downstream lane bit-identical. · Revisited if a jurisdiction requires
+banker's rounding or a different scale.
+
+**C4 (fractional split remainder) — largest-remainder, base = floor(total × weight ÷ Σweights), ties to the
+lowest split index (M5-L1)** · `allocate(total, weights)` divides a total across integer weights in integer
+cents: each share's base is the floored proportional amount and the leftover cents are handed out one per
+share in DESCENDING fractional-remainder order, ties broken by ASCENDING share index. Σ(shares) ≡ the total
+EXACTLY and the outcome is byte-identical across runs (e.g. 100.00÷3 → 33.34/33.33/33.33; 0.01÷3 →
+0.01/0.00/0.00). · Conservative because a pinned deterministic remainder rule makes splits reproducible and
+auditable — no cent is created or lost. · Revisited only by an explicit change to the pinned rule via the
+CoS (it is a coordinated contract every money lane codes to).
+
+**C4 (split allocation granularity) — whole-item BY_ITEM/BY_SEAT; per-quantity fractioning deferred
+(M5-L1)** · BY_ITEM and BY_SEAT place each non-voided order item on exactly one bill as a WHOLE line; a
+single item's quantity is not divided across bills. FRACTIONAL divides the order total by integer fraction
+pairs (via the `allocate` rule above), never by re-pricing items. · Conservative because whole-item
+allocation is unambiguous and covers the common check-split cases without a per-unit pricing model. ·
+Revisited when per-quantity or per-portion splitting is required.
+
+**C5 (tips) — captured at tender time only; no post-capture tip-adjust flow (M5-L1)** · `tipAmount` lives on
+tender and refund records only and is NEVER merged into the (still structurally-zero) service-charge item
+snapshot; the daily close reports `tipTotal` and `serviceChargeTotal` as separate columns. The MOCK adapter
+ships the ADJUST capability (contract-tested), but no operator-facing post-capture tip-adjust FLOW ships in
+M5 — a tip correction is a refund + re-tender. · Conservative because tip-at-tender is the simplest correct
+capture and keeps tips provably distinct from service charges. · Revisited when a gratuity-adjust UX (bar
+tab / delayed tip) is scheduled.
+
+**C3 (append-only enforcement) — DB-enforced by RLS policy omission (M5-L1)** · `restaurant_tenders`,
+`restaurant_payment_events`, `restaurant_refunds`, `restaurant_drawer_movements`, `restaurant_daily_closes`,
+and `restaurant_daily_close_tender_totals` receive SELECT + INSERT RLS policies ONLY. With forced RLS and no
+UPDATE/DELETE policy, the unprivileged app role cannot mutate or delete any row (the operation matches zero
+rows) — these tables carry no `updatedAt`, and a correction is observable only as a NEW record referencing
+the original. · Conservative because policy omission is a database-level guarantee that no application bug
+can loosen, and it needs no per-table GRANT/REVOKE (which the RLS verifier re-grants anyway). · Revisited
+only if a legitimate flow appears to need an in-place edit, which routes back to L1 via the CoS as a design
+defect — never an ad-hoc policy loosening.
+
+**C9 (close prerequisites) — every drawer session CLOSED and every bill SETTLED or VOID for the date
+(M5-L1)** · A daily close for a branch × businessDate can be cut only once every drawer session for that
+date is CLOSED and every bill is SETTLED or VOID; once cut, the row is immutable (append-only), and a
+"reopen"/correction is a NEW `RestaurantDailyClose` with `supersedesCloseId` + reason + manager
+co-authorization, the chain tip being authoritative in every read. · Conservative because it guarantees the
+close reconciles against a settled, counted day and can never silently rewrite a prior day. · Revisited if a
+partial/interim close is required.
+
+**C7 (correction posting date) — refunds post to the PROCESSING business date (M5-L1)** · A refund carries
+its own `businessDate` = the date it is processed; a cross-business-date correction (a prior day's tender
+refunded today) appears in TODAY's close and never mutates the prior day's close, which re-reads
+byte-identical. · Conservative because an immutable prior close plus current-day posting is the standard
+accounting treatment and keeps every closed day reproducible. · Revisited if statutory reporting requires
+original-date attribution.
+
+**C10 (receipt numbering) — unique + monotonic per (branch, businessDate), not gap-free, non-fiscal
+(M5-L1)** · Receipt numbers allocate transactionally from `restaurant_receipt_number_sequences` (a seam
+SEPARATE from order numbers), assigned once at settlement; they are guaranteed unique and monotone but NOT
+gap-free (a rolled-back settlement consumes a number) and carry no fiscal/printer/registration semantics. ·
+Conservative because unique + monotone is what a check number needs, and gap-free/fiscal numbering is a
+regulated feature better built deliberately. · Revisited when fiscalization or gap-free legal numbering is
+scoped.
+
+**C6 (payment provider) — MOCK adapter only; D23 not built (M5-L1)** · The provider registry contains
+exactly one provider, MOCK (deterministic refs + scriptable outcomes for tests), implementing all six
+capabilities SALE/AUTH/CAPTURE/ADJUST/VOID/REFUND. There is no real PSP network I/O and no PAN/CVV/track
+data is ever stored or logged — only provider references, sanitized method info, amounts, status, and
+timing. · Conservative because a capability-shaped MOCK exercises the whole settlement surface with zero PCI
+exposure. · Revisited when a real payment-provider integration (D23) is scheduled.
+
+**C1 (single currency) — one currency per organization, unlabelled (M5-L1)** · Money columns carry no
+currency code; every amount in an organization is in that organization's single implicit currency. ·
+Conservative because the restaurant vertical is single-currency in v1 and an unused currency column invites
+drift. · Revisited when multi-currency pricing/settlement is scoped.
+
+**C9 (`discountTotal`) — structurally present, zero in M5 (M5-L1)** · The daily close carries a
+`discountTotal` column that is structurally zero throughout M5; comps (which net a line to zero via
+`compAmount` with reason + co-authorization) flow to `compTotal`, not to discounts. · Conservative because
+carrying the column now keeps the close shape stable while the percentage/amount discount engine is a later
+milestone. · Revisited by the discount milestone.
+
+**C9 (co-authorization composite tenant FK) — single-column FK only, no composite tenant FK (M5-L1)** ·
+Money references to `restaurant_co_authorizations` (bill void, bill-line comp, refund, close correction)
+use a single-column FK only, with no deferred `(organizationId, id)` composite tenant FK — matching the M4
+precedent for the void co-authorization reference: the co-authorization table carries no `(organizationId,
+id)` unique and is consumed, never modified. · Conservative because it follows the established cross-table
+reference discipline without adding a unique to a consumed table. · Revisited if co-authorizations gain a
+composite tenant key for other reasons.
