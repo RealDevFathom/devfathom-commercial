@@ -10,6 +10,7 @@ const publicPaths = [
   '/reset-password',
   '/sso',
   '/terminal',
+  '/pos',
   '/api/auth',
   '/brand',
 ];

@@ -30,4 +30,22 @@ describe('terminal root providers', () => {
     );
     expect(screen.getByTestId('app-providers')).toBeInTheDocument();
   });
+
+  it('keeps only the exact POS route outside SessionProvider-backed app providers', () => {
+    navigation.pathname = '/pos';
+    const { rerender } = render(
+      <Providers>
+        <span>POS</span>
+      </Providers>
+    );
+    expect(screen.queryByTestId('app-providers')).not.toBeInTheDocument();
+
+    navigation.pathname = '/pos/settings';
+    rerender(
+      <Providers>
+        <span>POS settings</span>
+      </Providers>
+    );
+    expect(screen.getByTestId('app-providers')).toBeInTheDocument();
+  });
 });

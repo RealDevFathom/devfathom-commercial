@@ -51,4 +51,12 @@ describe('platform host routing', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('x-middleware-next')).toBe('1');
   });
+
+  it('allows unauthenticated POS access without a login redirect', () => {
+    const response = proxy(tenantRequest('/pos'));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-middleware-next')).toBe('1');
+    expect(response.headers.get('location')).toBeNull();
+  });
 });
