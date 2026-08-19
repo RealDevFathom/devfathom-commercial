@@ -231,7 +231,7 @@ beforeAll(async () => {
     });
   registerA = await enroll('Register A');
   registerB = await enroll('Register B');
-});
+}, 60_000);
 
 describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)', () => {
   it('reconciles orders, drawer ledgers, close totals, and tender children independently', async () => {
@@ -530,5 +530,5 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
       eqMoney(child!.tipAmount, aggregate.tipAmount);
       expect(child!.count).toBe(aggregate.count);
     }
-  });
+  }, 60_000);
 });

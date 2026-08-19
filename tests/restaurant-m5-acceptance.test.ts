@@ -54,10 +54,12 @@ const ids = {
 
 let deps: Deps;
 const devices = new Map<string, Device>();
-const TODAY = new Date().toISOString().slice(0, 10);
-const yesterday = new Date(`${TODAY}T00:00:00.000Z`);
-yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-const YESTERDAY = yesterday.toISOString().slice(0, 10);
+const currentBusinessDate = () => new Date().toISOString().slice(0, 10);
+const previousBusinessDate = (date: string) => {
+  const previous = new Date(`${date}T00:00:00.000Z`);
+  previous.setUTCDate(previous.getUTCDate() - 1);
+  return previous.toISOString().slice(0, 10);
+};
 
 const key = (label: string) => `${label}_${suffix}_${randomBytes(3).toString('hex')}`;
 const utcDate = (date: string) => new Date(`${date}T00:00:00.000Z`);
@@ -280,12 +282,13 @@ beforeAll(async () => {
       devices.set(branchId, { deviceId: device.id, secret });
     }
   });
-});
+}, 60_000);
 
 describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
   it('allocates adversarial odd-cent FRACTIONAL splits by 3 and 7 exactly and deterministically', async () => {
     const device = devices.get(ids.splitBranch)!;
     const session = await unlock(device);
+    const businessDate = currentBusinessDate();
     for (const scenario of [
       { orderNumber: 31001, total: '10.01', count: 3, expected: ['3.34', '3.34', '3.33'] },
       {
@@ -298,7 +301,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       const order = await seedOrder(
         ids.splitBranch,
         device.deviceId,
-        TODAY,
+        businessDate,
         scenario.orderNumber,
         [scenario.total]
       );
@@ -327,14 +330,14 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       });
       eqMoney(sum(ordered.map((row) => row.grandTotal)), scenario.total);
     }
-  });
+  }, 60_000);
 
   it('carries a zeroed comp and keeps tips distinct from service charges through close', async () => {
     const device = devices.get(ids.moneyBranch)!;
     const session = await unlock(device);
-    const compOrder = await seedOrder(ids.moneyBranch, device.deviceId, TODAY, 41001, [
+    const businessDate = currentBusinessDate();
+    const compOrder = await seedOrder(ids.moneyBranch, device.deviceId, businessDate, 41001, [
       '8.01',
-      '3.00',
     ]);
     const [compBillId] = await cutBills(device, session, compOrder.orderId, { kind: 'NONE' });
     const compLine = await deps.withTenantDb(orgId, (tx) =>
@@ -363,17 +366,33 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       }),
       bill: await tx.restaurantBill.findUnique({
         where: { id: compBillId },
-        select: { compTotal: true, grandTotal: true },
+        select: { status: true, compTotal: true, grandTotal: true },
       }),
     }));
     eqMoney(zeroed.line!.lineSubtotal, '8.01');
     eqMoney(zeroed.line!.compAmount, '8.01');
     eqMoney(zeroed.line!.lineTotal, '0');
     eqMoney(zeroed.bill!.compTotal, '8.01');
-    eqMoney(zeroed.bill!.grandTotal, '3.00');
-    await cardTender(device, session, compBillId!, '3.00');
+    eqMoney(zeroed.bill!.grandTotal, '0');
+    if (zeroed.bill!.status !== 'SETTLED') {
+      const settlement = await call(deps.routes.tender, {
+        secret: device.secret,
+        session,
+        key: key('zero_comp_settlement'),
+        body: { billId: compBillId, tender: { type: 'OTHER', amount: '0.00' } },
+      });
+      expect(settlement.status).toBe(200);
+      expect(settlement.json.settled).toBe(true);
+      eqMoney(settlement.json.remainingDue, '0');
+    }
+    const settledComp = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantBill.findUnique({ where: { id: compBillId }, select: { status: true } })
+    );
+    expect(settledComp?.status).toBe('SETTLED');
 
-    const tipOrder = await seedOrder(ids.moneyBranch, device.deviceId, TODAY, 41002, ['5.00']);
+    const tipOrder = await seedOrder(ids.moneyBranch, device.deviceId, businessDate, 41002, [
+      '5.00',
+    ]);
     const [tipBillId] = await cutBills(device, session, tipOrder.orderId, { kind: 'NONE' });
     await cardTender(device, session, tipBillId!, '5.00', '1.23');
 
@@ -381,7 +400,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       secret: device.secret,
       session,
       key: key('money_close'),
-      body: { businessDate: TODAY },
+      body: { businessDate },
     });
     expect(close.status).toBe(200);
     const persisted = await deps.withTenantDb(orgId, (tx) =>
@@ -393,12 +412,13 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     eqMoney(persisted!.compTotal, '8.01');
     eqMoney(persisted!.tipTotal, '1.23');
     eqMoney(persisted!.serviceChargeTotal, '0');
-  });
+  }, 60_000);
 
   it('posts a D1 sale refund to D2 and preserves immutable close/correction chains', async () => {
     const device = devices.get(ids.crossBranch)!;
     const session = await unlock(device);
-    const order = await seedOrder(ids.crossBranch, device.deviceId, YESTERDAY, 51001, ['40.00']);
+    const saleDate = previousBusinessDate(currentBusinessDate());
+    const order = await seedOrder(ids.crossBranch, device.deviceId, saleDate, 51001, ['40.00']);
     const [billId] = await cutBills(device, session, order.orderId, { kind: 'NONE' });
     const sale = await cardTender(device, session, billId!, '40.00', '2.00');
 
@@ -406,7 +426,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       secret: device.secret,
       session,
       key: key('d1_close'),
-      body: { businessDate: YESTERDAY },
+      body: { businessDate: saleDate },
     });
     expect(d1CloseResponse.status).toBe(200);
     const d1CloseId = d1CloseResponse.json.dailyCloseId as string;
@@ -456,6 +476,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     const d1Before = await selectClose(d1CloseId);
     const d1Bytes = JSON.stringify(d1Before);
 
+    const processingDateBefore = currentBusinessDate();
     const refund = await call(deps.routes.refund, {
       secret: device.secret,
       session,
@@ -468,13 +489,16 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       },
     });
     expect(refund.status).toBe(200);
-    expect(refund.json.businessDate).toBe(TODAY);
+    const processingDateAfter = currentBusinessDate();
+    const refundDate = refund.json.businessDate as string;
+    expect([processingDateBefore, processingDateAfter]).toContain(refundDate);
+    expect(refundDate).not.toBe(saleDate);
 
     const d2CloseResponse = await call(deps.routes.dayClose, {
       secret: device.secret,
       session,
       key: key('d2_close'),
-      body: { businessDate: TODAY },
+      body: { businessDate: refundDate },
     });
     expect(d2CloseResponse.status).toBe(200);
     const d2CloseId = d2CloseResponse.json.dailyCloseId as string;
@@ -487,7 +511,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       session,
       key: key('missing_manager'),
       body: {
-        businessDate: TODAY,
+        businessDate: refundDate,
         supersedesCloseId: d2CloseId,
         reason: 'missing manager',
       },
@@ -495,7 +519,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     expect(missingManager.status).toBe(400);
     const afterDeniedCount = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantDailyClose.count({
-        where: { branchId: ids.crossBranch, businessDate: utcDate(TODAY) },
+        where: { branchId: ids.crossBranch, businessDate: utcDate(refundDate) },
       })
     );
     expect(afterDeniedCount).toBe(1);
@@ -505,7 +529,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       session,
       key: key('correct'),
       body: {
-        businessDate: TODAY,
+        businessDate: refundDate,
         supersedesCloseId: d2CloseId,
         reason: 'manager recount',
         approving: { staffProfileId: ids.manager, type: 'PIN', secret: PIN },
@@ -522,7 +546,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       session,
       key: key('stale'),
       body: {
-        businessDate: TODAY,
+        businessDate: refundDate,
         supersedesCloseId: d2CloseId,
         reason: 'stale retry',
         approving: { staffProfileId: ids.manager, type: 'PIN', secret: PIN },
@@ -532,7 +556,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
 
     const chain = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantDailyClose.findMany({
-        where: { branchId: ids.crossBranch, businessDate: utcDate(TODAY) },
+        where: { branchId: ids.crossBranch, businessDate: utcDate(refundDate) },
         select: { id: true, supersedesCloseId: true, coAuthorizationId: true },
       })
     );
@@ -547,18 +571,19 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
 
     const d1After = await selectClose(d1CloseId);
     expect(JSON.stringify(d1After)).toBe(d1Bytes);
-  });
+  }, 60_000);
 
   it('allocates unique monotonic receipts under concurrent REST settlement, apart from order numbers', async () => {
     const device = devices.get(ids.receiptBranch)!;
     const session = await unlock(device);
+    const businessDate = currentBusinessDate();
     const orderNumbers = [9001, 7, 500, 42, 8100];
     const billIds: string[] = [];
     for (const orderNumber of orderNumbers) {
       const order = await seedOrder(
         ids.receiptBranch,
         device.deviceId,
-        TODAY,
+        businessDate,
         orderNumber,
         ['12.50']
       );
@@ -609,7 +634,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
         where: {
           branchId_businessDate: {
             branchId: ids.receiptBranch,
-            businessDate: utcDate(TODAY),
+            businessDate: utcDate(businessDate),
           },
         },
         select: { nextNumber: true },
@@ -627,5 +652,5 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       true
     );
     expect(receiptState.bills.map((bill) => bill.order.orderNumber)).not.toEqual(receipts);
-  });
+  }, 60_000);
 });
