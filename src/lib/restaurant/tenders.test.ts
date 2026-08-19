@@ -14,7 +14,10 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+import { classifyTenderAmount } from './tenders';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -470,5 +473,41 @@ describeIfDatabase('idempotency (real DB)', () => {
 
     const tenderCount = await read((tx) => tx.restaurantTender.count({ where: { billId } }));
     expect(tenderCount).toBe(1);
+  });
+});
+
+const d = (value: string): Prisma.Decimal => new Prisma.Decimal(value);
+
+// A pure, DB-free classification of a tender's applied amount against the bill's
+// outstanding balance — the guard that lets a ZERO amount settle an already
+// fully-covered (e.g. fully comped, zero grand-total) bill while still rejecting a
+// zero amount on any bill that still owes a balance. No TEST_DATABASE_URL needed.
+describe('classifyTenderAmount (M5-L2 — zero tender settles a fully-covered bill)', () => {
+  it('accepts a zero amount when the bill is already fully covered (outstanding 0) — the comp-settlement path', () => {
+    expect(classifyTenderAmount(d('0'), d('0'))).toBe('OK');
+    expect(classifyTenderAmount(d('0.00'), d('0.00'))).toBe('OK');
+  });
+
+  it('rejects a zero amount when the bill still owes a balance', () => {
+    expect(classifyTenderAmount(d('0'), d('5.00'))).toBe('INVALID_AMOUNT');
+    expect(classifyTenderAmount(d('0.00'), d('0.01'))).toBe('INVALID_AMOUNT');
+  });
+
+  it('rejects a negative amount regardless of outstanding', () => {
+    expect(classifyTenderAmount(d('-0.01'), d('5.00'))).toBe('INVALID_AMOUNT');
+    expect(classifyTenderAmount(d('-5.00'), d('0'))).toBe('INVALID_AMOUNT');
+  });
+
+  it('accepts a positive amount that is less than the outstanding balance', () => {
+    expect(classifyTenderAmount(d('2.50'), d('5.00'))).toBe('OK');
+  });
+
+  it('accepts a positive amount that exactly equals the outstanding balance (final tender)', () => {
+    expect(classifyTenderAmount(d('5.00'), d('5.00'))).toBe('OK');
+  });
+
+  it('flags a positive amount greater than the outstanding balance as OVER_TENDER', () => {
+    expect(classifyTenderAmount(d('5.01'), d('5.00'))).toBe('OVER_TENDER');
+    expect(classifyTenderAmount(d('0.01'), d('0'))).toBe('OVER_TENDER');
   });
 });

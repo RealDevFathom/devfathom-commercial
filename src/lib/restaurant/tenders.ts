@@ -35,11 +35,14 @@ import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
  *   - OTHER  a non-cash/non-card seam (gift/voucher/loyalty deferred): amount + tip.
  *
  * OVER-TENDER is rejected — a tender's applied `amount` may never exceed the bill's
- * outstanding balance — the ONLY over-payment is cash change. When the applied
- * tenders reach the grand total EXACTLY (Decimal equality), the bill is settled and
- * its receipt number allocated in the SAME transaction, EXACTLY ONCE: a bill-row
- * `FOR UPDATE` lock serializes concurrent final tenders, so the loser observes the
- * SETTLED bill and is rejected rather than allocating a second receipt.
+ * outstanding balance — the ONLY over-payment is cash change. The amount guard runs
+ * AGAINST that outstanding balance (see `classifyTenderAmount`), so a ZERO amount is
+ * valid ONLY as the settlement of an already-fully-covered bill — e.g. a fully comped,
+ * zero grand-total bill — and is rejected on any bill that still owes a balance. When
+ * the applied tenders reach the grand total EXACTLY (Decimal equality), the bill is
+ * settled and its receipt number allocated in the SAME transaction, EXACTLY ONCE: a
+ * bill-row `FOR UPDATE` lock serializes concurrent final tenders, so the loser observes
+ * the SETTLED bill and is rejected rather than allocating a second receipt.
  *
  * Server time is authoritative (C6): the caller passes the settlement instant.
  */
@@ -135,6 +138,24 @@ type PersistedTender = {
   drawerSessionId: string | null;
 };
 
+export type TenderAmountVerdict = 'OK' | 'INVALID_AMOUNT' | 'OVER_TENDER';
+
+/** Classify a tender's applied amount against the bill's outstanding balance.
+ * A positive amount up to `outstanding` is a normal (possibly final) tender; a
+ * ZERO amount is valid ONLY as the settlement of an already fully-covered bill
+ * (e.g. a fully comped, zero grand-total bill); negative → INVALID_AMOUNT;
+ * amount > outstanding → OVER_TENDER. The guard is amount-vs-outstanding, not
+ * tender type. */
+export function classifyTenderAmount(
+  amount: Prisma.Decimal,
+  outstanding: Prisma.Decimal
+): TenderAmountVerdict {
+  if (isNegative(amount)) return 'INVALID_AMOUNT';
+  if (isZero(amount) && !isZero(outstanding)) return 'INVALID_AMOUNT';
+  if (compare(amount, outstanding) > 0) return 'OVER_TENDER';
+  return 'OK';
+}
+
 /**
  * Apply one tender to a bill and, when coverage is reached, settle it + allocate its
  * receipt — atomically and idempotently. See the module doc for the full contract.
@@ -166,9 +187,6 @@ export async function applyTender(
     }
 
     const amount = money(input.tender.amount);
-    if (isZero(amount) || isNegative(amount)) {
-      throw new TenderError('A tender amount must be positive.', 'INVALID_AMOUNT');
-    }
 
     const existing = await tx.restaurantTender.findMany({
       where: { billId: bill.id },
@@ -176,9 +194,16 @@ export async function applyTender(
     });
     const alreadyTendered = sum(existing.map((t) => t.amount));
     const outstanding = sub(bill.grandTotal, alreadyTendered);
-    // The applied amount may never exceed what is due — the only over-payment is
-    // cash change (handled inside the cash path, not against the bill).
-    if (compare(amount, outstanding) > 0) {
+    // Validate the amount AGAINST the outstanding balance so a zero amount is
+    // accepted only as the settlement of an already-fully-covered bill (e.g. a
+    // fully comped, zero grand-total bill). The applied amount may never exceed
+    // what is due — the only over-payment is cash change (handled inside the cash
+    // path, not against the bill).
+    const verdict = classifyTenderAmount(amount, outstanding);
+    if (verdict === 'INVALID_AMOUNT') {
+      throw new TenderError('A tender amount must be positive.', 'INVALID_AMOUNT');
+    }
+    if (verdict === 'OVER_TENDER') {
       throw new TenderError(
         'The tender amount exceeds the bill balance; the only over-payment is cash change.',
         'OVER_TENDER'
