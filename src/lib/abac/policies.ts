@@ -44,6 +44,15 @@ export const ALL_ACTIONS = [
   'inventory:adjust', // post transfers, manual corrections, sale reversals
   'inventory:waste',  // post wastage, spoilage, staff-meal movements
   'inventory:count',  // create/submit/post physical counts
+  // Restaurant M6 (COORDINATED): the inventory/purchasing capabilities the M6
+  // back-office surfaces enforce. L2 (inventory ops) and L3 (purchasing) both
+  // gate reads on `inventory:read`; L3 owns `purchasing:create`/`purchasing:approve`.
+  // Each lane declares the entries it needs so it compiles and tests standalone;
+  // the supervisor dedups the `inventory:read` overlap at merge (same adjacency
+  // rule as `_app.ts` and the M4 `orders:read` coordination above).
+  'inventory:read', // restaurant M6: back-office inventory/purchasing reads — org-role driven
+  'purchasing:create', // restaurant M6-L3: supplier/PO/receiving mutations — org-role driven
+  'purchasing:approve', // restaurant M6-L3: purchase-order approval transition — org-role driven
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -129,4 +138,13 @@ export const POLICIES: Record<Action, Policy[]> = {
   'inventory:adjust': [],
   'inventory:waste': [],
   'inventory:count': [],
+  // Restaurant M6: inventory/purchasing back-office capabilities. Granted through
+  // an organization role/override carrying the capability (or `*`, e.g. the
+  // restaurant Owner or Purchasing Officer templates), evaluated by the DB
+  // `customDecision` path in `can()`; no static agency-role policy, so a subject
+  // without an explicit grant is denied by default (COORDINATED with L2 — see the
+  // ALL_ACTIONS note above; the supervisor dedups the `inventory:read` overlap).
+  'inventory:read': [],
+  'purchasing:create': [],
+  'purchasing:approve': [],
 };
