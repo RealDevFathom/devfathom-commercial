@@ -330,6 +330,8 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
         WHERE table_schema = 'public' AND table_name = 'restaurant_orders'
         ORDER BY ordinal_position`
     );
-    expect(result.rows.map((row) => row.column_name).filter((column) => /total|aggregate/i.test(column))).toEqual([]);
+    expect(
+      result.rows.map((row) => row.column_name).filter((column) => /total|aggregate/i.test(column))
+    ).toEqual([]);
   });
 });

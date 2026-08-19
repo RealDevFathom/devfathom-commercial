@@ -284,9 +284,9 @@ describeIfDatabase('M5 cross-tenant RLS probes (real PostgreSQL)', () => {
         )
       ).rowCount
     ).toBe(0);
-    expect((await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ids.rowB])).rowCount).toBe(
-      0
-    );
+    expect(
+      (await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ids.rowB])).rowCount
+    ).toBe(0);
   });
 
   it.each(M5_TABLES)('%s rejects a tenant-B insert under tenant-A scope', async (table) => {
@@ -304,8 +304,8 @@ describeIfDatabase('M5 cross-tenant RLS probes (real PostgreSQL)', () => {
         )
       ).rowCount
     ).toBe(0);
-    expect((await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ids.rowA])).rowCount).toBe(
-      0
-    );
+    expect(
+      (await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ids.rowA])).rowCount
+    ).toBe(0);
   });
 });
