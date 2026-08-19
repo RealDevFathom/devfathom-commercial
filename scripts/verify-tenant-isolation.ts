@@ -399,6 +399,35 @@ async function main() {
     const outboxB = `routbox_b_${suffix}`;
     const idempotencyA = `ridem_a_${suffix}`;
     const idempotencyB = `ridem_b_${suffix}`;
+    // M5-L1: representative money ids per tenant. The probe covers a bill, a bill
+    // line, a payment, an append-only payment event, an append-only tender, an
+    // append-only refund, a drawer session, an append-only drawer movement, an
+    // append-only daily close, an append-only close tender total, a receipt-number
+    // sequence, and a money idempotency key — the 12 M5 tables.
+    const billA = `rbill_a_${suffix}`;
+    const billB = `rbill_b_${suffix}`;
+    const billLineA = `rbline_a_${suffix}`;
+    const billLineB = `rbline_b_${suffix}`;
+    const paymentA = `rpay_a_${suffix}`;
+    const paymentB = `rpay_b_${suffix}`;
+    const paymentEventA = `rpayev_a_${suffix}`;
+    const paymentEventB = `rpayev_b_${suffix}`;
+    const tenderA = `rtender_a_${suffix}`;
+    const tenderB = `rtender_b_${suffix}`;
+    const refundA = `rrefund_a_${suffix}`;
+    const refundB = `rrefund_b_${suffix}`;
+    const drawerSessionA = `rdrawer_a_${suffix}`;
+    const drawerSessionB = `rdrawer_b_${suffix}`;
+    const drawerMovementA = `rdmove_a_${suffix}`;
+    const drawerMovementB = `rdmove_b_${suffix}`;
+    const dailyCloseA = `rclose_a_${suffix}`;
+    const dailyCloseB = `rclose_b_${suffix}`;
+    const closeTenderTotalA = `rclosett_a_${suffix}`;
+    const closeTenderTotalB = `rclosett_b_${suffix}`;
+    const receiptSeqA = `rrcpt_a_${suffix}`;
+    const receiptSeqB = `rrcpt_b_${suffix}`;
+    const moneyIdemA = `rmidem_a_${suffix}`;
+    const moneyIdemB = `rmidem_b_${suffix}`;
     await client.query(
       `INSERT INTO "api_tokens" (
         "id", "organizationId", "name", "prefix", "tokenHash", "scopes", "userId"
@@ -746,6 +775,172 @@ async function main() {
       ]
     );
 
+    // M5-L1: bill -> (bill line | payment -> payment event) and drawer session ->
+    // tender -> (refund | drawer movement) plus daily close -> tender total, the
+    // receipt-number sequence, and the money idempotency key — one mirrored graph
+    // per tenant. Parents precede children so the immediate single-column FKs pass
+    // during seeding; the deferred composite tenant FKs are validated at COMMIT
+    // (rolled back here). Every money value is DECIMAL(12,2) (C2).
+    await client.query(
+      `INSERT INTO "restaurant_bills" (
+        "id", "organizationId", "orderId", "branchId", "businessDate",
+        "openerStaffProfileId", "deviceId", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, DATE '2030-01-01', $4, $5, CURRENT_TIMESTAMP),
+               ($6, $7, $8, $9, DATE '2030-01-01', $10, $11, CURRENT_TIMESTAMP)`,
+      [
+        billA,
+        orderA,
+        branchA,
+        staffA1,
+        deviceA,
+        billB,
+        organizationB,
+        orderB,
+        branchB,
+        staffB1,
+        deviceB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_bill_lines" (
+        "id", "organizationId", "billId", "orderItemId", "name", "unitPrice",
+        "lineSubtotal", "lineTotal", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 'Tenant A Line', 9.99, 9.99, 9.99, CURRENT_TIMESTAMP),
+               ($4, $5, $6, $7, 'Tenant B Line', 9.99, 9.99, 9.99, CURRENT_TIMESTAMP)`,
+      [billLineA, billA, orderItemA, billLineB, organizationB, billB, orderItemB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_payments" (
+        "id", "organizationId", "billId", "capability", "status", "amount",
+        "staffProfileId", "deviceId", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'SALE', 'CAPTURED', 20.00, $3, $4, CURRENT_TIMESTAMP),
+               ($5, $6, $7, 'SALE', 'CAPTURED', 20.00, $8, $9, CURRENT_TIMESTAMP)`,
+      [paymentA, billA, staffA1, deviceA, paymentB, organizationB, billB, staffB1, deviceB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_payment_events" (
+        "id", "organizationId", "paymentId", "capability", "eventType", "payload"
+      ) VALUES ($1, 'org_devfathom', $2, 'SALE', 'sale.captured', '{}'),
+               ($3, $4, $5, 'SALE', 'sale.captured', '{}')`,
+      [paymentEventA, paymentA, paymentEventB, organizationB, paymentB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_drawer_sessions" (
+        "id", "organizationId", "branchId", "deviceId", "staffProfileId",
+        "businessDate", "openingFloat", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, $4, DATE '2030-01-01', 100.00, CURRENT_TIMESTAMP),
+               ($5, $6, $7, $8, $9, DATE '2030-01-01', 100.00, CURRENT_TIMESTAMP)`,
+      [
+        drawerSessionA,
+        branchA,
+        deviceA,
+        staffA1,
+        drawerSessionB,
+        organizationB,
+        branchB,
+        deviceB,
+        staffB1,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_tenders" (
+        "id", "organizationId", "billId", "type", "amount", "drawerSessionId",
+        "businessDate", "staffProfileId", "deviceId"
+      ) VALUES ($1, 'org_devfathom', $2, 'CASH', 10.00, $3, DATE '2030-01-01', $4, $5),
+               ($6, $7, $8, 'CASH', 10.00, $9, DATE '2030-01-01', $10, $11)`,
+      [
+        tenderA,
+        billA,
+        drawerSessionA,
+        staffA1,
+        deviceA,
+        tenderB,
+        organizationB,
+        billB,
+        drawerSessionB,
+        staffB1,
+        deviceB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_refunds" (
+        "id", "organizationId", "originalTenderId", "billId", "amount", "kind",
+        "businessDate", "reason", "coAuthorizationId", "staffProfileId", "deviceId"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 5.00, 'REFUND', DATE '2030-01-01', 'Tenant A refund', $4, $5, $6),
+               ($7, $8, $9, $10, 5.00, 'REFUND', DATE '2030-01-01', 'Tenant B refund', $11, $12, $13)`,
+      [
+        refundA,
+        tenderA,
+        billA,
+        coAuthA,
+        staffA1,
+        deviceA,
+        refundB,
+        organizationB,
+        tenderB,
+        billB,
+        coAuthB,
+        staffB1,
+        deviceB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_drawer_movements" (
+        "id", "organizationId", "drawerSessionId", "kind", "amount", "tenderId",
+        "staffProfileId", "deviceId"
+      ) VALUES ($1, 'org_devfathom', $2, 'CASH_SALE', 10.00, $3, $4, $5),
+               ($6, $7, $8, 'CASH_SALE', 10.00, $9, $10, $11)`,
+      [
+        drawerMovementA,
+        drawerSessionA,
+        tenderA,
+        staffA1,
+        deviceA,
+        drawerMovementB,
+        organizationB,
+        drawerSessionB,
+        tenderB,
+        staffB1,
+        deviceB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_daily_closes" (
+        "id", "organizationId", "branchId", "businessDate", "cutByStaffProfileId"
+      ) VALUES ($1, 'org_devfathom', $2, DATE '2030-01-01', $3),
+               ($4, $5, $6, DATE '2030-01-01', $7)`,
+      [dailyCloseA, branchA, staffA1, dailyCloseB, organizationB, branchB, staffB1]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_daily_close_tender_totals" (
+        "id", "organizationId", "dailyCloseId", "tenderType", "amount", "count"
+      ) VALUES ($1, 'org_devfathom', $2, 'CASH', 10.00, 1),
+               ($3, $4, $5, 'CASH', 10.00, 1)`,
+      [closeTenderTotalA, dailyCloseA, closeTenderTotalB, organizationB, dailyCloseB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_receipt_number_sequences" (
+        "id", "organizationId", "branchId", "businessDate", "nextNumber", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, DATE '2030-01-01', 1, CURRENT_TIMESTAMP),
+               ($3, $4, $5, DATE '2030-01-01', 1, CURRENT_TIMESTAMP)`,
+      [receiptSeqA, branchA, receiptSeqB, organizationB, branchB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_money_idempotency_keys" (
+        "id", "organizationId", "deviceId", "key", "commandType", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 'tender.apply', CURRENT_TIMESTAMP),
+               ($4, $5, $6, $7, 'tender.apply', CURRENT_TIMESTAMP)`,
+      [
+        moneyIdemA,
+        deviceA,
+        `money-idem-a-${suffix}`,
+        moneyIdemB,
+        organizationB,
+        deviceB,
+        `money-idem-b-${suffix}`,
+      ]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -798,6 +993,24 @@ async function main() {
       ['restaurant_server_section_assignments', sectionAssignmentA, sectionAssignmentB],
       ['restaurant_event_outbox', outboxA, outboxB],
       ['restaurant_order_idempotency_keys', idempotencyA, idempotencyB],
+      // M5-L1: explicit read/update/delete isolation for the representative bill,
+      // bill line, payment, payment event, tender, refund, drawer session, drawer
+      // movement, daily close, close tender total, receipt sequence, and money
+      // idempotency-key rows. (Cross-tenant update/delete is denied here; the
+      // append-only ledgers among these also deny mutation on the OWNER's row —
+      // asserted separately below.)
+      ['restaurant_bills', billA, billB],
+      ['restaurant_bill_lines', billLineA, billLineB],
+      ['restaurant_payments', paymentA, paymentB],
+      ['restaurant_payment_events', paymentEventA, paymentEventB],
+      ['restaurant_tenders', tenderA, tenderB],
+      ['restaurant_refunds', refundA, refundB],
+      ['restaurant_drawer_sessions', drawerSessionA, drawerSessionB],
+      ['restaurant_drawer_movements', drawerMovementA, drawerMovementB],
+      ['restaurant_daily_closes', dailyCloseA, dailyCloseB],
+      ['restaurant_daily_close_tender_totals', closeTenderTotalA, closeTenderTotalB],
+      ['restaurant_receipt_number_sequences', receiptSeqA, receiptSeqB],
+      ['restaurant_money_idempotency_keys', moneyIdemA, moneyIdemB],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -811,6 +1024,46 @@ async function main() {
       assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
       const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
       assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
+
+    // M5-L1 / C3: the six append-only ledgers are DB-enforced append-only — with
+    // forced RLS and SELECT+INSERT policies ONLY (no UPDATE/DELETE policy), the
+    // unprivileged app role cannot mutate or delete ANY row, not even its OWN.
+    // (Read isolation for these tables is covered by the loop above; here we prove
+    // the mutation denial on tenant A's own rows — the operation matches zero rows.
+    // A correction is observable only as a NEW record referencing the original.)
+    for (const [table, ownId] of [
+      ['restaurant_tenders', tenderA],
+      ['restaurant_payment_events', paymentEventA],
+      ['restaurant_refunds', refundA],
+      ['restaurant_drawer_movements', drawerMovementA],
+      ['restaurant_daily_closes', dailyCloseA],
+      ['restaurant_daily_close_tender_totals', closeTenderTotalA],
+    ] as const) {
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" = $1`,
+        [ownId]
+      );
+      assertEqual(
+        visible.rows[0]?.count,
+        1,
+        `tenant A must see its own append-only "${table}" row`
+      );
+      const updated = await client.query(
+        `UPDATE "${table}" SET "createdAt" = "createdAt" WHERE "id" = $1`,
+        [ownId]
+      );
+      assertEqual(
+        updated.rowCount,
+        0,
+        `append-only "${table}" must deny UPDATE even on the owner's own row`
+      );
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ownId]);
+      assertEqual(
+        deleted.rowCount,
+        0,
+        `append-only "${table}" must deny DELETE even on the owner's own row`
+      );
     }
 
     // MEET-01: one read-isolation case per new meeting table. Each query names
@@ -1208,7 +1461,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, restaurant order/order-item/order-event/kitchen-ticket/floor-table/section-assignment/outbox/idempotency-key isolation + fail-closed WITH CHECK, SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, restaurant order/order-item/order-event/kitchen-ticket/floor-table/section-assignment/outbox/idempotency-key isolation + fail-closed WITH CHECK, restaurant money bill/bill-line/payment/payment-event/tender/refund/drawer-session/drawer-movement/daily-close/close-tender-total/receipt-sequence/money-idempotency isolation + DB-enforced append-only ledgers (UPDATE/DELETE denied even to the owner), SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);
