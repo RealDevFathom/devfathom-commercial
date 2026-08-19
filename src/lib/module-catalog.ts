@@ -78,6 +78,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // closes/correction chains — gate on the POS module (`restaurant-pos`), the same
   // licensed surface that runs settlement and cash accountability.
   restaurantCash: 'restaurant-pos',
+  // M5-L4: back-office payments reads — tenders, refunds and the payment event
+  // trail — gate on the POS module (`restaurant-pos`), the licensed surface that
+  // runs checkout and settlement.
+  restaurantPayments: 'restaurant-pos',
 };
 
 export function moduleForProcedure(path: string): string | null {
