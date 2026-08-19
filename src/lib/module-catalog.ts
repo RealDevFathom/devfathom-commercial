@@ -70,6 +70,14 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // POS module (`restaurant-pos`) — the module whose licensed purpose is running
   // service orders and the kitchen (BUILD-ASSUMPTIONS).
   restaurantOrders: 'restaurant-pos',
+  // M5-L2: back-office bill reads — splits/comps/receipts and per-order settlement
+  // state — gate on the POS module (`restaurant-pos`), the licensed surface that
+  // runs settlement.
+  restaurantBills: 'restaurant-pos',
+  // M5-L3: back-office cash reads — drawer sessions/movement ledgers and daily
+  // closes/correction chains — gate on the POS module (`restaurant-pos`), the same
+  // licensed surface that runs settlement and cash accountability.
+  restaurantCash: 'restaurant-pos',
 };
 
 export function moduleForProcedure(path: string): string | null {

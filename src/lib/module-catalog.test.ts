@@ -17,6 +17,8 @@ describe('module catalog routing', () => {
     ['restaurantStaff.issueCredential', 'restaurant-core'],
     ['restaurantMenus.publishPublication', 'restaurant-menu'],
     ['restaurantFloor.listFloors', 'restaurant-pos'],
+    ['restaurantBills.listBills', 'restaurant-pos'],
+    ['restaurantCash.listDrawerSessions', 'restaurant-pos'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);

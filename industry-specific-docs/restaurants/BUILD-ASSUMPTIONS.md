@@ -726,3 +726,77 @@ precedent for the void co-authorization reference: the co-authorization table ca
 id)` unique and is consumed, never modified. · Conservative because it follows the established cross-table
 reference discipline without adding a unique to a consumed table. · Revisited if co-authorizations gain a
 composite tenant key for other reasons.
+
+**C9 (daily-close aggregation definitions) — pinned totals so L3 and the L6b reconciliation agree to the
+cent (M5-L3)** · A branch × businessDate close aggregates ONLY the persisted rows for that date, defined
+exactly as: `grossSales` = Σ SETTLED bill `subtotal` (menu prices, pre-comp/pre-discount); `compTotal`,
+`taxTotal`, `serviceChargeTotal` = Σ SETTLED bill of the same column (tax/service-charge structurally zero
+in M5); `discountTotal` = 0; `netSales` = `grossSales − compTotal − discountTotal`; `voidTotal` = Σ VOID
+bill `grandTotal`; `tipTotal` = Σ tender `tipAmount` for the date (GROSS — equal to Σ of the per-tender-type
+child `tipAmount`); `refundTotal` = Σ refund `amount` for the PROCESSING date (C7 — a cross-business-date
+correction lands on the day processed and never mutates a prior day's close); `cashExpected`/`cashCounted`/
+`cashVariance` = Σ over the date's drawer sessions of the ledger fold / counted cash / (counted − expected).
+Per-tender-type child rows carry Σ `amount` + Σ `tipAmount` + a count grouped by CASH/CARD/OTHER (only types
+present, in enum-definition order). Per-bill `roundingAdjustment` is excluded from gross/net because it nets
+to zero across a fractional split (C4). All values are `Prisma.Decimal`; equality is exact string equality.
+· Conservative because pinning the definitions lets the independent L6b recomputation read the same numbers
+from raw bill/tender/refund/movement rows without coding to L3's implementation. · Revisited when the tax or
+discount engines introduce non-zero components.
+
+**C8 (drawer expected-cash fold sign convention) — one signed fold, closing count excluded (M5-L3)** ·
+`expectedCash` is DERIVED, never stored on a movement: OPENING_FLOAT + CASH_SALE + PAID_IN add;
+CASH_REFUND + PAID_OUT + DROP subtract; CLOSING_COUNT folds to zero (it is the physical count, recorded in
+the ledger for audit but not part of the expectation). Movement `amount` is always a non-negative magnitude
+(DB CHECK); the sign is applied by kind in the one fold used by both the drawer close and the daily close, so
+`session.expectedCash` and the L6b cash-reconciliation identity (Σ floats + sales − refunds + paid-ins −
+paid-outs − drops ≡ Σ expectedCash) match by construction. · Conservative because a single signed fold with
+non-negative magnitudes removes any per-call sign ambiguity. · Revisited if a new movement kind is added.
+
+**C4/C12 (settlement reconciliation identity) — Σ(bill grandTotal + compTotal) ≡ derived order total (M5-L2)**
+· The bill layer and the order-close settlement guard reconcile a bill set against its order by
+`Σ over non-void bills of (grandTotal + compTotal)` — a comp adds its own amount back, so the identity
+holds with or without comps and across every split kind (a bill's `grandTotal = subtotal + tax + service
+charge − compTotal + roundingAdjustment`, with tax/service-charge structurally zero in M5). · Conservative
+because it is the one Decimal-exact identity that unifies item-partition and fractional splits and makes the
+close guard independent of comp placement. · Revisited when tax/service-charge become non-zero (the identity
+generalizes; the reconciliation columns already exist).
+
+**C4 (FRACTIONAL bills carry no item lines) — fractional split divides the total, not the items (M5-L2)** ·
+A FRACTIONAL bill owns a `money.allocate` share of the ORDER total and carries NO `restaurant_bill_lines`
+(bill lines exist only for NONE/BY_ITEM/BY_SEAT); item coverage for a fractional order is proven by the
+money identity above rather than a per-item partition. A comp therefore requires an item-carrying split
+(NONE/BY_ITEM/BY_SEAT), since a comp targets a bill line. · Conservative because per-item lines on a
+fractional bill would double-count the total; the schema's `orderItemId`-bearing line is honestly reserved
+for item splits. · Revisited if per-quantity fractioning or comps-on-fractional-bills are scoped.
+
+**C4 (roundingAdjustment semantics) — the largest-remainder +cent, item splits carry zero (M5-L2)** · For a
+FRACTIONAL bill, `subtotal` = the floor base share and `roundingAdjustment` = the extra cent (0.00 or 0.01)
+the pinned largest-remainder rule handed that bill, so `grandTotal = subtotal + roundingAdjustment` and the
+grand totals sum to the order total exactly; the authoritative per-bill amounts come from `money.allocate`,
+and the floor base is recovered with exact integer-cent Decimal ops mirroring `allocate`'s own base rule.
+Item-partition bills (NONE/BY_ITEM/BY_SEAT) split whole items with no rounding, so `roundingAdjustment` is
+zero. · Conservative because it records the remainder distribution transparently without a second arithmetic
+path. · Revisited if a different rounding/remainder policy is chosen (money.ts is the single owner).
+
+**C4 (BY_SEAT designated bill for unseated items) — one bill, placed last, seats ascending (M5-L2)** ·
+BY_SEAT groups non-voided items by the M4 `seatNumber` seam into one bill per seat (ascending seat order);
+items with no seat form ONE additional designated bill placed last. · Conservative because a deterministic
+grouping keeps the split reproducible and every non-voided item lands on exactly one bill. · Revisited if
+per-seat bill designation becomes operator-configurable.
+
+**C4 (re-split = void-and-recut) — re-split only while all live bills OPEN + untendered (M5-L2)** · Cutting
+bills for an order that already has live (non-void) bills is refused unless a `recut` (reason + manager
+co-authorization) is supplied AND every live bill is still OPEN and untendered; the recut voids the existing
+bills as new VOID records (reason + co-auth) and creates a fresh set — never an in-place edit. Once any bill
+is SETTLED or carries a tender, re-splitting is locked (RESPLIT_LOCKED). · Conservative because it preserves
+the append-only spirit (corrections are new records) and never rewrites money after settlement begins. ·
+Revisited if partial re-splits of an already-tendered order are scoped.
+
+**C12 (close parks at PAYMENT_PENDING) — settlement guard gates only PAYMENT_PENDING → CLOSED (M5-L2)** ·
+The order close command consults the bills-settled predicate before `PAYMENT_PENDING → CLOSED` only; a
+just-served order whose first close would advance SERVED → PAYMENT_PENDING is PARKED at PAYMENT_PENDING when
+not yet settled (awaiting tender — returns success, no error, so bills can be cut and tendered), while an
+order already at PAYMENT_PENDING that is asked to close while unsettled is rejected (NOT_SETTLED). The §11.1
+state machine and its edges are unchanged. · Conservative because it keeps the single declared cross-milestone
+`orders.ts` edit bounded to a pre-transition guard and avoids a chicken-and-egg where an order can never reach
+the state in which it is tendered. · Revisited if a distinct explicit "request payment" command is introduced.

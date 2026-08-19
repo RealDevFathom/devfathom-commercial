@@ -60,13 +60,7 @@ export class DrawerSessionError extends Error {
 }
 
 export type DrawerMovementKind =
-  | 'OPENING_FLOAT'
-  | 'CASH_SALE'
-  | 'CASH_REFUND'
-  | 'PAID_IN'
-  | 'PAID_OUT'
-  | 'DROP'
-  | 'CLOSING_COUNT';
+  'OPENING_FLOAT' | 'CASH_SALE' | 'CASH_REFUND' | 'PAID_IN' | 'PAID_OUT' | 'DROP' | 'CLOSING_COUNT';
 
 /** The manual adjustment kinds a `cash:adjust` command may post (C8). Opening
  * float, sales, refunds and the closing count are written by their own commands /
@@ -477,10 +471,7 @@ export async function closeDrawerSession(
       throw new DrawerSessionError('The drawer session does not exist.', 'DRAWER_NOT_FOUND');
     }
     if (session.status !== 'OPEN') {
-      throw new DrawerSessionError(
-        'The drawer session is already closed.',
-        'ALREADY_CLOSED'
-      );
+      throw new DrawerSessionError('The drawer session is already closed.', 'ALREADY_CLOSED');
     }
 
     const countedCash = requireNonNegative(money(input.countedCash), 'The counted cash');

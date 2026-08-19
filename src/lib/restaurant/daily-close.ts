@@ -85,7 +85,11 @@ export type AggregateBill = {
   compTotal: Prisma.Decimal;
   grandTotal: Prisma.Decimal;
 };
-export type AggregateTender = { type: TenderType; amount: Prisma.Decimal; tipAmount: Prisma.Decimal };
+export type AggregateTender = {
+  type: TenderType;
+  amount: Prisma.Decimal;
+  tipAmount: Prisma.Decimal;
+};
 export type AggregateRefund = { amount: Prisma.Decimal };
 export type AggregateDrawer = {
   status: DrawerStatus;

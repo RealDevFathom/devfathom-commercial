@@ -55,6 +55,7 @@ type Deps = {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   orders: typeof import('@/lib/restaurant/orders');
+  bills: typeof import('@/lib/restaurant/bills');
   stateMachine: typeof import('@/lib/restaurant/order-state-machine');
   coAuth: typeof import('@/lib/restaurant/co-authorization');
 };
@@ -94,12 +95,29 @@ async function openWithItem(over?: { course?: number }) {
   return { orderId: opened.orderId, itemId: added.itemId, db };
 }
 
+/** Cut one bill for the whole order and settle it, so the M5-L2 settlement guard
+ * lets the order close. Uses the real bills command layer + the `settleBill` seam
+ * L4's tender flow calls; here we settle directly (no tender) to exercise the
+ * order-close path without pulling in the not-yet-built tender lane. */
+async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
+  const cut = await deps.bills.cutBills(db, { orderId, split: { kind: 'NONE' }, actor: actor() });
+  await deps.withTenantDb(orgId, (tx) =>
+    deps.bills.settleBill(tx, {
+      billId: cut.billIds[0]!,
+      staffProfileId: ids.operator,
+      deviceId,
+      at: AT,
+    })
+  );
+}
+
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, stateMachine, coAuth] = await Promise.all([
+  const [scopedDb, devices, orders, bills, stateMachine, coAuth] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('@/lib/restaurant/orders'),
+    import('@/lib/restaurant/bills'),
     import('@/lib/restaurant/order-state-machine'),
     import('@/lib/restaurant/co-authorization'),
   ]);
@@ -109,6 +127,7 @@ beforeAll(async () => {
     createTenantDb: scopedDb.createTenantDb,
     enrollDevice: devices.enrollDevice,
     orders,
+    bills,
     stateMachine,
     coAuth,
   };
@@ -387,6 +406,16 @@ describeIfDatabase('orders command layer (real DB)', () => {
     await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'FIRING', actor: actor() });
     await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'PREPARED', actor: actor() });
     await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'SERVED', actor: actor() });
+
+    // M5-L2: a served order's first close parks it at PAYMENT_PENDING awaiting
+    // tender; it does not close until its bills are settled (settlement guard, C12).
+    await deps.orders.closeOrder(db, { orderId, actor: actor() });
+    const parked = await read((tx) =>
+      tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+    );
+    expect(parked?.status).toBe('PAYMENT_PENDING');
+
+    await settleOrderFully(db, orderId);
     await deps.orders.closeOrder(db, { orderId, actor: actor() });
 
     const order = await read((tx) =>
@@ -441,7 +470,9 @@ describeIfDatabase('orders command layer (real DB)', () => {
       actor: actor(),
     });
     await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'SERVED', actor: actor() });
-    await deps.orders.closeOrder(db, { orderId, actor: actor() });
+    await deps.orders.closeOrder(db, { orderId, actor: actor() }); // parks at PAYMENT_PENDING
+    await settleOrderFully(db, orderId);
+    await deps.orders.closeOrder(db, { orderId, actor: actor() }); // finalizes
 
     const order = await read((tx) =>
       tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
