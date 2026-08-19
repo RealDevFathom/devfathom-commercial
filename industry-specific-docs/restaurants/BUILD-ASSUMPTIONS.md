@@ -873,6 +873,34 @@ data is gated (unlike the ungated M4 order reads). · Conservative because finan
 checkout/close operator rather than any device session, and the receipt exposes no card data. · Revisited if a
 read-only floor/customer-display surface is scoped.
 
+### M6 — inventory & purchasing
+
+**D07 (inventory costing, negative stock, recipe-consumption posting, remake/void-after-preparation, batch/lot,
+production-batch, and backdating policies) (M6-L1)** · D07 is `OPEN` in the D-register; M6 records these
+conservative defaults behind the plan's §11.4 seam. **(1) Costing — read-time weighted-average.** On-hand cost is
+weighted-average, derived AT READ TIME from intrinsic-cost movements: only `PURCHASE_RECEIPT` and
+`SUPPLIER_RETURN` carry a `unitCost` (per canonical unit); WAC = Σ(quantity×unitCost) ÷ Σ(quantity) over those
+movements. No FIFO/LIFO layers; no per-consumption cost snapshot is written. **(2) Negative stock — permitted,
+flagged, never blocked.** There is NO on-hand balance column and NO balance pre-check at posting; a movement is
+appended unconditionally, so a derived on-hand may go negative and is surfaced/flagged in reads (compared against
+zero / the low-stock threshold). **(3) Recipe-consumption posting point — at order close.** `RECIPE_CONSUMPTION`
+movements post transactionally at order close (M5's settle-then-close guarantees settlement first). Remake or
+void-after-preparation consumes per the recorded C6 `wastageDisposition`: `WASTE` → a `WASTAGE` movement;
+`RESTOCK` → no consumption; `NONE` → no movement. `SALE_REVERSAL` covers post-close corrections. **(4) Backdating
+— immutable rows, corrections are new movements.** Ledger rows are immutable (DB-enforced append-only: forced RLS
+with SELECT+INSERT policies only, no UPDATE/DELETE); a correction is a NEW movement with `occurredAt` in the past
+and `recordedAt` = now. **(5) Batch/lot — optional seam only.** `RestaurantStockBatch` is recordable at receiving
+and referenceable by movements (`RestaurantStockItem.trackBatches` toggles it); NO expiry gating and NO FEFO
+enforcement. **(6) Production/preparation batches — NOT built (D23 deferred).** · Conservative because each choice
+avoids a hard-to-reverse commitment before D07 closes: read-time WAC needs no racy cost snapshots under parallel
+writes; permitting negative stock keeps posting append-only and race-free (a pre-check would serialize writers and
+still race), and never blocks service; posting consumption at close reuses the settled M5 guarantee; immutable
+backdated corrections preserve history; the batch seam records data without enforcing an unproven lot policy. The
+append-only ledger + exact-Decimal derived balance are proven under ≥8-way concurrency
+(`tests/restaurant-m6-stock-concurrency.test.ts`). · Revisited by D07 closing — worked costing/reconciliation
+examples from Product owner + Finance + Restaurant operations SME may replace WAC with FIFO layers, gate negative
+stock, or move the consumption posting point; and by D23 for production/preparation batches.
+
 ---
 
 ## M5-L8 — Independent verification rollup (Verification Engineer, WHA-63)

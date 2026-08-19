@@ -59,6 +59,33 @@ const M5_TABLES = [
   'restaurant_money_idempotency_keys',
 ] as const;
 
+// M6 (inventory & purchasing: stock locations, the stockable-ingredient seam,
+// the append-only movement ledger, batches, counts, transfers, low-stock rules,
+// suppliers, purchase orders, receiving, discrepancies, and the inventory
+// idempotency replay domain) tables. Flat allowlist alongside the earlier sets
+// so the table-pinning probe fails deliberately whenever the restaurant schema
+// grows without review (directive 7). Every M6 table shipped in M6-L1 is listed
+// here — the WHA-51 "complete allowlist" contract: a new table without a listing,
+// or a listed table not shipped, fails the pin below.
+const M6_TABLES = [
+  'restaurant_stock_locations',
+  'restaurant_stock_items',
+  'restaurant_stock_movements',
+  'restaurant_stock_batches',
+  'restaurant_stock_counts',
+  'restaurant_stock_count_lines',
+  'restaurant_stock_transfers',
+  'restaurant_stock_transfer_lines',
+  'restaurant_low_stock_rules',
+  'restaurant_suppliers',
+  'restaurant_purchase_orders',
+  'restaurant_purchase_order_lines',
+  'restaurant_purchase_receipts',
+  'restaurant_purchase_receipt_lines',
+  'restaurant_receiving_discrepancies',
+  'restaurant_inventory_idempotency_keys',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -377,7 +404,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ORDER BY table_name`
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual(
-      [...BASE_RESTAURANT_TABLES, ...M3_TABLES, ...M4_TABLES, ...M5_TABLES].sort()
+      [...BASE_RESTAURANT_TABLES, ...M3_TABLES, ...M4_TABLES, ...M5_TABLES, ...M6_TABLES].sort()
     );
 
     expect(await readM3Columns()).toEqual(M3_COLUMNS);

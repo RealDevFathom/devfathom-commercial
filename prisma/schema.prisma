@@ -2267,6 +2267,11 @@ model RestaurantBranch {
   drawerSessions         RestaurantDrawerSession[]
   dailyCloses            RestaurantDailyClose[]
   receiptNumberSequences RestaurantReceiptNumberSequence[]
+  // M6-L1: branch-scoped inventory stock locations and the purchasing surfaces
+  // (POs, receipts) delivered to this branch. All org-scoped under forced RLS.
+  stockLocations         RestaurantStockLocation[]
+  purchaseOrders         RestaurantPurchaseOrder[]
+  purchaseReceipts       RestaurantPurchaseReceipt[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
@@ -2341,27 +2346,36 @@ model RestaurantStaffProfile {
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
 
-  user               User?                               @relation("RestaurantStaffUser", fields: [userId], references: [id], onDelete: SetNull)
-  primaryBranch      RestaurantBranch?                   @relation("RestaurantStaffPrimaryBranch", fields: [primaryBranchId], references: [id], onDelete: SetNull)
-  credentials        RestaurantOperatorCredential[]
-  terminalSessions   RestaurantTerminalSession[]         @relation("TerminalSessionActiveStaff")
-  actingCoAuths      RestaurantCoAuthorization[]         @relation("CoAuthActingStaff")
-  approvingCoAuths   RestaurantCoAuthorization[]         @relation("CoAuthApprovingStaff")
-  auditLogs          AuditLog[]                          @relation("StaffProfileAuditLogs")
+  user                   User?                               @relation("RestaurantStaffUser", fields: [userId], references: [id], onDelete: SetNull)
+  primaryBranch          RestaurantBranch?                   @relation("RestaurantStaffPrimaryBranch", fields: [primaryBranchId], references: [id], onDelete: SetNull)
+  credentials            RestaurantOperatorCredential[]
+  terminalSessions       RestaurantTerminalSession[]         @relation("TerminalSessionActiveStaff")
+  actingCoAuths          RestaurantCoAuthorization[]         @relation("CoAuthActingStaff")
+  approvingCoAuths       RestaurantCoAuthorization[]         @relation("CoAuthApprovingStaff")
+  auditLogs              AuditLog[]                          @relation("StaffProfileAuditLogs")
   // M4-L1: section assignments (per business date) and order/kitchen attribution
   // (the operator who opened an order, the assigned server, and the acting
   // operator on an order event). Attribution is preserved on archival (§11.6).
-  sectionAssignments RestaurantServerSectionAssignment[]
-  ordersOpened       RestaurantOrder[]                   @relation("OrderOpeningStaff")
-  ordersServed       RestaurantOrder[]                   @relation("OrderServerStaff")
-  actedOrderEvents   RestaurantOrderEvent[]              @relation("OrderEventActorStaff")
-  billsOpened        RestaurantBill[]
-  payments           RestaurantPayment[]
-  tenders            RestaurantTender[]
-  refunds            RestaurantRefund[]
-  drawerSessions     RestaurantDrawerSession[]
-  drawerMovements    RestaurantDrawerMovement[]
-  dailyClosesCut     RestaurantDailyClose[]
+  sectionAssignments     RestaurantServerSectionAssignment[]
+  ordersOpened           RestaurantOrder[]                   @relation("OrderOpeningStaff")
+  ordersServed           RestaurantOrder[]                   @relation("OrderServerStaff")
+  actedOrderEvents       RestaurantOrderEvent[]              @relation("OrderEventActorStaff")
+  billsOpened            RestaurantBill[]
+  payments               RestaurantPayment[]
+  tenders                RestaurantTender[]
+  refunds                RestaurantRefund[]
+  drawerSessions         RestaurantDrawerSession[]
+  drawerMovements        RestaurantDrawerMovement[]
+  dailyClosesCut         RestaurantDailyClose[]
+  // M6-L1: best-effort inventory attribution (nullable on the child rows) — the
+  // operator who posted a movement, ran a count/transfer or received goods, and
+  // the creator/approver of a purchase order.
+  stockMovements         RestaurantStockMovement[]
+  stockCounts            RestaurantStockCount[]
+  stockTransfers         RestaurantStockTransfer[]
+  purchaseReceipts       RestaurantPurchaseReceipt[]
+  purchaseOrdersCreated  RestaurantPurchaseOrder[]           @relation("PurchaseOrderCreatedBy")
+  purchaseOrdersApproved RestaurantPurchaseOrder[]           @relation("PurchaseOrderApprovedBy")
 
   @@index([organizationId])
   @@index([userId])
@@ -2422,24 +2436,29 @@ model RestaurantRegisteredDevice {
   createdAt        DateTime                         @default(now())
   updatedAt        DateTime                         @updatedAt
 
-  branch               RestaurantBranch                @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  station              RestaurantKitchenStation?       @relation(fields: [stationId], references: [id], onDelete: SetNull)
-  credentials          RestaurantOperatorCredential[]
-  terminalSessions     RestaurantTerminalSession[]
-  coAuthorizations     RestaurantCoAuthorization[]
+  branch                    RestaurantBranch                    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  station                   RestaurantKitchenStation?           @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  credentials               RestaurantOperatorCredential[]
+  terminalSessions          RestaurantTerminalSession[]
+  coAuthorizations          RestaurantCoAuthorization[]
   // M4-L1: orders opened from this terminal, order events attributed to it, and
   // the device-scoped idempotency keys guarding its command replays (C7).
-  ordersOpened         RestaurantOrder[]               @relation("OrderOpeningDevice")
-  actedOrderEvents     RestaurantOrderEvent[]          @relation("OrderEventActorDevice")
-  idempotencyKeys      RestaurantOrderIdempotencyKey[]
-  bills                RestaurantBill[]
-  payments             RestaurantPayment[]
-  tenders              RestaurantTender[]
-  refunds              RestaurantRefund[]
-  drawerSessions       RestaurantDrawerSession[]
-  drawerMovements      RestaurantDrawerMovement[]
-  dailyCloses          RestaurantDailyClose[]
-  moneyIdempotencyKeys RestaurantMoneyIdempotencyKey[]
+  ordersOpened              RestaurantOrder[]                   @relation("OrderOpeningDevice")
+  actedOrderEvents          RestaurantOrderEvent[]              @relation("OrderEventActorDevice")
+  idempotencyKeys           RestaurantOrderIdempotencyKey[]
+  bills                     RestaurantBill[]
+  payments                  RestaurantPayment[]
+  tenders                   RestaurantTender[]
+  refunds                   RestaurantRefund[]
+  drawerSessions            RestaurantDrawerSession[]
+  drawerMovements           RestaurantDrawerMovement[]
+  dailyCloses               RestaurantDailyClose[]
+  moneyIdempotencyKeys      RestaurantMoneyIdempotencyKey[]
+  // M6-L1: terminal-attributed inventory movements/receipts and the separate
+  // inventory idempotency-key replay domain (all nullable device refs).
+  stockMovements            RestaurantStockMovement[]
+  inventoryPurchaseReceipts RestaurantPurchaseReceipt[]
+  inventoryIdempotencyKeys  RestaurantInventoryIdempotencyKey[]
 
   @@index([organizationId])
   @@index([branchId])
@@ -2818,11 +2837,16 @@ model RestaurantUnit {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  conversionsFrom RestaurantUnitConversion[] @relation("RestaurantUnitConversionFrom")
-  conversionsTo   RestaurantUnitConversion[] @relation("RestaurantUnitConversionTo")
-  ingredients     RestaurantIngredient[]
-  recipeLines     RestaurantRecipeLine[]
-  recipeVersions  RestaurantRecipeVersion[]
+  conversionsFrom      RestaurantUnitConversion[]      @relation("RestaurantUnitConversionFrom")
+  conversionsTo        RestaurantUnitConversion[]      @relation("RestaurantUnitConversionTo")
+  ingredients          RestaurantIngredient[]
+  recipeLines          RestaurantRecipeLine[]
+  recipeVersions       RestaurantRecipeVersion[]
+  // M6-L1: canonical stock unit for stock items, and the ordering/receiving units
+  // recorded on purchase-order / receipt lines (converted to canonical at post).
+  stockItems           RestaurantStockItem[]
+  purchaseOrderLines   RestaurantPurchaseOrderLine[]
+  purchaseReceiptLines RestaurantPurchaseReceiptLine[]
 
   @@index([organizationId])
   @@map("restaurant_units")
@@ -2916,6 +2940,9 @@ model RestaurantIngredient {
   baseUnit    RestaurantUnit                 @relation(fields: [baseUnitId], references: [id], onDelete: Restrict)
   allergens   RestaurantIngredientAllergen[]
   recipeLines RestaurantRecipeLine[]
+  // M6-L1: the ingredient's stockable identity (one per ingredient). NO stock
+  // columns land on the ingredient itself — inventory lives on RestaurantStockItem.
+  stockItem   RestaurantStockItem?
 
   @@index([organizationId])
   @@index([baseUnitId])
@@ -3553,6 +3580,9 @@ model RestaurantOrder {
   events           RestaurantOrderEvent[]
   kitchenTickets   RestaurantKitchenTicket[]
   bills            RestaurantBill[]
+  // M6-L1: RECIPE_CONSUMPTION / SALE_REVERSAL movements posted at order close and
+  // for post-close corrections reference the originating order (nullable, SetNull).
+  stockMovements   RestaurantStockMovement[]
 
   @@unique([branchId, businessDate, orderNumber])
   @@index([organizationId])
@@ -4344,6 +4374,549 @@ model RestaurantMoneyIdempotencyKey {
   @@index([organizationId])
   @@index([deviceId])
   @@map("restaurant_money_idempotency_keys")
+}
+
+// ===========================================================================
+// M6 — Inventory & purchasing (restaurant/m6-inventory-purchasing). Every model
+// below is org-scoped under forced RLS (C1) with a bare, RLS-guarded
+// organizationId that defaults from the transaction-local setting. Quantities
+// and costs are Decimal (never float). The single source of stock truth is the
+// APPEND-ONLY movement ledger (RestaurantStockMovement, DB-enforced SELECT+INSERT
+// RLS only); NO model carries a mutable on-hand balance column — balances are
+// DERIVED by folding the ledger (D07). Costing is read-time weighted-average from
+// intrinsic-cost movements; negative derived stock is permitted and flagged, not
+// blocked at posting (D07 conservative defaults — BUILD-ASSUMPTIONS §M6).
+// ===========================================================================
+
+/// M6/§11.4: the ten canonical stock-movement reasons — the CLOSED set of ways a
+/// signed quantity enters or leaves a (stockItem, location). Intrinsic-cost
+/// movements (PURCHASE_RECEIPT, SUPPLIER_RETURN) carry a `unitCost` that feeds the
+/// read-time weighted-average cost; the rest carry none (D07). RECIPE_CONSUMPTION
+/// posts transactionally at order close; SALE_REVERSAL covers post-close
+/// corrections.
+enum RestaurantStockMovementReason {
+  PURCHASE_RECEIPT
+  RECIPE_CONSUMPTION
+  SALE_REVERSAL
+  TRANSFER
+  PHYSICAL_COUNT_ADJUSTMENT
+  WASTAGE
+  SPOILAGE
+  STAFF_MEAL
+  SUPPLIER_RETURN
+  MANUAL_CORRECTION
+}
+
+/// M6/§11.4: a physical stock count's lifecycle. DRAFT accumulates counted lines;
+/// SUBMITTED freezes the counted quantities + derived snapshot; POSTED writes the
+/// PHYSICAL_COUNT_ADJUSTMENT movements that reconcile derived to counted.
+enum RestaurantStockCountStatus {
+  DRAFT
+  SUBMITTED
+  POSTED
+}
+
+/// M6/§6.4: an inter-location stock transfer's lifecycle. DRAFT accumulates lines;
+/// DISPATCHED posts the out-of-source TRANSFER movements; RECEIVED posts the
+/// into-destination TRANSFER movements; CANCELLED abandons a DRAFT.
+enum RestaurantStockTransferStatus {
+  DRAFT
+  DISPATCHED
+  RECEIVED
+  CANCELLED
+}
+
+/// M6/§6.5/§11.4: a purchase order's lifecycle. DRAFT while edited, SUBMITTED for
+/// approval, APPROVED to order, PARTIALLY_RECEIVED / RECEIVED as goods arrive,
+/// CLOSED when done, or CANCELLED. Received quantity is DERIVED from receipt
+/// lines — never stored as a mutable column on the line.
+enum RestaurantPurchaseOrderStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+/// M6/§6.5: a goods-receiving discrepancy category. SHORTAGE/OVERAGE record a
+/// received-vs-expected quantity mismatch; DAMAGED/EXPIRED/REJECTED record
+/// unusable goods; OTHER + a note is the escape hatch. The signed correction to
+/// stock is always a movement, never a mutation of this evidence row.
+enum RestaurantReceivingDiscrepancyKind {
+  SHORTAGE
+  OVERAGE
+  DAMAGED
+  EXPIRED
+  REJECTED
+  OTHER
+}
+
+/// M6/§6.4: a physical stock-holding location inside a branch (kitchen line, dry
+/// store, walk-in, bar…). Branch-scoped (§8 "transfers within the branch");
+/// balances are derived per (stockItem, location) from the movement ledger. The
+/// `inventory.stockLocations.max` limit key lives in vertical-catalog (untouched).
+model RestaurantStockLocation {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  name           String
+  code           String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch           RestaurantBranch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  movements        RestaurantStockMovement[]
+  lowStockRules    RestaurantLowStockRule[]
+  counts           RestaurantStockCount[]
+  transfersFrom    RestaurantStockTransfer[]   @relation("StockTransferSource")
+  transfersTo      RestaurantStockTransfer[]   @relation("StockTransferDestination")
+  purchaseOrders   RestaurantPurchaseOrder[]
+  purchaseReceipts RestaurantPurchaseReceipt[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_stock_locations")
+}
+
+/// M6/§6.4: the stockable identity of a catalog ingredient (M3 seam) — one per
+/// ingredient. `canonicalUnitId` is the unit every movement quantity is stored in
+/// (ordering/receiving units are converted to it by the L1 ledger primitive).
+/// `trackBatches` toggles the optional batch/lot seam (D07 — recordable, never
+/// enforced). NO on-hand balance column: balances are derived from the ledger.
+model RestaurantStockItem {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ingredientId    String   @unique
+  canonicalUnitId String
+  isActive        Boolean  @default(true)
+  trackBatches    Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  ingredient           RestaurantIngredient             @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  canonicalUnit        RestaurantUnit                   @relation(fields: [canonicalUnitId], references: [id], onDelete: Restrict)
+  movements            RestaurantStockMovement[]
+  batches              RestaurantStockBatch[]
+  countLines           RestaurantStockCountLine[]
+  transferLines        RestaurantStockTransferLine[]
+  lowStockRules        RestaurantLowStockRule[]
+  purchaseOrderLines   RestaurantPurchaseOrderLine[]
+  purchaseReceiptLines RestaurantPurchaseReceiptLine[]
+  discrepancies        RestaurantReceivingDiscrepancy[]
+
+  @@index([organizationId])
+  @@index([canonicalUnitId])
+  @@map("restaurant_stock_items")
+}
+
+/// M6/§11.4: the APPEND-ONLY stock movement ledger — the SINGLE source of stock
+/// truth. Every row is a signed `quantity` (canonical unit; positive = in,
+/// negative = out) at a (stockItem, location) for one of the ten reasons.
+/// Intrinsic-cost movements carry `unitCost` (weighted-average cost is derived at
+/// read time; D07). `occurredAt` is the economic time (backdatable); `recordedAt`
+/// is the immutable system record time. Nullable refs tie a movement to the
+/// order/receipt/transfer/count/batch that produced it. Actor attribution is
+/// best-effort (nullable) — system postings (recipe consumption at order close)
+/// carry the order's operator when known. No updatedAt; DB-enforced append-only
+/// (SELECT+INSERT RLS only) — a correction is a NEW movement, never an edit.
+model RestaurantStockMovement {
+  id             String                        @id @default(cuid())
+  organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  stockItemId    String
+  locationId     String
+  reason         RestaurantStockMovementReason
+  quantity       Decimal                       @db.Decimal(18, 6)
+  unitCost       Decimal?                      @db.Decimal(18, 6)
+  occurredAt     DateTime                      @default(now())
+  recordedAt     DateTime                      @default(now())
+  orderId        String?
+  receiptId      String?
+  transferId     String?
+  countId        String?
+  batchId        String?
+  staffProfileId String?
+  deviceId       String?
+
+  stockItem RestaurantStockItem         @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  location  RestaurantStockLocation     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  order     RestaurantOrder?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  receipt   RestaurantPurchaseReceipt?  @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  transfer  RestaurantStockTransfer?    @relation(fields: [transferId], references: [id], onDelete: SetNull)
+  count     RestaurantStockCount?       @relation(fields: [countId], references: [id], onDelete: SetNull)
+  batch     RestaurantStockBatch?       @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  staff     RestaurantStaffProfile?     @relation(fields: [staffProfileId], references: [id], onDelete: SetNull)
+  device    RestaurantRegisteredDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([stockItemId, locationId])
+  @@index([locationId])
+  @@index([reason])
+  @@index([occurredAt])
+  @@index([orderId])
+  @@index([receiptId])
+  @@index([transferId])
+  @@index([countId])
+  @@index([batchId])
+  @@map("restaurant_stock_movements")
+}
+
+/// M6/§6.4/D07: an optional batch/lot recorded at receiving (`code`, expiry) and
+/// referenced by movements. Seam only — recordable, never enforced (no expiry
+/// gating, no FEFO). One code per stock item.
+model RestaurantStockBatch {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  stockItemId    String
+  receiptId      String?
+  code           String
+  expiryDate     DateTime? @db.Date
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  stockItem    RestaurantStockItem             @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  receipt      RestaurantPurchaseReceipt?      @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  movements    RestaurantStockMovement[]
+  receiptLines RestaurantPurchaseReceiptLine[]
+
+  @@unique([stockItemId, code])
+  @@index([organizationId])
+  @@index([stockItemId])
+  @@index([receiptId])
+  @@map("restaurant_stock_batches")
+}
+
+/// M6/§6.4/§11.4: a physical stock count at a location. DRAFT→SUBMITTED→POSTED;
+/// posting writes the reconciling PHYSICAL_COUNT_ADJUSTMENT movements. Counted vs
+/// derived and the variance live on the lines (a frozen snapshot, not a live
+/// balance).
+model RestaurantStockCount {
+  id             String                     @id @default(cuid())
+  organizationId String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  locationId     String
+  status         RestaurantStockCountStatus @default(DRAFT)
+  reference      String?
+  countedAt      DateTime?
+  submittedAt    DateTime?
+  postedAt       DateTime?
+  staffProfileId String?
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  location  RestaurantStockLocation    @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  staff     RestaurantStaffProfile?    @relation(fields: [staffProfileId], references: [id], onDelete: SetNull)
+  lines     RestaurantStockCountLine[]
+  movements RestaurantStockMovement[]
+
+  @@index([organizationId])
+  @@index([locationId])
+  @@index([status])
+  @@map("restaurant_stock_counts")
+}
+
+/// M6/§11.4: one counted line of a stock count. `countedQuantity` is physically
+/// counted; `snapshotQuantity` is the derived on-hand FROZEN at submit time (the
+/// counted-vs-derived pairing); `varianceQuantity` = counted − snapshot. All are
+/// immutable snapshots (evidence), never a live balance. One line per stock item.
+model RestaurantStockCountLine {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  stockCountId     String
+  stockItemId      String
+  countedQuantity  Decimal  @db.Decimal(18, 6)
+  snapshotQuantity Decimal  @db.Decimal(18, 6)
+  varianceQuantity Decimal  @db.Decimal(18, 6)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  stockCount RestaurantStockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  stockItem  RestaurantStockItem  @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+
+  @@unique([stockCountId, stockItemId])
+  @@index([organizationId])
+  @@index([stockCountId])
+  @@index([stockItemId])
+  @@map("restaurant_stock_count_lines")
+}
+
+/// M6/§6.4: an inter-location stock transfer within a branch. DRAFT→DISPATCHED→
+/// RECEIVED (or CANCELLED). Dispatch posts negative TRANSFER movements at the
+/// source; receipt posts positive TRANSFER movements at the destination. Source
+/// and destination must differ (DB CHECK).
+model RestaurantStockTransfer {
+  id                    String                        @id @default(cuid())
+  organizationId        String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sourceLocationId      String
+  destinationLocationId String
+  status                RestaurantStockTransferStatus @default(DRAFT)
+  reference             String?
+  dispatchedAt          DateTime?
+  receivedAt            DateTime?
+  staffProfileId        String?
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+
+  sourceLocation      RestaurantStockLocation       @relation("StockTransferSource", fields: [sourceLocationId], references: [id], onDelete: Cascade)
+  destinationLocation RestaurantStockLocation       @relation("StockTransferDestination", fields: [destinationLocationId], references: [id], onDelete: Cascade)
+  staff               RestaurantStaffProfile?       @relation(fields: [staffProfileId], references: [id], onDelete: SetNull)
+  lines               RestaurantStockTransferLine[]
+  movements           RestaurantStockMovement[]
+
+  @@index([organizationId])
+  @@index([sourceLocationId])
+  @@index([destinationLocationId])
+  @@index([status])
+  @@map("restaurant_stock_transfers")
+}
+
+/// M6/§6.4: one line of a stock transfer — a positive `quantity` (canonical unit)
+/// of a stock item to move. The signed source/destination movements are derived
+/// from this at dispatch/receipt.
+model RestaurantStockTransferLine {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  stockTransferId String
+  stockItemId     String
+  quantity        Decimal  @db.Decimal(18, 6)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  stockTransfer RestaurantStockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  stockItem     RestaurantStockItem     @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+
+  @@unique([stockTransferId, stockItemId])
+  @@index([organizationId])
+  @@index([stockTransferId])
+  @@index([stockItemId])
+  @@map("restaurant_stock_transfer_lines")
+}
+
+/// M6/§6.4: a low-stock threshold for a (stockItem, location). When the derived
+/// on-hand falls below `threshold` (canonical unit) the item is surfaced as
+/// low/reorder in reads. One rule per (item, location).
+model RestaurantLowStockRule {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  stockItemId    String
+  locationId     String
+  threshold      Decimal  @db.Decimal(18, 6)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  stockItem RestaurantStockItem     @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  location  RestaurantStockLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([stockItemId, locationId])
+  @@index([organizationId])
+  @@index([stockItemId])
+  @@index([locationId])
+  @@map("restaurant_low_stock_rules")
+}
+
+/// M6/§6.5: a purchasing supplier — the identity POs and receipts reference.
+/// Contacts/item-mappings/price-history are downstream seams. Supplier payment
+/// execution stays in Finance (§6.5) — no accounts-payable ledger here.
+model RestaurantSupplier {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  code           String?
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  purchaseOrders   RestaurantPurchaseOrder[]
+  purchaseReceipts RestaurantPurchaseReceipt[]
+
+  @@index([organizationId])
+  @@map("restaurant_suppliers")
+}
+
+/// M6/§6.5/§11.4: a purchase order to a supplier, delivered to a branch, with the
+/// §11.4 lifecycle. Received quantity is DERIVED from receipt lines — never a
+/// mutable column. `locationId` is the default receiving-location seam.
+model RestaurantPurchaseOrder {
+  id                       String                        @id @default(cuid())
+  organizationId           String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  supplierId               String
+  branchId                 String
+  locationId               String?
+  status                   RestaurantPurchaseOrderStatus @default(DRAFT)
+  reference                String?
+  expectedDate             DateTime?                     @db.Date
+  submittedAt              DateTime?
+  approvedAt               DateTime?
+  closedAt                 DateTime?
+  cancelledAt              DateTime?
+  createdByStaffProfileId  String?
+  approvedByStaffProfileId String?
+  createdAt                DateTime                      @default(now())
+  updatedAt                DateTime                      @updatedAt
+
+  supplier        RestaurantSupplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  branch          RestaurantBranch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  location        RestaurantStockLocation?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  createdByStaff  RestaurantStaffProfile?       @relation("PurchaseOrderCreatedBy", fields: [createdByStaffProfileId], references: [id], onDelete: SetNull)
+  approvedByStaff RestaurantStaffProfile?       @relation("PurchaseOrderApprovedBy", fields: [approvedByStaffProfileId], references: [id], onDelete: SetNull)
+  lines           RestaurantPurchaseOrderLine[]
+  receipts        RestaurantPurchaseReceipt[]
+
+  @@index([organizationId])
+  @@index([supplierId])
+  @@index([branchId])
+  @@index([locationId])
+  @@index([status])
+  @@map("restaurant_purchase_orders")
+}
+
+/// M6/§6.5: one ordered line of a purchase order — `orderedQuantity` in `unit`
+/// (converted to the item's canonical unit at receipt) at an expected `unitCost`.
+/// Received quantity is DERIVED from the receipt lines that reference this line.
+model RestaurantPurchaseOrderLine {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  purchaseOrderId String
+  stockItemId     String
+  orderedQuantity Decimal  @db.Decimal(18, 6)
+  unitId          String
+  unitCost        Decimal  @db.Decimal(18, 6)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  purchaseOrder RestaurantPurchaseOrder         @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  stockItem     RestaurantStockItem             @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+  unit          RestaurantUnit                  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  receiptLines  RestaurantPurchaseReceiptLine[]
+
+  @@index([organizationId])
+  @@index([purchaseOrderId])
+  @@index([stockItemId])
+  @@index([unitId])
+  @@map("restaurant_purchase_order_lines")
+}
+
+/// M6/§6.5: a goods-receiving event (against a PO or ad-hoc) into a location. Its
+/// lines drive the PURCHASE_RECEIPT movements (carrying `unitCost` → weighted-
+/// average cost) in one transaction; discrepancies and batches hang off it.
+/// Receiving retries are idempotent via RestaurantInventoryIdempotencyKey.
+model RestaurantPurchaseReceipt {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  purchaseOrderId String?
+  supplierId      String
+  branchId        String
+  locationId      String
+  reference       String?
+  receivedAt      DateTime @default(now())
+  staffProfileId  String?
+  deviceId        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  purchaseOrder RestaurantPurchaseOrder?         @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  supplier      RestaurantSupplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  branch        RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  location      RestaurantStockLocation          @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  staff         RestaurantStaffProfile?          @relation(fields: [staffProfileId], references: [id], onDelete: SetNull)
+  device        RestaurantRegisteredDevice?      @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  lines         RestaurantPurchaseReceiptLine[]
+  movements     RestaurantStockMovement[]
+  batches       RestaurantStockBatch[]
+  discrepancies RestaurantReceivingDiscrepancy[]
+
+  @@index([organizationId])
+  @@index([purchaseOrderId])
+  @@index([supplierId])
+  @@index([branchId])
+  @@index([locationId])
+  @@map("restaurant_purchase_receipts")
+}
+
+/// M6/§6.5: one received line — `receivedQuantity` in `unit` at the actual
+/// `unitCost` (the intrinsic cost that feeds weighted-average costing via the
+/// PURCHASE_RECEIPT movement). Optionally links its PO line and a batch.
+model RestaurantPurchaseReceiptLine {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  purchaseReceiptId   String
+  purchaseOrderLineId String?
+  stockItemId         String
+  receivedQuantity    Decimal  @db.Decimal(18, 6)
+  unitId              String
+  unitCost            Decimal  @db.Decimal(18, 6)
+  batchId             String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  purchaseReceipt   RestaurantPurchaseReceipt        @relation(fields: [purchaseReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderLine RestaurantPurchaseOrderLine?     @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+  stockItem         RestaurantStockItem              @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+  unit              RestaurantUnit                   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  batch             RestaurantStockBatch?            @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  discrepancies     RestaurantReceivingDiscrepancy[]
+
+  @@index([organizationId])
+  @@index([purchaseReceiptId])
+  @@index([purchaseOrderLineId])
+  @@index([stockItemId])
+  @@index([unitId])
+  @@index([batchId])
+  @@map("restaurant_purchase_receipt_lines")
+}
+
+/// M6/§6.5: a goods-receiving discrepancy (shortage/overage/damaged/…) recorded
+/// against a receipt (and optionally a line). Evidence only — the signed stock
+/// correction is always a movement, never a mutation of this row.
+model RestaurantReceivingDiscrepancy {
+  id                    String                             @id @default(cuid())
+  organizationId        String                             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  purchaseReceiptId     String
+  purchaseReceiptLineId String?
+  stockItemId           String
+  kind                  RestaurantReceivingDiscrepancyKind
+  expectedQuantity      Decimal                            @db.Decimal(18, 6)
+  receivedQuantity      Decimal                            @db.Decimal(18, 6)
+  note                  String?
+  createdAt             DateTime                           @default(now())
+  updatedAt             DateTime                           @updatedAt
+
+  purchaseReceipt     RestaurantPurchaseReceipt      @relation(fields: [purchaseReceiptId], references: [id], onDelete: Cascade)
+  purchaseReceiptLine RestaurantPurchaseReceiptLine? @relation(fields: [purchaseReceiptLineId], references: [id], onDelete: SetNull)
+  stockItem           RestaurantStockItem            @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([purchaseReceiptId])
+  @@index([purchaseReceiptLineId])
+  @@index([stockItemId])
+  @@map("restaurant_receiving_discrepancies")
+}
+
+/// M6/§11.4: an idempotency key for inventory/purchasing commands (receiving,
+/// transfers, count posting, adjustments) — the M5 money-key pattern applied to a
+/// SEPARATE replay domain. Org-scoped (not device-scoped): inventory commands
+/// include back-office flows with no device. A replay of the same (org, key)
+/// returns the original result and creates nothing. Unique (organizationId, key).
+model RestaurantInventoryIdempotencyKey {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  commandType    String
+  resultRef      String?
+  deviceId       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  device RestaurantRegisteredDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+  @@index([deviceId])
+  @@map("restaurant_inventory_idempotency_keys")
 }
 
 model PlatformUser {
