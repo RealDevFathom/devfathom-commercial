@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => {
           createdAt: new Date('2026-08-19T11:00:00Z'),
         },
       ],
-      nextCursor: null,
+      nextCursor: null as string | null,
     }),
     bill: query(null),
     tenders: query({
@@ -52,7 +52,7 @@ const mocks = vi.hoisted(() => {
           createdAt: new Date('2026-08-19T12:00:00Z'),
         },
       ],
-      nextCursor: null,
+      nextCursor: null as string | null,
     }),
     refunds: query({
       refunds: [
@@ -73,7 +73,7 @@ const mocks = vi.hoisted(() => {
           createdAt: new Date('2026-08-19T13:00:00Z'),
         },
       ],
-      nextCursor: null,
+      nextCursor: null as string | null,
     }),
     totals: query({
       branchId: 'branch_1',
@@ -129,7 +129,7 @@ const mocks = vi.hoisted(() => {
           movementCount: 3,
         },
       ],
-      nextCursor: null,
+      nextCursor: null as string | null,
     }),
     drawer: query({
       id: 'drawer_1',
@@ -327,7 +327,29 @@ describe('MoneyConsole', () => {
     Object.values(mocks.calls).forEach((calls) => {
       calls.length = 0;
     });
-    mocks.bills.error = null;
+    [
+      mocks.bills,
+      mocks.bill,
+      mocks.tenders,
+      mocks.refunds,
+      mocks.totals,
+      mocks.payment,
+      mocks.drawers,
+      mocks.drawer,
+      mocks.closes,
+      mocks.close,
+    ].forEach((query) => {
+      query.error = null;
+      query.isLoading = false;
+    });
+    mocks.bills.data.nextCursor = null;
+    mocks.tenders.data.nextCursor = null;
+    mocks.refunds.data.nextCursor = null;
+    mocks.drawers.data.nextCursor = null;
+    mocks.close.data.tenderTotals = [
+      { tenderType: 'CARD', amount: '22.00', tipAmount: '2.00', count: 1 },
+    ];
+    mocks.close.data.drawerVariances = [];
   });
 
   it('gates every read by entitlement, branch, active tab, date, and detail selection', () => {
@@ -369,6 +391,9 @@ describe('MoneyConsole', () => {
     setBranchAndDate();
     expect(screen.getByText('bill_1')).toBeInTheDocument();
     expect(screen.getByText('22.00')).toBeInTheDocument();
+    const billsRegion = screen.getByRole('region', { name: 'Bills table' });
+    expect(billsRegion).toHaveAttribute('tabindex', '0');
+    expect(billsRegion.className).toContain('[&_[data-slot=table-container]]:overflow-visible');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Payments' }));
     expect(screen.getAllByText('tender_card').length).toBeGreaterThan(0);
@@ -395,6 +420,75 @@ describe('MoneyConsole', () => {
     });
     expect(screen.getByText('CAPTURE SUCCEEDED')).toBeInTheDocument();
     expect(screen.getByText('{"response":"approved"}')).toBeInTheDocument();
+  });
+
+  it('paginates bills, tenders, refunds, and drawers independently and resets cursors', () => {
+    mocks.bills.data.nextCursor = 'bill_cursor_2';
+    mocks.tenders.data.nextCursor = 'tender_cursor_2';
+    mocks.refunds.data.nextCursor = 'refund_cursor_2';
+    mocks.drawers.data.nextCursor = 'drawer_cursor_2';
+
+    renderConsole();
+    setBranchAndDate();
+    fireEvent.click(screen.getByRole('button', { name: 'View bill bill_1' }));
+    expect(mocks.calls.bill.at(-1)?.enabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next bills page' }));
+    expect(mocks.calls.bills.at(-1)?.input).toEqual({
+      branchId: 'branch_1',
+      businessDate: '2026-08-19',
+      limit: 100,
+      cursor: 'bill_cursor_2',
+    });
+    expect(mocks.calls.bill.at(-1)?.enabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Previous bills page' }));
+    expect(mocks.calls.bills.at(-1)?.input).not.toHaveProperty('cursor');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Payments' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next tenders page' }));
+    expect(mocks.calls.tenders.at(-1)?.input).toHaveProperty('cursor', 'tender_cursor_2');
+    expect(mocks.calls.refunds.at(-1)?.input).not.toHaveProperty('cursor');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next refunds page' }));
+    expect(mocks.calls.tenders.at(-1)?.input).toHaveProperty('cursor', 'tender_cursor_2');
+    expect(mocks.calls.refunds.at(-1)?.input).toHaveProperty('cursor', 'refund_cursor_2');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Drawers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next drawers page' }));
+    expect(mocks.calls.drawers.at(-1)?.input).toHaveProperty('cursor', 'drawer_cursor_2');
+
+    fireEvent.change(screen.getByLabelText('Business date'), {
+      target: { value: '2026-08-20' },
+    });
+    expect(mocks.calls.drawers.at(-1)?.input).not.toHaveProperty('cursor');
+  });
+
+  it('renders explicit empty daily-close detail states', () => {
+    mocks.close.data.tenderTotals = [];
+    mocks.close.data.drawerVariances = [];
+    renderConsole();
+    setBranchAndDate();
+    fireEvent.click(screen.getByRole('tab', { name: 'Daily close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View close close_1' }));
+
+    expect(screen.getByText('No tender totals')).toBeInTheDocument();
+    expect(screen.getByText('No drawer variances')).toBeInTheDocument();
+  });
+
+  it('renders list loading and retryable generic-error states', () => {
+    mocks.bills.isLoading = true;
+    const loading = renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    expect(screen.getByRole('status', { name: 'Loading bills' })).toBeInTheDocument();
+    loading.unmount();
+
+    mocks.bills.isLoading = false;
+    mocks.bills.error = { message: 'Read unavailable', data: { code: 'INTERNAL_SERVER_ERROR' } };
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    expect(screen.getByText('Could not load bills')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(mocks.bills.refetch).toHaveBeenCalledOnce();
   });
 
   it('renders a distinct permission-denied state', () => {

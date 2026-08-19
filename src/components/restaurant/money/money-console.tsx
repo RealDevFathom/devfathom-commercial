@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -41,6 +41,13 @@ type ReadQuery<T> = {
   error: unknown;
   isLoading: boolean;
   refetch: () => unknown;
+};
+type CursorHistory = Array<string | undefined>;
+type CursorPagination = {
+  hasPrevious: boolean;
+  hasNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
 };
 
 const labelClass =
@@ -128,8 +135,75 @@ function DetailField({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function TableFrame({ children }: { children: ReactNode }) {
-  return <div className="max-w-full overflow-x-auto">{children}</div>;
+function TableFrame({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <div
+      role="region"
+      aria-label={label}
+      tabIndex={0}
+      className="max-w-full overflow-x-auto rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 [&_[data-slot=table-container]]:overflow-visible"
+    >
+      {children}
+    </div>
+  );
+}
+
+function CursorControls({
+  label,
+  hasPrevious,
+  hasNext,
+  onPrevious,
+  onNext,
+}: CursorPagination & { label: string }) {
+  return (
+    <nav aria-label={label + ' pagination'} className="mt-4 flex justify-end gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        aria-label={'Previous ' + label + ' page'}
+        disabled={!hasPrevious}
+        onClick={onPrevious}
+      >
+        Previous
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        aria-label={'Next ' + label + ' page'}
+        disabled={!hasNext}
+        onClick={onNext}
+      >
+        Next
+      </Button>
+    </nav>
+  );
+}
+
+function advanceCursor(
+  nextCursor: string | null | undefined,
+  cursor: string | undefined,
+  setCursor: Dispatch<SetStateAction<string | undefined>>,
+  setHistory: Dispatch<SetStateAction<CursorHistory>>,
+  clearSelection: () => void
+) {
+  if (!nextCursor) return;
+  setHistory((history) => [...history, cursor]);
+  setCursor(nextCursor);
+  clearSelection();
+}
+
+function retreatCursor(
+  history: CursorHistory,
+  setCursor: Dispatch<SetStateAction<string | undefined>>,
+  setHistory: Dispatch<SetStateAction<CursorHistory>>,
+  clearSelection: () => void
+) {
+  if (history.length === 0) return;
+  setCursor(history.at(-1));
+  setHistory((values) => values.slice(0, -1));
+  clearSelection();
 }
 
 function tone(status: string): StatusTone {
@@ -159,6 +233,14 @@ export function MoneyConsole() {
   const [selectedPaymentId, setSelectedPaymentId] = useState('');
   const [selectedDrawerId, setSelectedDrawerId] = useState('');
   const [selectedCloseId, setSelectedCloseId] = useState('');
+  const [billCursor, setBillCursor] = useState<string>();
+  const [billHistory, setBillHistory] = useState<CursorHistory>([]);
+  const [tenderCursor, setTenderCursor] = useState<string>();
+  const [tenderHistory, setTenderHistory] = useState<CursorHistory>([]);
+  const [refundCursor, setRefundCursor] = useState<string>();
+  const [refundHistory, setRefundHistory] = useState<CursorHistory>([]);
+  const [drawerCursor, setDrawerCursor] = useState<string>();
+  const [drawerHistory, setDrawerHistory] = useState<CursorHistory>([]);
 
   const normalizedBranchId = branchId.trim();
   const branchEnabled = posEnabled && normalizedBranchId.length > 0;
@@ -172,19 +254,28 @@ export function MoneyConsole() {
     limit: 100,
   };
 
-  const billsQuery = trpc.restaurantBills.listBills.useQuery(listInput, {
-    enabled: billsEnabled,
-  });
+  const billsQuery = trpc.restaurantBills.listBills.useQuery(
+    { ...listInput, ...(billCursor ? { cursor: billCursor } : {}) },
+    {
+      enabled: billsEnabled,
+    }
+  );
   const billQuery = trpc.restaurantBills.getBill.useQuery(
     { billId: selectedBillId },
     { enabled: billsEnabled && selectedBillId.length > 0 }
   );
-  const tendersQuery = trpc.restaurantPayments.listTenders.useQuery(listInput, {
-    enabled: paymentsEnabled,
-  });
-  const refundsQuery = trpc.restaurantPayments.listRefunds.useQuery(listInput, {
-    enabled: paymentsEnabled,
-  });
+  const tendersQuery = trpc.restaurantPayments.listTenders.useQuery(
+    { ...listInput, ...(tenderCursor ? { cursor: tenderCursor } : {}) },
+    {
+      enabled: paymentsEnabled,
+    }
+  );
+  const refundsQuery = trpc.restaurantPayments.listRefunds.useQuery(
+    { ...listInput, ...(refundCursor ? { cursor: refundCursor } : {}) },
+    {
+      enabled: paymentsEnabled,
+    }
+  );
   const tenderTotalsQuery = trpc.restaurantPayments.getTenderTypeTotals.useQuery(
     {
       branchId: normalizedBranchId,
@@ -196,9 +287,12 @@ export function MoneyConsole() {
     { paymentId: selectedPaymentId },
     { enabled: paymentsEnabled && selectedPaymentId.length > 0 }
   );
-  const drawersQuery = trpc.restaurantCash.listDrawerSessions.useQuery(listInput, {
-    enabled: drawersEnabled,
-  });
+  const drawersQuery = trpc.restaurantCash.listDrawerSessions.useQuery(
+    { ...listInput, ...(drawerCursor ? { cursor: drawerCursor } : {}) },
+    {
+      enabled: drawersEnabled,
+    }
+  );
   const drawerQuery = trpc.restaurantCash.getDrawerSession.useQuery(
     { drawerSessionId: selectedDrawerId },
     { enabled: drawersEnabled && selectedDrawerId.length > 0 }
@@ -221,17 +315,30 @@ export function MoneyConsole() {
     setSelectedDrawerId('');
     setSelectedCloseId('');
   };
+  const resetCursors = () => {
+    setBillCursor(undefined);
+    setBillHistory([]);
+    setTenderCursor(undefined);
+    setTenderHistory([]);
+    setRefundCursor(undefined);
+    setRefundHistory([]);
+    setDrawerCursor(undefined);
+    setDrawerHistory([]);
+  };
   const updateBranch = (value: string) => {
     setBranchId(value);
     resetSelections();
+    resetCursors();
   };
   const updateBusinessDate = (value: string) => {
     setBusinessDate(value);
     resetSelections();
+    resetCursors();
   };
   const updateTab = (value: string) => {
     setTab(value as MoneyTab);
     resetSelections();
+    resetCursors();
   };
 
   return (
@@ -304,6 +411,22 @@ export function MoneyConsole() {
                 detailQuery={billQuery}
                 selectedId={selectedBillId}
                 onSelect={setSelectedBillId}
+                pagination={{
+                  hasPrevious: billHistory.length > 0,
+                  hasNext: Boolean(billsQuery.data?.nextCursor),
+                  onPrevious: () =>
+                    retreatCursor(billHistory, setBillCursor, setBillHistory, () =>
+                      setSelectedBillId('')
+                    ),
+                  onNext: () =>
+                    advanceCursor(
+                      billsQuery.data?.nextCursor,
+                      billCursor,
+                      setBillCursor,
+                      setBillHistory,
+                      () => setSelectedBillId('')
+                    ),
+                }}
               />
             ) : null}
           </TabsContent>
@@ -317,6 +440,38 @@ export function MoneyConsole() {
                 detailQuery={paymentQuery}
                 selectedId={selectedPaymentId}
                 onSelect={setSelectedPaymentId}
+                tenderPagination={{
+                  hasPrevious: tenderHistory.length > 0,
+                  hasNext: Boolean(tendersQuery.data?.nextCursor),
+                  onPrevious: () =>
+                    retreatCursor(tenderHistory, setTenderCursor, setTenderHistory, () =>
+                      setSelectedPaymentId('')
+                    ),
+                  onNext: () =>
+                    advanceCursor(
+                      tendersQuery.data?.nextCursor,
+                      tenderCursor,
+                      setTenderCursor,
+                      setTenderHistory,
+                      () => setSelectedPaymentId('')
+                    ),
+                }}
+                refundPagination={{
+                  hasPrevious: refundHistory.length > 0,
+                  hasNext: Boolean(refundsQuery.data?.nextCursor),
+                  onPrevious: () =>
+                    retreatCursor(refundHistory, setRefundCursor, setRefundHistory, () =>
+                      setSelectedPaymentId('')
+                    ),
+                  onNext: () =>
+                    advanceCursor(
+                      refundsQuery.data?.nextCursor,
+                      refundCursor,
+                      setRefundCursor,
+                      setRefundHistory,
+                      () => setSelectedPaymentId('')
+                    ),
+                }}
               />
             ) : null}
           </TabsContent>
@@ -327,6 +482,22 @@ export function MoneyConsole() {
                 detailQuery={drawerQuery}
                 selectedId={selectedDrawerId}
                 onSelect={setSelectedDrawerId}
+                pagination={{
+                  hasPrevious: drawerHistory.length > 0,
+                  hasNext: Boolean(drawersQuery.data?.nextCursor),
+                  onPrevious: () =>
+                    retreatCursor(drawerHistory, setDrawerCursor, setDrawerHistory, () =>
+                      setSelectedDrawerId('')
+                    ),
+                  onNext: () =>
+                    advanceCursor(
+                      drawersQuery.data?.nextCursor,
+                      drawerCursor,
+                      setDrawerCursor,
+                      setDrawerHistory,
+                      () => setSelectedDrawerId('')
+                    ),
+                }}
               />
             ) : null}
           </TabsContent>
@@ -351,11 +522,13 @@ function BillsLedger({
   detailQuery,
   selectedId,
   onSelect,
+  pagination,
 }: {
   query: ReadQuery<BillPage>;
   detailQuery: ReadQuery<BillDetail | null>;
   selectedId: string;
   onSelect: (id: string) => void;
+  pagination: CursorPagination;
 }) {
   const bills = query.data?.bills ?? [];
   return (
@@ -365,72 +538,80 @@ function BillsLedger({
           <LoadingState label="Loading bills" />
         ) : query.error ? (
           <ErrorState error={query.error} retry={() => void query.refetch()} subject="bills" />
-        ) : bills.length === 0 ? (
-          <EmptyState title="No bills found" detail="Choose another branch or business date." />
         ) : (
           <>
-            <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="Loaded bills" value={bills.length} />
-              <Stat label="Date filter" value={bills[0]?.businessDate ?? 'All dates'} />
-              <Stat label="First receipt" value={bills[0]?.receiptNumber ?? 'Unissued'} />
-              <Stat label="Next page" value={query.data?.nextCursor ? 'Available' : 'Complete'} />
-            </div>
-            <TableFrame>
-              <Table className="min-w-[1180px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Bill</TableHead>
-                    <TableHead>Receipt</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Split</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead numeric>Subtotal</TableHead>
-                    <TableHead numeric>Tax</TableHead>
-                    <TableHead numeric>Service</TableHead>
-                    <TableHead numeric>Comp</TableHead>
-                    <TableHead numeric>Total</TableHead>
-                    <TableHead className="text-right">Detail</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {bills.map((bill) => (
-                    <TableRow
-                      key={bill.id}
-                      data-state={selectedId === bill.id ? 'selected' : undefined}
-                    >
-                      <TableCell>
-                        <span className="block font-medium text-text-strong">{bill.id}</span>
-                        <span className="block font-mono text-[0.625rem] text-text-faint">
-                          Order {bill.orderId}
-                        </span>
-                      </TableCell>
-                      <TableCell>{bill.receiptNumber ?? 'Unissued'}</TableCell>
-                      <TableCell>{bill.businessDate}</TableCell>
-                      <TableCell>{label(bill.splitKind)}</TableCell>
-                      <TableCell>
-                        <StatusPill status={label(bill.status)} tone={tone(bill.status)} />
-                      </TableCell>
-                      <TableCell numeric>{bill.subtotal}</TableCell>
-                      <TableCell numeric>{bill.taxTotal}</TableCell>
-                      <TableCell numeric>{bill.serviceChargeTotal}</TableCell>
-                      <TableCell numeric>{bill.compTotal}</TableCell>
-                      <TableCell numeric>{bill.grandTotal}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={selectedId === bill.id ? 'secondary' : 'outline'}
-                          aria-pressed={selectedId === bill.id}
-                          onClick={() => onSelect(bill.id)}
+            {bills.length === 0 ? (
+              <EmptyState title="No bills found" detail="Choose another branch or business date." />
+            ) : (
+              <>
+                <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Stat label="Loaded bills" value={bills.length} />
+                  <Stat label="Date filter" value={bills[0]?.businessDate ?? 'All dates'} />
+                  <Stat label="First receipt" value={bills[0]?.receiptNumber ?? 'Unissued'} />
+                  <Stat
+                    label="Next page"
+                    value={query.data?.nextCursor ? 'Available' : 'Complete'}
+                  />
+                </div>
+                <TableFrame label="Bills table">
+                  <Table className="min-w-[1180px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Bill</TableHead>
+                        <TableHead>Receipt</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Split</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead numeric>Subtotal</TableHead>
+                        <TableHead numeric>Tax</TableHead>
+                        <TableHead numeric>Service</TableHead>
+                        <TableHead numeric>Comp</TableHead>
+                        <TableHead numeric>Total</TableHead>
+                        <TableHead className="text-right">Detail</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {bills.map((bill) => (
+                        <TableRow
+                          key={bill.id}
+                          data-state={selectedId === bill.id ? 'selected' : undefined}
                         >
-                          View bill {bill.id}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableFrame>
+                          <TableCell>
+                            <span className="block font-medium text-text-strong">{bill.id}</span>
+                            <span className="block font-mono text-[0.625rem] text-text-faint">
+                              Order {bill.orderId}
+                            </span>
+                          </TableCell>
+                          <TableCell>{bill.receiptNumber ?? 'Unissued'}</TableCell>
+                          <TableCell>{bill.businessDate}</TableCell>
+                          <TableCell>{label(bill.splitKind)}</TableCell>
+                          <TableCell>
+                            <StatusPill status={label(bill.status)} tone={tone(bill.status)} />
+                          </TableCell>
+                          <TableCell numeric>{bill.subtotal}</TableCell>
+                          <TableCell numeric>{bill.taxTotal}</TableCell>
+                          <TableCell numeric>{bill.serviceChargeTotal}</TableCell>
+                          <TableCell numeric>{bill.compTotal}</TableCell>
+                          <TableCell numeric>{bill.grandTotal}</TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={selectedId === bill.id ? 'secondary' : 'outline'}
+                              aria-pressed={selectedId === bill.id}
+                              onClick={() => onSelect(bill.id)}
+                            >
+                              View bill {bill.id}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableFrame>
+              </>
+            )}
+            <CursorControls label="bills" {...pagination} />
           </>
         )}
       </SectionCard>
@@ -479,7 +660,7 @@ function BillDetailPanel({ bill }: { bill: BillDetail }) {
           Lines and comps
         </h3>
         {bill.lines.length ? (
-          <TableFrame>
+          <TableFrame label="Bill lines table">
             <Table className="min-w-[980px]">
               <TableHeader>
                 <TableRow>
@@ -534,7 +715,7 @@ function BillTenderTable({ bill }: { bill: BillDetail }) {
         Tender summary
       </h3>
       {bill.tenders.length ? (
-        <TableFrame>
+        <TableFrame label="Bill tender summary table">
           <Table className="min-w-[760px]">
             <TableHeader>
               <TableRow>
@@ -576,7 +757,7 @@ function BillRefundTable({ bill }: { bill: BillDetail }) {
         Refund summary
       </h3>
       {bill.refunds.length ? (
-        <TableFrame>
+        <TableFrame label="Bill refund summary table">
           <Table className="min-w-[760px]">
             <TableHeader>
               <TableRow>
@@ -619,6 +800,8 @@ function PaymentsLedger({
   detailQuery,
   selectedId,
   onSelect,
+  tenderPagination,
+  refundPagination,
 }: {
   businessDate: string;
   tendersQuery: ReadQuery<TenderPage>;
@@ -627,6 +810,8 @@ function PaymentsLedger({
   detailQuery: ReadQuery<PaymentDetail>;
   selectedId: string;
   onSelect: (id: string) => void;
+  tenderPagination: CursorPagination;
+  refundPagination: CursorPagination;
 }) {
   const error = tendersQuery.error || refundsQuery.error || totalsQuery.error;
   const loading =
@@ -693,7 +878,7 @@ function PaymentsLedger({
                 Tenders
               </h3>
               {tenders.length ? (
-                <TableFrame>
+                <TableFrame label="Payment tenders table">
                   <Table className="min-w-[1120px]">
                     <TableHeader>
                       <TableRow>
@@ -749,6 +934,7 @@ function PaymentsLedger({
               ) : (
                 <EmptyState title="No tenders found" detail="No tenders match these filters." />
               )}
+              <CursorControls label="tenders" {...tenderPagination} />
             </section>
 
             <section aria-labelledby="payment-refunds-heading">
@@ -756,7 +942,7 @@ function PaymentsLedger({
                 Refunds
               </h3>
               {refunds.length ? (
-                <TableFrame>
+                <TableFrame label="Payment refunds table">
                   <Table className="min-w-[1100px]">
                     <TableHeader>
                       <TableRow>
@@ -791,6 +977,7 @@ function PaymentsLedger({
               ) : (
                 <EmptyState title="No refunds found" detail="No refunds match these filters." />
               )}
+              <CursorControls label="refunds" {...refundPagination} />
             </section>
           </div>
         )}
@@ -829,7 +1016,7 @@ function PaymentDetailPanel({ payment }: { payment: PaymentDetail }) {
         <DetailField label="Tip" value={payment.tipAmount} />
       </dl>
       {payment.events.length ? (
-        <TableFrame>
+        <TableFrame label="Payment event trail table">
           <Table className="min-w-[1100px]">
             <TableHeader>
               <TableRow>
@@ -875,11 +1062,13 @@ function DrawersLedger({
   detailQuery,
   selectedId,
   onSelect,
+  pagination,
 }: {
   query: ReadQuery<DrawerPage>;
   detailQuery: ReadQuery<DrawerDetail>;
   selectedId: string;
   onSelect: (id: string) => void;
+  pagination: CursorPagination;
 }) {
   const sessions = query.data?.sessions ?? [];
   return (
@@ -893,60 +1082,70 @@ function DrawersLedger({
             retry={() => void query.refetch()}
             subject="drawer sessions"
           />
-        ) : sessions.length === 0 ? (
-          <EmptyState title="No drawer sessions found" detail="No sessions match these filters." />
         ) : (
-          <TableFrame>
-            <Table className="min-w-[1120px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Session</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Device</TableHead>
-                  <TableHead>Operator</TableHead>
-                  <TableHead numeric>Opening</TableHead>
-                  <TableHead numeric>Expected</TableHead>
-                  <TableHead numeric>Counted</TableHead>
-                  <TableHead numeric>Variance</TableHead>
-                  <TableHead numeric>Movements</TableHead>
-                  <TableHead className="text-right">Detail</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sessions.map((session) => (
-                  <TableRow
-                    key={session.id}
-                    data-state={selectedId === session.id ? 'selected' : undefined}
-                  >
-                    <TableCell className="font-mono text-xs">{session.id}</TableCell>
-                    <TableCell>
-                      <StatusPill status={label(session.status)} tone={tone(session.status)} />
-                    </TableCell>
-                    <TableCell>{session.businessDate}</TableCell>
-                    <TableCell className="font-mono text-xs">{session.deviceId}</TableCell>
-                    <TableCell className="font-mono text-xs">{session.staffProfileId}</TableCell>
-                    <TableCell numeric>{session.openingFloat}</TableCell>
-                    <TableCell numeric>{session.expectedCash ?? '—'}</TableCell>
-                    <TableCell numeric>{session.countedCash ?? '—'}</TableCell>
-                    <TableCell numeric>{session.variance ?? '—'}</TableCell>
-                    <TableCell numeric>{session.movementCount}</TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={selectedId === session.id ? 'secondary' : 'outline'}
-                        aria-pressed={selectedId === session.id}
-                        onClick={() => onSelect(session.id)}
+          <>
+            {sessions.length === 0 ? (
+              <EmptyState
+                title="No drawer sessions found"
+                detail="No sessions match these filters."
+              />
+            ) : (
+              <TableFrame label="Drawer sessions table">
+                <Table className="min-w-[1120px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Session</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Device</TableHead>
+                      <TableHead>Operator</TableHead>
+                      <TableHead numeric>Opening</TableHead>
+                      <TableHead numeric>Expected</TableHead>
+                      <TableHead numeric>Counted</TableHead>
+                      <TableHead numeric>Variance</TableHead>
+                      <TableHead numeric>Movements</TableHead>
+                      <TableHead className="text-right">Detail</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sessions.map((session) => (
+                      <TableRow
+                        key={session.id}
+                        data-state={selectedId === session.id ? 'selected' : undefined}
                       >
-                        View drawer {session.id}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableFrame>
+                        <TableCell className="font-mono text-xs">{session.id}</TableCell>
+                        <TableCell>
+                          <StatusPill status={label(session.status)} tone={tone(session.status)} />
+                        </TableCell>
+                        <TableCell>{session.businessDate}</TableCell>
+                        <TableCell className="font-mono text-xs">{session.deviceId}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {session.staffProfileId}
+                        </TableCell>
+                        <TableCell numeric>{session.openingFloat}</TableCell>
+                        <TableCell numeric>{session.expectedCash ?? '—'}</TableCell>
+                        <TableCell numeric>{session.countedCash ?? '—'}</TableCell>
+                        <TableCell numeric>{session.variance ?? '—'}</TableCell>
+                        <TableCell numeric>{session.movementCount}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={selectedId === session.id ? 'secondary' : 'outline'}
+                            aria-pressed={selectedId === session.id}
+                            onClick={() => onSelect(session.id)}
+                          >
+                            View drawer {session.id}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableFrame>
+            )}
+            <CursorControls label="drawers" {...pagination} />
+          </>
         )}
       </SectionCard>
 
@@ -979,7 +1178,7 @@ function DrawerDetailPanel({ drawer }: { drawer: DrawerDetail }) {
         <Stat label="Variance" value={drawer.variance ?? '—'} />
       </div>
       {drawer.movements.length ? (
-        <TableFrame>
+        <TableFrame label="Drawer movement ledger table">
           <Table className="min-w-[1020px]">
             <TableHeader>
               <TableRow>
@@ -1063,7 +1262,7 @@ function DailyCloseLedger({
                     Authoritative tip: {chain.tipCloseId ?? 'Unresolved'}
                   </p>
                 </div>
-                <TableFrame>
+                <TableFrame label={'Daily close chain table for ' + chain.businessDate}>
                   <Table className="min-w-[1040px]">
                     <TableHeader>
                       <TableRow>
@@ -1170,69 +1369,83 @@ function DailyCloseDetailPanel({ detail }: { detail: CloseDetail }) {
         <h3 id="close-tenders-heading" className="mb-3 font-semibold text-text-strong">
           Tender totals
         </h3>
-        <TableFrame>
-          <Table className="min-w-[620px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Type</TableHead>
-                <TableHead numeric>Amount</TableHead>
-                <TableHead numeric>Tips</TableHead>
-                <TableHead numeric>Count</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {detail.tenderTotals.map((total) => (
-                <TableRow key={total.tenderType}>
-                  <TableCell>{label(total.tenderType)}</TableCell>
-                  <TableCell numeric>{total.amount}</TableCell>
-                  <TableCell numeric>{total.tipAmount}</TableCell>
-                  <TableCell numeric>{total.count}</TableCell>
+        {detail.tenderTotals.length ? (
+          <TableFrame label="Daily close tender totals table">
+            <Table className="min-w-[620px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Type</TableHead>
+                  <TableHead numeric>Amount</TableHead>
+                  <TableHead numeric>Tips</TableHead>
+                  <TableHead numeric>Count</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableFrame>
+              </TableHeader>
+              <TableBody>
+                {detail.tenderTotals.map((total) => (
+                  <TableRow key={total.tenderType}>
+                    <TableCell>{label(total.tenderType)}</TableCell>
+                    <TableCell numeric>{total.amount}</TableCell>
+                    <TableCell numeric>{total.tipAmount}</TableCell>
+                    <TableCell numeric>{total.count}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableFrame>
+        ) : (
+          <EmptyState
+            title="No tender totals"
+            detail="This daily close contains no tender-type totals."
+          />
+        )}
       </section>
 
       <section aria-labelledby="close-drawers-heading">
         <h3 id="close-drawers-heading" className="mb-3 font-semibold text-text-strong">
           Drawer variances
         </h3>
-        <TableFrame>
-          <Table className="min-w-[860px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Drawer</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Device / operator</TableHead>
-                <TableHead numeric>Opening</TableHead>
-                <TableHead numeric>Expected</TableHead>
-                <TableHead numeric>Counted</TableHead>
-                <TableHead numeric>Variance</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {detail.drawerVariances.map((drawer) => (
-                <TableRow key={drawer.drawerSessionId}>
-                  <TableCell className="font-mono text-xs">{drawer.drawerSessionId}</TableCell>
-                  <TableCell>
-                    <StatusPill status={label(drawer.status)} tone={tone(drawer.status)} />
-                  </TableCell>
-                  <TableCell>
-                    <span className="block font-mono text-xs">{drawer.deviceId}</span>
-                    <span className="block font-mono text-[0.625rem] text-text-faint">
-                      {drawer.staffProfileId}
-                    </span>
-                  </TableCell>
-                  <TableCell numeric>{drawer.openingFloat}</TableCell>
-                  <TableCell numeric>{drawer.expectedCash ?? '—'}</TableCell>
-                  <TableCell numeric>{drawer.countedCash ?? '—'}</TableCell>
-                  <TableCell numeric>{drawer.variance ?? '—'}</TableCell>
+        {detail.drawerVariances.length ? (
+          <TableFrame label="Daily close drawer variances table">
+            <Table className="min-w-[860px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Drawer</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Device / operator</TableHead>
+                  <TableHead numeric>Opening</TableHead>
+                  <TableHead numeric>Expected</TableHead>
+                  <TableHead numeric>Counted</TableHead>
+                  <TableHead numeric>Variance</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableFrame>
+              </TableHeader>
+              <TableBody>
+                {detail.drawerVariances.map((drawer) => (
+                  <TableRow key={drawer.drawerSessionId}>
+                    <TableCell className="font-mono text-xs">{drawer.drawerSessionId}</TableCell>
+                    <TableCell>
+                      <StatusPill status={label(drawer.status)} tone={tone(drawer.status)} />
+                    </TableCell>
+                    <TableCell>
+                      <span className="block font-mono text-xs">{drawer.deviceId}</span>
+                      <span className="block font-mono text-[0.625rem] text-text-faint">
+                        {drawer.staffProfileId}
+                      </span>
+                    </TableCell>
+                    <TableCell numeric>{drawer.openingFloat}</TableCell>
+                    <TableCell numeric>{drawer.expectedCash ?? '—'}</TableCell>
+                    <TableCell numeric>{drawer.countedCash ?? '—'}</TableCell>
+                    <TableCell numeric>{drawer.variance ?? '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableFrame>
+        ) : (
+          <EmptyState
+            title="No drawer variances"
+            detail="This daily close contains no drawer reconciliation rows."
+          />
+        )}
       </section>
 
       <section aria-labelledby="close-chain-heading">
