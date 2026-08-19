@@ -104,10 +104,19 @@ beforeAll(async () => {
 
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
-      data: { id: ids.branch, name: 'Purchasing Branch', timezone: 'UTC', businessDayCutoff: '00:00' },
+      data: {
+        id: ids.branch,
+        name: 'Purchasing Branch',
+        timezone: 'UTC',
+        businessDayCutoff: '00:00',
+      },
     });
-    await tx.restaurantUnit.create({ data: { id: ids.unitEach, name: 'Each', abbreviation: 'ea' } });
-    await tx.restaurantUnit.create({ data: { id: ids.unitCase, name: 'Case', abbreviation: 'cs' } });
+    await tx.restaurantUnit.create({
+      data: { id: ids.unitEach, name: 'Each', abbreviation: 'ea' },
+    });
+    await tx.restaurantUnit.create({
+      data: { id: ids.unitCase, name: 'Case', abbreviation: 'cs' },
+    });
     // 1 case = 24 each.
     await tx.restaurantUnitConversion.create({
       data: { fromUnitId: ids.unitCase, toUnitId: ids.unitEach, factor: D('24') },
@@ -178,7 +187,12 @@ describeIfDatabase('M6 purchasing — PO state machine (server-side guards)', ()
         branchId: ids.branch,
         locationId: ids.location,
         lines: [
-          { stockItemId: ids.stockItem, orderedQuantity: '10', unitId: ids.unitEach, unitCost: '2.00' },
+          {
+            stockItemId: ids.stockItem,
+            orderedQuantity: '10',
+            unitId: ids.unitEach,
+            unitCost: '2.00',
+          },
         ],
       })
     );
@@ -230,7 +244,9 @@ describeIfDatabase('M6 purchasing — PO state machine (server-side guards)', ()
         supplierId: ids.supplier,
         branchId: ids.branch,
         locationId: ids.location,
-        lines: [{ stockItemId: ids.stockItem, orderedQuantity: '5', unitId: ids.unitEach, unitCost: '1' }],
+        lines: [
+          { stockItemId: ids.stockItem, orderedQuantity: '5', unitId: ids.unitEach, unitCost: '1' },
+        ],
       })
     );
     const cancelled = await deps.withTenantDb(orgId, (tx) =>
@@ -375,7 +391,12 @@ describeIfDatabase('M6 purchasing — receiving', () => {
             purchaseOrderLineId: lineId,
             receivedQuantity: '8',
             discrepancies: [
-              { kind: 'SHORTAGE', expectedQuantity: '10', receivedQuantity: '8', note: 'two short' },
+              {
+                kind: 'SHORTAGE',
+                expectedQuantity: '10',
+                receivedQuantity: '8',
+                note: 'two short',
+              },
             ],
           },
         ],
@@ -432,7 +453,14 @@ describeIfDatabase('M6 purchasing — receiving', () => {
     const partial = await deps.withTenantDb(orgId, (tx) =>
       deps.purchasing.receivePurchaseOrder(tx, {
         purchaseOrderId: orderId,
-        lines: [{ purchaseOrderLineId: lineId, receivedQuantity: '24', unitId: ids.unitEach, unitCost: '2.00' }],
+        lines: [
+          {
+            purchaseOrderLineId: lineId,
+            receivedQuantity: '24',
+            unitId: ids.unitEach,
+            unitCost: '2.00',
+          },
+        ],
       })
     );
     expect(partial.purchaseOrderStatus).toBe('PARTIALLY_RECEIVED');
@@ -441,7 +469,14 @@ describeIfDatabase('M6 purchasing — receiving', () => {
     const full = await deps.withTenantDb(orgId, (tx) =>
       deps.purchasing.receivePurchaseOrder(tx, {
         purchaseOrderId: orderId,
-        lines: [{ purchaseOrderLineId: lineId, receivedQuantity: '24', unitId: ids.unitEach, unitCost: '2.00' }],
+        lines: [
+          {
+            purchaseOrderLineId: lineId,
+            receivedQuantity: '24',
+            unitId: ids.unitEach,
+            unitCost: '2.00',
+          },
+        ],
       })
     );
     expect(full.purchaseOrderStatus).toBe('RECEIVED');
@@ -491,7 +526,7 @@ describeIfDatabase('M6 purchasing — supplier returns', () => {
 });
 
 describeIfDatabase('M6 purchasing — cross-org isolation (RLS)', () => {
-  it('hides another org\'s purchase order and refuses to receive against it', async () => {
+  it("hides another org's purchase order and refuses to receive against it", async () => {
     const { orderId, lineId } = await approvedOrder({ orderedQuantity: '10' });
 
     // Org B cannot read org A's order.

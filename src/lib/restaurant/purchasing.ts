@@ -2,7 +2,11 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { postStockMovements, runStockTransaction, type StockMovementInput } from './inventory-ledger';
+import {
+  postStockMovements,
+  runStockTransaction,
+  type StockMovementInput,
+} from './inventory-ledger';
 
 /**
  * M6-L3 / §6.5 / §11.4 / D07 — the purchasing & suppliers domain: supplier
@@ -59,22 +63,11 @@ export class PurchasingError extends Error {
 
 /** Mirrors the Prisma `RestaurantPurchaseOrderStatus` enum (§11.4 lifecycle). */
 export type PurchaseOrderStatus =
-  | 'DRAFT'
-  | 'SUBMITTED'
-  | 'APPROVED'
-  | 'PARTIALLY_RECEIVED'
-  | 'RECEIVED'
-  | 'CLOSED'
-  | 'CANCELLED';
+  'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CLOSED' | 'CANCELLED';
 
 /** Mirrors the Prisma `RestaurantReceivingDiscrepancyKind` enum. */
 export type ReceivingDiscrepancyKind =
-  | 'SHORTAGE'
-  | 'OVERAGE'
-  | 'DAMAGED'
-  | 'EXPIRED'
-  | 'REJECTED'
-  | 'OTHER';
+  'SHORTAGE' | 'OVERAGE' | 'DAMAGED' | 'EXPIRED' | 'REJECTED' | 'OTHER';
 
 /** Statuses a receipt may be posted against (§6.5 — never DRAFT/SUBMITTED). */
 const RECEIVABLE_STATUSES: ReadonlySet<PurchaseOrderStatus> = new Set([
@@ -185,7 +178,10 @@ export async function getSupplier(db: ScopedDb, id: string) {
 }
 
 async function requireSupplier(db: ScopedDb, id: string) {
-  const supplier = await db.restaurantSupplier.findUnique({ where: { id }, select: SUPPLIER_SELECT });
+  const supplier = await db.restaurantSupplier.findUnique({
+    where: { id },
+    select: SUPPLIER_SELECT,
+  });
   if (!supplier) throw new PurchasingError('The supplier does not exist.', 'NOT_FOUND');
   return supplier;
 }
@@ -603,7 +599,12 @@ export async function receivePurchaseOrder(
 
     // Auto overage discrepancies + PO status advance from DERIVED received qty.
     const touchedLineIds = [...new Set(input.lines.map((line) => line.purchaseOrderLineId))];
-    const overageIds = await recordOverageDiscrepancies(tx, receipt.id, order.lines, touchedLineIds);
+    const overageIds = await recordOverageDiscrepancies(
+      tx,
+      receipt.id,
+      order.lines,
+      touchedLineIds
+    );
     discrepancyIds.push(...overageIds);
 
     const nextStatus = await deriveOrderStatusAfterReceipt(tx, order.lines);
@@ -928,11 +929,7 @@ async function requirePurchaseOrder(db: ScopedDb, id: string) {
   return { id: order.id, status: order.status as PurchaseOrderStatus };
 }
 
-async function requirePurchaseOrderStatus(
-  db: ScopedDb,
-  id: string,
-  expected: PurchaseOrderStatus
-) {
+async function requirePurchaseOrderStatus(db: ScopedDb, id: string, expected: PurchaseOrderStatus) {
   const order = await requirePurchaseOrder(db, id);
   if (order.status !== expected) {
     throw new PurchasingError(
