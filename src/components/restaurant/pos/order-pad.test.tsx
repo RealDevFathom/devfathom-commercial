@@ -52,6 +52,7 @@ function transport({
   detailGate,
   failedAddAttempts = 0,
   refreshGate,
+  checkoutBillErrors = [],
 }: {
   failedOpenAttempts?: number;
   openErrors?: { status: number; error: string }[];
@@ -59,12 +60,14 @@ function transport({
   detailGate?: Promise<void>;
   failedAddAttempts?: number;
   refreshGate?: Promise<void>;
+  checkoutBillErrors?: ({ status: number; error: string } | Error)[];
 } = {}) {
   let openAttempts = 0;
   let addAttempts = 0;
   let openOrderReads = 0;
   let closed = false;
   let billCut = false;
+  let checkoutBillAttempts = 0;
   const fetch: typeof globalThis.fetch = async (input) => {
     const path = String(input);
     if (path.endsWith('/terminal/establish')) {
@@ -122,7 +125,7 @@ function transport({
       return json({
         orderId: 'order-1',
         settled: false,
-        blocker: billCut ? 'OPEN_BILLS' : 'UNBILLED_ITEMS',
+        blocker: billCut ? 'BILLS_OPEN' : 'ITEMS_UNBILLED',
         derivedOrderTotal: '24.00',
         accountedTotal: billCut ? '24.00' : '0.00',
         unbilledItemIds: billCut ? [] : ['item-1'],
@@ -141,6 +144,10 @@ function transport({
       });
     }
     if (path.endsWith('/checkout/bill')) {
+      checkoutBillAttempts += 1;
+      const responseError = checkoutBillErrors[checkoutBillAttempts - 1];
+      if (responseError instanceof Error) throw responseError;
+      if (responseError) return json({ error: responseError.error }, responseError.status);
       billCut = true;
       return json({ billIds: ['bill-1'] }, 201);
     }
@@ -379,5 +386,55 @@ describe('OrderPad transport', () => {
     expect(headers.get('Authorization')).toBe('Bearer device-secret');
     expect(headers.get('X-Terminal-Session')).toBe('session-token');
     expect(headers.get('Idempotency-Key')).toBe('00000000-0000-4000-8000-000000000062');
+  });
+
+  it('retains checkout idempotency across ambiguous failures and releases it after a client error', async () => {
+    const messages = [
+      'Request timed out.',
+      'Rate limited.',
+      'Service unavailable.',
+      'network failed',
+      'request timed out',
+      'Invalid split.',
+    ];
+    const fetch = transport({
+      detailResponse: { ...detail, status: 'PAYMENT_PENDING' },
+      checkoutBillErrors: [
+        { status: 408, error: messages[0]! },
+        { status: 429, error: messages[1]! },
+        { status: 503, error: messages[2]! },
+        new TypeError(messages[3]),
+        Object.assign(new Error(messages[4]), { name: 'TimeoutError' }),
+        { status: 400, error: messages[5]! },
+      ],
+    });
+    vi.spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000061')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000062')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000063');
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+    fireEvent.click(screen.getByRole('button', { name: 'Collect payment' }));
+    const cut = await screen.findByRole('button', { name: 'Cut single bill' });
+
+    for (const failureMessage of messages) {
+      fireEvent.click(cut);
+      await screen.findByText(failureMessage);
+      await waitFor(() => expect(cut).toBeEnabled());
+    }
+    fireEvent.click(cut);
+    await screen.findByText('Bill total');
+
+    const bills = fetch.mock.calls.filter(([input]) => String(input).endsWith('/checkout/bill'));
+    expect(bills.map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
+      '00000000-0000-4000-8000-000000000062',
+      '00000000-0000-4000-8000-000000000062',
+      '00000000-0000-4000-8000-000000000062',
+      '00000000-0000-4000-8000-000000000062',
+      '00000000-0000-4000-8000-000000000062',
+      '00000000-0000-4000-8000-000000000062',
+      '00000000-0000-4000-8000-000000000063',
+    ]);
   });
 });

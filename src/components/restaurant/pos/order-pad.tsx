@@ -51,6 +51,16 @@ class RequestError extends Error {
   }
 }
 
+function isDefinitiveMutationFailure(error: unknown) {
+  return (
+    error instanceof RequestError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  );
+}
+
 function messageFrom(body: unknown) {
   if (
     typeof body === 'object' &&
@@ -161,7 +171,9 @@ export function OrderPad() {
         if (mutation) idempotencyKeys.current.delete(intent);
         return data;
       } catch (error) {
-        if (mutation && error instanceof RequestError) idempotencyKeys.current.delete(intent);
+        if (mutation && isDefinitiveMutationFailure(error)) {
+          idempotencyKeys.current.delete(intent);
+        }
         if (
           error instanceof RequestError &&
           ((error.status === 403 && /device.+revoked/i.test(error.message)) ||
@@ -379,7 +391,7 @@ export function OrderPad() {
       await loadOpenOrders(runtime, false);
       return true;
     } catch (error) {
-      if (error instanceof RequestError) idempotencyKeys.current.delete(intent);
+      if (isDefinitiveMutationFailure(error)) idempotencyKeys.current.delete(intent);
       handleError(error);
       return false;
     } finally {
@@ -419,7 +431,7 @@ export function OrderPad() {
       setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
       await Promise.all([loadDetail(data.orderId, runtime, false), loadOpenOrders(runtime, false)]);
     } catch (error) {
-      if (error instanceof RequestError) idempotencyKeys.current.delete(intent);
+      if (isDefinitiveMutationFailure(error)) idempotencyKeys.current.delete(intent);
       handleError(error);
     } finally {
       setPending(null);

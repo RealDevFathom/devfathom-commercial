@@ -1,12 +1,13 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CheckoutPanel, type TerminalRequest, type TerminalRequestOptions } from './checkout-panel';
+import type { TenderResult } from './tender-pad';
 
 const unbilled = {
   orderId: 'order-1',
   settled: false,
-  blocker: 'UNBILLED_ITEMS',
+  blocker: 'ITEMS_UNBILLED',
   derivedOrderTotal: '24.00',
   accountedTotal: '0.00',
   unbilledItemIds: ['item-1'],
@@ -15,7 +16,7 @@ const unbilled = {
 
 const billed = {
   ...unbilled,
-  blocker: 'OPEN_BILLS',
+  blocker: 'BILLS_OPEN',
   accountedTotal: '24.00',
   unbilledItemIds: [],
   bills: [
@@ -44,6 +45,7 @@ describe('CheckoutPanel', () => {
     };
 
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+    expect(await screen.findByText('Some order items are not billed.')).toBeVisible();
     expect(await screen.findByRole('button', { name: 'Cut single bill' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Cut single bill' }));
 
@@ -84,5 +86,64 @@ describe('CheckoutPanel', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Apply tender' })).not.toBeInTheDocument()
     );
+  });
+
+  it('keeps a verified partial balance through close and reopen without an unsafe prefill', async () => {
+    const calls: { path: string; options?: TerminalRequestOptions }[] = [];
+    let resolveTender!: (result: TenderResult) => void;
+    const pendingTender = new Promise<TenderResult>((resolve) => {
+      resolveTender = resolve;
+    });
+    const partial: TenderResult = {
+      tenderId: 'tender-1',
+      billId: 'bill-1',
+      type: 'CASH',
+      amount: '8.00',
+      tipAmount: '0.00',
+      changeGiven: '0.00',
+      settled: false,
+      receiptNumber: null,
+      remainingDue: '16.00',
+      replayed: false,
+    };
+    const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
+      calls.push({ path, options });
+      if (path.includes('/summary')) return billed as T;
+      return (await pendingTender) as T;
+    };
+    const onClose = vi.fn();
+    const view = render(
+      <CheckoutPanel open orderId="order-1" request={request} onClose={onClose} />
+    );
+
+    expect(
+      await screen.findByText('Outstanding balance unavailable. Enter the exact tender amount.')
+    ).toBeVisible();
+    expect(screen.getByLabelText('Amount')).toHaveValue('');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('');
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '8.00' } });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '8.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
+
+    expect(screen.getByRole('button', { name: 'Close checkout' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Collect payment' })).toBeVisible();
+
+    await act(async () => resolveTender(partial));
+    expect(await screen.findByText('Remaining balance 16.00')).toBeVisible();
+    expect(calls.filter(({ path }) => path.includes('/summary'))).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close checkout' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    view.rerender(
+      <CheckoutPanel open={false} orderId="order-1" request={request} onClose={onClose} />
+    );
+    view.rerender(<CheckoutPanel open orderId="order-1" request={request} onClose={onClose} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Amount')).toHaveValue('16.00'));
+    expect(screen.getByLabelText('Cash received')).toHaveValue('16.00');
+    expect(
+      screen.queryByText('Outstanding balance unavailable. Enter the exact tender amount.')
+    ).not.toBeInTheDocument();
   });
 });

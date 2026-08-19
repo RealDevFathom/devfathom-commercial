@@ -16,7 +16,7 @@ import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
 import { ReceiptView } from './receipt-view';
 import { SplitBillDialog, type BillSplit } from './split-bill-dialog';
-import { TenderPad } from './tender-pad';
+import { TenderPad, type TenderResult } from './tender-pad';
 
 export type TerminalRequestOptions = {
   method?: 'GET' | 'POST';
@@ -29,7 +29,7 @@ export type TerminalRequest = <T>(path: string, options?: TerminalRequestOptions
 type CheckoutSummary = {
   orderId: string;
   settled: boolean;
-  blocker: string | null;
+  blocker: 'NO_BILLS' | 'ITEMS_UNBILLED' | 'BILLS_OPEN' | 'TOTAL_MISMATCH' | null;
   derivedOrderTotal: string;
   accountedTotal: string;
   unbilledItemIds: string[];
@@ -39,7 +39,7 @@ type CheckoutSummary = {
     splitKind: string;
     grandTotal: string;
     compTotal: string;
-    receiptNumber: string | null;
+    receiptNumber: number | null;
   }[];
 };
 
@@ -72,12 +72,21 @@ function billTone(status: string): StatusTone {
   return 'neutral';
 }
 
+const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> = {
+  NO_BILLS: 'No bills have been cut.',
+  ITEMS_UNBILLED: 'Some order items are not billed.',
+  BILLS_OPEN: 'Payment is still due on one or more bills.',
+  TOTAL_MISMATCH: 'Bill totals do not match the order total.',
+};
+
 export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanelProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tenderPending, setTenderPending] = useState(false);
+  const [remainingDueByBill, setRemainingDueByBill] = useState<Record<string, string>>({});
 
   const fetchSummary = useCallback(
     () =>
@@ -154,8 +163,12 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
     }
   }
 
-  async function tenderApplied() {
-    await loadSummary();
+  async function tenderApplied(result: TenderResult) {
+    setRemainingDueByBill((current) => ({
+      ...current,
+      [result.billId]: result.remainingDue,
+    }));
+    if (result.settled) await loadSummary();
   }
 
   function closePanel() {
@@ -165,11 +178,13 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
     onClose();
   }
 
+  const dismissBlocked = busy || tenderPending;
+
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next && !busy) closePanel();
+        if (!next && !dismissBlocked) closePanel();
       }}
     >
       <DialogContent
@@ -239,7 +254,7 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
               </dl>
               {summary.blocker ? (
                 <p className="mt-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-text-body">
-                  {summary.blocker}
+                  {blockerLabels[summary.blocker]}
                 </p>
               ) : null}
             </SectionCard>
@@ -289,7 +304,7 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
                 key={bill.id}
                 eyebrow={`Bill ${index + 1}`}
                 title={
-                  bill.receiptNumber
+                  bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
                     : bill.splitKind.replaceAll('_', ' ')
                 }
@@ -312,10 +327,11 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
                 {bill.status === 'OPEN' ? (
                   <TenderPad
                     billId={bill.id}
-                    amountDue={bill.grandTotal}
+                    amountDue={remainingDueByBill[bill.id]}
                     request={request}
                     disabled={busy}
                     onApplied={tenderApplied}
+                    onPendingChange={setTenderPending}
                   />
                 ) : null}
                 {bill.status === 'SETTLED' ? (
@@ -333,7 +349,7 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
             type="button"
             variant="outline"
             onClick={closePanel}
-            disabled={busy}
+            disabled={dismissBlocked}
             className="h-11"
           >
             Close checkout

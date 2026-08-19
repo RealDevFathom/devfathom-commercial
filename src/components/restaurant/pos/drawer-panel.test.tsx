@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DrawerPanel } from './drawer-panel';
 import type { TerminalRequest, TerminalRequestOptions } from './checkout-panel';
@@ -32,7 +32,7 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     fireEvent.click(screen.getByRole('button', { name: 'Cash drawer' }));
     const dialog = screen.getByRole('dialog', { name: 'Cash drawer' });
-    expect(within(dialog).getByText(/L5 has no current-drawer lookup/)).toBeVisible();
+    expect(within(dialog).getByText(/state exists only in this page memory/)).toBeVisible();
 
     fireEvent.change(within(dialog).getByLabelText('Opening float'), {
       target: { value: '100.00' },
@@ -72,5 +72,56 @@ describe('DrawerPanel', () => {
       drawerSessionId: 'drawer-1',
       countedCash: '90.00',
     });
+  });
+
+  it('blocks every dismissal path while a drawer mutation is pending', async () => {
+    let resolveOpen!: (value: {
+      drawerSessionId: string;
+      businessDate: string;
+      openingFloat: string;
+      replayed: boolean;
+    }) => void;
+    const pendingOpen = new Promise<{
+      drawerSessionId: string;
+      businessDate: string;
+      openingFloat: string;
+      replayed: boolean;
+    }>((resolve) => {
+      resolveOpen = resolve;
+    });
+    const requestMock = vi.fn(async (path: string, options?: TerminalRequestOptions) => {
+      void path;
+      void options;
+      return pendingOpen;
+    });
+    const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) =>
+      (await requestMock(path, options)) as T;
+
+    render(<DrawerPanel request={request} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cash drawer' }));
+    const dialog = screen.getByRole('dialog', { name: 'Cash drawer' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open drawer' }));
+
+    expect(within(dialog).getByRole('button', { name: 'Close drawer panel' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    const overlay = document.querySelector('[data-slot="dialog-overlay"]');
+    expect(overlay).not.toBeNull();
+    fireEvent.pointerDown(overlay!);
+    fireEvent.click(overlay!);
+    expect(screen.getByRole('dialog', { name: 'Cash drawer' })).toBeVisible();
+
+    await act(async () =>
+      resolveOpen({
+        drawerSessionId: 'drawer-1',
+        businessDate: '2026-08-19',
+        openingFloat: '0.00',
+        replayed: false,
+      })
+    );
+    expect(await within(dialog).findByText('drawer-1')).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close drawer panel' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Cash drawer' })).not.toBeInTheDocument()
+    );
   });
 });

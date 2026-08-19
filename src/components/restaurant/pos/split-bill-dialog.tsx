@@ -63,8 +63,8 @@ export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBil
       split = { kind, groups: parsed };
     } else if (kind === 'FRACTIONAL') {
       const parsed = weights.split(',').map((weight) => Number(weight.trim()));
-      if (parsed.length < 2 || parsed.some((weight) => !Number.isFinite(weight) || weight <= 0)) {
-        setError('Enter at least two positive weights separated by commas.');
+      if (parsed.length < 2 || parsed.some((weight) => !Number.isInteger(weight) || weight <= 0)) {
+        setError('Enter at least two positive whole-number weights separated by commas.');
         return;
       }
       split = { kind, weights: parsed };
@@ -145,7 +145,7 @@ export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBil
                   value={weights}
                   disabled={pending}
                   onChange={(event) => setWeights(event.target.value)}
-                  inputMode="decimal"
+                  inputMode="numeric"
                   aria-describedby="split-weights-help"
                   className="h-11"
                 />

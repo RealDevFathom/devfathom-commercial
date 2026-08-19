@@ -5,7 +5,6 @@ import { type FormEvent, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -46,6 +45,7 @@ function message(error: unknown) {
 }
 
 export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
+  const [open, setOpen] = useState(false);
   const [openingFloat, setOpeningFloat] = useState('0.00');
   const [drawer, setDrawer] = useState<OpenResult | null>(null);
   const [movementKind, setMovementKind] = useState<MovementKind>('PAID_IN');
@@ -145,7 +145,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   const busy = pending !== null;
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={(next) => !busy && setOpen(next)}>
       <DialogTrigger
         render={<Button type="button" variant="outline" className="h-11" />}
         disabled={disabled}
@@ -164,8 +164,8 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
         </DialogHeader>
 
         <p className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-text-body">
-          Drawer session is remembered only in this terminal memory. Reloading or locking loses the
-          reference because L5 has no current-drawer lookup.
+          Drawer state exists only in this page memory. Reloading or locking loses the reference
+          because L5 has no current-drawer lookup; verify drawer state before another action.
         </p>
 
         {notice ? (
@@ -303,9 +303,15 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
         )}
 
         <DialogFooter>
-          <DialogClose render={<Button type="button" variant="outline" className="h-11" />}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setOpen(false)}
+            disabled={busy}
+            className="h-11"
+          >
             Close drawer panel
-          </DialogClose>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

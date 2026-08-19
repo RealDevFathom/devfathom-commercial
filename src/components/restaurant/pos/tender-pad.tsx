@@ -19,17 +19,18 @@ export type TenderResult = {
   tipAmount: string;
   changeGiven: string | null;
   settled: boolean;
-  receiptNumber: string | null;
+  receiptNumber: number | null;
   remainingDue: string;
   replayed: boolean;
 };
 
 type TenderPadProps = {
   billId: string;
-  amountDue: string;
+  amountDue?: string;
   request: TerminalRequest;
   disabled?: boolean;
   onApplied: (result: TenderResult) => Promise<void> | void;
+  onPendingChange?: (pending: boolean) => void;
 };
 
 function message(error: unknown) {
@@ -42,10 +43,11 @@ export function TenderPad({
   request,
   disabled = false,
   onApplied,
+  onPendingChange,
 }: TenderPadProps) {
   const [type, setType] = useState<TenderResult['type']>('CASH');
-  const [amount, setAmount] = useState(amountDue);
-  const [cashReceived, setCashReceived] = useState(amountDue);
+  const [amount, setAmount] = useState(amountDue ?? '');
+  const [cashReceived, setCashReceived] = useState(amountDue ?? '');
   const [tipAmount, setTipAmount] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +74,7 @@ export function TenderPad({
         ? { type, amount, cashReceived }
         : { type, amount, ...(tipAmount ? { tipAmount } : {}) };
     setPending(true);
+    onPendingChange?.(true);
     setError(null);
     try {
       const next = await request<TenderResult>('/api/restaurant/checkout/tender', {
@@ -87,6 +90,7 @@ export function TenderPad({
       setError(message(requestError));
     } finally {
       setPending(false);
+      onPendingChange?.(false);
     }
   }
 
@@ -101,6 +105,11 @@ export function TenderPad({
           />
         ) : null}
       </div>
+      {amountDue === undefined && !result ? (
+        <p className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-text-body">
+          Outstanding balance unavailable. Enter the exact tender amount.
+        </p>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`tender-type-${billId}`}>Tender type</Label>
@@ -172,7 +181,7 @@ export function TenderPad({
           {result.tipAmount !== '0' && result.tipAmount !== '0.00' ? (
             <span className="font-mono tabular-nums text-text-muted">Tip {result.tipAmount}</span>
           ) : null}
-          {result.receiptNumber ? (
+          {result.receiptNumber !== null ? (
             <span className="text-text-muted">Receipt {result.receiptNumber}</span>
           ) : null}
         </div>

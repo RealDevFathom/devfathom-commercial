@@ -13,7 +13,7 @@ describe('ReceiptView', () => {
         channel: 'DINE_IN',
         branchName: 'Central',
         businessDate: '2026-08-19',
-        receiptNumber: 'R-1042',
+        receiptNumber: 1042,
         settledAt: '2026-08-19T12:00:00.000Z',
         splitKind: 'NONE',
         lines: [
@@ -30,9 +30,16 @@ describe('ReceiptView', () => {
         tenders: [
           {
             id: 'tender-1',
-            type: 'CASH',
-            amount: '24.00',
+            type: 'CARD',
+            amount: '19.00',
             tipAmount: '2.00',
+            changeGiven: null,
+          },
+          {
+            id: 'tender-2',
+            type: 'CASH',
+            amount: '5.00',
+            tipAmount: '0.00',
             changeGiven: '4.00',
           },
         ],
@@ -46,7 +53,7 @@ describe('ReceiptView', () => {
 
     render(<ReceiptView billId="bill-1" request={request} />);
 
-    expect(await screen.findByLabelText('Receipt R-1042')).toBeVisible();
+    expect(await screen.findByLabelText('Receipt 1042')).toBeVisible();
     expect(screen.getByText('1 × Steak')).toBeVisible();
     expect(screen.getByText('Tip')).toBeVisible();
     expect(screen.getByText('2.00')).toBeVisible();

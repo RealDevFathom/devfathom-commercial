@@ -13,7 +13,7 @@ type Receipt = {
   channel: string;
   branchName: string;
   businessDate: string;
-  receiptNumber: string;
+  receiptNumber: number | null;
   settledAt: string;
   splitKind: string;
   lines: {
@@ -108,12 +108,15 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
     );
   }
 
+  const receiptLabel =
+    receipt.receiptNumber === null ? 'Receipt unissued' : `Receipt ${receipt.receiptNumber}`;
+
   return (
-    <section aria-label={`Receipt ${receipt.receiptNumber}`} className="space-y-4">
+    <section aria-label={receiptLabel} className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border-subtle pb-3">
         <div>
           <p className="font-mono text-xs tracking-wide text-text-muted uppercase">
-            Receipt {receipt.receiptNumber}
+            {receiptLabel}
           </p>
           <p className="mt-1 text-sm text-text-strong">
             {receipt.branchName} · Order {receipt.orderNumber}
