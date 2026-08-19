@@ -227,6 +227,10 @@ const APPEND_ONLY_TABLES = [
   'restaurant_drawer_movements',
   'restaurant_daily_closes',
   'restaurant_daily_close_tender_totals',
+  // M6-L1: the append-only stock movement ledger (§11.4) — the single source of
+  // stock truth, SELECT+INSERT policies only, same DB-enforced append-only shape
+  // as the M5 money ledgers. A correction is a NEW movement, never an edit.
+  'restaurant_stock_movements',
 ] as const;
 
 type M5Table = keyof typeof M5_COLUMNS;
