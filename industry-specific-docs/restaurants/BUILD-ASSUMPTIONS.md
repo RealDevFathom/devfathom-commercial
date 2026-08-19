@@ -872,3 +872,72 @@ indistinguishable from 404) and require an acting operator + the sibling money c
 data is gated (unlike the ungated M4 order reads). · Conservative because financial reads are held to the
 checkout/close operator rather than any device session, and the receipt exposes no card data. · Revisited if a
 read-only floor/customer-display surface is scoped.
+
+---
+
+## M5-L8 — Independent verification rollup (Verification Engineer, WHA-63)
+
+**Base verified:** milestone execution tip `da0b383` = `restaurant/m5-money` (`44dba32`) + 3 supervisor-merged
+follow-ups (WHA-64 zero-total comp settle `247c742`; register terminal-state handling `e304720`; battery
+formatting `da0b383`). Worktree clean; L8 modified no `src/**` or `tests/**` — this doc is the only write.
+
+**0-skip suite recipe (plan §7, confirmed):** fresh disposable DB **owned by** an unprivileged
+`NOSUPERUSER NOBYPASSRLS CREATEROLE` role (`devfathom_test`); `prisma migrate deploy` run AS that owner so
+forced RLS binds it AND the m2/m3/m4-rls batteries can `CREATE ROLE`/`GRANT` self-made sub-roles;
+`TEST_DATABASE_URL` = that role → every DB battery runs, **0 skipped**. Exception: `test:rls`
+(`verify-tenant-isolation.ts`) needs a **privileged** URL — it seeds cross-tenant rows with unqualified
+inserts, then `SET LOCAL ROLE`s to a self-made NOLOGIN role for the isolation probes.
+
+**Per-AC verdicts (plan §6):**
+- **AC1 — FAIL.** Full suite at the tip (fresh unprivileged DB) = **2 failed | 1748 passed | 0 skipped**.
+  Failure #1 = sanctioned `src/lib/tenancy/explicit-host.test.ts` (baseline). Failure #2 = **NEW**:
+  `tests/restaurant-m4-acceptance.test.ts` ("WHA-49 … opens, adds, fires, prepares, serves, closes …") — the
+  ledger no longer ends in `order.closed`; it stops at `order.payment_pending`. Root cause is the sole declared
+  cross-milestone edit, the **M5-L2 settlement guard** in `src/lib/restaurant/orders.ts` (the C12 note above):
+  a just-served order with no bills is not settled, so `closeOrder` PARKS it at PAYMENT_PENDING and returns
+  success without emitting `order.closed`. The M4 acceptance test is byte-identical to `f3b8e8a` (where it was
+  green) — it was not reconciled to the new settle-then-close flow. This is a **test-fixup**, not a functional
+  bug (behavior is intended + documented); it routes back through the CoS to the owning lane. VE does not edit it.
+- **AC2 — PASS.** M5 migration applies cleanly on a fresh DB at `f3b8e8a`; all 12 M5 tables have
+  `relrowsecurity=t AND relforcerowsecurity=t`; `restaurant-m5-rls.test.ts` + `test:rls` verifier green;
+  `tests/restaurant-m3-governance.test.ts` allowlist holds exactly the 12 shipped M5 tables; `migrate diff`
+  shows no `restaurant_` drift (only pre-existing platform-table raw-SQL/RLS noise on `users`/`webhooks`).
+- **AC3 — PASS.** The 6 append-only ledgers (`restaurant_tenders`, `_payment_events`, `_refunds`,
+  `_drawer_movements`, `_daily_closes`, `_daily_close_tender_totals`) carry SELECT+INSERT policies ONLY;
+  UPDATE/DELETE denied even to the OWNER (verifier + m5-rls battery + direct `pg_policies` inspection).
+- **AC4 — PASS.** FRACTIONAL adversarial ÷3/÷7 exact by Decimal string-equality + deterministic cents
+  (`restaurant-m5-acceptance`); BY_ITEM complete-partition rejects gaps/dupes/unknowns (`bills.test.ts`);
+  BY_SEAT grouping + order-total reconciliation (`bills.test.ts`).
+- **AC5 — PASS (nit).** Comp keeps snapshot price, nets to zero via `compAmount`, `compTotal ≡ Σ comps`,
+  requires reason + co-auth (positive: `bills.test.ts`; route co-auth denial: `terminal-checkout.db.test.ts`).
+  Nit: no explicit comp-missing-reason negative (refund path has `REASON_REQUIRED`; route co-auth negatives exist).
+- **AC6 — PASS.** `tipTotal` and `serviceChargeTotal` reported separately on the close; tips never leak into
+  service-charge totals (seeded flow); `tipAmount` on tenders/payments/refund-tip, never on bills.
+- **AC7 — PASS.** MOCK conformance for all six capabilities incl. AUTH→CAPTURE, ADJUST, prior-ref requirement,
+  scripted declines (`payment-adapter.test.ts`); declined SALE leaves NO tender/movement/payment/receipt
+  (`tenders.test.ts`); no PAN/CVV/track column (information_schema probe) or logged card data.
+- **AC8 — PASS.** Σ(refunds) capped at the original tender (`REFUND_EXCEEDS_TENDER`); one CASH_REFUND movement
+  per cash refund; D2 refund of a D1 tender lands on D2 while the D1 close re-reads byte-identical.
+- **AC9 — PASS.** `expectedCash ≡` signed movement-ledger fold; at most one OPEN session per register under a
+  concurrent race; close records counted cash + variance; session ties register×operator×business-date.
+- **AC10 — PASS (nit).** Cut blocked while any drawer OPEN or any bill unsettled; every total ≡ independent
+  recompute from raw rows; correction = new row with `supersedesCloseId` + reason + manager co-auth; chain tip
+  authoritative; superseded rows byte-identical. Nit: the platform audit-event ROW for a correction is written
+  at the REST edge but not asserted directly (the co-authorization record is asserted as durable evidence).
+- **AC11 — PASS.** Settled bills get unique, strictly-monotonic receipts from
+  `restaurant_receipt_number_sequences`; concurrent settlements produce no duplicates; order-number sequences
+  untouched (separate seam asserted).
+- **AC12 — PASS.** Replaying a checkout/cash mutation with the same device key returns the original and creates
+  nothing (tender/day-close/refund/drawer-open replays); a REVOKED device is rejected on every money route.
+- **AC13 — PASS (note).** Read-contract audit: both consoles (L7a POS, L7b money) consume only server-lane
+  reads, zero direct DB access. Money-discipline: no `parseFloat`/`Number(` arithmetic/`toBeCloseTo` on money
+  paths (the only `Number(`/`parseInt` hits are integer counts — covers/weights/quantity/seat). `typecheck`,
+  `lint`, `build` all green. Note: `format:check` reports 39 pre-existing dirty files — ALL disjoint from the
+  M5 change set (byte-identical to `f3b8e8a`, spanning unrelated subsystems), i.e. environmental/baseline drift;
+  **zero M5-authored files are format-dirty.** Studio visual-QA matrix (§12.7) is an L7a/L7b lane deliverable,
+  not independently re-run by VE.
+
+**Consolidated verdict: FAIL** on exactly one criterion (AC1) — a single NEW, precisely-scoped test failure
+whose fix is a test-only reconciliation of `tests/restaurant-m4-acceptance.test.ts` to the documented M5-L2
+settle-then-close flow. AC2–AC13 all PASS. Correction routes through the CoS to the owning lane; one VE
+recheck follows the correction pass.
