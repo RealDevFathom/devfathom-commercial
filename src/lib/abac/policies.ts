@@ -39,6 +39,11 @@ export const ALL_ACTIONS = [
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
   'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
   'money:read', // restaurant M5-L1: back-office money reads (bills/tenders/refunds/drawers/close) — org-role driven
+  // restaurant M6-L2 inventory domain capabilities (org-role driven via customDecision path):
+  'inventory:read',   // console reads: stock on hand, ledger, counts, transfers, batches, low-stock rules
+  'inventory:adjust', // post transfers, manual corrections, sale reversals
+  'inventory:waste',  // post wastage, spoilage, staff-meal movements
+  'inventory:count',  // create/submit/post physical counts
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -116,4 +121,12 @@ export const POLICIES: Record<Action, Policy[]> = {
   // default. Terminal money mutations gate on the existing pos/payments/cash
   // capabilities, not on this back-office read action (C11).
   'money:read': [],
+
+  // Restaurant M6-L2 inventory console capabilities. All four are org-role-driven
+  // — granted through an organization role/override carrying the capability (or
+  // `*`), evaluated by the DB `customDecision` path; no static agency-role policy.
+  'inventory:read': [],
+  'inventory:adjust': [],
+  'inventory:waste': [],
+  'inventory:count': [],
 };
