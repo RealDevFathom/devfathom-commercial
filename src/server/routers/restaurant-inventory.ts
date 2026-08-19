@@ -98,6 +98,7 @@ export const restaurantInventoryRouter = router({
         locationName: r.locationName,
         onHand: qty(r.onHand),
         isNegative: r.isNegative,
+        weightedAverageCost: r.weightedAverageCost == null ? null : qty(r.weightedAverageCost),
       }));
     }),
 

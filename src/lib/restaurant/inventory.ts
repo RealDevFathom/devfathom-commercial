@@ -510,6 +510,18 @@ async function flattenBom(
   depth = 0
 ): Promise<BomLeaf[]> {
   if (depth > 10) return []; // cycle guard (assertNoRecipeCycle already enforces, belt+suspenders)
+
+  // A recipe version's BOM lines yield `yieldQuantity` portions; consuming
+  // `scale` portions draws leaf quantities of `line.quantity × scale / yield`
+  // (D07). A null or zero yield means "no batch yield" → do not divide.
+  const version = await tx.restaurantRecipeVersion.findUnique({
+    where: { id: versionId },
+    select: { yieldQuantity: true },
+  });
+  const yieldQuantity = version?.yieldQuantity ?? null;
+  const effectiveScale =
+    yieldQuantity !== null && !yieldQuantity.isZero() ? scale.dividedBy(yieldQuantity) : scale;
+
   const lines = await tx.restaurantRecipeLine.findMany({
     where: { recipeVersionId: versionId },
     select: {
@@ -523,7 +535,7 @@ async function flattenBom(
 
   const leaves: BomLeaf[] = [];
   for (const line of lines) {
-    const qty = dec(line.quantity).times(scale);
+    const qty = dec(line.quantity).times(effectiveScale);
     if (line.ingredientId) {
       const stockItemId = line.ingredient?.stockItem?.id;
       if (stockItemId) {
@@ -638,6 +650,10 @@ export type StockOnHandRow = {
   locationName: string;
   onHand: Prisma.Decimal;
   isNegative: boolean;
+  /** Read-time weighted-average cost per canonical unit, derived from the
+   *  intrinsic-cost movements (unitCost on PURCHASE_RECEIPT / SUPPLIER_RETURN);
+   *  ZERO when no cost-bearing movements exist for the group (D07, no snapshot). */
+  weightedAverageCost: Prisma.Decimal;
 };
 
 /** Derived on-hand per (stockItem × location) with negative flag. */
@@ -679,14 +695,42 @@ export async function listStockOnHand(
   const itemMap = new Map(items.map((i) => [i.id, i]));
   const locMap = new Map(locations.map((l) => [l.id, l]));
 
-  return balances.map((b) => ({
-    stockItemId: b.stockItemId,
-    ingredientName: itemMap.get(b.stockItemId)?.ingredient?.name ?? b.stockItemId,
-    locationId: b.locationId,
-    locationName: locMap.get(b.locationId)?.name ?? b.locationId,
-    onHand: b.onHand,
-    isNegative: b.onHand.lessThan(ZERO),
-  }));
+  // Read-time WAC (D07): fold the intrinsic-cost movements per (item × location).
+  // WAC = Σ(quantity × unitCost) / Σ(quantity) over cost-bearing movements only —
+  // the divisor is the received quantity, NOT the (consumption-reduced) on-hand.
+  const wacKey = (stockItemId: string, locationId: string) => `${stockItemId} ${locationId}`;
+  const costRows = await db.restaurantStockMovement.findMany({
+    where: {
+      stockItemId: { in: itemIds },
+      locationId: { in: locIds },
+      unitCost: { not: null },
+    },
+    select: { stockItemId: true, locationId: true, quantity: true, unitCost: true },
+  });
+  const costAcc = new Map<string, { totalCost: Prisma.Decimal; totalQty: Prisma.Decimal }>();
+  for (const row of costRows) {
+    if (row.unitCost === null) continue;
+    const key = wacKey(row.stockItemId, row.locationId);
+    const acc = costAcc.get(key) ?? { totalCost: ZERO, totalQty: ZERO };
+    acc.totalCost = acc.totalCost.plus(row.quantity.times(row.unitCost));
+    acc.totalQty = acc.totalQty.plus(row.quantity);
+    costAcc.set(key, acc);
+  }
+
+  return balances.map((b) => {
+    const acc = costAcc.get(wacKey(b.stockItemId, b.locationId));
+    const weightedAverageCost =
+      acc && !acc.totalQty.isZero() ? acc.totalCost.dividedBy(acc.totalQty) : ZERO;
+    return {
+      stockItemId: b.stockItemId,
+      ingredientName: itemMap.get(b.stockItemId)?.ingredient?.name ?? b.stockItemId,
+      locationId: b.locationId,
+      locationName: locMap.get(b.locationId)?.name ?? b.locationId,
+      onHand: b.onHand,
+      isNegative: b.onHand.lessThan(ZERO),
+      weightedAverageCost,
+    };
+  });
 }
 
 export type ListMovementsInput = {
