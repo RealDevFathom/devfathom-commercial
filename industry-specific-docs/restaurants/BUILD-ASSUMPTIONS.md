@@ -1013,6 +1013,33 @@ outbox planners keeps ONE retry policy per queue; host-only tenant resolution ke
 unauthenticated ingress; and gating on an EXISTING capability + module avoids inventing commercial surface. · Revisited
 by D13/D21 closing (dedicated queue tech, real signature verification + provider adapters, external-delivery lease) and
 by the shared-file merge as L3/L4/L5 append their own `job-handlers.ts` / `outbox` / `policies.ts` keys after L2.
+**SOP authoring — templates/versioning/recurrence(DST)/occurrence-generation (M7-L3)** · L3 realises the L1 SOP
+seam for AUTHORING (execution/late-missed/escalation remain the L4 flow lane). Files: `sop-templates.ts`
+(family/version/step lifecycle + branch assignments), `sop-recurrence.ts` (pure engine), `sop-occurrence-generation.ts`
+(scheduler handler), `restaurant-sop.ts` (`sop:manage` console). Decisions this lane commits to:
+**(1) Publish immutability is SERVER-GUARDED, not RLS-enforced.** The SOP tables carry ordinary tenant-isolation
+policies (UPDATE is technically permitted to the app role), so every step mutation and every publish/retire
+transition asserts the target version's `status` first (`assertDraft`); editing a published SOP opens a NEW draft
+version with its steps cloned forward. At most ONE `PUBLISHED` version per family (publishing auto-retires the prior)
+so "latest published" is unambiguous for occurrence pinning; at most ONE open `DRAFT`; publish requires ≥1 step.
+`sop.templates.max` counts ACTIVE families and is re-checked on reactivation (archiving cannot sidestep the cap).
+**(2) Recurrence/DST is a pure `Intl`-based engine — NO RRULE, no system-tz dependence.** Wall-clock is projected to
+UTC through the branch IANA timezone; DST policy: spring-forward gap → NEXT VALID instant (the transition boundary,
+found by an offset binary search); fall-back ambiguity → FIRST (earlier) instant. Proven with exact UTC instants
+across America/New_York + Europe/Berlin in both directions (`sop-recurrence.test.ts`). WEEKLY interval aligns on the
+Sunday of `startDate`'s week; MONTHLY `monthDay` clamps to the month's last day; `windowEndsAt = dueAt + windowMinutes`.
+**(3) Occurrence generation is a WINDOW-IDEMPOTENT scheduler handler** (`sop.generateOccurrences`, one key in
+`job-handlers.ts`). It pins `templateVersionId` to the latest PUBLISHED at generation time, seeds the per-occurrence
+step checklist from that pinned version, and resolves each branch's current business date in ITS OWN timezone
+(`business-date.ts`). Re-running creates ZERO duplicates: `unique(assignmentId, businessDate)` is the guarantee, a
+pre-filter skips already-materialised dates, and a concurrent unique violation (P2002) is swallowed as a skip
+(at-least-once, D13). §4 defaults: `GENERATION_LOOKBACK_DAYS=1` (a briefly-missed run can still be swept
+LATE/MISSED), `GENERATION_HORIZON_DAYS=1` (console preview of the immediate schedule); both bounded + payload-overridable.
+· Coordinated shared-file edits beyond the named lane files (all additive, supervisor-dedupable at merge): `_app.ts`
+(`restaurantSop` router), `module-catalog.ts` (`restaurantSop → restaurant-sop`), `abac/policies.ts` (`sop:manage`,
+org-role-driven `[]` policy — the capability itself pre-exists in the untouched `vertical-catalog.ts`). · Revisited by
+the L4 flow lane (execution/evidence-completeness/late-missed sweep/escalation firing consume these occurrences and
+the pinned version) and by the §11.5 SOP decisions closing.
 
 ---
 

@@ -6,6 +6,12 @@ import {
   processInboundWebhookHandler,
 } from '@/lib/restaurant/webhook-inbox';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+// M7-L3: SOP occurrence generation. Supervisor-sequenced merge order L2 -> L3 ->
+// L4 -> L5; the only conflict is this import list and the object literal below.
+import {
+  SOP_GENERATE_OCCURRENCES_JOB,
+  generateSopOccurrencesHandler,
+} from '@/lib/restaurant/sop-occurrence-generation';
 
 /**
  * M7-L1 — the typed job-handler registry. The scheduler primitive
@@ -49,6 +55,7 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   // M7-L2: inbound-webhook processing (the receiver enqueues one job per envelope).
   [WEBHOOK_PROCESS_JOB_TYPE]: processInboundWebhookHandler,
   // …later lanes (L3 SOP, L5 notifications) append one key each here…
+  [SOP_GENERATE_OCCURRENCES_JOB]: generateSopOccurrencesHandler,
 };
 
 /** Look up the handler registered for a job type (undefined when none is). */

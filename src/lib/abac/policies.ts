@@ -56,6 +56,7 @@ export const ALL_ACTIONS = [
   // the existing `reports:operational` capability (already in the vertical-catalog
   // role templates: general-manager, financial-controller, sop-compliance-auditor).
   'reports:operational', // restaurant M7-L2: background-ops read/requeue console — org-role driven
+  'sop:manage', // restaurant M7-L3: SOP authoring console — templates/versions/steps/assignments/schedule preview (org-role driven)
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -156,4 +157,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   // by the DB `customDecision` path in `can()`; no static agency-role policy, so a
   // subject without an explicit grant is denied by default.
   'reports:operational': [],
+  // Restaurant M7-L3: SOP authoring console (templates, versions, steps, branch
+  // assignments, schedule preview). Granted through an organization role/override
+  // carrying `sop:manage` (or `*`, e.g. the restaurant Owner or SOP/Compliance
+  // Auditor templates in vertical-catalog), evaluated by the DB `customDecision`
+  // path in `can()`; no static agency-role policy, so a subject without an
+  // explicit grant is denied by default.
+  'sop:manage': [],
 };

@@ -95,6 +95,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // inbox — gate on the SOP/automation module (`restaurant-sop`), the licensed
   // surface whose scheduler runtime this console observes.
   restaurantJobs: 'restaurant-sop',
+  // M7-L3: SOP authoring console — templates, versions, steps, branch assignments
+  // and schedule preview — gate on the SOP & Compliance module (`restaurant-sop`),
+  // whose licensed purpose is exactly this surface (vertical-catalog).
+  restaurantSop: 'restaurant-sop',
 };
 
 export function moduleForProcedure(path: string): string | null {
