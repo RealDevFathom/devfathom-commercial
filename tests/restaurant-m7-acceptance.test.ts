@@ -381,15 +381,16 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     const due = new Date('2026-08-21T12:00:00.000Z');
     const outcomes: string[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      const attemptAt = new Date(due.getTime() + attempt * (deps.scheduler.RETRY_BASE_MS + 1));
       const claimed = await deps.withTenantDb(orgId, (tx) =>
-        deps.scheduler.claimNextDue(tx, { workerId, now: due })
+        deps.scheduler.claimNextDue(tx, { workerId, now: attemptAt })
       );
       expect(claimed?.id).toBe(dead.job.id);
       outcomes.push(
         await deps.withTenantDb(orgId, (tx) =>
           deps.scheduler.fail(tx, dead.job.id, new Error('induced failure'), {
             workerId,
-            now: due,
+            now: attemptAt,
           })
         )
       );
@@ -429,12 +430,12 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
   }, 60_000);
 
   it('settles in-flight work before graceful shutdown and leaves no RUNNING orphan', async () => {
+    const jobType = `acceptance.shutdown.${suffix}`;
     const queued = await deps.withTenantDb(orgId, (tx) =>
       deps.scheduler.enqueue(
         tx,
         {
-          type: deps.lateMissed.SOP_LATE_MISSED_JOB,
-          payload: { now: T0.toISOString() },
+          type: jobType,
           idempotencyKey: `shutdown_${suffix}`,
           maxAttempts: 1,
           scheduledAt: T0,
@@ -443,17 +444,29 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
       )
     );
     const controller = new AbortController();
-    const result = await deps.jobRunner.runRestaurantWorker({
-      workerId: `shutdown_worker_${suffix}`,
-      signal: controller.signal,
-      clock: () => T0,
-      maxJobsPerOrg: 1,
-      maxOutboxPerOrg: 1,
-      discoverOrganizations: async () => [orgId],
-      runInOrg: (organizationId, work) => deps.withTenantDb(organizationId, work),
-      outboxClient: (organizationId) => deps.createTenantDb(organizationId),
-      onTick: () => controller.abort(),
-    });
+    const handlerStarted = vi.fn();
+    const { restaurantJobHandlers } = await import('@/lib/restaurant/job-handlers');
+    restaurantJobHandlers[jobType] = async () => {
+      handlerStarted();
+      controller.abort();
+    };
+    const result = await (async () => {
+      try {
+        return await deps.jobRunner.runRestaurantWorker({
+          workerId: `shutdown_worker_${suffix}`,
+          signal: controller.signal,
+          clock: () => T0,
+          maxJobsPerOrg: 1,
+          maxOutboxPerOrg: 1,
+          discoverOrganizations: async () => [orgId],
+          runInOrg: (organizationId, work) => deps.withTenantDb(organizationId, work),
+          outboxClient: (organizationId) => deps.createTenantDb(organizationId),
+        });
+      } finally {
+        delete restaurantJobHandlers[jobType];
+      }
+    })();
+    expect(handlerStarted).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ stoppedBy: 'signal', ticks: 1, jobs: { succeeded: 1 } });
     const state = await deps.withTenantDb(orgId, async (tx) => ({
       job: await tx.restaurantJob.findUniqueOrThrow({ where: { id: queued.job.id } }),
@@ -517,11 +530,13 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
       registry: failingRegistry,
       now: T0,
       policy,
+      batchSize: 1,
     });
     const failedTwice = await deps.outboxDispatcher.dispatchOutboxBatch(outboxDb, {
       registry: failingRegistry,
       now: T0,
       policy,
+      batchSize: 1,
     });
     expect(failedOnce.retried).toBe(1);
     expect(failedTwice.dead).toBe(1);
@@ -576,7 +591,7 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         where: { source: input.source, externalEventId: input.externalEventId },
       }),
       signedJobs: await tx.restaurantJob.count({
-        where: { idempotencyKey: `webhook-process:${first.inbox.id}` },
+        where: { idempotencyKey: `webhook.process:${first.inbox.id}` },
       }),
     }));
     expect(counts).toEqual({ signedRows: 1, signedJobs: 1 });
@@ -737,8 +752,18 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     expect(detail.evidence.map((row) => row.contentHash)).toEqual(['1'.repeat(64), '2'.repeat(64)]);
   }, 60_000);
 
-  it('denies a waiver without distinct manager co-authorization', async () => {
+  it('requires verify permission and distinct manager co-authorization for a waiver', async () => {
     const occurrence = await seedOccurrence('waiver', 'MISSED', { windowEndsAt: T0 });
+    mocks.can.mockResolvedValueOnce(false);
+    await expect(
+      api.execution.waive({
+        occurrenceId: occurrence.id,
+        actorStaffProfileId: ids.operator,
+        approvingStaffProfileId: ids.manager,
+        reason: 'Caller lacks manager verification permission',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
     await expect(
       api.execution.waive({
         occurrenceId: occurrence.id,
@@ -747,6 +772,9 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         reason: 'Self approval is forbidden',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.execution.getOccurrence({ id: occurrence.id })).resolves.toMatchObject({
+      status: 'MISSED',
+    });
 
     const waived = await api.execution.waive({
       occurrenceId: occurrence.id,
@@ -822,17 +850,43 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
           },
         })
       );
-    const run = (occurrenceId: string, policyId: string, now = T0) =>
-      deps.withTenantDb(orgId, (tx) =>
-        deps.escalation.sopEscalationHandler({
-          db: tx,
-          job: claimedJob(deps.escalation.SOP_ESCALATION_JOB, {
-            occurrenceId,
-            policyId,
-            now: now.toISOString(),
-          }),
-        })
+    const noOutboxConsumers = new deps.outboxDispatcher.OutboxConsumerRegistry();
+    let runNumber = 0;
+    const run = async (occurrenceId: string, policyId: string, now = T0) => {
+      runNumber += 1;
+      const queued = await deps.withTenantDb(orgId, (tx) =>
+        deps.scheduler.enqueue(
+          tx,
+          {
+            type: deps.escalation.SOP_ESCALATION_JOB,
+            payload: { occurrenceId, policyId, now: now.toISOString() },
+            idempotencyKey: `escalation_${suffix}_${runNumber}`,
+            scheduledAt: new Date('2000-01-01T00:00:00.000Z'),
+            maxAttempts: 1,
+          },
+          now
+        )
       );
+      const result = await deps.jobRunner.runRestaurantWorkerTick({
+        workerId: `escalation_worker_${suffix}_${runNumber}`,
+        now,
+        maxJobsPerOrg: 1,
+        maxOutboxPerOrg: 1,
+        outboxConsumers: noOutboxConsumers,
+        discoverOrganizations: async () => [orgId],
+        runInOrg: (organizationId, work) => deps.withTenantDb(organizationId, work),
+        outboxClient: (organizationId) => deps.createTenantDb(organizationId),
+      });
+      expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
+      await expect(
+        deps.withTenantDb(orgId, (tx) =>
+          tx.restaurantJob.findUniqueOrThrow({
+            where: { id: queued.job.id },
+            select: { status: true },
+          })
+        )
+      ).resolves.toEqual({ status: 'SUCCEEDED' });
+    };
 
     const exhaustedOccurrence = await seedOccurrence('escalation_exhausted', 'MISSED', {
       windowEndsAt: T0,
@@ -919,18 +973,20 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     const persisted = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantNotification.findMany({
         where: { category },
-        include: { deliveries: { orderBy: { channel: 'asc' } } },
+        include: { deliveries: true },
       })
     );
     expect(persisted).toHaveLength(1);
-    expect(persisted[0]!.deliveries.map((delivery) => [delivery.channel, delivery.status])).toEqual(
-      [
-        ['EMAIL', 'STUBBED'],
-        ['IN_APP', 'DELIVERED_IN_APP'],
-        ['SMS', 'STUBBED'],
-        ['WHATSAPP', 'STUBBED'],
-      ]
-    );
+    expect(
+      persisted[0]!.deliveries
+        .map((delivery) => [delivery.channel, delivery.status] as const)
+        .sort(([left], [right]) => left.localeCompare(right))
+    ).toEqual([
+      ['EMAIL', 'STUBBED'],
+      ['IN_APP', 'DELIVERED_IN_APP'],
+      ['SMS', 'STUBBED'],
+      ['WHATSAPP', 'STUBBED'],
+    ]);
     expect(persisted[0]!.deliveries.some((delivery) => delivery.channel === 'PUSH')).toBe(false);
 
     await expect(api.notifications.unreadCount({})).resolves.toEqual({ count: 1 });
