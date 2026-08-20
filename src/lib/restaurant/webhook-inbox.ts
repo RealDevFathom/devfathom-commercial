@@ -1,0 +1,224 @@
+import 'server-only';
+
+import { z } from 'zod';
+
+import {
+  Prisma,
+  type RestaurantWebhookInbox,
+  type RestaurantWebhookVerificationStatus,
+} from '@/generated/prisma/client';
+import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
+import { enqueue } from '@/lib/restaurant/scheduler';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+/**
+ * M7-L2 / D21 — the inbound-webhook inbox seam. External providers POST an
+ * envelope to `/api/restaurant/webhooks/[source]`; this module durably records it
+ * in `restaurant_webhook_inbox` (deduplicated by `(organization, source,
+ * externalEventId)`) and enqueues a `webhook.process` job so the scheduler drains
+ * it inside the tenant's RLS context — the receiver never processes provider
+ * events on the request path.
+ *
+ * Conservative M7 defaults (recorded in BUILD-ASSUMPTIONS):
+ *   - Signature verification is STUBBED. No provider secret is configured in M7,
+ *     so {@link verifyWebhookSignatureStub} records a status from the presence of a
+ *     signature header — never a real HMAC/asymmetric check. It is the seam a
+ *     provider adapter replaces; `FAILED` is reserved for that real verifier.
+ *   - Dedup is idempotent at two layers: a check-then-create fast path plus the
+ *     `(organization, source, externalEventId)` unique index as the authoritative
+ *     guard (a concurrent duplicate loses the race and is returned as
+ *     `deduplicated`). The enqueued job is itself deduplicated on the inbox id.
+ *   - Processing is durable acknowledgement only. The `webhook.process` handler
+ *     marks a received envelope `PROCESSED` (or `DISCARDED` when verification
+ *     FAILED — "a failed verification is never processed"); no tenant mutation and
+ *     no external call happen in M7. A later integration fills the seam.
+ */
+
+/** The scheduler job type L2 owns and registers in `job-handlers.ts`. */
+export const WEBHOOK_PROCESS_JOB_TYPE = 'webhook.process';
+
+/** The per-inbox-row idempotency key for the processing job (one job per row). */
+export function webhookProcessJobKey(inboxId: string): string {
+  return `${WEBHOOK_PROCESS_JOB_TYPE}:${inboxId}`;
+}
+
+/**
+ * The strict inbound envelope. Unknown top-level keys are REJECTED (house style /
+ * M7 global constraint). `payload` is the opaque provider event, stored verbatim
+ * as JSON; `externalEventId` is the provider's own event id and the dedup key.
+ */
+export const webhookEnvelopeSchema = z
+  .object({
+    externalEventId: z.string().min(1).max(200),
+    eventType: z.string().min(1).max(200).optional(),
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+export type WebhookEnvelope = z.infer<typeof webhookEnvelopeSchema>;
+
+/** The strict `webhook.process` job payload the handler validates at its boundary. */
+export const webhookProcessPayloadSchema = z.object({ inboxId: z.string().min(1) }).strict();
+
+export type RecordInboundWebhookInput = {
+  /** The `[source]` path segment (provider slug), already validated by the route. */
+  source: string;
+  externalEventId: string;
+  eventType?: string | null;
+  payload: Prisma.InputJsonValue;
+  /** The raw signature header value, if the caller presented one (STUB input). */
+  signature?: string | null;
+};
+
+export type RecordInboundWebhookResult = {
+  inbox: Pick<
+    RestaurantWebhookInbox,
+    'id' | 'source' | 'externalEventId' | 'status' | 'verificationStatus' | 'receivedAt'
+  >;
+  /** True iff an envelope with the same `(org, source, externalEventId)` existed. */
+  deduplicated: boolean;
+  /** The enqueued processing job id, or null when this was a duplicate receipt. */
+  enqueuedJobId: string | null;
+};
+
+const INBOX_SELECT = {
+  id: true,
+  source: true,
+  externalEventId: true,
+  status: true,
+  verificationStatus: true,
+  receivedAt: true,
+} as const;
+
+/**
+ * STUB (D21) signature verification. No provider secret is configured in M7, so
+ * this performs NO cryptographic check: it records `VERIFIED` when the caller
+ * presented a non-empty signature and `PENDING` otherwise (awaiting a real
+ * verifier). This is the extension point a provider adapter replaces to return the
+ * real `VERIFIED`/`FAILED` — the receiver claims no more than it does.
+ */
+export function verifyWebhookSignatureStub(input: {
+  source: string;
+  signature: string | null;
+}): RestaurantWebhookVerificationStatus {
+  return input.signature != null && input.signature.trim().length > 0 ? 'VERIFIED' : 'PENDING';
+}
+
+/** Open one tenant-scoped transaction (same retype as scheduler.ts / dispatcher). */
+function runInboxTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {
+  return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+async function findExistingInbox(
+  tx: ScopedDb,
+  source: string,
+  externalEventId: string
+): Promise<RecordInboundWebhookResult['inbox'] | null> {
+  // RLS scopes the lookup to the current organization, so `(source,
+  // externalEventId)` is the effective dedup key without threading the org id.
+  return tx.restaurantWebhookInbox.findFirst({
+    where: { source, externalEventId },
+    select: INBOX_SELECT,
+  });
+}
+
+/**
+ * Record an inbound webhook and enqueue its processing job atomically. `db` must
+ * be bound to the target organization's RLS scope (the route resolves the org
+ * from the request host and opens the tenant client). A repeat of the same
+ * `(source, externalEventId)` returns the existing row (`deduplicated: true`) and
+ * enqueues nothing new; a concurrent duplicate that loses the unique-index race is
+ * resolved to the same result.
+ */
+export async function recordInboundWebhook(
+  db: ScopedDb,
+  input: RecordInboundWebhookInput,
+  now: Date = new Date()
+): Promise<RecordInboundWebhookResult> {
+  const verificationStatus = verifyWebhookSignatureStub({
+    source: input.source,
+    signature: input.signature ?? null,
+  });
+
+  try {
+    return await runInboxTransaction(db, async (tx) => {
+      const existing = await findExistingInbox(tx, input.source, input.externalEventId);
+      if (existing) {
+        return { inbox: existing, deduplicated: true, enqueuedJobId: null };
+      }
+
+      const inbox = await tx.restaurantWebhookInbox.create({
+        data: {
+          source: input.source,
+          externalEventId: input.externalEventId,
+          eventType: input.eventType ?? null,
+          payload: input.payload,
+          verificationStatus,
+          status: 'PENDING',
+        },
+        select: INBOX_SELECT,
+      });
+
+      // Same transaction as the inbox insert: the row and its processing job
+      // commit together, so a received envelope always has a job to drain it.
+      const { job } = await enqueue(
+        tx,
+        {
+          type: WEBHOOK_PROCESS_JOB_TYPE,
+          payload: { inboxId: inbox.id },
+          idempotencyKey: webhookProcessJobKey(inbox.id),
+        },
+        now
+      );
+
+      return { inbox, deduplicated: false, enqueuedJobId: job.id };
+    });
+  } catch (error) {
+    // Lost the create race: another request inserted the same (org, source,
+    // externalEventId) first. Re-read and report it as a duplicate receipt.
+    if (isUniqueViolation(error)) {
+      const existing = await runInboxTransaction(db, (tx) =>
+        findExistingInbox(tx, input.source, input.externalEventId)
+      );
+      if (existing) {
+        return { inbox: existing, deduplicated: true, enqueuedJobId: null };
+      }
+    }
+    throw error;
+  }
+}
+
+/**
+ * The `webhook.process` handler (registered in `job-handlers.ts`). Idempotent: it
+ * re-reads the inbox row, no-ops if the row is gone or already left `PENDING`
+ * (a retry after a crash), and otherwise moves it to a terminal state — `DISCARDED`
+ * when signature verification FAILED (never processed), else `PROCESSED`. M7 does
+ * NO tenant mutation and NO external call here; this is the durable-acknowledgement
+ * seam a provider integration later fills.
+ */
+export const processInboundWebhookHandler: RestaurantJobHandler = async ({ db, job }) => {
+  const { inboxId } = webhookProcessPayloadSchema.parse(job.payload);
+  const now = new Date();
+
+  await runInboxTransaction(db, async (tx) => {
+    const row = await tx.restaurantWebhookInbox.findUnique({
+      where: { id: inboxId },
+      select: { id: true, status: true, verificationStatus: true },
+    });
+    if (!row || row.status !== 'PENDING') return;
+
+    const terminalStatus = row.verificationStatus === 'FAILED' ? 'DISCARDED' : 'PROCESSED';
+    await tx.restaurantWebhookInbox.update({
+      where: { id: inboxId },
+      data: {
+        status: terminalStatus,
+        processedAt: now,
+        attempts: { increment: 1 },
+      },
+    });
+  });
+};

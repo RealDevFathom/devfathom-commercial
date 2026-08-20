@@ -90,6 +90,11 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // goods receiving and supplier returns — gate on the POS module
   // (`restaurant-pos`), the licensed surface that runs procurement and inventory.
   restaurantPurchasing: 'restaurant-pos',
+  // M7-L2: background-operations console — scheduler queue browse, job execution
+  // history, dead-letter review + requeue, transactional-outbox status and webhook
+  // inbox — gate on the SOP/automation module (`restaurant-sop`), the licensed
+  // surface whose scheduler runtime this console observes.
+  restaurantJobs: 'restaurant-sop',
 };
 
 export function moduleForProcedure(path: string): string | null {

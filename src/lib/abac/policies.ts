@@ -51,6 +51,11 @@ export const ALL_ACTIONS = [
   // and the M4 `orders:read` coordination above).
   'purchasing:create', // restaurant M6-L3: supplier/PO/receiving mutations — org-role driven
   'purchasing:approve', // restaurant M6-L3: purchase-order approval transition — org-role driven
+  // Restaurant M7-L2: scheduler/outbox/webhook-inbox operations console — queue
+  // browse, execution history, dead-letter review + requeue. Org-role driven via
+  // the existing `reports:operational` capability (already in the vertical-catalog
+  // role templates: general-manager, financial-controller, sop-compliance-auditor).
+  'reports:operational', // restaurant M7-L2: background-ops read/requeue console — org-role driven
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -144,4 +149,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   // declared once above; the supervisor deduped L3's `inventory:read` overlap).
   'purchasing:create': [],
   'purchasing:approve': [],
+
+  // Restaurant M7-L2: background-operations console (scheduler queue, execution
+  // history, dead-letter + requeue, outbox status, webhook inbox). Granted through
+  // an organization role/override carrying `reports:operational` (or `*`), evaluated
+  // by the DB `customDecision` path in `can()`; no static agency-role policy, so a
+  // subject without an explicit grant is denied by default.
+  'reports:operational': [],
 };

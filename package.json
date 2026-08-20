@@ -27,7 +27,8 @@
     "assistant:eval": "tsx scripts/assistant-eval.ts",
     "assistant:diag": "tsx scripts/assistant-diag.ts",
     "email:smoke": "tsx scripts/email-smoke.ts",
-    "platform:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/process-platform-jobs.ts"
+    "platform:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/process-platform-jobs.ts",
+    "restaurant:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/run-restaurant-jobs.ts"
   },
   "prisma": {
     "seed": "bunx tsx prisma/seed.ts"

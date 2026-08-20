@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { ClaimedJob } from '@/lib/restaurant/scheduler';
+import { WEBHOOK_PROCESS_JOB_TYPE, processInboundWebhookHandler } from '@/lib/restaurant/webhook-inbox';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -41,7 +42,11 @@ export type RestaurantJobHandler = (context: RestaurantJobContext) => Promise<vo
  * The job-type → handler map. Keyed by the string `RestaurantJob.type` an
  * enqueuer set. Intentionally empty in L1: later lanes add exactly one key each.
  */
-export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {};
+export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
+  // M7-L2: inbound-webhook processing (the receiver enqueues one job per envelope).
+  [WEBHOOK_PROCESS_JOB_TYPE]: processInboundWebhookHandler,
+  // …later lanes (L3 SOP, L5 notifications) append one key each here…
+};
 
 /** Look up the handler registered for a job type (undefined when none is). */
 export function resolveRestaurantJobHandler(type: string): RestaurantJobHandler | undefined {
