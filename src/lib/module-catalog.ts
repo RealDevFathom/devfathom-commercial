@@ -90,6 +90,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // goods receiving and supplier returns — gate on the POS module
   // (`restaurant-pos`), the licensed surface that runs procurement and inventory.
   restaurantPurchasing: 'restaurant-pos',
+  // M7-L3: SOP authoring console — templates, versions, steps, branch assignments
+  // and schedule preview — gate on the SOP & Compliance module (`restaurant-sop`),
+  // whose licensed purpose is exactly this surface (vertical-catalog).
+  restaurantSop: 'restaurant-sop',
 };
 
 export function moduleForProcedure(path: string): string | null {

@@ -6,11 +6,11 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
 import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
+import { enumerateOccurrences } from '@/lib/restaurant/sop-recurrence';
 import {
-  type RecurrenceRule,
-  enumerateOccurrences,
-} from '@/lib/restaurant/sop-recurrence';
-import { resolveLatestPublishedVersion } from '@/lib/restaurant/sop-templates';
+  assignmentRecurrenceRule,
+  resolveLatestPublishedVersion,
+} from '@/lib/restaurant/sop-templates';
 
 /**
  * M7-L3 / §SOP — SOP occurrence generation (a scheduler handler, M7-L1/D13).
@@ -77,29 +77,6 @@ function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
-/** Build a recurrence rule from an assignment row (its `@db.Date` fields → ISO). */
-function ruleFromAssignment(assignment: {
-  frequency: RecurrenceRule['frequency'];
-  interval: number;
-  daysOfWeek: number[];
-  monthDay: number | null;
-  startDate: Date;
-  endDate: Date | null;
-  dueTimeMinutes: number;
-  windowMinutes: number;
-}): RecurrenceRule {
-  return {
-    frequency: assignment.frequency,
-    interval: assignment.interval,
-    daysOfWeek: assignment.daysOfWeek,
-    monthDay: assignment.monthDay,
-    startDate: dateColumnToISO(assignment.startDate),
-    endDate: assignment.endDate ? dateColumnToISO(assignment.endDate) : null,
-    dueTimeMinutes: assignment.dueTimeMinutes,
-    windowMinutes: assignment.windowMinutes,
-  };
-}
-
 /**
  * Generate the due occurrences for every active assignment in the current tenant
  * (the `db` is already org-scoped). Idempotent; safe to re-run.
@@ -142,7 +119,7 @@ export async function generateDueSopOccurrences(
     const windowEndISO = dateColumnToISO(addUtcDays(base, horizonDays));
 
     const occurrences = enumerateOccurrences(
-      ruleFromAssignment(assignment),
+      assignmentRecurrenceRule(assignment),
       timezone,
       windowStartISO,
       windowEndISO

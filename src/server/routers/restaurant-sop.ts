@@ -1,0 +1,453 @@
+import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
+
+import { router, capabilityProcedure } from '../trpc';
+import { annotateAudit } from '../audit';
+import {
+  SopTemplateError,
+  addStep,
+  createAssignment,
+  createDraftVersion,
+  createTemplate,
+  getAssignment,
+  getTemplate,
+  getVersion,
+  listAssignments,
+  listTemplates,
+  listVersions,
+  publishVersion,
+  removeStep,
+  reorderSteps,
+  retireVersion,
+  setAssignmentActive,
+  setTemplateActive,
+  updateAssignment,
+  updateStep,
+  updateTemplate,
+  assignmentRecurrenceRule,
+} from '@/lib/restaurant/sop-templates';
+import { RecurrenceError, enumerateOccurrences } from '@/lib/restaurant/sop-recurrence';
+
+/**
+ * M7-L3 — the SOP authoring console (back-office server surface).
+ *
+ * Every procedure gates on the `sop:manage` capability (ABAC, org-role-driven)
+ * and the `restaurant-sop` module (module-catalog). Tenant scoping is the
+ * RLS-forced `organizationId` default on every row (C1). Domain rules —
+ * publish immutability, `sop.templates.max`, recurrence validity — live in the
+ * `sop-templates` / `sop-recurrence` libs; this router is a thin, strictly-typed
+ * mapping layer that translates domain errors to tRPC status codes.
+ *
+ * Strict-zod boundary: EVERY input schema is `.strict()`, so an unknown key is
+ * REJECTED with a 400 rather than silently stripped.
+ */
+
+const manageProcedure = capabilityProcedure('sop:manage');
+
+/** Translate SOP/recurrence domain errors to tRPC status. Rethrows unknowns. */
+function mapSopError(err: unknown): never {
+  if (err instanceof SopTemplateError) {
+    const code =
+      err.reason === 'NOT_FOUND'
+        ? 'NOT_FOUND'
+        : err.reason === 'TEMPLATE_LIMIT_REACHED' ||
+            err.reason === 'DRAFT_EXISTS' ||
+            err.reason === 'VERSION_NOT_DRAFT' ||
+            err.reason === 'INVALID_STATE'
+          ? 'CONFLICT'
+          : 'BAD_REQUEST'; // NO_STEPS, INVALID
+    throw new TRPCError({ code, message: err.message });
+  }
+  if (err instanceof RecurrenceError) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+  }
+  throw err;
+}
+
+// ── Shared field schemas ──────────────────────────────────────────────────────
+
+const NAME = z.string().min(1).max(200);
+const OPTIONAL_TEXT = z.string().max(2_000).nullable().optional();
+const STEP_TITLE = z.string().min(1).max(500);
+const DATE_ISO = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD date.');
+const FREQUENCY = z.enum(['ONCE', 'DAILY', 'WEEKLY', 'MONTHLY']);
+const MINUTES_OF_DAY = z.number().int().min(0).max(1439);
+const DAYS_OF_WEEK = z.array(z.number().int().min(0).max(6)).max(7);
+const MONTH_DAY = z.number().int().min(1).max(31).nullable();
+
+/** The recurrence fields shared by createAssignment and previewSchedule. */
+const recurrenceShape = {
+  frequency: FREQUENCY,
+  interval: z.number().int().min(1).max(365).default(1),
+  daysOfWeek: DAYS_OF_WEEK.default([]),
+  monthDay: MONTH_DAY.default(null),
+  startDate: DATE_ISO,
+  endDate: DATE_ISO.nullable().default(null),
+  dueTimeMinutes: MINUTES_OF_DAY.default(0),
+  windowMinutes: z.number().int().min(0).max(1440).default(1440),
+} as const;
+
+export const restaurantSopRouter = router({
+  // ── Templates ───────────────────────────────────────────────────────────────
+
+  createTemplate: manageProcedure
+    .input(
+      z
+        .object({
+          name: NAME,
+          description: OPTIONAL_TEXT,
+          category: z.string().max(200).nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const templatesMax =
+          (ctx.entitlements.limits as Record<string, number>)['sop.templates.max'] ?? 0;
+        const template = await createTemplate(ctx.db, input, templatesMax);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopTemplate',
+          targetId: template.id,
+          targetLabel: template.name,
+          description: `Created SOP template "${template.name}"`,
+        });
+        return template;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  updateTemplate: manageProcedure
+    .input(
+      z
+        .object({
+          id: z.string(),
+          name: NAME.optional(),
+          description: OPTIONAL_TEXT,
+          category: z.string().max(200).nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...patch } = input;
+      try {
+        return await updateTemplate(ctx.db, id, patch);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  setTemplateActive: manageProcedure
+    .input(z.object({ id: z.string(), isActive: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const templatesMax =
+          (ctx.entitlements.limits as Record<string, number>)['sop.templates.max'] ?? 0;
+        return await setTemplateActive(ctx.db, input.id, input.isActive, templatesMax);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  listTemplates: manageProcedure
+    .input(z.object({ includeInactive: z.boolean().optional() }).strict().optional())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await listTemplates(ctx.db, { includeInactive: input?.includeInactive });
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  getTemplate: manageProcedure
+    .input(z.object({ id: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await getTemplate(ctx.db, input.id);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  // ── Versions ──────────────────────────────────────────────────────────────
+
+  createDraftVersion: manageProcedure
+    .input(z.object({ templateId: z.string(), cloneFromVersionId: z.string().optional() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const version = await createDraftVersion(ctx.db, input.templateId, {
+          cloneFromVersionId: input.cloneFromVersionId,
+        });
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopTemplateVersion',
+          targetId: version.id,
+          description: `Opened SOP draft version v${version.versionNumber}`,
+        });
+        return version;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  publishVersion: manageProcedure
+    .input(z.object({ versionId: z.string() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const version = await publishVersion(ctx.db, input.versionId);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopTemplateVersion',
+          targetId: version.id,
+          description: `Published SOP version v${version.versionNumber}`,
+        });
+        return version;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  retireVersion: manageProcedure
+    .input(z.object({ versionId: z.string() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await retireVersion(ctx.db, input.versionId);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  listVersions: manageProcedure
+    .input(z.object({ templateId: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await listVersions(ctx.db, input.templateId);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  getVersion: manageProcedure
+    .input(z.object({ versionId: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await getVersion(ctx.db, input.versionId);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  // ── Steps (DRAFT-only mutations, server-guarded) ──────────────────────────────
+
+  addStep: manageProcedure
+    .input(
+      z
+        .object({
+          templateVersionId: z.string(),
+          title: STEP_TITLE,
+          instructions: OPTIONAL_TEXT,
+          requiresPhoto: z.boolean().optional(),
+          requiresSignature: z.boolean().optional(),
+          requiresNote: z.boolean().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await addStep(ctx.db, input);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  updateStep: manageProcedure
+    .input(
+      z
+        .object({
+          stepId: z.string(),
+          title: STEP_TITLE.optional(),
+          instructions: OPTIONAL_TEXT,
+          requiresPhoto: z.boolean().optional(),
+          requiresSignature: z.boolean().optional(),
+          requiresNote: z.boolean().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { stepId, ...patch } = input;
+      try {
+        return await updateStep(ctx.db, stepId, patch);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  removeStep: manageProcedure
+    .input(z.object({ stepId: z.string() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await removeStep(ctx.db, input.stepId);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  reorderSteps: manageProcedure
+    .input(z.object({ versionId: z.string(), orderedStepIds: z.array(z.string()).min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await reorderSteps(ctx.db, input.versionId, input.orderedStepIds);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  // ── Assignments ───────────────────────────────────────────────────────────
+
+  createAssignment: manageProcedure
+    .input(
+      z
+        .object({
+          branchId: z.string(),
+          templateId: z.string(),
+          graceMinutes: z.number().int().min(0).max(1440).default(0),
+          ...recurrenceShape,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const assignment = await createAssignment(ctx.db, input);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopAssignment',
+          targetId: assignment.id,
+          description: `Assigned SOP template ${input.templateId} to branch ${input.branchId}`,
+        });
+        return assignment;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  updateAssignment: manageProcedure
+    .input(
+      z
+        .object({
+          id: z.string(),
+          frequency: FREQUENCY.optional(),
+          interval: z.number().int().min(1).max(365).optional(),
+          daysOfWeek: DAYS_OF_WEEK.optional(),
+          monthDay: MONTH_DAY.optional(),
+          startDate: DATE_ISO.optional(),
+          endDate: DATE_ISO.nullable().optional(),
+          dueTimeMinutes: MINUTES_OF_DAY.optional(),
+          windowMinutes: z.number().int().min(0).max(1440).optional(),
+          graceMinutes: z.number().int().min(0).max(1440).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...patch } = input;
+      try {
+        return await updateAssignment(ctx.db, id, patch);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  setAssignmentActive: manageProcedure
+    .input(z.object({ id: z.string(), active: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await setAssignmentActive(ctx.db, input.id, input.active);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  listAssignments: manageProcedure
+    .input(
+      z
+        .object({ branchId: z.string().optional(), templateId: z.string().optional() })
+        .strict()
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await listAssignments(ctx.db, input ?? {});
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  getAssignment: manageProcedure
+    .input(z.object({ id: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await getAssignment(ctx.db, input.id);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  // ── Schedule preview (pure recurrence evaluation, no persistence) ─────────────
+
+  /** Preview an ad-hoc recurrence against a branch's timezone before saving it. */
+  previewSchedule: manageProcedure
+    .input(
+      z
+        .object({
+          branchId: z.string(),
+          from: DATE_ISO,
+          to: DATE_ISO,
+          ...recurrenceShape,
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const branch = await ctx.db.restaurantBranch.findUnique({
+        where: { id: input.branchId },
+        select: { timezone: true },
+      });
+      if (!branch) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: `Branch ${input.branchId} was not found.`,
+        });
+      }
+      try {
+        return enumerateOccurrences(
+          {
+            frequency: input.frequency,
+            interval: input.interval,
+            daysOfWeek: input.daysOfWeek,
+            monthDay: input.monthDay,
+            startDate: input.startDate,
+            endDate: input.endDate,
+            dueTimeMinutes: input.dueTimeMinutes,
+            windowMinutes: input.windowMinutes,
+          },
+          branch.timezone,
+          input.from,
+          input.to
+        );
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  /** Preview an existing assignment's schedule over a date window. */
+  previewAssignmentSchedule: manageProcedure
+    .input(z.object({ assignmentId: z.string(), from: DATE_ISO, to: DATE_ISO }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const assignment = await getAssignment(ctx.db, input.assignmentId);
+        return enumerateOccurrences(
+          assignmentRecurrenceRule(assignment),
+          assignment.branch.timezone,
+          input.from,
+          input.to
+        );
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+});

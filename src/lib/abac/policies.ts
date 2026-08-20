@@ -51,6 +51,7 @@ export const ALL_ACTIONS = [
   // and the M4 `orders:read` coordination above).
   'purchasing:create', // restaurant M6-L3: supplier/PO/receiving mutations — org-role driven
   'purchasing:approve', // restaurant M6-L3: purchase-order approval transition — org-role driven
+  'sop:manage', // restaurant M7-L3: SOP authoring console — templates/versions/steps/assignments/schedule preview (org-role driven)
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -144,4 +145,12 @@ export const POLICIES: Record<Action, Policy[]> = {
   // declared once above; the supervisor deduped L3's `inventory:read` overlap).
   'purchasing:create': [],
   'purchasing:approve': [],
+
+  // Restaurant M7-L3: SOP authoring console (templates, versions, steps, branch
+  // assignments, schedule preview). Granted through an organization role/override
+  // carrying `sop:manage` (or `*`, e.g. the restaurant Owner or SOP/Compliance
+  // Auditor templates in vertical-catalog), evaluated by the DB `customDecision`
+  // path in `can()`; no static agency-role policy, so a subject without an
+  // explicit grant is denied by default.
+  'sop:manage': [],
 };

@@ -2,6 +2,12 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import {
+  type RecurrenceFrequency,
+  type RecurrenceRule,
+  assertValidRule,
+} from '@/lib/restaurant/sop-recurrence';
 
 /**
  * M7-L3 / §SOP — SOP template authoring: the template family → version → step
@@ -409,15 +415,18 @@ export async function reorderSteps(db: ScopedDb, versionId: string, orderedStepI
       select: { id: true },
     });
     const existing = new Set(steps.map((s) => s.id));
-    if (orderedStepIds.length !== existing.size || new Set(orderedStepIds).size !== orderedStepIds.length) {
-      throw new SopTemplateError(
-        'reorderSteps requires each step exactly once.',
-        'INVALID'
-      );
+    if (
+      orderedStepIds.length !== existing.size ||
+      new Set(orderedStepIds).size !== orderedStepIds.length
+    ) {
+      throw new SopTemplateError('reorderSteps requires each step exactly once.', 'INVALID');
     }
     for (const id of orderedStepIds) {
       if (!existing.has(id)) {
-        throw new SopTemplateError(`Step ${id} does not belong to version ${versionId}.`, 'INVALID');
+        throw new SopTemplateError(
+          `Step ${id} does not belong to version ${versionId}.`,
+          'INVALID'
+        );
       }
     }
     // Phase 1: move every step to a temporary, collision-free negative order.
@@ -488,6 +497,195 @@ export async function getVersion(db: ScopedDb, versionId: string) {
     where: { id: versionId },
     include: { steps: { orderBy: { stepOrder: 'asc' } } },
   });
-  if (!version) throw new SopTemplateError(`Template version ${versionId} was not found.`, 'NOT_FOUND');
+  if (!version)
+    throw new SopTemplateError(`Template version ${versionId} was not found.`, 'NOT_FOUND');
   return version;
+}
+
+// ── Assignments (a template scheduled to a branch with a recurrence) ───────────
+//
+// An assignment binds a template family to a branch with a structured recurrence
+// (the fields the occurrence generator reads). The recurrence is validated HERE
+// through the pure engine (`assertValidRule`) so a malformed schedule is rejected
+// at authoring time, not discovered when generation runs.
+
+/** Format a `@db.Date` column value (UTC midnight) as `YYYY-MM-DD`. */
+function dateColumnToISO(date: Date): string {
+  const y = date.getUTCFullYear().toString().padStart(4, '0');
+  const m = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+  const d = date.getUTCDate().toString().padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export type AssignmentRuleFields = {
+  frequency: RecurrenceFrequency;
+  interval: number;
+  daysOfWeek: number[];
+  monthDay: number | null;
+  startDate: string; // YYYY-MM-DD (branch-local)
+  endDate: string | null;
+  dueTimeMinutes: number;
+  windowMinutes: number;
+};
+
+export type CreateAssignmentInput = AssignmentRuleFields & {
+  branchId: string;
+  templateId: string;
+  graceMinutes: number;
+};
+
+function ruleOf(fields: AssignmentRuleFields): RecurrenceRule {
+  return {
+    frequency: fields.frequency,
+    interval: fields.interval,
+    daysOfWeek: fields.daysOfWeek,
+    monthDay: fields.monthDay,
+    startDate: fields.startDate,
+    endDate: fields.endDate,
+    dueTimeMinutes: fields.dueTimeMinutes,
+    windowMinutes: fields.windowMinutes,
+  };
+}
+
+/** The stored shape of an assignment's recurrence fields (`@db.Date` columns). */
+export type StoredAssignmentRule = {
+  frequency: RecurrenceFrequency;
+  interval: number;
+  daysOfWeek: number[];
+  monthDay: number | null;
+  startDate: Date;
+  endDate: Date | null;
+  dueTimeMinutes: number;
+  windowMinutes: number;
+};
+
+/** Project a persisted assignment onto a {@link RecurrenceRule} (dates → ISO). */
+export function assignmentRecurrenceRule(assignment: StoredAssignmentRule): RecurrenceRule {
+  return {
+    frequency: assignment.frequency,
+    interval: assignment.interval,
+    daysOfWeek: assignment.daysOfWeek,
+    monthDay: assignment.monthDay,
+    startDate: dateColumnToISO(assignment.startDate),
+    endDate: assignment.endDate ? dateColumnToISO(assignment.endDate) : null,
+    dueTimeMinutes: assignment.dueTimeMinutes,
+    windowMinutes: assignment.windowMinutes,
+  };
+}
+
+/**
+ * Create a branch assignment for a template. Validates that the branch and
+ * template exist and that the recurrence is well-formed before persisting; dates
+ * are stored as `@db.Date` (UTC midnight). Throws `RecurrenceError` on a malformed
+ * rule — the router maps it to a 400.
+ */
+export async function createAssignment(db: ScopedDb, input: CreateAssignmentInput) {
+  assertValidRule(ruleOf(input));
+  const [branch, template] = await Promise.all([
+    db.restaurantBranch.findUnique({ where: { id: input.branchId }, select: { id: true } }),
+    db.restaurantSopTemplate.findUnique({ where: { id: input.templateId }, select: { id: true } }),
+  ]);
+  if (!branch) throw new SopTemplateError(`Branch ${input.branchId} was not found.`, 'NOT_FOUND');
+  if (!template)
+    throw new SopTemplateError(`Template ${input.templateId} was not found.`, 'NOT_FOUND');
+  return db.restaurantSopAssignment.create({
+    data: {
+      branchId: input.branchId,
+      templateId: input.templateId,
+      frequency: input.frequency,
+      interval: input.interval,
+      daysOfWeek: input.daysOfWeek,
+      monthDay: input.monthDay,
+      startDate: businessDateToUtcDate(input.startDate),
+      endDate: input.endDate ? businessDateToUtcDate(input.endDate) : null,
+      dueTimeMinutes: input.dueTimeMinutes,
+      windowMinutes: input.windowMinutes,
+      graceMinutes: input.graceMinutes,
+    },
+  });
+}
+
+export type UpdateAssignmentInput = Partial<AssignmentRuleFields & { graceMinutes: number }>;
+
+/**
+ * Update an assignment's recurrence/config. The full effective rule (existing
+ * merged with the patch) is re-validated so an update can never leave a schedule
+ * malformed. The template↔branch binding is immutable (rebind = new assignment).
+ */
+export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAssignmentInput) {
+  const existing = await db.restaurantSopAssignment.findUnique({ where: { id } });
+  if (!existing) throw new SopTemplateError(`Assignment ${id} was not found.`, 'NOT_FOUND');
+
+  const merged: AssignmentRuleFields = {
+    frequency: patch.frequency ?? (existing.frequency as RecurrenceFrequency),
+    interval: patch.interval ?? existing.interval,
+    daysOfWeek: patch.daysOfWeek ?? existing.daysOfWeek,
+    monthDay: patch.monthDay !== undefined ? patch.monthDay : existing.monthDay,
+    startDate: patch.startDate ?? dateColumnToISO(existing.startDate),
+    endDate:
+      patch.endDate !== undefined
+        ? patch.endDate
+        : existing.endDate
+          ? dateColumnToISO(existing.endDate)
+          : null,
+    dueTimeMinutes: patch.dueTimeMinutes ?? existing.dueTimeMinutes,
+    windowMinutes: patch.windowMinutes ?? existing.windowMinutes,
+  };
+  assertValidRule(ruleOf(merged));
+
+  return db.restaurantSopAssignment.update({
+    where: { id },
+    data: {
+      frequency: merged.frequency,
+      interval: merged.interval,
+      daysOfWeek: merged.daysOfWeek,
+      monthDay: merged.monthDay,
+      startDate: businessDateToUtcDate(merged.startDate),
+      endDate: merged.endDate ? businessDateToUtcDate(merged.endDate) : null,
+      dueTimeMinutes: merged.dueTimeMinutes,
+      windowMinutes: merged.windowMinutes,
+      ...(patch.graceMinutes !== undefined ? { graceMinutes: patch.graceMinutes } : {}),
+    },
+  });
+}
+
+/** Activate/pause an assignment (paused assignments generate no new occurrences). */
+export async function setAssignmentActive(db: ScopedDb, id: string, active: boolean) {
+  const existing = await db.restaurantSopAssignment.findUnique({
+    where: { id },
+    select: { id: true },
+  });
+  if (!existing) throw new SopTemplateError(`Assignment ${id} was not found.`, 'NOT_FOUND');
+  return db.restaurantSopAssignment.update({ where: { id }, data: { active } });
+}
+
+/** List assignments, optionally filtered by branch and/or template. */
+export async function listAssignments(
+  db: ScopedDb,
+  filter: { branchId?: string; templateId?: string } = {}
+) {
+  return db.restaurantSopAssignment.findMany({
+    where: {
+      ...(filter.branchId ? { branchId: filter.branchId } : {}),
+      ...(filter.templateId ? { templateId: filter.templateId } : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    include: {
+      template: { select: { id: true, name: true } },
+      branch: { select: { id: true, name: true, timezone: true } },
+    },
+  });
+}
+
+/** A single assignment with its template and branch. */
+export async function getAssignment(db: ScopedDb, id: string) {
+  const assignment = await db.restaurantSopAssignment.findUnique({
+    where: { id },
+    include: {
+      template: { select: { id: true, name: true } },
+      branch: { select: { id: true, name: true, timezone: true } },
+    },
+  });
+  if (!assignment) throw new SopTemplateError(`Assignment ${id} was not found.`, 'NOT_FOUND');
+  return assignment;
 }
