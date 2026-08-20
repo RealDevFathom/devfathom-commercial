@@ -3,6 +3,8 @@
  * Covers: SCHEDULED→IN_PROGRESS, step completion (idempotent), evidence with sha256,
  * IN_PROGRESS→SUBMITTED/LATE transition based on window, and state-guard errors.
  */
+import { createHash } from 'node:crypto';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -187,7 +189,7 @@ describe('completeStep', () => {
 describe('attachEvidence', () => {
   const contentBytes = Buffer.from('hello evidence');
   // Precomputed sha256 of "hello evidence":
-  const expectedHash = require('crypto').createHash('sha256').update(contentBytes).digest('hex');
+  const expectedHash = createHash('sha256').update(contentBytes).digest('hex');
 
   it('computes sha256 from contentBytes and creates evidence', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
