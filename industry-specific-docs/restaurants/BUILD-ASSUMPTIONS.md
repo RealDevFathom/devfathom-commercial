@@ -1153,3 +1153,47 @@ documented nits (both PASS).
 **Final consolidated verdict: PASS.** All 13 acceptance criteria met at milestone tip `9d62f6a`; the single
 remaining suite failure is the sanctioned explicit-host baseline. The correction pass (WHA-65) is complete and
 independently re-verified. M5 rollup verification closed.
+
+**Notifications — channel matrix, in-app REAL, external stubs, fan-out (M7-L5)** · L5 realises the L1 D21 seam
+(`src/lib/restaurant/notifications.ts` + `notification-fanout.ts` + `src/server/routers/restaurant-notifications.ts`).
+It commits to the choices L1 left to app code, all reversible when D21 closes:
+**(1) Channels honour the SCHEMA, not the loose brief text.** The routing brief named "EMAIL/SMS/PUSH/WHATSAPP", but
+the authoritative L1 enum is `RestaurantNotificationChannel = IN_APP | EMAIL | SMS | WEBHOOK`. Per
+local-repository-source-of-truth the schema wins: L5 stubs `EMAIL`/`SMS`/`WEBHOOK`. `PUSH`/`WHATSAPP` are NOT built
+(they are not in the enum; adding them is a D21/L1 schema change, out of this lane). **(2) IN_APP is REAL; external
+is STUBBED — never blurred.** A fanned-out request creates ONE `restaurant_notifications` row (the durable inbox
+entry + per-recipient read state) and one `restaurant_notification_deliveries` row per enabled channel:
+`IN_APP → DELIVERED_IN_APP` (real), `EMAIL/SMS/WEBHOOK → STUBBED` via `deliverViaStub` (NO provider SDK, NO secret,
+NO network call — the seam a later integration fills). **(3) Matrix default is enabled.** `resolveChannelMatrix`
+applies branch-override → org-default → **default-enabled** when no `restaurant_notification_channel_settings` row
+exists (matching the enum's "IN_APP is always delivered" default, applied uniformly). An explicit `enabled = false`
+row SUPPRESSES the channel — a matrix-off channel yields NO delivery record; when EVERY channel is off the request
+records nothing at all (no notification row, no delivery). **(4) In-app inbox = notifications with a
+`DELIVERED_IN_APP` delivery.** The notification row is created whenever ≥1 channel is enabled (it is the FK anchor
+for external stubbed deliveries too), so `listInAppNotifications` filters on the presence of an `IN_APP` delivery —
+a category delivered on EMAIL only never appears in the inbox. **(5) Idempotency is entity-anchored.**
+`fanOutNotification` is at-least-once safe: an entity-anchored request (`entityType` + `entityId` present) that
+matches an existing notification with the same recipient + category + entity + title is a no-op (the guard for
+outbox redelivery after a crash and for retried jobs). A request WITHOUT an entity reference relies on the
+transport's own dedupe (the scheduler `idempotencyKey`); no new schema column was added (schema is L1's). **(6)
+Fan-out drives BOTH durable seams.** A scheduler job handler (`notification.fanOut`, keyed in `job-handlers.ts`) gets
+a tenant-scoped `db` from the worker, so its payload is the bare request. An outbox consumer
+(`restaurant.notification.requested`, registered into `restaurantOutboxConsumers` from `job-handlers.ts`) receives
+only the dispatch record — the L2 dispatcher passes no `db`/org and the record omits `organizationId` — so the
+outbox payload carries `organizationId` as transport metadata and the consumer binds `createTenantDb(org)`; its
+writes land in a SEPARATE transaction from the row settle, which is exactly why the idempotency guard is
+load-bearing on this path. A transactional producer helper (`appendNotificationRequest`) lets a producing lane
+enqueue a request in the same tx as its state change. **(7) Recipient scoping is by input staff profile.** The
+router takes `recipientStaffProfileId` as input (there is no session→staff-profile map in the tRPC ctx — consistent
+with the M7 SOP execution lane) and scopes every read/write to it in the `where` clause. `notification:read` is
+granted to any active member (a personal inbox is not an org-role privilege, like `team:view`); `notification:manage`
+(channel-matrix admin) is org-role-driven like `sop:manage`, both on the `restaurant-sop` module. · Revisited by D21
+closing: real EMAIL/SMS/WEBHOOK (and any PUSH/WHATSAPP) providers with retry SLAs, a per-recipient channel-preference
+model, a caller-supplied idempotency key with a dedicated column, and binding the inbox to the authenticated staff
+identity. · Evidence: 36 lane unit tests GREEN (`notifications.test.ts`, `notification-fanout.test.ts`,
+`restaurant-notifications.test.ts`); `typecheck` clean on lane files (1 pre-existing `app/login/page.tsx` baseline
+error, untouched); `eslint`/`prettier --check` clean on lane files; full suite `1 failed | 1625 passed | 476 skipped`
+— the 1 = sanctioned `explicit-host` baseline (zero NEW failures), the 476 skipped are DB-gated tests
+environment-deferred (no `TEST_DATABASE_URL`; notification-table RLS + append-only are covered by L1's
+`tests/restaurant-m7-rls.test.ts` under a privileged DB). Docker/visual-QA: environment-deferred per standing
+disposition.
