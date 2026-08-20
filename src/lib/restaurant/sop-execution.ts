@@ -25,11 +25,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  */
 
 export type SopExecutionErrorReason =
-  | 'NOT_FOUND'
-  | 'INVALID_STATE'
-  | 'STEP_NOT_FOUND'
-  | 'STEP_ALREADY_COMPLETED'
-  | 'INVALID';
+  'NOT_FOUND' | 'INVALID_STATE' | 'STEP_NOT_FOUND' | 'STEP_ALREADY_COMPLETED' | 'INVALID';
 
 export class SopExecutionError extends Error {
   constructor(
@@ -238,7 +234,11 @@ export async function attachEvidence(
       },
       select: { id: true, contentHash: true, createdAt: true },
     });
-    return { evidenceId: evidence.id, contentHash: evidence.contentHash, createdAt: evidence.createdAt };
+    return {
+      evidenceId: evidence.id,
+      contentHash: evidence.contentHash,
+      createdAt: evidence.createdAt,
+    };
   });
 }
 

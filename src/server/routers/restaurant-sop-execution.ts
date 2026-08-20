@@ -38,8 +38,7 @@ function mapExecutionError(err: unknown): never {
     const code =
       err.reason === 'NOT_FOUND'
         ? 'NOT_FOUND'
-        : err.reason === 'INVALID_STATE' ||
-            err.reason === 'STEP_ALREADY_COMPLETED'
+        : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
           ? 'CONFLICT'
           : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
@@ -76,7 +75,16 @@ const BoardFilterSchema = z
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
       .optional(),
     status: z
-      .enum(['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'VERIFIED', 'REJECTED', 'LATE', 'MISSED', 'WAIVED'])
+      .enum([
+        'SCHEDULED',
+        'IN_PROGRESS',
+        'SUBMITTED',
+        'VERIFIED',
+        'REJECTED',
+        'LATE',
+        'MISSED',
+        'WAIVED',
+      ])
       .optional(),
     limit: z.number().int().min(1).max(200).default(50),
     cursor: z.string().optional(),
@@ -86,60 +94,60 @@ const BoardFilterSchema = z
 export const restaurantSopExecutionRouter = router({
   // ── Board: list occurrences ───────────────────────────────────────────────
 
-  listOccurrences: completeProcedure
-    .input(BoardFilterSchema)
-    .query(async ({ ctx, input }) => {
-      const where: Record<string, unknown> = { branchId: input.branchId };
+  listOccurrences: completeProcedure.input(BoardFilterSchema).query(async ({ ctx, input }) => {
+    const where: Record<string, unknown> = { branchId: input.branchId };
 
-      if (input.businessDate) {
-        // Filter by business date (stored as UTC @db.Date midnight)
-        const date = new Date(`${input.businessDate}T00:00:00.000Z`);
-        where['businessDate'] = date;
-      }
+    if (input.businessDate) {
+      // Filter by business date (stored as UTC @db.Date midnight)
+      const date = new Date(`${input.businessDate}T00:00:00.000Z`);
+      where['businessDate'] = date;
+    }
 
-      if (input.status) {
-        where['status'] = input.status;
-      } else {
-        // Default board view: active statuses (not terminal)
-        where['status'] = { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'REJECTED', 'LATE', 'MISSED'] };
-      }
+    if (input.status) {
+      where['status'] = input.status;
+    } else {
+      // Default board view: active statuses (not terminal)
+      where['status'] = {
+        in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'REJECTED', 'LATE', 'MISSED'],
+      };
+    }
 
-      if (input.cursor) {
-        where['id'] = { gt: input.cursor };
-      }
+    if (input.cursor) {
+      where['id'] = { gt: input.cursor };
+    }
 
-      const items = await ctx.db.restaurantSopOccurrence.findMany({
-        where,
-        orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
-        take: input.limit + 1,
-        select: {
-          id: true,
-          status: true,
-          businessDate: true,
-          dueAt: true,
-          windowEndsAt: true,
-          startedAt: true,
-          submittedAt: true,
-          resolvedAt: true,
-          assignment: {
-            select: {
-              id: true,
-              template: { select: { id: true, name: true, category: true } },
-            },
-          },
-          steps: {
-            select: { id: true, templateStepId: true, completed: true },
+    const items = await ctx.db.restaurantSopOccurrence.findMany({
+      where,
+      orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
+      take: input.limit + 1,
+      select: {
+        id: true,
+        status: true,
+        businessDate: true,
+        dueAt: true,
+        windowEndsAt: true,
+        startedAt: true,
+        submittedAt: true,
+        resolvedAt: true,
+        assignment: {
+          select: {
+            id: true,
+            template: { select: { id: true, name: true, category: true } },
           },
         },
-      });
+        steps: {
+          select: { id: true, templateStepId: true, completed: true },
+        },
+      },
+    });
 
-      const hasMore = items.length > input.limit;
-      const page = hasMore ? items.slice(0, input.limit) : items;
-      return {
-        items: page,
-        nextCursor: hasMore ? page[page.length - 1].id : null,
-      };
-    }),
+    const hasMore = items.length > input.limit;
+    const page = hasMore ? items.slice(0, input.limit) : items;
+    return {
+      items: page,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
+  }),
 
   // ── Detail: one occurrence with evidence, verifications, escalation ───────
 

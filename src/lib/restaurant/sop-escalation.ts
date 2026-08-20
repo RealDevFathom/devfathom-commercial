@@ -78,11 +78,7 @@ function localMinutesOfDay(branchTimezone: string, now: Date): number {
 }
 
 /** Returns true if `minuteOfDay` falls within the quiet window (wraps midnight). */
-function isQuietHour(
-  minuteOfDay: number,
-  startMinutes: number,
-  endMinutes: number
-): boolean {
+function isQuietHour(minuteOfDay: number, startMinutes: number, endMinutes: number): boolean {
   if (startMinutes <= endMinutes) {
     return minuteOfDay >= startMinutes && minuteOfDay < endMinutes;
   }
@@ -121,8 +117,7 @@ async function emitNotification(
     select: { id: true },
   });
 
-  const status =
-    opts.channel === 'IN_APP' ? 'DELIVERED_IN_APP' : 'STUBBED';
+  const status = opts.channel === 'IN_APP' ? 'DELIVERED_IN_APP' : 'STUBBED';
 
   await tx.restaurantNotificationDelivery.create({
     data: {
@@ -227,7 +222,9 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
       }
 
       const firedStepIds = new Set(
-        events.filter((e) => e.kind === 'FIRED' && e.escalationStepId).map((e) => e.escalationStepId!)
+        events
+          .filter((e) => e.kind === 'FIRED' && e.escalationStepId)
+          .map((e) => e.escalationStepId!)
       );
 
       // ── Find the next unfired step ─────────────────────────────────────────
@@ -265,10 +262,7 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
       }
 
       // ── Quiet-hour check ──────────────────────────────────────────────────
-      if (
-        policy.quietHoursStartMinutes !== null &&
-        policy.quietHoursEndMinutes !== null
-      ) {
+      if (policy.quietHoursStartMinutes !== null && policy.quietHoursEndMinutes !== null) {
         const branchTz = occ.branch?.timezone ?? 'UTC';
         const localMin = localMinutesOfDay(branchTz, now);
         if (isQuietHour(localMin, policy.quietHoursStartMinutes, policy.quietHoursEndMinutes)) {
@@ -329,26 +323,28 @@ export async function acknowledgeEscalation(
   input: AcknowledgeEscalationInput
 ): Promise<AcknowledgeEscalationResult> {
   const now = input.now ?? new Date();
-  return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<AcknowledgeEscalationResult>) => Promise<AcknowledgeEscalationResult>)(
-    async (tx) => {
-      const existing = await tx.restaurantSopEscalationEvent.findFirst({
-        where: { occurrenceId: input.occurrenceId, kind: 'ACKNOWLEDGED' },
-        select: { id: true },
-      });
-      if (existing) return { eventId: existing.id, occurrenceId: input.occurrenceId };
+  return (
+    db.$transaction as unknown as (
+      fn: (tx: ScopedDb) => Promise<AcknowledgeEscalationResult>
+    ) => Promise<AcknowledgeEscalationResult>
+  )(async (tx) => {
+    const existing = await tx.restaurantSopEscalationEvent.findFirst({
+      where: { occurrenceId: input.occurrenceId, kind: 'ACKNOWLEDGED' },
+      select: { id: true },
+    });
+    if (existing) return { eventId: existing.id, occurrenceId: input.occurrenceId };
 
-      const event = await tx.restaurantSopEscalationEvent.create({
-        data: {
-          occurrenceId: input.occurrenceId,
-          escalationStepId: null,
-          kind: 'ACKNOWLEDGED',
-          actorStaffProfileId: input.actorStaffProfileId ?? null,
-          detail: 'Acknowledged by operator.',
-          createdAt: now,
-        },
-        select: { id: true },
-      });
-      return { eventId: event.id, occurrenceId: input.occurrenceId };
-    }
-  );
+    const event = await tx.restaurantSopEscalationEvent.create({
+      data: {
+        occurrenceId: input.occurrenceId,
+        escalationStepId: null,
+        kind: 'ACKNOWLEDGED',
+        actorStaffProfileId: input.actorStaffProfileId ?? null,
+        detail: 'Acknowledged by operator.',
+        createdAt: now,
+      },
+      select: { id: true },
+    });
+    return { eventId: event.id, occurrenceId: input.occurrenceId };
+  });
 }

@@ -7,12 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import {
-  startOccurrence,
-  completeStep,
-  attachEvidence,
-  submitOccurrence,
-} from './sop-execution';
+import { startOccurrence, completeStep, attachEvidence, submitOccurrence } from './sop-execution';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
@@ -76,7 +71,9 @@ describe('startOccurrence', () => {
     expect(result.status).toBe('IN_PROGRESS');
     expect(result.startedAt).toEqual(NOW);
     expect(db.restaurantSopOccurrence.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'IN_PROGRESS', startedAt: NOW }) })
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'IN_PROGRESS', startedAt: NOW }),
+      })
     );
   });
 
@@ -84,14 +81,19 @@ describe('startOccurrence', () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'REJECTED' });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, startedAt: NOW });
 
-    const result = await startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID, now: NOW });
+    const result = await startOccurrence(db as unknown as ScopedDb, {
+      occurrenceId: OCC_ID,
+      now: NOW,
+    });
     expect(result.status).toBe('IN_PROGRESS');
   });
 
   it('throws NOT_FOUND when occurrence does not exist', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue(null);
 
-    await expect(startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })).rejects.toMatchObject({
+    await expect(
+      startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({
       reason: 'NOT_FOUND',
     });
   });
@@ -99,7 +101,9 @@ describe('startOccurrence', () => {
   it('throws INVALID_STATE when occurrence is already IN_PROGRESS', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
 
-    await expect(startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })).rejects.toMatchObject({
+    await expect(
+      startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({
       reason: 'INVALID_STATE',
     });
   });
@@ -107,7 +111,9 @@ describe('startOccurrence', () => {
   it('throws INVALID_STATE when occurrence is SUBMITTED', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
 
-    await expect(startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })).rejects.toMatchObject({
+    await expect(
+      startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({
       reason: 'INVALID_STATE',
     });
   });
@@ -156,7 +162,10 @@ describe('completeStep', () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
 
     await expect(
-      completeStep(db as unknown as ScopedDb, { occurrenceId: OCC_ID, templateStepId: TMPL_STEP_ID })
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+      })
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
   });
 
@@ -165,7 +174,10 @@ describe('completeStep', () => {
     db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue(null);
 
     await expect(
-      completeStep(db as unknown as ScopedDb, { occurrenceId: OCC_ID, templateStepId: TMPL_STEP_ID })
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+      })
     ).rejects.toMatchObject({ reason: 'STEP_NOT_FOUND' });
   });
 });
@@ -203,7 +215,11 @@ describe('attachEvidence', () => {
 
   it('accepts a pre-computed contentHashHex', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
-    db.restaurantSopEvidence.create.mockResolvedValue({ id: 'ev_1', contentHash: expectedHash, createdAt: NOW });
+    db.restaurantSopEvidence.create.mockResolvedValue({
+      id: 'ev_1',
+      contentHash: expectedHash,
+      createdAt: NOW,
+    });
 
     const result = await attachEvidence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
@@ -261,7 +277,10 @@ describe('submitOccurrence', () => {
     });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: NOW });
 
-    const result = await submitOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID, now: NOW });
+    const result = await submitOccurrence(db as unknown as ScopedDb, {
+      occurrenceId: OCC_ID,
+      now: NOW,
+    });
     expect(result.status).toBe('SUBMITTED');
   });
 
@@ -273,7 +292,10 @@ describe('submitOccurrence', () => {
     });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: NOW });
 
-    const result = await submitOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID, now: NOW });
+    const result = await submitOccurrence(db as unknown as ScopedDb, {
+      occurrenceId: OCC_ID,
+      now: NOW,
+    });
     expect(result.status).toBe('LATE');
     expect(db.restaurantSopOccurrence.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'LATE' }) })

@@ -1,7 +1,10 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { buildCoAuthorizationRecord, CoAuthorizationError } from '@/lib/restaurant/co-authorization';
+import {
+  buildCoAuthorizationRecord,
+  CoAuthorizationError,
+} from '@/lib/restaurant/co-authorization';
 
 /**
  * M7-L4 / §11.5 — SOP occurrence verification: VERIFY, REJECT, WAIVE.
@@ -25,10 +28,7 @@ import { buildCoAuthorizationRecord, CoAuthorizationError } from '@/lib/restaura
  */
 
 export type SopVerificationErrorReason =
-  | 'NOT_FOUND'
-  | 'INVALID_STATE'
-  | 'CO_AUTH_REQUIRED'
-  | 'INVALID';
+  'NOT_FOUND' | 'INVALID_STATE' | 'CO_AUTH_REQUIRED' | 'INVALID';
 
 export class SopVerificationError extends Error {
   constructor(
@@ -98,7 +98,12 @@ export async function verifyOccurrence(
         select: { id: true, createdAt: true },
       }),
     ]);
-    return { verificationId: verification.id, occurrenceId: input.occurrenceId, action: 'VERIFY', createdAt: verification.createdAt };
+    return {
+      verificationId: verification.id,
+      occurrenceId: input.occurrenceId,
+      action: 'VERIFY',
+      createdAt: verification.createdAt,
+    };
   });
 }
 
@@ -145,7 +150,12 @@ export async function rejectOccurrence(
         select: { id: true, createdAt: true },
       }),
     ]);
-    return { verificationId: verification.id, occurrenceId: input.occurrenceId, action: 'REJECT', createdAt: verification.createdAt };
+    return {
+      verificationId: verification.id,
+      occurrenceId: input.occurrenceId,
+      action: 'REJECT',
+      createdAt: verification.createdAt,
+    };
   });
 }
 
@@ -217,6 +227,11 @@ export async function waiveOccurrence(
         select: { id: true, createdAt: true },
       }),
     ]);
-    return { verificationId: verification.id, occurrenceId: input.occurrenceId, action: 'WAIVE', createdAt: verification.createdAt };
+    return {
+      verificationId: verification.id,
+      occurrenceId: input.occurrenceId,
+      action: 'WAIVE',
+      createdAt: verification.createdAt,
+    };
   });
 }
