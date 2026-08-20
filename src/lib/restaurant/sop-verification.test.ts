@@ -7,11 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import {
-  verifyOccurrence,
-  rejectOccurrence,
-  waiveOccurrence,
-} from './sop-verification';
+import { verifyOccurrence, rejectOccurrence, waiveOccurrence } from './sop-verification';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
@@ -90,7 +86,9 @@ describe('verifyOccurrence', () => {
   it('throws NOT_FOUND when occurrence does not exist', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue(null);
 
-    await expect(verifyOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })).rejects.toMatchObject({
+    await expect(
+      verifyOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({
       reason: 'NOT_FOUND',
     });
   });
@@ -98,7 +96,9 @@ describe('verifyOccurrence', () => {
   it('throws INVALID_STATE when occurrence is SCHEDULED', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SCHEDULED' });
 
-    await expect(verifyOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })).rejects.toMatchObject({
+    await expect(
+      verifyOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({
       reason: 'INVALID_STATE',
     });
   });
@@ -125,7 +125,9 @@ describe('rejectOccurrence', () => {
   it('throws INVALID_STATE when occurrence is already VERIFIED', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'VERIFIED' });
 
-    await expect(rejectOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })).rejects.toMatchObject({
+    await expect(
+      rejectOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({
       reason: 'INVALID_STATE',
     });
   });

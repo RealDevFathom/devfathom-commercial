@@ -141,7 +141,18 @@ describe('strict-zod boundary', () => {
 describe('listOccurrences', () => {
   it('returns paged items and null nextCursor when under limit', async () => {
     const occs = [
-      { id: 'o1', status: 'LATE', businessDate: new Date(), dueAt: new Date(), windowEndsAt: new Date(), startedAt: null, submittedAt: null, resolvedAt: null, assignment: { id: 'a1', template: { id: 't1', name: 'Open Check', category: null } }, steps: [] },
+      {
+        id: 'o1',
+        status: 'LATE',
+        businessDate: new Date(),
+        dueAt: new Date(),
+        windowEndsAt: new Date(),
+        startedAt: null,
+        submittedAt: null,
+        resolvedAt: null,
+        assignment: { id: 'a1', template: { id: 't1', name: 'Open Check', category: null } },
+        steps: [],
+      },
     ];
     db.restaurantSopOccurrence.findMany.mockResolvedValue(occs);
 
@@ -199,13 +210,17 @@ describe('start', () => {
   it('maps INVALID_STATE → CONFLICT', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
 
-    await expect(caller().start({ occurrenceId: OCC_ID })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(caller().start({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
   });
 
   it('maps NOT_FOUND → NOT_FOUND', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue(null);
 
-    await expect(caller().start({ occurrenceId: OCC_ID })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(caller().start({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
   });
 });
 

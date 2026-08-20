@@ -31,8 +31,22 @@ const BASE_POLICY = {
   quietHoursStartMinutes: null,
   quietHoursEndMinutes: null,
   steps: [
-    { id: 'step_a', stepOrder: 1, delayMinutes: 0, target: 'staff_mgr', channel: 'IN_APP', maxAttempts: 1 },
-    { id: 'step_b', stepOrder: 2, delayMinutes: 30, target: 'staff_gm', channel: 'IN_APP', maxAttempts: 1 },
+    {
+      id: 'step_a',
+      stepOrder: 1,
+      delayMinutes: 0,
+      target: 'staff_mgr',
+      channel: 'IN_APP',
+      maxAttempts: 1,
+    },
+    {
+      id: 'step_b',
+      stepOrder: 2,
+      delayMinutes: 30,
+      target: 'staff_gm',
+      channel: 'IN_APP',
+      maxAttempts: 1,
+    },
   ],
 };
 
@@ -54,19 +68,27 @@ function makeDb(opts: {
   existingAckEvent?: Record<string, unknown> | null;
   lastFiredCreatedAt?: Date;
 }): { db: ScopedDb; mocks: DbMocks } {
-  const occFindUnique = vi.fn().mockResolvedValue(opts.occ !== undefined ? opts.occ : BASE_OCCURRENCE);
-  const policyFindUnique = vi.fn().mockResolvedValue(opts.policy !== undefined ? opts.policy : BASE_POLICY);
+  const occFindUnique = vi
+    .fn()
+    .mockResolvedValue(opts.occ !== undefined ? opts.occ : BASE_OCCURRENCE);
+  const policyFindUnique = vi
+    .fn()
+    .mockResolvedValue(opts.policy !== undefined ? opts.policy : BASE_POLICY);
   const eventFindMany = vi.fn().mockResolvedValue(opts.events ?? []);
   const existingAckEvent = opts.existingAckEvent !== undefined ? opts.existingAckEvent : null;
   const eventFindFirst = vi.fn().mockResolvedValue(existingAckEvent);
-  const eventFindUnique = vi.fn().mockResolvedValue(
-    opts.lastFiredCreatedAt ? { createdAt: opts.lastFiredCreatedAt } : { createdAt: NOW }
-  );
-  const eventCreate = vi.fn().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
-    id: 'evt_new',
-    createdAt: NOW,
-    ...data,
-  }));
+  const eventFindUnique = vi
+    .fn()
+    .mockResolvedValue(
+      opts.lastFiredCreatedAt ? { createdAt: opts.lastFiredCreatedAt } : { createdAt: NOW }
+    );
+  const eventCreate = vi
+    .fn()
+    .mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
+      id: 'evt_new',
+      createdAt: NOW,
+      ...data,
+    }));
   const notifCreate = vi.fn().mockResolvedValue({ id: 'notif_1' });
   const notifDeliveryCreate = vi.fn().mockResolvedValue({ id: 'deliv_1' });
 
@@ -96,15 +118,29 @@ function makeDb(opts: {
       create: notifDeliveryCreate,
     },
   };
-  (dbObj as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbObj));
+  (dbObj as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
+    fn(dbObj)
+  );
   const db = dbObj as unknown as ScopedDb;
   return {
     db,
-    mocks: { occFindUnique, policyFindUnique, eventFindMany, eventFindFirst, eventFindUnique, eventCreate, notifCreate, notifDeliveryCreate },
+    mocks: {
+      occFindUnique,
+      policyFindUnique,
+      eventFindMany,
+      eventFindFirst,
+      eventFindUnique,
+      eventCreate,
+      notifCreate,
+      notifDeliveryCreate,
+    },
   };
 }
 
-function makeCtx(db: ScopedDb, payloadOverride: Record<string, unknown> = {}): RestaurantJobContext {
+function makeCtx(
+  db: ScopedDb,
+  payloadOverride: Record<string, unknown> = {}
+): RestaurantJobContext {
   return {
     db,
     job: {
