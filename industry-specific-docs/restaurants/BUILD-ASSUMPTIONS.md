@@ -931,8 +931,8 @@ priority/fairness across organizations, or a separate worker identity/authorizat
 
 **D21 (notifications channel matrix + delivery) (M7-L1)** · D21 is `OPEN`; M7 records these conservative defaults
 behind the §11.5 notification seam. **(1) Channels — in-app real, the rest stubbed.** `RestaurantNotificationChannel`
-is `IN_APP | EMAIL | SMS | WEBHOOK`; only `IN_APP` is actually delivered in M7. `EMAIL`/`SMS`/`WEBHOOK` are recorded
-as `STUBBED` deliveries — the append-only `restaurant_notification_deliveries` ledger captures every attempt
+is `IN_APP | EMAIL | SMS | PUSH | WHATSAPP`; only `IN_APP` is actually delivered in M7. `EMAIL`/`SMS`/`PUSH`/
+`WHATSAPP` are explicitly stub-only and recorded as `STUBBED` deliveries — the append-only `restaurant_notification_deliveries` ledger captures every attempt
 (`DELIVERED_IN_APP` / `STUBBED` / `FAILED`) so the provider adapter a later integration fills changes no schema.
 **(2) Matrix — category × channel with a branch override.** `restaurant_notification_channel_settings` enables a
 channel per free-form category, with a null `branchId` as the organization default and a set `branchId` as a branch
@@ -941,7 +941,7 @@ Notification `category` and the matrix `eventCategory` are plain strings, not an
 categories without a schema/enum change (which would be a shared-file merge conflict). · Conservative because
 stubbing the non-in-app channels behind the same delivery ledger lets the in-app product ship now while keeping an
 exact, auditable record of what WOULD have been sent, and an open category string avoids coupling every later lane
-to one enum. · Revisited by D21 closing — a chosen email/SMS/push/webhook provider set, delivery-retry SLAs, and a
+to one enum. · Revisited by D21 closing — a chosen email/SMS/push/WhatsApp provider set, delivery-retry SLAs, and a
 per-recipient channel-preference model.
 
 **SOP-defaults (versioning, recurrence/DST, evidence, occurrence flow, late/missed, escalation) (M7-L1)** · The §11.5

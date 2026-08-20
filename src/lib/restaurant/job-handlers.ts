@@ -15,6 +15,10 @@ import {
 // M7-L4: late/missed sweep + escalation chain
 import { SOP_LATE_MISSED_JOB, sopLateMissedHandler } from '@/lib/restaurant/sop-late-missed';
 import { SOP_ESCALATION_JOB, sopEscalationHandler } from '@/lib/restaurant/sop-escalation';
+import {
+  NOTIFICATION_FANOUT_JOB,
+  notificationFanoutHandler,
+} from '@/lib/restaurant/notification-fanout';
 
 /**
  * M7-L1 — the typed job-handler registry. The scheduler primitive
@@ -61,6 +65,7 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   [SOP_GENERATE_OCCURRENCES_JOB]: generateSopOccurrencesHandler,
   [SOP_LATE_MISSED_JOB]: sopLateMissedHandler,
   [SOP_ESCALATION_JOB]: sopEscalationHandler,
+  [NOTIFICATION_FANOUT_JOB]: notificationFanoutHandler,
 };
 
 /** Look up the handler registered for a job type (undefined when none is). */

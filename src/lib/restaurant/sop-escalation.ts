@@ -3,6 +3,11 @@ import 'server-only';
 import { z } from 'zod';
 
 import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
+import { appendNotificationRequest } from '@/lib/restaurant/notification-fanout';
+import {
+  notificationRequestId,
+  type RestaurantNotificationChannel,
+} from '@/lib/restaurant/notifications';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -12,8 +17,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * that fire when a compliance occurrence is overdue and unresolved. The handler
  * folds the escalation-event ledger (APPEND-ONLY: FIRED/ACKNOWLEDGED/STOPPED) to
  * determine current position, applies STOP conditions, respects quiet hours, and
- * emits `RestaurantNotification` rows (the D21 in-app channel; EMAIL/SMS/WEBHOOK
- * are recorded as STUBBED deliveries — never actually sent in M7).
+ * appends a notification request to the transactional outbox. Fan-out later
+ * records IN_APP delivery; EMAIL/SMS/PUSH/WHATSAPP remain STUBBED in M7.
  *
  * STOP conditions (policy flags):
  *   stopOnVerified     — occurrence is VERIFIED or WAIVED
@@ -49,7 +54,7 @@ type EscalationStep = {
   stepOrder: number;
   delayMinutes: number;
   target: string;
-  channel: 'IN_APP' | 'EMAIL' | 'SMS' | 'WEBHOOK';
+  channel: RestaurantNotificationChannel;
   maxAttempts: number;
 };
 
@@ -84,48 +89,6 @@ function isQuietHour(minuteOfDay: number, startMinutes: number, endMinutes: numb
   }
   // Cross-midnight: e.g. 22:00 → 06:00
   return minuteOfDay >= startMinutes || minuteOfDay < endMinutes;
-}
-
-async function emitNotification(
-  tx: ScopedDb,
-  opts: {
-    recipientTarget: string;
-    branchId: string | null;
-    category: string;
-    title: string;
-    body: string;
-    entityType: string;
-    entityId: string;
-    channel: 'IN_APP' | 'EMAIL' | 'SMS' | 'WEBHOOK';
-    now: Date;
-  }
-): Promise<void> {
-  // The target field is treated as a recipientStaffProfileId for IN_APP; for
-  // other channels it is an opaque address string — we still create the
-  // notification row but mark the delivery STUBBED (D21).
-  const notification = await tx.restaurantNotification.create({
-    data: {
-      recipientStaffProfileId: opts.recipientTarget,
-      branchId: opts.branchId,
-      category: opts.category,
-      title: opts.title,
-      body: opts.body,
-      entityType: opts.entityType,
-      entityId: opts.entityId,
-      createdAt: opts.now,
-    },
-    select: { id: true },
-  });
-
-  const status = opts.channel === 'IN_APP' ? 'DELIVERED_IN_APP' : 'STUBBED';
-
-  await tx.restaurantNotificationDelivery.create({
-    data: {
-      notificationId: notification.id,
-      channel: opts.channel,
-      status,
-    },
-  });
 }
 
 export async function sopEscalationHandler({ db, job }: RestaurantJobContext): Promise<void> {
@@ -276,16 +239,16 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
       const title = `SOP Escalation: ${templateName}`;
       const body = `Occurrence is overdue. Target: ${nextStep.target}. Step ${nextStep.stepOrder}.`;
 
-      await emitNotification(tx, {
-        recipientTarget: nextStep.target,
+      await appendNotificationRequest(tx, {
+        requestId: notificationRequestId('sop.escalation', occ.id, nextStep.id),
+        recipientStaffProfileIds: [nextStep.target],
         branchId: occ.branchId,
         category: 'sop.escalation',
         title,
         body,
         entityType: 'RestaurantSopOccurrence',
         entityId: occ.id,
-        channel: nextStep.channel,
-        now,
+        channels: [nextStep.channel],
       });
 
       await tx.restaurantSopEscalationEvent.create({

@@ -75,7 +75,7 @@ CREATE TYPE "RestaurantSopEscalationScope" AS ENUM ('ORG', 'BRANCH');
 CREATE TYPE "RestaurantSopEscalationEventKind" AS ENUM ('FIRED', 'ACKNOWLEDGED', 'STOPPED');
 
 -- CreateEnum
-CREATE TYPE "RestaurantNotificationChannel" AS ENUM ('IN_APP', 'EMAIL', 'SMS', 'WEBHOOK');
+CREATE TYPE "RestaurantNotificationChannel" AS ENUM ('IN_APP', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP');
 
 -- CreateEnum
 CREATE TYPE "RestaurantNotificationDeliveryStatus" AS ENUM ('DELIVERED_IN_APP', 'STUBBED', 'FAILED');
@@ -546,6 +546,10 @@ CREATE INDEX "restaurant_notification_channel_settings_branchId_idx" ON "restaur
 
 -- CreateIndex
 CREATE UNIQUE INDEX "restaurant_notification_channel_settings_organizationId_bra_key" ON "restaurant_notification_channel_settings"("organizationId", "branchId", "category", "channel");
+
+-- One organization-default row per category/channel. PostgreSQL treats NULLs as
+-- distinct in the four-column key above, so the null branch scope needs its own key.
+CREATE UNIQUE INDEX "restaurant_notification_channel_settings_org_default_key" ON "restaurant_notification_channel_settings"("organizationId", "category", "channel") WHERE "branchId" IS NULL;
 
 -- CreateIndex
 CREATE INDEX "restaurant_notification_deliveries_organizationId_idx" ON "restaurant_notification_deliveries"("organizationId");

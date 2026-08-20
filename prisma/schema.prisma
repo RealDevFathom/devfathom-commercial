@@ -5057,14 +5057,14 @@ enum RestaurantSopEscalationEventKind {
   STOPPED
 }
 
-/// M7/D21: a notification delivery channel. IN_APP is always delivered; EMAIL /
-/// SMS / WEBHOOK are STUBBED adapters in M7 (recorded, never actually sent) — the
-/// seam a later provider integration fills without a schema change.
+/// M7/D21: notification delivery channels. IN_APP is real; EMAIL / SMS / PUSH /
+/// WHATSAPP are STUBBED adapters in M7 (recorded, never actually sent).
 enum RestaurantNotificationChannel {
   IN_APP
   EMAIL
   SMS
-  WEBHOOK
+  PUSH
+  WHATSAPP
 }
 
 /// M7/D21: the append-only outcome of one delivery attempt on one channel.

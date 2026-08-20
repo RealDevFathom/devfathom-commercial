@@ -372,6 +372,7 @@ describeIfDatabase('M7 schema governance (real PostgreSQL)', () => {
   it.each([
     ['restaurant_jobs', ['organizationId', 'idempotencyKey']],
     ['restaurant_webhook_inbox', ['organizationId', 'source', 'externalEventId']],
+    ['restaurant_notification_channel_settings', ['organizationId', 'category', 'channel']],
   ] as const)('%s enforces the required dedupe key', async (table, columns) => {
     expect(await uniqueColumnSets(table)).toContainEqual([...columns]);
   });
