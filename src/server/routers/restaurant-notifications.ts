@@ -14,7 +14,7 @@ const channel = z.enum(RESTAURANT_NOTIFICATION_CHANNELS);
 
 async function requireSessionStaffProfile(db: ScopedDb, userId: string): Promise<string> {
   const profile = await db.restaurantStaffProfile.findFirst({
-    where: { userId },
+    where: { userId, status: 'ACTIVE' },
     select: { id: true },
   });
   if (!profile) {
@@ -44,10 +44,7 @@ export const restaurantNotificationsRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const recipientStaffProfileId = await requireSessionStaffProfile(
-        ctx.db,
-        ctx.session.user.id
-      );
+      const recipientStaffProfileId = await requireSessionStaffProfile(ctx.db, ctx.session.user.id);
       const rows = await ctx.db.restaurantNotification.findMany({
         where: {
           recipientStaffProfileId,
@@ -78,26 +75,18 @@ export const restaurantNotificationsRouter = router({
       return { items: rows.slice(0, input.limit), nextCursor };
     }),
 
-  unreadCount: protectedProcedure
-    .input(z.object({}).strict())
-    .query(async ({ ctx }) => {
-      const recipientStaffProfileId = await requireSessionStaffProfile(
-        ctx.db,
-        ctx.session.user.id
-      );
-      const count = await ctx.db.restaurantNotification.count({
-        where: { recipientStaffProfileId, isRead: false, deliveries: inAppDelivery },
-      });
-      return { count };
-    }),
+  unreadCount: protectedProcedure.input(z.object({}).strict()).query(async ({ ctx }) => {
+    const recipientStaffProfileId = await requireSessionStaffProfile(ctx.db, ctx.session.user.id);
+    const count = await ctx.db.restaurantNotification.count({
+      where: { recipientStaffProfileId, isRead: false, deliveries: inAppDelivery },
+    });
+    return { count };
+  }),
 
   markRead: protectedProcedure
     .input(z.object({ id: identifier }).strict())
     .mutation(async ({ ctx, input }) => {
-      const recipientStaffProfileId = await requireSessionStaffProfile(
-        ctx.db,
-        ctx.session.user.id
-      );
+      const recipientStaffProfileId = await requireSessionStaffProfile(ctx.db, ctx.session.user.id);
       const existing = await ctx.db.restaurantNotification.findFirst({
         where: { id: input.id, recipientStaffProfileId, deliveries: inAppDelivery },
         select: { id: true, isRead: true, readAt: true },
@@ -113,20 +102,15 @@ export const restaurantNotificationsRouter = router({
       return { id: existing.id, isRead: true, readAt };
     }),
 
-  markAllRead: protectedProcedure
-    .input(z.object({}).strict())
-    .mutation(async ({ ctx }) => {
-      const recipientStaffProfileId = await requireSessionStaffProfile(
-        ctx.db,
-        ctx.session.user.id
-      );
-      const readAt = new Date();
-      const result = await ctx.db.restaurantNotification.updateMany({
-        where: { recipientStaffProfileId, isRead: false, deliveries: inAppDelivery },
-        data: { isRead: true, readAt },
-      });
-      return { count: result.count, readAt };
-    }),
+  markAllRead: protectedProcedure.input(z.object({}).strict()).mutation(async ({ ctx }) => {
+    const recipientStaffProfileId = await requireSessionStaffProfile(ctx.db, ctx.session.user.id);
+    const readAt = new Date();
+    const result = await ctx.db.restaurantNotification.updateMany({
+      where: { recipientStaffProfileId, isRead: false, deliveries: inAppDelivery },
+      data: { isRead: true, readAt },
+    });
+    return { count: result.count, readAt };
+  }),
 
   getMatrix: matrixProcedure
     .input(z.object({ category, branchId: identifier.nullable().default(null) }).strict())

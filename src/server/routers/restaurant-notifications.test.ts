@@ -74,7 +74,11 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.staffFindFirst.mockResolvedValue({ id: 'staff_1' });
   mocks.notificationFindMany.mockResolvedValue([]);
-  mocks.notificationFindFirst.mockResolvedValue({ id: 'notification_1', isRead: false, readAt: null });
+  mocks.notificationFindFirst.mockResolvedValue({
+    id: 'notification_1',
+    isRead: false,
+    readAt: null,
+  });
   mocks.notificationCount.mockResolvedValue(2);
   mocks.notificationUpdateMany.mockResolvedValue({ count: 1 });
   mocks.settingFindMany.mockResolvedValue([]);
@@ -89,7 +93,7 @@ describe('recipient notifications', () => {
   it('lists only the session-linked staff profile and rejects unknown input', async () => {
     await caller().list({ limit: 20, unreadOnly: true });
     expect(mocks.staffFindFirst).toHaveBeenCalledWith({
-      where: { userId: 'user_1' },
+      where: { userId: 'user_1', status: 'ACTIVE' },
       select: { id: true },
     });
     expect(mocks.notificationFindMany.mock.calls[0]?.[0].where).toMatchObject({

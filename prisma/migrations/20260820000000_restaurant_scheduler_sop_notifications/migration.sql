@@ -547,6 +547,10 @@ CREATE INDEX "restaurant_notification_channel_settings_branchId_idx" ON "restaur
 -- CreateIndex
 CREATE UNIQUE INDEX "restaurant_notification_channel_settings_organizationId_bra_key" ON "restaurant_notification_channel_settings"("organizationId", "branchId", "category", "channel");
 
+-- One organization-default row per category/channel. PostgreSQL treats NULLs as
+-- distinct in the four-column key above, so the null branch scope needs its own key.
+CREATE UNIQUE INDEX "restaurant_notification_channel_settings_org_default_key" ON "restaurant_notification_channel_settings"("organizationId", "category", "channel") WHERE "branchId" IS NULL;
+
 -- CreateIndex
 CREATE INDEX "restaurant_notification_deliveries_organizationId_idx" ON "restaurant_notification_deliveries"("organizationId");
 
