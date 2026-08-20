@@ -1,7 +1,10 @@
 import 'server-only';
 
 import type { ClaimedJob } from '@/lib/restaurant/scheduler';
-import { WEBHOOK_PROCESS_JOB_TYPE, processInboundWebhookHandler } from '@/lib/restaurant/webhook-inbox';
+import {
+  WEBHOOK_PROCESS_JOB_TYPE,
+  processInboundWebhookHandler,
+} from '@/lib/restaurant/webhook-inbox';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**

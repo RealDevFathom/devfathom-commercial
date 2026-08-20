@@ -975,6 +975,45 @@ the L-domain flow lanes. · Revisited by the §11.5 SOP decisions closing — wo
 (vs `sop.evidenceRetentionDays`), and escalation-timing examples from Restaurant operations SME may tighten
 completeness enforcement, add FEFO-style evidence gating, or change the late/missed sweep cadence.
 
+**M7-L2 runtime (worker org-scoping, outbox dispatch, webhook inbox, ops gate) (M7-L2)** · The L1 primitives
+(`scheduler.ts` + the empty `job-handlers.ts` registry, `outbox.ts`'s M4 dispatch seam) are DRIVEN by this lane's
+runtime; the decisions it commits to. **(1) Worker runtime realizes D13 §5.** `job-runner.ts` discovers organizations
+with due work via a PRIVILEGED READ scan (`withPlatformDb`, allowed by the tenant-isolation policy's `is_platform_admin`
+branch — reads only, never a cross-org mutation) and then runs every claim/handler/settle AND outbox dispatch INSIDE
+each org's `withTenantDb` RLS context; a job handler receives a tenant-scoped `db` bound to its own org. The worker is
+a poll loop with graceful shutdown (SIGINT/SIGTERM → abort → finish the current claim, releasing an unstarted job) and
+an interruptible idle sleep; everything time/tenancy-dependent is injectable so the unit tests are DB-free (the ≥8-way
+DB concurrency evidence stays in L1's battery). Entry point: `scripts/run-restaurant-jobs.ts` / `restaurant:jobs`
+(mirrors `platform:jobs`; `--once` = a single tick for cron/CI). **(2) Outbox dispatcher clears the M4 §12.2 debt.**
+`outbox-dispatcher.ts` claims due `PENDING` rows (`FOR UPDATE SKIP LOCKED`, mirroring the scheduler) and delivers each
+to a consumer resolved from an IN-PROCESS registry keyed by `eventType`, reusing M4's `planDispatchSuccess`/
+`planDispatchFailure` + `DEFAULT_OUTBOX_RETRY_POLICY` (8 attempts, 1s→1h) unchanged. Conservative defaults: the L2
+registry ships EMPTY (later lanes register one key each, the same seam as `job-handlers.ts`); a row whose `eventType`
+has NO registered consumer is left `PENDING` and counted `skipped` — never silently dropped, never dead-lettered — so a
+consumer a later lane registers picks it up. The consumer runs INSIDE the claiming transaction, which is correct for M7
+(all real external channels are D21-stubbed / in-process); a future external-delivery consumer doing long network I/O
+will need a lease-based claim instead (the §12.2/D21 follow-up). **(3) Webhook inbox seam (D21).** The receiver
+`/api/restaurant/webhooks/[source]` resolves the tenant STRICTLY from the request host (`resolveExplicitOrganizationBy
+Host` — never the DEFAULT_ORGANIZATION_ID fallback and never a client-supplied org; an unknown host is a flat 404), is
+IP rate-limited (unauthenticated public endpoint), parses a STRICT envelope `{ externalEventId, eventType?, payload }`
+(unknown keys rejected), deduplicates by `(org, source, externalEventId)` (fast-path check + the unique index as the
+authoritative guard, a lost race resolved to the existing row), records a STUB signature status
+(`verifyWebhookSignatureStub`: `VERIFIED` when a signature header is present, `PENDING` when unsigned — NO real crypto in
+M7; `FAILED` reserved for the adapter that replaces the stub), and enqueues a `webhook.process` job (idempotency-keyed on
+the inbox id). The `webhook.process` handler (L2's ONE `job-handlers.ts` key) is durable-acknowledgement ONLY: it marks
+the row `PROCESSED` (or `DISCARDED` when verification FAILED — "a failed verification is never processed"), does NO tenant
+mutation and NO external call. **(4) Ops console gate = `reports:operational`.** The read/requeue contracts
+(`restaurant-jobs.ts` router: queue browse, execution history, dead-letter list, outbox status, inbox browse metadata-
+only, + a requeue-dead command that creates a NEW job and RETAINS the dead row as audit) gate on the existing
+`reports:operational` capability, newly declared as a typed ABAC `Action` in `abac/policies.ts` (the M2 `staff:manage`
+coordinated-addition precedent — the capability already lives in the vertical-catalog general-manager / financial-
+controller / sop-compliance-auditor role templates) and mapped to the `restaurant-sop` module in `module-catalog.ts`.
+· Conservative because the privileged-read + per-org-RLS-write split is exactly D13 §5; reusing the L1 scheduler + M4
+outbox planners keeps ONE retry policy per queue; host-only tenant resolution keeps the strong M1–M6 isolation on an
+unauthenticated ingress; and gating on an EXISTING capability + module avoids inventing commercial surface. · Revisited
+by D13/D21 closing (dedicated queue tech, real signature verification + provider adapters, external-delivery lease) and
+by the shared-file merge as L3/L4/L5 append their own `job-handlers.ts` / `outbox` / `policies.ts` keys after L2.
+
 ---
 
 ## M5-L8 — Independent verification rollup (Verification Engineer, WHA-63)

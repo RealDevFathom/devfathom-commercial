@@ -109,7 +109,10 @@ function pageArgs(limit: number, cursor?: string) {
 }
 
 /** Split an over-fetched page into `{ items, nextCursor }`. */
-function paginate<T extends { id: string }>(rows: T[], limit: number): { items: T[]; nextCursor: string | null } {
+function paginate<T extends { id: string }>(
+  rows: T[],
+  limit: number
+): { items: T[]; nextCursor: string | null } {
   if (rows.length <= limit) return { items: rows, nextCursor: null };
   const items = rows.slice(0, limit);
   return { items, nextCursor: items[items.length - 1]!.id };

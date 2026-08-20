@@ -72,7 +72,9 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     stopping = true;
-    console.error(`[restaurant:jobs] ${signal} received — draining; will stop after the current claim`);
+    console.error(
+      `[restaurant:jobs] ${signal} received — draining; will stop after the current claim`
+    );
     controller.abort();
   };
   process.on('SIGINT', () => onSignal('SIGINT'));

@@ -155,7 +155,10 @@ export async function dispatchOutboxBatch(
   const now = options.now ?? new Date();
   const policy = options.policy ?? DEFAULT_OUTBOX_RETRY_POLICY;
   const registry = options.registry ?? restaurantOutboxConsumers;
-  const batchSize = Math.max(1, Math.min(MAX_OUTBOX_BATCH, Math.floor(options.batchSize ?? DEFAULT_OUTBOX_BATCH)));
+  const batchSize = Math.max(
+    1,
+    Math.min(MAX_OUTBOX_BATCH, Math.floor(options.batchSize ?? DEFAULT_OUTBOX_BATCH))
+  );
   const summary: OutboxDispatchSummary = { dispatched: 0, retried: 0, dead: 0, skipped: 0 };
   // Rows left PENDING (no consumer) this call — excluded so we never busy-loop on
   // the same undeliverable row inside one batch.
