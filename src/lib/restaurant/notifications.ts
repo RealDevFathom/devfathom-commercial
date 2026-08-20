@@ -79,7 +79,9 @@ export type NotificationRequest = z.infer<typeof NotificationRequestSchema>;
  * transaction client satisfies it, so the fan-out runs inside ONE tenant tx. */
 export type NotificationFanOutClient = Pick<
   Prisma.TransactionClient,
-  'restaurantNotification' | 'restaurantNotificationDelivery' | 'restaurantNotificationChannelSetting'
+  | 'restaurantNotification'
+  | 'restaurantNotificationDelivery'
+  | 'restaurantNotificationChannelSetting'
 >;
 
 /** The delegates the recipient-facing reads + read-state writes touch. */
@@ -421,7 +423,12 @@ export async function listChannelSettings(
  */
 export async function upsertChannelSetting(
   db: ChannelSettingClient,
-  params: { branchId?: string | null; category: string; channel: NotificationChannel; enabled: boolean }
+  params: {
+    branchId?: string | null;
+    category: string;
+    channel: NotificationChannel;
+    enabled: boolean;
+  }
 ): Promise<ChannelSettingRow> {
   const branchId = params.branchId ?? null;
   const existing = await db.restaurantNotificationChannelSetting.findFirst({

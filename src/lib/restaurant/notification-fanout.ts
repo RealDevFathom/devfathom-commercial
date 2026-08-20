@@ -139,8 +139,12 @@ export async function appendNotificationRequest(
   const request = NotificationRequestSchema.parse(input.request);
   const aggregateId =
     input.aggregateId ??
-    [request.recipientStaffProfileId, request.category, request.entityType ?? '', request.entityId ?? '']
-      .join(':');
+    [
+      request.recipientStaffProfileId,
+      request.category,
+      request.entityType ?? '',
+      request.entityId ?? '',
+    ].join(':');
   const payload: NotificationOutboxPayload = { organizationId: input.organizationId, request };
   const row = await tx.restaurantEventOutbox.create({
     data: {

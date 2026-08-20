@@ -72,9 +72,7 @@ export const restaurantNotificationsRouter = router({
   /** Mark ONE notification read for its recipient. NOT_FOUND when it isn't theirs. */
   markRead: readProcedure
     .input(
-      z
-        .object({ notificationId: z.string().min(1), recipientStaffProfileId: STAFF_ID })
-        .strict()
+      z.object({ notificationId: z.string().min(1), recipientStaffProfileId: STAFF_ID }).strict()
     )
     .mutation(async ({ ctx, input }) => {
       const result = await markNotificationRead(ctx.db, {
