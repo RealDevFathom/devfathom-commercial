@@ -780,12 +780,19 @@ export function SopBoardView(props: SopBoardViewProps) {
                         <StaffSelect label="Verifier" staff={staff} />
                         <label className="text-sm text-text-body">
                           Verification reason
-                          <Input className="mt-1 min-h-11" maxLength={2000} name="reason" />
+                          <Input
+                            className="mt-1 min-h-11"
+                            maxLength={2000}
+                            name="reason"
+                            pattern=".*\S.*"
+                            required
+                          />
                         </label>
                         <div className="flex flex-wrap gap-2 sm:col-span-2">
                           <Button
                             className="min-h-11"
                             disabled={!action}
+                            formNoValidate
                             name="intent"
                             type="submit"
                             value="verify"
@@ -1054,14 +1061,22 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           });
           success = 'SOP verified.';
           break;
-        case 'reject':
+        case 'reject': {
+          const reason = field(form, 'reason');
+          if (!reason) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Rejection rationale is required.',
+            });
+          }
           await caller.reject({
             occurrenceId,
             actorStaffProfileId,
-            reason: optionalField(form, 'reason'),
+            reason,
           });
           success = 'SOP rejected for rework.';
           break;
+        }
         case 'waive': {
           const approvingStaffProfileId = field(form, 'approvingStaffProfileId');
           if (
