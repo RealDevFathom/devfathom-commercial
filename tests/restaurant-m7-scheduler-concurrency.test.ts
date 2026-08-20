@@ -137,8 +137,11 @@ describeIfDatabase('WHA-79 M7 scheduler concurrency battery (real DB)', () => {
   it('drives a failing job through bounded retries to DEAD', async () => {
     const { withTenantDb, scheduler } = deps;
     const key = `dead_${suffix}`;
-    // A clock far past every backoff, so the job is due on each reclaim.
-    const clock = () => new Date(Date.now() + 86_400_000);
+    // A clock that advances 2 h per call — always past max backoff (30 min cap)
+    // so the job is due on every reclaim regardless of elapsed wall time.
+    const startMs = Date.now() + 86_400_000;
+    let clockTick = 0;
+    const clock = () => new Date(startMs + clockTick++ * 2 * 3_600_000);
 
     const { job } = await withTenantDb(orgId, (tx) =>
       scheduler.enqueue(

@@ -13,8 +13,7 @@ export const RESTAURANT_NOTIFICATION_CHANNELS = [
   'WHATSAPP',
 ] as const;
 
-export type RestaurantNotificationChannel =
-  (typeof RESTAURANT_NOTIFICATION_CHANNELS)[number];
+export type RestaurantNotificationChannel = (typeof RESTAURANT_NOTIFICATION_CHANNELS)[number];
 
 const notificationChannelSchema = z.enum(RESTAURANT_NOTIFICATION_CHANNELS);
 
@@ -28,7 +27,10 @@ export const notificationRequestSchema = z
     body: z.string().max(4_000).nullable().default(null),
     entityType: z.string().trim().min(1).max(100).nullable().default(null),
     entityId: z.string().trim().min(1).max(200).nullable().default(null),
-    channels: z.array(notificationChannelSchema).min(1).max(RESTAURANT_NOTIFICATION_CHANNELS.length),
+    channels: z
+      .array(notificationChannelSchema)
+      .min(1)
+      .max(RESTAURANT_NOTIFICATION_CHANNELS.length),
   })
   .strict();
 
@@ -77,7 +79,9 @@ export async function resolveNotificationMatrix(
   ) as NotificationMatrix;
 
   for (const channel of RESTAURANT_NOTIFICATION_CHANNELS) {
-    const org = settings.find((setting) => setting.branchId === null && setting.channel === channel);
+    const org = settings.find(
+      (setting) => setting.branchId === null && setting.channel === channel
+    );
     const branch = branchId
       ? settings.find((setting) => setting.branchId === branchId && setting.channel === channel)
       : undefined;
