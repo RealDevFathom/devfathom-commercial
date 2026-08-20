@@ -31,7 +31,13 @@ type AssignmentFixture = {
   branch: { id: string; timezone: string; businessDayCutoff: string };
 };
 
-type OccurrenceRow = { assignmentId: string; businessDate: Date; dueAt: Date; windowEndsAt: Date; templateVersionId: string };
+type OccurrenceRow = {
+  assignmentId: string;
+  businessDate: Date;
+  dueAt: Date;
+  windowEndsAt: Date;
+  templateVersionId: string;
+};
 
 function utcDate(y: number, m: number, d: number): Date {
   return new Date(Date.UTC(y, m - 1, d));
@@ -70,25 +76,34 @@ function makeDb(opts: {
       findMany: vi.fn(async () => opts.assignments),
     },
     restaurantSopTemplateVersion: {
-      findFirst: vi.fn(async ({ where }: { where: { templateId: string } }) => published[where.templateId] ?? null),
+      findFirst: vi.fn(
+        async ({ where }: { where: { templateId: string } }) => published[where.templateId] ?? null
+      ),
     },
     restaurantSopTemplateStep: {
       findMany: vi.fn(async () => steps),
     },
     restaurantSopOccurrence: {
-      findMany: vi.fn(async ({ where }: { where: { assignmentId: string; businessDate: { gte: Date; lte: Date } } }) =>
-        store
-          .filter(
-            (o) =>
-              o.assignmentId === where.assignmentId &&
-              o.businessDate.getTime() >= where.businessDate.gte.getTime() &&
-              o.businessDate.getTime() <= where.businessDate.lte.getTime()
-          )
-          .map((o) => ({ businessDate: o.businessDate }))
+      findMany: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { assignmentId: string; businessDate: { gte: Date; lte: Date } };
+        }) =>
+          store
+            .filter(
+              (o) =>
+                o.assignmentId === where.assignmentId &&
+                o.businessDate.getTime() >= where.businessDate.gte.getTime() &&
+                o.businessDate.getTime() <= where.businessDate.lte.getTime()
+            )
+            .map((o) => ({ businessDate: o.businessDate }))
       ),
       create: vi.fn(async ({ data }: { data: OccurrenceRow }) => {
         const dup = store.find(
-          (o) => o.assignmentId === data.assignmentId && o.businessDate.getTime() === data.businessDate.getTime()
+          (o) =>
+            o.assignmentId === data.assignmentId &&
+            o.businessDate.getTime() === data.businessDate.getTime()
         );
         if (dup) {
           throw new Prisma.PrismaClientKnownRequestError('duplicate', {
@@ -127,7 +142,11 @@ describe('generateDueSopOccurrences', () => {
       assignments: [assignment()],
       publishedVersionByTemplate: { t1: { id: 'v7' } },
     });
-    await generateDueSopOccurrences(db, { now: at('2026-06-15T12:00:00.000Z'), lookbackDays: 0, horizonDays: 0 });
+    await generateDueSopOccurrences(db, {
+      now: at('2026-06-15T12:00:00.000Z'),
+      lookbackDays: 0,
+      horizonDays: 0,
+    });
     expect(store).toHaveLength(1);
     expect(store[0]!.templateVersionId).toBe('v7');
   });
@@ -172,8 +191,14 @@ describe('generateDueSopOccurrences', () => {
     });
     const ny = assignment({ id: 'a1', dueTimeMinutes: 9 * 60 });
     const { db, store } = makeDb({ assignments: [ny, berlin] });
-    await generateDueSopOccurrences(db, { now: at('2026-06-15T12:00:00.000Z'), lookbackDays: 0, horizonDays: 0 });
-    const byAssignment = Object.fromEntries(store.map((o) => [o.assignmentId, o.dueAt.toISOString()]));
+    await generateDueSopOccurrences(db, {
+      now: at('2026-06-15T12:00:00.000Z'),
+      lookbackDays: 0,
+      horizonDays: 0,
+    });
+    const byAssignment = Object.fromEntries(
+      store.map((o) => [o.assignmentId, o.dueAt.toISOString()])
+    );
     expect(byAssignment.a1).toBe('2026-06-15T13:00:00.000Z'); // 09:00 EDT
     expect(byAssignment.a2).toBe('2026-06-15T07:00:00.000Z'); // 09:00 CEST
   });
@@ -181,7 +206,10 @@ describe('generateDueSopOccurrences', () => {
   it('swallows a concurrent unique violation as a skip', async () => {
     // findMany reports nothing, but create throws P2002 (a concurrent generator won).
     const create = vi.fn(async () => {
-      throw new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: '7.9.1' });
+      throw new Prisma.PrismaClientKnownRequestError('dup', {
+        code: 'P2002',
+        clientVersion: '7.9.1',
+      });
     });
     const db = {
       restaurantSopAssignment: { findMany: vi.fn(async () => [assignment()]) },
@@ -213,7 +241,11 @@ describe('generateDueSopOccurrences', () => {
       $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
     } as unknown as ScopedDb;
     await expect(
-      generateDueSopOccurrences(db, { now: at('2026-06-15T12:00:00.000Z'), lookbackDays: 0, horizonDays: 0 })
+      generateDueSopOccurrences(db, {
+        now: at('2026-06-15T12:00:00.000Z'),
+        lookbackDays: 0,
+        horizonDays: 0,
+      })
     ).rejects.toThrow('connection reset');
   });
 });

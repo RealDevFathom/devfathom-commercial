@@ -55,32 +55,52 @@ describe('zonedWallTimeToUtc — DST-free days', () => {
 describe('zonedWallTimeToUtc — America/New_York DST', () => {
   // Spring forward: 2026-03-08, 02:00 EST → 03:00 EDT (transition at 07:00Z).
   it('spring-forward gap → next valid instant (transition boundary)', () => {
-    const { instant, adjustment } = zonedWallTimeToUtc('2026-03-08', 2 * 60 + 30, 'America/New_York');
+    const { instant, adjustment } = zonedWallTimeToUtc(
+      '2026-03-08',
+      2 * 60 + 30,
+      'America/New_York'
+    );
     expect(iso(instant)).toBe('2026-03-08T07:00:00.000Z');
     expect(adjustment).toBe('spring-forward');
   });
 
   it('the wall clock just before the gap is unaffected (EST)', () => {
-    const { instant, adjustment } = zonedWallTimeToUtc('2026-03-08', 1 * 60 + 30, 'America/New_York');
+    const { instant, adjustment } = zonedWallTimeToUtc(
+      '2026-03-08',
+      1 * 60 + 30,
+      'America/New_York'
+    );
     expect(iso(instant)).toBe('2026-03-08T06:30:00.000Z'); // 01:30 EST = UTC-5
     expect(adjustment).toBe('none');
   });
 
   it('the wall clock just after the gap is unaffected (EDT)', () => {
-    const { instant, adjustment } = zonedWallTimeToUtc('2026-03-08', 3 * 60 + 30, 'America/New_York');
+    const { instant, adjustment } = zonedWallTimeToUtc(
+      '2026-03-08',
+      3 * 60 + 30,
+      'America/New_York'
+    );
     expect(iso(instant)).toBe('2026-03-08T07:30:00.000Z'); // 03:30 EDT = UTC-4
     expect(adjustment).toBe('none');
   });
 
   // Fall back: 2026-11-01, 02:00 EDT → 01:00 EST (transition at 06:00Z).
   it('fall-back ambiguity → first (earlier) instant (EDT)', () => {
-    const { instant, adjustment } = zonedWallTimeToUtc('2026-11-01', 1 * 60 + 30, 'America/New_York');
+    const { instant, adjustment } = zonedWallTimeToUtc(
+      '2026-11-01',
+      1 * 60 + 30,
+      'America/New_York'
+    );
     expect(iso(instant)).toBe('2026-11-01T05:30:00.000Z'); // 01:30 EDT (UTC-4), the earlier of the two
     expect(adjustment).toBe('fall-back');
   });
 
   it('a wall clock after the fold is unaffected (EST)', () => {
-    const { instant, adjustment } = zonedWallTimeToUtc('2026-11-01', 2 * 60 + 30, 'America/New_York');
+    const { instant, adjustment } = zonedWallTimeToUtc(
+      '2026-11-01',
+      2 * 60 + 30,
+      'America/New_York'
+    );
     expect(iso(instant)).toBe('2026-11-01T07:30:00.000Z'); // 02:30 EST = UTC-5
     expect(adjustment).toBe('none');
   });
@@ -134,7 +154,12 @@ describe('occursOn — structured selection', () => {
 
   it('WEEKLY selects weekdays and honours the interval (every 2 weeks, Mon+Wed)', () => {
     // 2026-03-02 is a Monday. Mon=1, Wed=3.
-    const r = rule({ frequency: 'WEEKLY', interval: 2, daysOfWeek: [1, 3], startDate: '2026-03-02' });
+    const r = rule({
+      frequency: 'WEEKLY',
+      interval: 2,
+      daysOfWeek: [1, 3],
+      startDate: '2026-03-02',
+    });
     expect(occursOn(r, '2026-03-02')).toBe(true); // Mon, week 0
     expect(occursOn(r, '2026-03-04')).toBe(true); // Wed, week 0
     expect(occursOn(r, '2026-03-03')).toBe(false); // Tue
@@ -209,12 +234,14 @@ describe('computeOccurrence + enumerateOccurrences', () => {
 
   it('rejects an over-wide enumeration window', () => {
     const r = rule({ frequency: 'DAILY', startDate: '2000-01-01' });
-    expect(() => enumerateOccurrences(r, 'UTC', '2000-01-01', '2026-01-01')).toThrow(RecurrenceError);
+    expect(() => enumerateOccurrences(r, 'UTC', '2000-01-01', '2026-01-01')).toThrow(
+      RecurrenceError
+    );
   });
 
   it('rejects an invalid interval', () => {
-    expect(() => enumerateOccurrences(rule({ interval: 0 }), 'UTC', '2026-01-01', '2026-01-02')).toThrow(
-      RecurrenceError
-    );
+    expect(() =>
+      enumerateOccurrences(rule({ interval: 0 }), 'UTC', '2026-01-01', '2026-01-02')
+    ).toThrow(RecurrenceError);
   });
 });

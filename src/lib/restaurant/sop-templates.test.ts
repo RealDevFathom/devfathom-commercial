@@ -36,10 +36,12 @@ function model(): Delegate {
     })),
     update: vi
       .fn()
-      .mockImplementation(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
-        id: where.id,
-        ...data,
-      })),
+      .mockImplementation(
+        async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
+          id: where.id,
+          ...data,
+        })
+      ),
     updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     delete: vi.fn().mockResolvedValue({}),
   };
@@ -67,7 +69,9 @@ describe('createTemplate — sop.templates.max', () => {
     db.restaurantSopTemplate.count.mockResolvedValue(2);
     await createTemplate(scoped(), { name: '  Opening Checklist  ', category: 'FOH' }, 5);
     expect(db.restaurantSopTemplate.create).toHaveBeenCalledTimes(1);
-    const arg = db.restaurantSopTemplate.create.mock.calls[0]![0] as { data: Record<string, unknown> };
+    const arg = db.restaurantSopTemplate.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
     expect(arg.data.name).toBe('Opening Checklist'); // trimmed
     expect(arg.data.versions).toEqual({ create: { versionNumber: 1, status: 'DRAFT' } });
     expect(arg.data).not.toHaveProperty('organizationId'); // RLS-forced default only
@@ -82,7 +86,9 @@ describe('createTemplate — sop.templates.max', () => {
   });
 
   it('rejects a blank name', async () => {
-    await expect(createTemplate(scoped(), { name: '   ' }, 5)).rejects.toBeInstanceOf(SopTemplateError);
+    await expect(createTemplate(scoped(), { name: '   ' }, 5)).rejects.toBeInstanceOf(
+      SopTemplateError
+    );
   });
 });
 
@@ -121,7 +127,10 @@ describe('publish immutability', () => {
   });
 
   it('updateStep is rejected on a PUBLISHED version', async () => {
-    db.restaurantSopTemplateStep.findUnique.mockResolvedValue({ id: 's1', templateVersionId: 'v1' });
+    db.restaurantSopTemplateStep.findUnique.mockResolvedValue({
+      id: 's1',
+      templateVersionId: 'v1',
+    });
     db.restaurantSopTemplateVersion.findUnique.mockResolvedValue({
       id: 'v1',
       templateId: 't1',
@@ -134,7 +143,10 @@ describe('publish immutability', () => {
   });
 
   it('removeStep is rejected on a RETIRED version', async () => {
-    db.restaurantSopTemplateStep.findUnique.mockResolvedValue({ id: 's1', templateVersionId: 'v1' });
+    db.restaurantSopTemplateStep.findUnique.mockResolvedValue({
+      id: 's1',
+      templateVersionId: 'v1',
+    });
     db.restaurantSopTemplateVersion.findUnique.mockResolvedValue({
       id: 'v1',
       templateId: 't1',
@@ -152,8 +164,14 @@ describe('publish immutability', () => {
       status: 'DRAFT',
     });
     db.restaurantSopTemplateStep.findFirst.mockResolvedValue({ stepOrder: 3 });
-    await addStep(scoped(), { templateVersionId: 'v1', title: '  Sanitize surfaces  ', requiresPhoto: true });
-    const arg = db.restaurantSopTemplateStep.create.mock.calls[0]![0] as { data: Record<string, unknown> };
+    await addStep(scoped(), {
+      templateVersionId: 'v1',
+      title: '  Sanitize surfaces  ',
+      requiresPhoto: true,
+    });
+    const arg = db.restaurantSopTemplateStep.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
     expect(arg.data.stepOrder).toBe(4);
     expect(arg.data.title).toBe('Sanitize surfaces');
     expect(arg.data.requiresPhoto).toBe(true);
@@ -211,7 +229,9 @@ describe('createDraftVersion', () => {
       { id: 'v2', versionNumber: 2, status: 'DRAFT' },
       { id: 'v1', versionNumber: 1, status: 'PUBLISHED' },
     ]);
-    await expect(createDraftVersion(scoped(), 't1')).rejects.toMatchObject({ reason: 'DRAFT_EXISTS' });
+    await expect(createDraftVersion(scoped(), 't1')).rejects.toMatchObject({
+      reason: 'DRAFT_EXISTS',
+    });
   });
 
   it('clones steps forward from the latest version into a new DRAFT', async () => {
@@ -220,17 +240,47 @@ describe('createDraftVersion', () => {
       { id: 'v1', versionNumber: 1, status: 'PUBLISHED' },
     ]);
     db.restaurantSopTemplateStep.findMany.mockResolvedValue([
-      { stepOrder: 1, title: 'A', instructions: null, requiresPhoto: true, requiresSignature: false, requiresNote: false },
-      { stepOrder: 2, title: 'B', instructions: 'do B', requiresPhoto: false, requiresSignature: true, requiresNote: false },
+      {
+        stepOrder: 1,
+        title: 'A',
+        instructions: null,
+        requiresPhoto: true,
+        requiresSignature: false,
+        requiresNote: false,
+      },
+      {
+        stepOrder: 2,
+        title: 'B',
+        instructions: 'do B',
+        requiresPhoto: false,
+        requiresSignature: true,
+        requiresNote: false,
+      },
     ]);
     await createDraftVersion(scoped(), 't1');
-    const arg = db.restaurantSopTemplateVersion.create.mock.calls[0]![0] as { data: Record<string, unknown> };
+    const arg = db.restaurantSopTemplateVersion.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
     expect(arg.data.versionNumber).toBe(2);
     expect(arg.data.status).toBe('DRAFT');
     expect(arg.data.steps).toEqual({
       create: [
-        { stepOrder: 1, title: 'A', instructions: null, requiresPhoto: true, requiresSignature: false, requiresNote: false },
-        { stepOrder: 2, title: 'B', instructions: 'do B', requiresPhoto: false, requiresSignature: true, requiresNote: false },
+        {
+          stepOrder: 1,
+          title: 'A',
+          instructions: null,
+          requiresPhoto: true,
+          requiresSignature: false,
+          requiresNote: false,
+        },
+        {
+          stepOrder: 2,
+          title: 'B',
+          instructions: 'do B',
+          requiresPhoto: false,
+          requiresSignature: true,
+          requiresNote: false,
+        },
       ],
     });
   });
