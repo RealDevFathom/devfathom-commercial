@@ -178,7 +178,12 @@ function zoneOffsetMs(utc: Date, timeZone: string): number {
  * spring-forward gap ends. Invariant on entry: `offset(lo) === offBefore` and
  * `offset(hi) !== offBefore`.
  */
-function findTransitionBoundary(lo: number, hi: number, timeZone: string, offBefore: number): number {
+function findTransitionBoundary(
+  lo: number,
+  hi: number,
+  timeZone: string,
+  offBefore: number
+): number {
   while (hi - lo > 1) {
     const mid = lo + Math.floor((hi - lo) / 2);
     if (zoneOffsetMs(new Date(mid), timeZone) === offBefore) {
@@ -248,7 +253,11 @@ export function assertValidRule(rule: RecurrenceRule): void {
   if (!Number.isInteger(rule.interval) || rule.interval < 1) {
     throw new RecurrenceError(`interval must be an integer >= 1 (got ${rule.interval}).`);
   }
-  if (!Number.isInteger(rule.dueTimeMinutes) || rule.dueTimeMinutes < 0 || rule.dueTimeMinutes > 1439) {
+  if (
+    !Number.isInteger(rule.dueTimeMinutes) ||
+    rule.dueTimeMinutes < 0 ||
+    rule.dueTimeMinutes > 1439
+  ) {
     throw new RecurrenceError(
       `dueTimeMinutes must be an integer in 0..1439 (got ${rule.dueTimeMinutes}).`
     );
@@ -261,7 +270,10 @@ export function assertValidRule(rule: RecurrenceRule): void {
       throw new RecurrenceError(`daysOfWeek entries must be integers in 0..6 (got ${dow}).`);
     }
   }
-  if (rule.monthDay != null && (!Number.isInteger(rule.monthDay) || rule.monthDay < 1 || rule.monthDay > 31)) {
+  if (
+    rule.monthDay != null &&
+    (!Number.isInteger(rule.monthDay) || rule.monthDay < 1 || rule.monthDay > 31)
+  ) {
     throw new RecurrenceError(`monthDay must be an integer in 1..31 (got ${rule.monthDay}).`);
   }
   parseDate(rule.startDate);
@@ -343,7 +355,8 @@ export function enumerateOccurrences(
 ): RecurrenceOccurrence[] {
   assertValidRule(rule);
   const startIndex = dayIndex(parseDate(rule.startDate));
-  const endIndex = rule.endDate != null ? dayIndex(parseDate(rule.endDate)) : Number.POSITIVE_INFINITY;
+  const endIndex =
+    rule.endDate != null ? dayIndex(parseDate(rule.endDate)) : Number.POSITIVE_INFINITY;
   const lo = Math.max(dayIndex(parseDate(fromISO)), startIndex);
   const hi = Math.min(dayIndex(parseDate(toISO)), endIndex);
   if (hi < lo) return [];
