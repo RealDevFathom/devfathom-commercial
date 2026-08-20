@@ -231,6 +231,15 @@ const APPEND_ONLY_TABLES = [
   // stock truth, SELECT+INSERT policies only, same DB-enforced append-only shape
   // as the M5 money ledgers. A correction is a NEW movement, never an edit.
   'restaurant_stock_movements',
+  // M7-L1: the five DB-enforced append-only ledgers (§11.5 / D13 / D21) — the
+  // job-attempt execution history, SOP evidence, SOP verification decisions,
+  // escalation events, and notification deliveries. SELECT+INSERT policies only;
+  // a correction is a NEW row referencing the original context, never an edit.
+  'restaurant_job_executions',
+  'restaurant_sop_evidence',
+  'restaurant_sop_verifications',
+  'restaurant_sop_escalation_events',
+  'restaurant_notification_deliveries',
 ] as const;
 
 type M5Table = keyof typeof M5_COLUMNS;

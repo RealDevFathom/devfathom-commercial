@@ -941,6 +941,59 @@ async function main() {
       ]
     );
 
+    // M7-L1: representative scheduler/SOP/notification ids per tenant. The probe
+    // covers a durable job, its APPEND-ONLY execution row, a webhook-inbox
+    // envelope, an in-app notification, and its APPEND-ONLY delivery row — org-
+    // scoped tables plus two of the five DB-enforced append-only ledgers, which
+    // deny UPDATE/DELETE even to the owner (asserted below). Forced RLS on all 17
+    // M7 tables is proven by the auto-discovery probe above; the append-only
+    // policy shape of all five ledgers is pinned by restaurant-m5-governance.
+    const jobA = `rjob_a_${suffix}`;
+    const jobB = `rjob_b_${suffix}`;
+    const jobExecA = `rjobx_a_${suffix}`;
+    const jobExecB = `rjobx_b_${suffix}`;
+    const webhookInboxA = `rwhi_a_${suffix}`;
+    const webhookInboxB = `rwhi_b_${suffix}`;
+    const notificationA = `rnotif_a_${suffix}`;
+    const notificationB = `rnotif_b_${suffix}`;
+    const notifDeliveryA = `rndlv_a_${suffix}`;
+    const notifDeliveryB = `rndlv_b_${suffix}`;
+    await client.query(
+      `INSERT INTO "restaurant_jobs" (
+        "id", "organizationId", "type", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 'sop.sweep', CURRENT_TIMESTAMP),
+               ($2, $3, 'sop.sweep', CURRENT_TIMESTAMP)`,
+      [jobA, jobB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_job_executions" (
+        "id", "organizationId", "jobId", "workerId", "attempt", "startedAt", "finishedAt", "outcome"
+      ) VALUES ($1, 'org_devfathom', $2, 'worker-a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'SUCCEEDED'),
+               ($3, $4, $5, 'worker-b', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'SUCCEEDED')`,
+      [jobExecA, jobA, jobExecB, organizationB, jobB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_webhook_inbox" (
+        "id", "organizationId", "source", "externalEventId", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 'stripe', $2, CURRENT_TIMESTAMP),
+               ($3, $4, 'stripe', $5, CURRENT_TIMESTAMP)`,
+      [webhookInboxA, `evt_a_${suffix}`, webhookInboxB, organizationB, `evt_b_${suffix}`]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_notifications" (
+        "id", "organizationId", "recipientStaffProfileId", "category", "title", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'sop.due', 'SOP due', CURRENT_TIMESTAMP),
+               ($3, $4, $5, 'sop.due', 'SOP due', CURRENT_TIMESTAMP)`,
+      [notificationA, staffA1, notificationB, organizationB, staffB1]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_notification_deliveries" (
+        "id", "organizationId", "notificationId", "channel", "status"
+      ) VALUES ($1, 'org_devfathom', $2, 'IN_APP', 'DELIVERED_IN_APP'),
+               ($3, $4, $5, 'IN_APP', 'DELIVERED_IN_APP')`,
+      [notifDeliveryA, notificationA, notifDeliveryB, organizationB, notificationB]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -1011,6 +1064,16 @@ async function main() {
       ['restaurant_daily_close_tender_totals', closeTenderTotalA, closeTenderTotalB],
       ['restaurant_receipt_number_sequences', receiptSeqA, receiptSeqB],
       ['restaurant_money_idempotency_keys', moneyIdemA, moneyIdemB],
+      // M7-L1: explicit read/update/delete isolation for the representative job,
+      // append-only execution, webhook-inbox envelope, notification, and append-
+      // only delivery rows. (Cross-tenant update/delete is denied here; the
+      // append-only ledgers among these also deny mutation on the OWNER's row —
+      // asserted separately below.)
+      ['restaurant_jobs', jobA, jobB],
+      ['restaurant_job_executions', jobExecA, jobExecB],
+      ['restaurant_webhook_inbox', webhookInboxA, webhookInboxB],
+      ['restaurant_notifications', notificationA, notificationB],
+      ['restaurant_notification_deliveries', notifDeliveryA, notifDeliveryB],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -1039,6 +1102,12 @@ async function main() {
       ['restaurant_drawer_movements', drawerMovementA],
       ['restaurant_daily_closes', dailyCloseA],
       ['restaurant_daily_close_tender_totals', closeTenderTotalA],
+      // M7-L1: two of the five append-only ledgers proved end-to-end here (the
+      // job-attempt execution history and notification-delivery records); the
+      // other three (SOP evidence, verifications, escalation events) have their
+      // SELECT+INSERT-only policy shape pinned by restaurant-m5-governance.
+      ['restaurant_job_executions', jobExecA],
+      ['restaurant_notification_deliveries', notifDeliveryA],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" = $1`,
@@ -1461,7 +1530,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, restaurant order/order-item/order-event/kitchen-ticket/floor-table/section-assignment/outbox/idempotency-key isolation + fail-closed WITH CHECK, restaurant money bill/bill-line/payment/payment-event/tender/refund/drawer-session/drawer-movement/daily-close/close-tender-total/receipt-sequence/money-idempotency isolation + DB-enforced append-only ledgers (UPDATE/DELETE denied even to the owner), SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, restaurant order/order-item/order-event/kitchen-ticket/floor-table/section-assignment/outbox/idempotency-key isolation + fail-closed WITH CHECK, restaurant money bill/bill-line/payment/payment-event/tender/refund/drawer-session/drawer-movement/daily-close/close-tender-total/receipt-sequence/money-idempotency isolation + DB-enforced append-only ledgers (UPDATE/DELETE denied even to the owner), restaurant scheduler job/execution + webhook-inbox + notification/delivery isolation + DB-enforced append-only execution/delivery ledgers (UPDATE/DELETE denied even to the owner), SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);

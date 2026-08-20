@@ -56,9 +56,7 @@ export function resolveRestaurantJobHandler(type: string): RestaurantJobHandler 
 export async function runRestaurantJob(context: RestaurantJobContext): Promise<void> {
   const handler = resolveRestaurantJobHandler(context.job.type);
   if (!handler) {
-    throw new Error(
-      `No restaurant job handler is registered for type "${context.job.type}".`
-    );
+    throw new Error(`No restaurant job handler is registered for type "${context.job.type}".`);
   }
   await handler(context);
 }

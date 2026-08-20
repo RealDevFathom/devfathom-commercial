@@ -86,6 +86,35 @@ const M6_TABLES = [
   'restaurant_inventory_idempotency_keys',
 ] as const;
 
+// M7 (scheduler primitive + append-only execution history, webhook inbox, SOP
+// templates/versions/steps, branch assignments, dated occurrences + per-step
+// completion, append-only evidence/verification/escalation events, escalation
+// policies/steps, notifications + channel-setting matrix + append-only
+// deliveries) tables. Flat allowlist alongside the earlier sets so the
+// table-pinning probe fails deliberately whenever the restaurant schema grows
+// without review (directive 7). Every M7 table shipped in M7-L1 is listed here —
+// the WHA-51 "complete allowlist" contract: a new table without a listing, or a
+// listed table not shipped, fails the pin below.
+const M7_TABLES = [
+  'restaurant_jobs',
+  'restaurant_job_executions',
+  'restaurant_webhook_inbox',
+  'restaurant_sop_templates',
+  'restaurant_sop_template_versions',
+  'restaurant_sop_template_steps',
+  'restaurant_sop_assignments',
+  'restaurant_sop_occurrences',
+  'restaurant_sop_occurrence_steps',
+  'restaurant_sop_evidence',
+  'restaurant_sop_verifications',
+  'restaurant_sop_escalation_policies',
+  'restaurant_sop_escalation_steps',
+  'restaurant_sop_escalation_events',
+  'restaurant_notifications',
+  'restaurant_notification_channel_settings',
+  'restaurant_notification_deliveries',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -404,7 +433,14 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ORDER BY table_name`
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual(
-      [...BASE_RESTAURANT_TABLES, ...M3_TABLES, ...M4_TABLES, ...M5_TABLES, ...M6_TABLES].sort()
+      [
+        ...BASE_RESTAURANT_TABLES,
+        ...M3_TABLES,
+        ...M4_TABLES,
+        ...M5_TABLES,
+        ...M6_TABLES,
+        ...M7_TABLES,
+      ].sort()
     );
 
     expect(await readM3Columns()).toEqual(M3_COLUMNS);

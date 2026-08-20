@@ -54,10 +54,7 @@ export const RETRY_CAP_MS = 30 * 60_000;
 export const DEFAULT_LEASE_MS = 15 * 60_000;
 
 export type SchedulerErrorReason =
-  | 'INVALID'
-  | 'JOB_NOT_FOUND'
-  | 'INVALID_STATE'
-  | 'DUPLICATE_ENQUEUE';
+  'INVALID' | 'JOB_NOT_FOUND' | 'INVALID_STATE' | 'DUPLICATE_ENQUEUE';
 
 export class SchedulerError extends Error {
   constructor(
@@ -241,7 +238,11 @@ export type FailSettleOptions = SettleOptions & {
  * Mark a RUNNING job SUCCEEDED and append its immutable execution row. Throws if
  * the job is missing or is not RUNNING (guards against double-settle).
  */
-export async function complete(db: ScopedDb, jobId: string, opts: SettleOptions = {}): Promise<void> {
+export async function complete(
+  db: ScopedDb,
+  jobId: string,
+  opts: SettleOptions = {}
+): Promise<void> {
   const now = opts.now ?? new Date();
   await runSchedulerTransaction(db, async (tx) => {
     const job = await requireRunningJob(tx, jobId);
