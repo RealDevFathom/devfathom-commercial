@@ -101,7 +101,6 @@ function caller() {
 }
 
 const OCC_ID = 'occ_1';
-const TMPL_STEP_ID = 'tmpl_step_1';
 
 // ── strict-zod boundary ────────────────────────────────────────────────────────
 

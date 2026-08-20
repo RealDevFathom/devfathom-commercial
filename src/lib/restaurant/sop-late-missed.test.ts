@@ -3,7 +3,7 @@
  * Covers: happy path (updateMany + queryRaw called), payload schema validation,
  * injectable clock (deterministic now).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -11,42 +11,42 @@ import { sopLateMissedHandler } from './sop-late-missed';
 import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-function makeContext(payloadOverride: Record<string, unknown> = {}): RestaurantJobContext {
+function makeContext(payloadOverride: Record<string, unknown> = {}): {
+  ctx: RestaurantJobContext;
+  updateMany: ReturnType<typeof vi.fn>;
+  queryRaw: ReturnType<typeof vi.fn>;
+} {
+  const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+  const queryRaw = vi.fn().mockResolvedValue([]);
+
   const db = {
-    restaurantSopOccurrence: {
-      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
-    },
-    $queryRaw: vi.fn().mockResolvedValue([]),
+    restaurantSopOccurrence: { updateMany },
+    $queryRaw: queryRaw,
   } as unknown as ScopedDb;
 
-  return {
+  const ctx: RestaurantJobContext = {
     db,
     job: {
       id: 'job_1',
       type: 'sop.sweepLateMissed',
-      payload: payloadOverride,
-      organizationId: 'org_1',
-      status: 'RUNNING',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      payload: payloadOverride as any,
       attempts: 1,
       maxAttempts: 5,
-      scheduledAt: new Date(),
-      nextAttemptAt: new Date(),
-      claimedAt: new Date(),
       claimedBy: 'worker_1',
-      lastError: null,
-      idempotencyKey: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      startedAt: new Date(),
     },
   };
+
+  return { ctx, updateMany, queryRaw };
 }
 
 describe('sopLateMissedHandler', () => {
   it('calls updateMany (LATE sweep) and $queryRaw (MISSED sweep)', async () => {
-    const ctx = makeContext({ now: '2026-08-20T12:00:00.000Z' });
+    const { ctx, updateMany, queryRaw } = makeContext({ now: '2026-08-20T12:00:00.000Z' });
     await sopLateMissedHandler(ctx);
 
-    expect((ctx.db as Record<string, { updateMany: ReturnType<typeof vi.fn> }>).restaurantSopOccurrence.updateMany).toHaveBeenCalledWith(
+    expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           status: { in: ['SCHEDULED', 'IN_PROGRESS'] },
@@ -54,16 +54,16 @@ describe('sopLateMissedHandler', () => {
         data: { status: 'LATE' },
       })
     );
-    expect((ctx.db as { $queryRaw: ReturnType<typeof vi.fn> }).$queryRaw).toHaveBeenCalledOnce();
+    expect(queryRaw).toHaveBeenCalledOnce();
   });
 
   it('works with an empty payload (uses current time)', async () => {
-    const ctx = makeContext();
+    const { ctx } = makeContext();
     await expect(sopLateMissedHandler(ctx)).resolves.toBeUndefined();
   });
 
   it('rejects an unknown payload key (strict zod)', async () => {
-    const ctx = makeContext({ unknown: true });
+    const { ctx } = makeContext({ unknown: true });
     await expect(sopLateMissedHandler(ctx)).rejects.toThrow();
   });
 });
