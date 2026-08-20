@@ -57,6 +57,8 @@ export const ALL_ACTIONS = [
   // role templates: general-manager, financial-controller, sop-compliance-auditor).
   'reports:operational', // restaurant M7-L2: background-ops read/requeue console — org-role driven
   'sop:manage', // restaurant M7-L3: SOP authoring console — templates/versions/steps/assignments/schedule preview (org-role driven)
+  'sop:complete', // restaurant M7-L4: SOP occurrence execution (start/complete-step/submit) — org-role driven
+  'sop:verify', // restaurant M7-L4: SOP verification decisions (VERIFY/REJECT/WAIVE) — org-role driven
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -164,4 +166,9 @@ export const POLICIES: Record<Action, Policy[]> = {
   // path in `can()`; no static agency-role policy, so a subject without an
   // explicit grant is denied by default.
   'sop:manage': [],
+  // restaurant M7-L4: SOP execution — org-role-driven, no static agency-role policy.
+  'sop:complete': [],
+  // restaurant M7-L4: SOP verification decisions — org-role-driven, no static agency-role
+  // policy (default-deny without an explicit grant via customDecision path).
+  'sop:verify': [],
 };

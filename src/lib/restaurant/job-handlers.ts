@@ -12,6 +12,9 @@ import {
   SOP_GENERATE_OCCURRENCES_JOB,
   generateSopOccurrencesHandler,
 } from '@/lib/restaurant/sop-occurrence-generation';
+// M7-L4: late/missed sweep + escalation chain
+import { SOP_LATE_MISSED_JOB, sopLateMissedHandler } from '@/lib/restaurant/sop-late-missed';
+import { SOP_ESCALATION_JOB, sopEscalationHandler } from '@/lib/restaurant/sop-escalation';
 
 /**
  * M7-L1 — the typed job-handler registry. The scheduler primitive
@@ -56,6 +59,8 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   [WEBHOOK_PROCESS_JOB_TYPE]: processInboundWebhookHandler,
   // …later lanes (L3 SOP, L5 notifications) append one key each here…
   [SOP_GENERATE_OCCURRENCES_JOB]: generateSopOccurrencesHandler,
+  [SOP_LATE_MISSED_JOB]: sopLateMissedHandler,
+  [SOP_ESCALATION_JOB]: sopEscalationHandler,
 };
 
 /** Look up the handler registered for a job type (undefined when none is). */
