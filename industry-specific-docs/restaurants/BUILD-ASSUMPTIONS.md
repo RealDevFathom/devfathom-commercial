@@ -901,6 +901,80 @@ append-only ledger + exact-Decimal derived balance are proven under ≥8-way con
 examples from Product owner + Finance + Restaurant operations SME may replace WAC with FIFO layers, gate negative
 stock, or move the consumption posting point; and by D23 for production/preparation batches.
 
+### M7 — scheduler, SOP & notifications
+
+**D13 (background scheduler mechanics + worker org-scoping) (M7-L1)** · D13 is `OPEN` in the D-register; M7 records
+these conservative defaults behind the plan's §11.5 scheduler seam (`src/lib/restaurant/scheduler.ts` over the
+org-scoped `restaurant_jobs` queue + the append-only `restaurant_job_executions` history). **(1) Claiming —
+at-least-once, exactly-one-in-flight.** A due `QUEUED` job (`nextAttemptAt <= now`) is claimed with
+`SELECT … FOR UPDATE SKIP LOCKED` inside ONE tenant-scoped transaction, so N parallel claimers over M due jobs each
+take a DISTINCT job — never the same one twice, never a lost job (proven under ≥8-way concurrency in
+`tests/restaurant-m7-scheduler-concurrency.test.ts`). Delivery is therefore at-least-once and handlers MUST be
+idempotent (a job can run again after a worker crash). **(2) Retries — bounded, exponential backoff → DEAD.** A
+failed attempt appends one immutable execution row and, while `attempts < maxAttempts` (default 5), re-queues with
+backoff `min(30s·2^(attempts-1), 30m)`; once exhausted the job moves to `DEAD`. A handler may declare a failure
+permanent (non-retryable) → `FAILED`, skipping the remaining budget. **(3) Recovery + graceful shutdown.** A job
+stuck `RUNNING` past a 15-minute lease is requeued (worker crash); on shutdown a worker stops claiming and releases
+its just-claimed job back to `QUEUED`, rolling back the claim's attempt increment. **(4) Injectable clock.** Every
+time decision (due filter, backoff schedule, lease expiry) flows from an explicit `now`/`clock`, never a hidden
+`Date.now()`. **(5) Worker org-scoping vs. cross-org claim.** There is NO cross-org queue scan in the unprivileged
+app role: a claimer runs inside `withTenantDb`, so forced RLS restricts the visible queue to the current
+organization. A privileged multi-org worker still executes each job INSIDE its target organization's RLS context
+(`app.current_organization_id` set to that org) — never a bypass-RLS mutation of tenant rows. Handler registration
+is a typed registry (`src/lib/restaurant/job-handlers.ts`) so L2–L5 plug in independently (one import + one key).
+· Conservative because `FOR UPDATE SKIP LOCKED` is Postgres's proven, race-free work-claim primitive (already used
+by `src/lib/platform/jobs.ts`); at-least-once + idempotent handlers is the standard durable-queue contract and is
+far safer than an unproven exactly-once protocol; bounded backoff → DEAD prevents a poison job from looping
+forever; and claiming inside the target org's RLS context keeps the strong M1–M6 tenancy boundary intact even for a
+privileged worker. · Revisited by D13 closing — a decision on a dedicated queue technology, exactly-once semantics,
+priority/fairness across organizations, or a separate worker identity/authorization model.
+
+**D21 (notifications channel matrix + delivery) (M7-L1)** · D21 is `OPEN`; M7 records these conservative defaults
+behind the §11.5 notification seam. **(1) Channels — in-app real, the rest stubbed.** `RestaurantNotificationChannel`
+is `IN_APP | EMAIL | SMS | WEBHOOK`; only `IN_APP` is actually delivered in M7. `EMAIL`/`SMS`/`WEBHOOK` are recorded
+as `STUBBED` deliveries — the append-only `restaurant_notification_deliveries` ledger captures every attempt
+(`DELIVERED_IN_APP` / `STUBBED` / `FAILED`) so the provider adapter a later integration fills changes no schema.
+**(2) Matrix — category × channel with a branch override.** `restaurant_notification_channel_settings` enables a
+channel per free-form category, with a null `branchId` as the organization default and a set `branchId` as a branch
+override; the branch-override-then-org precedence is resolved in app code (L5). **(3) Categories are open strings.**
+Notification `category` and the matrix `eventCategory` are plain strings, not an enum, so L2–L5 register new event
+categories without a schema/enum change (which would be a shared-file merge conflict). · Conservative because
+stubbing the non-in-app channels behind the same delivery ledger lets the in-app product ship now while keeping an
+exact, auditable record of what WOULD have been sent, and an open category string avoids coupling every later lane
+to one enum. · Revisited by D21 closing — a chosen email/SMS/push/webhook provider set, delivery-retry SLAs, and a
+per-recipient channel-preference model.
+
+**SOP-defaults (versioning, recurrence/DST, evidence, occurrence flow, late/missed, escalation) (M7-L1)** · The §11.5
+SOP micro-policies are `OPEN`; M7-L1 records the conservative defaults its schema + RLS commit to. **(1) Versioning
+— immutable-once-PUBLISHED, occurrence-pinned.** A template FAMILY (`restaurant_sop_templates`, the unit counted by
+`sop.templates.max`) owns ordered VERSIONS (`DRAFT → PUBLISHED → RETIRED`); a `PUBLISHED` version is immutable and
+the only kind an assignment may pin, and every occurrence pins its `templateVersionId` with `ON DELETE RESTRICT`, so
+a later edit never rewrites recorded compliance history (the M3 C3 versioning precedent). **(2) Recurrence + DST —
+generated against branch wall-clock.** An assignment carries `frequency` (`ONCE/DAILY/WEEKLY/MONTHLY`) + `interval`
+(+ `daysOfWeek` for weekly, `monthDay` for monthly) over `[startDate, endDate]` with a branch-local `dueTimeMinutes`
+and `windowMinutes`/`graceMinutes`. Occurrences are generated against the BRANCH wall-clock/timezone (never a fixed
+UTC offset), so a DST shift keeps "the 9am open check" at 9am local; the derived `dueAt`/`windowEndsAt` are stored as
+UTC instants and `businessDate` is the branch business day (`business-date.ts`). **(3) Evidence — append-only,
+requirement flags recorded not enforced.** Template steps carry `requiresPhoto/Signature/Note` flags; captured
+evidence (`restaurant_sop_evidence`) is APPEND-ONLY (content-hash + a nullable `storageRef` blob seam, non-negative
+`sizeBytes`) — L1 records the requirement flags and evidence rows but does NOT enforce completeness (an L-domain
+concern). **(4) Occurrence flow + late/missed.** `RestaurantSopOccurrenceStatus` is EXACTLY the eight §11.5 states
+(`SCHEDULED/IN_PROGRESS/SUBMITTED/VERIFIED/REJECTED/LATE/MISSED/WAIVED`); LATE = submitted after the due window,
+MISSED = window elapsed with no submission. Transitioning overdue occurrences to LATE/MISSED is a scheduled sweep (a
+scheduler job an L-domain lane registers); L1 stores the states and the due/window instants that drive it.
+Verification decisions (`restaurant_sop_verifications`, APPEND-ONLY: `VERIFY/REJECT/WAIVE`) may pin an M2
+co-authorization for a sensitive decision (single-column FK, the M5 refund precedent). **(5) Escalation — append-only
+events, scoped policies.** An escalation policy is `ORG`- or `BRANCH`-scoped with stop conditions and branch-local
+quiet hours; its ordered steps carry a delay, a target, a channel, and a bounded attempt count; firing history is
+the APPEND-ONLY `restaurant_sop_escalation_events` ledger (`FIRED/ACKNOWLEDGED/STOPPED`), from which the live
+escalation state is folded. · Conservative because pinning the published version + append-only evidence/verification/
+escalation ledgers makes compliance history tamper-evident (a correction is a new row, never an edit — the M5/M6
+ledger discipline); generating recurrence against the branch wall-clock is the only choice that survives DST without
+drifting due times; and recording evidence-requirement flags without enforcing them keeps the L1 seam permissive for
+the L-domain flow lanes. · Revisited by the §11.5 SOP decisions closing — worked recurrence/DST, evidence-retention
+(vs `sop.evidenceRetentionDays`), and escalation-timing examples from Restaurant operations SME may tighten
+completeness enforcement, add FEFO-style evidence gating, or change the late/missed sweep cadence.
+
 ---
 
 ## M5-L8 — Independent verification rollup (Verification Engineer, WHA-63)
