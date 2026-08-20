@@ -15,6 +15,14 @@ import {
 // M7-L4: late/missed sweep + escalation chain
 import { SOP_LATE_MISSED_JOB, sopLateMissedHandler } from '@/lib/restaurant/sop-late-missed';
 import { SOP_ESCALATION_JOB, sopEscalationHandler } from '@/lib/restaurant/sop-escalation';
+// M7-L5: notification fan-out. Registers BOTH durable seams — the scheduler job
+// handler (the map key below) and the outbox consumer (the side-effecting call
+// after the map) — so importing the worker's handler registry wires up both.
+import {
+  NOTIFICATION_FANOUT_JOB,
+  notificationFanoutHandler,
+  registerNotificationOutboxConsumer,
+} from '@/lib/restaurant/notification-fanout';
 
 /**
  * M7-L1 — the typed job-handler registry. The scheduler primitive
@@ -61,7 +69,12 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   [SOP_GENERATE_OCCURRENCES_JOB]: generateSopOccurrencesHandler,
   [SOP_LATE_MISSED_JOB]: sopLateMissedHandler,
   [SOP_ESCALATION_JOB]: sopEscalationHandler,
+  [NOTIFICATION_FANOUT_JOB]: notificationFanoutHandler,
 };
+
+// M7-L5: wire the notification outbox consumer into the process-wide registry the
+// worker drives. Idempotent, so importing this module more than once is safe.
+registerNotificationOutboxConsumer();
 
 /** Look up the handler registered for a job type (undefined when none is). */
 export function resolveRestaurantJobHandler(type: string): RestaurantJobHandler | undefined {

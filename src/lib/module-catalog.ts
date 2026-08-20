@@ -102,6 +102,10 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // M7-L4: SOP execution console — branch board, lifecycle commands, evidence,
   // verification (verify/reject/waive), escalation acknowledgement.
   restaurantSopExecution: 'restaurant-sop',
+  // M7-L5: notifications — recipient inbox (list/read state) + channel-matrix admin
+  // — gate on the SOP/automation module (`restaurant-sop`), the licensed surface
+  // whose scheduler/outbox runtime fans notifications out.
+  restaurantNotifications: 'restaurant-sop',
 };
 
 export function moduleForProcedure(path: string): string | null {
