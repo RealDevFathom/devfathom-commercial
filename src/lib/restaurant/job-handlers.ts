@@ -2,6 +2,12 @@ import 'server-only';
 
 import type { ClaimedJob } from '@/lib/restaurant/scheduler';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+// M7-L3: SOP occurrence generation. Supervisor-sequenced merge order L2 -> L3 ->
+// L4 -> L5; the only conflict is this import list and the object literal below.
+import {
+  SOP_GENERATE_OCCURRENCES_JOB,
+  generateSopOccurrencesHandler,
+} from '@/lib/restaurant/sop-occurrence-generation';
 
 /**
  * M7-L1 — the typed job-handler registry. The scheduler primitive
@@ -41,7 +47,9 @@ export type RestaurantJobHandler = (context: RestaurantJobContext) => Promise<vo
  * The job-type → handler map. Keyed by the string `RestaurantJob.type` an
  * enqueuer set. Intentionally empty in L1: later lanes add exactly one key each.
  */
-export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {};
+export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
+  [SOP_GENERATE_OCCURRENCES_JOB]: generateSopOccurrencesHandler,
+};
 
 /** Look up the handler registered for a job type (undefined when none is). */
 export function resolveRestaurantJobHandler(type: string): RestaurantJobHandler | undefined {
