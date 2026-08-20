@@ -99,9 +99,11 @@ describe('dispatchOutboxBatch', () => {
   it('delivers a PENDING row to its consumer and marks it DISPATCHED', async () => {
     const { db, rows } = createFakeDb([pendingRow()]);
     const seen: OutboxDispatchRecord[] = [];
+    let consumerTx: ScopedDb | undefined;
     const registry = new OutboxConsumerRegistry();
-    registry.register('order.opened', async (record) => {
+    registry.register('order.opened', async (record, tx) => {
       seen.push(record);
+      consumerTx = tx;
     });
 
     const summary = await dispatchOutboxBatch(db, { registry, now: T0 });
@@ -109,6 +111,7 @@ describe('dispatchOutboxBatch', () => {
     expect(summary).toEqual({ dispatched: 1, retried: 0, dead: 0, skipped: 0 });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.payload).toEqual({ hello: 'world' });
+    expect(consumerTx).toBe(db);
     const row = rows.get('ob_1')!;
     expect(row.status).toBe('DISPATCHED');
     expect(row.attempts).toBe(1);

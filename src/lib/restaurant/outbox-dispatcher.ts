@@ -59,7 +59,7 @@ export type OutboxDispatchRecord = OutboxRecord & {
  * means a row can be re-delivered after a crash between the consumer and the
  * status write.
  */
-export type OutboxConsumer = (record: OutboxDispatchRecord) => Promise<void>;
+export type OutboxConsumer = (record: OutboxDispatchRecord, tx: ScopedDb) => Promise<void>;
 
 /**
  * The in-process consumer registry: `eventType` → consumer. Intentionally empty in
@@ -224,7 +224,7 @@ export async function dispatchOutboxBatch(
 
       let patch: OutboxDispatchPatch;
       try {
-        await consumer(record);
+        await consumer(record, tx);
         patch = planDispatchSuccess(record);
       } catch (error) {
         patch = planDispatchFailure(record, now, errorMessage(error), policy);

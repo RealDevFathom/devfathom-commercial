@@ -1,0 +1,164 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  can: vi.fn(async () => true),
+  staffFindFirst: vi.fn(),
+  notificationFindMany: vi.fn(),
+  notificationFindFirst: vi.fn(),
+  notificationCount: vi.fn(),
+  notificationUpdateMany: vi.fn(),
+  settingFindMany: vi.fn(),
+  settingFindFirst: vi.fn(),
+  settingUpdate: vi.fn(),
+  settingCreate: vi.fn(),
+}));
+
+vi.mock('server-only', () => ({}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+vi.mock('@/lib/entitlements', () => ({
+  hasModule: vi.fn(() => true),
+  resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
+}));
+vi.mock('@/server/audit', () => ({
+  ipFromHeaders: vi.fn(() => null),
+  isAuditExcludedPath: vi.fn(() => true),
+  recordTrpcAudit: vi.fn(),
+}));
+vi.mock('@/lib/abac', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+  return { ...actual, can: mocks.can };
+});
+
+import type { TRPCContext } from '../trpc';
+import { restaurantNotificationsRouter } from './restaurant-notifications';
+
+const db = {
+  restaurantStaffProfile: { findFirst: mocks.staffFindFirst },
+  restaurantNotification: {
+    findMany: mocks.notificationFindMany,
+    findFirst: mocks.notificationFindFirst,
+    count: mocks.notificationCount,
+    updateMany: mocks.notificationUpdateMany,
+  },
+  restaurantNotificationChannelSetting: {
+    findMany: mocks.settingFindMany,
+    findFirst: mocks.settingFindFirst,
+    update: mocks.settingUpdate,
+    create: mocks.settingCreate,
+  },
+};
+
+function caller() {
+  return restaurantNotificationsRouter.createCaller({
+    db,
+    entitlements: {
+      enabledModules: ['restaurant-core'],
+      activeSeats: 1,
+      seatLimit: 50,
+      modules: [],
+    },
+    session: {
+      expires: 'later',
+      user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+    },
+    organization: null,
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as unknown as TRPCContext);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.can.mockResolvedValue(true);
+  mocks.staffFindFirst.mockResolvedValue({ id: 'staff_1' });
+  mocks.notificationFindMany.mockResolvedValue([]);
+  mocks.notificationFindFirst.mockResolvedValue({ id: 'notification_1', isRead: false, readAt: null });
+  mocks.notificationCount.mockResolvedValue(2);
+  mocks.notificationUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.settingFindMany.mockResolvedValue([]);
+  mocks.settingFindFirst.mockResolvedValue(null);
+  mocks.settingCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
+    id: 'setting_1',
+    ...data,
+  }));
+});
+
+describe('recipient notifications', () => {
+  it('lists only the session-linked staff profile and rejects unknown input', async () => {
+    await caller().list({ limit: 20, unreadOnly: true });
+    expect(mocks.staffFindFirst).toHaveBeenCalledWith({
+      where: { userId: 'user_1' },
+      select: { id: true },
+    });
+    expect(mocks.notificationFindMany.mock.calls[0]?.[0].where).toMatchObject({
+      recipientStaffProfileId: 'staff_1',
+      isRead: false,
+      deliveries: { some: { channel: 'IN_APP', status: 'DELIVERED_IN_APP' } },
+    });
+    await expect(caller().list({ limit: 20, unknown: true } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+  });
+
+  it('counts unread notifications', async () => {
+    await expect(caller().unreadCount({})).resolves.toEqual({ count: 2 });
+    expect(mocks.notificationCount.mock.calls[0]?.[0].where).toMatchObject({
+      recipientStaffProfileId: 'staff_1',
+      isRead: false,
+    });
+  });
+
+  it('marks one owned notification and all owned notifications read', async () => {
+    const one = await caller().markRead({ id: 'notification_1' });
+    expect(one).toMatchObject({ id: 'notification_1', isRead: true });
+    expect(mocks.notificationUpdateMany.mock.calls[0]?.[0].where).toEqual({
+      id: 'notification_1',
+      recipientStaffProfileId: 'staff_1',
+    });
+
+    const all = await caller().markAllRead({});
+    expect(all).toMatchObject({ count: 1 });
+    expect(mocks.notificationUpdateMany.mock.calls[1]?.[0].where).toMatchObject({
+      recipientStaffProfileId: 'staff_1',
+      isRead: false,
+    });
+  });
+
+  it('fails closed without a linked staff profile', async () => {
+    mocks.staffFindFirst.mockResolvedValue(null);
+    await expect(caller().unreadCount({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+describe('notification matrix administration', () => {
+  it('reads effective defaults and creates a branch override through staff:manage', async () => {
+    await expect(
+      caller().getMatrix({ category: 'sop.escalation', branchId: 'branch_1' })
+    ).resolves.toMatchObject({
+      channels: [
+        { channel: 'IN_APP', enabled: true },
+        { channel: 'EMAIL', enabled: true },
+        { channel: 'SMS', enabled: true },
+        { channel: 'PUSH', enabled: true },
+        { channel: 'WHATSAPP', enabled: true },
+      ],
+    });
+    await expect(
+      caller().updateMatrix({
+        category: 'sop.escalation',
+        branchId: 'branch_1',
+        channel: 'PUSH',
+        enabled: false,
+      })
+    ).resolves.toMatchObject({ id: 'setting_1', enabled: false });
+  });
+
+  it('requires staff:manage', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(
+      caller().getMatrix({ category: 'sop.escalation', branchId: null })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});

@@ -2,7 +2,7 @@
  * M7-L4 — SOP escalation unit tests.
  * Covers: step firing, STOP conditions (stopOnVerified via occurrence status,
  * stopOnAcknowledged, chain exhausted), quiet-hour deferral, delay enforcement,
- * notification + delivery row creation, acknowledgeEscalation idempotency.
+ * notification-request outbox append, acknowledgeEscalation idempotency.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -57,8 +57,7 @@ interface DbMocks {
   eventFindFirst: ReturnType<typeof vi.fn>;
   eventFindUnique: ReturnType<typeof vi.fn>;
   eventCreate: ReturnType<typeof vi.fn>;
-  notifCreate: ReturnType<typeof vi.fn>;
-  notifDeliveryCreate: ReturnType<typeof vi.fn>;
+  outboxCreateMany: ReturnType<typeof vi.fn>;
 }
 
 function makeDb(opts: {
@@ -89,8 +88,7 @@ function makeDb(opts: {
       createdAt: NOW,
       ...data,
     }));
-  const notifCreate = vi.fn().mockResolvedValue({ id: 'notif_1' });
-  const notifDeliveryCreate = vi.fn().mockResolvedValue({ id: 'deliv_1' });
+  const outboxCreateMany = vi.fn().mockResolvedValue({ count: 1 });
 
   const dbObj = {
     restaurantSopOccurrence: {
@@ -111,11 +109,8 @@ function makeDb(opts: {
       findUnique: eventFindUnique,
       create: eventCreate,
     },
-    restaurantNotification: {
-      create: notifCreate,
-    },
-    restaurantNotificationDelivery: {
-      create: notifDeliveryCreate,
+    restaurantEventOutbox: {
+      createMany: outboxCreateMany,
     },
   };
   (dbObj as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
@@ -131,8 +126,7 @@ function makeDb(opts: {
       eventFindFirst,
       eventFindUnique,
       eventCreate,
-      notifCreate,
-      notifDeliveryCreate,
+      outboxCreateMany,
     },
   };
 }
@@ -165,7 +159,17 @@ describe('sopEscalationHandler', () => {
       kind: 'FIRED',
       escalationStepId: 'step_a',
     });
-    expect(mocks.notifCreate).toHaveBeenCalledOnce();
+    expect(mocks.outboxCreateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            eventType: 'notification.requested',
+            aggregateType: 'restaurant.notification-request',
+          }),
+        ],
+        skipDuplicates: true,
+      })
+    );
   });
 
   it('does nothing when occurrence is already VERIFIED (stopOnVerified)', async () => {
@@ -175,7 +179,7 @@ describe('sopEscalationHandler', () => {
     // Should write a STOPPED event, no notification
     expect(mocks.eventCreate).toHaveBeenCalledOnce();
     expect(mocks.eventCreate.mock.calls[0][0].data.kind).toBe('STOPPED');
-    expect(mocks.notifCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
   it('stops when an ACKNOWLEDGED event exists (stopOnAcknowledged)', async () => {
@@ -186,7 +190,7 @@ describe('sopEscalationHandler', () => {
 
     const lastCall = mocks.eventCreate.mock.calls.at(-1)?.[0];
     expect(lastCall?.data?.kind).toBe('STOPPED');
-    expect(mocks.notifCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
   it('stops when all steps are exhausted', async () => {
@@ -199,7 +203,7 @@ describe('sopEscalationHandler', () => {
     await sopEscalationHandler(makeCtx(db));
 
     expect(mocks.eventCreate.mock.calls[0][0].data.kind).toBe('STOPPED');
-    expect(mocks.notifCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
   it('does nothing during quiet hours', async () => {
@@ -209,7 +213,7 @@ describe('sopEscalationHandler', () => {
     });
     await sopEscalationHandler(makeCtx(db));
 
-    expect(mocks.notifCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
     expect(mocks.eventCreate).not.toHaveBeenCalled();
   });
 
@@ -221,7 +225,7 @@ describe('sopEscalationHandler', () => {
     });
     await sopEscalationHandler(makeCtx(db));
 
-    expect(mocks.notifCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
   it('rejects unknown payload key (strict zod)', async () => {

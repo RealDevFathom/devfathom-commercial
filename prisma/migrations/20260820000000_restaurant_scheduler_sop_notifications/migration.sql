@@ -75,7 +75,7 @@ CREATE TYPE "RestaurantSopEscalationScope" AS ENUM ('ORG', 'BRANCH');
 CREATE TYPE "RestaurantSopEscalationEventKind" AS ENUM ('FIRED', 'ACKNOWLEDGED', 'STOPPED');
 
 -- CreateEnum
-CREATE TYPE "RestaurantNotificationChannel" AS ENUM ('IN_APP', 'EMAIL', 'SMS', 'WEBHOOK');
+CREATE TYPE "RestaurantNotificationChannel" AS ENUM ('IN_APP', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP');
 
 -- CreateEnum
 CREATE TYPE "RestaurantNotificationDeliveryStatus" AS ENUM ('DELIVERED_IN_APP', 'STUBBED', 'FAILED');
