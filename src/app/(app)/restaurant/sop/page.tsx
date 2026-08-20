@@ -310,7 +310,7 @@ export function SopBoardView(props: SopBoardViewProps) {
     />
   );
 
-  if (props.state === 'disabled' || props.state === 'permission' || props.state === 'error') {
+  if (props.state !== 'ready' && props.state !== 'empty') {
     const copy = {
       disabled: {
         title: 'SOP module disabled',
