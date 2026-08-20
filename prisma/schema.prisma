@@ -2247,31 +2247,39 @@ model RestaurantBranch {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  assignments            RestaurantBranchAssignment[]
+  assignments                 RestaurantBranchAssignment[]
   // M2-L1: staff pinned to this branch as their primary, and devices registered
   // to this branch. Both are org-scoped and branch-scoped seams (§4.1/D12).
-  staffProfiles          RestaurantStaffProfile[]          @relation("RestaurantStaffPrimaryBranch")
-  registeredDevices      RestaurantRegisteredDevice[]
+  staffProfiles               RestaurantStaffProfile[]               @relation("RestaurantStaffPrimaryBranch")
+  registeredDevices           RestaurantRegisteredDevice[]
   // M3-L1: branch-menu publications binding this branch to a brand-owned menu
   // (§6.3). Publications are the only branch-linked catalog surface (C2); the
   // canonical catalog itself carries no branchId.
-  menuPublications       RestaurantBranchMenuPublication[]
+  menuPublications            RestaurantBranchMenuPublication[]
   // M4-L1: floor/service, section, kitchen-station, order, and number-sequence
   // aggregates hanging off the branch (all org-scoped under forced RLS, C1).
-  floors                 RestaurantFloor[]
-  serverSections         RestaurantServerSection[]
-  kitchenStations        RestaurantKitchenStation[]
-  orders                 RestaurantOrder[]
-  orderNumberSequences   RestaurantOrderNumberSequence[]
-  bills                  RestaurantBill[]
-  drawerSessions         RestaurantDrawerSession[]
-  dailyCloses            RestaurantDailyClose[]
-  receiptNumberSequences RestaurantReceiptNumberSequence[]
+  floors                      RestaurantFloor[]
+  serverSections              RestaurantServerSection[]
+  kitchenStations             RestaurantKitchenStation[]
+  orders                      RestaurantOrder[]
+  orderNumberSequences        RestaurantOrderNumberSequence[]
+  bills                       RestaurantBill[]
+  drawerSessions              RestaurantDrawerSession[]
+  dailyCloses                 RestaurantDailyClose[]
+  receiptNumberSequences      RestaurantReceiptNumberSequence[]
   // M6-L1: branch-scoped inventory stock locations and the purchasing surfaces
   // (POs, receipts) delivered to this branch. All org-scoped under forced RLS.
-  stockLocations         RestaurantStockLocation[]
-  purchaseOrders         RestaurantPurchaseOrder[]
-  purchaseReceipts       RestaurantPurchaseReceipt[]
+  stockLocations              RestaurantStockLocation[]
+  purchaseOrders              RestaurantPurchaseOrder[]
+  purchaseReceipts            RestaurantPurchaseReceipt[]
+  // M7-L1: branch-scoped SOP assignments/occurrences, branch-scoped escalation
+  // policies, and branch-scoped notifications + channel-setting overrides. All
+  // org-scoped under forced RLS.
+  sopAssignments              RestaurantSopAssignment[]
+  sopOccurrences              RestaurantSopOccurrence[]
+  sopEscalationPolicies       RestaurantSopEscalationPolicy[]
+  notifications               RestaurantNotification[]
+  notificationChannelSettings RestaurantNotificationChannelSetting[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
@@ -2376,6 +2384,14 @@ model RestaurantStaffProfile {
   purchaseReceipts       RestaurantPurchaseReceipt[]
   purchaseOrdersCreated  RestaurantPurchaseOrder[]           @relation("PurchaseOrderCreatedBy")
   purchaseOrdersApproved RestaurantPurchaseOrder[]           @relation("PurchaseOrderApprovedBy")
+  // M7-L1: best-effort SOP attribution (nullable on the child rows) — the
+  // operator who completed a step, uploaded evidence, verified an occurrence, or
+  // is named on an escalation event — plus the operator a notification is for.
+  sopStepsCompleted      RestaurantSopOccurrenceStep[]
+  sopEvidenceUploaded    RestaurantSopEvidence[]
+  sopVerifications       RestaurantSopVerification[]
+  sopEscalationEvents    RestaurantSopEscalationEvent[]
+  notifications          RestaurantNotification[]
 
   @@index([organizationId])
   @@index([userId])
@@ -2525,6 +2541,9 @@ model RestaurantCoAuthorization {
   billLineComps         RestaurantBillLine[]
   refunds               RestaurantRefund[]
   dailyCloses           RestaurantDailyClose[]
+  // M7-L1: co-authorization optionally pinned on a sensitive SOP verification
+  // (VERIFY/REJECT/WAIVE) — single-column FK, the M5 refund/close precedent.
+  sopVerifications      RestaurantSopVerification[]
 
   @@index([organizationId])
   @@index([actingStaffProfileId])
@@ -4917,6 +4936,606 @@ model RestaurantInventoryIdempotencyKey {
   @@index([organizationId])
   @@index([deviceId])
   @@map("restaurant_inventory_idempotency_keys")
+}
+
+// ===========================================================================
+// M7-L1 — Scheduler primitive, SOP compliance engine, and notifications for the
+// Restaurant vertical (restaurant/m7-scheduler-sop-notifications).
+//
+// Binding design constraints realised in this model set:
+//   C1  Every table is org-scoped (a bare, RLS-guarded organizationId defaulting
+//       from the transaction-local setting) and gets forced org RLS in the
+//       migration. No pre-M7 table is altered except additive back-relations.
+//   C-append-only  Five tables are DB-enforced APPEND-ONLY (SELECT+INSERT RLS
+//       policies only, no UPDATE/DELETE) — RestaurantJobExecution,
+//       RestaurantSopEvidence, RestaurantSopVerification,
+//       RestaurantSopEscalationEvent, RestaurantNotificationDelivery. A
+//       correction is a NEW row, never an edit (the M5/M6 ledger pattern).
+//   C-scheduler   RestaurantJob is the org-scoped durable work queue; the
+//       scheduler primitive (src/lib/restaurant/scheduler.ts) claims due jobs
+//       with FOR UPDATE SKIP LOCKED and appends one immutable
+//       RestaurantJobExecution per attempt. Bounded retries with backoff move a
+//       terminally-failing job to DEAD (D13).
+//   UTC   Every timestamp is stored UTC; branch-local rendering (SOP due windows,
+//       quiet hours) is derived at read time from the branch timezone
+//       (business-date.ts) — never recomputed from a stored local value.
+// ===========================================================================
+
+/// M7/D13: a durable background job's lifecycle. QUEUED is claimable when due;
+/// RUNNING is claimed by a worker; SUCCEEDED is a completed attempt; FAILED is a
+/// permanent (handler-declared, non-retryable) failure; DEAD is the terminal
+/// state once maxAttempts bounded retries are exhausted.
+enum RestaurantJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+/// M7/D13: the immutable outcome of ONE job attempt in the append-only execution
+/// history. SUCCEEDED/FAILED describe that single attempt, not the job.
+enum RestaurantJobExecutionOutcome {
+  SUCCEEDED
+  FAILED
+}
+
+/// M7/D21: verification state of an inbound webhook payload. PENDING until the
+/// signature is checked; VERIFIED once the source signature validates; FAILED
+/// when it does not (the payload is retained for audit, never processed).
+enum RestaurantWebhookVerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+/// M7/D21: processing state of an inbound webhook envelope, independent of its
+/// signature verification. Dedup is by (organization, source, externalEventId).
+enum RestaurantWebhookInboxStatus {
+  PENDING
+  PROCESSED
+  FAILED
+  DISCARDED
+}
+
+/// M7/§11.5: an SOP template VERSION's lifecycle. DRAFT is editable; PUBLISHED is
+/// immutable and the only version an assignment may pin; RETIRED is withdrawn
+/// from new assignments but retained (occurrences that pinned it stay readable).
+enum RestaurantSopTemplateStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+/// M7/§11.5: the EXACTLY eight occurrence states. SCHEDULED (generated, not yet
+/// worked); IN_PROGRESS (an operator began); SUBMITTED (completed, awaiting
+/// verification); VERIFIED / REJECTED (a verifier's decision); LATE (submitted
+/// past the due window); MISSED (window elapsed with no submission); WAIVED.
+enum RestaurantSopOccurrenceStatus {
+  SCHEDULED
+  IN_PROGRESS
+  SUBMITTED
+  VERIFIED
+  REJECTED
+  LATE
+  MISSED
+  WAIVED
+}
+
+/// M7/§11.5: a verifier's decision on a submitted occurrence. VERIFY accepts;
+/// REJECT sends it back; WAIVE excuses it. A sensitive decision may pin an M2
+/// co-authorization record (co-auth field) — additive, never enforced at L1.
+enum RestaurantSopVerificationAction {
+  VERIFY
+  REJECT
+  WAIVE
+}
+
+/// M7/§11.5: how an assignment recurs. ONCE is a single dated occurrence; DAILY /
+/// WEEKLY / MONTHLY generate occurrences on a branch-local schedule. DST is
+/// handled by generating against the branch wall-clock, never a fixed UTC offset.
+enum RestaurantSopRecurrenceFrequency {
+  ONCE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+/// M7/§11.5: the scope an escalation policy applies to. ORG applies org-wide;
+/// BRANCH narrows to one branch (branchId set).
+enum RestaurantSopEscalationScope {
+  ORG
+  BRANCH
+}
+
+/// M7/§11.5: an append-only escalation-event kind. FIRED when a step triggers;
+/// ACKNOWLEDGED when a recipient responds; STOPPED when a stop condition ends the
+/// chain. Each is an immutable record; the current state is folded from events.
+enum RestaurantSopEscalationEventKind {
+  FIRED
+  ACKNOWLEDGED
+  STOPPED
+}
+
+/// M7/D21: a notification delivery channel. IN_APP is always delivered; EMAIL /
+/// SMS / WEBHOOK are STUBBED adapters in M7 (recorded, never actually sent) — the
+/// seam a later provider integration fills without a schema change.
+enum RestaurantNotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WEBHOOK
+}
+
+/// M7/D21: the append-only outcome of one delivery attempt on one channel.
+/// DELIVERED_IN_APP is the real in-app delivery; STUBBED records a non-in-app
+/// channel whose adapter is a stub; FAILED records an attempt that errored.
+enum RestaurantNotificationDeliveryStatus {
+  DELIVERED_IN_APP
+  STUBBED
+  FAILED
+}
+
+/// M7/D13: the org-scoped durable work queue. A job is claimed when QUEUED and
+/// `nextAttemptAt <= now` via FOR UPDATE SKIP LOCKED; the scheduler primitive
+/// increments `attempts`, stamps `claimedAt`/`claimedBy`, and appends one
+/// immutable execution row per attempt. `idempotencyKey` deduplicates enqueues
+/// within the organization (a null key is never deduplicated). `payload` is an
+/// opaque handler input; the handler type is a plain string resolved through the
+/// job-handlers registry so later lanes register independently.
+model RestaurantJob {
+  id             String              @id @default(cuid())
+  organizationId String              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  type           String
+  payload        Json                @default("{}")
+  status         RestaurantJobStatus @default(QUEUED)
+  attempts       Int                 @default(0)
+  maxAttempts    Int                 @default(5)
+  scheduledAt    DateTime            @default(now())
+  nextAttemptAt  DateTime            @default(now())
+  claimedAt      DateTime?
+  claimedBy      String?
+  lastError      String?
+  idempotencyKey String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  executions RestaurantJobExecution[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([status, nextAttemptAt])
+  @@map("restaurant_jobs")
+}
+
+/// M7/D13: the APPEND-ONLY execution history of the job queue — one immutable row
+/// per attempt (DB-enforced SELECT+INSERT RLS; no updatedAt). `workerId` is the
+/// claimer that ran the attempt; `outcome` is that attempt's result. Exact
+/// counts of these rows are the concurrency battery's exactly-once evidence.
+model RestaurantJobExecution {
+  id             String                        @id @default(cuid())
+  organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  jobId          String
+  workerId       String
+  attempt        Int
+  startedAt      DateTime
+  finishedAt     DateTime
+  outcome        RestaurantJobExecutionOutcome
+  error          String?
+  createdAt      DateTime                      @default(now())
+
+  job RestaurantJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([jobId])
+  @@map("restaurant_job_executions")
+}
+
+/// M7/D21: an inbound webhook envelope, deduplicated by (organization, source,
+/// externalEventId). `verificationStatus` records the signature check; `status`
+/// records processing. The raw `payload` is retained for audit; a failed
+/// verification is never processed. This is the ingress seam a provider adapter
+/// consumes — no provider-specific columns are invented here.
+model RestaurantWebhookInbox {
+  id                 String                              @id @default(cuid())
+  organizationId     String                              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  source             String
+  externalEventId    String
+  eventType          String?
+  payload            Json                                @default("{}")
+  verificationStatus RestaurantWebhookVerificationStatus @default(PENDING)
+  status             RestaurantWebhookInboxStatus        @default(PENDING)
+  attempts           Int                                 @default(0)
+  lastError          String?
+  receivedAt         DateTime                            @default(now())
+  processedAt        DateTime?
+  createdAt          DateTime                            @default(now())
+  updatedAt          DateTime                            @updatedAt
+
+  @@unique([organizationId, source, externalEventId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("restaurant_webhook_inbox")
+}
+
+/// M7/§11.5: an SOP template FAMILY (the unit counted by `sop.templates.max` in
+/// vertical-catalog — not immutable historical versions). Content lives on the
+/// versions; a family is org-scoped and carries no branchId (branch binding lives
+/// on the assignment, mirroring the M3 catalog/publication split).
+model RestaurantSopTemplate {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  description    String?
+  category       String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  versions    RestaurantSopTemplateVersion[]
+  assignments RestaurantSopAssignment[]
+
+  @@index([organizationId])
+  @@map("restaurant_sop_templates")
+}
+
+/// M7/§11.5: an immutable-once-PUBLISHED template version. DRAFT is editable;
+/// PUBLISHED freezes the step set and is the only version an assignment may pin;
+/// RETIRED withdraws it from new assignments. Occurrences pin a specific version
+/// so a later edit never rewrites recorded compliance history (C3-style).
+model RestaurantSopTemplateVersion {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  templateId     String
+  versionNumber  Int
+  status         RestaurantSopTemplateStatus @default(DRAFT)
+  publishedAt    DateTime?
+  retiredAt      DateTime?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  template    RestaurantSopTemplate       @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  steps       RestaurantSopTemplateStep[]
+  occurrences RestaurantSopOccurrence[]
+
+  @@unique([templateId, versionNumber])
+  @@index([organizationId])
+  @@index([templateId])
+  @@index([status])
+  @@map("restaurant_sop_template_versions")
+}
+
+/// M7/§11.5: one ordered step of a template version, with per-step evidence
+/// requirement flags (photo / signature / note). Steps are frozen when the
+/// version is PUBLISHED; occurrence steps reference them by FK.
+model RestaurantSopTemplateStep {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  templateVersionId String
+  stepOrder         Int
+  title             String
+  instructions      String?
+  requiresPhoto     Boolean  @default(false)
+  requiresSignature Boolean  @default(false)
+  requiresNote      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  templateVersion RestaurantSopTemplateVersion  @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  occurrenceSteps RestaurantSopOccurrenceStep[]
+
+  @@unique([templateVersionId, stepOrder])
+  @@index([organizationId])
+  @@index([templateVersionId])
+  @@map("restaurant_sop_template_steps")
+}
+
+/// M7/§11.5: a branch-scoped recurring assignment of a template. Recurrence is
+/// expressed as a frequency + interval (+ daysOfWeek for WEEKLY, monthDay for
+/// MONTHLY) over [startDate, endDate], with a branch-local due time and window.
+/// The occurrence generator (an L-domain lane) folds this into dated occurrences;
+/// L1 only stores the recurrence seam and pins nothing about a specific version.
+model RestaurantSopAssignment {
+  id             String                           @id @default(cuid())
+  organizationId String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  templateId     String
+  frequency      RestaurantSopRecurrenceFrequency @default(DAILY)
+  interval       Int                              @default(1)
+  daysOfWeek     Int[]
+  monthDay       Int?
+  startDate      DateTime                         @db.Date
+  endDate        DateTime?                        @db.Date
+  dueTimeMinutes Int                              @default(0)
+  windowMinutes  Int                              @default(1440)
+  graceMinutes   Int                              @default(0)
+  active         Boolean                          @default(true)
+  createdAt      DateTime                         @default(now())
+  updatedAt      DateTime                         @updatedAt
+
+  branch      RestaurantBranch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  template    RestaurantSopTemplate     @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  occurrences RestaurantSopOccurrence[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([templateId])
+  @@index([active])
+  @@map("restaurant_sop_assignments")
+}
+
+/// M7/§11.5: one dated instance of an assignment, pinning the template VERSION it
+/// was generated against (immutable history). `businessDate` is the branch-local
+/// business day (business-date.ts); `dueAt`/`windowEndsAt` are the derived UTC
+/// instants. `status` is exactly one of the eight §11.5 states. One occurrence
+/// per (assignment, businessDate) makes generation idempotent.
+model RestaurantSopOccurrence {
+  id                String                        @id @default(cuid())
+  organizationId    String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  assignmentId      String
+  templateVersionId String
+  branchId          String
+  businessDate      DateTime                      @db.Date
+  status            RestaurantSopOccurrenceStatus @default(SCHEDULED)
+  dueAt             DateTime
+  windowEndsAt      DateTime
+  startedAt         DateTime?
+  submittedAt       DateTime?
+  resolvedAt        DateTime?
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  assignment       RestaurantSopAssignment        @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  templateVersion  RestaurantSopTemplateVersion   @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  branch           RestaurantBranch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  steps            RestaurantSopOccurrenceStep[]
+  evidence         RestaurantSopEvidence[]
+  verifications    RestaurantSopVerification[]
+  escalationEvents RestaurantSopEscalationEvent[]
+
+  @@unique([assignmentId, businessDate])
+  @@index([organizationId])
+  @@index([assignmentId])
+  @@index([templateVersionId])
+  @@index([branchId])
+  @@index([status])
+  @@index([businessDate])
+  @@index([dueAt])
+  @@map("restaurant_sop_occurrences")
+}
+
+/// M7/§11.5: per-step completion state of an occurrence, referencing the pinned
+/// template step. `completedBy` is best-effort operator attribution (nullable).
+/// Evidence hangs off the occurrence and (optionally) a specific step.
+model RestaurantSopOccurrenceStep {
+  id                        String    @id @default(cuid())
+  organizationId            String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  occurrenceId              String
+  templateStepId            String
+  completed                 Boolean   @default(false)
+  completedAt               DateTime?
+  completedByStaffProfileId String?
+  note                      String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  occurrence   RestaurantSopOccurrence   @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  templateStep RestaurantSopTemplateStep @relation(fields: [templateStepId], references: [id], onDelete: Restrict)
+  completedBy  RestaurantStaffProfile?   @relation(fields: [completedByStaffProfileId], references: [id], onDelete: SetNull)
+  evidence     RestaurantSopEvidence[]
+
+  @@unique([occurrenceId, templateStepId])
+  @@index([organizationId])
+  @@index([occurrenceId])
+  @@index([templateStepId])
+  @@index([completedByStaffProfileId])
+  @@map("restaurant_sop_occurrence_steps")
+}
+
+/// M7/§11.5: APPEND-ONLY evidence captured for an occurrence (and optionally a
+/// specific step). `contentHash` + `storageRef` are the content-addressed seam
+/// (storageRef is nullable until a blob store is wired). `sizeBytes` is a
+/// non-negative magnitude (CHECK). DB-enforced append-only (SELECT+INSERT RLS,
+/// no updatedAt) — evidence is never edited, only superseded by new evidence.
+model RestaurantSopEvidence {
+  id                     String   @id @default(cuid())
+  organizationId         String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  occurrenceId           String
+  occurrenceStepId       String?
+  contentHash            String
+  mimeType               String
+  sizeBytes              Int
+  storageRef             String?
+  uploaderStaffProfileId String?
+  capturedAt             DateTime @default(now())
+  createdAt              DateTime @default(now())
+
+  occurrence     RestaurantSopOccurrence      @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  occurrenceStep RestaurantSopOccurrenceStep? @relation(fields: [occurrenceStepId], references: [id], onDelete: SetNull)
+  uploader       RestaurantStaffProfile?      @relation(fields: [uploaderStaffProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([occurrenceId])
+  @@index([occurrenceStepId])
+  @@index([contentHash])
+  @@index([uploaderStaffProfileId])
+  @@map("restaurant_sop_evidence")
+}
+
+/// M7/§11.5: APPEND-ONLY verification decision on a submitted occurrence. `action`
+/// is VERIFY/REJECT/WAIVE; `actor` is the deciding operator (nullable, best
+/// effort); `coAuthorization` optionally pins an M2 co-authorization record for a
+/// sensitive decision (single-column FK, the M5 precedent). DB-enforced
+/// append-only (SELECT+INSERT RLS) — the occurrence status is folded from these.
+model RestaurantSopVerification {
+  id                  String                          @id @default(cuid())
+  organizationId      String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  occurrenceId        String
+  action              RestaurantSopVerificationAction
+  actorStaffProfileId String?
+  coAuthorizationId   String?
+  reason              String?
+  createdAt           DateTime                        @default(now())
+
+  occurrence      RestaurantSopOccurrence    @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  actor           RestaurantStaffProfile?    @relation(fields: [actorStaffProfileId], references: [id], onDelete: SetNull)
+  coAuthorization RestaurantCoAuthorization? @relation(fields: [coAuthorizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([occurrenceId])
+  @@index([actorStaffProfileId])
+  @@index([coAuthorizationId])
+  @@map("restaurant_sop_verifications")
+}
+
+/// M7/§11.5: an escalation policy — a scope (ORG or a specific BRANCH), stop
+/// conditions, and optional branch-local quiet hours. Its ordered steps fire on a
+/// delay when an occurrence is overdue; L1 stores the policy seam only.
+model RestaurantSopEscalationPolicy {
+  id                     String                       @id @default(cuid())
+  organizationId         String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name                   String
+  scope                  RestaurantSopEscalationScope @default(ORG)
+  branchId               String?
+  stopOnAcknowledged     Boolean                      @default(true)
+  stopOnVerified         Boolean                      @default(true)
+  quietHoursStartMinutes Int?
+  quietHoursEndMinutes   Int?
+  active                 Boolean                      @default(true)
+  createdAt              DateTime                     @default(now())
+  updatedAt              DateTime                     @updatedAt
+
+  branch RestaurantBranch?             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  steps  RestaurantSopEscalationStep[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([active])
+  @@map("restaurant_sop_escalation_policies")
+}
+
+/// M7/§11.5: one ordered step of an escalation policy — a delay, a target
+/// (role/operator/address string), a channel, and a bounded attempt count. Events
+/// reference the step that fired them.
+model RestaurantSopEscalationStep {
+  id             String                        @id @default(cuid())
+  organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  policyId       String
+  stepOrder      Int
+  delayMinutes   Int                           @default(0)
+  target         String
+  channel        RestaurantNotificationChannel @default(IN_APP)
+  maxAttempts    Int                           @default(1)
+  createdAt      DateTime                      @default(now())
+  updatedAt      DateTime                      @updatedAt
+
+  policy RestaurantSopEscalationPolicy  @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  events RestaurantSopEscalationEvent[]
+
+  @@unique([policyId, stepOrder])
+  @@index([organizationId])
+  @@index([policyId])
+  @@map("restaurant_sop_escalation_steps")
+}
+
+/// M7/§11.5: APPEND-ONLY escalation event — FIRED/ACKNOWLEDGED/STOPPED against an
+/// occurrence (and the step that fired, when applicable). `actor` is nullable
+/// (system-fired events carry none). DB-enforced append-only (SELECT+INSERT RLS);
+/// the live escalation state is folded from these immutable rows.
+model RestaurantSopEscalationEvent {
+  id                  String                           @id @default(cuid())
+  organizationId      String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  occurrenceId        String
+  escalationStepId    String?
+  kind                RestaurantSopEscalationEventKind
+  actorStaffProfileId String?
+  detail              String?
+  createdAt           DateTime                         @default(now())
+
+  occurrence     RestaurantSopOccurrence      @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  escalationStep RestaurantSopEscalationStep? @relation(fields: [escalationStepId], references: [id], onDelete: SetNull)
+  actor          RestaurantStaffProfile?      @relation(fields: [actorStaffProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([occurrenceId])
+  @@index([escalationStepId])
+  @@index([actorStaffProfileId])
+  @@map("restaurant_sop_escalation_events")
+}
+
+/// M7/D21: an in-app notification addressed to a staff operator, optionally
+/// scoped to a branch and tied to a source entity (entityType/entityId — a loose
+/// reference, never a cross-table FK). `isRead`/`readAt` track read state; the
+/// per-channel delivery record is append-only (below).
+model RestaurantNotification {
+  id                      String    @id @default(cuid())
+  organizationId          String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  recipientStaffProfileId String
+  branchId                String?
+  category                String
+  title                   String
+  body                    String?
+  entityType              String?
+  entityId                String?
+  isRead                  Boolean   @default(false)
+  readAt                  DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  recipient  RestaurantStaffProfile           @relation(fields: [recipientStaffProfileId], references: [id], onDelete: Cascade)
+  branch     RestaurantBranch?                @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  deliveries RestaurantNotificationDelivery[]
+
+  @@index([organizationId])
+  @@index([recipientStaffProfileId])
+  @@index([branchId])
+  @@index([category])
+  @@index([isRead])
+  @@map("restaurant_notifications")
+}
+
+/// M7/D21: the event-category × channel delivery matrix. A row enables/disables a
+/// channel for a category; a null `branchId` is the org default, a set `branchId`
+/// is a branch override (the L-domain lane resolves the branch-override-then-org
+/// precedence in app code).
+model RestaurantNotificationChannelSetting {
+  id             String                        @id @default(cuid())
+  organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String?
+  category       String
+  channel        RestaurantNotificationChannel
+  enabled        Boolean                       @default(true)
+  createdAt      DateTime                      @default(now())
+  updatedAt      DateTime                      @updatedAt
+
+  branch RestaurantBranch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, branchId, category, channel])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_notification_channel_settings")
+}
+
+/// M7/D21: APPEND-ONLY record of ONE delivery attempt of a notification on ONE
+/// channel. DELIVERED_IN_APP is the real in-app delivery; STUBBED records a
+/// non-in-app channel whose adapter is a stub; FAILED records an errored attempt.
+/// DB-enforced append-only (SELECT+INSERT RLS, no updatedAt).
+model RestaurantNotificationDelivery {
+  id             String                               @id @default(cuid())
+  organizationId String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  notificationId String
+  channel        RestaurantNotificationChannel
+  status         RestaurantNotificationDeliveryStatus
+  attempt        Int                                  @default(1)
+  error          String?
+  createdAt      DateTime                             @default(now())
+
+  notification RestaurantNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([notificationId])
+  @@index([channel])
+  @@map("restaurant_notification_deliveries")
 }
 
 model PlatformUser {
