@@ -94,6 +94,9 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // and schedule preview — gate on the SOP & Compliance module (`restaurant-sop`),
   // whose licensed purpose is exactly this surface (vertical-catalog).
   restaurantSop: 'restaurant-sop',
+  // M7-L4: SOP execution console — branch board, lifecycle commands, evidence,
+  // verification (verify/reject/waive), escalation acknowledgement.
+  restaurantSopExecution: 'restaurant-sop',
 };
 
 export function moduleForProcedure(path: string): string | null {

@@ -32,6 +32,7 @@ import { restaurantPaymentsRouter } from './restaurant-payments';
 import { restaurantInventoryRouter } from './restaurant-inventory';
 import { restaurantPurchasingRouter } from './restaurant-purchasing';
 import { restaurantSopRouter } from './restaurant-sop';
+import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -67,6 +68,7 @@ export const appRouter = router({
   restaurantInventory: restaurantInventoryRouter,
   restaurantPurchasing: restaurantPurchasingRouter,
   restaurantSop: restaurantSopRouter,
+  restaurantSopExecution: restaurantSopExecutionRouter,
 });
 
 export type AppRouter = typeof appRouter;
