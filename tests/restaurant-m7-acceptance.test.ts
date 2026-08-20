@@ -3,7 +3,6 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '@/server/trpc';
 
 const mocks = vi.hoisted(() => ({
@@ -247,7 +246,7 @@ beforeAll(async () => {
         id: ids.user,
         name: 'WHA-88 Operator',
         email: `wha88-${suffix}@example.test`,
-        department: 'OPERATIONS',
+        department: 'QUALITY',
         title: 'Operator',
         role: 'EMPLOYEE',
         status: 'ACTIVE',
@@ -284,7 +283,7 @@ beforeAll(async () => {
       user: {
         id: ids.user,
         role: 'EMPLOYEE',
-        department: 'OPERATIONS',
+        department: 'QUALITY',
         status: 'ACTIVE',
         organizationId: orgId,
       },
