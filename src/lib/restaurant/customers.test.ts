@@ -145,7 +145,9 @@ describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
     const tag = await tenant((tx) =>
       deps.customers.createCustomerTag(tx, { name: 'Regular', color: '#123456' })
     );
-    await tenant((tx) => deps.customers.assignCustomerTag(tx, { customerId: customer.id, tagId: tag.id }));
+    await tenant((tx) =>
+      deps.customers.assignCustomerTag(tx, { customerId: customer.id, tagId: tag.id })
+    );
     await tenant((tx) =>
       deps.customers.attachCustomerToOrder(tx, { customerId: customer.id, orderId: ids.openOrder })
     );
@@ -292,9 +294,7 @@ describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
       })
     );
     await expect(
-      tenant((tx) =>
-        deps.customers.attachCustomerToOrder(tx, { customerId: customer.id, orderId })
-      )
+      tenant((tx) => deps.customers.attachCustomerToOrder(tx, { customerId: customer.id, orderId }))
     ).resolves.toMatchObject({ customerId: customer.id, status: 'OPEN' });
     await expect(
       tenant((tx) =>

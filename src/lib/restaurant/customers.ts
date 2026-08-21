@@ -1,10 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import type {
-  CustomerConsentChannel,
-  CustomerIdentifierKind,
-} from '@/generated/prisma/client';
+import type { CustomerConsentChannel, CustomerIdentifierKind } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type CustomerErrorReason =
@@ -61,7 +58,10 @@ export function normalizeCustomerIdentifier(input: CustomerIdentifierInput): str
     return normalized;
   }
   if (input.kind === 'PHONE' && PHONE_PATTERN.test(input.value)) return input.value;
-  throw new CustomerError('Phone identifier must use canonical E.164 format.', 'INVALID_IDENTIFIER');
+  throw new CustomerError(
+    'Phone identifier must use canonical E.164 format.',
+    'INVALID_IDENTIFIER'
+  );
 }
 
 type CustomerProfileInput = {
@@ -190,7 +190,9 @@ type ListedCustomer = Prisma.RestaurantCustomerGetPayload<{
 }>;
 
 function projectCustomer(customer: LoadedCustomer) {
-  const currentConsent: Partial<Record<CustomerConsentChannel, LoadedCustomer['consentEvents'][number]>> = {};
+  const currentConsent: Partial<
+    Record<CustomerConsentChannel, LoadedCustomer['consentEvents'][number]>
+  > = {};
   for (const event of customer.consentEvents) currentConsent[event.channel] ??= event;
   const { tagAssignments, loyaltyAccount, ...rest } = customer;
   return {
@@ -246,7 +248,10 @@ export async function createCustomer(db: ScopedDb, input: CreateCustomerInput) {
     normalizedValue: normalizeCustomerIdentifier(identifier),
     verifiedAt: identifier.verifiedAt,
   }));
-  if (new Set(identifiers.map(({ kind, normalizedValue }) => `${kind}:${normalizedValue}`)).size !== identifiers.length) {
+  if (
+    new Set(identifiers.map(({ kind, normalizedValue }) => `${kind}:${normalizedValue}`)).size !==
+    identifiers.length
+  ) {
     throw new CustomerError('Identifier is duplicated.', 'DUPLICATE_IDENTIFIER');
   }
   try {
@@ -444,7 +449,10 @@ export async function appendCustomerInteraction(
       });
       if (!order) throw new CustomerError('Order does not exist.', 'NOT_FOUND');
       if (order.branchId !== input.branchId || order.customerId !== input.customerId) {
-        throw new CustomerError('Interaction branch, order, and customer do not match.', 'INVALID_STATE');
+        throw new CustomerError(
+          'Interaction branch, order, and customer do not match.',
+          'INVALID_STATE'
+        );
       }
     }
     await tx.customerInteraction.createMany({
@@ -495,7 +503,10 @@ export async function appendCustomerConsent(db: ScopedDb, input: AppendCustomerC
     const existing = await tx.customerConsent.findFirst({ where: { idempotencyKey } });
     if (existing) {
       if (existing.customerId !== input.customerId || existing.channel !== input.channel) {
-        throw new CustomerError('Idempotency key belongs to another consent event.', 'INVALID_STATE');
+        throw new CustomerError(
+          'Idempotency key belongs to another consent event.',
+          'INVALID_STATE'
+        );
       }
       return existing;
     }
@@ -513,14 +524,21 @@ export async function appendCustomerConsent(db: ScopedDb, input: AppendCustomerC
       skipDuplicates: true,
     });
     const appended = await tx.customerConsent.findFirst({ where: { idempotencyKey } });
-    if (!appended || appended.customerId !== input.customerId || appended.channel !== input.channel) {
+    if (
+      !appended ||
+      appended.customerId !== input.customerId ||
+      appended.channel !== input.channel
+    ) {
       throw new CustomerError('Idempotency key belongs to another consent event.', 'INVALID_STATE');
     }
     return appended;
   });
 }
 
-export async function createCustomerTag(db: ScopedDb, input: { name: string; color?: string | null }) {
+export async function createCustomerTag(
+  db: ScopedDb,
+  input: { name: string; color?: string | null }
+) {
   try {
     return await db.customerTag.create({
       data: { name: required(input.name, 'Tag name'), color: input.color },
@@ -545,7 +563,10 @@ export async function assignCustomerTag(
 ) {
   return runInTransaction(db, async (tx) => {
     await requireActiveCustomer(tx, input.customerId);
-    const tag = await tx.customerTag.findUnique({ where: { id: input.tagId }, select: { id: true } });
+    const tag = await tx.customerTag.findUnique({
+      where: { id: input.tagId },
+      select: { id: true },
+    });
     if (!tag) throw new CustomerError('Tag does not exist.', 'NOT_FOUND');
     return tx.customerTagAssignment.upsert({
       where: { customerId_tagId: input },

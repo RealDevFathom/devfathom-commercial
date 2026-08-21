@@ -43,7 +43,7 @@ vi.mock('@/server/audit', async () => {
       const [entry] = args;
       mocks.recordTrpcAudit({
         ...entry,
-        input: entry.ctx.audit.detail.skipInput ? '[skipped]' : entry.input,
+        input: entry.ctx.audit?.detail.skipInput ? '[skipped]' : entry.input,
       });
     },
   };
@@ -279,29 +279,34 @@ describe('privacy audit', () => {
   it.each([
     ['export', 'restaurantCustomers.export', mocks.exportCustomerData],
     ['anonymize', 'restaurantCustomers.anonymize', mocks.anonymizeCustomer],
-  ] as const)('%s records only target metadata and skips input', async (operation, action, domain) => {
-    const input = { customerId: 'customer_1' };
-    await caller()[operation](input);
+  ] as const)(
+    '%s records only target metadata and skips input',
+    async (operation, action, domain) => {
+      const input = { customerId: 'customer_1' };
+      await caller()[operation](input);
 
-    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
-      action,
-      targetType: 'RestaurantCustomer',
-      targetId: 'customer_1',
-      skipInput: true,
-    });
-    expect(mocks.annotateAudit.mock.invocationCallOrder[0]).toBeLessThan(
-      domain.mock.invocationCallOrder[0] ?? Infinity
-    );
-    const detail = mocks.recordTrpcAudit.mock.calls[0]?.[0].ctx.audit.detail;
-    expect(detail).toEqual({
-      action,
-      targetType: 'RestaurantCustomer',
-      targetId: 'customer_1',
-      skipInput: true,
-    });
-    expect(mocks.recordTrpcAudit.mock.calls[0]?.[0].input).toBe('[skipped]');
-    expect(JSON.stringify(detail)).not.toMatch(/email|phone|name|notes|payload|consent|exported/i);
-  });
+      expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+        action,
+        targetType: 'RestaurantCustomer',
+        targetId: 'customer_1',
+        skipInput: true,
+      });
+      expect(mocks.annotateAudit.mock.invocationCallOrder[0]).toBeLessThan(
+        domain.mock.invocationCallOrder[0] ?? Infinity
+      );
+      const detail = mocks.recordTrpcAudit.mock.calls[0]?.[0].ctx.audit.detail;
+      expect(detail).toEqual({
+        action,
+        targetType: 'RestaurantCustomer',
+        targetId: 'customer_1',
+        skipInput: true,
+      });
+      expect(mocks.recordTrpcAudit.mock.calls[0]?.[0].input).toBe('[skipped]');
+      expect(JSON.stringify(detail)).not.toMatch(
+        /email|phone|name|notes|payload|consent|exported/i
+      );
+    }
+  );
 
   it('suppresses PII before input validation fails', async () => {
     await expect(

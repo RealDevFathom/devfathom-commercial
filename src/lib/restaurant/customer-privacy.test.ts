@@ -302,7 +302,9 @@ describeIfDatabase('customer privacy (real PostgreSQL)', () => {
     const before = await tenant(async (tx) => ({
       order: await tx.restaurantOrder.findUniqueOrThrow({ where: { id: ids.order } }),
       bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: ids.bill } }),
-      interaction: await tx.customerInteraction.findFirstOrThrow({ where: { customerId: targetId } }),
+      interaction: await tx.customerInteraction.findFirstOrThrow({
+        where: { customerId: targetId },
+      }),
       consent: await tx.customerConsent.findUniqueOrThrow({ where: { id: consentId } }),
       ledger: await tx.loyaltyPointsEntry.findUniqueOrThrow({ where: { id: ledgerId } }),
       program: await tx.loyaltyProgramVersion.findFirstOrThrow({ where: { versionNumber: 1 } }),
@@ -327,7 +329,9 @@ describeIfDatabase('customer privacy (real PostgreSQL)', () => {
       loyalty: await tx.loyaltyAccount.findUniqueOrThrow({ where: { customerId: targetId } }),
       order: await tx.restaurantOrder.findUniqueOrThrow({ where: { id: ids.order } }),
       bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: ids.bill } }),
-      interaction: await tx.customerInteraction.findFirstOrThrow({ where: { customerId: targetId } }),
+      interaction: await tx.customerInteraction.findFirstOrThrow({
+        where: { customerId: targetId },
+      }),
       consent: await tx.customerConsent.findUniqueOrThrow({ where: { id: consentId } }),
       ledger: await tx.loyaltyPointsEntry.findUniqueOrThrow({ where: { id: ledgerId } }),
       program: await tx.loyaltyProgramVersion.findFirstOrThrow({ where: { versionNumber: 1 } }),

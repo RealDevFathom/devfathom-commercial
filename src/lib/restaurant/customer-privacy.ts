@@ -221,13 +221,11 @@ export async function exportCustomerData(db: ScopedDb, customerId: string) {
   };
 }
 
-export async function anonymizeCustomer(
-  db: ScopedDb,
-  input: { customerId: string; at?: Date }
-) {
+export async function anonymizeCustomer(db: ScopedDb, input: { customerId: string; at?: Date }) {
   return runInTransaction(db, async (tx) => {
     const customer = await lockCustomer(tx, input.customerId);
-    if (customer.anonymizedAt) return { customerId: customer.id, anonymizedAt: customer.anonymizedAt };
+    if (customer.anonymizedAt)
+      return { customerId: customer.id, anonymizedAt: customer.anonymizedAt };
 
     const anonymizedAt = input.at ?? new Date();
     await tx.customerIdentifier.deleteMany({ where: { customerId: customer.id } });
