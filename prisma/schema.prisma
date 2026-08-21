@@ -2280,6 +2280,10 @@ model RestaurantBranch {
   sopEscalationPolicies       RestaurantSopEscalationPolicy[]
   notifications               RestaurantNotification[]
   notificationChannelSettings RestaurantNotificationChannelSetting[]
+  customerInteractions        CustomerInteraction[]
+  insightDailyRollups         InsightDailyRollup[]
+  insightItemMixRollups       InsightItemMixRollup[]
+  labourCostFacts             LabourCostFact[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
@@ -2691,19 +2695,20 @@ model RestaurantProduct {
   createdAt            DateTime                @default(now())
   updatedAt            DateTime                @updatedAt
 
-  category             RestaurantCategory?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  variants             RestaurantProductVariant[]
-  modifierGroups       RestaurantProductModifierGroup[]
-  comboComponentGroups RestaurantComboComponentGroup[]
-  comboUsages          RestaurantComboComponentOption[]
-  allergens            RestaurantProductAllergen[]
-  recipes              RestaurantRecipe[]
-  menuItems            RestaurantMenuItem[]
-  priceListEntries     RestaurantPriceListEntry[]
+  category              RestaurantCategory?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variants              RestaurantProductVariant[]
+  modifierGroups        RestaurantProductModifierGroup[]
+  comboComponentGroups  RestaurantComboComponentGroup[]
+  comboUsages           RestaurantComboComponentOption[]
+  allergens             RestaurantProductAllergen[]
+  recipes               RestaurantRecipe[]
+  menuItems             RestaurantMenuItem[]
+  priceListEntries      RestaurantPriceListEntry[]
   // M4-L1: order items snapshotted from this product, and station routing rules
   // that target it (product-level routing outranks category-level, C-list).
-  orderItems           RestaurantOrderItem[]
-  stationRoutingRules  RestaurantStationRoutingRule[]
+  orderItems            RestaurantOrderItem[]
+  stationRoutingRules   RestaurantStationRoutingRule[]
+  insightItemMixRollups InsightItemMixRollup[]
 
   @@index([organizationId])
   @@index([categoryId])
@@ -3581,27 +3586,30 @@ model RestaurantOrder {
   deviceId             String
   publicationId        String?
   priceListVersionId   String?
+  customerId           String?
   openedAt             DateTime?
   closedAt             DateTime?
   cancelledAt          DateTime?
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
 
-  branch           RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  section          RestaurantServerSection?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
-  serverStaff      RestaurantStaffProfile?          @relation("OrderServerStaff", fields: [serverStaffProfileId], references: [id], onDelete: SetNull)
-  openingStaff     RestaurantStaffProfile           @relation("OrderOpeningStaff", fields: [staffProfileId], references: [id], onDelete: Restrict)
-  openingDevice    RestaurantRegisteredDevice       @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
-  publication      RestaurantBranchMenuPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
-  priceListVersion RestaurantPriceListVersion?      @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
-  items            RestaurantOrderItem[]
-  orderTables      RestaurantOrderTable[]
-  events           RestaurantOrderEvent[]
-  kitchenTickets   RestaurantKitchenTicket[]
-  bills            RestaurantBill[]
+  branch               RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  section              RestaurantServerSection?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  serverStaff          RestaurantStaffProfile?          @relation("OrderServerStaff", fields: [serverStaffProfileId], references: [id], onDelete: SetNull)
+  openingStaff         RestaurantStaffProfile           @relation("OrderOpeningStaff", fields: [staffProfileId], references: [id], onDelete: Restrict)
+  openingDevice        RestaurantRegisteredDevice       @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
+  publication          RestaurantBranchMenuPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
+  priceListVersion     RestaurantPriceListVersion?      @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
+  customer             RestaurantCustomer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items                RestaurantOrderItem[]
+  orderTables          RestaurantOrderTable[]
+  events               RestaurantOrderEvent[]
+  kitchenTickets       RestaurantKitchenTicket[]
+  bills                RestaurantBill[]
   // M6-L1: RECIPE_CONSUMPTION / SALE_REVERSAL movements posted at order close and
   // for post-close corrections reference the originating order (nullable, SetNull).
-  stockMovements   RestaurantStockMovement[]
+  stockMovements       RestaurantStockMovement[]
+  customerInteractions CustomerInteraction[]
 
   @@unique([branchId, businessDate, orderNumber])
   @@index([organizationId])
@@ -3612,6 +3620,7 @@ model RestaurantOrder {
   @@index([serverStaffProfileId])
   @@index([staffProfileId])
   @@index([deviceId])
+  @@index([customerId])
   @@map("restaurant_orders")
 }
 
@@ -4011,6 +4020,7 @@ model RestaurantBill {
   taxTotal              Decimal                 @default(0) @db.Decimal(12, 2)
   serviceChargeTotal    Decimal                 @default(0) @db.Decimal(12, 2)
   compTotal             Decimal                 @default(0) @db.Decimal(12, 2)
+  discountTotal         Decimal                 @default(0) @db.Decimal(12, 2)
   roundingAdjustment    Decimal                 @default(0) @db.Decimal(12, 2)
   grandTotal            Decimal                 @default(0) @db.Decimal(12, 2)
   receiptNumber         Int?
@@ -4022,15 +4032,16 @@ model RestaurantBill {
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
 
-  order               RestaurantOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  branch              RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  openerStaff         RestaurantStaffProfile     @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
-  device              RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  voidCoAuthorization RestaurantCoAuthorization? @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
-  lines               RestaurantBillLine[]
-  payments            RestaurantPayment[]
-  tenders             RestaurantTender[]
-  refunds             RestaurantRefund[]
+  order                RestaurantOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch               RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  openerStaff          RestaurantStaffProfile     @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
+  device               RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  voidCoAuthorization  RestaurantCoAuthorization? @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
+  lines                RestaurantBillLine[]
+  payments             RestaurantPayment[]
+  tenders              RestaurantTender[]
+  refunds              RestaurantRefund[]
+  loyaltyPointsEntries LoyaltyPointsEntry[]
 
   @@index([organizationId])
   @@index([orderId])
@@ -4153,13 +4164,14 @@ model RestaurantTender {
   deviceId        String
   createdAt       DateTime             @default(now())
 
-  bill            RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
-  drawerSession   RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
-  payment         RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  staff           RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
-  device          RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  refunds         RestaurantRefund[]
-  drawerMovements RestaurantDrawerMovement[]
+  bill                 RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  drawerSession        RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment              RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff                RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device               RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  refunds              RestaurantRefund[]
+  drawerMovements      RestaurantDrawerMovement[]
+  loyaltyPointsEntries LoyaltyPointsEntry[]
 
   @@index([organizationId])
   @@index([billId])
@@ -4194,14 +4206,15 @@ model RestaurantRefund {
   deviceId          String
   createdAt         DateTime             @default(now())
 
-  originalTender  RestaurantTender           @relation(fields: [originalTenderId], references: [id], onDelete: Cascade)
-  bill            RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
-  coAuthorization RestaurantCoAuthorization  @relation(fields: [coAuthorizationId], references: [id], onDelete: Restrict)
-  drawerSession   RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
-  payment         RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  staff           RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
-  device          RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  drawerMovements RestaurantDrawerMovement[]
+  originalTender       RestaurantTender           @relation(fields: [originalTenderId], references: [id], onDelete: Cascade)
+  bill                 RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  coAuthorization      RestaurantCoAuthorization  @relation(fields: [coAuthorizationId], references: [id], onDelete: Restrict)
+  drawerSession        RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment              RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff                RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device               RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  drawerMovements      RestaurantDrawerMovement[]
+  loyaltyPointsEntries LoyaltyPointsEntry[]
 
   @@index([organizationId])
   @@index([originalTenderId])
@@ -4317,13 +4330,15 @@ model RestaurantDailyClose {
   cashVariance        Decimal  @default(0) @db.Decimal(12, 2)
   createdAt           DateTime @default(now())
 
-  branch          RestaurantBranch                  @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  supersedesClose RestaurantDailyClose?             @relation("DailyCloseSupersede", fields: [supersedesCloseId], references: [id], onDelete: SetNull)
-  supersededBy    RestaurantDailyClose[]            @relation("DailyCloseSupersede")
-  coAuthorization RestaurantCoAuthorization?        @relation(fields: [coAuthorizationId], references: [id], onDelete: SetNull)
-  cutByStaff      RestaurantStaffProfile            @relation(fields: [cutByStaffProfileId], references: [id], onDelete: Restrict)
-  device          RestaurantRegisteredDevice?       @relation(fields: [deviceId], references: [id], onDelete: SetNull)
-  tenderTotals    RestaurantDailyCloseTenderTotal[]
+  branch                RestaurantBranch                  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  supersedesClose       RestaurantDailyClose?             @relation("DailyCloseSupersede", fields: [supersedesCloseId], references: [id], onDelete: SetNull)
+  supersededBy          RestaurantDailyClose[]            @relation("DailyCloseSupersede")
+  coAuthorization       RestaurantCoAuthorization?        @relation(fields: [coAuthorizationId], references: [id], onDelete: SetNull)
+  cutByStaff            RestaurantStaffProfile            @relation(fields: [cutByStaffProfileId], references: [id], onDelete: Restrict)
+  device                RestaurantRegisteredDevice?       @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  tenderTotals          RestaurantDailyCloseTenderTotal[]
+  insightDailyRollups   InsightDailyRollup[]
+  insightItemMixRollups InsightItemMixRollup[]
 
   @@index([organizationId])
   @@index([branchId])
@@ -5536,6 +5551,330 @@ model RestaurantNotificationDelivery {
   @@index([notificationId])
   @@index([channel])
   @@map("restaurant_notification_deliveries")
+}
+
+// ===========================================================================
+// M8 — Restaurant customers, loyalty and insight read models. Customer PII is
+// isolated from agency Client records; consent and loyalty history are event
+// ledgers; insight rows are rebuildable projections. Every model is org-scoped
+// under forced RLS in the M8 migration.
+// ===========================================================================
+
+enum CustomerIdentifierKind {
+  EMAIL
+  PHONE
+}
+
+enum CustomerConsentChannel {
+  EMAIL
+  SMS
+  PHONE
+  WHATSAPP
+  PUSH
+}
+
+enum LoyaltyPointsEntryKind {
+  EARN
+  REDEEM
+  REVERSAL
+  EXPIRY
+  ADJUSTMENT
+}
+
+/// D08: the organization-owned restaurant customer surrogate. Contact identity
+/// lives in CustomerIdentifier, never agency Client. Anonymization clears the
+/// nullable profile fields and stamps anonymizedAt while retained history keeps
+/// referencing this non-PII surrogate.
+model RestaurantCustomer {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  displayName    String?
+  givenName      String?
+  familyName     String?
+  birthDate      DateTime? @db.Date
+  notes          String?
+  anonymizedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  identifiers    CustomerIdentifier[]
+  interactions   CustomerInteraction[]
+  tagAssignments CustomerTagAssignment[]
+  consentEvents  CustomerConsent[]
+  loyaltyAccount LoyaltyAccount?
+  orders         RestaurantOrder[]
+
+  @@index([organizationId])
+  @@index([anonymizedAt])
+  @@map("restaurant_customers")
+}
+
+/// D08: normalized EMAIL/PHONE identity. EMAIL normalization is also pinned by
+/// a migration CHECK; PHONE canonicalization is supplied and validated at the
+/// API boundary. The org-scoped unique is the only local dedupe authority.
+model CustomerIdentifier {
+  id              String                 @id @default(cuid())
+  organizationId  String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId      String
+  kind            CustomerIdentifierKind
+  normalizedValue String
+  verifiedAt      DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  customer RestaurantCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, kind, normalizedValue])
+  @@index([organizationId])
+  @@index([customerId])
+  @@map("restaurant_customer_identifiers")
+}
+
+/// D08: APPEND-ONLY customer timeline event. Branch and order references make
+/// branch interactions directly queryable; payload is metadata only and must
+/// never copy customer PII. The org idempotency key deduplicates retries.
+model CustomerInteraction {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  branchId       String
+  orderId        String?
+  type           String
+  payload        Json     @default("{}")
+  occurredAt     DateTime @default(now())
+  idempotencyKey String
+  createdAt      DateTime @default(now())
+
+  customer RestaurantCustomer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  branch   RestaurantBranch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  order    RestaurantOrder?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([customerId, occurredAt])
+  @@index([branchId, occurredAt])
+  @@index([orderId])
+  @@map("restaurant_customer_interactions")
+}
+
+/// D08: static tag vocabulary used only as the future segmentation seam. M8
+/// deliberately carries no dynamic segment-rule language.
+model CustomerTag {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  color          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  assignments CustomerTagAssignment[]
+
+  @@index([organizationId])
+  @@map("restaurant_customer_tags")
+}
+
+model CustomerTagAssignment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  tagId          String
+  createdAt      DateTime @default(now())
+
+  customer RestaurantCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tag      CustomerTag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, tagId])
+  @@index([organizationId])
+  @@index([tagId])
+  @@map("restaurant_customer_tag_assignments")
+}
+
+/// D08: APPEND-ONLY channel consent event. Current state is the latest event;
+/// absence means denied. Source, actor and policyVersion retain provenance while
+/// the idempotency key makes event ingestion retry-safe.
+model CustomerConsent {
+  id             String                 @id @default(cuid())
+  organizationId String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  channel        CustomerConsentChannel
+  granted        Boolean
+  source         String
+  actorId        String
+  policyVersion  String
+  occurredAt     DateTime               @default(now())
+  idempotencyKey String
+  createdAt      DateTime               @default(now())
+
+  customer RestaurantCustomer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([customerId, channel, occurredAt])
+  @@map("restaurant_customer_consents")
+}
+
+/// D08: one organization-wide loyalty configuration timeline. At time T, the
+/// effective version is the greatest effectiveFrom <= T. The migration prevents
+/// UPDATE/DELETE once effective, so configuration changes append a new version.
+model LoyaltyProgramVersion {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  versionNumber   Int
+  effectiveFrom   DateTime
+  earnRate        Decimal  @db.Decimal(18, 6)
+  redemptionValue Decimal  @db.Decimal(18, 6)
+  expiryDays      Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  pointsEntries LoyaltyPointsEntry[]
+
+  @@unique([organizationId, versionNumber])
+  @@unique([organizationId, effectiveFrom])
+  @@index([organizationId])
+  @@index([effectiveFrom])
+  @@map("restaurant_loyalty_program_versions")
+}
+
+/// D08: at most one loyalty account per customer. Balance is never stored; it is
+/// the exact SUM(points) over LoyaltyPointsEntry at read time.
+model LoyaltyAccount {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String    @unique
+  active         Boolean   @default(true)
+  enrolledAt     DateTime  @default(now())
+  deactivatedAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  customer      RestaurantCustomer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  pointsEntries LoyaltyPointsEntry[]
+
+  @@unique([organizationId, customerId])
+  @@index([organizationId])
+  @@index([active])
+  @@map("restaurant_loyalty_accounts")
+}
+
+/// D08: APPEND-ONLY signed whole-points ledger. EARN pins the settled bill and
+/// effective program version; REDEEM/REVERSAL/EXPIRY are negative entries;
+/// reversesEntryId links corrections/lot consumption to the original earn.
+model LoyaltyPointsEntry {
+  id               String                 @id @default(cuid())
+  organizationId   String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  accountId        String
+  programVersionId String
+  kind             LoyaltyPointsEntryKind
+  points           Int
+  billId           String?
+  refundId         String?
+  reversesEntryId  String?
+  actorId          String?
+  reason           String?
+  expiresAt        DateTime?
+  occurredAt       DateTime               @default(now())
+  idempotencyKey   String
+  createdAt        DateTime               @default(now())
+
+  account            LoyaltyAccount        @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  programVersion     LoyaltyProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Restrict)
+  bill               RestaurantBill?       @relation(fields: [billId], references: [id], onDelete: SetNull)
+  refund             RestaurantRefund?     @relation(fields: [refundId], references: [id], onDelete: SetNull)
+  reversesEntry      LoyaltyPointsEntry?   @relation("LoyaltyPointsReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy         LoyaltyPointsEntry[]  @relation("LoyaltyPointsReversal")
+  restaurantTender   RestaurantTender?     @relation(fields: [restaurantTenderId], references: [id])
+  restaurantTenderId String?
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([accountId, occurredAt])
+  @@index([programVersionId])
+  @@index([billId])
+  @@index([refundId])
+  @@index([reversesEntryId])
+  @@map("restaurant_loyalty_points_entries")
+}
+
+/// D22: rebuildable daily branch projection pinned to the authoritative latest
+/// daily-close chain tip used for reconciliation. All monetary values are Decimal.
+model InsightDailyRollup {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  businessDate       DateTime @db.Date
+  sourceDailyCloseId String
+  orderCount         Int      @default(0)
+  coverCount         Int      @default(0)
+  grossSales         Decimal  @default(0) @db.Decimal(12, 2)
+  netSales           Decimal  @default(0) @db.Decimal(12, 2)
+  compTotal          Decimal  @default(0) @db.Decimal(12, 2)
+  refundTotal        Decimal  @default(0) @db.Decimal(12, 2)
+  voidTotal          Decimal  @default(0) @db.Decimal(12, 2)
+  drawerVariance     Decimal  @default(0) @db.Decimal(12, 2)
+  loyaltyLiability   Decimal  @default(0) @db.Decimal(12, 2)
+  computedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  branch           RestaurantBranch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  sourceDailyClose RestaurantDailyClose @relation(fields: [sourceDailyCloseId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, businessDate])
+  @@index([organizationId])
+  @@index([sourceDailyCloseId])
+  @@map("restaurant_insight_daily_rollups")
+}
+
+/// D22: rebuildable product-level item-mix projection. Key adds product to the
+/// daily branch key; product identity stays canonical and branch-free.
+model InsightItemMixRollup {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  businessDate       DateTime @db.Date
+  productId          String
+  sourceDailyCloseId String
+  quantity           Int      @default(0)
+  grossSales         Decimal  @default(0) @db.Decimal(12, 2)
+  netSales           Decimal  @default(0) @db.Decimal(12, 2)
+  compTotal          Decimal  @default(0) @db.Decimal(12, 2)
+  computedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  branch           RestaurantBranch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product          RestaurantProduct    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sourceDailyClose RestaurantDailyClose @relation(fields: [sourceDailyCloseId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, businessDate, productId])
+  @@index([organizationId])
+  @@index([productId])
+  @@index([sourceDailyCloseId])
+  @@map("restaurant_insight_item_mix_rollups")
+}
+
+/// D22: APPEND-ONLY imported daily labour fact. It stores aggregate hours/cost,
+/// never employee wage or payroll data. Read/export requires reports:financial
+/// plus workforce:rates in the later report lane.
+model LabourCostFact {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  businessDate   DateTime @db.Date
+  labourHours    Decimal  @db.Decimal(12, 2)
+  labourCost     Decimal  @db.Decimal(12, 2)
+  source         String
+  idempotencyKey String
+  importedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  branch RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([branchId, businessDate])
+  @@map("restaurant_labour_cost_facts")
 }
 
 model PlatformUser {
