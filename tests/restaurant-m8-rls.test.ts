@@ -368,6 +368,39 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
     expect((await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB])).rowCount).toBe(0);
   });
 
+  it('allows tenant A customer inserts and rejects cross-tenant writes', async () => {
+    const customerId = `m8_customer_write_${suffix}`;
+
+    await client!.query(
+      `INSERT INTO "restaurant_customers" ("id", "organizationId", "displayName", "updatedAt")
+       VALUES ($1, $2, 'Tenant A Write', CURRENT_TIMESTAMP)`,
+      [customerId, ids.orgA]
+    );
+
+    await expectDatabaseError('42501', () =>
+      client!.query(
+        `INSERT INTO "restaurant_customers" ("id", "organizationId", "displayName", "updatedAt")
+         VALUES ($1, $2, 'Tenant B Write', CURRENT_TIMESTAMP)`,
+        [`m8_customer_cross_tenant_${suffix}`, ids.orgB]
+      )
+    );
+    await expectDatabaseError('42501', () =>
+      client!.query(`UPDATE "restaurant_customers" SET "organizationId" = $1 WHERE "id" = $2`, [
+        ids.orgB,
+        customerId,
+      ])
+    );
+
+    expect(
+      (
+        await client!.query<{ id: string; organizationId: string }>(
+          `SELECT "id", "organizationId" FROM "restaurant_customers" WHERE "id" = $1`,
+          [customerId]
+        )
+      ).rows
+    ).toEqual([{ id: customerId, organizationId: ids.orgA }]);
+  });
+
   it('enforces normalized EMAIL and PHONE uniqueness per organization only', async () => {
     expect(normalizedIdentifierProof).toEqual([
       { kind: 'EMAIL', organizations: 2, rows: 2 },
