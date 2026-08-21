@@ -20,6 +20,9 @@ describe('module catalog routing', () => {
     ['restaurantBills.listBills', 'restaurant-pos'],
     ['restaurantCash.listDrawerSessions', 'restaurant-pos'],
     ['restaurantPayments.listTenders', 'restaurant-pos'],
+    ['restaurantCustomers.list', 'restaurant-customers'],
+    ['restaurantLoyalty.readAccount', 'restaurant-loyalty'],
+    ['restaurantInsights.listFinancialReports', 'restaurant-insights'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);

@@ -17,6 +17,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { computeCloseAggregate, resolveChainTip } from './daily-close';
+import { insightRollupJobKey } from './insight-rollups';
 
 const D = (v: string) => new Prisma.Decimal(v);
 
@@ -32,6 +33,7 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
           taxTotal: D('0'),
           serviceChargeTotal: D('0'),
           compTotal: D('20.00'),
+          discountTotal: D('5.00'),
           grandTotal: D('80.00'),
         },
         {
@@ -40,6 +42,7 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
           taxTotal: D('0'),
           serviceChargeTotal: D('0'),
           compTotal: D('0'),
+          discountTotal: D('0'),
           grandTotal: D('12.50'),
         },
         {
@@ -48,6 +51,7 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
           taxTotal: D('0'),
           serviceChargeTotal: D('0'),
           compTotal: D('0'),
+          discountTotal: D('0'),
           grandTotal: D('999.99'),
         },
       ],
@@ -61,7 +65,8 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
     });
     expect(aggregate.grossSales.toString()).toBe('100'); // OPEN bill excluded
     expect(aggregate.compTotal.toString()).toBe('20');
-    expect(aggregate.netSales.toString()).toBe('80'); // 100 - 20 - 0
+    expect(aggregate.discountTotal.toString()).toBe('5');
+    expect(aggregate.netSales.toString()).toBe('75'); // 100 - 20 - 5
     expect(aggregate.voidTotal.toString()).toBe('12.5');
     expect(aggregate.tipTotal.toString()).toBe('15');
     expect(aggregate.refundTotal.toString()).toBe('15');
@@ -150,6 +155,7 @@ async function seedBillWithTender(input: {
   status: 'OPEN' | 'SETTLED' | 'VOID';
   subtotal: string;
   compTotal?: string;
+  discountTotal?: string;
   grandTotal: string;
   tender?: { type: 'CASH' | 'CARD' | 'OTHER'; amount: string; tip?: string };
 }): Promise<{ orderId: string; billId: string; tenderId: string | null }> {
@@ -175,6 +181,7 @@ async function seedBillWithTender(input: {
         status: input.status,
         subtotal: input.subtotal,
         compTotal: input.compTotal ?? '0',
+        discountTotal: input.discountTotal ?? '0',
         grandTotal: input.grandTotal,
         openerStaffProfileId: ids.operator,
         deviceId: ids.seedDevice,
@@ -489,6 +496,18 @@ describeIfDatabase('daily close (real DB)', () => {
       })
     );
     expect(closeCount).toBe(1);
+    const rollupJobCount = await read((tx) =>
+      tx.restaurantJob.count({
+        where: {
+          idempotencyKey: insightRollupJobKey({
+            branchId: ids.branch,
+            businessDate: date,
+            sourceDailyCloseId: cut.dailyCloseId,
+          }),
+        },
+      })
+    );
+    expect(rollupJobCount).toBe(1);
   });
 
   it('corrects a close: new record supersedes the tip; the original is byte-identical', async () => {
@@ -543,6 +562,28 @@ describeIfDatabase('daily close (real DB)', () => {
     const corrRow = chain.find((c) => c.id === correction.dailyCloseId);
     expect(corrRow?.correctionReason).toBe('recount after audit');
     expect(corrRow?.coAuthorizationId).not.toBeNull();
+    const rollupJobs = await read((tx) =>
+      tx.restaurantJob.findMany({
+        where: {
+          idempotencyKey: {
+            in: [
+              insightRollupJobKey({
+                branchId: ids.branch,
+                businessDate: date,
+                sourceDailyCloseId: cut.dailyCloseId,
+              }),
+              insightRollupJobKey({
+                branchId: ids.branch,
+                businessDate: date,
+                sourceDailyCloseId: correction.dailyCloseId,
+              }),
+            ],
+          },
+        },
+        select: { id: true },
+      })
+    );
+    expect(rollupJobs).toHaveLength(2);
 
     const after = await read((tx) =>
       tx.restaurantDailyClose.findUnique({
