@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthzDb } from '@/lib/authz';
 
 import { can, subjectFromSession } from '.';
+import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
@@ -78,5 +79,24 @@ describe('custom ABAC decisions', () => {
       department: null,
       status: null,
     });
+  });
+
+  it('pins all five M8 capabilities as typed static default-deny actions', async () => {
+    const actions = [
+      'customers:read',
+      'loyalty:redeem',
+      'reports:financial',
+      'workforce:rates',
+      'restaurant:configure',
+    ] as const satisfies readonly Action[];
+
+    expect(ALL_ACTIONS).toHaveLength(32);
+    for (const action of actions) {
+      expect(ALL_ACTIONS).toContain(action);
+      expect(POLICIES[action]).toEqual([]);
+      await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
+        false
+      );
+    }
   });
 });

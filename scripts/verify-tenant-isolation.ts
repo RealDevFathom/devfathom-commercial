@@ -994,6 +994,190 @@ async function main() {
       [notifDeliveryA, notificationA, notifDeliveryB, organizationB, notificationB]
     );
 
+    // M8-L1: one mirrored row per customer/loyalty/insight table. Identifiers,
+    // tags and idempotency keys deliberately reuse the same values across orgs:
+    // dedupe is tenant-local, never a cross-tenant existence oracle.
+    const customerA = `rcustomer_a_${suffix}`;
+    const customerB = `rcustomer_b_${suffix}`;
+    const customerIdentifierA = `rcustid_a_${suffix}`;
+    const customerIdentifierB = `rcustid_b_${suffix}`;
+    const customerInteractionA = `rcustix_a_${suffix}`;
+    const customerInteractionB = `rcustix_b_${suffix}`;
+    const customerTagA = `rcusttag_a_${suffix}`;
+    const customerTagB = `rcusttag_b_${suffix}`;
+    const customerTagAssignmentA = `rcustta_a_${suffix}`;
+    const customerTagAssignmentB = `rcustta_b_${suffix}`;
+    const customerConsentA = `rcustco_a_${suffix}`;
+    const customerConsentB = `rcustco_b_${suffix}`;
+    const loyaltyProgramA = `rloyalprog_a_${suffix}`;
+    const loyaltyProgramB = `rloyalprog_b_${suffix}`;
+    const loyaltyAccountA = `rloyalacct_a_${suffix}`;
+    const loyaltyAccountB = `rloyalacct_b_${suffix}`;
+    const loyaltyPointsA = `rloyalpts_a_${suffix}`;
+    const loyaltyPointsB = `rloyalpts_b_${suffix}`;
+    const insightDailyA = `rinsday_a_${suffix}`;
+    const insightDailyB = `rinsday_b_${suffix}`;
+    const insightItemA = `rinsitem_a_${suffix}`;
+    const insightItemB = `rinsitem_b_${suffix}`;
+    const labourFactA = `rlabour_a_${suffix}`;
+    const labourFactB = `rlabour_b_${suffix}`;
+    const sharedCustomerEmail = `shared-${suffix}@example.test`;
+    const sharedInteractionKey = `interaction-${suffix}`;
+    const sharedConsentKey = `consent-${suffix}`;
+    const sharedPointsKey = `points-${suffix}`;
+    const sharedLabourKey = `labour-${suffix}`;
+
+    await client.query(
+      `INSERT INTO "restaurant_customers" (
+        "id", "organizationId", "displayName", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 'Tenant A Customer', CURRENT_TIMESTAMP),
+               ($2, $3, 'Tenant B Customer', CURRENT_TIMESTAMP)`,
+      [customerA, customerB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_customer_identifiers" (
+        "id", "organizationId", "customerId", "kind", "normalizedValue", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'EMAIL', $3, CURRENT_TIMESTAMP),
+               ($4, $5, $6, 'EMAIL', $3, CURRENT_TIMESTAMP)`,
+      [
+        customerIdentifierA,
+        customerA,
+        sharedCustomerEmail,
+        customerIdentifierB,
+        organizationB,
+        customerB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_customer_interactions" (
+        "id", "organizationId", "customerId", "branchId", "orderId", "type", "idempotencyKey"
+      ) VALUES ($1, 'org_devfathom', $2, $3, $4, 'ORDER', $5),
+               ($6, $7, $8, $9, $10, 'ORDER', $5)`,
+      [
+        customerInteractionA,
+        customerA,
+        branchA,
+        orderA,
+        sharedInteractionKey,
+        customerInteractionB,
+        organizationB,
+        customerB,
+        branchB,
+        orderB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_customer_tags" (
+        "id", "organizationId", "name", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 'Regular', CURRENT_TIMESTAMP),
+               ($2, $3, 'Regular', CURRENT_TIMESTAMP)`,
+      [customerTagA, customerTagB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_customer_tag_assignments" (
+        "id", "organizationId", "customerId", "tagId"
+      ) VALUES ($1, 'org_devfathom', $2, $3),
+               ($4, $5, $6, $7)`,
+      [
+        customerTagAssignmentA,
+        customerA,
+        customerTagA,
+        customerTagAssignmentB,
+        organizationB,
+        customerB,
+        customerTagB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_customer_consents" (
+        "id", "organizationId", "customerId", "channel", "granted", "source",
+        "actorId", "policyVersion", "idempotencyKey"
+      ) VALUES ($1, 'org_devfathom', $2, 'EMAIL', true, 'customer', $3, 'v1', $4),
+               ($5, $6, $7, 'EMAIL', true, 'customer', $8, 'v1', $4)`,
+      [
+        customerConsentA,
+        customerA,
+        userA,
+        sharedConsentKey,
+        customerConsentB,
+        organizationB,
+        customerB,
+        userB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_loyalty_program_versions" (
+        "id", "organizationId", "versionNumber", "effectiveFrom", "earnRate",
+        "redemptionValue", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 1, CURRENT_TIMESTAMP - INTERVAL '1 minute', 1, 0.01, CURRENT_TIMESTAMP),
+               ($2, $3, 1, CURRENT_TIMESTAMP - INTERVAL '1 minute', 1, 0.01, CURRENT_TIMESTAMP)`,
+      [loyaltyProgramA, loyaltyProgramB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_loyalty_accounts" (
+        "id", "organizationId", "customerId", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, CURRENT_TIMESTAMP),
+               ($3, $4, $5, CURRENT_TIMESTAMP)`,
+      [loyaltyAccountA, customerA, loyaltyAccountB, organizationB, customerB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_loyalty_points_entries" (
+        "id", "organizationId", "accountId", "programVersionId", "kind", "points",
+        "billId", "idempotencyKey"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 'EARN', 10, $4, $5),
+               ($6, $7, $8, $9, 'EARN', 10, $10, $5)`,
+      [
+        loyaltyPointsA,
+        loyaltyAccountA,
+        loyaltyProgramA,
+        billA,
+        sharedPointsKey,
+        loyaltyPointsB,
+        organizationB,
+        loyaltyAccountB,
+        loyaltyProgramB,
+        billB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_insight_daily_rollups" (
+        "id", "organizationId", "branchId", "businessDate", "sourceDailyCloseId", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, DATE '2030-01-01', $3, CURRENT_TIMESTAMP),
+               ($4, $5, $6, DATE '2030-01-01', $7, CURRENT_TIMESTAMP)`,
+      [insightDailyA, branchA, dailyCloseA, insightDailyB, organizationB, branchB, dailyCloseB]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_insight_item_mix_rollups" (
+        "id", "organizationId", "branchId", "businessDate", "productId",
+        "sourceDailyCloseId", "quantity", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, DATE '2030-01-01', $3, $4, 1, CURRENT_TIMESTAMP),
+               ($5, $6, $7, DATE '2030-01-01', $8, $9, 1, CURRENT_TIMESTAMP)`,
+      [
+        insightItemA,
+        branchA,
+        productA,
+        dailyCloseA,
+        insightItemB,
+        organizationB,
+        branchB,
+        productB,
+        dailyCloseB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "restaurant_labour_cost_facts" (
+        "id", "organizationId", "branchId", "businessDate", "labourHours",
+        "labourCost", "source", "idempotencyKey"
+      ) VALUES ($1, 'org_devfathom', $2, DATE '2030-01-01', 8, 100, 'import', $3),
+               ($4, $5, $6, DATE '2030-01-01', 8, 100, 'import', $3)`,
+      [labourFactA, branchA, sharedLabourKey, labourFactB, organizationB, branchB]
+    );
+    await client.query(
+      `UPDATE "restaurant_orders" SET "customerId" = CASE "id" WHEN $1 THEN $2 WHEN $3 THEN $4 END
+        WHERE "id" IN ($1, $3)`,
+      [orderA, customerA, orderB, customerB]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -1074,6 +1258,20 @@ async function main() {
       ['restaurant_webhook_inbox', webhookInboxA, webhookInboxB],
       ['restaurant_notifications', notificationA, notificationB],
       ['restaurant_notification_deliveries', notifDeliveryA, notifDeliveryB],
+      // M8-L1: every customer, loyalty, insight and labour table is explicitly
+      // probed in addition to the generic forced-RLS discovery above.
+      ['restaurant_customers', customerA, customerB],
+      ['restaurant_customer_identifiers', customerIdentifierA, customerIdentifierB],
+      ['restaurant_customer_interactions', customerInteractionA, customerInteractionB],
+      ['restaurant_customer_tags', customerTagA, customerTagB],
+      ['restaurant_customer_tag_assignments', customerTagAssignmentA, customerTagAssignmentB],
+      ['restaurant_customer_consents', customerConsentA, customerConsentB],
+      ['restaurant_loyalty_program_versions', loyaltyProgramA, loyaltyProgramB],
+      ['restaurant_loyalty_accounts', loyaltyAccountA, loyaltyAccountB],
+      ['restaurant_loyalty_points_entries', loyaltyPointsA, loyaltyPointsB],
+      ['restaurant_insight_daily_rollups', insightDailyA, insightDailyB],
+      ['restaurant_insight_item_mix_rollups', insightItemA, insightItemB],
+      ['restaurant_labour_cost_facts', labourFactA, labourFactB],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -1108,6 +1306,10 @@ async function main() {
       // SELECT+INSERT-only policy shape pinned by restaurant-m5-governance.
       ['restaurant_job_executions', jobExecA],
       ['restaurant_notification_deliveries', notifDeliveryA],
+      ['restaurant_customer_interactions', customerInteractionA],
+      ['restaurant_customer_consents', customerConsentA],
+      ['restaurant_loyalty_points_entries', loyaltyPointsA],
+      ['restaurant_labour_cost_facts', labourFactA],
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" = $1`,
@@ -1323,6 +1525,12 @@ async function main() {
         ) VALUES ($1, $2, $3, $4, 'order.open', CURRENT_TIMESTAMP)`,
         [`deny_idem_${suffix}`, organizationB, deviceB, `deny-idem-${suffix}`],
       ],
+      [
+        `INSERT INTO "restaurant_customers" (
+          "id", "organizationId", "displayName", "updatedAt"
+        ) VALUES ($1, $2, 'Escape Customer', CURRENT_TIMESTAMP)`,
+        [`deny_customer_${suffix}`, organizationB],
+      ],
     ];
     for (const [sql, values] of restaurantWriteDenied) {
       await expectDatabaseError('42501', () => client.query(sql, values));
@@ -1340,6 +1548,40 @@ async function main() {
       );
       await client.query(`SET CONSTRAINTS "tenant_rest_cred_staffProfileId_fk" IMMEDIATE`);
     });
+
+    // M8-L1: normalized identifiers dedupe only within an organization, and a
+    // tenant-scoped child cannot reference another tenant's customer.
+    await expectDatabaseError('23505', () =>
+      client.query(
+        `INSERT INTO "restaurant_customer_identifiers" (
+          "id", "organizationId", "customerId", "kind", "normalizedValue", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', $2, 'EMAIL', $3, CURRENT_TIMESTAMP)`,
+        [`duplicate_customer_identifier_${suffix}`, customerA, sharedCustomerEmail]
+      )
+    );
+    await expectDatabaseError('23503', async () => {
+      await client.query(
+        `INSERT INTO "restaurant_customer_identifiers" (
+          "id", "organizationId", "customerId", "kind", "normalizedValue", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', $2, 'PHONE', '+15550000000', CURRENT_TIMESTAMP)`,
+        [`cross_customer_identifier_${suffix}`, customerB]
+      );
+      await client.query(`SET CONSTRAINTS "tenant_customer_identifier_customerId_fk" IMMEDIATE`);
+    });
+
+    // Normal CRUD RLS permits owner updates, but the database trigger blocks
+    // effective loyalty-version mutation for every role.
+    await expectDatabaseError('55000', () =>
+      client.query(
+        `UPDATE "restaurant_loyalty_program_versions" SET "earnRate" = 2 WHERE "id" = $1`,
+        [loyaltyProgramA]
+      )
+    );
+    await expectDatabaseError('55000', () =>
+      client.query(`DELETE FROM "restaurant_loyalty_program_versions" WHERE "id" = $1`, [
+        loyaltyProgramA,
+      ])
+    );
 
     // MEET-01: a tenant scope may not insert a meeting row that belongs to
     // another organization.
@@ -1530,7 +1772,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, read isolation, token/webhook isolation, restaurant branch/assignment isolation, restaurant staff/credential/device/terminal-session/co-authorization isolation + fail-closed WITH CHECK + composite ownership, restaurant order/order-item/order-event/kitchen-ticket/floor-table/section-assignment/outbox/idempotency-key isolation + fail-closed WITH CHECK, restaurant money bill/bill-line/payment/payment-event/tender/refund/drawer-session/drawer-movement/daily-close/close-tender-total/receipt-sequence/money-idempotency isolation + DB-enforced append-only ledgers (UPDATE/DELETE denied even to the owner), restaurant scheduler job/execution + webhook-inbox + notification/delivery isolation + DB-enforced append-only execution/delivery ledgers (UPDATE/DELETE denied even to the owner), SSO/ticket isolation, meeting occurrence/participant/session/event/link isolation, globally unique occurrence publicId, credential-free meeting series, fail-closed access, composite ownership, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);

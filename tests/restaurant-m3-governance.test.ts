@@ -115,6 +115,24 @@ const M7_TABLES = [
   'restaurant_notification_deliveries',
 ] as const;
 
+// M8 customer identity/consent, loyalty ledger, insight projections and
+// restricted labour-cost seam. Exact list keeps generic restaurant governance
+// fail-closed when a table is added without an explicit review.
+const M8_TABLES = [
+  'restaurant_customers',
+  'restaurant_customer_identifiers',
+  'restaurant_customer_interactions',
+  'restaurant_customer_tags',
+  'restaurant_customer_tag_assignments',
+  'restaurant_customer_consents',
+  'restaurant_loyalty_program_versions',
+  'restaurant_loyalty_accounts',
+  'restaurant_loyalty_points_entries',
+  'restaurant_insight_daily_rollups',
+  'restaurant_insight_item_mix_rollups',
+  'restaurant_labour_cost_facts',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -440,6 +458,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M5_TABLES,
         ...M6_TABLES,
         ...M7_TABLES,
+        ...M8_TABLES,
       ].sort()
     );
 

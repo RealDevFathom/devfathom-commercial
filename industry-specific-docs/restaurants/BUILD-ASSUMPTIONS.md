@@ -1057,6 +1057,7 @@ forced RLS binds it AND the m2/m3/m4-rls batteries can `CREATE ROLE`/`GRANT` sel
 inserts, then `SET LOCAL ROLE`s to a self-made NOLOGIN role for the isolation probes.
 
 **Per-AC verdicts (plan §6):**
+
 - **AC1 — FAIL.** Full suite at the tip (fresh unprivileged DB) = **2 failed | 1748 passed | 0 skipped**.
   Failure #1 = sanctioned `src/lib/tenancy/explicit-host.test.ts` (baseline). Failure #2 = **NEW**:
   `tests/restaurant-m4-acceptance.test.ts` ("WHA-49 … opens, adds, fires, prepares, serves, closes …") — the
@@ -1124,6 +1125,7 @@ single close still walks `SERVED → PAYMENT_PENDING → CLOSED` in one shot), m
 M5-L2 guard (C12 note above). VE modified no `src/**` or `tests/**` — this doc is the only write.
 
 **Fresh evidence (re-reproduced at `9d62f6a`, same 0-skip recipe):**
+
 - **Full suite** (fresh unprivileged `devfathom_test`-owned DB, `TEST_DATABASE_URL` = that role) =
   **1 failed | 1749 passed | 0 skipped** (138 files: 137 passed, 1 failed). The single failure is the
   sanctioned baseline `src/lib/tenancy/explicit-host.test.ts`; the previously-NEW `restaurant-m4-acceptance`
@@ -1153,3 +1155,55 @@ documented nits (both PASS).
 **Final consolidated verdict: PASS.** All 13 acceptance criteria met at milestone tip `9d62f6a`; the single
 remaining suite failure is the sanctioned explicit-host baseline. The correction pass (WHA-65) is complete and
 independently re-verified. M5 rollup verification closed.
+
+## M8-L1 accepted D08/D22 defaults
+
+### D08 — customers, consent, privacy and loyalty
+
+- Canonical customers are organization-scoped and independent of agency `Client`. EMAIL is trim+lowercase
+  normalized; PHONE is stored in canonical international form supplied/validated at the boundary. A unique
+  `(organization, kind, normalized value)` key is the local dedupe authority; no external identity/dedupe
+  provider.
+- Tags are the segment seam only. No dynamic segment rule engine in M8.
+- Consent is channel-level, append-only, timestamped, actor-attributed, source-attributed, and
+  policy-versioned. Current consent is the latest event; missing consent means denied.
+- Export returns one customer-scoped JSON bundle. Anonymization is explicit and idempotent: remove
+  identifiers, clear profile PII/tag assignments, mark the canonical surrogate anonymized, deactivate
+  loyalty, and retain de-identified financial/order/consent/loyalty history where legal or accounting
+  retention applies. Audit payloads contain IDs/actions, never copied PII. No automatic retention purge until
+  D08 receives jurisdiction-specific policy.
+- One organization-wide loyalty program version is effective at an instant. Effective versions are immutable;
+  changes create a new version. Earn rate is Decimal points-per-currency-unit; redemption value is Decimal
+  currency-per-point; `expiryDays = null` means no expiry.
+- Whole points only. Earn occurs exactly once per settled bill when its order closes, using the bill grand total
+  after comps/loyalty discount and excluding tips, rounded down. Cancelled orders therefore earn zero.
+- Redemption requires an OPEN bill, `loyalty:redeem`, sufficient positive derived balance, and a value no
+  greater than the outstanding bill; it appends a negative ledger entry and changes bill `discountTotal` /
+  `grandTotal` in the same transaction.
+- Refunds append a REVERSAL against the original earned lot in the same M5 refund transaction, using the pinned
+  program version and capping cumulative reversal to original earn. A reversal may make a previously spent
+  account negative; further redemption is denied until the balance recovers. Expiry consumes remaining earn
+  lots FIFO and is idempotent.
+- Program configuration and manual adjustments require `restaurant:configure`; adjustments require actor and
+  reason. `loyalty.activeCustomers.max` is enforced.
+
+### D22 — insight rollups and restricted labour facts
+
+- Reuse the M7 Postgres scheduler and job-handler registry. Daily-close cut/correction enqueues an idempotent
+  `insights.rollupDay` job; a strict backfill command enqueues bounded 90-day chunks. No queue, warehouse, or
+  streaming infrastructure.
+- Daily rollups are deterministic upserts keyed `(organization, branch, businessDate)`; item-mix rows
+  additionally key product. Rebuild replaces derived rows only.
+- Gross/net sales, comps, refunds, voids, and drawer variance reconcile to the authoritative latest daily-close
+  chain tip and independently to raw bills/refunds/drawer ledgers; covers/item mix derive from closed orders and
+  non-voided item snapshots; loyalty liability derives from positive read-time ledger balances multiplied by
+  the effective redemption value at cutoff. All money is Decimal.
+- Standard operational/financial report responses never contain labour cost. An append-only imported daily
+  labour-cost fact is the minimal source seam; its list/read/export contract requires `reports:financial` **and**
+  `workforce:rates`. No rate calculation, payroll, time clock, tip payout, or workforce module is built.
+- Branch scope fails closed: a user with an ACTIVE restaurant staff profile and `primaryBranchId` may read only
+  that branch; cross-branch/consolidated access requires `restaurant:configure`. A report-capable user with
+  neither proof is denied.
+- `customers:read`, `loyalty:redeem`, `reports:financial`, `workforce:rates`, and `restaurant:configure` use the
+  existing org-role custom-decision path with empty static policies, so absent grants deny by default.
+  `vertical-catalog.ts` already contains the module/capability keys and remains untouched.

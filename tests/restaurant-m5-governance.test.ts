@@ -30,6 +30,7 @@ const M5_COLUMNS = {
     'deviceId',
     'createdAt',
     'updatedAt',
+    'discountTotal',
   ],
   restaurant_bill_lines: [
     'id',
@@ -193,6 +194,142 @@ const M5_COLUMNS = {
   ],
 } as const;
 
+const M8_COLUMNS = {
+  restaurant_customers: [
+    'id',
+    'organizationId',
+    'displayName',
+    'givenName',
+    'familyName',
+    'birthDate',
+    'notes',
+    'anonymizedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  restaurant_customer_identifiers: [
+    'id',
+    'organizationId',
+    'customerId',
+    'kind',
+    'normalizedValue',
+    'verifiedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  restaurant_customer_interactions: [
+    'id',
+    'organizationId',
+    'customerId',
+    'branchId',
+    'orderId',
+    'type',
+    'payload',
+    'occurredAt',
+    'idempotencyKey',
+    'createdAt',
+  ],
+  restaurant_customer_tags: ['id', 'organizationId', 'name', 'color', 'createdAt', 'updatedAt'],
+  restaurant_customer_tag_assignments: ['id', 'organizationId', 'customerId', 'tagId', 'createdAt'],
+  restaurant_customer_consents: [
+    'id',
+    'organizationId',
+    'customerId',
+    'channel',
+    'granted',
+    'source',
+    'actorId',
+    'policyVersion',
+    'occurredAt',
+    'idempotencyKey',
+    'createdAt',
+  ],
+  restaurant_loyalty_program_versions: [
+    'id',
+    'organizationId',
+    'versionNumber',
+    'effectiveFrom',
+    'earnRate',
+    'redemptionValue',
+    'expiryDays',
+    'createdAt',
+    'updatedAt',
+  ],
+  restaurant_loyalty_accounts: [
+    'id',
+    'organizationId',
+    'customerId',
+    'active',
+    'enrolledAt',
+    'deactivatedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  restaurant_loyalty_points_entries: [
+    'id',
+    'organizationId',
+    'accountId',
+    'programVersionId',
+    'kind',
+    'points',
+    'billId',
+    'refundId',
+    'reversesEntryId',
+    'actorId',
+    'reason',
+    'expiresAt',
+    'occurredAt',
+    'idempotencyKey',
+    'createdAt',
+  ],
+  restaurant_insight_daily_rollups: [
+    'id',
+    'organizationId',
+    'branchId',
+    'businessDate',
+    'sourceDailyCloseId',
+    'orderCount',
+    'coverCount',
+    'grossSales',
+    'netSales',
+    'compTotal',
+    'refundTotal',
+    'voidTotal',
+    'drawerVariance',
+    'loyaltyLiability',
+    'computedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  restaurant_insight_item_mix_rollups: [
+    'id',
+    'organizationId',
+    'branchId',
+    'businessDate',
+    'productId',
+    'sourceDailyCloseId',
+    'quantity',
+    'grossSales',
+    'netSales',
+    'compTotal',
+    'computedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  restaurant_labour_cost_facts: [
+    'id',
+    'organizationId',
+    'branchId',
+    'businessDate',
+    'labourHours',
+    'labourCost',
+    'source',
+    'idempotencyKey',
+    'importedAt',
+    'createdAt',
+  ],
+} as const;
+
 const M5_ENUMS = [
   ['RestaurantBillStatus', ['OPEN', 'SETTLED', 'VOID']],
   ['RestaurantBillSplitKind', ['NONE', 'BY_ITEM', 'BY_SEAT', 'FRACTIONAL']],
@@ -220,6 +357,12 @@ const M5_ENUMS = [
   ],
 ] as const;
 
+const M8_ENUMS = [
+  ['CustomerIdentifierKind', ['EMAIL', 'PHONE']],
+  ['CustomerConsentChannel', ['EMAIL', 'SMS', 'PHONE', 'WHATSAPP', 'PUSH']],
+  ['LoyaltyPointsEntryKind', ['EARN', 'REDEEM', 'REVERSAL', 'EXPIRY', 'ADJUSTMENT']],
+] as const;
+
 const APPEND_ONLY_TABLES = [
   'restaurant_tenders',
   'restaurant_payment_events',
@@ -240,10 +383,27 @@ const APPEND_ONLY_TABLES = [
   'restaurant_sop_verifications',
   'restaurant_sop_escalation_events',
   'restaurant_notification_deliveries',
+  // M8-L1: customer events/consent, signed loyalty ledger, and imported labour
+  // fact history are DB-enforced append-only.
+  'restaurant_customer_interactions',
+  'restaurant_customer_consents',
+  'restaurant_loyalty_points_entries',
+  'restaurant_labour_cost_facts',
 ] as const;
 
 type M5Table = keyof typeof M5_COLUMNS;
 const M5_TABLES = Object.keys(M5_COLUMNS) as M5Table[];
+type M8Table = keyof typeof M8_COLUMNS;
+const M8_TABLES = Object.keys(M8_COLUMNS) as M8Table[];
+const M8_APPEND_ONLY_TABLES = [
+  'restaurant_customer_interactions',
+  'restaurant_customer_consents',
+  'restaurant_loyalty_points_entries',
+  'restaurant_labour_cost_facts',
+] as const;
+const M8_MUTABLE_TABLES = M8_TABLES.filter(
+  (table) => !(M8_APPEND_ONLY_TABLES as readonly string[]).includes(table)
+);
 
 describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
   beforeAll(async () => {
@@ -279,7 +439,38 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
     ).toEqual(M5_COLUMNS);
   });
 
+  it('pins all 12 M8 table column allowlists', async () => {
+    const result = await client!.query<{ table_name: M8Table; column_name: string }>(
+      `SELECT table_name, column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ANY($1::text[])
+        ORDER BY table_name, ordinal_position`,
+      [M8_TABLES]
+    );
+    expect(
+      Object.fromEntries(
+        M8_TABLES.map((table) => [
+          table,
+          result.rows.filter((row) => row.table_name === table).map((row) => row.column_name),
+        ])
+      )
+    ).toEqual(M8_COLUMNS);
+  });
+
   it.each(M5_ENUMS)('pins the exact %s values', async (typeName, expected) => {
+    const result = await client!.query<{ enumlabel: string }>(
+      `SELECT enum_row.enumlabel
+         FROM pg_catalog.pg_type type_row
+         JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = type_row.typnamespace
+         JOIN pg_catalog.pg_enum enum_row ON enum_row.enumtypid = type_row.oid
+        WHERE namespace_row.nspname = 'public' AND type_row.typname = $1
+        ORDER BY enum_row.enumsortorder`,
+      [typeName]
+    );
+    expect(result.rows.map((row) => row.enumlabel)).toEqual(expected);
+  });
+
+  it.each(M8_ENUMS)('pins the exact M8 %s values', async (typeName, expected) => {
     const result = await client!.query<{ enumlabel: string }>(
       `SELECT enum_row.enumlabel
          FROM pg_catalog.pg_type type_row
@@ -324,6 +515,96 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
     );
   });
 
+  it('pins forced RLS and exact M8 mutable/append-only policy shapes', async () => {
+    const rls = await client!.query<{
+      table_name: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT table_row.relname AS table_name,
+              table_row.relrowsecurity,
+              table_row.relforcerowsecurity
+         FROM pg_catalog.pg_class table_row
+         JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+        WHERE namespace_row.nspname = 'public' AND table_row.relname = ANY($1::text[])
+        ORDER BY table_row.relname`,
+      [M8_TABLES]
+    );
+    expect(rls.rows).toEqual(
+      [...M8_TABLES].sort().map((table_name) => ({
+        table_name,
+        relrowsecurity: true,
+        relforcerowsecurity: true,
+      }))
+    );
+
+    const policies = await client!.query<{ table_name: string; commands: string[] }>(
+      `SELECT table_row.relname AS table_name,
+              array_agg(DISTINCT CASE policy_row.polcmd
+                WHEN 'r' THEN 'SELECT'
+                WHEN 'a' THEN 'INSERT'
+                WHEN 'w' THEN 'UPDATE'
+                WHEN 'd' THEN 'DELETE'
+                ELSE 'ALL'
+              END ORDER BY CASE policy_row.polcmd
+                WHEN 'r' THEN 'SELECT'
+                WHEN 'a' THEN 'INSERT'
+                WHEN 'w' THEN 'UPDATE'
+                WHEN 'd' THEN 'DELETE'
+                ELSE 'ALL'
+              END) AS commands
+         FROM pg_catalog.pg_class table_row
+         JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+         JOIN pg_catalog.pg_policy policy_row ON policy_row.polrelid = table_row.oid
+        WHERE namespace_row.nspname = 'public' AND table_row.relname = ANY($1::text[])
+        GROUP BY table_row.relname
+        ORDER BY table_row.relname`,
+      [M8_TABLES]
+    );
+    expect(policies.rows).toEqual(
+      [
+        ...M8_MUTABLE_TABLES.map((table_name) => ({ table_name, commands: ['ALL'] })),
+        ...M8_APPEND_ONLY_TABLES.map((table_name) => ({
+          table_name,
+          commands: ['INSERT', 'SELECT'],
+        })),
+      ].sort((left, right) => left.table_name.localeCompare(right.table_name))
+    );
+  });
+
+  it('prevents UPDATE and DELETE of effective loyalty versions in the database', async () => {
+    const id = `m8_effective_${Date.now()}`;
+    await client!.query('BEGIN');
+    try {
+      await client!.query(`SET LOCAL app.is_platform_admin = 'true'`);
+      await client!.query(
+        `INSERT INTO "restaurant_loyalty_program_versions" (
+          "id", "organizationId", "versionNumber", "effectiveFrom", "earnRate",
+          "redemptionValue", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', 999999, CURRENT_TIMESTAMP - INTERVAL '1 minute',
+          1, 0.01, CURRENT_TIMESTAMP)`,
+        [id]
+      );
+
+      await client!.query('SAVEPOINT immutable_update');
+      await expect(
+        client!.query(
+          `UPDATE "restaurant_loyalty_program_versions" SET "earnRate" = 2 WHERE "id" = $1`,
+          [id]
+        )
+      ).rejects.toMatchObject({ code: '55000' });
+      await client!.query('ROLLBACK TO SAVEPOINT immutable_update');
+
+      await client!.query('SAVEPOINT immutable_delete');
+      await expect(
+        client!.query(`DELETE FROM "restaurant_loyalty_program_versions" WHERE "id" = $1`, [id])
+      ).rejects.toMatchObject({ code: '55000' });
+      await client!.query('ROLLBACK TO SAVEPOINT immutable_delete');
+    } finally {
+      await client!.query('ROLLBACK');
+    }
+  });
+
   it('uses no floating-point type in any restaurant table', async () => {
     const result = await client!.query<{ table_name: string; column_name: string }>(
       `SELECT table_name, column_name
@@ -362,6 +643,7 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
       'cancelledAt',
       'createdAt',
       'updatedAt',
+      'customerId',
     ]);
   });
 });
