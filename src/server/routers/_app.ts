@@ -35,6 +35,8 @@ import { restaurantJobsRouter } from './restaurant-jobs';
 import { restaurantSopRouter } from './restaurant-sop';
 import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
 import { restaurantNotificationsRouter } from './restaurant-notifications';
+import { restaurantCustomersRouter } from './restaurant-customers';
+import { restaurantLoyaltyRouter } from './restaurant-loyalty';
 import { restaurantInsightsRouter } from './restaurant-insights';
 
 export const appRouter = router({
@@ -74,6 +76,8 @@ export const appRouter = router({
   restaurantSop: restaurantSopRouter,
   restaurantSopExecution: restaurantSopExecutionRouter,
   restaurantNotifications: restaurantNotificationsRouter,
+  restaurantCustomers: restaurantCustomersRouter,
+  restaurantLoyalty: restaurantLoyaltyRouter,
   restaurantInsights: restaurantInsightsRouter,
 });
 

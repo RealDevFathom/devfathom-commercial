@@ -19,6 +19,7 @@ import {
   NOTIFICATION_FANOUT_JOB,
   notificationFanoutHandler,
 } from '@/lib/restaurant/notification-fanout';
+import { LOYALTY_EXPIRY_JOB, loyaltyExpiryHandler } from '@/lib/restaurant/loyalty-expiry';
 import { INSIGHTS_ROLLUP_DAY_JOB, rollupDayHandler } from '@/lib/restaurant/insight-rollups';
 
 /**
@@ -67,6 +68,7 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   [SOP_LATE_MISSED_JOB]: sopLateMissedHandler,
   [SOP_ESCALATION_JOB]: sopEscalationHandler,
   [NOTIFICATION_FANOUT_JOB]: notificationFanoutHandler,
+  [LOYALTY_EXPIRY_JOB]: loyaltyExpiryHandler,
   [INSIGHTS_ROLLUP_DAY_JOB]: rollupDayHandler,
 };
 
