@@ -4164,14 +4164,13 @@ model RestaurantTender {
   deviceId        String
   createdAt       DateTime             @default(now())
 
-  bill                 RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
-  drawerSession        RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
-  payment              RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  staff                RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
-  device               RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  refunds              RestaurantRefund[]
-  drawerMovements      RestaurantDrawerMovement[]
-  loyaltyPointsEntries LoyaltyPointsEntry[]
+  bill            RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  drawerSession   RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment         RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff           RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device          RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  refunds         RestaurantRefund[]
+  drawerMovements RestaurantDrawerMovement[]
 
   @@index([organizationId])
   @@index([billId])
@@ -5647,7 +5646,7 @@ model CustomerInteraction {
 
   customer RestaurantCustomer @relation(fields: [customerId], references: [id], onDelete: Restrict)
   branch   RestaurantBranch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  order    RestaurantOrder?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  order    RestaurantOrder?   @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
@@ -5777,14 +5776,12 @@ model LoyaltyPointsEntry {
   idempotencyKey   String
   createdAt        DateTime               @default(now())
 
-  account            LoyaltyAccount        @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  programVersion     LoyaltyProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Restrict)
-  bill               RestaurantBill?       @relation(fields: [billId], references: [id], onDelete: SetNull)
-  refund             RestaurantRefund?     @relation(fields: [refundId], references: [id], onDelete: SetNull)
-  reversesEntry      LoyaltyPointsEntry?   @relation("LoyaltyPointsReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
-  reversedBy         LoyaltyPointsEntry[]  @relation("LoyaltyPointsReversal")
-  restaurantTender   RestaurantTender?     @relation(fields: [restaurantTenderId], references: [id])
-  restaurantTenderId String?
+  account        LoyaltyAccount        @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  programVersion LoyaltyProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Restrict)
+  bill           RestaurantBill?       @relation(fields: [billId], references: [id], onDelete: SetNull)
+  refund         RestaurantRefund?     @relation(fields: [refundId], references: [id], onDelete: SetNull)
+  reversesEntry  LoyaltyPointsEntry?   @relation("LoyaltyPointsReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy     LoyaltyPointsEntry[]  @relation("LoyaltyPointsReversal")
 
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId])

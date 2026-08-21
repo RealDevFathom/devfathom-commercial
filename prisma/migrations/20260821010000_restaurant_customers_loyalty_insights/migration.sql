@@ -269,7 +269,7 @@ ALTER TABLE "restaurant_orders" ADD CONSTRAINT "restaurant_orders_customerId_fke
 ALTER TABLE "restaurant_customer_identifiers" ADD CONSTRAINT "restaurant_customer_identifiers_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "restaurant_customers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "restaurant_customer_interactions" ADD CONSTRAINT "restaurant_customer_interactions_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "restaurant_customers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "restaurant_customer_interactions" ADD CONSTRAINT "restaurant_customer_interactions_branchId_fkey" FOREIGN KEY ("branchId") REFERENCES "restaurant_branches"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "restaurant_customer_interactions" ADD CONSTRAINT "restaurant_customer_interactions_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "restaurant_orders"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "restaurant_customer_interactions" ADD CONSTRAINT "restaurant_customer_interactions_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "restaurant_orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "restaurant_customer_tag_assignments" ADD CONSTRAINT "restaurant_customer_tag_assignments_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "restaurant_customers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "restaurant_customer_tag_assignments" ADD CONSTRAINT "restaurant_customer_tag_assignments_tagId_fkey" FOREIGN KEY ("tagId") REFERENCES "restaurant_customer_tags"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "restaurant_customer_consents" ADD CONSTRAINT "restaurant_customer_consents_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "restaurant_customers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -322,8 +322,8 @@ ALTER TABLE "restaurant_customer_tags" ADD CONSTRAINT "restaurant_customer_tags_
 ALTER TABLE "restaurant_customer_consents" ADD CONSTRAINT "restaurant_customer_consents_provenance_ck" CHECK (btrim("source") <> '' AND btrim("actorId") <> '' AND btrim("policyVersion") <> '' AND btrim("idempotencyKey") <> '');
 ALTER TABLE "restaurant_loyalty_program_versions" ADD CONSTRAINT "restaurant_loyalty_program_versions_values_ck" CHECK ("versionNumber" >= 1 AND "earnRate" >= 0 AND "redemptionValue" > 0 AND ("expiryDays" IS NULL OR "expiryDays" >= 1));
 ALTER TABLE "restaurant_loyalty_accounts" ADD CONSTRAINT "restaurant_loyalty_accounts_active_ck" CHECK ("active" = ("deactivatedAt" IS NULL));
-ALTER TABLE "restaurant_loyalty_points_entries" ADD CONSTRAINT "restaurant_loyalty_points_entries_points_ck" CHECK (("kind" = 'EARN' AND "points" > 0 AND "billId" IS NOT NULL) OR ("kind" IN ('REDEEM', 'REVERSAL', 'EXPIRY') AND "points" < 0) OR ("kind" = 'ADJUSTMENT' AND "points" <> 0));
-ALTER TABLE "restaurant_loyalty_points_entries" ADD CONSTRAINT "restaurant_loyalty_points_entries_reference_ck" CHECK (("kind" <> 'REVERSAL' OR ("refundId" IS NOT NULL AND "reversesEntryId" IS NOT NULL)) AND ("kind" <> 'EXPIRY' OR "reversesEntryId" IS NOT NULL) AND ("kind" <> 'ADJUSTMENT' OR ("actorId" IS NOT NULL AND btrim("reason") <> '')) AND btrim("idempotencyKey") <> '');
+ALTER TABLE "restaurant_loyalty_points_entries" ADD CONSTRAINT "restaurant_loyalty_points_entries_points_ck" CHECK (("kind" = 'EARN' AND "points" > 0 AND "billId" IS NOT NULL) OR ("kind" = 'REDEEM' AND "points" < 0 AND "billId" IS NOT NULL) OR ("kind" IN ('REVERSAL', 'EXPIRY') AND "points" < 0) OR ("kind" = 'ADJUSTMENT' AND "points" <> 0));
+ALTER TABLE "restaurant_loyalty_points_entries" ADD CONSTRAINT "restaurant_loyalty_points_entries_reference_ck" CHECK (("kind" <> 'REVERSAL' OR ("refundId" IS NOT NULL AND "reversesEntryId" IS NOT NULL)) AND ("kind" <> 'EXPIRY' OR "reversesEntryId" IS NOT NULL) AND ("kind" <> 'ADJUSTMENT' OR ("actorId" IS NOT NULL AND btrim("actorId") <> '' AND "reason" IS NOT NULL AND btrim("reason") <> '')) AND btrim("idempotencyKey") <> '');
 ALTER TABLE "restaurant_insight_daily_rollups" ADD CONSTRAINT "restaurant_insight_daily_rollups_counts_ck" CHECK ("orderCount" >= 0 AND "coverCount" >= 0);
 ALTER TABLE "restaurant_insight_item_mix_rollups" ADD CONSTRAINT "restaurant_insight_item_mix_rollups_quantity_ck" CHECK ("quantity" >= 0);
 ALTER TABLE "restaurant_labour_cost_facts" ADD CONSTRAINT "restaurant_labour_cost_facts_values_ck" CHECK ("labourHours" >= 0 AND "labourCost" >= 0 AND btrim("source") <> '' AND btrim("idempotencyKey") <> '');
@@ -334,7 +334,7 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF OLD."effectiveFrom" <= CURRENT_TIMESTAMP THEN
+  IF OLD."effectiveFrom" <= clock_timestamp() THEN
     RAISE EXCEPTION 'effective loyalty program versions are immutable'
       USING ERRCODE = '55000';
   END IF;
