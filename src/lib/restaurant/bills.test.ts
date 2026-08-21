@@ -578,6 +578,16 @@ describeIfDatabase('bills command layer (real DB)', () => {
       split: { kind: 'FRACTIONAL', weights: [1, 1, 1] },
       actor: actor(),
     });
+    await deps.withTenantDb(orgId, async (tx) => {
+      const bill = await tx.restaurantBill.findUniqueOrThrow({ where: { id: cut.billIds[0]! } });
+      await tx.restaurantBill.update({
+        where: { id: bill.id },
+        data: {
+          discountTotal: bill.discountTotal.plus('0.50'),
+          grandTotal: bill.grandTotal.minus('0.50'),
+        },
+      });
+    });
     const open = await read((tx) => deps.bills.evaluateOrderSettlement(tx, orderId));
     expect(open.blocker).toBe('BILLS_OPEN');
     expect(open.accountedTotal.toString()).toBe(open.derivedOrderTotal.toString());

@@ -28,6 +28,9 @@ const orgId = `org_wha42_${suffix}`;
 const ids = {
   brand: `brand_${suffix}`,
   branch: `branch_${suffix}`,
+  customer: `customer_${suffix}`,
+  loyaltyAccount: `loyalty_account_${suffix}`,
+  loyaltyProgram: `loyalty_program_${suffix}`,
   operator: `staff_op_${suffix}`,
   manager: `staff_mgr_${suffix}`,
   floor: `floor_${suffix}`,
@@ -153,6 +156,20 @@ beforeAll(async () => {
     });
     await tx.restaurantStaffProfile.create({
       data: { id: ids.manager, displayName: 'Manager', status: 'ACTIVE' },
+    });
+    await tx.restaurantCustomer.create({ data: { id: ids.customer, displayName: 'Loyal Guest' } });
+    await tx.loyaltyAccount.create({
+      data: { id: ids.loyaltyAccount, customerId: ids.customer },
+    });
+    await tx.loyaltyProgramVersion.create({
+      data: {
+        id: ids.loyaltyProgram,
+        versionNumber: 1,
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        earnRate: '1.2',
+        redemptionValue: '0.01',
+        expiryDays: 30,
+      },
     });
     const enrolled = await deps.enrollDevice(tx, { branchId: ids.branch, name: 'POS-1' });
     deviceId = enrolled.device.id;
@@ -427,6 +444,32 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(order?.status).toBe('CLOSED');
     expect(order?.closedAt).not.toBeNull();
     expect(order?.events.map((e) => e.eventType)).toContain('order.closed');
+  });
+
+  it('earns whole points exactly once for a customer-linked settled bill', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await read((tx) =>
+      tx.restaurantOrder.update({ where: { id: orderId }, data: { customerId: ids.customer } })
+    );
+    await deps.orders.sendOrder(db, { orderId, actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'FIRING', actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'PREPARED', actor: actor() });
+    await deps.orders.advanceItem(db, { orderId, itemId, toStatus: 'SERVED', actor: actor() });
+    await deps.orders.closeOrder(db, { orderId, actor: actor() });
+    await settleOrderFully(db, orderId);
+    const closingActor = actor();
+    await deps.orders.closeOrder(db, { orderId, actor: closingActor });
+    await expect(deps.orders.closeOrder(db, { orderId, actor: closingActor })).resolves.toEqual({
+      orderId,
+      replayed: true,
+    });
+
+    const entries = await read((tx) =>
+      tx.loyaltyPointsEntry.findMany({ where: { bill: { orderId }, kind: 'EARN' } })
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.points).toBe(15);
+    expect(entries[0]?.programVersionId).toBe(ids.loyaltyProgram);
   });
 
   it('blocks close while a remake is unresolved, then closes once it is (remake-blocks-close)', async () => {

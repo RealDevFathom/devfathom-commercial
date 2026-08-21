@@ -32,12 +32,11 @@ import { allocateReceiptNumber } from './receipt-numbers';
  *                its `roundingAdjustment` (the +cent it received) so Σ(grandTotal)
  *                ≡ the order derived total EXACTLY and deterministically.
  *
- * A bill's `grandTotal = subtotal + taxTotal + serviceChargeTotal − compTotal +
- * roundingAdjustment`. With tax/service-charge structurally zero (M5), that reduces
- * to `subtotal − compTotal + roundingAdjustment`. The reconciliation invariant the
+ * A bill's `grandTotal = subtotal + taxTotal + serviceChargeTotal − compTotal −
+ * discountTotal + roundingAdjustment`. The reconciliation invariant the
  * settlement guard and the reconciliation battery both rely on is:
  *
- *   Σ over the order's non-void bills of (grandTotal + compTotal) ≡ derived order total.
+ *   Σ non-void bills of (grandTotal + compTotal + discountTotal) ≡ derived order total.
  *
  * A comp adds back its own amount, so this identity holds with or without comps and
  * across every split kind.
@@ -716,8 +715,7 @@ export type OrderSettlement = {
   settled: boolean;
   blocker: OrderSettlementBlocker | null;
   derivedOrderTotal: Prisma.Decimal;
-  /** Σ over the non-void bills of (grandTotal + compTotal) — reconciles to the
-   * derived order total when the order is fully accounted. */
+  /** Σ over live bills of (grandTotal + compTotal + discountTotal). */
   accountedTotal: Prisma.Decimal;
   bills: {
     id: string;
@@ -725,6 +723,7 @@ export type OrderSettlement = {
     splitKind: string;
     grandTotal: Prisma.Decimal;
     compTotal: Prisma.Decimal;
+    discountTotal: Prisma.Decimal;
     receiptNumber: number | null;
   }[];
   unbilledItemIds: string[];
@@ -738,9 +737,8 @@ export type OrderSettlement = {
  *      line (FRACTIONAL bills own fractions, not items, so item coverage is proven
  *      by the money identity instead);
  *   3. every live bill is SETTLED (VOID bills are excluded);
- *   4. Σ (grandTotal + compTotal) over the live bills ≡ the derived order total,
- *      by exact Decimal equality — comps add back their own amount, so this holds
- *      across every split kind and with or without comps.
+ *   4. Σ (grandTotal + compTotal + discountTotal) over live bills ≡ the derived
+ *      order total by exact Decimal equality; deductions add back their amount.
  */
 export async function evaluateOrderSettlement(
   tx: ScopedDb,
@@ -759,12 +757,15 @@ export async function evaluateOrderSettlement(
       splitKind: true,
       grandTotal: true,
       compTotal: true,
+      discountTotal: true,
       receiptNumber: true,
       lines: { select: { orderItemId: true } },
     },
   });
   const liveBills = allBills.filter((b) => b.status !== 'VOID');
-  const accountedTotal = sum(liveBills.map((b) => add(b.grandTotal, b.compTotal)));
+  const accountedTotal = sum(
+    liveBills.map((bill) => add(add(bill.grandTotal, bill.compTotal), bill.discountTotal))
+  );
 
   const coveredItemIds = new Set<string>();
   for (const bill of liveBills) {
@@ -781,6 +782,7 @@ export async function evaluateOrderSettlement(
     splitKind: b.splitKind,
     grandTotal: b.grandTotal,
     compTotal: b.compTotal,
+    discountTotal: b.discountTotal,
     receiptNumber: b.receiptNumber,
   }));
 

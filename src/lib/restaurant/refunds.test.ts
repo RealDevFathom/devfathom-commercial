@@ -26,6 +26,9 @@ const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha58r_${suffix}`;
 const ids = {
   branch: `branch_${suffix}`,
+  customer: `customer_${suffix}`,
+  loyaltyAccount: `loyalty_account_${suffix}`,
+  loyaltyProgram: `loyalty_program_${suffix}`,
   operator: `staff_op_${suffix}`,
   manager: `staff_mgr_${suffix}`,
   category: `cat_${suffix}`,
@@ -178,6 +181,19 @@ beforeAll(async () => {
     await tx.restaurantStaffProfile.create({
       data: { id: ids.manager, displayName: 'Manager', status: 'ACTIVE' },
     });
+    await tx.restaurantCustomer.create({ data: { id: ids.customer, displayName: 'Loyal Guest' } });
+    await tx.loyaltyAccount.create({
+      data: { id: ids.loyaltyAccount, customerId: ids.customer },
+    });
+    await tx.loyaltyProgramVersion.create({
+      data: {
+        id: ids.loyaltyProgram,
+        versionNumber: 1,
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        earnRate: '1',
+        redemptionValue: '0.01',
+      },
+    });
     const enrolled = await deps.enrollDevice(tx, { branchId: ids.branch, name: 'POS-1' });
     deviceId = enrolled.device.id;
 
@@ -227,6 +243,35 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('card refunds (real DB)', () => {
+  it('appends a capped REVERSAL pinned to the original earn program', async () => {
+    const { billId, tenderId } = await cardTender();
+    await read((tx) =>
+      tx.loyaltyPointsEntry.create({
+        data: {
+          accountId: ids.loyaltyAccount,
+          programVersionId: ids.loyaltyProgram,
+          kind: 'EARN',
+          points: 12,
+          billId,
+          idempotencyKey: `earn_${billId}`,
+        },
+      })
+    );
+    const refund = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '6.25',
+      reason: 'partial return',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    const reversal = await read((tx) =>
+      tx.loyaltyPointsEntry.findFirst({ where: { refundId: refund.refundId, kind: 'REVERSAL' } })
+    );
+    expect(reversal?.points).toBe(-6);
+    expect(reversal?.programVersionId).toBe(ids.loyaltyProgram);
+  });
+
   it('partial then full REFUND transitions the payment PARTIALLY_REFUNDED → REFUNDED', async () => {
     const { tenderId, paymentId } = await cardTender();
 

@@ -12,6 +12,7 @@ import {
   runMoneyTransaction,
   type MoneyActor,
 } from './drawer-sessions';
+import { reverseLoyaltyForRefund } from './loyalty';
 import { compare, equals, isNegative, isZero, money, sub, ZERO } from './money';
 import {
   appendPaymentEvent,
@@ -226,6 +227,8 @@ export async function refundTender(
       },
       select: { id: true },
     });
+
+    await reverseLoyaltyForRefund(tx, { refundId: refund.id, billId: tender.billId, at });
 
     if (drawerSessionId) {
       // Every cash refund writes exactly one CASH_REFUND drawer movement.

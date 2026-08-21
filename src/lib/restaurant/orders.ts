@@ -8,6 +8,7 @@ import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
 import { postOrderRecipeConsumption } from './inventory';
 import { generateKitchenTickets, type FiredItem, type GeneratedTicket } from './kitchen-tickets';
+import { earnLoyaltyForClosedOrder } from './loyalty';
 import type { OrderChannel } from './menu-availability';
 import { allocateOrderNumber } from './order-numbers';
 import {
@@ -1097,7 +1098,7 @@ export async function closeOrder(
     // M5-L2 settlement guard (C12): before PAYMENT_PENDING → CLOSED the money must be
     // fully accounted — every non-voided item allocated to a bill (or the total
     // fractionally allocated), every bill SETTLED or VOID, and Σ (bill grand totals +
-    // comps) ≡ the derived order total. The §11.1 state machine is unchanged; this is
+    // comps + discounts) ≡ the derived order total. The §11.1 state machine is unchanged; this is
     // a pre-transition guard. An order that has just moved SERVED → PAYMENT_PENDING and
     // is not yet settled is PARKED there awaiting tender (a later close finalizes it,
     // no error); an already-pending order asked to close while unsettled is rejected.
@@ -1119,6 +1120,7 @@ export async function closeOrder(
       data: { status: 'CLOSED', closedAt },
     });
     await record(tx, order, input.actor, 'order.closed', {});
+    await earnLoyaltyForClosedOrder(tx, order.id, closedAt);
     // M6-L2: recipe consumption at order close (C6 disposition applied per item).
     await postOrderRecipeConsumption(
       tx,
