@@ -572,6 +572,48 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
     );
   });
 
+  it('pins corrected M8 loyalty and interaction database invariants', async () => {
+    const constraints = await client!.query<{ conname: string; definition: string }>(
+      `SELECT conname, pg_get_constraintdef(oid) AS definition
+         FROM pg_catalog.pg_constraint
+        WHERE conname = ANY($1::text[])
+        ORDER BY conname`,
+      [
+        [
+          'restaurant_loyalty_points_entries_points_ck',
+          'restaurant_loyalty_points_entries_reference_ck',
+        ],
+      ]
+    );
+    const definitions = Object.fromEntries(
+      constraints.rows.map(({ conname, definition }) => [conname, definition])
+    );
+    expect(definitions.restaurant_loyalty_points_entries_points_ck).toMatch(
+      /'REDEEM'.*points < 0.*"billId" IS NOT NULL/s
+    );
+    expect(definitions.restaurant_loyalty_points_entries_reference_ck).toMatch(
+      /"actorId" IS NOT NULL.*btrim\("actorId"\) <> ''::text.*reason IS NOT NULL.*btrim\(reason\) <> ''::text/s
+    );
+
+    const triggerFunction = await client!.query<{ definition: string }>(
+      `SELECT pg_get_functiondef(routine_row.oid) AS definition
+         FROM pg_catalog.pg_proc routine_row
+         JOIN pg_catalog.pg_namespace namespace_row
+           ON namespace_row.oid = routine_row.pronamespace
+        WHERE namespace_row.nspname = 'public'
+          AND routine_row.proname = 'prevent_effective_loyalty_program_version_mutation'`
+    );
+    expect(triggerFunction.rows[0]?.definition).toContain('clock_timestamp()');
+    expect(triggerFunction.rows[0]?.definition).not.toContain('CURRENT_TIMESTAMP');
+
+    const orderForeignKey = await client!.query<{ delete_action: string }>(
+      `SELECT confdeltype AS delete_action
+         FROM pg_catalog.pg_constraint
+        WHERE conname = 'restaurant_customer_interactions_orderId_fkey'`
+    );
+    expect(orderForeignKey.rows).toEqual([{ delete_action: 'r' }]);
+  });
+
   it('prevents UPDATE and DELETE of effective loyalty versions in the database', async () => {
     const id = `m8_effective_${Date.now()}`;
     await client!.query('BEGIN');
