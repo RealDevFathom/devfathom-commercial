@@ -28,6 +28,7 @@ import {
   UtensilsCrossed,
   LayoutGrid,
   ReceiptText,
+  Gift,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -45,7 +46,7 @@ interface NavItem {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   group: NavGroup;
-  module?: string;
+  module?: string | string[];
   adminOnly?: boolean;
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
@@ -157,6 +158,20 @@ const navigation: NavItem[] = [
     module: 'restaurant-pos',
   },
   {
+    label: 'Customers & Loyalty',
+    href: '/restaurant/loyalty',
+    icon: Gift,
+    group: 'Firm',
+    module: ['restaurant-customers', 'restaurant-loyalty'],
+  },
+  {
+    label: 'Restaurant Insights',
+    href: '/restaurant/insights',
+    icon: BarChart3,
+    group: 'Firm',
+    module: 'restaurant-insights',
+  },
+  {
     label: 'Reviews',
     href: '/reviews',
     icon: ClipboardList,
@@ -207,7 +222,13 @@ function useVisibleNavigation() {
   const isHr = session?.user?.role === 'HR';
 
   const filteredNav = navigation.filter((item) => {
-    if (item.module && !entitlements.enabledModules.includes(item.module)) return false;
+    if (
+      item.module &&
+      !(Array.isArray(item.module)
+        ? item.module.some((key) => entitlements.enabledModules.includes(key))
+        : entitlements.enabledModules.includes(item.module))
+    )
+      return false;
     if (item.hrAccess) return isAdmin || isHr;
     if (item.adminOnly) return isAdmin;
     return true;
