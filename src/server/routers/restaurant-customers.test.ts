@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn(async () => true),
+  can: vi.fn<typeof import('@/lib/abac').can>(async () => true),
   annotateAudit: vi.fn(),
   recordTrpcAudit: vi.fn(),
   listCustomers: vi.fn(),
@@ -39,7 +39,13 @@ vi.mock('@/server/audit', async () => {
       actual.annotateAudit(...args);
     },
     isAuditExcludedPath: vi.fn(() => false),
-    recordTrpcAudit: mocks.recordTrpcAudit,
+    recordTrpcAudit: (...args: Parameters<typeof actual.recordTrpcAudit>) => {
+      const [entry] = args;
+      mocks.recordTrpcAudit({
+        ...entry,
+        input: entry.ctx.audit.detail.skipInput ? '[skipped]' : entry.input,
+      });
+    },
   };
 });
 vi.mock('@/lib/restaurant/customers', async () => {
@@ -138,7 +144,6 @@ describe('capabilities and delegation', () => {
       channel: 'EMAIL',
       granted: true,
       source: 'checkout',
-      actorId: 'staff_1',
       policyVersion: 'v1',
       idempotencyKey: 'consent_1',
     });
@@ -157,6 +162,22 @@ describe('capabilities and delegation', () => {
       customerId: 'customer_1',
       orderId: 'order_1',
     });
+    expect(mocks.appendCustomerInteraction).toHaveBeenCalledWith(db, {
+      customerId: 'customer_1',
+      branchId: 'branch_1',
+      type: 'NOTE',
+      idempotencyKey: 'interaction_1',
+    });
+    expect(mocks.appendCustomerConsent).toHaveBeenCalledWith(db, {
+      customerId: 'customer_1',
+      channel: 'EMAIL',
+      granted: true,
+      source: 'checkout',
+      actorId: 'user_1',
+      policyVersion: 'v1',
+      idempotencyKey: 'consent_1',
+    });
+    expect(mocks.anonymizeCustomer).toHaveBeenCalledWith(db, { customerId: 'customer_1' });
   });
 
   it('fails closed before domain delegation', async () => {
@@ -192,16 +213,48 @@ describe('strict boundary validation', () => {
     expect(mocks.createCustomer).not.toHaveBeenCalled();
   });
 
-  it.each(['text', ['array']])('rejects non-object interaction payload %#', async (payload) => {
+  it.each([
+    ['payload', { customer: 'private' }],
+    ['occurredAt', new Date('2026-08-21T00:00:00.000Z')],
+  ] as const)('rejects caller-owned interaction %s', async (key, value) => {
     await expect(
       caller().appendInteraction({
         customerId: 'customer_1',
         branchId: 'branch_1',
         type: 'NOTE',
         idempotencyKey: 'interaction_1',
-        payload,
+        [key]: value,
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.appendCustomerInteraction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['actorId', 'caller_owned_actor'],
+    ['occurredAt', new Date('2026-08-21T00:00:00.000Z')],
+  ] as const)('rejects caller-owned consent %s', async (key, value) => {
+    await expect(
+      caller().appendConsent({
+        customerId: 'customer_1',
+        channel: 'EMAIL',
+        granted: true,
+        source: 'checkout',
+        policyVersion: 'v1',
+        idempotencyKey: 'consent_1',
+        [key]: value,
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.appendCustomerConsent).not.toHaveBeenCalled();
+  });
+
+  it('rejects caller-owned anonymization time', async () => {
+    await expect(
+      caller().anonymize({
+        customerId: 'customer_1',
+        at: new Date('2026-08-21T00:00:00.000Z'),
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.anonymizeCustomer).not.toHaveBeenCalled();
   });
 });
 
@@ -211,6 +264,7 @@ describe('error mapping', () => {
     ['INVALID_IDENTIFIER', 'BAD_REQUEST'],
     ['INVALID_STATE', 'CONFLICT'],
     ['DUPLICATE_IDENTIFIER', 'CONFLICT'],
+    ['DUPLICATE_TAG', 'CONFLICT'],
     ['ANONYMIZED', 'CONFLICT'],
   ] as const)('maps %s to %s', async (reason, code) => {
     mocks.getCustomer.mockRejectedValueOnce(new CustomerError(`customer ${reason}`, reason));
@@ -245,14 +299,28 @@ describe('privacy audit', () => {
       targetId: 'customer_1',
       skipInput: true,
     });
+    expect(mocks.recordTrpcAudit.mock.calls[0]?.[0].input).toBe('[skipped]');
     expect(JSON.stringify(detail)).not.toMatch(/email|phone|name|notes|payload|consent|exported/i);
+  });
+
+  it('suppresses PII before input validation fails', async () => {
+    await expect(
+      caller().create({ displayName: 'Private Person', unknown: 'private@example.com' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.annotateAudit.mock.calls[0]?.[1]).toEqual({ skipInput: true });
+    expect(mocks.recordTrpcAudit.mock.calls[0]?.[0]).toMatchObject({
+      input: '[skipped]',
+      outcome: 'FAILURE',
+    });
+    expect(mocks.createCustomer).not.toHaveBeenCalled();
   });
 });
 
-  it('normalizes email before direct domain delegation and preserves Dates', async () => {
+it('trims and normalizes email before domain delegation and preserves Dates', async () => {
   const verifiedAt = new Date('2026-08-21T00:00:00.000Z');
   await caller().create({
-    identifiers: [{ kind: 'EMAIL', value: 'Person@Example.COM', verifiedAt }],
+    identifiers: [{ kind: 'EMAIL', value: '  Person@Example.COM  ', verifiedAt }],
   });
   expect(mocks.createCustomer).toHaveBeenCalledWith(db, {
     identifiers: [{ kind: 'EMAIL', value: 'person@example.com', verifiedAt }],

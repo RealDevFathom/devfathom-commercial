@@ -192,6 +192,110 @@ describeIfDatabase('customer privacy (real PostgreSQL)', () => {
       { id: ids.bill, subtotal: '12.34', taxTotal: '1.23', grandTotal: '13.57' },
     ]);
     expect(exported.profile.createdAt).toBeInstanceOf(Date);
+    expect(Object.keys(exported.profile).sort()).toEqual(
+      [
+        'id',
+        'displayName',
+        'givenName',
+        'familyName',
+        'birthDate',
+        'notes',
+        'anonymizedAt',
+        'createdAt',
+        'updatedAt',
+      ].sort()
+    );
+    expect(Object.keys(exported.identifiers[0]!).sort()).toEqual(
+      ['id', 'kind', 'normalizedValue', 'verifiedAt', 'createdAt', 'updatedAt'].sort()
+    );
+    expect(Object.keys(exported.interactions[0]!).sort()).toEqual(
+      ['id', 'branchId', 'orderId', 'type', 'occurredAt', 'createdAt'].sort()
+    );
+    expect(Object.keys(exported.tags[0]!).sort()).toEqual(
+      ['id', 'name', 'color', 'createdAt', 'updatedAt'].sort()
+    );
+    expect(Object.keys(exported.tagAssignments[0]!).sort()).toEqual(
+      ['id', 'tagId', 'createdAt'].sort()
+    );
+    expect(Object.keys(exported.consentEvents[0]!).sort()).toEqual(
+      [
+        'id',
+        'channel',
+        'granted',
+        'source',
+        'actorId',
+        'policyVersion',
+        'occurredAt',
+        'createdAt',
+      ].sort()
+    );
+    expect(Object.keys(exported.loyaltyAccount!).sort()).toEqual(
+      ['id', 'active', 'enrolledAt', 'deactivatedAt', 'createdAt', 'updatedAt'].sort()
+    );
+    expect(Object.keys(exported.loyaltyProgramVersions[0]!).sort()).toEqual(
+      [
+        'id',
+        'versionNumber',
+        'effectiveFrom',
+        'earnRate',
+        'redemptionValue',
+        'expiryDays',
+        'createdAt',
+        'updatedAt',
+      ].sort()
+    );
+    expect(Object.keys(exported.loyaltyLedger[0]!).sort()).toEqual(
+      [
+        'id',
+        'accountId',
+        'programVersionId',
+        'kind',
+        'points',
+        'billId',
+        'refundId',
+        'reversesEntryId',
+        'reason',
+        'expiresAt',
+        'occurredAt',
+        'createdAt',
+      ].sort()
+    );
+    expect(Object.keys(exported.orders[0]!).sort()).toEqual(
+      [
+        'id',
+        'branchId',
+        'orderNumber',
+        'businessDate',
+        'status',
+        'channel',
+        'openedAt',
+        'closedAt',
+        'cancelledAt',
+        'createdAt',
+      ].sort()
+    );
+    expect(Object.keys(exported.bills[0]!).sort()).toEqual(
+      [
+        'id',
+        'orderId',
+        'branchId',
+        'businessDate',
+        'status',
+        'subtotal',
+        'taxTotal',
+        'serviceChargeTotal',
+        'compTotal',
+        'discountTotal',
+        'roundingAdjustment',
+        'grandTotal',
+        'receiptNumber',
+        'settledAt',
+        'createdAt',
+      ].sort()
+    );
+    expect(JSON.stringify(exported)).not.toMatch(
+      /organizationId|staffProfileId|deviceId|coAuthorization|idempotencyKey|payload/
+    );
   });
 
   it('anonymizes once while preserving retained history and financial records', async () => {

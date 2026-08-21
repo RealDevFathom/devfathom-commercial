@@ -17,15 +17,21 @@ import {
 } from '@/lib/restaurant/customers';
 import { anonymizeCustomer, exportCustomerData } from '@/lib/restaurant/customer-privacy';
 import { annotateAudit } from '../audit';
-import { capabilityProcedure, router } from '../trpc';
+import { capabilityProcedure, publicProcedure, router } from '../trpc';
 
 const id = z.string().trim().min(1).max(200);
 const phone = z.string().regex(/^\+[1-9]\d{7,14}$/);
+const email = z
+  .string()
+  .trim()
+  .max(320)
+  .pipe(z.email())
+  .transform((value) => value.toLowerCase());
 const identifier = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('EMAIL'),
-      value: z.email().max(320).transform((value) => value.toLowerCase()),
+      value: email,
       verifiedAt: z.date().nullable().optional(),
     })
     .strict(),
@@ -42,7 +48,7 @@ const identifierCorrection = z.discriminatedUnion('kind', [
     .object({
       id: id.optional(),
       kind: z.literal('EMAIL'),
-      value: z.email().max(320).transform((value) => value.toLowerCase()),
+      value: email,
       verifiedAt: z.date().nullable().optional(),
     })
     .strict(),
@@ -63,8 +69,18 @@ const profile = {
   notes: z.string().max(5_000).nullable().optional(),
 };
 const pair = z.object({ customerId: id, tagId: id }).strict();
-const readProcedure = capabilityProcedure('customers:read');
-const configureProcedure = capabilityProcedure('restaurant:configure');
+
+function customerSensitiveProcedure(action: Parameters<typeof capabilityProcedure>[0]) {
+  return publicProcedure
+    .use(({ ctx, next }) => {
+      annotateAudit(ctx, { skipInput: true });
+      return next();
+    })
+    .concat(capabilityProcedure(action));
+}
+
+const readProcedure = customerSensitiveProcedure('customers:read');
+const configureProcedure = customerSensitiveProcedure('restaurant:configure');
 
 function mapCustomerError(error: unknown): never {
   if (!(error instanceof CustomerError)) throw error;
@@ -154,8 +170,6 @@ export const restaurantCustomersRouter = router({
           branchId: id,
           orderId: id.nullable().optional(),
           type: z.string().trim().min(1).max(100),
-          payload: z.record(z.string().min(1).max(100), z.json()).optional(),
-          occurredAt: z.date().optional(),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
@@ -176,16 +190,17 @@ export const restaurantCustomersRouter = router({
           channel: z.enum(['EMAIL', 'SMS', 'PHONE', 'WHATSAPP', 'PUSH']),
           granted: z.boolean(),
           source: z.string().trim().min(1).max(100),
-          actorId: id,
           policyVersion: z.string().trim().min(1).max(100),
-          occurredAt: z.date().optional(),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await appendCustomerConsent(ctx.db, input);
+        return await appendCustomerConsent(ctx.db, {
+          ...input,
+          actorId: ctx.session.user.id,
+        });
       } catch (error) {
         mapCustomerError(error);
       }
@@ -249,7 +264,7 @@ export const restaurantCustomersRouter = router({
     }),
 
   anonymize: configureProcedure
-    .input(z.object({ customerId: id, at: z.date().optional() }).strict())
+    .input(z.object({ customerId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, {
         action: 'restaurantCustomers.anonymize',
@@ -258,7 +273,7 @@ export const restaurantCustomersRouter = router({
         skipInput: true,
       });
       try {
-        return await anonymizeCustomer(ctx.db, input);
+        return await anonymizeCustomer(ctx.db, { customerId: input.customerId });
       } catch (error) {
         mapCustomerError(error);
       }

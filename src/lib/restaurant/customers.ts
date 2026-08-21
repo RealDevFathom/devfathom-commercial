@@ -10,6 +10,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 export type CustomerErrorReason =
   | 'NOT_FOUND'
   | 'DUPLICATE_IDENTIFIER'
+  | 'DUPLICATE_TAG'
   | 'INVALID_IDENTIFIER'
   | 'ANONYMIZED'
   | 'INVALID_STATE';
@@ -159,6 +160,35 @@ const CUSTOMER_SELECT = {
 
 type LoadedCustomer = Prisma.RestaurantCustomerGetPayload<{ select: typeof CUSTOMER_SELECT }>;
 
+const CUSTOMER_LIST_SELECT = {
+  id: true,
+  displayName: true,
+  givenName: true,
+  familyName: true,
+  birthDate: true,
+  notes: true,
+  anonymizedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  identifiers: CUSTOMER_SELECT.identifiers,
+  interactions: {
+    orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    take: 5,
+    select: {
+      id: true,
+      branchId: true,
+      branch: { select: { id: true, name: true } },
+      type: true,
+      occurredAt: true,
+    },
+  },
+  tagAssignments: CUSTOMER_SELECT.tagAssignments,
+} satisfies Prisma.RestaurantCustomerSelect;
+
+type ListedCustomer = Prisma.RestaurantCustomerGetPayload<{
+  select: typeof CUSTOMER_LIST_SELECT;
+}>;
+
 function projectCustomer(customer: LoadedCustomer) {
   const currentConsent: Partial<Record<CustomerConsentChannel, LoadedCustomer['consentEvents'][number]>> = {};
   for (const event of customer.consentEvents) currentConsent[event.channel] ??= event;
@@ -179,17 +209,29 @@ function projectCustomer(customer: LoadedCustomer) {
   };
 }
 
-async function requireCustomer(db: ScopedDb, customerId: string) {
-  const customer = await db.restaurantCustomer.findUnique({
-    where: { id: customerId },
-    select: { id: true, anonymizedAt: true },
-  });
+function projectListedCustomer(customer: ListedCustomer) {
+  const { tagAssignments, ...profile } = customer;
+  return {
+    ...profile,
+    tags: tagAssignments.map(({ tag, createdAt }) => ({ ...tag, assignedAt: createdAt })),
+  };
+}
+
+export async function lockCustomer(db: ScopedDb, customerId: string) {
+  const [customer] = await db.$queryRaw<Array<{ id: string; anonymizedAt: Date | null }>>(
+    Prisma.sql`
+      SELECT "id", "anonymizedAt"
+      FROM "restaurant_customers"
+      WHERE "id" = ${customerId}
+      FOR UPDATE
+    `
+  );
   if (!customer) throw new CustomerError('Customer does not exist.', 'NOT_FOUND');
   return customer;
 }
 
 async function requireActiveCustomer(db: ScopedDb, customerId: string) {
-  const customer = await requireCustomer(db, customerId);
+  const customer = await lockCustomer(db, customerId);
   if (customer.anonymizedAt) throw new CustomerError('Customer is anonymized.', 'ANONYMIZED');
   return customer;
 }
@@ -318,12 +360,12 @@ export async function listCustomers(db: ScopedDb, input: ListCustomersInput = {}
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
-    select: CUSTOMER_SELECT,
+    select: CUSTOMER_LIST_SELECT,
   });
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   return {
-    customers: page.map(projectCustomer),
+    customers: page.map(projectListedCustomer),
     nextCursor: hasMore ? (page.at(-1)?.id ?? null) : null,
   };
 }
@@ -334,20 +376,27 @@ export async function attachCustomerToOrder(
 ) {
   return runInTransaction(db, async (tx) => {
     await requireActiveCustomer(tx, input.customerId);
-    const order = await tx.restaurantOrder.findUnique({
-      where: { id: input.orderId },
-      select: { id: true, customerId: true, status: true },
+    const attached = await tx.restaurantOrder.updateMany({
+      where: {
+        id: input.orderId,
+        status: 'OPEN',
+        OR: [{ customerId: null }, { customerId: input.customerId }],
+      },
+      data: { customerId: input.customerId },
     });
-    if (!order) throw new CustomerError('Order does not exist.', 'NOT_FOUND');
-    if (order.status !== 'OPEN') {
-      throw new CustomerError('Customer can only be attached to an OPEN order.', 'INVALID_STATE');
-    }
-    if (order.customerId && order.customerId !== input.customerId) {
+    if (attached.count === 0) {
+      const order = await tx.restaurantOrder.findUnique({
+        where: { id: input.orderId },
+        select: { customerId: true, status: true },
+      });
+      if (!order) throw new CustomerError('Order does not exist.', 'NOT_FOUND');
+      if (order.status !== 'OPEN') {
+        throw new CustomerError('Customer can only be attached to an OPEN order.', 'INVALID_STATE');
+      }
       throw new CustomerError('Order already belongs to another customer.', 'INVALID_STATE');
     }
-    return tx.restaurantOrder.update({
-      where: { id: order.id },
-      data: { customerId: input.customerId },
+    return tx.restaurantOrder.findUniqueOrThrow({
+      where: { id: input.orderId },
       select: { id: true, branchId: true, customerId: true, status: true },
     });
   });
@@ -358,7 +407,6 @@ export type AppendCustomerInteractionInput = {
   branchId: string;
   orderId?: string | null;
   type: string;
-  payload?: Prisma.InputJsonValue;
   occurredAt?: Date;
   idempotencyKey: string;
 };
@@ -405,7 +453,6 @@ export async function appendCustomerInteraction(
         branchId: input.branchId,
         orderId: input.orderId,
         type,
-        payload: input.payload,
         occurredAt: input.occurredAt,
         idempotencyKey,
       },
@@ -474,10 +521,15 @@ export async function appendCustomerConsent(db: ScopedDb, input: AppendCustomerC
 }
 
 export async function createCustomerTag(db: ScopedDb, input: { name: string; color?: string | null }) {
-  return db.customerTag.create({
-    data: { name: required(input.name, 'Tag name'), color: input.color },
-    select: { id: true, name: true, color: true, createdAt: true, updatedAt: true },
-  });
+  try {
+    return await db.customerTag.create({
+      data: { name: required(input.name, 'Tag name'), color: input.color },
+      select: { id: true, name: true, color: true, createdAt: true, updatedAt: true },
+    });
+  } catch (error) {
+    if (isUniqueError(error)) throw new CustomerError('Tag name already exists.', 'DUPLICATE_TAG');
+    throw error;
+  }
 }
 
 export async function listCustomerTags(db: ScopedDb) {
@@ -507,7 +559,9 @@ export async function unassignCustomerTag(
   db: ScopedDb,
   input: { customerId: string; tagId: string }
 ) {
-  await requireActiveCustomer(db, input.customerId);
-  const result = await db.customerTagAssignment.deleteMany({ where: input });
-  return { removed: result.count > 0 };
+  return runInTransaction(db, async (tx) => {
+    await requireActiveCustomer(tx, input.customerId);
+    const result = await tx.customerTagAssignment.deleteMany({ where: input });
+    return { removed: result.count > 0 };
+  });
 }

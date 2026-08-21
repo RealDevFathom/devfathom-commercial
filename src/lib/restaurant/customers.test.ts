@@ -155,7 +155,6 @@ describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
       branchId: ids.branch,
       orderId: ids.openOrder,
       type: 'ORDER_OPENED',
-      payload: { source: 'pos' },
       idempotencyKey: `interaction_${suffix}`,
       occurredAt: t1,
     };
@@ -235,14 +234,38 @@ describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
     expect(detail.currentConsent.EMAIL).toMatchObject({ id: latest.id, granted: false });
     expect(detail.loyaltySummary).toMatchObject({ active: true, balance: 25 });
 
+    for (let index = 0; index < 6; index += 1) {
+      await tenant((tx) =>
+        deps.customers.appendCustomerInteraction(tx, {
+          customerId: customer.id,
+          branchId: ids.branch,
+          type: `VISIT_${index}`,
+          idempotencyKey: `recent_interaction_${index}_${suffix}`,
+          occurredAt: new Date(t2.getTime() + index + 1),
+        })
+      );
+    }
+
     const page = await tenant((tx) =>
       deps.customers.listCustomers(tx, { query: 'grace', tagId: tag.id, limit: 1 })
     );
     expect(page.customers.map(({ id }) => id)).toEqual([customer.id]);
+    expect(page.customers[0]?.interactions).toHaveLength(5);
+    expect(page.customers[0]?.interactions[0]).toMatchObject({
+      branch: { id: ids.branch, name: 'Main' },
+      type: 'VISIT_5',
+    });
+    expect(page.customers[0]).not.toHaveProperty('orders');
+    expect(page.customers[0]).not.toHaveProperty('consentEvents');
+    expect(page.customers[0]).not.toHaveProperty('loyaltySummary');
+    expect(page.customers[0]?.interactions[0]).not.toHaveProperty('payload');
   });
 
-  it('rejects customer attachment unless the order is OPEN', async () => {
-    const customer = await tenant((tx) => deps.customers.createCustomer(tx, {}));
+  it('atomically attaches only unassigned OPEN orders and preserves domain errors', async () => {
+    const [customer, otherCustomer] = await Promise.all([
+      tenant((tx) => deps.customers.createCustomer(tx, {})),
+      tenant((tx) => deps.customers.createCustomer(tx, {})),
+    ]);
     await expect(
       tenant((tx) =>
         deps.customers.attachCustomerToOrder(tx, {
@@ -251,6 +274,48 @@ describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
         })
       )
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+
+    const orderId = `order_attach_${suffix}`;
+    await tenant((tx) =>
+      tx.restaurantOrder.create({
+        data: {
+          id: orderId,
+          branchId: ids.branch,
+          orderNumber: 3,
+          businessDate: new Date('2026-08-21T00:00:00.000Z'),
+          status: 'OPEN',
+          channel: 'TAKEAWAY',
+          staffProfileId: ids.staff,
+          deviceId: ids.device,
+          openedAt: t1,
+        },
+      })
+    );
+    await expect(
+      tenant((tx) =>
+        deps.customers.attachCustomerToOrder(tx, { customerId: customer.id, orderId })
+      )
+    ).resolves.toMatchObject({ customerId: customer.id, status: 'OPEN' });
+    await expect(
+      tenant((tx) =>
+        deps.customers.attachCustomerToOrder(tx, { customerId: otherCustomer.id, orderId })
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(
+      tenant((tx) =>
+        deps.customers.attachCustomerToOrder(tx, {
+          customerId: customer.id,
+          orderId: `missing_${suffix}`,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+  });
+
+  it('maps normalized duplicate tag names to a domain conflict', async () => {
+    await tenant((tx) => deps.customers.createCustomerTag(tx, { name: `Loyal ${suffix}` }));
+    await expect(
+      tenant((tx) => deps.customers.createCustomerTag(tx, { name: `  loyal ${suffix}  ` }))
+    ).rejects.toMatchObject({ reason: 'DUPLICATE_TAG' });
   });
 
   it('rejects unprivileged UPDATE and DELETE of consent and interaction ledgers', async () => {
