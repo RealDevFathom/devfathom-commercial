@@ -103,6 +103,9 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // verification (verify/reject/waive), escalation acknowledgement.
   restaurantSopExecution: 'restaurant-sop',
   restaurantNotifications: 'restaurant-core',
+  restaurantCustomers: 'restaurant-customers',
+  restaurantLoyalty: 'restaurant-loyalty',
+  restaurantInsights: 'restaurant-insights',
 };
 
 export function moduleForProcedure(path: string): string | null {

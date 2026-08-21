@@ -14,6 +14,7 @@ import {
   type MoneyActor,
 } from './drawer-sessions';
 import { sub, sum, ZERO } from './money';
+import { enqueueInsightRollup } from './insight-rollups';
 
 /**
  * M5-L3 / C9 / §11.3 — the IMMUTABLE daily close.
@@ -33,7 +34,7 @@ import { sub, sum, ZERO } from './money';
  *   - compTotal    = Σ SETTLED bill.compTotal
  *   - taxTotal / serviceChargeTotal = Σ SETTLED bill.{taxTotal,serviceChargeTotal}
  *                    (structurally zero in M5)
- *   - discountTotal= 0 (structurally zero until the discount milestone)
+ *   - discountTotal= Σ SETTLED bill.discountTotal
  *   - netSales     = grossSales − compTotal − discountTotal
  *   - tipTotal     = Σ tender.tipAmount for the date (== Σ child tipAmount)
  *   - refundTotal  = Σ refund.amount for the PROCESSING date (C7 — cross-date
@@ -83,6 +84,7 @@ export type AggregateBill = {
   taxTotal: Prisma.Decimal;
   serviceChargeTotal: Prisma.Decimal;
   compTotal: Prisma.Decimal;
+  discountTotal: Prisma.Decimal;
   grandTotal: Prisma.Decimal;
 };
 export type AggregateTender = {
@@ -141,7 +143,7 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   const compTotal = sum(settled.map((b) => b.compTotal));
   const taxTotal = sum(settled.map((b) => b.taxTotal));
   const serviceChargeTotal = sum(settled.map((b) => b.serviceChargeTotal));
-  const discountTotal = ZERO; // structurally zero in M5 (C9)
+  const discountTotal = sum(settled.map((b) => b.discountTotal));
   const netSales = sub(sub(grossSales, compTotal), discountTotal);
   const voidTotal = sum(voided.map((b) => b.grandTotal));
 
@@ -223,6 +225,7 @@ async function loadCloseInputs(
       taxTotal: true,
       serviceChargeTotal: true,
       compTotal: true,
+      discountTotal: true,
       grandTotal: true,
     },
   });
@@ -419,6 +422,11 @@ export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutC
       deviceId: input.actor.deviceId,
     });
     await recordMoneyResult(tx, input.actor, closeId);
+    await enqueueInsightRollup(tx, {
+      branchId: input.branchId,
+      businessDate: input.businessDate,
+      sourceDailyCloseId: closeId,
+    });
 
     return { dailyCloseId: closeId, ...splitAggregate(aggregate), replayed: false };
   });
@@ -514,6 +522,11 @@ export async function correctClose(
       coAuthorizationId,
     });
     await recordMoneyResult(tx, input.actor, closeId);
+    await enqueueInsightRollup(tx, {
+      branchId: input.branchId,
+      businessDate: input.businessDate,
+      sourceDailyCloseId: closeId,
+    });
 
     return {
       dailyCloseId: closeId,
