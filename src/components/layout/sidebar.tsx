@@ -157,6 +157,20 @@ const navigation: NavItem[] = [
     module: 'restaurant-pos',
   },
   {
+    label: 'Customers & Loyalty',
+    href: '/restaurant/loyalty',
+    icon: Users,
+    group: 'Firm',
+    module: 'restaurant-loyalty',
+  },
+  {
+    label: 'Restaurant Insights',
+    href: '/restaurant/insights',
+    icon: BarChart3,
+    group: 'Firm',
+    module: 'restaurant-insights',
+  },
+  {
     label: 'Reviews',
     href: '/reviews',
     icon: ClipboardList,
