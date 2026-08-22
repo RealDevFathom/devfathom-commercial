@@ -431,7 +431,7 @@ describe('Customers & Loyalty console', () => {
     });
     fireEvent.change(screen.getByLabelText('Earn rate'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Redemption value'), { target: { value: '0.01' } });
-    fireEvent.change(screen.getByLabelText('Expiry days'), { target: { value: '365' } });
+    fireEvent.change(screen.getByLabelText(/^Expiry days/), { target: { value: '365' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create program version' }));
 
     expect(mocks.mutations.configure[0]).toMatchObject({

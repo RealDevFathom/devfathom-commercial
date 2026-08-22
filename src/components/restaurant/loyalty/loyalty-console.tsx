@@ -2,7 +2,7 @@
 
 import type { inferRouterOutputs } from '@trpc/server';
 import { Download, Search, ShieldAlert } from 'lucide-react';
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Button } from '@/components/ui/button';
@@ -28,7 +28,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 
@@ -349,7 +348,6 @@ export function LoyaltyConsole() {
       policyVersion: String(data.get('policyVersion') ?? '').trim(),
       idempotencyKey: crypto.randomUUID(),
     });
-    event.currentTarget.reset();
   };
   const submitInteraction = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -363,7 +361,6 @@ export function LoyaltyConsole() {
       ...(orderId ? { orderId } : {}),
       idempotencyKey: crypto.randomUUID(),
     });
-    event.currentTarget.reset();
   };
   const submitProgram = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -376,7 +373,6 @@ export function LoyaltyConsole() {
       redemptionValue: String(data.get('redemptionValue') ?? ''),
       expiryDays: expiryDays ? Number(expiryDays) : null,
     });
-    event.currentTarget.reset();
   };
   const submitAdjustment = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -388,7 +384,6 @@ export function LoyaltyConsole() {
       reason: String(data.get('reason') ?? '').trim(),
       idempotencyKey: crypto.randomUUID(),
     });
-    event.currentTarget.reset();
   };
 
   const header = (
@@ -582,6 +577,7 @@ export function LoyaltyConsole() {
                             type="button"
                             size="sm"
                             variant="secondary"
+                            className="min-h-11"
                             aria-pressed={customer.id === activeCustomerId}
                             onClick={() => setSelectedCustomerId(customer.id)}
                           >
@@ -634,6 +630,7 @@ export function LoyaltyConsole() {
                 <Button
                   type="button"
                   variant="secondary"
+                  className="min-h-11"
                   onClick={() => void detailQuery.refetch()}
                 >
                   Retry detail
@@ -700,6 +697,7 @@ export function LoyaltyConsole() {
                 <Button
                   type="button"
                   variant="secondary"
+                  className="min-h-11"
                   onClick={() => void accountQuery.refetch()}
                 >
                   Retry account
@@ -785,6 +783,7 @@ export function LoyaltyConsole() {
                 <Button
                   type="button"
                   variant="secondary"
+                  className="min-h-11"
                   onClick={() => void ledgerQuery.refetch()}
                 >
                   Retry ledger
