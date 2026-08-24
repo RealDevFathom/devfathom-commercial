@@ -32,12 +32,16 @@ const dailyRow = {
 
 const db = {
   insightDailyRollup: { findMany: vi.fn() },
+  insightLoyaltyLiability: { findMany: vi.fn() },
   labourCostFact: { findFirst: vi.fn(), create: vi.fn() },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   db.insightDailyRollup.findMany.mockResolvedValue([dailyRow]);
+  db.insightLoyaltyLiability.findMany.mockResolvedValue([
+    { businessDate: dailyRow.businessDate, liability: D('18.75') },
+  ]);
   db.labourCostFact.findFirst.mockResolvedValue(null);
 });
 
@@ -49,6 +53,7 @@ describe('insight report serialization', () => {
     expect(row).toMatchObject({
       grossSales: '125.5',
       drawerVariance: '-0.5',
+      loyaltyLiability: '18.75',
       freshness: {
         status: 'CURRENT',
         computedAtUtc: '2026-08-21T12:34:56.000Z',
