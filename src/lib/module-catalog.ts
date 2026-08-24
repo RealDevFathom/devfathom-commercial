@@ -35,7 +35,7 @@ export function verticalForModuleKey(key: string): OrganizationVertical {
   return isRestaurantModuleKey(key) ? 'RESTAURANT' : 'AGENCY';
 }
 
-const PROCEDURE_MODULES: Record<string, string> = {
+export const PROCEDURE_MODULES: Record<string, string> = {
   dashboard: 'dashboard',
   projects: 'projects',
   trelloImport: 'projects',
@@ -103,7 +103,7 @@ const PROCEDURE_MODULES: Record<string, string> = {
   // verification (verify/reject/waive), escalation acknowledgement.
   restaurantSopExecution: 'restaurant-sop',
   restaurantNotifications: 'restaurant-core',
-  restaurantCustomers: 'restaurant-customers',
+  restaurantCustomers: 'restaurant-loyalty',
   restaurantLoyalty: 'restaurant-loyalty',
   restaurantInsights: 'restaurant-insights',
 };

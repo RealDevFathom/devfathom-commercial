@@ -24,10 +24,23 @@ const redeemProcedure = capabilityProcedure('loyalty:redeem');
 
 const ID = z.string().trim().min(1).max(191);
 const IDEMPOTENCY_KEY = z.string().trim().min(1).max(200);
+const ACTIVE_CUSTOMERS_LIMIT = 'loyalty.activeCustomers.max';
+const BOOTSTRAPPED_ACTIVE_CUSTOMERS_LIMIT = `restaurant-core.${ACTIVE_CUSTOMERS_LIMIT}`;
 const DECIMAL_18_6 = z
   .string()
   .regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/, 'Expected a positive Decimal string.');
 const LIMIT = z.number().int().min(1).max(200).default(100);
+
+function activeCustomersMax(limits: Record<string, number>): number {
+  const value = limits[ACTIVE_CUSTOMERS_LIMIT] ?? limits[BOOTSTRAPPED_ACTIVE_CUSTOMERS_LIMIT];
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TRPCError({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'The loyalty active-customer entitlement limit is not configured correctly.',
+    });
+  }
+  return value;
+}
 
 function mapLoyaltyError(error: unknown): never {
   if (!(error instanceof LoyaltyError)) throw error;
@@ -102,8 +115,7 @@ export const restaurantLoyaltyRouter = router({
       try {
         const account = await enrollLoyaltyAccount(ctx.db, {
           customerId: input.customerId,
-          activeCustomersMax:
-            (ctx.entitlements.limits as Record<string, number>)['loyalty.activeCustomers.max'] ?? 0,
+          activeCustomersMax: activeCustomersMax(ctx.entitlements.limits),
         });
         annotateAudit(ctx, {
           targetType: 'LoyaltyAccount',
