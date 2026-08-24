@@ -17,7 +17,7 @@ export const POST = terminalCommandRoute(
       tableIds: data.tableIds,
       coverCount: data.coverCount ?? null,
       sectionId: data.sectionId ?? null,
-      serverStaffProfileId: data.serverStaffProfileId ?? null,
+      serverStaffProfileId: actor.staffProfileId,
       actor,
     });
     return { ...result, businessDate: result.businessDate.toISOString().slice(0, 10) };
