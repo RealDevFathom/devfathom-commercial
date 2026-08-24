@@ -4,8 +4,20 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
-import { readLoyaltyRelease, releaseLoyaltyRedemption } from './loyalty';
-import { add, allocate, compare, equals, multiply, roundMoney, sub, sum, ZERO } from './money';
+import { releaseLoyaltyRedemption } from './loyalty';
+import {
+  add,
+  allocate,
+  compare,
+  equals,
+  money,
+  MONEY_SCALE,
+  multiply,
+  roundMoney,
+  sub,
+  sum,
+  ZERO,
+} from './money';
 import { allocateReceiptNumber } from './receipt-numbers';
 
 /**
@@ -467,6 +479,20 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
       return { orderId: input.orderId, billIds, replayed: true };
     }
 
+    // Serialize every cut of this order on a key that exists BEFORE any bill does.
+    // Locking the bill ROWS is not enough, because the dangerous row is the one that is
+    // not there yet: a concurrent cut can INSERT a bill after this transaction has taken
+    // its locks and read its live set, and the `updateMany` that voids "every live bill"
+    // would then void a bill this transaction never locked and never compensated — or,
+    // on a first cut, two transactions each see no live bills and the order ends up with
+    // two independent bill sets billing the same money. The order row is the one thing
+    // both cuts must pass through.
+    //
+    // LOCK ORDER, repo-wide: the order row first, then bill rows ascending by id.
+    // `orders.closeOrder` takes this same order row (by UPDATE) before its loyalty earn
+    // locks the bills, so a cut and a close of the same order queue instead of deadlock.
+    await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${input.orderId} FOR UPDATE`;
+
     const order = await loadBillOrder(tx, input.orderId);
     if (!BILLABLE_STATUSES.has(order.status)) {
       throw new BillCommandError(
@@ -535,11 +561,13 @@ async function handleExistingBills(
   order: LoadedBillOrder,
   input: CutBillsInput
 ): Promise<void> {
-  // Lock the live bills first: a concurrent redemption must not slip a discount onto
-  // a bill between the guard, the compensation and the void. `ORDER BY id` because
-  // this is one of the two places that locks SEVERAL bill rows at once — the order
-  // close's loyalty earn is the other — and they must agree on the order or a re-cut
-  // racing a close of the same order can deadlock on the second row.
+  // `cutBills` already holds this order's row, so the live set cannot GROW under us.
+  // Lock the live bill rows as well: a concurrent redemption or comp takes the same
+  // bill lock (and no order lock), and must not slip a discount onto one of these bills
+  // between the guard, the compensation and the void. `ORDER BY id` because this is one
+  // of the two places that locks SEVERAL bill rows at once — the order close's loyalty
+  // earn is the other — and they must agree on the order or a re-cut racing a close of
+  // the same order can deadlock on the second row.
   await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE "orderId" = ${order.id} AND status <> 'VOID' ORDER BY id FOR UPDATE`;
   const live = await tx.restaurantBill.findMany({
     where: { orderId: order.id, status: { not: 'VOID' } },
@@ -631,12 +659,44 @@ export type CompLineInput = {
  * first call and every replay of it name the same release. */
 const compReleaseKey = (billLineId: string) => `comp:${billLineId}`;
 
+/**
+ * The comp's OWN idempotency record carries both facts its replay has to answer with:
+ * the line it comped, and the exact loyalty discount that call released.
+ *
+ * The money is PERSISTED here, not re-derived later. What a release frees depends on how
+ * much of the same redemption earlier commands had already given back (cumulative
+ * rounding — see `loyalty.LoyaltyReleaseResult`), so with a fractional redemption value a
+ * release recorded AFTER this comp would move any reconstruction off the ledger by a
+ * cent, and the replay would answer with a number the original call never returned.
+ * Storing it against the idempotency key makes the replay exact and command-local: it
+ * reads one row, written by the call it is replaying, that nothing later can touch.
+ *
+ * A record written before this field existed is a bare line id with no separator, and is
+ * read as a comp that released nothing — which is what those comps did, since the release
+ * path did not exist yet.
+ */
+function encodeCompResult(billLineId: string, releasedDiscount: Prisma.Decimal): string {
+  return `${billLineId}|${releasedDiscount.toFixed(MONEY_SCALE)}`;
+}
+
+function decodeCompResult(
+  resultRef: string | null,
+  fallbackLineId: string
+): { billLineId: string; releasedDiscount: Prisma.Decimal } {
+  const [billLineId, released] = (resultRef ?? '').split('|');
+  return {
+    billLineId: billLineId || fallbackLineId,
+    releasedDiscount: released ? money(released) : ZERO,
+  };
+}
+
 export type CompLineResult = {
   billLineId: string;
   billId: string;
   /** Loyalty discount handed back because the comp would otherwise overdraw the
    * bill (M8/B3); zero on the ordinary path. The points return to the guest. A
-   * replay reports the SAME amount its first run released, not zero. */
+   * replay reports the SAME amount its first run released, not zero — read back from
+   * that call's own idempotency record, never re-derived (`encodeCompResult`). */
   releasedDiscount: Prisma.Decimal;
   replayed: boolean;
 };
@@ -662,18 +722,15 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
   return runInTransaction(db, async (tx) => {
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp');
     if (idem.replay) {
-      // Answer with what the first run actually released, re-derived from the ledger.
       // A replay writes nothing, but it must not report a DIFFERENT comp than the call
       // it replays: `releasedDiscount: 0` on the replay of a comp that released 9.00
-      // would tell the caller the guest's points were never given back.
-      const billLineId = idem.resultRef ?? input.billLineId;
-      const released = await readLoyaltyRelease(tx, {
-        idempotencyKey: compReleaseKey(billLineId),
-      });
+      // would tell the caller the guest's points were never given back. The answer comes
+      // from the record that call wrote, so it is exactly the number it returned.
+      const replayed = decodeCompResult(idem.resultRef, input.billLineId);
       return {
-        billLineId,
+        billLineId: replayed.billLineId,
         billId: input.billId,
-        releasedDiscount: released.value,
+        releasedDiscount: replayed.releasedDiscount,
         replayed: true,
       };
     }
@@ -716,7 +773,10 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         idempotencyKey: compReleaseKey(line.id),
         at: new Date(),
       });
-      releasedDiscount = release.value;
+      // A replay here would mean an earlier transaction already rolled this release off
+      // the bill — `bill.grandTotal`, read above under the same lock, already reflects
+      // it — so this call applies no further delta.
+      releasedDiscount = release.replayed ? ZERO : release.value;
     }
     const grandTotal = sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal);
     if (compare(grandTotal, ZERO) < 0) {
@@ -756,7 +816,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       },
     });
 
-    await recordMoneyIdempotentResult(tx, input.actor, line.id);
+    await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
   });
 }
