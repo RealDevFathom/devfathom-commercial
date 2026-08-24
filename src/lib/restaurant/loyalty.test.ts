@@ -11,7 +11,6 @@ import {
   enrollLoyaltyAccount,
   loyaltyBalance,
   netEarnableAmount,
-  readLoyaltyRelease,
   redeemLoyaltyPoints,
   releaseLoyaltyRedemption,
   reverseLoyaltyForRefund,
@@ -342,6 +341,16 @@ describe('earn is net of refunds taken before the close (M2)', () => {
   });
 });
 
+/**
+ * The money a release freed. Only the call that WROTE the entries reports one — a
+ * replay carries no `value` at all, so reaching for it here is a type error, which is
+ * the point: the amount is never re-derived from a ledger later releases can move.
+ */
+function releasedValue(result: Awaited<ReturnType<typeof releaseLoyaltyRedemption>>) {
+  if (result.replayed) throw new Error('a replayed release reports no money, by design');
+  return result.value;
+}
+
 describe('redemption release (B3/B4)', () => {
   const redemption = {
     id: 'redeem_1',
@@ -366,7 +375,7 @@ describe('redemption release (B3/B4)', () => {
       at: AT,
     });
     expect(result.points).toBe(160);
-    expect(result.value.toFixed(2)).toBe('8.00');
+    expect(releasedValue(result).toFixed(2)).toBe('8.00');
     expect(result.replayed).toBe(false);
     expect(db.loyaltyPointsEntry.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -394,10 +403,10 @@ describe('redemption release (B3/B4)', () => {
       at: AT,
     });
     expect(result.points).toBe(80);
-    expect(result.value.toFixed(2)).toBe('4.00');
+    expect(releasedValue(result).toFixed(2)).toBe('4.00');
   });
 
-  it('replays its own entries without releasing a second time', async () => {
+  it('replays its own entries without releasing a second time, and reports no money', async () => {
     const release = { id: 'release_1', points: 160, reversesEntryId: 'redeem_1' };
     entryReads({ mine: [release], byId: [redemption], releases: [release] });
 
@@ -409,9 +418,34 @@ describe('redemption release (B3/B4)', () => {
       idempotencyKey: 'comp:line_1',
       at: AT,
     });
-    expect(result).toMatchObject({ points: 160, replayed: true, entryIds: ['release_1'] });
-    expect(result.value.toFixed(2)).toBe('8.00');
+    expect(result).toEqual({ points: 160, replayed: true, entryIds: ['release_1'] });
+    // No `value`, at all. The money a release freed depends on how much of the same
+    // redemption was already given back, so a number re-derived here could differ from
+    // the one the original call returned; the caller persists that number instead.
+    expect(result).not.toHaveProperty('value');
     expect(db.loyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('decides the replay from its OWN key prefix alone, reading no sibling release', async () => {
+    // The guard against re-derivation drift: a replay must not consult the other
+    // releases against the same redemption, because those can be written after it.
+    const release = { id: 'release_1', points: 160, reversesEntryId: 'redeem_1' };
+    entryReads({ mine: [release], byId: [redemption], releases: [release] });
+
+    await releaseLoyaltyRedemption(scoped(), {
+      billId: 'bill_1',
+      shortfall: new Prisma.Decimal('8.00'),
+      actorId: 'staff_1',
+      reason: 'comp',
+      idempotencyKey: 'comp:line_1',
+      at: AT,
+    });
+    const reads = db.loyaltyPointsEntry.findMany.mock.calls.map(
+      (call) => (call[0] as { where?: EntryWhere }).where ?? {}
+    );
+    expect(reads).toEqual([
+      { kind: 'ADJUSTMENT', idempotencyKey: { startsWith: 'loyalty:release:comp:line_1:' } },
+    ]);
   });
 
   it('releases nothing when the bill carries no redemption', async () => {
@@ -429,45 +463,56 @@ describe('redemption release (B3/B4)', () => {
   });
 });
 
-describe('readLoyaltyRelease — a replay reports what the first run released', () => {
+describe('redemption release — fractional point values and cumulative rounding', () => {
+  /**
+   * A redemption priced at 0.0335 per point: two points took 0.07 off the bill
+   * (round(0.067)), but the FIRST point alone is worth round(0.0335) = 0.03. So the
+   * second point has to be worth 0.07 − 0.03 = 0.04 — more than the first, for the same
+   * one point — or the two releases together hand back 0.06 and leave a cent of discount
+   * on a bill that no longer carries it.
+   *
+   * This is exactly why the money is not reconstructible from a release row alone: the
+   * same `points: 1` entry is worth 0.03 or 0.04 depending only on what came BEFORE it.
+   */
   const redemption = {
     id: 'redeem_1',
-    programVersion: { redemptionValue: new Prisma.Decimal('0.05') },
+    accountId: 'account_1',
+    points: -2,
+    programVersionId: 'program_1',
+    programVersion: { redemptionValue: new Prisma.Decimal('0.0335') },
   };
 
-  it('reports nothing released for a command that released nothing', async () => {
-    entryReads({});
-    await expect(
-      readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_1' })
-    ).resolves.toMatchObject({ points: 0, entryIds: [] });
-    expect(
-      (await readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_1' })).value.toFixed(2)
-    ).toBe('0.00');
+  const release = (shortfall: string, key: string) =>
+    releaseLoyaltyRedemption(scoped(), {
+      billId: 'bill_1',
+      shortfall: new Prisma.Decimal(shortfall),
+      actorId: 'staff_1',
+      reason: 'comp',
+      idempotencyKey: key,
+      at: AT,
+    });
+
+  it('prices the first point of a fractional redemption at the rounded-down cent', async () => {
+    entryReads({ redemptions: [redemption] });
+    db.restaurantBill.findUnique.mockResolvedValue({ discountTotal: new Prisma.Decimal('0.07') });
+
+    const result = await release('0.03', 'comp:line_1');
+    expect(result.points).toBe(1);
+    expect(releasedValue(result).toFixed(2)).toBe('0.03');
   });
 
-  it('scopes the read to the release keys this command owns', async () => {
-    entryReads({});
-    await readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_1' });
-    expect(db.loyaltyPointsEntry.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          kind: 'ADJUSTMENT',
-          idempotencyKey: { startsWith: 'loyalty:release:comp:line_1:' },
-        }),
-      })
-    );
-  });
+  it('prices the next point off the points already given back, not from zero', async () => {
+    entryReads({
+      redemptions: [redemption],
+      releases: [{ id: 'release_1', points: 1, reversesEntryId: 'redeem_1' }],
+    });
+    // The bill still carries the 0.04 the first release did not take.
+    db.restaurantBill.findUnique.mockResolvedValue({ discountTotal: new Prisma.Decimal('0.04') });
 
-  it('prices a later release off the points already given back, not from zero', async () => {
-    // Two comps released the same redemption: 160 points first, then 200. The second
-    // release is worth the CUMULATIVE difference — 18.00 − 8.00 = 10.00 — so a replay
-    // of it reports 10.00 and the two together sum to exactly the 18.00 redeemed.
-    const first = { id: 'release_1', points: 160, reversesEntryId: 'redeem_1' };
-    const second = { id: 'release_2', points: 200, reversesEntryId: 'redeem_1' };
-    entryReads({ mine: [second], byId: [redemption], releases: [first, second] });
-
-    const result = await readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_2' });
-    expect(result).toMatchObject({ points: 200, entryIds: ['release_2'] });
-    expect(result.value.toFixed(2)).toBe('10.00');
+    const result = await release('0.04', 'comp:line_2');
+    expect(result.points).toBe(1);
+    // 0.04, NOT the 0.03 that pricing this release on its own point count would give:
+    // the two releases now sum to exactly the 0.07 the redemption took off the bill.
+    expect(releasedValue(result).toFixed(2)).toBe('0.04');
   });
 });

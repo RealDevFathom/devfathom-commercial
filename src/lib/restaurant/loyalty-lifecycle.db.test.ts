@@ -20,12 +20,25 @@
  *     transactions with the loser provably queued on the row lock, converge on the
  *     same net balance in BOTH orderings — no earn on refunded money, no double
  *     reversal;
+ *   - B3 the comped bill goes out through the REAL register path — zero tender, settle,
+ *     close — with the identity intact and nothing earned on comped money;
+ *   - B4 the re-cut lifecycle end to end: a failed re-cut rolls back whole, the retry
+ *     compensates the redemption EXACTLY once, and a same-key replay answers with the
+ *     bills the first call cut without re-planning or writing;
+ *   - B4 a cut serializes on the ORDER, not only on the bills it can see: a concurrent
+ *     first cut is provably queued on a key that exists before any bill does, and is
+ *     then refused rather than billing one order twice;
  *   - the guard migration FAILS the deployment on a database that already holds a
  *     negative grand total, whether or not row-level security lets its precondition
  *     see the row, and leaks no bill or tenant identifier while doing so;
  *   - the release and the bill mutation commit or roll back together (injected
  *     failure), and a money-key replay releases nothing a second time while still
- *     REPORTING what the call it replays released.
+ *     REPORTING what the call it replays released — including at a FRACTIONAL point
+ *     value, where the same one point is worth 0.03 to one comp and 0.04 to the next,
+ *     and a replay re-derived from the ledger would answer with the wrong one;
+ *   - the role this all ran as is neither SUPERUSER nor BYPASSRLS (asked of `pg_roles`,
+ *     not assumed), a second tenant can see and touch none of it, and a cross-tenant
+ *     ledger write is refused by the INSERT policy and by the composite tenant key.
  *
  * Requires TEST_DATABASE_URL — a migrated throwaway database with an unprivileged
  * (NOSUPERUSER / NOBYPASSRLS) application role, never DATABASE_URL. Every read is
@@ -36,7 +49,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Client } from 'pg';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -75,29 +88,55 @@ type Deps = {
 let deps: Deps;
 let db: ScopedDb;
 
-const ctx = {
+/** Everything a scenario needs to drive the command layer as ONE organization. The
+ * battery runs two: `ctx` (the default) and `ctxB`, whose loyalty program prices points
+ * FRACTIONALLY so cumulative rounding is observable. */
+type Tenant = {
+  orgId: string;
+  branch: string;
+  product: string;
+  operator: string;
+  manager: string;
+  deviceId: string;
+  db: ScopedDb;
+};
+
+const ctx: Tenant = {
+  orgId,
   branch: `branch_${suffix}`,
   product: `product_${suffix}`,
   operator: `staff_op_${suffix}`,
   manager: `staff_mgr_${suffix}`,
   deviceId: '',
+  db: undefined as unknown as ScopedDb,
+};
+
+const orgB = `org_wha132b_${suffix}`;
+const ctxB: Tenant = {
+  orgId: orgB,
+  branch: `branchb_${suffix}`,
+  product: `productb_${suffix}`,
+  operator: `staff_opb_${suffix}`,
+  manager: `staff_mgrb_${suffix}`,
+  deviceId: '',
+  db: undefined as unknown as ScopedDb,
 };
 
 /** One loyalty customer + funded account per scenario, so every count is absolute. */
-async function seedGuest(label: string, points: number) {
+async function seedGuest(label: string, points: number, t: Tenant = ctx) {
   const customerId = `cust_${label}_${suffix}`;
-  await deps.withTenantDb(orgId, (tx) =>
+  await deps.withTenantDb(t.orgId, (tx) =>
     tx.restaurantCustomer.create({ data: { id: customerId, displayName: label } })
   );
-  const enrolled = await deps.loyalty.enrollLoyaltyAccount(db, {
+  const enrolled = await deps.loyalty.enrollLoyaltyAccount(t.db, {
     customerId,
     activeCustomersMax: 50,
   });
   if (points !== 0) {
-    await deps.loyalty.adjustLoyaltyPoints(db, {
+    await deps.loyalty.adjustLoyaltyPoints(t.db, {
       accountId: enrolled.id,
       points,
-      actorId: ctx.operator,
+      actorId: t.operator,
       reason: 'opening balance for the lifecycle battery',
       idempotencyKey: `seed:${label}:${suffix}`,
     });
@@ -107,19 +146,19 @@ async function seedGuest(label: string, points: number) {
 
 let orderSeq = 0;
 
-async function seedOrder(customerId: string | null, prices: string[]) {
+async function seedOrder(customerId: string | null, prices: string[], t: Tenant = ctx) {
   orderSeq += 1;
   const orderNumber = orderSeq;
-  return deps.withTenantDb(orgId, async (tx) => {
+  return deps.withTenantDb(t.orgId, async (tx) => {
     const order = await tx.restaurantOrder.create({
       data: {
-        branchId: ctx.branch,
+        branchId: t.branch,
         orderNumber,
         businessDate,
         status: 'SERVED',
         channel: 'DINE_IN',
-        staffProfileId: ctx.operator,
-        deviceId: ctx.deviceId,
+        staffProfileId: t.operator,
+        deviceId: t.deviceId,
         customerId,
       },
       select: { id: true },
@@ -129,7 +168,7 @@ async function seedOrder(customerId: string | null, prices: string[]) {
       const item = await tx.restaurantOrderItem.create({
         data: {
           orderId: order.id,
-          productId: ctx.product,
+          productId: t.product,
           name: 'Plate',
           unitPrice,
           quantity: 1,
@@ -143,11 +182,47 @@ async function seedOrder(customerId: string | null, prices: string[]) {
   });
 }
 
-const actor = (label: string) => ({
-  staffProfileId: ctx.operator,
-  deviceId: ctx.deviceId,
+const actor = (label: string, t: Tenant = ctx) => ({
+  staffProfileId: t.operator,
+  deviceId: t.deviceId,
   idempotencyKey: `${label}-${suffix}-${randomBytes(3).toString('hex')}`,
 });
+
+/** Seed one organization's branch / catalog / staff / device / loyalty program. */
+async function provisionTenant(t: Tenant, slug: string, program: { redemptionValue: string }) {
+  await deps.withPlatformDb((tx) =>
+    tx.organization.create({
+      data: {
+        id: t.orgId,
+        slug,
+        legalName: 'WHA132 Test Co',
+        displayName: 'WHA132 Test',
+        status: 'ACTIVE',
+      },
+    })
+  );
+  await deps.withTenantDb(t.orgId, async (tx) => {
+    await tx.restaurantBranch.create({ data: { id: t.branch, name: 'Lifecycle' } });
+    await tx.restaurantProduct.create({ data: { id: t.product, name: 'Plate' } });
+    await tx.restaurantStaffProfile.create({
+      data: { id: t.operator, displayName: 'Operator', status: 'ACTIVE' },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: { id: t.manager, displayName: 'Manager', status: 'ACTIVE' },
+    });
+  });
+  const enrolled = await deps.withTenantDb(t.orgId, (tx) =>
+    deps.enrollDevice(tx, { branchId: t.branch, name: 'POS' })
+  );
+  t.deviceId = enrolled.device.id;
+  t.db = deps.createTenantDb(t.orgId);
+  await deps.loyalty.configureLoyaltyProgram(t.db, {
+    effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+    earnRate: '1.000000',
+    redemptionValue: program.redemptionValue,
+    expiryDays: null,
+  });
+}
 
 /**
  * A `db` whose next command runs to completion inside its transaction and then HOLDS
@@ -211,8 +286,52 @@ async function awaitBlockedBackend(observer: Client) {
   );
 }
 
-function readBill(billId: string) {
-  return deps.withTenantDb(orgId, (tx) =>
+/**
+ * A `db` whose next command runs its whole transaction and then FAILS, after every write
+ * it makes — the injected-failure seam the atomicity checks turn on.
+ */
+function failAfterWrites(base: ScopedDb) {
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop !== '$transaction') return Reflect.get(target, prop, receiver);
+      return (run: (tx: ScopedDb) => Promise<unknown>) =>
+        (
+          target.$transaction as unknown as (
+            fn: (tx: ScopedDb) => Promise<unknown>
+          ) => Promise<unknown>
+        )(async (tx: ScopedDb) => {
+          await run(tx);
+          throw new Error('injected failure after the command wrote');
+        });
+    },
+  }) as ScopedDb;
+}
+
+/** Settle a promise into a value/error record without ever leaving it unhandled. */
+const settle = <T>(promise: Promise<T>) =>
+  promise.then(
+    (value) => ({ value, error: undefined as unknown }),
+    (error: unknown) => ({ value: undefined as unknown as T, error })
+  );
+
+function moneyKeyCount(idempotencyKey: string, t: Tenant = ctx) {
+  return deps.withTenantDb(t.orgId, (tx) =>
+    tx.restaurantMoneyIdempotencyKey.count({ where: { key: idempotencyKey } })
+  );
+}
+
+function liveBills(orderId: string, t: Tenant = ctx) {
+  return deps.withTenantDb(t.orgId, (tx) =>
+    tx.restaurantBill.findMany({
+      where: { orderId, status: { not: 'VOID' } },
+      orderBy: { id: 'asc' },
+      select: { id: true, status: true, grandTotal: true, discountTotal: true },
+    })
+  );
+}
+
+function readBill(billId: string, t: Tenant = ctx) {
+  return deps.withTenantDb(t.orgId, (tx) =>
     tx.restaurantBill.findUniqueOrThrow({
       where: { id: billId },
       select: {
@@ -241,8 +360,8 @@ function assertMoneyIdentity(bill: {
   expect(bill.grandTotal.isNegative()).toBe(false);
 }
 
-function ledger(accountId: string) {
-  return deps.withTenantDb(orgId, (tx) =>
+function ledger(accountId: string, t: Tenant = ctx) {
+  return deps.withTenantDb(t.orgId, (tx) =>
     tx.loyaltyPointsEntry.findMany({
       where: { accountId },
       orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
@@ -258,8 +377,8 @@ function ledger(accountId: string) {
   );
 }
 
-function billLines(billId: string) {
-  return deps.withTenantDb(orgId, (tx) =>
+function billLines(billId: string, t: Tenant = ctx) {
+  return deps.withTenantDb(t.orgId, (tx) =>
     tx.restaurantBillLine.findMany({
       where: { billId },
       orderBy: { id: 'asc' },
@@ -293,42 +412,16 @@ beforeAll(async () => {
     orders,
   };
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
-      data: {
-        id: orgId,
-        slug: `wha132-${suffix}`,
-        legalName: 'WHA132 Test Co',
-        displayName: 'WHA132 Test',
-        status: 'ACTIVE',
-      },
-    })
-  );
+  // Tenant A: 1 point per currency unit earned; 1 point redeems 0.05 — a value that
+  // divides the cent exactly, which keeps the lifecycle arithmetic readable.
+  await provisionTenant(ctx, `wha132-${suffix}`, { redemptionValue: '0.050000' });
+  db = ctx.db;
 
-  await deps.withTenantDb(orgId, async (tx) => {
-    await tx.restaurantBranch.create({ data: { id: ctx.branch, name: 'Lifecycle' } });
-    await tx.restaurantProduct.create({ data: { id: ctx.product, name: 'Plate' } });
-    await tx.restaurantStaffProfile.create({
-      data: { id: ctx.operator, displayName: 'Operator', status: 'ACTIVE' },
-    });
-    await tx.restaurantStaffProfile.create({
-      data: { id: ctx.manager, displayName: 'Manager', status: 'ACTIVE' },
-    });
-  });
+  // Tenant B: the SAME code under a redemption value that does NOT divide the cent
+  // (0.0335), so cumulative rounding is observable — and a second tenant to prove the
+  // isolation this battery's own reads depend on.
+  await provisionTenant(ctxB, `wha132b-${suffix}`, { redemptionValue: '0.033500' });
 
-  const enrolled = await deps.withTenantDb(orgId, (tx) =>
-    deps.enrollDevice(tx, { branchId: ctx.branch, name: 'POS' })
-  );
-  ctx.deviceId = enrolled.device.id;
-  db = deps.createTenantDb(orgId);
-
-  // 1 point per currency unit earned; 1 point redeems 0.05.
-  await deps.loyalty.configureLoyaltyProgram(db, {
-    effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
-    earnRate: '1.000000',
-    redemptionValue: '0.050000',
-    expiryDays: null,
-  });
   // Cash tenders and cash refunds both require this register to have an OPEN drawer.
   await deps.drawers.openDrawerSession(db, {
     branchId: ctx.branch,
@@ -505,7 +598,7 @@ describeIfDatabase('M8/B4 — void-and-recut of a discounted bill', () => {
     ]);
     expect(entries[2]!.reversesEntryId).toBeTruthy();
 
-    const fresh = await Promise.all(recut.billIds.map(readBill));
+    const fresh = await Promise.all(recut.billIds.map((billId) => readBill(billId)));
     eqMoney(fresh[0]!.grandTotal, '12.00');
     eqMoney(fresh[1]!.grandTotal, '8.00');
     for (const bill of fresh) {
@@ -791,20 +884,7 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     const lines = await billLines(billId);
 
     // Fail INSIDE the command's own transaction, after every write it makes.
-    const failing = new Proxy(db, {
-      get(target, prop, receiver) {
-        if (prop !== '$transaction') return Reflect.get(target, prop, receiver);
-        return (run: (tx: ScopedDb) => Promise<unknown>) =>
-          (
-            target.$transaction as unknown as (
-              fn: (tx: ScopedDb) => Promise<unknown>
-            ) => Promise<unknown>
-          )(async (tx: ScopedDb) => {
-            await run(tx);
-            throw new Error('injected failure after the command wrote');
-          });
-      },
-    }) as ScopedDb;
+    const failing = failAfterWrites(db);
     const failedActor = actor('comp-rollback');
     await expect(
       deps.bills.compLine(failing, {
@@ -891,5 +971,545 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     eqMoney(bill.compTotal, '10.00');
     eqMoney(bill.grandTotal, '10.00');
     assertMoneyIdentity(bill);
+  });
+});
+
+describeIfDatabase('M8/B3 — the comped bill survives a real settle and close', () => {
+  it('zero-tenders, settles and closes with the money identity intact and nothing earned', async () => {
+    const guest = await seedGuest('comp-close', 1000);
+    const { orderId } = await seedOrder(guest.customerId, ['10.00', '10.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-comp-close'),
+    });
+    const billId = cut.billIds[0]!;
+    // 300 points × 0.05 = 15.00 off a 20.00 bill.
+    await deps.loyalty.redeemLoyaltyPoints(db, {
+      accountId: guest.accountId,
+      billId,
+      points: 300,
+      actorId: ctx.operator,
+      idempotencyKey: `redeem-comp-close-${suffix}`,
+    });
+    eqMoney((await readBill(billId)).grandTotal, '5.00');
+
+    const lines = await billLines(billId);
+    for (const [index, line] of lines.entries()) {
+      await deps.bills.compLine(db, {
+        billId,
+        billLineId: line.id,
+        reason: 'kitchen error',
+        approvingStaffProfileId: ctx.manager,
+        actor: actor(`comp-close-${index}`),
+      });
+    }
+    const comped = await readBill(billId);
+    eqMoney(comped.grandTotal, '0.00');
+    eqMoney(comped.compTotal, '20.00');
+    eqMoney(comped.discountTotal, '0.00');
+    assertMoneyIdentity(comped);
+
+    // The bill goes out through the REAL register path — a zero cash tender is the only
+    // way a fully comped bill settles — not a direct status write.
+    const tender = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CASH', amount: '0.00', cashReceived: '0.00' },
+      actor: actor('tender-comp-close'),
+    });
+    expect(tender.settled).toBe(true);
+    expect(tender.receiptNumber).toBeTruthy();
+    eqMoney(tender.remainingDue, '0.00');
+
+    await deps.orders.closeOrder(db, { orderId, actor: actor('close-comp-close') });
+    const order = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.findUniqueOrThrow({ where: { id: orderId }, select: { status: true } })
+    );
+    expect(order.status).toBe('CLOSED');
+
+    // The invariant holds THROUGH the close — the earn ran against this bill and had to
+    // find a non-negative grand total to work on — and no points were earned on money
+    // the house comped, so the guest is exactly where they started.
+    const settled = await readBill(billId);
+    expect(settled.status).toBe('SETTLED');
+    eqMoney(settled.grandTotal, '0.00');
+    assertMoneyIdentity(settled);
+    const entries = await ledger(guest.accountId);
+    expect(entries.filter((entry) => entry.kind === 'EARN')).toEqual([]);
+    expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(1000);
+  });
+});
+
+describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', () => {
+  const recutOf = (approver: string) => ({
+    reason: 'guest asked to split the check',
+    approvingStaffProfileId: approver,
+  });
+
+  it('rolls a failed re-cut back whole, compensates exactly once, and replays exactly', async () => {
+    const guest = await seedGuest('recut-life', 500);
+    const { orderId, itemIds } = await seedOrder(guest.customerId, ['12.00', '8.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-recut-life'),
+    });
+    const originalBillId = cut.billIds[0]!;
+    await deps.loyalty.redeemLoyaltyPoints(db, {
+      accountId: guest.accountId,
+      billId: originalBillId,
+      points: 200,
+      actorId: ctx.operator,
+      idempotencyKey: `redeem-recut-life-${suffix}`,
+    });
+    const before = await readBill(originalBillId);
+    eqMoney(before.discountTotal, '10.00');
+    const entriesBefore = await ledger(guest.accountId);
+    expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(300);
+
+    const split = { kind: 'BY_ITEM' as const, groups: [[itemIds[0]!], [itemIds[1]!]] };
+
+    // (a) A re-cut that fails after its writes leaves NOTHING behind — not the
+    // compensation, not the void, not even the money-key claim that would block a retry.
+    const failedActor = actor('recut-fail');
+    await expect(
+      deps.bills.cutBills(failAfterWrites(db), {
+        orderId,
+        split,
+        recut: recutOf(ctx.manager),
+        actor: failedActor,
+      })
+    ).rejects.toThrow(/injected failure/);
+    expect(await readBill(originalBillId)).toEqual(before);
+    expect(await ledger(guest.accountId)).toEqual(entriesBefore);
+    expect(await moneyKeyCount(failedActor.idempotencyKey)).toBe(0);
+    expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(300);
+
+    // (b) The retry succeeds, and the redemption is compensated EXACTLY ONCE — the
+    // failed attempt did not consume it and the retry did not double it.
+    const recutActor = actor('recut-retry');
+    const recut = await deps.bills.cutBills(db, {
+      orderId,
+      split,
+      recut: recutOf(ctx.manager),
+      actor: recutActor,
+    });
+    expect(recut.replayed).toBe(false);
+    expect(recut.billIds).toHaveLength(2);
+    const compensations = (await ledger(guest.accountId)).filter((entry) =>
+      entry.idempotencyKey.startsWith(`loyalty:release:void:${originalBillId}:`)
+    );
+    expect(compensations).toHaveLength(1);
+    expect(compensations[0]!.points).toBe(200);
+    expect(compensations[0]!.kind).toBe('ADJUSTMENT');
+    expect(compensations[0]!.reversesEntryId).toBeTruthy();
+    expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(500);
+    const voided = await readBill(originalBillId);
+    expect(voided.status).toBe('VOID');
+    eqMoney(voided.discountTotal, '0.00');
+    assertMoneyIdentity(voided);
+
+    // (c) An exact same-key replay. The split passed here is DELIBERATELY a different
+    // one: a replay must answer from the record, never re-plan, so it has to come back
+    // with the two bills the first call cut and touch nothing.
+    const afterEntries = await ledger(guest.accountId);
+    const afterBills = await liveBills(orderId);
+    const replay = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      recut: recutOf(ctx.manager),
+      actor: recutActor,
+    });
+    expect(replay.replayed).toBe(true);
+    // By set, not by sequence: both bills were INSERTed in one transaction, so they
+    // share a `createdAt` and their read-back order is not a contract.
+    expect([...replay.billIds].sort()).toEqual([...recut.billIds].sort());
+    expect(await ledger(guest.accountId)).toEqual(afterEntries);
+    expect(await liveBills(orderId)).toEqual(afterBills);
+  }, 60_000);
+});
+
+describeIfDatabase('M8/B4 — a cut serializes on the order, not only on bills it can see', () => {
+  /**
+   * The bill rows are the wrong lock alone, because the dangerous row is the one that is
+   * not there yet: a cut cannot lock — or even see — a bill a concurrent cut has not
+   * committed. Two first cuts of the same order would then each find no live bills and
+   * each create a full bill set, leaving the order billed twice; and a re-cut's
+   * "void every live bill" would reach a split it never locked or compensated.
+   *
+   * `cutBills` therefore takes the ORDER row first. Both checks hold one cut open with
+   * all its locks and prove, through PostgreSQL's own wait state, that the second one is
+   * queued behind it rather than running past it — but they carry different weight, and
+   * it is worth being exact about which:
+   *
+   *   - the FIRST is the regression for the order key itself. The order has no committed
+   *     bill, so there is no row the second cut could have locked; drop the order lock
+   *     and `awaitBlockedBackend` reports that nothing ever waited, because nothing did;
+   *   - the SECOND is lifecycle evidence under real contention. Two re-cuts of a redeemed
+   *     order converge on exactly one compensation with no VOID bill left holding a
+   *     discount. It also passes on bill-row locking alone (the bills exist, so they can
+   *     be locked), and is here for the convergence, not to discriminate the lock.
+   */
+  let observer: Client;
+
+  beforeAll(async () => {
+    if (!TEST_DATABASE_URL) return;
+    observer = new Client({ connectionString: TEST_DATABASE_URL });
+    await observer.connect();
+  });
+
+  afterAll(async () => {
+    await observer?.end();
+  });
+
+  it('queues a concurrent first cut and refuses to give one order two bill sets', async () => {
+    const { orderId } = await seedOrder(null, ['10.00']);
+
+    const held = heldOpen(db);
+    const first = deps.bills.cutBills(held.db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-race-a'),
+    });
+    // The first cut has created its bill and still holds every lock it took…
+    await held.reached;
+    // …and the second cut is now stuck. Note what it is stuck ON: there is no committed
+    // bill row for it to have locked, so this wait can only be the order row.
+    const second = settle(
+      deps.bills.cutBills(db, {
+        orderId,
+        split: { kind: 'NONE' },
+        actor: actor('cut-race-b'),
+      })
+    );
+    await awaitBlockedBackend(observer);
+    held.commit();
+
+    const firstResult = await first;
+    const secondResult = await second;
+    // Released, the second cut sees the committed bill and refuses to re-split it
+    // without authorization — instead of quietly billing the order a second time.
+    expect(secondResult.error).toMatchObject({ reason: 'RESPLIT_LOCKED' });
+    const live = await liveBills(orderId);
+    expect(live.map((bill) => bill.id)).toEqual(firstResult.billIds);
+  }, 60_000);
+
+  it('holds the order across a re-cut, so a racing cut cannot void an uncompensated bill', async () => {
+    const guest = await seedGuest('recut-race', 500);
+    const { orderId, itemIds } = await seedOrder(guest.customerId, ['12.00', '8.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-recut-race'),
+    });
+    const originalBillId = cut.billIds[0]!;
+    await deps.loyalty.redeemLoyaltyPoints(db, {
+      accountId: guest.accountId,
+      billId: originalBillId,
+      points: 200,
+      actorId: ctx.operator,
+      idempotencyKey: `redeem-recut-race-${suffix}`,
+    });
+    eqMoney((await readBill(originalBillId)).discountTotal, '10.00');
+
+    const recutArgs = {
+      reason: 'guest asked to split the check',
+      approvingStaffProfileId: ctx.manager,
+    };
+    const held = heldOpen(db);
+    // Re-cut A: compensates the redemption, voids the redeemed bill, cuts two fresh
+    // ones — all uncommitted, all held.
+    const recutA = deps.bills.cutBills(held.db, {
+      orderId,
+      split: { kind: 'BY_ITEM', groups: [[itemIds[0]!], [itemIds[1]!]] },
+      recut: recutArgs,
+      actor: actor('recut-race-a'),
+    });
+    await held.reached;
+    // Re-cut B wants the same order. The bills it would have locked are the ones A just
+    // voided; the bills it will actually void are ones A has not committed yet. Only the
+    // order row keeps it out of that window.
+    const recutB = settle(
+      deps.bills.cutBills(db, {
+        orderId,
+        split: { kind: 'NONE' },
+        recut: recutArgs,
+        actor: actor('recut-race-b'),
+      })
+    );
+    await awaitBlockedBackend(observer);
+    held.commit();
+
+    const resultA = await recutA;
+    const resultB = await recutB;
+    expect(resultB.error).toBeUndefined();
+    expect(resultA.billIds).toHaveLength(2);
+
+    // B ran on A's committed result: it voided A's two fresh bills — which carried no
+    // discount — and cut its own. Across the whole order the redemption was compensated
+    // exactly once, and no VOID bill was left holding a discount nobody paid for.
+    const releases = (await ledger(guest.accountId)).filter(
+      (entry) => entry.kind === 'ADJUSTMENT' && entry.reversesEntryId !== null
+    );
+    expect(releases).toHaveLength(1);
+    expect(releases[0]!.points).toBe(200);
+    // …and it is the ORIGINAL bill's void that compensated it, not a later one.
+    expect(releases[0]!.idempotencyKey).toBe(
+      `loyalty:release:void:${originalBillId}:${releases[0]!.reversesEntryId}`
+    );
+    expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(500);
+
+    const all = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantBill.findMany({
+        where: { orderId },
+        orderBy: { id: 'asc' },
+        select: { id: true, status: true, discountTotal: true, grandTotal: true, subtotal: true },
+      })
+    );
+    for (const bill of all.filter((row) => row.status === 'VOID')) {
+      eqMoney(bill.discountTotal, '0.00');
+    }
+    const live = await liveBills(orderId);
+    expect(live).toHaveLength(1);
+    expect(live.map((bill) => bill.id)).not.toContain(originalBillId);
+    eqMoney(live[0]!.grandTotal, '20.00');
+    eqMoney(live[0]!.discountTotal, '0.00');
+  }, 60_000);
+});
+
+describeIfDatabase('M8/B3 — a comp replay reports the money ITS OWN call released', () => {
+  /**
+   * Tenant B prices a point at 0.0335, which does not divide the cent. Two points took
+   * round(0.067) = 0.07 off the bill, but the first point alone is worth
+   * round(0.0335) = 0.03 — so the second point has to be worth 0.07 − 0.03 = 0.04. The
+   * SAME one point is worth 0.03 or 0.04 depending only on what was released before it.
+   *
+   * That is why a replay cannot re-derive its money from the ledger: reconstructing the
+   * "before" of comp 1 means looking at rows comp 2 wrote afterwards, and one ordering
+   * mistake turns comp 1's honest 0.03 into 0.04. Each comp's exact result is persisted
+   * with its own idempotency record instead, so its replay is a lookup — and this test
+   * replays comp 1 AFTER comp 2 has moved the ledger underneath it.
+   */
+  it('is stable under a later release of the same redemption, at a fractional point value', async () => {
+    const guest = await seedGuest('fractional', 100, ctxB);
+    const { orderId } = await seedOrder(guest.customerId, ['0.03', '0.04'], ctxB);
+    const cut = await deps.bills.cutBills(ctxB.db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-fractional', ctxB),
+    });
+    const billId = cut.billIds[0]!;
+
+    const redeemed = await deps.loyalty.redeemLoyaltyPoints(ctxB.db, {
+      accountId: guest.accountId,
+      billId,
+      points: 2,
+      actorId: ctxB.operator,
+      idempotencyKey: `redeem-fractional-${suffix}`,
+    });
+    // round(2 × 0.0335) = 0.07 — the whole bill.
+    eqMoney(redeemed.value, '0.07');
+    eqMoney((await readBill(billId, ctxB)).grandTotal, '0.00');
+
+    const lines = await billLines(billId, ctxB);
+    const compArgs = (billLineId: string, label: string) => ({
+      billId,
+      billLineId,
+      reason: 'kitchen error',
+      approvingStaffProfileId: ctxB.manager,
+      actor: actor(label, ctxB),
+    });
+
+    // Comp 1 needs 0.03 back and releases ONE point for it.
+    const firstArgs = compArgs(lines[0]!.id, 'comp-fractional-1');
+    const first = await deps.bills.compLine(ctxB.db, firstArgs);
+    expect(first.replayed).toBe(false);
+    eqMoney(first.releasedDiscount, '0.03');
+
+    // Comp 2 needs 0.04 and releases the OTHER point — worth a cent more than the first
+    // one was, because cumulative rounding prices it against the point already given
+    // back. Together they hand back exactly the 0.07 the redemption took.
+    const secondArgs = compArgs(lines[1]!.id, 'comp-fractional-2');
+    const second = await deps.bills.compLine(ctxB.db, secondArgs);
+    expect(second.replayed).toBe(false);
+    eqMoney(second.releasedDiscount, '0.04');
+
+    const bill = await readBill(billId, ctxB);
+    eqMoney(bill.discountTotal, '0.00');
+    eqMoney(bill.grandTotal, '0.00');
+    eqMoney(bill.compTotal, '0.07');
+    assertMoneyIdentity(bill);
+    expect(await deps.loyalty.loyaltyBalance(ctxB.db, guest.accountId)).toBe(100);
+
+    // THE REGRESSION. Comp 1 is replayed only now, with comp 2's release sitting in the
+    // ledger against the same redemption. It must still answer 0.03 — the number its own
+    // call returned — and comp 2 must still answer 0.04.
+    const entriesBefore = await ledger(guest.accountId, ctxB);
+    const firstReplay = await deps.bills.compLine(ctxB.db, firstArgs);
+    expect(firstReplay.replayed).toBe(true);
+    expect(firstReplay.billLineId).toBe(lines[0]!.id);
+    eqMoney(firstReplay.releasedDiscount, '0.03');
+
+    const secondReplay = await deps.bills.compLine(ctxB.db, secondArgs);
+    expect(secondReplay.replayed).toBe(true);
+    eqMoney(secondReplay.releasedDiscount, '0.04');
+
+    // Two replays, two different answers for one point each, and not a row written.
+    expect(await ledger(guest.accountId, ctxB)).toEqual(entriesBefore);
+    expect(await readBill(billId, ctxB)).toEqual(bill);
+  }, 60_000);
+});
+
+describeIfDatabase('M8 correction B — the role and the tenancy this battery ran under', () => {
+  it('runs as an unprivileged application role, so every RLS result above is real', async () => {
+    const [role] = await deps.withTenantDb(
+      orgId,
+      (tx) =>
+        tx.$queryRaw<
+          { current_user: string; rolsuper: boolean; rolbypassrls: boolean }[]
+        >`SELECT current_user::text AS current_user, r.rolsuper, r.rolbypassrls
+          FROM pg_roles r
+         WHERE r.rolname = current_user`
+    );
+    // Not "we believe the URL points at the app role" — the catalog's own answer. A
+    // SUPERUSER or BYPASSRLS role would silently satisfy every isolation check below by
+    // ignoring the policies entirely, so this battery's verdict would be worthless.
+    expect(role).toBeDefined();
+    expect(role!.rolsuper, `${role!.current_user} is SUPERUSER`).toBe(false);
+    expect(role!.rolbypassrls, `${role!.current_user} has BYPASSRLS`).toBe(false);
+  });
+
+  it('hides one tenant’s bills and loyalty ledger from the other, in both directions', async () => {
+    const guest = await seedGuest('isolation', 200);
+    const { orderId } = await seedOrder(guest.customerId, ['10.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-isolation'),
+    });
+    const billId = cut.billIds[0]!;
+    await deps.loyalty.redeemLoyaltyPoints(db, {
+      accountId: guest.accountId,
+      billId,
+      points: 100,
+      actorId: ctx.operator,
+      idempotencyKey: `redeem-isolation-${suffix}`,
+    });
+
+    // Tenant B cannot see the bill, its lines, the order, or a single ledger entry.
+    await deps.withTenantDb(orgB, async (tx) => {
+      expect(await tx.restaurantBill.findUnique({ where: { id: billId } })).toBeNull();
+      expect(await tx.restaurantBillLine.count({ where: { billId } })).toBe(0);
+      expect(await tx.restaurantOrder.findUnique({ where: { id: orderId } })).toBeNull();
+      expect(await tx.loyaltyPointsEntry.count({ where: { accountId: guest.accountId } })).toBe(0);
+      expect(await tx.loyaltyAccount.findUnique({ where: { id: guest.accountId } })).toBeNull();
+    });
+    // The balance A reads is therefore A's alone.
+    expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(100);
+    expect(await deps.loyalty.loyaltyBalance(ctxB.db, guest.accountId)).toBe(0);
+
+    // And a write from B cannot reach A's bill either: the UPDATE is policy-filtered to
+    // no rows rather than silently applied.
+    const touched = await deps.withTenantDb(orgB, (tx) =>
+      tx.restaurantBill.updateMany({ where: { id: billId }, data: { grandTotal: '1.00' } })
+    );
+    expect(touched.count).toBe(0);
+    eqMoney((await readBill(billId)).grandTotal, '5.00');
+  });
+
+  it('refuses a cross-tenant ledger write at the policy and at the composite FK', async () => {
+    const guest = await seedGuest('cross-tenant', 50);
+    const { orderId } = await seedOrder(guest.customerId, ['10.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-cross'),
+    });
+    const billId = cut.billIds[0]!;
+    const program = await deps.withTenantDb(orgId, (tx) =>
+      tx.loyaltyProgramVersion.findFirstOrThrow({ select: { id: true } })
+    );
+
+    const accountB = await seedGuest('cross-tenant-b', 10, ctxB);
+    const programB = await deps.withTenantDb(orgB, (tx) =>
+      tx.loyaltyProgramVersion.findFirstOrThrow({ select: { id: true } })
+    );
+
+    /** One INSERT as tenant B, on a raw session, so the SQLSTATE and the constraint name
+     * that rejected it are the database's own words rather than a driver's paraphrase. */
+    async function insertAsTenantB(row: {
+      id: string;
+      organizationId: string;
+      accountId: string;
+      programVersionId: string;
+      billId: string | null;
+      idempotencyKey: string;
+    }) {
+      const client = new Client({ connectionString: TEST_DATABASE_URL });
+      await client.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [orgB]);
+        await client.query(
+          `INSERT INTO restaurant_loyalty_points_entries
+             (id, "organizationId", "accountId", "programVersionId", kind, points, "billId",
+              "actorId", reason, "occurredAt", "idempotencyKey")
+           VALUES ($1, $2, $3, $4, 'ADJUSTMENT', 1, $5, 'attacker', 'cross-tenant write',
+                   now(), $6)`,
+          [
+            row.id,
+            row.organizationId,
+            row.accountId,
+            row.programVersionId,
+            row.billId,
+            row.idempotencyKey,
+          ]
+        );
+        // DEFERRABLE INITIALLY DEFERRED: the composite tenant FKs are only checked here.
+        await client.query('COMMIT');
+        return null;
+      } catch (failure) {
+        return failure as Error & { code?: string; constraint?: string };
+      } finally {
+        await client.query('ROLLBACK').catch(() => {});
+        await client.end();
+      }
+    }
+
+    // 1. Row stamped with A's organization, written from B's session: the INSERT policy's
+    //    WITH CHECK rejects it outright. A tenant cannot write INTO another tenant.
+    const policy = await insertAsTenantB({
+      id: `x_${suffix}_policy`,
+      organizationId: orgId,
+      accountId: guest.accountId,
+      programVersionId: program.id,
+      billId: null,
+      idempotencyKey: `cross:policy:${suffix}`,
+    });
+    expect(policy?.code).toBe('42501');
+    expect(policy?.message).toMatch(/row-level security policy/i);
+
+    // 2. Row stamped with B's OWN organization but pointing at A's bill. The plain
+    //    `billId` foreign key is satisfied — that bill really exists — so the only thing
+    //    standing between B and a ledger entry against A's money is the COMPOSITE tenant
+    //    key on (organizationId, billId). It is what rejects this, by name, at COMMIT.
+    const composite = await insertAsTenantB({
+      id: `x_${suffix}_fk`,
+      organizationId: orgB,
+      accountId: accountB.accountId,
+      programVersionId: programB.id,
+      billId,
+      idempotencyKey: `cross:fk:${suffix}`,
+    });
+    expect(composite?.code).toBe('23503');
+    expect(composite?.constraint).toBe('tenant_loyalty_points_billId_fk');
+
+    // Neither attempt left anything behind, in either tenant.
+    const planted = await deps.withPlatformDb((tx) =>
+      tx.loyaltyPointsEntry.count({
+        where: { idempotencyKey: { in: [`cross:policy:${suffix}`, `cross:fk:${suffix}`] } },
+      })
+    );
+    expect(planted).toBe(0);
   });
 });
