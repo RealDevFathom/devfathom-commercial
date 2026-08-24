@@ -573,18 +573,42 @@ export async function reverseLoyaltyForRefund(
 
 // ── Redemption release (comp / void-and-recut compensation) ──────────────────
 
-/** What one release command handed back. `entryIds` empty ⇒ it released nothing. */
-export type LoyaltyReleaseRecord = {
-  /** Discount money handed back to the bill; the caller MUST apply it. */
-  value: Prisma.Decimal;
-  /** Whole points restored to the account. */
-  points: number;
-  entryIds: string[];
-};
+/**
+ * What one release command wrote. `entryIds` empty ⇒ it released nothing.
+ *
+ * A REPLAY deliberately carries no money. The value a release frees is not a function
+ * of that release alone: cumulative rounding makes it
+ * `round((before + take) × v) − round(before × v)`, where `before` is how many points of
+ * the same redemption EARLIER commands had already given back. Answering for the money
+ * after the fact therefore means reconstructing `before` out of the ledger — and with a
+ * fractional redemption value a release that lands AFTER this one shifts that
+ * reconstruction by a cent, so the "replay" would report a number the original call
+ * never returned. No column repairs the ordering either: `occurredAt` is caller-supplied
+ * and `createdAt` is transaction START time, so a transaction that began earlier can
+ * commit later.
+ *
+ * The money is therefore returned exactly once, by the call that actually wrote the
+ * entries, and a caller that must answer for it on its OWN replay persists it with its
+ * own idempotency record — `bills.compLine` does exactly that. The union shape is what
+ * enforces it: there is no `value` to read off a replay.
+ */
+export type LoyaltyReleaseResult =
+  | {
+      replayed: false;
+      /** Discount money freed by THIS call; the caller MUST apply it to the bill. */
+      value: Prisma.Decimal;
+      /** Whole points restored to the account. */
+      points: number;
+      entryIds: string[];
+    }
+  | { replayed: true; points: number; entryIds: string[] };
 
-export type LoyaltyReleaseResult = LoyaltyReleaseRecord & { replayed: boolean };
-
-const nothingReleased = (): LoyaltyReleaseRecord => ({ value: ZERO, points: 0, entryIds: [] });
+const nothingReleased = (): LoyaltyReleaseResult => ({
+  replayed: false,
+  value: ZERO,
+  points: 0,
+  entryIds: [],
+});
 
 /** The money a release of `take` further points frees, given `before` points of this
  * redemption were already released. Rounding is applied to the CUMULATIVE released
@@ -599,70 +623,6 @@ function releasedValueDelta(before: number, take: number, redemptionValue: Prism
 
 function releaseKeyPrefix(idempotencyKey: string) {
   return `loyalty:release:${idempotencyKey}:`;
-}
-
-/**
- * Re-derive, read-only, what the release command `idempotencyKey` ALREADY handed back.
- *
- * This is what a replay must report. A command that releases redemption is idempotent
- * on this key, so its second call writes nothing — but it still has to answer the same
- * question with the same number, or the caller's contract contradicts itself (a first
- * call reporting 9.00 released and its replay reporting 0.00 describe two different
- * bills). Returns `nothingReleased()` when the command never released anything, which
- * is a truthful answer too: the ordinary comp absorbs its line out of the bill's own
- * balance and touches no redemption.
- *
- * The value is rebuilt with the same cumulative rounding the write used, by summing the
- * releases that preceded each of this command's entries in ledger order.
- */
-export async function readLoyaltyRelease(
-  tx: ScopedDb,
-  input: { idempotencyKey: string }
-): Promise<LoyaltyReleaseRecord> {
-  const mine = await tx.loyaltyPointsEntry.findMany({
-    where: {
-      kind: 'ADJUSTMENT',
-      idempotencyKey: { startsWith: releaseKeyPrefix(input.idempotencyKey) },
-    },
-    orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, points: true, reversesEntryId: true },
-  });
-  if (mine.length === 0) return nothingReleased();
-
-  const redemptionIds = mine
-    .map((row) => row.reversesEntryId)
-    .filter((id): id is string => id !== null);
-  const [redemptions, siblings] = await Promise.all([
-    tx.loyaltyPointsEntry.findMany({
-      where: { id: { in: redemptionIds } },
-      select: { id: true, programVersion: { select: { redemptionValue: true } } },
-    }),
-    tx.loyaltyPointsEntry.findMany({
-      where: { kind: 'ADJUSTMENT', reversesEntryId: { in: redemptionIds } },
-      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, points: true, reversesEntryId: true },
-    }),
-  ]);
-  const redemptionValues = new Map(
-    redemptions.map((row) => [row.id, row.programVersion.redemptionValue])
-  );
-
-  let value = ZERO;
-  let points = 0;
-  for (const entry of mine) {
-    const redemptionValue = entry.reversesEntryId
-      ? redemptionValues.get(entry.reversesEntryId)
-      : undefined;
-    if (!redemptionValue) continue;
-    const chain = siblings.filter((row) => row.reversesEntryId === entry.reversesEntryId);
-    const position = chain.findIndex((row) => row.id === entry.id);
-    const before = chain
-      .slice(0, position < 0 ? 0 : position)
-      .reduce((total, row) => total + row.points, 0);
-    value = add(value, releasedValueDelta(before, entry.points, redemptionValue));
-    points += entry.points;
-  }
-  return { value, points, entryIds: mine.map((row) => row.id) };
 }
 
 /**
@@ -704,11 +664,23 @@ export async function releaseLoyaltyRedemption(
     throw new LoyaltyError('A redemption release requires an actor and reason.', 'INVALID');
   }
 
-  // A replay of THIS command: report exactly what it already released, write nothing.
-  const already = await readLoyaltyRelease(tx, { idempotencyKey: input.idempotencyKey });
-  if (already.entryIds.length > 0) return { ...already, replayed: true };
-
+  // A replay of THIS command: it already wrote its entries, so write nothing more.
+  // COMMAND-LOCAL by construction — the only rows consulted are the ones this command's
+  // own key prefix owns, never a neighbouring release against the same redemption, so
+  // the answer cannot drift as the ledger grows underneath it.
   const keyPrefix = releaseKeyPrefix(input.idempotencyKey);
+  const mine = await tx.loyaltyPointsEntry.findMany({
+    where: { kind: 'ADJUSTMENT', idempotencyKey: { startsWith: keyPrefix } },
+    select: { id: true, points: true },
+  });
+  if (mine.length > 0) {
+    return {
+      replayed: true,
+      points: mine.reduce((total, row) => total + row.points, 0),
+      entryIds: mine.map((row) => row.id),
+    };
+  }
+
   const redemptions = await tx.loyaltyPointsEntry.findMany({
     where: { billId: input.billId, kind: 'REDEEM' },
     orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
@@ -720,7 +692,7 @@ export async function releaseLoyaltyRedemption(
       programVersion: { select: { redemptionValue: true } },
     },
   });
-  if (redemptions.length === 0) return { ...nothingReleased(), replayed: false };
+  if (redemptions.length === 0) return nothingReleased();
 
   const releases = await tx.loyaltyPointsEntry.findMany({
     where: {
@@ -739,7 +711,7 @@ export async function releaseLoyaltyRedemption(
   // sum of what the redemptions took off it, and it may not go negative (DB CHECK).
   const requested = input.shortfall ?? bill.discountTotal;
   const needed = compare(requested, bill.discountTotal) > 0 ? bill.discountTotal : requested;
-  if (compare(needed, ZERO) <= 0) return { ...nothingReleased(), replayed: false };
+  if (compare(needed, ZERO) <= 0) return nothingReleased();
 
   let value = ZERO;
   let points = 0;
@@ -785,5 +757,5 @@ export async function releaseLoyaltyRedemption(
     value = add(value, releasedValueDelta(before, take, redemptionValue));
     points += take;
   }
-  return { value, points, entryIds, replayed: false };
+  return { replayed: false, value, points, entryIds };
 }
