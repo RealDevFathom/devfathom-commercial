@@ -20,7 +20,7 @@ type Runtime = {
   sessionToken: string;
   sessionId: string;
   state: 'LOCKED' | 'UNLOCKED';
-  branchId: string;
+  branchName: string;
   operator: OperatorOption | null;
 };
 type OperatorOption = { staffProfileId: string; displayName: string; role: string };
@@ -37,7 +37,7 @@ type Notice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: str
 type EstablishResponse = {
   sessionToken: string;
   session: { id: string; state: 'LOCKED'; establishedAt: string };
-  device: { id: string; branchId: string };
+  device: { id: string; branchName: string };
 };
 type SessionResponse = {
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
@@ -320,7 +320,7 @@ export function OrderPad() {
         sessionToken: data.sessionToken,
         sessionId: data.session.id,
         state: data.session.state,
-        branchId: data.device.branchId,
+        branchName: data.device.branchName,
         operator: null,
       };
       setRuntime(established);
@@ -528,7 +528,7 @@ export function OrderPad() {
           <PageHeader
             eyebrow="Restaurant POS"
             heading="Terminal locked"
-            description={`Device session active for branch ${runtime.branchId}.`}
+            description={`Device session active for ${runtime.branchName}.`}
           />
           {notice ? <Notice notice={notice} /> : null}
           <SectionCard

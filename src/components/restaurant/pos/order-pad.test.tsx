@@ -75,7 +75,7 @@ function transport({
         {
           sessionToken: 'session-token',
           session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-19T00:00:00Z' },
-          device: { id: 'device-1', branchId: 'branch-1' },
+          device: { id: 'device-1', branchName: 'Clifton Flagship' },
         },
         201
       );
@@ -170,6 +170,8 @@ async function unlock(fetch: ReturnType<typeof transport>) {
   });
   fireEvent.click(screen.getByRole('button', { name: 'Establish session' }));
   await screen.findByRole('heading', { name: 'Terminal locked' });
+  expect(screen.getByText('Device session active for Clifton Flagship.')).toBeVisible();
+  expect(screen.queryByText(/branch-1/)).not.toBeInTheDocument();
   await screen.findByRole('option', { name: 'Amina Rahman — Shift lead' });
   fireEvent.change(screen.getByLabelText('Operator'), {
     target: { value: 'staff-1' },

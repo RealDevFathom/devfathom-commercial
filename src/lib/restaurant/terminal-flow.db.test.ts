@@ -233,6 +233,15 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('terminal transport end-to-end (real DB)', () => {
+  it('returns the authenticated device branch name without exposing its ID', async () => {
+    const { secret } = await enroll('branch-name');
+    const response = await call(deps.routes.establish, { secret });
+
+    expect(response.status).toBe(201);
+    expect(response.json.device).toEqual(expect.objectContaining({ branchName: 'Main' }));
+    expect(response.json.device).not.toHaveProperty('branchId');
+  });
+
   it('returns only active, credentialed operators from the device branch', async () => {
     const { secret } = await enroll('directory');
     const { token } = await establish(secret);
