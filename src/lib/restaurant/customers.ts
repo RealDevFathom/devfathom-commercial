@@ -45,6 +45,45 @@ function required(value: string, field: string): string {
   return normalized;
 }
 
+/**
+ * Recursively key-sorts objects so two semantically equal JSON payloads that
+ * differ only in key order produce one identical string. Array order is
+ * significant and preserved; `Date` values collapse to the ISO form Prisma
+ * persists for a `Json` column, so a replay compares like against like.
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value instanceof Date) return value.toISOString();
+  if (value && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(source)
+        .sort()
+        .map((key) => [key, canonicalize(source[key])])
+    );
+  }
+  return value;
+}
+
+/**
+ * Deterministic comparison form for an interaction payload. An omitted payload
+ * is `{}` — the column default — so "no payload" and "empty payload" are the
+ * same replay, never a spurious conflict. The result is compared in memory
+ * only: it is never logged or persisted, so no new PII leaves the row.
+ */
+function canonicalPayload(value: Prisma.InputJsonValue | Prisma.JsonValue | undefined): string {
+  return JSON.stringify(canonicalize(value ?? {})) ?? 'null';
+}
+
+/**
+ * `occurredAt` is caller-supplied or server-assigned (`now()` default). A
+ * caller that supplied it must supply the same instant to replay; a caller that
+ * omitted it cannot be held to a server clock it never saw.
+ */
+function occurredAtMatches(stored: Date, requested: Date | undefined): boolean {
+  return requested === undefined || stored.getTime() === requested.getTime();
+}
+
 export type CustomerIdentifierInput = {
   kind: CustomerIdentifierKind;
   value: string;
@@ -412,9 +451,41 @@ export type AppendCustomerInteractionInput = {
   branchId: string;
   orderId?: string | null;
   type: string;
+  payload?: Prisma.InputJsonValue;
   occurredAt?: Date;
   idempotencyKey: string;
 };
+
+type StoredInteraction = {
+  customerId: string;
+  branchId: string;
+  orderId: string | null;
+  type: string;
+  payload: Prisma.JsonValue;
+  occurredAt: Date;
+};
+
+/**
+ * A replay is only a replay when every field the row attests to matches. Type
+ * and payload are as material as the customer: reusing a key with a different
+ * body must surface a conflict instead of returning an unrelated row that the
+ * caller would read as its own write.
+ */
+function interactionReplayMatches(
+  stored: StoredInteraction,
+  input: AppendCustomerInteractionInput,
+  type: string,
+  payload: string
+): boolean {
+  return (
+    stored.customerId === input.customerId &&
+    stored.branchId === input.branchId &&
+    stored.orderId === (input.orderId ?? null) &&
+    stored.type === type &&
+    canonicalPayload(stored.payload) === payload &&
+    occurredAtMatches(stored.occurredAt, input.occurredAt)
+  );
+}
 
 export async function appendCustomerInteraction(
   db: ScopedDb,
@@ -424,15 +495,12 @@ export async function appendCustomerInteraction(
     await requireActiveCustomer(tx, input.customerId);
     const idempotencyKey = required(input.idempotencyKey, 'Idempotency key');
     const type = required(input.type, 'Interaction type');
+    const payload = canonicalPayload(input.payload);
     const existing = await tx.customerInteraction.findFirst({
       where: { idempotencyKey },
     });
     if (existing) {
-      if (
-        existing.customerId !== input.customerId ||
-        existing.branchId !== input.branchId ||
-        existing.orderId !== (input.orderId ?? null)
-      ) {
+      if (!interactionReplayMatches(existing, input, type, payload)) {
         throw new CustomerError('Idempotency key belongs to another interaction.', 'INVALID_STATE');
       }
       return existing;
@@ -461,18 +529,16 @@ export async function appendCustomerInteraction(
         branchId: input.branchId,
         orderId: input.orderId,
         type,
+        ...(input.payload !== undefined ? { payload: input.payload } : {}),
         occurredAt: input.occurredAt,
         idempotencyKey,
       },
       skipDuplicates: true,
     });
+    // `skipDuplicates` hides the race where a concurrent transaction claimed the
+    // key first, so the re-read is validated with the same material comparison.
     const appended = await tx.customerInteraction.findFirst({ where: { idempotencyKey } });
-    if (
-      !appended ||
-      appended.customerId !== input.customerId ||
-      appended.branchId !== input.branchId ||
-      appended.orderId !== (input.orderId ?? null)
-    ) {
+    if (!appended || !interactionReplayMatches(appended, input, type, payload)) {
       throw new CustomerError('Idempotency key belongs to another interaction.', 'INVALID_STATE');
     }
     return appended;
@@ -490,6 +556,41 @@ export type AppendCustomerConsentInput = {
   idempotencyKey: string;
 };
 
+type StoredConsent = {
+  customerId: string;
+  channel: CustomerConsentChannel;
+  granted: boolean;
+  source: string;
+  actorId: string;
+  policyVersion: string;
+  occurredAt: Date;
+};
+
+/**
+ * Consent is the one ledger where a lax replay check is a privacy defect: with
+ * only customer+channel compared, replaying a grant's key with `granted: false`
+ * returned the stored grant and the caller read the opt-out as recorded. Every
+ * field the row attests to — state, provenance and policy version included —
+ * must match, so a changed body conflicts instead of being swallowed.
+ */
+function consentReplayMatches(
+  stored: StoredConsent,
+  input: AppendCustomerConsentInput,
+  source: string,
+  actorId: string,
+  policyVersion: string
+): boolean {
+  return (
+    stored.customerId === input.customerId &&
+    stored.channel === input.channel &&
+    stored.granted === input.granted &&
+    stored.source === source &&
+    stored.actorId === actorId &&
+    stored.policyVersion === policyVersion &&
+    occurredAtMatches(stored.occurredAt, input.occurredAt)
+  );
+}
+
 export async function appendCustomerConsent(db: ScopedDb, input: AppendCustomerConsentInput) {
   return runInTransaction(db, async (tx) => {
     await requireActiveCustomer(tx, input.customerId);
@@ -502,7 +603,7 @@ export async function appendCustomerConsent(db: ScopedDb, input: AppendCustomerC
     const idempotencyKey = required(input.idempotencyKey, 'Idempotency key');
     const existing = await tx.customerConsent.findFirst({ where: { idempotencyKey } });
     if (existing) {
-      if (existing.customerId !== input.customerId || existing.channel !== input.channel) {
+      if (!consentReplayMatches(existing, input, source, actorId, policyVersion)) {
         throw new CustomerError(
           'Idempotency key belongs to another consent event.',
           'INVALID_STATE'
@@ -523,12 +624,10 @@ export async function appendCustomerConsent(db: ScopedDb, input: AppendCustomerC
       },
       skipDuplicates: true,
     });
+    // Same race as the interaction ledger: `skipDuplicates` swallows the loser's
+    // insert, so the re-read must clear the full material comparison too.
     const appended = await tx.customerConsent.findFirst({ where: { idempotencyKey } });
-    if (
-      !appended ||
-      appended.customerId !== input.customerId ||
-      appended.channel !== input.channel
-    ) {
+    if (!appended || !consentReplayMatches(appended, input, source, actorId, policyVersion)) {
       throw new CustomerError('Idempotency key belongs to another consent event.', 'INVALID_STATE');
     }
     return appended;
