@@ -43,15 +43,19 @@ vi.mock('@/lib/restaurant/loyalty', () => ({
 
 import { restaurantLoyaltyRouter } from './restaurant-loyalty';
 
-function caller() {
+function caller(
+  limits: Record<string, number> = {
+    'restaurant-core.loyalty.activeCustomers.max': 25_000,
+  }
+) {
   return restaurantLoyaltyRouter.createCaller({
     db: {} as never,
     entitlements: {
-      enabledModules: ['restaurant-crm-loyalty'],
+      enabledModules: ['restaurant-loyalty'],
       activeSeats: 1,
       seatLimit: 50,
       modules: [],
-      limits: { 'loyalty.activeCustomers.max': 25_000 },
+      limits,
     },
     session: {
       expires: 'later',
@@ -100,7 +104,7 @@ describe('loyalty tRPC boundary', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('gates configure/adjust and redeem with distinct server capabilities', async () => {
+  it('gates mutations and enrolls with the bootstrapped module-prefixed limit', async () => {
     await caller().configure({
       effectiveFrom: '2026-08-21T00:00:00.000Z',
       earnRate: '1.25',
@@ -143,6 +147,28 @@ describe('loyalty tRPC boundary', () => {
       expect.anything(),
       expect.objectContaining({ actorId: 'user_1' })
     );
+  });
+
+  it('preserves an explicit zero organization override ahead of the package default', async () => {
+    await caller({
+      'loyalty.activeCustomers.max': 0,
+      'restaurant-core.loyalty.activeCustomers.max': 25_000,
+    }).enrollAccount({ customerId: 'customer_1' });
+
+    expect(mocks.enroll).toHaveBeenCalledWith(expect.anything(), {
+      customerId: 'customer_1',
+      activeCustomersMax: 0,
+    });
+  });
+
+  it.each([
+    ['unset', {}],
+    ['misconfigured', { 'restaurant-core.loyalty.activeCustomers.max': Number.NaN }],
+  ])('rejects an %s active-customer limit as an entitlement error', async (_case, limits) => {
+    await expect(caller(limits).enrollAccount({ customerId: 'customer_1' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+    });
+    expect(mocks.enroll).not.toHaveBeenCalled();
   });
 
   it('rejects unknown redemption keys before domain work', async () => {

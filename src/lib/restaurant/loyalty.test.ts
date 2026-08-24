@@ -71,11 +71,20 @@ describe('program versions and account limits', () => {
     expect(db.loyaltyProgramVersion.update).not.toHaveBeenCalled();
   });
 
-  it('enforces loyalty.activeCustomers.max before enrollment', async () => {
+  it('denies the N+1 enrollment at loyalty.activeCustomers.max', async () => {
     db.restaurantCustomer.findUnique.mockResolvedValue({ id: 'customer_1', anonymizedAt: null });
     db.loyaltyAccount.count.mockResolvedValue(2);
     await expect(
       enrollLoyaltyAccount(scoped(), { customerId: 'customer_1', activeCustomersMax: 2 })
+    ).rejects.toMatchObject({ reason: 'ACTIVE_CUSTOMER_LIMIT_REACHED' });
+    expect(db.loyaltyAccount.create).not.toHaveBeenCalled();
+  });
+
+  it('treats an explicit zero active-customer limit as disabled', async () => {
+    db.restaurantCustomer.findUnique.mockResolvedValue({ id: 'customer_1', anonymizedAt: null });
+    db.loyaltyAccount.count.mockResolvedValue(0);
+    await expect(
+      enrollLoyaltyAccount(scoped(), { customerId: 'customer_1', activeCustomersMax: 0 })
     ).rejects.toMatchObject({ reason: 'ACTIVE_CUSTOMER_LIMIT_REACHED' });
     expect(db.loyaltyAccount.create).not.toHaveBeenCalled();
   });
