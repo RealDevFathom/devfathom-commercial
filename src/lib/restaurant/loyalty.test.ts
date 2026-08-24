@@ -11,6 +11,7 @@ import {
   enrollLoyaltyAccount,
   loyaltyBalance,
   netEarnableAmount,
+  readLoyaltyRelease,
   redeemLoyaltyPoints,
   releaseLoyaltyRedemption,
   reverseLoyaltyForRefund,
@@ -58,6 +59,59 @@ beforeEach(() => {
   db = makeDb();
 });
 
+/**
+ * Fixture for `earnLoyaltyForClosedOrder`, which reads its bills in two steps: the
+ * order carries only the SETTLED bill IDS, then the money and the `refunds` relation
+ * are re-read through `restaurantBill.findMany` AFTER the row lock (M8/M2).
+ */
+function settledOrder(bills: { id: string; grandTotal: string; refunded?: string[] }[]) {
+  db.restaurantOrder.findUnique.mockResolvedValue({
+    status: 'CLOSED',
+    customerId: 'customer_1',
+    bills: bills.map((bill) => ({ id: bill.id })),
+  });
+  db.restaurantBill.findMany.mockResolvedValue(
+    bills.map((bill) => ({
+      id: bill.id,
+      grandTotal: new Prisma.Decimal(bill.grandTotal),
+      refunds: (bill.refunded ?? []).map((amount) => ({ amount: new Prisma.Decimal(amount) })),
+    }))
+  );
+  db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
+}
+
+/** The raw SQL text of a `$queryRaw` tagged-template call, holes elided. */
+const rawSql = (call: unknown[]) => (call[0] as string[]).join('?');
+
+type EntryWhere = {
+  kind?: string;
+  id?: { in?: string[] };
+  idempotencyKey?: { startsWith?: string };
+};
+
+/**
+ * Route `loyaltyPointsEntry.findMany` by WHAT it asks for rather than by call order,
+ * so the release tests state their fixture instead of counting reads:
+ *   - `mine`         the entries a release command already wrote, by idempotency key;
+ *   - `redemptions`  the bill's REDEEMs, the release candidates;
+ *   - `byId`         those REDEEMs re-read by id (the replay pricing path);
+ *   - `releases`     every ADJUSTMENT already made against them.
+ */
+function entryReads(rows: {
+  mine?: unknown[];
+  redemptions?: unknown[];
+  byId?: unknown[];
+  releases?: unknown[];
+}) {
+  db.loyaltyPointsEntry.findMany.mockImplementation(async (args?: { where?: EntryWhere }) => {
+    const where = args?.where ?? {};
+    if (where.idempotencyKey?.startsWith !== undefined) return rows.mine ?? [];
+    if (where.kind === 'REDEEM') return rows.redemptions ?? [];
+    if (where.id?.in !== undefined) return rows.byId ?? [];
+    return rows.releases ?? [];
+  });
+}
+
 describe('program versions and account limits', () => {
   it('configures by appending the next immutable version', async () => {
     db.loyaltyProgramVersion.findFirst.mockResolvedValue({ versionNumber: 2 });
@@ -90,12 +144,7 @@ describe('append-only ledger', () => {
   });
 
   it('earns floor(bill grand total × rate) once for an active linked account', async () => {
-    db.restaurantOrder.findUnique.mockResolvedValue({
-      status: 'CLOSED',
-      customerId: 'customer_1',
-      bills: [{ id: 'bill_1', grandTotal: new Prisma.Decimal('12.50'), refunds: [] }],
-    });
-    db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
+    settledOrder([{ id: 'bill_1', grandTotal: '12.50' }]);
     db.loyaltyProgramVersion.findFirst.mockResolvedValue({
       id: 'program_1',
       earnRate: new Prisma.Decimal('1.2'),
@@ -211,18 +260,7 @@ describe('earn is net of refunds taken before the close (M2)', () => {
   });
 
   it('earns on the net when the refund preceded the close', async () => {
-    db.restaurantOrder.findUnique.mockResolvedValue({
-      status: 'CLOSED',
-      customerId: 'customer_1',
-      bills: [
-        {
-          id: 'bill_1',
-          grandTotal: new Prisma.Decimal('10.00'),
-          refunds: [{ amount: new Prisma.Decimal('4.00') }],
-        },
-      ],
-    });
-    db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
+    settledOrder([{ id: 'bill_1', grandTotal: '10.00', refunded: ['4.00'] }]);
     db.loyaltyProgramVersion.findFirst.mockResolvedValue({
       id: 'program_1',
       earnRate: new Prisma.Decimal('1'),
@@ -233,6 +271,54 @@ describe('earn is net of refunds taken before the close (M2)', () => {
     expect(db.loyaltyPointsEntry.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ kind: 'EARN', points: 6 }) })
     );
+  });
+
+  it('locks every settled bill in ascending id order BEFORE reading its refunds', async () => {
+    settledOrder([
+      { id: 'bill_a', grandTotal: '10.00' },
+      { id: 'bill_b', grandTotal: '10.00' },
+    ]);
+    db.loyaltyProgramVersion.findFirst.mockResolvedValue({
+      id: 'program_1',
+      earnRate: new Prisma.Decimal('1'),
+      expiryDays: null,
+    });
+
+    await earnLoyaltyForClosedOrder(scoped(), 'order_1', AT);
+
+    // The same row lock `refundTender` takes, so the two commands cannot interleave
+    // into an earn on refunded money.
+    const locks = db.$queryRaw.mock.calls;
+    expect(locks).toHaveLength(2);
+    for (const call of locks) {
+      expect(rawSql(call)).toBe('SELECT id FROM restaurant_bills WHERE id = ? FOR UPDATE');
+    }
+    // Ascending id — a deterministic order, so two concurrent closes cannot deadlock.
+    expect(locks.map((call) => call[1])).toEqual(['bill_a', 'bill_b']);
+    expect(db.restaurantOrder.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          bills: expect.objectContaining({ orderBy: { id: 'asc' } }),
+        }),
+      })
+    );
+
+    // …and the refunds the earn nets out are read only after the last lock is held.
+    const lastLock = Math.max(...db.$queryRaw.mock.invocationCallOrder);
+    expect(db.restaurantBill.findMany.mock.invocationCallOrder[0]).toBeGreaterThan(lastLock);
+    expect(db.restaurantBill.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: ['bill_a', 'bill_b'] } },
+        select: expect.objectContaining({ refunds: { select: { amount: true } } }),
+      })
+    );
+  });
+
+  it('takes no lock and earns nothing when the order has no settled bill', async () => {
+    settledOrder([]);
+    await expect(earnLoyaltyForClosedOrder(scoped(), 'order_1', AT)).resolves.toEqual([]);
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(db.loyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
 
   it('writes no reversal when the earn already netted the refund', async () => {
@@ -266,10 +352,7 @@ describe('redemption release (B3/B4)', () => {
   };
 
   it('releases only the whole points the shortfall needs', async () => {
-    db.loyaltyPointsEntry.findMany
-      .mockResolvedValueOnce([redemption])
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([]);
+    entryReads({ redemptions: [redemption] });
     db.restaurantBill.findUnique.mockResolvedValue({
       discountTotal: new Prisma.Decimal('18.00'),
     });
@@ -299,7 +382,7 @@ describe('redemption release (B3/B4)', () => {
   });
 
   it('never hands back more than the bill still carries', async () => {
-    db.loyaltyPointsEntry.findMany.mockResolvedValueOnce([redemption]).mockResolvedValue([]);
+    entryReads({ redemptions: [redemption] });
     db.restaurantBill.findUnique.mockResolvedValue({ discountTotal: new Prisma.Decimal('4.00') });
 
     const result = await releaseLoyaltyRedemption(scoped(), {
@@ -315,14 +398,8 @@ describe('redemption release (B3/B4)', () => {
   });
 
   it('replays its own entries without releasing a second time', async () => {
-    db.loyaltyPointsEntry.findMany.mockResolvedValueOnce([redemption]).mockResolvedValueOnce([
-      {
-        id: 'release_1',
-        points: 160,
-        reversesEntryId: 'redeem_1',
-        idempotencyKey: 'loyalty:release:comp:line_1:redeem_1',
-      },
-    ]);
+    const release = { id: 'release_1', points: 160, reversesEntryId: 'redeem_1' };
+    entryReads({ mine: [release], byId: [redemption], releases: [release] });
 
     const result = await releaseLoyaltyRedemption(scoped(), {
       billId: 'bill_1',
@@ -338,7 +415,7 @@ describe('redemption release (B3/B4)', () => {
   });
 
   it('releases nothing when the bill carries no redemption', async () => {
-    db.loyaltyPointsEntry.findMany.mockResolvedValue([]);
+    entryReads({});
     const result = await releaseLoyaltyRedemption(scoped(), {
       billId: 'bill_1',
       shortfall: new Prisma.Decimal('8.00'),
@@ -349,5 +426,48 @@ describe('redemption release (B3/B4)', () => {
     });
     expect(result).toMatchObject({ points: 0, replayed: false, entryIds: [] });
     expect(db.loyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('readLoyaltyRelease — a replay reports what the first run released', () => {
+  const redemption = {
+    id: 'redeem_1',
+    programVersion: { redemptionValue: new Prisma.Decimal('0.05') },
+  };
+
+  it('reports nothing released for a command that released nothing', async () => {
+    entryReads({});
+    await expect(
+      readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_1' })
+    ).resolves.toMatchObject({ points: 0, entryIds: [] });
+    expect(
+      (await readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_1' })).value.toFixed(2)
+    ).toBe('0.00');
+  });
+
+  it('scopes the read to the release keys this command owns', async () => {
+    entryReads({});
+    await readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_1' });
+    expect(db.loyaltyPointsEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          kind: 'ADJUSTMENT',
+          idempotencyKey: { startsWith: 'loyalty:release:comp:line_1:' },
+        }),
+      })
+    );
+  });
+
+  it('prices a later release off the points already given back, not from zero', async () => {
+    // Two comps released the same redemption: 160 points first, then 200. The second
+    // release is worth the CUMULATIVE difference — 18.00 − 8.00 = 10.00 — so a replay
+    // of it reports 10.00 and the two together sum to exactly the 18.00 redeemed.
+    const first = { id: 'release_1', points: 160, reversesEntryId: 'redeem_1' };
+    const second = { id: 'release_2', points: 200, reversesEntryId: 'redeem_1' };
+    entryReads({ mine: [second], byId: [redemption], releases: [first, second] });
+
+    const result = await readLoyaltyRelease(scoped(), { idempotencyKey: 'comp:line_2' });
+    expect(result).toMatchObject({ points: 200, entryIds: ['release_2'] });
+    expect(result.value.toFixed(2)).toBe('10.00');
   });
 });

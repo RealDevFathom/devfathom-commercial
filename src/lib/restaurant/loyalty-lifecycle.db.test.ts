@@ -16,15 +16,26 @@
  *     value;
  *   - M2 a refund taken BEFORE the close reduces the earn, and a later refund
  *     reverses only the remainder — the same money is never charged twice;
+ *   - M2 a close and a refund racing for the SAME bill, in two overlapping
+ *     transactions with the loser provably queued on the row lock, converge on the
+ *     same net balance in BOTH orderings — no earn on refunded money, no double
+ *     reversal;
+ *   - the guard migration FAILS the deployment on a database that already holds a
+ *     negative grand total, whether or not row-level security lets its precondition
+ *     see the row, and leaks no bill or tenant identifier while doing so;
  *   - the release and the bill mutation commit or roll back together (injected
- *     failure), and a money-key replay releases nothing a second time.
+ *     failure), and a money-key replay releases nothing a second time while still
+ *     REPORTING what the call it replays released.
  *
  * Requires TEST_DATABASE_URL — a migrated throwaway database with an unprivileged
  * (NOSUPERUSER / NOBYPASSRLS) application role, never DATABASE_URL. Every read is
  * filtered by a per-run-unique id.
  */
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
+import { Client } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -137,6 +148,68 @@ const actor = (label: string) => ({
   deviceId: ctx.deviceId,
   idempotencyKey: `${label}-${suffix}-${randomBytes(3).toString('hex')}`,
 });
+
+/**
+ * A `db` whose next command runs to completion inside its transaction and then HOLDS
+ * that transaction open — every row lock taken and every write still uncommitted —
+ * until `commit()` is called. `reached` settles the moment the command's own work is
+ * done, which is the window a test needs in order to start the competing command
+ * against locks that are provably still held.
+ */
+function heldOpen(base: ScopedDb) {
+  let signalReached!: () => void;
+  let openGate!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    signalReached = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    openGate = resolve;
+  });
+  const held = new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop !== '$transaction') return Reflect.get(target, prop, receiver);
+      return (run: (tx: ScopedDb) => Promise<unknown>) =>
+        (
+          target.$transaction as unknown as (
+            fn: (tx: ScopedDb) => Promise<unknown>
+          ) => Promise<unknown>
+        )(async (tx: ScopedDb) => {
+          const result = await run(tx);
+          signalReached();
+          await gate;
+          return result;
+        });
+    },
+  }) as ScopedDb;
+  return { db: held, reached, commit: () => openGate() };
+}
+
+/**
+ * Block until some backend on this database is WAITING ON A LOCK.
+ *
+ * This is the deterministic barrier the concurrency battery turns on. Without it a
+ * test can only hope the second command reached the contended row lock before the
+ * first one committed, and the interleaving it claims to exercise may never have
+ * happened — the race would then pass against the very bug it exists to catch. Here
+ * the test does not continue until PostgreSQL itself reports the queue.
+ */
+async function awaitBlockedBackend(observer: Client) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const { rows } = await observer.query<{ waiting: number }>(
+      `SELECT count(*)::int AS waiting
+         FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND wait_event_type = 'Lock'`
+    );
+    if ((rows[0]?.waiting ?? 0) > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(
+    'no backend ever waited on a lock: the interleaving under test never happened, ' +
+      'so this run proves nothing about serialization'
+  );
+}
 
 function readBill(billId: string) {
   return deps.withTenantDb(orgId, (tx) =>
@@ -505,6 +578,196 @@ describeIfDatabase('M8/M2 — refunds around the order close', () => {
   });
 });
 
+describeIfDatabase('M8/M2 — close ↔ refund serialization under real concurrency', () => {
+  /**
+   * Drive a close and a refund of the SAME bill in two overlapping transactions, with
+   * `ordering` deciding which one takes the bill row lock first and the other one
+   * provably queued behind it. A 10.00 bill, 4.00 refunded, 1 point per unit: the
+   * guest must end on 6 points either way.
+   *
+   * The unserialized version of this loses that: the close reads refunds without the
+   * lock, so with `refund-first` it earns 10 on a refund it cannot see while the
+   * refund, finding no committed earn, writes no reversal — 10 points on 6.00 of kept
+   * money, with nothing left to correct it.
+   */
+  async function raceCloseAndRefund(ordering: 'close-first' | 'refund-first', observer: Client) {
+    const guest = await seedGuest(`race-${ordering}`, 0);
+    const { orderId } = await seedOrder(guest.customerId, ['10.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor(`cut-${ordering}`),
+    });
+    const tender = await deps.tenders.applyTender(db, {
+      billId: cut.billIds[0]!,
+      tender: { type: 'CASH', amount: '10.00', cashReceived: '10.00' },
+      actor: actor(`tender-${ordering}`),
+    });
+    expect(tender.settled).toBe(true);
+
+    const close = (target: ScopedDb) =>
+      deps.orders.closeOrder(target, { orderId, actor: actor(`close-${ordering}`) });
+    const refund = (target: ScopedDb) =>
+      deps.refunds.refundTender(target, {
+        originalTenderId: tender.tenderId,
+        amount: '4.00',
+        reason: 'wrong dish',
+        approvingStaffProfileId: ctx.manager,
+        actor: actor(`refund-${ordering}`),
+      });
+
+    const held = heldOpen(db);
+    const holder = ordering === 'close-first' ? close(held.db) : refund(held.db);
+    // The holder has finished its writes and still owns every lock it took…
+    await held.reached;
+    const contender = ordering === 'close-first' ? refund(db) : close(db);
+    // …and the contender is now demonstrably stuck on one of them.
+    await awaitBlockedBackend(observer);
+    held.commit();
+    await Promise.all([holder, contender]);
+
+    return {
+      entries: (await ledger(guest.accountId)).map((entry) => [entry.kind, entry.points]),
+      balance: await deps.loyalty.loyaltyBalance(db, guest.accountId),
+    };
+  }
+
+  it('converges on the same net balance whichever side wins the bill lock', async () => {
+    const observer = new Client({ connectionString: TEST_DATABASE_URL });
+    await observer.connect();
+    let closeFirst: Awaited<ReturnType<typeof raceCloseAndRefund>>;
+    let refundFirst: Awaited<ReturnType<typeof raceCloseAndRefund>>;
+    try {
+      closeFirst = await raceCloseAndRefund('close-first', observer);
+      refundFirst = await raceCloseAndRefund('refund-first', observer);
+    } finally {
+      await observer.end();
+    }
+
+    // The close won the lock, so its full earn was committed and visible by the time
+    // the refund ran: the refund reverses exactly the 4 points the refunded 4.00 bought.
+    expect(closeFirst.entries).toEqual([
+      ['EARN', 10],
+      ['REVERSAL', -4],
+    ]);
+    // The refund won, so there was no earn to reverse — and the close, released from
+    // the same lock, read the committed refund and earned on the net 6.00.
+    expect(refundFirst.entries).toEqual([['EARN', 6]]);
+
+    // Neither ordering double-earns or double-reverses…
+    for (const outcome of [closeFirst, refundFirst]) {
+      expect(outcome.entries.filter(([kind]) => kind === 'EARN')).toHaveLength(1);
+      expect(outcome.entries.filter(([kind]) => kind === 'REVERSAL').length).toBeLessThanOrEqual(1);
+    }
+    // …and both land on the identical net ledger balance: 6 points for 6.00 kept.
+    expect(closeFirst.balance).toBe(refundFirst.balance);
+    expect(closeFirst.balance).toBe(6);
+  }, 120_000);
+});
+
+describeIfDatabase('M8 grandTotal guard migration — fails closed', () => {
+  // The SHIPPED file, read from the repo root (vitest's root) — never a copy, so this
+  // battery cannot pass against SQL that is not the SQL a deploy would run.
+  const MIGRATION = join(
+    process.cwd(),
+    'prisma/migrations/20260824120000_restaurant_m8_bill_grand_total_guard/migration.sql'
+  );
+  const CHECK_VIOLATION = '23514';
+  const constraint = 'restaurant_bills_grandTotal_nonneg_ck';
+
+  async function connect() {
+    const client = new Client({ connectionString: TEST_DATABASE_URL });
+    await client.connect();
+    return client;
+  }
+
+  /**
+   * Run the SHIPPED migration file against a database deliberately holding one negative
+   * grand total, then roll the whole thing back.
+   *
+   * `visible` selects whether the session can SEE the offending row. A real migration
+   * runs with no `app.current_organization_id`, and `restaurant_bills` is FORCE ROW
+   * LEVEL SECURITY, so the migration's own precondition SELECT is policy-filtered to
+   * nothing — which is exactly why the unguarded `VALIDATE` has to be there as well.
+   * Both settings must abort the deployment.
+   */
+  async function deployOverNegativeBill(visible: boolean) {
+    const { orderId } = await seedOrder(null, ['10.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor(`cut-mig-${visible}`),
+    });
+    const billId = cut.billIds[0]!;
+    const sql = await readFile(MIGRATION, 'utf8');
+
+    const client = await connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL lock_timeout = 15000');
+      await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [orgId]);
+      // Reach the corrupt state this guard exists to refuse: take the CHECK away, write
+      // a negative grand total, then put the migration back in front of it.
+      await client.query(`ALTER TABLE "restaurant_bills" DROP CONSTRAINT "${constraint}"`);
+      const corrupted = await client.query(
+        'UPDATE "restaurant_bills" SET "grandTotal" = -1 WHERE id = $1',
+        [billId]
+      );
+      expect(corrupted.rowCount).toBe(1);
+      if (!visible) {
+        await client.query(`SELECT set_config('app.current_organization_id', '', true)`);
+      }
+
+      const error = await client.query(sql).then(
+        () => {
+          throw new Error('the migration COMPLETED on a table holding a negative grand total');
+        },
+        (failure: Error & { code?: string }) => failure
+      );
+      return { error, billId };
+    } finally {
+      await client.query('ROLLBACK').catch(() => {});
+      await client.end();
+    }
+  }
+
+  it('aborts the deployment when its precondition can see the offending rows', async () => {
+    const { error, billId } = await deployOverNegativeBill(true);
+    expect(error.code).toBe(CHECK_VIOLATION);
+    expect(error.message).toMatch(/1 row\(s\) with grandTotal < 0/);
+    expect(error.message).toContain(constraint);
+    // Aggregate diagnostics only — a deploy log must not carry bill, order or tenant
+    // identifiers out of a financial table.
+    expect(error.message).not.toContain(billId);
+    expect(error.message).not.toContain(orgId);
+  }, 60_000);
+
+  it('still aborts when row-level security hides those rows from the precondition', async () => {
+    const { error, billId } = await deployOverNegativeBill(false);
+    expect(error.code).toBe(CHECK_VIOLATION);
+    // This is the VALIDATE scan speaking, not the precondition: it reads the heap
+    // directly, so no policy can talk it out of the violation.
+    expect(error.message).toMatch(/violated by some row/i);
+    expect(error.message).toContain(constraint);
+    expect(error.message).not.toContain(billId);
+  }, 60_000);
+
+  it('re-runs clean on a healthy database and leaves the constraint VALID', async () => {
+    const sql = await readFile(MIGRATION, 'utf8');
+    const client = await connect();
+    try {
+      await client.query(sql);
+      const { rows } = await client.query(
+        `SELECT convalidated FROM pg_constraint WHERE conname = $1`,
+        [constraint]
+      );
+      expect(rows).toEqual([{ convalidated: true }]);
+    } finally {
+      await client.end();
+    }
+  }, 60_000);
+});
+
 describeIfDatabase('M8/B3 — atomicity and replay', () => {
   it('rolls the release back with the comp when the transaction fails', async () => {
     const guest = await seedGuest('rollback', 400);
@@ -579,7 +842,9 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     assertMoneyIdentity(after);
     expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(400);
 
-    // A replay of the SAME money key writes nothing and releases nothing twice.
+    // A replay of the SAME money key writes nothing and releases nothing twice — but
+    // it REPORTS the same 9.00 its first run released. A replay answering 0.00 would
+    // describe a comp that never gave the guest's points back.
     const afterEntries = await ledger(guest.accountId);
     const replay = await deps.bills.compLine(db, {
       billId,
@@ -589,8 +854,42 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
       actor: retryActor,
     });
     expect(replay.replayed).toBe(true);
-    eqMoney(replay.releasedDiscount, '0.00');
+    expect(replay.billLineId).toBe(lines[0]!.id);
+    eqMoney(replay.releasedDiscount, '9.00');
     expect(await ledger(guest.accountId)).toEqual(afterEntries);
     expect(await readBill(billId)).toEqual(after);
+  });
+
+  it('reports zero released when the comp needed no redemption, on both calls', async () => {
+    // The contract cuts both ways: a comp the bill absorbs on its own releases nothing,
+    // and its replay must not invent a release either.
+    const { orderId } = await seedOrder(null, ['10.00', '10.00']);
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      actor: actor('cut-plain'),
+    });
+    const billId = cut.billIds[0]!;
+    const lines = await billLines(billId);
+    const plainActor = actor('comp-plain');
+    const args = {
+      billId,
+      billLineId: lines[0]!.id,
+      reason: 'kitchen error',
+      approvingStaffProfileId: ctx.manager,
+      actor: plainActor,
+    };
+
+    const first = await deps.bills.compLine(db, args);
+    expect(first.replayed).toBe(false);
+    eqMoney(first.releasedDiscount, '0.00');
+    const replay = await deps.bills.compLine(db, args);
+    expect(replay.replayed).toBe(true);
+    eqMoney(replay.releasedDiscount, '0.00');
+
+    const bill = await readBill(billId);
+    eqMoney(bill.compTotal, '10.00');
+    eqMoney(bill.grandTotal, '10.00');
+    assertMoneyIdentity(bill);
   });
 });
