@@ -88,6 +88,24 @@ describe('program versions and account limits', () => {
     ).rejects.toMatchObject({ reason: 'ACTIVE_CUSTOMER_LIMIT_REACHED' });
     expect(db.loyaltyAccount.create).not.toHaveBeenCalled();
   });
+
+  it('enrolls below the bootstrapped cap without duplicating an immediate retry', async () => {
+    const account = { id: 'created', customerId: 'customer_1', enrolledAt: AT, active: true };
+    db.loyaltyAccount.findUnique.mockResolvedValueOnce(null).mockResolvedValue(account);
+    db.restaurantCustomer.findUnique.mockResolvedValue({ id: 'customer_1', anonymizedAt: null });
+    db.loyaltyAccount.count.mockResolvedValue(24_999);
+    db.loyaltyAccount.create.mockResolvedValue(account);
+    const input = { customerId: 'customer_1', activeCustomersMax: 25_000, at: AT };
+
+    await expect(enrollLoyaltyAccount(scoped(), input)).resolves.toEqual(account);
+    expect(db.loyaltyAccount.create).toHaveBeenCalledTimes(1);
+    expect(db.loyaltyAccount.create).toHaveBeenCalledWith({
+      data: { customerId: 'customer_1', enrolledAt: AT },
+    });
+
+    await expect(enrollLoyaltyAccount(scoped(), input)).resolves.toEqual(account);
+    expect(db.loyaltyAccount.create).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('append-only ledger', () => {
