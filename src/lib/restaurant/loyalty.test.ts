@@ -10,7 +10,9 @@ import {
   earnLoyaltyForClosedOrder,
   enrollLoyaltyAccount,
   loyaltyBalance,
+  netEarnableAmount,
   redeemLoyaltyPoints,
+  releaseLoyaltyRedemption,
   reverseLoyaltyForRefund,
 } from './loyalty';
 
@@ -118,7 +120,7 @@ describe('append-only ledger', () => {
     db.restaurantOrder.findUnique.mockResolvedValue({
       status: 'CLOSED',
       customerId: 'customer_1',
-      bills: [{ id: 'bill_1', grandTotal: new Prisma.Decimal('12.50') }],
+      bills: [{ id: 'bill_1', grandTotal: new Prisma.Decimal('12.50'), refunds: [] }],
     });
     db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
     db.loyaltyProgramVersion.findFirst.mockResolvedValue({
@@ -200,6 +202,10 @@ describe('append-only ledger', () => {
       points: 10,
       programVersion: { earnRate: new Prisma.Decimal('0.1') },
     });
+    // A 105.00 bill earned floor(10.5) = 10 points; 65.00 has since been refunded,
+    // so the ledger must hold floor((105 − 65) × 0.1) = 4 — six reversed in total,
+    // three of them already written.
+    db.restaurantBill.findUnique.mockResolvedValue({ grandTotal: new Prisma.Decimal('105') });
     db.restaurantRefund.aggregate.mockResolvedValue({ _sum: { amount: new Prisma.Decimal('65') } });
     db.loyaltyPointsEntry.aggregate.mockResolvedValue({ _sum: { points: -3 } });
 
@@ -212,5 +218,163 @@ describe('append-only ledger', () => {
         reversesEntryId: 'earn_1',
       }),
     });
+  });
+});
+
+// ── M8 correction B (WHA-132) ────────────────────────────────────────────────
+
+describe('earn is net of refunds taken before the close (M2)', () => {
+  it('floors at zero and never earns on refunded money', () => {
+    expect(netEarnableAmount(new Prisma.Decimal('10'), new Prisma.Decimal('4')).toString()).toBe(
+      '6'
+    );
+    expect(netEarnableAmount(new Prisma.Decimal('10'), new Prisma.Decimal('10')).toString()).toBe(
+      '0'
+    );
+    // A tip-inclusive refund can exceed the bill's own total; the earn floors.
+    expect(netEarnableAmount(new Prisma.Decimal('10'), new Prisma.Decimal('12')).toString()).toBe(
+      '0'
+    );
+  });
+
+  it('earns on the net when the refund preceded the close', async () => {
+    db.restaurantOrder.findUnique.mockResolvedValue({
+      status: 'CLOSED',
+      customerId: 'customer_1',
+      bills: [
+        {
+          id: 'bill_1',
+          grandTotal: new Prisma.Decimal('10.00'),
+          refunds: [{ amount: new Prisma.Decimal('4.00') }],
+        },
+      ],
+    });
+    db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
+    db.loyaltyProgramVersion.findFirst.mockResolvedValue({
+      id: 'program_1',
+      earnRate: new Prisma.Decimal('1'),
+      expiryDays: null,
+    });
+
+    await earnLoyaltyForClosedOrder(scoped(), 'order_1', AT);
+    expect(db.loyaltyPointsEntry.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ kind: 'EARN', points: 6 }) })
+    );
+  });
+
+  it('writes no reversal when the earn already netted the refund', async () => {
+    db.loyaltyPointsEntry.findFirst.mockResolvedValueOnce({
+      id: 'earn_1',
+      accountId: 'account_1',
+      programVersionId: 'program_1',
+      points: 6,
+      programVersion: { earnRate: new Prisma.Decimal('1') },
+    });
+    db.restaurantBill.findUnique.mockResolvedValue({ grandTotal: new Prisma.Decimal('10.00') });
+    db.restaurantRefund.aggregate.mockResolvedValue({
+      _sum: { amount: new Prisma.Decimal('4.00') },
+    });
+    db.loyaltyPointsEntry.aggregate.mockResolvedValue({ _sum: { points: null } });
+
+    await expect(
+      reverseLoyaltyForRefund(scoped(), { refundId: 'refund_1', billId: 'bill_1', at: AT })
+    ).resolves.toBeNull();
+    expect(db.loyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('redemption release (B3/B4)', () => {
+  const redemption = {
+    id: 'redeem_1',
+    accountId: 'account_1',
+    points: -360,
+    programVersionId: 'program_1',
+    programVersion: { redemptionValue: new Prisma.Decimal('0.05') },
+  };
+
+  it('releases only the whole points the shortfall needs', async () => {
+    db.loyaltyPointsEntry.findMany
+      .mockResolvedValueOnce([redemption])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([]);
+    db.restaurantBill.findUnique.mockResolvedValue({
+      discountTotal: new Prisma.Decimal('18.00'),
+    });
+
+    const result = await releaseLoyaltyRedemption(scoped(), {
+      billId: 'bill_1',
+      shortfall: new Prisma.Decimal('8.00'),
+      actorId: 'staff_1',
+      reason: 'comp',
+      idempotencyKey: 'comp:line_1',
+      at: AT,
+    });
+    expect(result.points).toBe(160);
+    expect(result.value.toFixed(2)).toBe('8.00');
+    expect(result.replayed).toBe(false);
+    expect(db.loyaltyPointsEntry.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          kind: 'ADJUSTMENT',
+          points: 160,
+          billId: 'bill_1',
+          reversesEntryId: 'redeem_1',
+          idempotencyKey: 'loyalty:release:comp:line_1:redeem_1',
+        }),
+      })
+    );
+  });
+
+  it('never hands back more than the bill still carries', async () => {
+    db.loyaltyPointsEntry.findMany.mockResolvedValueOnce([redemption]).mockResolvedValue([]);
+    db.restaurantBill.findUnique.mockResolvedValue({ discountTotal: new Prisma.Decimal('4.00') });
+
+    const result = await releaseLoyaltyRedemption(scoped(), {
+      billId: 'bill_1',
+      shortfall: null,
+      actorId: 'staff_1',
+      reason: 'void-and-recut',
+      idempotencyKey: 'void:bill_1',
+      at: AT,
+    });
+    expect(result.points).toBe(80);
+    expect(result.value.toFixed(2)).toBe('4.00');
+  });
+
+  it('replays its own entries without releasing a second time', async () => {
+    db.loyaltyPointsEntry.findMany.mockResolvedValueOnce([redemption]).mockResolvedValueOnce([
+      {
+        id: 'release_1',
+        points: 160,
+        reversesEntryId: 'redeem_1',
+        idempotencyKey: 'loyalty:release:comp:line_1:redeem_1',
+      },
+    ]);
+
+    const result = await releaseLoyaltyRedemption(scoped(), {
+      billId: 'bill_1',
+      shortfall: new Prisma.Decimal('8.00'),
+      actorId: 'staff_1',
+      reason: 'comp',
+      idempotencyKey: 'comp:line_1',
+      at: AT,
+    });
+    expect(result).toMatchObject({ points: 160, replayed: true, entryIds: ['release_1'] });
+    expect(result.value.toFixed(2)).toBe('8.00');
+    expect(db.loyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('releases nothing when the bill carries no redemption', async () => {
+    db.loyaltyPointsEntry.findMany.mockResolvedValue([]);
+    const result = await releaseLoyaltyRedemption(scoped(), {
+      billId: 'bill_1',
+      shortfall: new Prisma.Decimal('8.00'),
+      actorId: 'staff_1',
+      reason: 'comp',
+      idempotencyKey: 'comp:line_1',
+      at: AT,
+    });
+    expect(result).toMatchObject({ points: 0, replayed: false, entryIds: [] });
+    expect(db.loyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
 });

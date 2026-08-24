@@ -214,6 +214,24 @@ export async function getLoyaltyEntry(db: ScopedDb, id: string) {
   return entry;
 }
 
+/**
+ * The money a bill may still earn on: its grand total NET of every refund already
+ * booked against it, floored at zero.
+ *
+ * A bill can be SETTLED and refunded while its order still sits in PAYMENT_PENDING,
+ * so the close may run after the refund. Netting here is what keeps the M8 rule
+ * "no points are earned on refunded money" true regardless of which side of the
+ * close the refund lands on; `reverseLoyaltyForRefund` re-derives the same target
+ * for refunds that arrive after the earn, so the two paths never double-count.
+ */
+export function netEarnableAmount(
+  grandTotal: Prisma.Decimal,
+  refunded: Prisma.Decimal
+): Prisma.Decimal {
+  const net = sub(grandTotal, refunded);
+  return compare(net, ZERO) > 0 ? net : ZERO;
+}
+
 /** Called inside order-close transaction after CLOSED is persisted. */
 export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, at: Date) {
   const order = await tx.restaurantOrder.findUnique({
@@ -223,7 +241,7 @@ export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, a
       customerId: true,
       bills: {
         where: { status: 'SETTLED' },
-        select: { id: true, grandTotal: true },
+        select: { id: true, grandTotal: true, refunds: { select: { amount: true } } },
       },
     },
   });
@@ -246,7 +264,8 @@ export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, a
       created.push(prior);
       continue;
     }
-    const points = wholePoints(multiply(bill.grandTotal, program.earnRate));
+    const earnable = netEarnableAmount(bill.grandTotal, sum(bill.refunds.map((r) => r.amount)));
+    const points = wholePoints(multiply(earnable, program.earnRate));
     if (points === 0) continue;
     const expiresAt = program.expiryDays
       ? new Date(at.getTime() + program.expiryDays * 86_400_000)
@@ -470,12 +489,18 @@ export async function reverseLoyaltyForRefund(
     where: { billId: input.billId, kind: 'EARN' },
     include: { programVersion: true },
   });
+  // No EARN yet: the refund precedes the order close, and the close nets it out of
+  // the earn itself (`netEarnableAmount`). Nothing to reverse.
   if (!earn) return null;
   const idempotencyKey = `loyalty:reversal:${input.refundId}`;
   const prior = await tx.loyaltyPointsEntry.findFirst({ where: { idempotencyKey } });
   if (prior) return prior;
 
-  const [refunds, reversals] = await Promise.all([
+  const [bill, refunds, reversals] = await Promise.all([
+    tx.restaurantBill.findUnique({
+      where: { id: input.billId },
+      select: { grandTotal: true },
+    }),
     tx.restaurantRefund.aggregate({
       where: { billId: input.billId },
       _sum: { amount: true },
@@ -485,10 +510,14 @@ export async function reverseLoyaltyForRefund(
       _sum: { points: true },
     }),
   ]);
-  const target = Math.min(
-    earn.points,
-    wholePoints(multiply(refunds._sum.amount ?? ZERO, earn.programVersion.earnRate))
-  );
+  if (!bill) throw new LoyaltyError('The refunded bill does not exist.', 'NOT_FOUND');
+
+  // Target the SAME ledger identity the close used — points on the bill must always
+  // equal the whole points earnable on its net-of-refunds total. Deriving the
+  // reversal from that identity (rather than from Σ refunds alone) is what keeps a
+  // pre-close refund, which the earn already netted out, from being charged twice.
+  const earnable = netEarnableAmount(bill.grandTotal, refunds._sum.amount ?? ZERO);
+  const target = earn.points - wholePoints(multiply(earnable, earn.programVersion.earnRate));
   const alreadyReversed = -(reversals._sum.points ?? 0);
   const points = target - alreadyReversed;
   if (points <= 0) return null;
@@ -505,4 +534,173 @@ export async function reverseLoyaltyForRefund(
       idempotencyKey,
     },
   });
+}
+
+// ── Redemption release (comp / void-and-recut compensation) ──────────────────
+
+export type LoyaltyReleaseResult = {
+  /** Discount money handed back to the bill; the caller MUST apply it. */
+  value: Prisma.Decimal;
+  /** Whole points restored to the account. */
+  points: number;
+  entryIds: string[];
+  replayed: boolean;
+};
+
+const noRelease = (): LoyaltyReleaseResult => ({
+  value: ZERO,
+  points: 0,
+  entryIds: [],
+  replayed: false,
+});
+
+/** The money a release of `take` further points frees, given `before` points of this
+ * redemption were already released. Rounding is applied to the CUMULATIVE released
+ * points so a sequence of partial releases sums to exactly the value the redemption
+ * originally took off the bill — never a cent more. */
+function releasedValueDelta(before: number, take: number, redemptionValue: Prisma.Decimal) {
+  return sub(
+    roundMoney(multiply(before + take, redemptionValue)),
+    roundMoney(multiply(before, redemptionValue))
+  );
+}
+
+/**
+ * Give back loyalty redemption a bill can no longer carry, and restore the points.
+ *
+ * Two lifecycle events strand a guest's spent points against a bill they will never
+ * pay: comping the line the redemption was applied to (the discount would push
+ * `grandTotal` below zero), and a void-and-recut that leaves the REDEEM pinned to a
+ * VOID bill while a fresh, undiscounted bill is issued. Both are compensated here —
+ * append-only, inside the caller's transaction, so the bill mutation and the ledger
+ * entry commit or roll back together.
+ *
+ * The compensation is a positive `ADJUSTMENT` linked to the REDEEM it releases
+ * (`reversesEntryId`): the M8 ledger CHECK reserves `REVERSAL` for a negative,
+ * refund-bound entry, and giving points BACK is the opposite direction. Redemptions
+ * are consumed FIFO and only as far as `shortfall` requires, so a comp releases the
+ * minimum that keeps `grandTotal >= 0` and the guest keeps the rest.
+ *
+ * Returns the money released — the caller subtracts it from `discountTotal` and adds
+ * it back to `grandTotal`, which preserves
+ * `subtotal = grandTotal + compTotal + discountTotal`.
+ */
+export async function releaseLoyaltyRedemption(
+  tx: ScopedDb,
+  input: {
+    billId: string;
+    /** Money that must be freed; `null` releases the whole remaining redemption. */
+    shortfall: Prisma.Decimal | null;
+    actorId: string;
+    reason: string;
+    /** Command-unique suffix. One entry per released redemption keys off it. */
+    idempotencyKey: string;
+    at: Date;
+  }
+): Promise<LoyaltyReleaseResult> {
+  const actorId = input.actorId.trim();
+  const reason = input.reason.trim();
+  if (!actorId || !reason) {
+    throw new LoyaltyError('A redemption release requires an actor and reason.', 'INVALID');
+  }
+  const keyPrefix = `loyalty:release:${input.idempotencyKey}:`;
+
+  const redemptions = await tx.loyaltyPointsEntry.findMany({
+    where: { billId: input.billId, kind: 'REDEEM' },
+    orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      accountId: true,
+      points: true,
+      programVersionId: true,
+      programVersion: { select: { redemptionValue: true } },
+    },
+  });
+  if (redemptions.length === 0) return noRelease();
+
+  const releases = await tx.loyaltyPointsEntry.findMany({
+    where: {
+      kind: 'ADJUSTMENT',
+      reversesEntryId: { in: redemptions.map((entry) => entry.id) },
+    },
+    select: { id: true, points: true, reversesEntryId: true, idempotencyKey: true },
+  });
+
+  // A replay of THIS command: report what it already released, write nothing.
+  const mine = releases.filter((row) => row.idempotencyKey.startsWith(keyPrefix));
+  if (mine.length > 0) {
+    let value = ZERO;
+    let points = 0;
+    for (const redemption of redemptions) {
+      const own = mine.filter((row) => row.reversesEntryId === redemption.id);
+      if (own.length === 0) continue;
+      const taken = own.reduce((total, row) => total + row.points, 0);
+      const before = releases
+        .filter((row) => row.reversesEntryId === redemption.id && !own.includes(row))
+        .reduce((total, row) => total + row.points, 0);
+      value = add(
+        value,
+        releasedValueDelta(before, taken, redemption.programVersion.redemptionValue)
+      );
+      points += taken;
+    }
+    return { value, points, entryIds: mine.map((row) => row.id), replayed: true };
+  }
+
+  const bill = await tx.restaurantBill.findUnique({
+    where: { id: input.billId },
+    select: { discountTotal: true },
+  });
+  if (!bill) throw new LoyaltyError('The bill does not exist.', 'NOT_FOUND');
+  // Never hand back more than the bill still carries: `discountTotal` is the exact
+  // sum of what the redemptions took off it, and it may not go negative (DB CHECK).
+  const requested = input.shortfall ?? bill.discountTotal;
+  const needed = compare(requested, bill.discountTotal) > 0 ? bill.discountTotal : requested;
+  if (compare(needed, ZERO) <= 0) return noRelease();
+
+  let value = ZERO;
+  let points = 0;
+  const entryIds: string[] = [];
+  for (const redemption of redemptions) {
+    if (compare(value, needed) >= 0) break;
+    const before = releases
+      .filter((row) => row.reversesEntryId === redemption.id)
+      .reduce((total, row) => total + row.points, 0);
+    const remaining = -redemption.points - before;
+    if (remaining <= 0) continue;
+
+    const redemptionValue = redemption.programVersion.redemptionValue;
+    const outstanding = sub(needed, value);
+    // The whole points whose value covers what is still outstanding. When cumulative
+    // rounding leaves the estimate a cent short, release this redemption in full and
+    // let the next one (if any) close the gap.
+    const estimate = outstanding
+      .dividedBy(redemptionValue)
+      .toDecimalPlaces(0, Prisma.Decimal.ROUND_CEIL)
+      .toNumber();
+    let take = Math.min(remaining, Math.max(1, Number.isFinite(estimate) ? estimate : remaining));
+    if (compare(releasedValueDelta(before, take, redemptionValue), outstanding) < 0) {
+      take = remaining;
+    }
+
+    const entry = await tx.loyaltyPointsEntry.create({
+      data: {
+        accountId: redemption.accountId,
+        programVersionId: redemption.programVersionId,
+        kind: 'ADJUSTMENT',
+        points: take,
+        billId: input.billId,
+        reversesEntryId: redemption.id,
+        actorId,
+        reason,
+        occurredAt: input.at,
+        idempotencyKey: `${keyPrefix}${redemption.id}`,
+      },
+      select: { id: true },
+    });
+    entryIds.push(entry.id);
+    value = add(value, releasedValueDelta(before, take, redemptionValue));
+    points += take;
+  }
+  return { value, points, entryIds, replayed: false };
 }

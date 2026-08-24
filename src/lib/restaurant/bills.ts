@@ -4,7 +4,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
-import { add, allocate, equals, multiply, roundMoney, sub, sum, ZERO } from './money';
+import { releaseLoyaltyRedemption } from './loyalty';
+import { add, allocate, compare, equals, multiply, roundMoney, sub, sum, ZERO } from './money';
 import { allocateReceiptNumber } from './receipt-numbers';
 
 /**
@@ -55,6 +56,7 @@ export type BillCommandErrorReason =
   | 'BILL_NOT_OPEN'
   | 'LINE_NOT_FOUND'
   | 'ALREADY_COMPED'
+  | 'COMP_EXCEEDS_BILL'
   | 'INVALID_SPLIT'
   | 'PARTITION_INCOMPLETE'
   | 'RESPLIT_LOCKED'
@@ -521,15 +523,30 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
 
 /** Void the order's existing live bills for a re-cut, asserting the re-split guard
  * (all live bills OPEN + untendered, reason + co-auth supplied). No-op when the
- * order has no live bills yet (the common first-cut path). */
+ * order has no live bills yet (the common first-cut path).
+ *
+ * A voided bill's loyalty redemption is compensated before the void (M8/B4): the
+ * REDEEM stays pinned to the bill that is about to become a VOID record, and the
+ * fresh bill set is cut at full price — so without a compensating entry the guest's
+ * points would stay spent against a bill nobody pays. The release restores the
+ * points and rolls the discount back off the voided record, in this transaction. */
 async function handleExistingBills(
   tx: ScopedDb,
   order: LoadedBillOrder,
   input: CutBillsInput
 ): Promise<void> {
+  // Lock the live bills first: a concurrent redemption must not slip a discount onto
+  // a bill between the guard, the compensation and the void.
+  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE "orderId" = ${order.id} AND status <> 'VOID' FOR UPDATE`;
   const live = await tx.restaurantBill.findMany({
     where: { orderId: order.id, status: { not: 'VOID' } },
-    select: { id: true, status: true, _count: { select: { tenders: true } } },
+    select: {
+      id: true,
+      status: true,
+      discountTotal: true,
+      grandTotal: true,
+      _count: { select: { tenders: true } },
+    },
   });
   if (live.length === 0) return;
 
@@ -558,6 +575,28 @@ async function handleExistingBills(
     targetId: order.id,
     deviceId: input.actor.deviceId,
   });
+
+  const at = new Date();
+  for (const bill of live) {
+    if (compare(bill.discountTotal, ZERO) <= 0) continue;
+    const release = await releaseLoyaltyRedemption(tx, {
+      billId: bill.id,
+      shortfall: null,
+      actorId: input.actor.staffProfileId,
+      reason: `Loyalty redemption released on void-and-recut of bill ${bill.id}: ${reason}`,
+      idempotencyKey: `void:${bill.id}`,
+      at,
+    });
+    if (release.points === 0) continue;
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        discountTotal: sub(bill.discountTotal, release.value),
+        grandTotal: add(bill.grandTotal, release.value),
+      },
+    });
+  }
+
   await tx.restaurantBill.updateMany({
     where: { orderId: order.id, status: { not: 'VOID' } },
     data: { status: 'VOID', voidReason: reason, voidCoAuthorizationId: coAuthorizationId },
@@ -583,7 +622,14 @@ export type CompLineInput = {
   actor: MoneyCommandActor;
 };
 
-export type CompLineResult = { billLineId: string; billId: string; replayed: boolean };
+export type CompLineResult = {
+  billLineId: string;
+  billId: string;
+  /** Loyalty discount handed back because the comp would otherwise overdraw the
+   * bill (M8/B3); zero on the ordinary path. The points return to the guest. */
+  releasedDiscount: Prisma.Decimal;
+  replayed: boolean;
+};
 
 /**
  * Comp a bill line to zero (C4). The line KEEPS its original snapshot unit price and
@@ -591,18 +637,36 @@ export type CompLineResult = { billLineId: string; billId: string; replayed: boo
  * nets to zero, and the comp records a reason + manager co-authorization. The bill's
  * `compTotal`/`grandTotal` are recomputed. Only a bill that is still OPEN can be
  * comped. The comp amount flows to the daily close. Idempotent on the money key.
+ *
+ * A comp and a loyalty redemption both deduct from the SAME bill, so comping a line
+ * whose subtotal exceeds what the bill still owes would drive `grandTotal` negative
+ * (M8/B3) — and a negative grand total then breaks the earn at order close. The comp
+ * wins: whatever it cannot absorb is released from the bill's loyalty discount and
+ * the points go back to the guest (`releaseLoyaltyRedemption`), inside this same
+ * transaction. `compTotal` and `discountTotal` therefore stay truthful about which
+ * deduction actually happened, the identity
+ * `subtotal = grandTotal + compTotal + discountTotal` is preserved, and `grandTotal`
+ * never goes below zero (also a DB CHECK).
  */
 export async function compLine(db: ScopedDb, input: CompLineInput): Promise<CompLineResult> {
   return runInTransaction(db, async (tx) => {
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp');
     if (idem.replay) {
-      return { billLineId: input.billLineId, billId: input.billId, replayed: true };
+      return {
+        billLineId: input.billLineId,
+        billId: input.billId,
+        releasedDiscount: ZERO,
+        replayed: true,
+      };
     }
 
     const reason = requireReason(input.reason);
+    // Serialize against a concurrent redemption on this bill (which takes the same
+    // lock): the clamp below is only sound on a grand total nobody can move under it.
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} FOR UPDATE`;
     const bill = await tx.restaurantBill.findUnique({
       where: { id: input.billId },
-      select: { id: true, status: true, compTotal: true, grandTotal: true },
+      select: { id: true, status: true, compTotal: true, discountTotal: true, grandTotal: true },
     });
     if (!bill) {
       throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -620,6 +684,30 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     }
     if (!line.compAmount.isZero()) {
       throw new BillCommandError('The line is already comped.', 'ALREADY_COMPED');
+    }
+
+    // What the comp cannot absorb out of the bill's own balance (B3).
+    const shortfall = sub(line.lineSubtotal, bill.grandTotal);
+    let releasedDiscount = ZERO;
+    if (compare(shortfall, ZERO) > 0 && compare(bill.discountTotal, ZERO) > 0) {
+      const release = await releaseLoyaltyRedemption(tx, {
+        billId: bill.id,
+        shortfall,
+        actorId: input.actor.staffProfileId,
+        reason: `Loyalty redemption released to comp bill line ${line.id}: ${reason}`,
+        idempotencyKey: `comp:${line.id}`,
+        at: new Date(),
+      });
+      releasedDiscount = release.value;
+    }
+    const grandTotal = sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal);
+    if (compare(grandTotal, ZERO) < 0) {
+      // The bill carries a deduction this lane cannot release, so the comp would
+      // leave a negative grand total. Refuse rather than record an untrue total.
+      throw new BillCommandError(
+        'The comp exceeds what this bill still owes; reverse its outstanding deductions first.',
+        'COMP_EXCEEDS_BILL'
+      );
     }
 
     const coAuthorizationId = await persistCoAuth(tx, {
@@ -645,12 +733,13 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       where: { id: bill.id },
       data: {
         compTotal: add(bill.compTotal, line.lineSubtotal),
-        grandTotal: sub(bill.grandTotal, line.lineSubtotal),
+        discountTotal: sub(bill.discountTotal, releasedDiscount),
+        grandTotal,
       },
     });
 
     await recordMoneyIdempotentResult(tx, input.actor, line.id);
-    return { billLineId: line.id, billId: bill.id, replayed: false };
+    return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
   });
 }
 
