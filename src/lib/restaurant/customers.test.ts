@@ -311,6 +311,214 @@ describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
     ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
   });
 
+  it('replays a consent key only for an identical event and never swallows an opt-out', async () => {
+    const customer = await tenant((tx) => deps.customers.createCustomer(tx, {}));
+    const idempotencyKey = `consent_material_${suffix}`;
+    const grant = {
+      customerId: customer.id,
+      channel: 'EMAIL' as const,
+      granted: true,
+      source: 'checkout',
+      actorId: ids.staff,
+      policyVersion: 'v1',
+      occurredAt: t1,
+      idempotencyKey,
+    };
+    const stored = await tenant((tx) => deps.customers.appendCustomerConsent(tx, grant));
+
+    const replay = await tenant((tx) => deps.customers.appendCustomerConsent(tx, grant));
+    expect(replay.id).toBe(stored.id);
+    expect(await tenant((tx) => tx.customerConsent.count({ where: { idempotencyKey } }))).toBe(1);
+
+    // Every material field, flipped one at a time. The opt-out case is the
+    // privacy-critical one: it must conflict, not return the stored grant.
+    for (const conflicting of [
+      { ...grant, granted: false },
+      { ...grant, source: 'call-center' },
+      { ...grant, actorId: `${ids.staff}_other` },
+      { ...grant, policyVersion: 'v2' },
+      { ...grant, occurredAt: t2 },
+    ]) {
+      await expect(
+        tenant((tx) => deps.customers.appendCustomerConsent(tx, conflicting))
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    }
+
+    const after = await tenant(async (tx) => ({
+      count: await tx.customerConsent.count({ where: { idempotencyKey } }),
+      row: await tx.customerConsent.findUnique({ where: { id: stored.id } }),
+    }));
+    expect(after.count).toBe(1);
+    expect(after.row).toMatchObject({ granted: true, source: 'checkout', policyVersion: 'v1' });
+
+    // A distinct key still records the opt-out, so the conflict is not a dead end.
+    const optOut = await tenant((tx) =>
+      deps.customers.appendCustomerConsent(tx, {
+        ...grant,
+        granted: false,
+        occurredAt: t2,
+        idempotencyKey: `${idempotencyKey}_optout`,
+      })
+    );
+    const detail = await tenant((tx) => deps.customers.getCustomer(tx, customer.id));
+    expect(detail.currentConsent.EMAIL).toMatchObject({ id: optOut.id, granted: false });
+  });
+
+  it('replays an interaction key only for the same material event', async () => {
+    const customer = await tenant((tx) => deps.customers.createCustomer(tx, {}));
+    const idempotencyKey = `interaction_material_${suffix}`;
+    const base = {
+      customerId: customer.id,
+      branchId: ids.branch,
+      type: 'FEEDBACK',
+      occurredAt: t1,
+      idempotencyKey,
+    };
+    const stored = await tenant((tx) => deps.customers.appendCustomerInteraction(tx, base));
+
+    const replay = await tenant((tx) => deps.customers.appendCustomerInteraction(tx, base));
+    expect(replay.id).toBe(stored.id);
+    expect(await tenant((tx) => tx.customerInteraction.count({ where: { idempotencyKey } }))).toBe(
+      1
+    );
+
+    // The comparison uses the normalized type, so surrounding whitespace names
+    // the same event rather than a spurious conflict.
+    const padded = await tenant((tx) =>
+      deps.customers.appendCustomerInteraction(tx, { ...base, type: '  FEEDBACK  ' })
+    );
+    expect(padded.id).toBe(stored.id);
+
+    const otherCustomer = await tenant((tx) => deps.customers.createCustomer(tx, {}));
+    const otherBranch = await tenant((tx) =>
+      tx.restaurantBranch.create({
+        data: { name: 'Annex', timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
+
+    // Every field this API accepts, flipped one at a time. A reused key that
+    // names a different event must conflict, never hand back the stored row.
+    for (const conflicting of [
+      { ...base, customerId: otherCustomer.id },
+      { ...base, branchId: otherBranch.id },
+      { ...base, orderId: ids.openOrder },
+      { ...base, type: 'COMPLAINT' },
+      { ...base, occurredAt: t2 },
+    ]) {
+      await expect(
+        tenant((tx) => deps.customers.appendCustomerInteraction(tx, conflicting))
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    }
+
+    const after = await tenant(async (tx) => ({
+      count: await tx.customerInteraction.count({ where: { idempotencyKey } }),
+      row: await tx.customerInteraction.findUnique({ where: { id: stored.id } }),
+    }));
+    expect(after.count).toBe(1);
+    expect(after.row).toMatchObject({
+      customerId: customer.id,
+      branchId: ids.branch,
+      orderId: null,
+      type: 'FEEDBACK',
+    });
+    expect(after.row?.occurredAt.getTime()).toBe(t1.getTime());
+  });
+
+  it('writes no interaction payload and offers no way to supply one', async () => {
+    const customer = await tenant((tx) => deps.customers.createCustomer(tx, {}));
+    const idempotencyKey = `interaction_no_payload_${suffix}`;
+    const base = {
+      customerId: customer.id,
+      branchId: ids.branch,
+      type: 'NOTE',
+      occurredAt: t1,
+      idempotencyKey,
+    };
+
+    // The `payload` column has no export, anonymization or redaction path, so
+    // this service leaves it at the empty-object column default.
+    const stored = await tenant((tx) => deps.customers.appendCustomerInteraction(tx, base));
+    const row = await tenant((tx) =>
+      tx.customerInteraction.findUnique({ where: { id: stored.id } })
+    );
+    expect(row?.payload).toEqual({});
+
+    // The write surface rejects a payload at the type level, and a value
+    // smuggled past it is dropped rather than persisted.
+    const smuggled = await tenant((tx) =>
+      deps.customers.appendCustomerInteraction(tx, {
+        ...base,
+        idempotencyKey: `${idempotencyKey}_surplus`,
+        // @ts-expect-error — payload is not part of the interaction write surface
+        payload: { note: 'must never be written' },
+      })
+    );
+    const smuggledRow = await tenant((tx) =>
+      tx.customerInteraction.findUnique({ where: { id: smuggled.id } })
+    );
+    expect(smuggledRow?.payload).toEqual({});
+  });
+
+  it('replays a server-assigned occurredAt without holding the caller to the server clock', async () => {
+    const customer = await tenant((tx) => deps.customers.createCustomer(tx, {}));
+    const idempotencyKey = `interaction_clock_${suffix}`;
+    const base = {
+      customerId: customer.id,
+      branchId: ids.branch,
+      type: 'VISIT',
+      idempotencyKey,
+    };
+    const stored = await tenant((tx) => deps.customers.appendCustomerInteraction(tx, base));
+    const replay = await tenant((tx) => deps.customers.appendCustomerInteraction(tx, base));
+    expect(replay.id).toBe(stored.id);
+    expect(replay.occurredAt.getTime()).toBe(stored.occurredAt.getTime());
+
+    // Naming an instant that is not the stored one is still a conflict.
+    await expect(
+      tenant((tx) => deps.customers.appendCustomerInteraction(tx, { ...base, occurredAt: t1 }))
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    expect(await tenant((tx) => tx.customerInteraction.count({ where: { idempotencyKey } }))).toBe(
+      1
+    );
+  });
+
+  it('keeps idempotency-key comparison tenant-scoped', async () => {
+    const idempotencyKey = `interaction_cross_tenant_${suffix}`;
+    const customer = await tenant((tx) => deps.customers.createCustomer(tx, {}));
+    await tenant((tx) =>
+      deps.customers.appendCustomerInteraction(tx, {
+        customerId: customer.id,
+        branchId: ids.branch,
+        type: 'VISIT',
+        occurredAt: t1,
+        idempotencyKey,
+      })
+    );
+
+    // The other tenant's row is invisible, so the same key is free there and the
+    // first tenant's ledger is untouched.
+    const otherRow = await deps.withTenantDb(otherOrgId, async (tx) => {
+      const branch = await tx.restaurantBranch.create({
+        data: { name: 'Other Main', timezone: 'UTC', businessDayCutoff: '00:00' },
+      });
+      const otherCustomer = await deps.customers.createCustomer(tx, {});
+      return deps.customers.appendCustomerInteraction(tx, {
+        customerId: otherCustomer.id,
+        branchId: branch.id,
+        type: 'COMPLAINT',
+        occurredAt: t2,
+        idempotencyKey,
+      });
+    });
+
+    const mine = await tenant((tx) =>
+      tx.customerInteraction.findMany({ where: { idempotencyKey } })
+    );
+    expect(mine).toHaveLength(1);
+    expect(mine[0]?.type).toBe('VISIT');
+    expect(mine[0]?.id).not.toBe(otherRow.id);
+  });
+
   it('maps normalized duplicate tag names to a domain conflict', async () => {
     await tenant((tx) => deps.customers.createCustomerTag(tx, { name: `Loyal ${suffix}` }));
     await expect(
