@@ -383,10 +383,19 @@ export type MoneyCommandArgs<S extends z.ZodTypeAny> = {
  * The shared shape of a money MUTATION route: `withTerminalAuth` (device + live
  * session, revoked-device rejected — C12), require an acting operator (C6), gate on the
  * route capability (C11), require an idempotency key (C11), parse the STRICT body,
- * build the attribution envelope, dispatch, and shape any domain error. `run` returns
- * the command result to serialise, OR a `Response` to short-circuit (e.g. a failed
- * co-authorization). A non-domain throw is rethrown so the transport wrapper answers a
- * generic 500 (no internals leaked).
+ * build the attribution envelope, and dispatch. `run` returns the command result to
+ * serialise, OR a `Response` to short-circuit (e.g. a failed co-authorization).
+ *
+ * A THROW IS NOT CAUGHT HERE (M8 correction E). `withTerminalAuth` owns the request's
+ * PostgreSQL transaction and a nested `$transaction` on the scoped client opens no
+ * savepoint, so an error mapped to a `Response` inside this callback would commit
+ * whatever the failed command had already written — a comp that released a loyalty
+ * redemption before refusing, a void-and-recut that released and voided before failing
+ * split planning, and in both cases the money idempotency key the retry then replayed
+ * against nothing. `moneyErrorResponse` is handed to the transport as its `mapError`
+ * instead: the error escapes the transaction (PostgreSQL rolls the request back) and is
+ * shaped afterwards, onto exactly the same status and body as before. A non-domain error
+ * still becomes a generic 500 (no internals leaked).
  */
 export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
   schema: S;
@@ -394,62 +403,60 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
   run: (args: MoneyCommandArgs<S>) => Promise<unknown>;
   successStatus?: number;
 }) {
-  return withTerminalAuth(async (ctx, request) => {
-    const operator = requireActingOperator(ctx);
-    if (!operator.ok) return operator.response;
+  return withTerminalAuth(
+    async (ctx, request) => {
+      const operator = requireActingOperator(ctx);
+      if (!operator.ok) return operator.response;
 
-    const now = new Date();
-    const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
-    if (denied) return denied;
+      const now = new Date();
+      const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+      if (denied) return denied;
 
-    const key = idempotencyKeyFromRequest(request);
-    if (!key) return missingIdempotencyKey();
+      const key = idempotencyKeyFromRequest(request);
+      if (!key) return missingIdempotencyKey();
 
-    const parsedJson = await readJson(request);
-    if (!parsedJson.ok) return parsedJson.response;
-    const parsed = opts.schema.safeParse(parsedJson.data);
-    if (!parsed.success) return invalidBody(parsed.error.issues);
+      const parsedJson = await readJson(request);
+      if (!parsedJson.ok) return parsedJson.response;
+      const parsed = opts.schema.safeParse(parsedJson.data);
+      if (!parsed.success) return invalidBody(parsed.error.issues);
 
-    const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key);
-    try {
+      const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key);
       const out = await opts.run({ ctx, data: parsed.data, actor, now });
       if (out instanceof Response) return out;
       return NextResponse.json(out as Record<string, unknown>, {
         status: opts.successStatus ?? 200,
       });
-    } catch (err) {
-      const response = moneyErrorResponse(err);
-      if (response) return response;
-      throw err;
-    }
-  });
+    },
+    { mapError: moneyErrorResponse }
+  );
 }
 
 /**
  * The shared shape of a money READ route (register display data): `withTerminalAuth`,
  * require an acting operator, gate on the route capability (C11 — financial reads are
  * capability-gated too), then run the read. No idempotency key (nothing is written).
+ * Errors are mapped by the transport, outside the owning transaction, on the same rule as
+ * the mutation factory: a read cannot corrupt money today, but the boundary keeps ONE
+ * ordering so a read that later writes (an audit or access-log row) cannot reintroduce
+ * the commit-a-failed-command defect. The statuses and bodies are unchanged.
  */
 export function moneyReadRoute(opts: {
   capability: MoneyCapability;
   run: (ctx: TerminalContext, request: Request) => Promise<Response>;
 }) {
-  return withTerminalAuth(async (ctx, request) => {
-    const operator = requireActingOperator(ctx);
-    if (!operator.ok) return operator.response;
+  return withTerminalAuth(
+    async (ctx, request) => {
+      const operator = requireActingOperator(ctx);
+      if (!operator.ok) return operator.response;
 
-    const now = new Date();
-    const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
-    if (denied) return denied;
+      const now = new Date();
+      const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+      if (denied) return denied;
 
-    try {
       return await opts.run(ctx, request);
-    } catch (err) {
-      const response = moneyErrorResponse(err);
-      if (response) return response;
-      throw err;
-    }
-  });
+    },
+    { mapError: moneyErrorResponse }
+  );
 }
 
 // ── Register read model (C12 — read contract, consumed by L7a) ────────────────

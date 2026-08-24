@@ -77,6 +77,36 @@ export type TerminalContext = TerminalDeviceContext & {
 const BEARER_PREFIX = 'Bearer ';
 const SESSION_HEADER = 'x-terminal-session';
 
+/**
+ * Shape a domain error thrown by a terminal handler into its public HTTP response, or
+ * return null for an error that is NOT part of the route's domain contract so the
+ * transport answers a generic 500 (no internals leaked).
+ *
+ * WHY THE TRANSPORT OWNS THIS (M8 correction E). The wrappers below own the request's
+ * PostgreSQL transaction, and a nested `$transaction` on the scoped client REUSES that
+ * transaction without opening a savepoint (`exposeNestedTransaction`) — so nothing
+ * running inside the callback can undo a write. A route factory that caught its domain
+ * error inside the callback and returned an error `Response` therefore COMMITTED every
+ * write the failed command had already made: a comp that released a loyalty redemption
+ * and then refused the comp kept the release, and a void-and-recut that released, voided
+ * and then failed split planning kept the voids plus a burnt idempotency key that wedged
+ * the retry. The mapper is handed to the transport instead — the error escapes the
+ * transaction owner, PostgreSQL rolls the whole request back, and only THEN is the error
+ * mapped. Mapping must stay PURE: it runs after the transaction is gone, so it can no
+ * longer read or write the database.
+ *
+ * A handler that RETURNS a response still commits, deliberately. `authenticateOperator`
+ * advances the durable failed-attempt counter and the route then answers 401/423; that
+ * brute-force evidence, and the device/session check-in, must survive a refusal. Only a
+ * THROW rolls the request back.
+ */
+export type TerminalErrorMapper = (err: unknown) => Response | null;
+
+export type TerminalRouteOptions = {
+  /** Shape a domain error into its public response, OUTSIDE the owning transaction. */
+  mapError?: TerminalErrorMapper;
+};
+
 function unauthorized(message: string): NextResponse {
   return NextResponse.json({ error: message }, { status: 401 });
 }
@@ -107,6 +137,24 @@ function sessionRejection(reason: TerminalInvalidReason): NextResponse {
   }
   // ENDED / EXPIRED / MISMATCH — the terminal must re-establish a session.
   return unauthorized('Terminal session is no longer valid; re-establish the session.');
+}
+
+/**
+ * Answer an error that ESCAPED the tenant transaction — by the time this runs the
+ * transaction is already rolled back, so nothing the failed command wrote survives. The
+ * route's own mapper claims a domain error and shapes its public status; anything else is
+ * logged once (the error only, never a request payload, token or credential) and answered
+ * as a generic 500.
+ */
+function respondToEscapedError(
+  label: string,
+  err: unknown,
+  mapError: TerminalErrorMapper | undefined
+): Response {
+  const mapped = mapError?.(err) ?? null;
+  if (mapped) return mapped;
+  console.error(label, err);
+  return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
 }
 
 type DeviceDiscovery = { deviceId: string; organizationId: string };
@@ -161,14 +209,16 @@ async function authenticateDevice(request: Request): Promise<DeviceDiscovery | N
  * Wrap a handler that needs a trusted device but no established session (used by
  * `establish`). Re-reads the device FRESH in tenant scope, rejects a revoked
  * device, records the check-in, and runs the handler inside the tenant
- * transaction.
+ * transaction. A throw from the handler escapes that transaction (PostgreSQL rolls the
+ * request back) before `options.mapError` shapes it — see `TerminalErrorMapper`.
  */
 export function withDeviceAuth<T extends unknown[]>(
   handler: (
     ctx: TerminalDeviceContext,
     request: Request,
     ...args: T
-  ) => Promise<Response> | Response
+  ) => Promise<Response> | Response,
+  options: TerminalRouteOptions = {}
 ) {
   return async (request: Request, ...args: T): Promise<Response> => {
     const auth = await authenticateDevice(request);
@@ -187,8 +237,7 @@ export function withDeviceAuth<T extends unknown[]>(
         return handler({ organizationId: auth.organizationId, device, db }, request, ...args);
       });
     } catch (err) {
-      console.error('Terminal device-auth error:', err);
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      return respondToEscapedError('Terminal device-auth error:', err, options.mapError);
     }
   };
 }
@@ -199,9 +248,16 @@ export function withDeviceAuth<T extends unknown[]>(
  * session FRESH in tenant scope and revalidates them via `evaluateTerminalSession`
  * on every call (C5), then records the check-in and runs the handler inside the
  * tenant transaction.
+ *
+ * This is the shared money/command boundary: a throw from the handler escapes the tenant
+ * transaction, so PostgreSQL rolls back every write the failed command made, and only
+ * then does `options.mapError` shape it into the route's public status. Every factory
+ * built on this wrapper inherits that ordering — see `TerminalErrorMapper` for why a
+ * factory must never map (and return) a domain error from inside the callback.
  */
 export function withTerminalAuth<T extends unknown[]>(
-  handler: (ctx: TerminalContext, request: Request, ...args: T) => Promise<Response> | Response
+  handler: (ctx: TerminalContext, request: Request, ...args: T) => Promise<Response> | Response,
+  options: TerminalRouteOptions = {}
 ) {
   return async (request: Request, ...args: T): Promise<Response> => {
     const auth = await authenticateDevice(request);
@@ -239,8 +295,7 @@ export function withTerminalAuth<T extends unknown[]>(
         );
       });
     } catch (err) {
-      console.error('Terminal session-auth error:', err);
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      return respondToEscapedError('Terminal session-auth error:', err, options.mapError);
     }
   };
 }
