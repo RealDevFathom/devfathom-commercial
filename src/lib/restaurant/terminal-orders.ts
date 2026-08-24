@@ -228,28 +228,25 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
   run: (args: { ctx: TerminalContext; data: z.infer<S>; actor: CommandActor }) => Promise<unknown>,
   successStatus = 200
 ) {
-  return withTerminalAuth(async (ctx, request) => {
-    const operator = requireActingOperator(ctx);
-    if (!operator.ok) return operator.response;
+  return withTerminalAuth(
+    async (ctx, request) => {
+      const operator = requireActingOperator(ctx);
+      if (!operator.ok) return operator.response;
 
-    const key = idempotencyKeyFromRequest(request);
-    if (!key) return missingIdempotencyKey();
+      const key = idempotencyKeyFromRequest(request);
+      if (!key) return missingIdempotencyKey();
 
-    const parsedJson = await readJson(request);
-    if (!parsedJson.ok) return parsedJson.response;
-    const parsed = schema.safeParse(parsedJson.data);
-    if (!parsed.success) return invalidBody(parsed.error.issues);
+      const parsedJson = await readJson(request);
+      if (!parsedJson.ok) return parsedJson.response;
+      const parsed = schema.safeParse(parsedJson.data);
+      if (!parsed.success) return invalidBody(parsed.error.issues);
 
-    const actor = buildActor(operator.staffProfileId, ctx.device.id, key);
-    try {
+      const actor = buildActor(operator.staffProfileId, ctx.device.id, key);
       const result = await run({ ctx, data: parsed.data, actor });
       return NextResponse.json(result as Record<string, unknown>, { status: successStatus });
-    } catch (err) {
-      const response = orderErrorResponse(err);
-      if (response) return response;
-      throw err;
-    }
-  });
+    },
+    { mapError: orderErrorResponse }
+  );
 }
 
 // ── Domain-error → HTTP shaping (no internals leaked) ─────────────────────────
