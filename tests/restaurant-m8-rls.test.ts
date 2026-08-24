@@ -20,6 +20,7 @@ const M8_TABLES = [
   'restaurant_loyalty_accounts',
   'restaurant_loyalty_points_entries',
   'restaurant_insight_daily_rollups',
+  'restaurant_insight_loyalty_liabilities',
   'restaurant_insight_item_mix_rollups',
   'restaurant_labour_cost_facts',
 ] as const;
@@ -54,6 +55,8 @@ const ids = {
   pointsB: `m8_points_b_${suffix}`,
   dailyA: `m8_daily_a_${suffix}`,
   dailyB: `m8_daily_b_${suffix}`,
+  liabilityA: `m8_liability_a_${suffix}`,
+  liabilityB: `m8_liability_b_${suffix}`,
   itemA: `m8_item_a_${suffix}`,
   itemB: `m8_item_b_${suffix}`,
   labourA: `m8_labour_a_${suffix}`,
@@ -71,6 +74,7 @@ const rowIds: Record<(typeof M8_TABLES)[number], [string, string]> = {
   restaurant_loyalty_accounts: [ids.accountA, ids.accountB],
   restaurant_loyalty_points_entries: [ids.pointsA, ids.pointsB],
   restaurant_insight_daily_rollups: [ids.dailyA, ids.dailyB],
+  restaurant_insight_loyalty_liabilities: [ids.liabilityA, ids.liabilityB],
   restaurant_insight_item_mix_rollups: [ids.itemA, ids.itemB],
   restaurant_labour_cost_facts: [ids.labourA, ids.labourB],
 };
@@ -251,6 +255,15 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       ]
     );
     await client!.query(
+      `INSERT INTO "restaurant_insight_loyalty_liabilities" (
+        "id", "organizationId", "businessDate", "cutoffAt", "programVersionId",
+        "redemptionValue", "positivePoints", "signedPoints", "liability", "updatedAt"
+      ) VALUES
+        ($1, $2, DATE '2030-01-01', TIMESTAMPTZ '2030-01-02T00:00:00Z', $3, 0.01, 100, 80, 1, CURRENT_TIMESTAMP),
+        ($4, $5, DATE '2030-01-01', TIMESTAMPTZ '2030-01-02T00:00:00Z', $6, 0.01, 200, 180, 2, CURRENT_TIMESTAMP)`,
+      [ids.liabilityA, ids.orgA, ids.programA, ids.liabilityB, ids.orgB, ids.programB]
+    );
+    await client!.query(
       `INSERT INTO "restaurant_insight_item_mix_rollups" (
         "id", "organizationId", "branchId", "businessDate", "productId", "sourceDailyCloseId",
         "quantity", "updatedAt"
@@ -312,7 +325,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
     await client.end();
   });
 
-  it('proves unprivileged NOBYPASSRLS role and exact policy metadata on all 12 tables', async () => {
+  it('proves unprivileged NOBYPASSRLS role and exact policy metadata on all 13 tables', async () => {
     expect(
       (
         await client!.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
@@ -331,7 +344,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       `SELECT table_row.relname AS table_name,
               table_row.relrowsecurity AS enabled,
               table_row.relforcerowsecurity AS forced,
-              array_agg(DISTINCT policy_row.polcmd ORDER BY policy_row.polcmd) AS commands
+              array_to_json(array_agg(DISTINCT policy_row.polcmd ORDER BY policy_row.polcmd)) AS commands
          FROM pg_catalog.pg_class table_row
          JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
          JOIN pg_catalog.pg_policy policy_row ON policy_row.polrelid = table_row.oid

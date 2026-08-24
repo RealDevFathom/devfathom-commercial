@@ -149,9 +149,14 @@ export const restaurantInsightsRouter = router({
   }),
 
   backfill: configureProcedure
-    .input(z.object({ branchId: ID, from: DATE, to: DATE }).strict())
+    .input(z.object({ branchId: ID, from: DATE, to: DATE, requestId: ID }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        const branch = await ctx.db.restaurantBranch.findFirst({
+          where: { id: input.branchId },
+          select: { id: true },
+        });
+        if (!branch) throw new RollupError('Restaurant branch not found.', 'INVALID');
         return await enqueueInsightBackfill(ctx.db, input);
       } catch (error) {
         mapInsightError(error);

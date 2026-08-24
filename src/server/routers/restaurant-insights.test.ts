@@ -57,6 +57,7 @@ import { restaurantInsightsRouter } from './restaurant-insights';
 
 const db = {
   restaurantStaffProfile: { findFirst: vi.fn() },
+  restaurantBranch: { findFirst: vi.fn() },
 };
 
 function caller() {
@@ -86,6 +87,7 @@ beforeEach(() => {
     Promise.resolve(mocks.grants.has(String(action)))
   );
   db.restaurantStaffProfile.findFirst.mockResolvedValue({ primaryBranchId: 'branch_1' });
+  db.restaurantBranch.findFirst.mockResolvedValue({ id: 'branch_1' });
   mocks.listInsightReports.mockResolvedValue([
     { branchId: 'branch_1', orderCount: 2, coverCount: 4 },
   ]);
@@ -175,13 +177,19 @@ describe('backfill command', () => {
   it('is strict and configure-gated', async () => {
     mocks.grants.add('restaurant:configure');
     await expect(
-      caller().backfill({ branchId: 'branch_1', from: '2026-01-01', to: '2026-01-02' })
+      caller().backfill({
+        branchId: 'branch_1',
+        from: '2026-01-01',
+        to: '2026-01-02',
+        requestId: 'repair_1',
+      })
     ).resolves.toMatchObject({ enqueued: 0 });
     await expect(
       caller().backfill({
         branchId: 'branch_1',
         from: '2026-01-01',
         to: '2026-01-02',
+        requestId: 'repair_1',
         extra: true,
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });

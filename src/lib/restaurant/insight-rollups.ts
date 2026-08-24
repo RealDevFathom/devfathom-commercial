@@ -7,11 +7,12 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { businessDateToUtcDate } from './business-date';
 import { foldExpectedCash, type FoldableMovement } from './drawer-sessions';
 import { add, multiply, roundMoney, sub, sum, ZERO } from './money';
-import { enqueue } from './scheduler';
+import { enqueue, SchedulerError } from './scheduler';
 import type { RestaurantJobHandler } from './job-handlers';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
+export const INSIGHT_PROJECTION_VERSION = 2;
 
 export type RollupErrorReason = 'CLOSE_NOT_FOUND' | 'RECONCILIATION_FAILED' | 'INVALID';
 
@@ -143,6 +144,41 @@ export function computeLoyaltyLiability(
   return roundMoney(multiply(sum(positivePoints), redemptionValue));
 }
 
+export function businessDateCutoffUtc(businessDate: string, timeZone: string): Date {
+  const date = businessDateToUtcDate(businessDate);
+  const desiredWallTime = Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate() + 1
+  );
+  let candidate = desiredWallTime;
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  for (let pass = 0; pass < 2; pass++) {
+    const parts = formatter.formatToParts(new Date(candidate));
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((value) => value.type === type)?.value);
+    const representedAsUtc = Date.UTC(
+      part('year'),
+      part('month') - 1,
+      part('day'),
+      part('hour') % 24,
+      part('minute'),
+      part('second')
+    );
+    candidate += desiredWallTime - representedAsUtc;
+  }
+  return new Date(candidate);
+}
+
 type CloseTip = ReconciledFinancials & {
   id: string;
   createdAt: Date;
@@ -172,7 +208,12 @@ function runRollupTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T
   return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
 }
 
-export type RollupDayInput = { branchId: string; businessDate: string; computedAt?: Date };
+export type RollupDayInput = {
+  branchId: string;
+  businessDate: string;
+  computedAt?: Date;
+  force?: boolean;
+};
 
 export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
   const businessDate = businessDateToUtcDate(input.businessDate);
@@ -243,17 +284,12 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
 
     const existing = await tx.insightDailyRollup.findFirst({
       where: { branchId: input.branchId, businessDate },
-      select: { id: true, sourceDailyCloseId: true },
+      select: { id: true, sourceDailyCloseId: true, projectionVersion: true },
     });
-    if (existing?.sourceDailyCloseId === close.id) {
-      return {
-        dailyRollupId: existing.id,
-        sourceDailyCloseId: close.id,
-        itemCount: 0,
-        replayed: true,
-      };
-    }
-
+    const existingLiability = await tx.insightLoyaltyLiability.findFirst({
+      where: { businessDate },
+      select: { projectionVersion: true },
+    });
     const orders = await tx.restaurantOrder.findMany({
       where: { branchId: input.branchId, businessDate, status: 'CLOSED' },
       select: {
@@ -274,19 +310,84 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       },
     });
     const items = computeItemMix(orders.flatMap((order) => order.items) as ItemMixInput[]);
+    const existingItems = await tx.insightItemMixRollup.findMany({
+      where: { branchId: input.branchId, businessDate },
+      select: { sourceDailyCloseId: true, projectionVersion: true },
+    });
+    if (
+      !input.force &&
+      existing?.sourceDailyCloseId === close.id &&
+      existing.projectionVersion === INSIGHT_PROJECTION_VERSION &&
+      existingLiability?.projectionVersion === INSIGHT_PROJECTION_VERSION &&
+      existingItems.length === items.length &&
+      existingItems.every(
+        (item) =>
+          item.sourceDailyCloseId === close.id &&
+          item.projectionVersion === INSIGHT_PROJECTION_VERSION
+      )
+    ) {
+      return {
+        dailyRollupId: existing.id,
+        sourceDailyCloseId: close.id,
+        itemCount: items.length,
+        replayed: true,
+      };
+    }
 
+    const organization = await tx.organization.findUnique({
+      where: { id: branch.organizationId },
+      select: { timezone: true },
+    });
+    if (!organization) throw new RollupError('Restaurant organization not found.', 'INVALID');
+    const cutoffAt = businessDateCutoffUtc(input.businessDate, organization.timezone);
     const program = await tx.loyaltyProgramVersion.findFirst({
-      where: { effectiveFrom: { lte: close.createdAt } },
+      where: { effectiveFrom: { lt: cutoffAt } },
       orderBy: { effectiveFrom: 'desc' },
-      select: { redemptionValue: true },
+      select: { id: true, redemptionValue: true },
     });
     const loyaltyEntries = await tx.loyaltyPointsEntry.findMany({
+      where: { occurredAt: { lt: cutoffAt } },
       select: { accountId: true, points: true },
     });
     const loyaltyLiability = computeLoyaltyLiability(
       loyaltyEntries,
       program?.redemptionValue ?? null
     );
+    const balances = new Map<string, number>();
+    for (const entry of loyaltyEntries) {
+      balances.set(entry.accountId, (balances.get(entry.accountId) ?? 0) + entry.points);
+    }
+    const positivePoints = [...balances.values()].reduce(
+      (total, balance) => total + Math.max(0, balance),
+      0
+    );
+    const signedPoints = loyaltyEntries.reduce((total, entry) => total + entry.points, 0);
+    await tx.insightLoyaltyLiability.upsert({
+      where: {
+        organizationId_businessDate: { organizationId: branch.organizationId, businessDate },
+      },
+      create: {
+        businessDate,
+        cutoffAt,
+        programVersionId: program?.id ?? null,
+        redemptionValue: program?.redemptionValue ?? ZERO,
+        positivePoints,
+        signedPoints,
+        liability: loyaltyLiability,
+        projectionVersion: INSIGHT_PROJECTION_VERSION,
+        computedAt,
+      },
+      update: {
+        cutoffAt,
+        programVersionId: program?.id ?? null,
+        redemptionValue: program?.redemptionValue ?? ZERO,
+        positivePoints,
+        signedPoints,
+        liability: loyaltyLiability,
+        projectionVersion: INSIGHT_PROJECTION_VERSION,
+        computedAt,
+      },
+    });
 
     await tx.insightItemMixRollup.deleteMany({
       where: { branchId: input.branchId, businessDate },
@@ -311,7 +412,8 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         refundTotal: close.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
-        loyaltyLiability,
+        loyaltyLiability: ZERO,
+        projectionVersion: INSIGHT_PROJECTION_VERSION,
         computedAt,
       },
       update: {
@@ -324,7 +426,8 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         refundTotal: close.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
-        loyaltyLiability,
+        loyaltyLiability: ZERO,
+        projectionVersion: INSIGHT_PROJECTION_VERSION,
         computedAt,
       },
       select: { id: true },
@@ -340,6 +443,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
           grossSales: item.grossSales,
           netSales: item.netSales,
           compTotal: item.compTotal,
+          projectionVersion: INSIGHT_PROJECTION_VERSION,
           computedAt,
         })),
       });
@@ -357,19 +461,32 @@ export function insightRollupJobKey(input: {
   branchId: string;
   businessDate: string;
   sourceDailyCloseId?: string;
+  requestId?: string;
 }): string {
-  return `insights.rollupDay:${input.branchId}:${input.businessDate}:${input.sourceDailyCloseId ?? 'backfill'}`;
+  return `insights.rollupDay:${input.branchId}:${input.businessDate}:${input.sourceDailyCloseId ?? `backfill:${input.requestId ?? 'manual'}`}`;
 }
 
 export async function enqueueInsightRollup(
   db: ScopedDb,
-  input: { branchId: string; businessDate: string; sourceDailyCloseId?: string }
+  input: { branchId: string; businessDate: string; sourceDailyCloseId?: string; requestId?: string }
 ) {
-  return enqueue(db, {
+  const job = {
     type: INSIGHTS_ROLLUP_DAY_JOB,
-    payload: { branchId: input.branchId, businessDate: input.businessDate },
+    payload: {
+      branchId: input.branchId,
+      businessDate: input.businessDate,
+      ...(input.requestId ? { force: true } : {}),
+    },
     idempotencyKey: insightRollupJobKey(input),
-  });
+  } as const;
+  try {
+    return await enqueue(db, job);
+  } catch (error) {
+    if (error instanceof SchedulerError && error.reason === 'DUPLICATE_ENQUEUE') {
+      return enqueue(db, job);
+    }
+    throw error;
+  }
 }
 
 export function chunkBusinessDateRange(from: string, to: string) {
@@ -394,9 +511,15 @@ export function chunkBusinessDateRange(from: string, to: string) {
 
 export async function enqueueInsightBackfill(
   db: ScopedDb,
-  input: { branchId: string; from: string; to: string }
+  input: { branchId: string; from: string; to: string; requestId: string }
 ) {
   const chunks = chunkBusinessDateRange(input.from, input.to);
+  if (chunks.length !== 1) {
+    throw new RollupError(
+      `Backfill ranges may not exceed ${MAX_BACKFILL_CHUNK_DAYS} days.`,
+      'INVALID'
+    );
+  }
   let enqueued = 0;
   let deduplicated = 0;
   for (const chunk of chunks) {
@@ -408,6 +531,7 @@ export async function enqueueInsightBackfill(
       const result = await enqueueInsightRollup(db, {
         branchId: input.branchId,
         businessDate: date.toISOString().slice(0, 10),
+        requestId: input.requestId,
       });
       if (result.deduplicated) deduplicated++;
       else enqueued++;
@@ -420,6 +544,7 @@ const ROLLUP_PAYLOAD = z
   .object({
     branchId: z.string().min(1),
     businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    force: z.boolean().optional(),
   })
   .strict();
 

@@ -49,7 +49,6 @@ const DAILY_SELECT = {
   refundTotal: true,
   voidTotal: true,
   drawerVariance: true,
-  loyaltyLiability: true,
   computedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -92,7 +91,6 @@ type DailyRow = {
   refundTotal: Prisma.Decimal;
   voidTotal: Prisma.Decimal;
   drawerVariance: Prisma.Decimal;
-  loyaltyLiability: Prisma.Decimal;
   computedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -157,7 +155,11 @@ function rangeWhere(input: InsightRangeInput) {
   };
 }
 
-function serializeDaily(row: DailyRow, kind: InsightReportKind) {
+function serializeDaily(
+  row: DailyRow,
+  kind: InsightReportKind,
+  loyaltyLiability: Prisma.Decimal = new Prisma.Decimal(0)
+) {
   return {
     id: row.id,
     branchId: row.branchId,
@@ -173,7 +175,7 @@ function serializeDaily(row: DailyRow, kind: InsightReportKind) {
           refundTotal: row.refundTotal.toString(),
           voidTotal: row.voidTotal.toString(),
           drawerVariance: row.drawerVariance.toString(),
-          loyaltyLiability: row.loyaltyLiability.toString(),
+          loyaltyLiability: loyaltyLiability.toString(),
         }
       : {}),
     freshness: {
@@ -214,7 +216,22 @@ export async function listInsightReports(
     take: input.limit ?? 200,
     select: DAILY_SELECT,
   });
-  return rows.map((row) => serializeDaily(row as DailyRow, kind));
+  if (kind !== 'financial') return rows.map((row) => serializeDaily(row as DailyRow, kind));
+  const dates = [...new Set(rows.map((row) => dateColumnToString(row.businessDate)))];
+  const liabilities = await db.insightLoyaltyLiability.findMany({
+    where: { businessDate: { in: dates.map(businessDateToUtcDate) } },
+    select: { businessDate: true, liability: true },
+  });
+  const byDate = new Map(
+    liabilities.map((fact) => [dateColumnToString(fact.businessDate), fact.liability])
+  );
+  const emitted = new Set<string>();
+  return rows.map((row) => {
+    const date = dateColumnToString(row.businessDate);
+    const liability = emitted.has(date) ? new Prisma.Decimal(0) : byDate.get(date);
+    emitted.add(date);
+    return serializeDaily(row as DailyRow, kind, liability);
+  });
 }
 
 export async function readInsightReport(
@@ -233,8 +250,15 @@ export async function readInsightReport(
     orderBy: { productId: 'asc' },
     select: ITEM_SELECT,
   });
+  const liability =
+    kind === 'financial'
+      ? await db.insightLoyaltyLiability.findFirst({
+          where: { businessDate },
+          select: { liability: true },
+        })
+      : null;
   return {
-    ...serializeDaily(row as DailyRow, kind),
+    ...serializeDaily(row as DailyRow, kind, liability?.liability),
     itemMix: items.map((item) => serializeItem(item as ItemRow, kind)),
   };
 }

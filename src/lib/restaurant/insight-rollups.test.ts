@@ -9,6 +9,7 @@ vi.mock('./scheduler', () => ({ enqueue: mocks.enqueue }));
 
 import {
   chunkBusinessDateRange,
+  businessDateCutoffUtc,
   computeItemMix,
   computeLoyaltyLiability,
   computeReconciledFinancials,
@@ -116,6 +117,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
   const db = {
     $transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => work(db)),
     restaurantBranch: { findUnique: vi.fn(async () => ({ organizationId: 'org_1' })) },
+    organization: { findUnique: vi.fn(async () => ({ timezone: 'Asia/Karachi' })) },
     restaurantDailyClose: {
       findMany: vi.fn(async () => (input?.correction ? [close, tip] : [tip])),
     },
@@ -145,13 +147,22 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
     restaurantRefund: { findMany: vi.fn(async () => [{ amount: D('3') }]) },
     restaurantDrawerSession: { findMany: vi.fn(async () => []) },
     insightDailyRollup: {
-      findFirst: vi.fn(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1' })),
+      findFirst: vi.fn(async () => ({
+        id: 'rollup_1',
+        sourceDailyCloseId: 'close_1',
+        projectionVersion: 2,
+      })),
       upsert: vi.fn(async () => ({ id: 'rollup_1' })),
+    },
+    insightLoyaltyLiability: {
+      findFirst: vi.fn(async () => ({ projectionVersion: 2 })),
+      upsert: vi.fn(async () => ({ id: 'liability_1' })),
     },
     restaurantOrder: { findMany: vi.fn(async () => []) },
     loyaltyProgramVersion: { findFirst: vi.fn(async () => null) },
     loyaltyPointsEntry: { findMany: vi.fn(async () => []) },
     insightItemMixRollup: {
+      findMany: vi.fn(async () => []),
       deleteMany: vi.fn(async () => ({ count: 0 })),
       createMany: vi.fn(async () => ({ count: 0 })),
     },
@@ -160,6 +171,12 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
 }
 
 describe('rollupDay handler idempotency and correction', () => {
+  it('pins the next organization-local midnight, including timezone offset', () => {
+    expect(businessDateCutoffUtc('2026-08-20', 'Asia/Karachi').toISOString()).toBe(
+      '2026-08-20T19:00:00.000Z'
+    );
+  });
+
   it('no-ops when current close source was already projected', async () => {
     const db = rollupDb();
     const result = await rollupDay(db as unknown as ScopedDb, {
@@ -184,6 +201,18 @@ describe('rollupDay handler idempotency and correction', () => {
         update: expect.objectContaining({ sourceDailyCloseId: 'close_2' }),
       })
     );
+  });
+
+  it('deliberately replaces an otherwise current projection when forced', async () => {
+    const db = rollupDb();
+    const result = await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force: true,
+    });
+    expect(result.replayed).toBe(false);
+    expect(db.insightDailyRollup.upsert).toHaveBeenCalledOnce();
+    expect(db.insightLoyaltyLiability.upsert).toHaveBeenCalledOnce();
   });
 
   it('fails closed when raw facts do not exactly reconcile', async () => {
@@ -220,14 +249,31 @@ describe('inclusive backfill chunking', () => {
     ]);
   });
 
-  it('enqueues each inclusive day once while reporting chunk boundaries', async () => {
+  it('enqueues a 90-day boundary once per day with request-scoped keys', async () => {
     const result = await enqueueInsightBackfill({} as ScopedDb, {
       branchId: 'branch_1',
       from: '2026-01-01',
-      to: '2026-04-01',
+      to: '2026-03-31',
+      requestId: 'repair_1',
     });
-    expect(result.chunks).toHaveLength(2);
-    expect(result.enqueued).toBe(91);
-    expect(mocks.enqueue).toHaveBeenCalledTimes(91);
+    expect(result.chunks).toHaveLength(1);
+    expect(result.enqueued).toBe(90);
+    expect(mocks.enqueue).toHaveBeenCalledTimes(90);
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ idempotencyKey: expect.stringContaining('backfill:repair_1') })
+    );
+  });
+
+  it('rejects 91 days before enqueuing any work', async () => {
+    await expect(
+      enqueueInsightBackfill({} as ScopedDb, {
+        branchId: 'branch_1',
+        from: '2026-01-01',
+        to: '2026-04-01',
+        requestId: 'repair_2',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 });

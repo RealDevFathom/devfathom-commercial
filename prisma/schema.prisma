@@ -2191,32 +2191,33 @@ model Organization {
   createdAt           DateTime                   @default(now())
   updatedAt           DateTime                   @updatedAt
 
-  package                PlatformPackage?                 @relation(fields: [packageId], references: [id], onDelete: SetNull)
-  users                  User[]
-  roles                  OrganizationRole[]
-  permissionOverrides    UserPermissionOverride[]
-  modules                OrganizationModule[]
-  limits                 OrganizationLimit[]
-  usageCounters          OrganizationUsageCounter[]
-  brand                  OrganizationBrand?
-  emailSettings          OrganizationEmailSettings?
-  domains                OrganizationDomain[]
-  identityConnections    OrganizationIdentityConnection[]
-  scimTokens             OrganizationScimToken[]
-  scimEvents             OrganizationScimEvent[]
-  accounts               PlatformAccount[]
-  convertedOpportunities PlatformOpportunity[]
-  contracts              PlatformContract[]
-  invoices               PlatformInvoice[]
-  payments               PlatformPayment[]
-  renewals               PlatformRenewal[]
-  deployments            OrganizationDeployment[]
-  jobs                   PlatformJob[]
-  lifecycleEvents        OrganizationLifecycleEvent[]
-  supportSessions        PlatformSupportSession[]
-  auditLogs              PlatformAuditLog[]
-  ssoStates              OrganizationSsoState[]
-  ssoTickets             TenantSsoTicket[]
+  package                   PlatformPackage?                 @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  users                     User[]
+  roles                     OrganizationRole[]
+  permissionOverrides       UserPermissionOverride[]
+  modules                   OrganizationModule[]
+  limits                    OrganizationLimit[]
+  usageCounters             OrganizationUsageCounter[]
+  brand                     OrganizationBrand?
+  emailSettings             OrganizationEmailSettings?
+  domains                   OrganizationDomain[]
+  identityConnections       OrganizationIdentityConnection[]
+  scimTokens                OrganizationScimToken[]
+  scimEvents                OrganizationScimEvent[]
+  accounts                  PlatformAccount[]
+  convertedOpportunities    PlatformOpportunity[]
+  contracts                 PlatformContract[]
+  invoices                  PlatformInvoice[]
+  payments                  PlatformPayment[]
+  renewals                  PlatformRenewal[]
+  deployments               OrganizationDeployment[]
+  jobs                      PlatformJob[]
+  lifecycleEvents           OrganizationLifecycleEvent[]
+  supportSessions           PlatformSupportSession[]
+  auditLogs                 PlatformAuditLog[]
+  ssoStates                 OrganizationSsoState[]
+  ssoTickets                TenantSsoTicket[]
+  insightLoyaltyLiabilities InsightLoyaltyLiability[]
 
   @@index([status])
   @@index([deploymentMode])
@@ -5726,8 +5727,10 @@ model LoyaltyProgramVersion {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  pointsEntries LoyaltyPointsEntry[]
+  pointsEntries      LoyaltyPointsEntry[]
+  insightLiabilities InsightLoyaltyLiability[]
 
+  @@unique([organizationId, id])
   @@unique([organizationId, versionNumber])
   @@unique([organizationId, effectiveFrom])
   @@index([organizationId])
@@ -5810,6 +5813,7 @@ model InsightDailyRollup {
   voidTotal          Decimal  @default(0) @db.Decimal(12, 2)
   drawerVariance     Decimal  @default(0) @db.Decimal(12, 2)
   loyaltyLiability   Decimal  @default(0) @db.Decimal(12, 2)
+  projectionVersion  Int      @default(1)
   computedAt         DateTime @default(now())
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -5821,6 +5825,32 @@ model InsightDailyRollup {
   @@index([organizationId])
   @@index([sourceDailyCloseId])
   @@map("restaurant_insight_daily_rollups")
+}
+
+/// Organization-wide daily loyalty liability. Unlike branch rollups this fact is
+/// stored once per tenant/date, with every historical input pinned for replay.
+model InsightLoyaltyLiability {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  businessDate      DateTime @db.Date
+  cutoffAt          DateTime
+  programVersionId  String?
+  redemptionValue   Decimal  @default(0) @db.Decimal(18, 6)
+  positivePoints    BigInt   @default(0)
+  signedPoints      BigInt   @default(0)
+  liability         Decimal  @default(0) @db.Decimal(12, 2)
+  projectionVersion Int      @default(1)
+  computedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  programVersion LoyaltyProgramVersion? @relation(fields: [organizationId, programVersionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, businessDate])
+  @@index([organizationId])
+  @@index([programVersionId])
+  @@map("restaurant_insight_loyalty_liabilities")
 }
 
 /// D22: rebuildable product-level item-mix projection. Key adds product to the
@@ -5836,6 +5866,7 @@ model InsightItemMixRollup {
   grossSales         Decimal  @default(0) @db.Decimal(12, 2)
   netSales           Decimal  @default(0) @db.Decimal(12, 2)
   compTotal          Decimal  @default(0) @db.Decimal(12, 2)
+  projectionVersion  Int      @default(1)
   computedAt         DateTime @default(now())
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
