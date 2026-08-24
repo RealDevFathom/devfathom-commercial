@@ -22,6 +22,8 @@ const M5_AT = new Date('2099-08-21T12:00:00.000Z');
 const ROLLUP_AT = new Date('2099-08-22T12:00:00.000Z');
 const BUSINESS_DATE = '2099-08-21';
 const ROLLUP_DATE = '2099-08-22';
+const LOYALTY_REDEMPTION_VALUE = '0.05';
+const ROLLUP_REDEMPTION_VALUE = '0.03';
 const modules = ['restaurant-customers', 'restaurant-loyalty', 'restaurant-insights'];
 const grants = [
   'customers:read',
@@ -215,6 +217,17 @@ async function cardBill(customerId: string) {
 async function seedRollupRaw() {
   const date = new Date(`${ROLLUP_DATE}T00:00:00.000Z`);
   return tenant(async (tx) => {
+    const latestProgram = await tx.loyaltyProgramVersion.findFirstOrThrow({
+      orderBy: { versionNumber: 'desc' },
+    });
+    await tx.loyaltyProgramVersion.create({
+      data: {
+        versionNumber: latestProgram.versionNumber + 1,
+        effectiveFrom: date,
+        earnRate: '1',
+        redemptionValue: ROLLUP_REDEMPTION_VALUE,
+      },
+    });
     const order = await tx.restaurantOrder.create({
       data: {
         branchId: ids.branch,
@@ -381,11 +394,82 @@ async function seedRollupRaw() {
         },
       ],
     });
-    return { billId: bill.id, drawerId: drawer.id, lineId: line.id, staleItemId: staleItem.id };
+    const sourceCustomer = await tx.restaurantCustomer.create({
+      data: { displayName: 'Rollup liability source' },
+    });
+    const repairedCustomer = await tx.restaurantCustomer.create({
+      data: { displayName: 'Rollup liability repaired' },
+    });
+    const sourceAccount = await tx.loyaltyAccount.create({
+      data: { customerId: sourceCustomer.id },
+    });
+    const repairedAccount = await tx.loyaltyAccount.create({
+      data: { customerId: repairedCustomer.id },
+    });
+    const sourceEarn = await tx.loyaltyPointsEntry.create({
+      data: {
+        accountId: sourceAccount.id,
+        programVersionId: programId,
+        kind: 'EARN',
+        points: 100,
+        billId: bill.id,
+        occurredAt: new Date('2099-08-22T09:00:00.000Z'),
+        idempotencyKey: key('rollup_earn'),
+      },
+    });
+    await tx.loyaltyPointsEntry.createMany({
+      data: [
+        {
+          accountId: sourceAccount.id,
+          programVersionId: programId,
+          kind: 'REDEEM',
+          points: -20,
+          billId: bill.id,
+          occurredAt: new Date('2099-08-22T09:15:00.000Z'),
+          idempotencyKey: key('rollup_redeem'),
+        },
+        {
+          accountId: sourceAccount.id,
+          programVersionId: programId,
+          kind: 'EXPIRY',
+          points: -10,
+          reversesEntryId: sourceEarn.id,
+          occurredAt: new Date('2099-08-22T09:30:00.000Z'),
+          idempotencyKey: key('rollup_expiry'),
+        },
+        {
+          accountId: repairedAccount.id,
+          programVersionId: programId,
+          kind: 'ADJUSTMENT',
+          points: -10,
+          actorId: ids.user,
+          reason: 'negative liability fixture',
+          occurredAt: new Date('2099-08-22T10:00:00.000Z'),
+          idempotencyKey: key('rollup_negative'),
+        },
+        {
+          accountId: repairedAccount.id,
+          programVersionId: programId,
+          kind: 'ADJUSTMENT',
+          points: 15,
+          actorId: ids.user,
+          reason: 'repair liability fixture',
+          occurredAt: new Date('2099-08-22T10:15:00.000Z'),
+          idempotencyKey: key('rollup_repair'),
+        },
+      ],
+    });
+    return {
+      billId: bill.id,
+      drawerId: drawer.id,
+      liabilityAccountIds: [sourceAccount.id, repairedAccount.id] as const,
+      lineId: line.id,
+      staleItemId: staleItem.id,
+    };
   });
 }
 
-async function readRollupOracle() {
+async function readRollupOracle(liabilityAccountIds: readonly [string, string]) {
   const businessDate = new Date(`${ROLLUP_DATE}T00:00:00.000Z`);
   return tenant(async (tx) => {
     const [closes, bills, tenders, refunds, drawers, orders, ledger] = await Promise.all([
@@ -416,17 +500,15 @@ async function readRollupOracle() {
           },
         },
       }),
-      tx.loyaltyPointsEntry.findMany({ select: { accountId: true, points: true } }),
+      tx.loyaltyPointsEntry.findMany({
+        select: { accountId: true, kind: true, occurredAt: true, points: true },
+      }),
     ]);
     const superseded = new Set(
       closes.flatMap((close) => (close.supersedesCloseId ? [close.supersedesCloseId] : []))
     );
     const close = closes.find((candidate) => !superseded.has(candidate.id));
     if (!close) throw new Error('Rollup oracle found no close-chain tip.');
-    const program = await tx.loyaltyProgramVersion.findFirst({
-      where: { effectiveFrom: { lte: close.createdAt } },
-      orderBy: { effectiveFrom: 'desc' },
-    });
     const settled = bills.filter((bill) => bill.status === 'SETTLED');
     const grossSales = sumDecimals(settled.map((bill) => bill.subtotal));
     const compTotal = sumDecimals(settled.map((bill) => bill.compTotal));
@@ -482,8 +564,23 @@ async function readRollupOracle() {
     const loyaltyLiability = sumDecimals(
       [...balances.values()]
         .filter((balance) => balance > 0)
-        .map((balance) => D(balance).times(program?.redemptionValue ?? D(0)))
+        .map((balance) => D(balance).times(ROLLUP_REDEMPTION_VALUE))
     ).toDecimalPlaces(2);
+    const [sourceAccountId, repairedAccountId] = liabilityAccountIds;
+    const sourceLedger = ledger.filter((entry) => entry.accountId === sourceAccountId);
+    const repairedLedger = ledger
+      .filter((entry) => entry.accountId === repairedAccountId)
+      .sort((left, right) => left.occurredAt.getTime() - right.occurredAt.getTime());
+    let repairedBalance = 0;
+    let minimumRepairedBalance = 0;
+    for (const entry of repairedLedger) {
+      repairedBalance += entry.points;
+      minimumRepairedBalance = Math.min(minimumRepairedBalance, repairedBalance);
+    }
+    const sourceBalance = sourceLedger.reduce((total, entry) => total + entry.points, 0);
+    const fixtureLiability = D(Math.max(sourceBalance, 0) + Math.max(repairedBalance, 0))
+      .times(ROLLUP_REDEMPTION_VALUE)
+      .toDecimalPlaces(2);
     return {
       close,
       compTotal,
@@ -494,6 +591,21 @@ async function readRollupOracle() {
         .map(([productId, values]) => ({ productId, ...values }))
         .sort((left, right) => left.productId.localeCompare(right.productId)),
       loyaltyLiability,
+      liabilityFacts: {
+        earnedPoints: sourceLedger
+          .filter((entry) => entry.kind === 'EARN')
+          .reduce((total, entry) => total + entry.points, 0),
+        expiredPoints: sourceLedger
+          .filter((entry) => entry.kind === 'EXPIRY')
+          .reduce((total, entry) => total + entry.points, 0),
+        fixtureLiability: fixtureLiability.toFixed(2),
+        minimumRepairedBalance,
+        redeemedPoints: sourceLedger
+          .filter((entry) => entry.kind === 'REDEEM')
+          .reduce((total, entry) => total + entry.points, 0),
+        repairedBalance,
+        sourceBalance,
+      },
       netSales: grossSales.minus(compTotal).minus(discountTotal),
       orderCount: orders.length,
       refundTotal: sumDecimals(refunds.map((refund) => refund.amount)),
@@ -679,9 +791,9 @@ describeDb('WHA-100 restaurant M8 acceptance', () => {
         await tx.loyaltyProgramVersion.create({
           data: {
             versionNumber: 1,
-            effectiveFrom: new Date('2099-01-01T00:00:00.000Z'),
+            effectiveFrom: new Date('2000-01-01T00:00:00.000Z'),
             earnRate: '1',
-            redemptionValue: '0.05',
+            redemptionValue: LOYALTY_REDEMPTION_VALUE,
             expiryDays: 30,
           },
         })
@@ -788,14 +900,29 @@ describeDb('WHA-100 restaurant M8 acceptance', () => {
     expect(cross.id).not.toBe(first.id);
     expect(first.identifiers[0]?.normalizedValue).toBe(email.toLowerCase());
     expect(first.currentConsent.EMAIL?.granted ?? false).toBe(false);
-    const granted = await api.restaurantCustomers.appendConsent({
+    const consentGrant = {
       customerId: first.id,
-      channel: 'EMAIL',
+      channel: 'EMAIL' as const,
       granted: true,
       source: 'checkout',
       policyVersion: 'v1',
       idempotencyKey: key('consent_grant'),
-    });
+    };
+    const granted = await api.restaurantCustomers.appendConsent(consentGrant);
+    await expect(api.restaurantCustomers.appendConsent(consentGrant)).resolves.toEqual(granted);
+    const silentlyReplayed: string[] = [];
+    for (const [field, changed] of [
+      ['granted', { granted: false }],
+      ['source', { source: 'customer-request' }],
+      ['policyVersion', { policyVersion: 'v2' }],
+    ] as const) {
+      try {
+        await api.restaurantCustomers.appendConsent({ ...consentGrant, ...changed });
+        silentlyReplayed.push(field);
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'CONFLICT' });
+      }
+    }
     const revoked = await api.restaurantCustomers.appendConsent({
       customerId: first.id,
       channel: 'EMAIL',
@@ -826,6 +953,24 @@ describeDb('WHA-100 restaurant M8 acceptance', () => {
       identifiers: [{ kind: 'PHONE', value: phone }],
     });
     expect(phoneCustomer.identifiers[0]?.normalizedValue).toBe(phone);
+    const phoneConsent = await api.restaurantCustomers.appendConsent({
+      customerId: phoneCustomer.id,
+      channel: 'PHONE',
+      granted: true,
+      source: 'voice-call',
+      policyVersion: 'phone-v1',
+      idempotencyKey: key('phone_consent'),
+    });
+    expect(
+      (await api.restaurantCustomers.detail({ customerId: phoneCustomer.id })).currentConsent.PHONE
+    ).toMatchObject({
+      id: phoneConsent.id,
+      actorId: ids.user,
+      granted: true,
+      policyVersion: 'phone-v1',
+      source: 'voice-call',
+    });
+    expect(silentlyReplayed).toEqual([]);
     await expect(
       api.restaurantCustomers.create({ identifiers: [{ kind: 'PHONE', value: phone }] })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
@@ -842,6 +987,167 @@ describeDb('WHA-100 restaurant M8 acceptance', () => {
     await expect(makeCaller(orgId, []).restaurantCustomers.list({})).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+  }, 60_000);
+
+  it('hides and denies cross-tenant customer, consent, loyalty, and insight rows', async () => {
+    expect(
+      await deps.withPlatformDb(
+        (tx) => tx.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>`
+          SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user
+        `
+      )
+    ).toEqual([{ rolbypassrls: false, rolsuper: false }]);
+
+    const otherApi = makeCaller(otherOrgId);
+    const otherCustomer = await otherApi.restaurantCustomers.create({
+      displayName: 'Cross-tenant customer',
+    });
+    const otherConsent = await otherApi.restaurantCustomers.appendConsent({
+      customerId: otherCustomer.id,
+      channel: 'PHONE',
+      granted: true,
+      source: 'cross-tenant-fixture',
+      policyVersion: 'v1',
+      idempotencyKey: key('cross_tenant_consent'),
+    });
+    const other = await tenant(async (tx) => {
+      const spareCustomer = await tx.restaurantCustomer.create({
+        data: { displayName: 'Cross-tenant spare' },
+      });
+      const branch = await tx.restaurantBranch.create({
+        data: { name: 'Cross-tenant branch', timezone: 'UTC', businessDayCutoff: '00:00' },
+      });
+      const staff = await tx.restaurantStaffProfile.create({
+        data: { displayName: 'Cross-tenant staff', primaryBranchId: branch.id },
+      });
+      await tx.loyaltyProgramVersion.create({
+        data: {
+          versionNumber: 1,
+          effectiveFrom: new Date('2000-01-01T00:00:00.000Z'),
+          earnRate: '1',
+          redemptionValue: LOYALTY_REDEMPTION_VALUE,
+        },
+      });
+      const account = await tx.loyaltyAccount.create({
+        data: { customerId: otherCustomer.id },
+      });
+      const close = await tx.restaurantDailyClose.create({
+        data: {
+          branchId: branch.id,
+          businessDate: new Date('2099-09-01T00:00:00.000Z'),
+          cutByStaffProfileId: staff.id,
+        },
+      });
+      const daily = await tx.insightDailyRollup.create({
+        data: {
+          branchId: branch.id,
+          businessDate: new Date('2099-09-01T00:00:00.000Z'),
+          sourceDailyCloseId: close.id,
+        },
+      });
+      return { account, branch, close, daily, spareCustomer };
+    }, otherOrgId);
+
+    expect(
+      await tenant(async (tx) => ({
+        consent: await tx.customerConsent.findMany({ where: { id: otherConsent.id } }),
+        customer: await tx.restaurantCustomer.findMany({ where: { id: otherCustomer.id } }),
+        insight: await tx.insightDailyRollup.findMany({ where: { id: other.daily.id } }),
+        loyalty: await tx.loyaltyAccount.findMany({ where: { id: other.account.id } }),
+      }))
+    ).toEqual({ consent: [], customer: [], insight: [], loyalty: [] });
+
+    expect(
+      await tenant(async (tx) => ({
+        consent: (
+          await tx.customerConsent.updateMany({
+            where: { id: otherConsent.id },
+            data: { granted: false },
+          })
+        ).count,
+        customer: (
+          await tx.restaurantCustomer.updateMany({
+            where: { id: otherCustomer.id },
+            data: { displayName: 'cross-tenant update' },
+          })
+        ).count,
+        insight: (
+          await tx.insightDailyRollup.updateMany({
+            where: { id: other.daily.id },
+            data: { orderCount: 99 },
+          })
+        ).count,
+        loyalty: (
+          await tx.loyaltyAccount.updateMany({
+            where: { id: other.account.id },
+            data: { active: false, deactivatedAt: new Date() },
+          })
+        ).count,
+      }))
+    ).toEqual({ consent: 0, customer: 0, insight: 0, loyalty: 0 });
+
+    expect(
+      await tenant(async (tx) => ({
+        consent: (await tx.customerConsent.deleteMany({ where: { id: otherConsent.id } })).count,
+        customer: (await tx.restaurantCustomer.deleteMany({ where: { id: otherCustomer.id } }))
+          .count,
+        insight: (await tx.insightDailyRollup.deleteMany({ where: { id: other.daily.id } })).count,
+        loyalty: (await tx.loyaltyAccount.deleteMany({ where: { id: other.account.id } })).count,
+      }))
+    ).toEqual({ consent: 0, customer: 0, insight: 0, loyalty: 0 });
+
+    const denied = {
+      code: 'P2010',
+      meta: expect.objectContaining({
+        driverAdapterError: expect.objectContaining({
+          cause: expect.objectContaining({ code: '42501' }),
+        }),
+      }),
+    };
+    await expect(
+      tenant(
+        (tx) => tx.$executeRaw`
+        INSERT INTO "restaurant_customers" ("id", "organizationId", "displayName", "updatedAt")
+        VALUES (${key('cross_customer_write')}, ${otherOrgId}, 'denied', CURRENT_TIMESTAMP)
+      `
+      )
+    ).rejects.toMatchObject(denied);
+    await expect(
+      tenant(
+        (tx) => tx.$executeRaw`
+        INSERT INTO "restaurant_customer_consents" (
+          "id", "organizationId", "customerId", "channel", "granted", "source",
+          "actorId", "policyVersion", "idempotencyKey"
+        ) VALUES (
+          ${key('cross_consent_write')}, ${otherOrgId}, ${otherCustomer.id}, 'PHONE', true,
+          'denied', ${ids.user}, 'v1', ${key('cross_consent_key')}
+        )
+      `
+      )
+    ).rejects.toMatchObject(denied);
+    await expect(
+      tenant(
+        (tx) => tx.$executeRaw`
+        INSERT INTO "restaurant_loyalty_accounts" (
+          "id", "organizationId", "customerId", "updatedAt"
+        ) VALUES (
+          ${key('cross_loyalty_write')}, ${otherOrgId}, ${other.spareCustomer.id}, CURRENT_TIMESTAMP
+        )
+      `
+      )
+    ).rejects.toMatchObject(denied);
+    await expect(
+      tenant(
+        (tx) => tx.$executeRaw`
+        INSERT INTO "restaurant_insight_daily_rollups" (
+          "id", "organizationId", "branchId", "businessDate", "sourceDailyCloseId", "updatedAt"
+        ) VALUES (
+          ${key('cross_insight_write')}, ${otherOrgId}, ${other.branch.id}, DATE '2099-09-02',
+          ${other.close.id}, CURRENT_TIMESTAMP
+        )
+      `
+      )
+    ).rejects.toMatchObject(denied);
   }, 60_000);
 
   it('exports one customer safely and anonymizes once without mutating retained history', async () => {
@@ -1521,7 +1827,7 @@ describeDb('WHA-100 restaurant M8 acceptance', () => {
     });
     if (!claimed) throw new Error('Rollup job was not claimable.');
     await deps.rollups.rollupDayHandler({ db: deps.createTenantDb(orgId), job: claimed });
-    const firstOracle = await readRollupOracle();
+    const firstOracle = await readRollupOracle(raw.liabilityAccountIds);
     const first = await tenant(async (tx) => ({
       daily: await tx.insightDailyRollup.findFirstOrThrow({
         where: { branchId: ids.branch, businessDate: close.businessDate },
@@ -1549,6 +1855,17 @@ describeDb('WHA-100 restaurant M8 acceptance', () => {
     expect(first.daily.refundTotal.toString()).toBe(firstOracle.refundTotal.toString());
     expect(first.daily.voidTotal.toString()).toBe(firstOracle.voidTotal.toString());
     expect(first.daily.drawerVariance.toString()).toBe(firstOracle.drawerVariance.toString());
+    expect(firstOracle.liabilityFacts).toEqual({
+      earnedPoints: 100,
+      expiredPoints: -10,
+      fixtureLiability: '2.25',
+      minimumRepairedBalance: -10,
+      redeemedPoints: -20,
+      repairedBalance: 5,
+      sourceBalance: 70,
+    });
+    expect(firstOracle.loyaltyLiability.greaterThan(0)).toBe(true);
+    expect(first.daily.loyaltyLiability.greaterThan(0)).toBe(true);
     expect(first.daily.loyaltyLiability.toString()).toBe(firstOracle.loyaltyLiability.toString());
     expect(
       first.items.map((item) => ({
@@ -1645,7 +1962,7 @@ describeDb('WHA-100 restaurant M8 acceptance', () => {
     });
     if (!correctionJob) throw new Error('Correction rollup job was not claimable.');
     await deps.rollups.rollupDayHandler({ db: deps.createTenantDb(orgId), job: correctionJob });
-    const correctedOracle = await readRollupOracle();
+    const correctedOracle = await readRollupOracle(raw.liabilityAccountIds);
     const correctedProjection = await tenant(async (tx) => ({
       closes: await tx.restaurantDailyClose.findMany({
         where: { branchId: ids.branch, businessDate: close.businessDate },
