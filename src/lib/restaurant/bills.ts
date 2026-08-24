@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
-import { releaseLoyaltyRedemption } from './loyalty';
+import { readLoyaltyRelease, releaseLoyaltyRedemption } from './loyalty';
 import { add, allocate, compare, equals, multiply, roundMoney, sub, sum, ZERO } from './money';
 import { allocateReceiptNumber } from './receipt-numbers';
 
@@ -536,8 +536,11 @@ async function handleExistingBills(
   input: CutBillsInput
 ): Promise<void> {
   // Lock the live bills first: a concurrent redemption must not slip a discount onto
-  // a bill between the guard, the compensation and the void.
-  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE "orderId" = ${order.id} AND status <> 'VOID' FOR UPDATE`;
+  // a bill between the guard, the compensation and the void. `ORDER BY id` because
+  // this is one of the two places that locks SEVERAL bill rows at once — the order
+  // close's loyalty earn is the other — and they must agree on the order or a re-cut
+  // racing a close of the same order can deadlock on the second row.
+  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE "orderId" = ${order.id} AND status <> 'VOID' ORDER BY id FOR UPDATE`;
   const live = await tx.restaurantBill.findMany({
     where: { orderId: order.id, status: { not: 'VOID' } },
     select: {
@@ -587,7 +590,9 @@ async function handleExistingBills(
       idempotencyKey: `void:${bill.id}`,
       at,
     });
-    if (release.points === 0) continue;
+    // `replayed` ⇒ an earlier run already rolled this discount off the bill; applying
+    // the same delta twice would inflate `grandTotal` past the subtotal.
+    if (release.replayed || release.points === 0) continue;
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
@@ -622,11 +627,16 @@ export type CompLineInput = {
   actor: MoneyCommandActor;
 };
 
+/** The release-idempotency key a comp of this line owns. One key per line, so the
+ * first call and every replay of it name the same release. */
+const compReleaseKey = (billLineId: string) => `comp:${billLineId}`;
+
 export type CompLineResult = {
   billLineId: string;
   billId: string;
   /** Loyalty discount handed back because the comp would otherwise overdraw the
-   * bill (M8/B3); zero on the ordinary path. The points return to the guest. */
+   * bill (M8/B3); zero on the ordinary path. The points return to the guest. A
+   * replay reports the SAME amount its first run released, not zero. */
   releasedDiscount: Prisma.Decimal;
   replayed: boolean;
 };
@@ -652,10 +662,18 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
   return runInTransaction(db, async (tx) => {
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp');
     if (idem.replay) {
+      // Answer with what the first run actually released, re-derived from the ledger.
+      // A replay writes nothing, but it must not report a DIFFERENT comp than the call
+      // it replays: `releasedDiscount: 0` on the replay of a comp that released 9.00
+      // would tell the caller the guest's points were never given back.
+      const billLineId = idem.resultRef ?? input.billLineId;
+      const released = await readLoyaltyRelease(tx, {
+        idempotencyKey: compReleaseKey(billLineId),
+      });
       return {
-        billLineId: input.billLineId,
+        billLineId,
         billId: input.billId,
-        releasedDiscount: ZERO,
+        releasedDiscount: released.value,
         replayed: true,
       };
     }
@@ -695,7 +713,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         shortfall,
         actorId: input.actor.staffProfileId,
         reason: `Loyalty redemption released to comp bill line ${line.id}: ${reason}`,
-        idempotencyKey: `comp:${line.id}`,
+        idempotencyKey: compReleaseKey(line.id),
         at: new Date(),
       });
       releasedDiscount = release.value;

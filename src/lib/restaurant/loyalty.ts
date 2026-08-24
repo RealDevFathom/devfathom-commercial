@@ -232,17 +232,39 @@ export function netEarnableAmount(
   return compare(net, ZERO) > 0 ? net : ZERO;
 }
 
-/** Called inside order-close transaction after CLOSED is persisted. */
+/**
+ * Called inside order-close transaction after CLOSED is persisted.
+ *
+ * SERIALIZATION (M8/M2). The earn and a refund on the same bill both decide how many
+ * points the guest keeps, from state the other one writes — so they must not run
+ * concurrently. Without a lock they can interleave into a double credit: `refundTender`
+ * locks the bill, appends its refund and asks `reverseLoyaltyForRefund` for a reversal,
+ * which correctly finds no EARN yet; the close, reading refunds unlocked, sees no
+ * refund either and writes the FULL earn; both commit and the guest has earned on
+ * refunded money with nothing to reverse it.
+ *
+ * The fix is to make this function take the SAME `restaurant_bills` row lock
+ * `refundTender` takes (bill by bill, ascending id — the order `bills.ts` uses for the
+ * re-cut's multi-bill lock too, so neither can deadlock the other) BEFORE it reads the
+ * refunds it nets out, and to hold it until the close commits. That leaves exactly two
+ * orderings, both correct:
+ *
+ *   - the close acquires first — the refund blocks until the EARN is committed and
+ *     visible, so `reverseLoyaltyForRefund` reverses it;
+ *   - the refund acquires first — the close blocks, and the `findMany` below (a new
+ *     statement, hence a fresh READ COMMITTED snapshot taken after the wait) sees the
+ *     committed refund and earns on the net.
+ *
+ * Under an isolation level above READ COMMITTED the blocked side aborts with a
+ * serialization failure instead of proceeding on a stale snapshot — also safe.
+ */
 export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, at: Date) {
   const order = await tx.restaurantOrder.findUnique({
     where: { id: orderId },
     select: {
       status: true,
       customerId: true,
-      bills: {
-        where: { status: 'SETTLED' },
-        select: { id: true, grandTotal: true, refunds: { select: { amount: true } } },
-      },
+      bills: { where: { status: 'SETTLED' }, orderBy: { id: 'asc' }, select: { id: true } },
     },
   });
   if (!order || order.status !== 'CLOSED' || !order.customerId) return [];
@@ -252,9 +274,22 @@ export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, a
     select: { id: true, active: true },
   });
   if (!account?.active) return [];
+
+  const billIds = order.bills.map((bill) => bill.id);
+  if (billIds.length === 0) return [];
+  for (const billId of billIds) {
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${billId} FOR UPDATE`;
+  }
+  // Read AFTER the lock, never before: this is the snapshot the earn is computed on.
+  const bills = await tx.restaurantBill.findMany({
+    where: { id: { in: billIds } },
+    orderBy: { id: 'asc' },
+    select: { id: true, grandTotal: true, refunds: { select: { amount: true } } },
+  });
+
   const program = await effectiveProgram(tx, at);
   const created: { id: string; billId: string | null; points: number }[] = [];
-  for (const bill of order.bills) {
+  for (const bill of bills) {
     const idempotencyKey = `loyalty:earn:${bill.id}`;
     const prior = await tx.loyaltyPointsEntry.findFirst({
       where: { idempotencyKey },
@@ -538,21 +573,18 @@ export async function reverseLoyaltyForRefund(
 
 // ── Redemption release (comp / void-and-recut compensation) ──────────────────
 
-export type LoyaltyReleaseResult = {
+/** What one release command handed back. `entryIds` empty ⇒ it released nothing. */
+export type LoyaltyReleaseRecord = {
   /** Discount money handed back to the bill; the caller MUST apply it. */
   value: Prisma.Decimal;
   /** Whole points restored to the account. */
   points: number;
   entryIds: string[];
-  replayed: boolean;
 };
 
-const noRelease = (): LoyaltyReleaseResult => ({
-  value: ZERO,
-  points: 0,
-  entryIds: [],
-  replayed: false,
-});
+export type LoyaltyReleaseResult = LoyaltyReleaseRecord & { replayed: boolean };
+
+const nothingReleased = (): LoyaltyReleaseRecord => ({ value: ZERO, points: 0, entryIds: [] });
 
 /** The money a release of `take` further points frees, given `before` points of this
  * redemption were already released. Rounding is applied to the CUMULATIVE released
@@ -563,6 +595,74 @@ function releasedValueDelta(before: number, take: number, redemptionValue: Prism
     roundMoney(multiply(before + take, redemptionValue)),
     roundMoney(multiply(before, redemptionValue))
   );
+}
+
+function releaseKeyPrefix(idempotencyKey: string) {
+  return `loyalty:release:${idempotencyKey}:`;
+}
+
+/**
+ * Re-derive, read-only, what the release command `idempotencyKey` ALREADY handed back.
+ *
+ * This is what a replay must report. A command that releases redemption is idempotent
+ * on this key, so its second call writes nothing — but it still has to answer the same
+ * question with the same number, or the caller's contract contradicts itself (a first
+ * call reporting 9.00 released and its replay reporting 0.00 describe two different
+ * bills). Returns `nothingReleased()` when the command never released anything, which
+ * is a truthful answer too: the ordinary comp absorbs its line out of the bill's own
+ * balance and touches no redemption.
+ *
+ * The value is rebuilt with the same cumulative rounding the write used, by summing the
+ * releases that preceded each of this command's entries in ledger order.
+ */
+export async function readLoyaltyRelease(
+  tx: ScopedDb,
+  input: { idempotencyKey: string }
+): Promise<LoyaltyReleaseRecord> {
+  const mine = await tx.loyaltyPointsEntry.findMany({
+    where: {
+      kind: 'ADJUSTMENT',
+      idempotencyKey: { startsWith: releaseKeyPrefix(input.idempotencyKey) },
+    },
+    orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, points: true, reversesEntryId: true },
+  });
+  if (mine.length === 0) return nothingReleased();
+
+  const redemptionIds = mine
+    .map((row) => row.reversesEntryId)
+    .filter((id): id is string => id !== null);
+  const [redemptions, siblings] = await Promise.all([
+    tx.loyaltyPointsEntry.findMany({
+      where: { id: { in: redemptionIds } },
+      select: { id: true, programVersion: { select: { redemptionValue: true } } },
+    }),
+    tx.loyaltyPointsEntry.findMany({
+      where: { kind: 'ADJUSTMENT', reversesEntryId: { in: redemptionIds } },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, points: true, reversesEntryId: true },
+    }),
+  ]);
+  const redemptionValues = new Map(
+    redemptions.map((row) => [row.id, row.programVersion.redemptionValue])
+  );
+
+  let value = ZERO;
+  let points = 0;
+  for (const entry of mine) {
+    const redemptionValue = entry.reversesEntryId
+      ? redemptionValues.get(entry.reversesEntryId)
+      : undefined;
+    if (!redemptionValue) continue;
+    const chain = siblings.filter((row) => row.reversesEntryId === entry.reversesEntryId);
+    const position = chain.findIndex((row) => row.id === entry.id);
+    const before = chain
+      .slice(0, position < 0 ? 0 : position)
+      .reduce((total, row) => total + row.points, 0);
+    value = add(value, releasedValueDelta(before, entry.points, redemptionValue));
+    points += entry.points;
+  }
+  return { value, points, entryIds: mine.map((row) => row.id) };
 }
 
 /**
@@ -603,8 +703,12 @@ export async function releaseLoyaltyRedemption(
   if (!actorId || !reason) {
     throw new LoyaltyError('A redemption release requires an actor and reason.', 'INVALID');
   }
-  const keyPrefix = `loyalty:release:${input.idempotencyKey}:`;
 
+  // A replay of THIS command: report exactly what it already released, write nothing.
+  const already = await readLoyaltyRelease(tx, { idempotencyKey: input.idempotencyKey });
+  if (already.entryIds.length > 0) return { ...already, replayed: true };
+
+  const keyPrefix = releaseKeyPrefix(input.idempotencyKey);
   const redemptions = await tx.loyaltyPointsEntry.findMany({
     where: { billId: input.billId, kind: 'REDEEM' },
     orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
@@ -616,36 +720,15 @@ export async function releaseLoyaltyRedemption(
       programVersion: { select: { redemptionValue: true } },
     },
   });
-  if (redemptions.length === 0) return noRelease();
+  if (redemptions.length === 0) return { ...nothingReleased(), replayed: false };
 
   const releases = await tx.loyaltyPointsEntry.findMany({
     where: {
       kind: 'ADJUSTMENT',
       reversesEntryId: { in: redemptions.map((entry) => entry.id) },
     },
-    select: { id: true, points: true, reversesEntryId: true, idempotencyKey: true },
+    select: { id: true, points: true, reversesEntryId: true },
   });
-
-  // A replay of THIS command: report what it already released, write nothing.
-  const mine = releases.filter((row) => row.idempotencyKey.startsWith(keyPrefix));
-  if (mine.length > 0) {
-    let value = ZERO;
-    let points = 0;
-    for (const redemption of redemptions) {
-      const own = mine.filter((row) => row.reversesEntryId === redemption.id);
-      if (own.length === 0) continue;
-      const taken = own.reduce((total, row) => total + row.points, 0);
-      const before = releases
-        .filter((row) => row.reversesEntryId === redemption.id && !own.includes(row))
-        .reduce((total, row) => total + row.points, 0);
-      value = add(
-        value,
-        releasedValueDelta(before, taken, redemption.programVersion.redemptionValue)
-      );
-      points += taken;
-    }
-    return { value, points, entryIds: mine.map((row) => row.id), replayed: true };
-  }
 
   const bill = await tx.restaurantBill.findUnique({
     where: { id: input.billId },
@@ -656,7 +739,7 @@ export async function releaseLoyaltyRedemption(
   // sum of what the redemptions took off it, and it may not go negative (DB CHECK).
   const requested = input.shortfall ?? bill.discountTotal;
   const needed = compare(requested, bill.discountTotal) > 0 ? bill.discountTotal : requested;
-  if (compare(needed, ZERO) <= 0) return noRelease();
+  if (compare(needed, ZERO) <= 0) return { ...nothingReleased(), replayed: false };
 
   let value = ZERO;
   let points = 0;
