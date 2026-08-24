@@ -74,7 +74,6 @@ export const openOrderBody = z
     tableIds: z.array(ID).optional(),
     coverCount: z.number().int().min(0).nullish(),
     sectionId: ID.nullish(),
-    serverStaffProfileId: ID.nullish(),
   })
   .strict();
 

@@ -21,8 +21,9 @@ type Runtime = {
   sessionId: string;
   state: 'LOCKED' | 'UNLOCKED';
   branchId: string;
-  operatorId: string | null;
+  operator: OperatorOption | null;
 };
+type OperatorOption = { staffProfileId: string; displayName: string; role: string };
 type OpenOrder = {
   id: string;
   orderNumber: number;
@@ -109,13 +110,16 @@ function effectiveMenuPath(channel: Channel, publicationId?: string | null) {
 export function OrderPad() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [deviceSecret, setDeviceSecret] = useState('');
+  const [operators, setOperators] = useState<OperatorOption[]>([]);
   const [operatorId, setOperatorId] = useState('');
+  const [operatorDirectoryState, setOperatorDirectoryState] = useState<
+    'idle' | 'loading' | 'ready' | 'error'
+  >('idle');
   const [operatorPin, setOperatorPin] = useState('');
   const [channel, setChannel] = useState<Channel>('DINE_IN');
   const [tableIds, setTableIds] = useState('');
   const [covers, setCovers] = useState('');
   const [sectionId, setSectionId] = useState('');
-  const [serverId, setServerId] = useState('');
   const [draftMenu, setDraftMenu] = useState<EffectiveMenu | null>(null);
   const [orderMenu, setOrderMenu] = useState<EffectiveMenu | null>(null);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
@@ -126,6 +130,27 @@ export function OrderPad() {
   const idempotencyKeys = useRef(new Map<string, string>());
   const stateEpoch = useRef(0);
 
+  const loadOperators = useCallback(async (activeRuntime: Runtime) => {
+    setOperatorDirectoryState('loading');
+    try {
+      const data = await request<{ operators: OperatorOption[] }>(
+        '/api/restaurant/terminal/operators',
+        { headers: authHeaders(activeRuntime) }
+      );
+      setOperators(data.operators);
+      setOperatorId((current) =>
+        data.operators.some((operator) => operator.staffProfileId === current)
+          ? current
+          : (data.operators[0]?.staffProfileId ?? '')
+      );
+      setOperatorDirectoryState('ready');
+    } catch {
+      setOperators([]);
+      setOperatorId('');
+      setOperatorDirectoryState('error');
+    }
+  }, []);
+
   const clearTerminalState = useCallback(() => {
     stateEpoch.current += 1;
     setRuntime(null);
@@ -134,6 +159,9 @@ export function OrderPad() {
     setOrder(null);
     setCheckoutOrderId(null);
     setOpenOrders([]);
+    setOperators([]);
+    setOperatorId('');
+    setOperatorDirectoryState('idle');
     idempotencyKeys.current.clear();
   }, []);
 
@@ -287,16 +315,18 @@ export function OrderPad() {
         method: 'POST',
         headers: { Authorization: `Bearer ${secret}` },
       });
-      setRuntime({
+      const established: Runtime = {
         deviceSecret: secret,
         sessionToken: data.sessionToken,
         sessionId: data.session.id,
         state: data.session.state,
         branchId: data.device.branchId,
-        operatorId: null,
-      });
+        operator: null,
+      };
+      setRuntime(established);
       setDeviceSecret('');
       setNotice({ tone: 'success', message: 'Device session established. Unlock to continue.' });
+      await loadOperators(established);
     } catch (error) {
       handleError(error);
     } finally {
@@ -322,7 +352,10 @@ export function OrderPad() {
       const unlocked: Runtime = {
         ...runtime,
         state: data.session.state,
-        operatorId: data.session.activeStaffProfileId,
+        operator:
+          operators.find(
+            (operator) => operator.staffProfileId === data.session.activeStaffProfileId
+          ) ?? null,
       };
       setRuntime(unlocked);
       setOperatorPin('');
@@ -344,9 +377,11 @@ export function OrderPad() {
         method: 'POST',
         headers: authHeaders(runtime),
       });
-      setRuntime({ ...runtime, state: data.session.state, operatorId: null });
+      const locked: Runtime = { ...runtime, state: data.session.state, operator: null };
+      setRuntime(locked);
       stateEpoch.current += 1;
       setOperatorId('');
+      setOperators([]);
       setOperatorPin('');
       setDraftMenu(null);
       setOrderMenu(null);
@@ -355,6 +390,7 @@ export function OrderPad() {
       setOpenOrders([]);
       idempotencyKeys.current.clear();
       setNotice({ tone: 'success', message: 'Terminal locked.' });
+      await loadOperators(locked);
     } catch (error) {
       handleError(error);
     } finally {
@@ -410,7 +446,6 @@ export function OrderPad() {
         : {}),
       ...(covers ? { coverCount: Number.parseInt(covers, 10) } : {}),
       ...(sectionId.trim() ? { sectionId: sectionId.trim() } : {}),
-      ...(serverId.trim() ? { serverStaffProfileId: serverId.trim() } : {}),
     };
     const intent = `open:${JSON.stringify(body)}`;
     setPending('open');
@@ -502,15 +537,46 @@ export function OrderPad() {
           >
             <form onSubmit={unlock} className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="operator-id">Operator profile ID</Label>
-                <Input
+                <Label htmlFor="operator-id">Operator</Label>
+                <select
                   id="operator-id"
                   required
                   autoComplete="username"
                   value={operatorId}
                   onChange={(event) => setOperatorId(event.target.value)}
-                  className="h-11"
-                />
+                  disabled={busy || operatorDirectoryState !== 'ready' || operators.length === 0}
+                  className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                >
+                  <option value="">
+                    {operatorDirectoryState === 'loading'
+                      ? 'Loading operators…'
+                      : operators.length === 0
+                        ? 'No eligible operators'
+                        : 'Choose an operator'}
+                  </option>
+                  {operators.map((operator) => (
+                    <option key={operator.staffProfileId} value={operator.staffProfileId}>
+                      {operator.displayName} — {operator.role}
+                    </option>
+                  ))}
+                </select>
+                {operatorDirectoryState === 'error' ? (
+                  <div className="flex items-center justify-between gap-3 text-sm text-text-muted">
+                    <span role="alert">Operators could not be loaded.</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void loadOperators(runtime)}
+                      className="h-11"
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                ) : operatorDirectoryState === 'ready' && operators.length === 0 ? (
+                  <p className="text-sm text-text-muted" role="status">
+                    No active operators are assigned to this branch. Ask a manager for access.
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="operator-pin">Operator PIN</Label>
@@ -551,7 +617,14 @@ export function OrderPad() {
           description="Live menu, open checks, kitchen pacing, and table service."
           actions={
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <StatusPill status="active" label={`Operator ${runtime.operatorId}`} />
+              <StatusPill
+                status="active"
+                label={
+                  runtime.operator
+                    ? `${runtime.operator.displayName} · ${runtime.operator.role}`
+                    : 'Operator active'
+                }
+              />
               <DrawerPanel request={checkoutRequest} disabled={busy} />
               <Button
                 type="button"
@@ -627,15 +700,9 @@ export function OrderPad() {
                     />
                   </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="order-server">Server profile ID</Label>
-                  <Input
-                    id="order-server"
-                    value={serverId}
-                    onChange={(event) => setServerId(event.target.value)}
-                    className="h-11"
-                  />
-                </div>
+                <p className="text-sm text-text-muted">
+                  Server: {runtime.operator?.displayName ?? 'Active operator'}
+                </p>
                 <p className="break-all font-mono text-xs text-text-faint">
                   Publication: {draftMenu?.publicationId ?? 'Loading current publication…'}
                 </p>
@@ -706,7 +773,7 @@ export function OrderPad() {
             />
             <OrderTicketPanel
               order={order}
-              actingOperatorId={runtime.operatorId ?? ''}
+              actingOperatorId={runtime.operator?.staffProfileId ?? ''}
               pending={busy}
               onHold={(course) =>
                 order &&

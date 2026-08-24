@@ -29,6 +29,7 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha22_term_${suffix}`;
 const branchId = `branch_${suffix}`;
+const otherOrgId = `org_wha149_other_${suffix}`;
 const STAFF = {
   A: { id: `staff_a_${suffix}`, pin: '111111' },
   B: { id: `staff_b_${suffix}`, pin: '222222' },
@@ -37,6 +38,7 @@ const STAFF = {
 };
 
 type RouteModule = { POST: (request: Request) => Promise<Response> };
+type GetRouteModule = { GET: (request: Request) => Promise<Response> };
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -52,6 +54,7 @@ type Deps = {
     lock: RouteModule;
     coAuthorize: RouteModule;
     heartbeat: RouteModule;
+    operators: GetRouteModule;
   };
 };
 
@@ -104,6 +107,7 @@ beforeAll(async () => {
     lockR,
     coAuthR,
     heartbeatR,
+    operatorsR,
   ] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
@@ -116,6 +120,7 @@ beforeAll(async () => {
     import('@/app/api/restaurant/terminal/lock/route'),
     import('@/app/api/restaurant/terminal/co-authorize/route'),
     import('@/app/api/restaurant/terminal/heartbeat/route'),
+    import('@/app/api/restaurant/terminal/operators/route'),
   ]);
 
   deps = {
@@ -132,19 +137,29 @@ beforeAll(async () => {
       lock: lockR,
       coAuthorize: coAuthR,
       heartbeat: heartbeatR,
+      operators: operatorsR,
     },
   };
 
   // A minimal, ACTIVE organization so the transport's org-status gate passes.
   await deps.withPlatformDb((tx) =>
-    tx.organization.create({
-      data: {
-        id: orgId,
-        slug: `wha22-term-${suffix}`,
-        legalName: 'Terminal Test Co',
-        displayName: 'Terminal Test',
-        status: 'ACTIVE',
-      },
+    tx.organization.createMany({
+      data: [
+        {
+          id: orgId,
+          slug: `wha22-term-${suffix}`,
+          legalName: 'Terminal Test Co',
+          displayName: 'Terminal Test',
+          status: 'ACTIVE',
+        },
+        {
+          id: otherOrgId,
+          slug: `wha149-other-${suffix}`,
+          legalName: 'Other Tenant Co',
+          displayName: 'Other Tenant',
+          status: 'ACTIVE',
+        },
+      ],
     })
   );
 
@@ -152,7 +167,12 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: branchId, name: 'Main' } });
     for (const staff of Object.values(STAFF)) {
       await tx.restaurantStaffProfile.create({
-        data: { id: staff.id, displayName: staff.id, status: 'ACTIVE' },
+        data: {
+          id: staff.id,
+          displayName: staff.id,
+          primaryBranchId: branchId,
+          status: 'ACTIVE',
+        },
       });
       await tx.restaurantOperatorCredential.create({
         data: {
@@ -162,10 +182,81 @@ beforeAll(async () => {
         },
       });
     }
+    const otherBranchId = `branch_other_${suffix}`;
+    await tx.restaurantBranch.create({ data: { id: otherBranchId, name: 'Other branch' } });
+    await tx.restaurantStaffProfile.createMany({
+      data: [
+        {
+          id: `staff_other_branch_${suffix}`,
+          displayName: 'Other Branch Operator',
+          primaryBranchId: otherBranchId,
+          status: 'ACTIVE',
+        },
+        {
+          id: `staff_inactive_${suffix}`,
+          displayName: 'Inactive Operator',
+          primaryBranchId: branchId,
+          status: 'SUSPENDED',
+        },
+      ],
+    });
+    for (const staffProfileId of [`staff_other_branch_${suffix}`, `staff_inactive_${suffix}`]) {
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId,
+          type: 'PIN',
+          credentialHash: await credentials.hashOperatorCredential('PIN', '333333'),
+        },
+      });
+    }
+  });
+
+  await deps.withTenantDb(otherOrgId, async (tx) => {
+    const foreignBranchId = `branch_foreign_${suffix}`;
+    await tx.restaurantBranch.create({ data: { id: foreignBranchId, name: 'Foreign branch' } });
+    const foreign = await tx.restaurantStaffProfile.create({
+      data: {
+        id: `staff_foreign_${suffix}`,
+        displayName: 'Foreign Operator',
+        primaryBranchId: foreignBranchId,
+        status: 'ACTIVE',
+      },
+    });
+    await tx.restaurantOperatorCredential.create({
+      data: {
+        staffProfileId: foreign.id,
+        type: 'PIN',
+        credentialHash: await credentials.hashOperatorCredential('PIN', '444444'),
+      },
+    });
   });
 });
 
 describeIfDatabase('terminal transport end-to-end (real DB)', () => {
+  it('returns only active, credentialed operators from the device branch', async () => {
+    const { secret } = await enroll('directory');
+    const { token } = await establish(secret);
+    const request = new Request('https://tenant.test/api/restaurant/terminal/operators', {
+      headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
+    });
+
+    const response = await deps.routes.operators.GET(request);
+    const body = (await response.json()) as {
+      operators: { staffProfileId: string; displayName: string; role: string }[];
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.operators.map((operator) => operator.staffProfileId).sort()).toEqual(
+      Object.values(STAFF)
+        .map((staff) => staff.id)
+        .sort()
+    );
+    expect(body.operators.every((operator) => Object.keys(operator).length === 3)).toBe(true);
+    expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
+    expect(JSON.stringify(body)).not.toContain('Inactive Operator');
+    expect(JSON.stringify(body)).not.toContain('Foreign Operator');
+  });
+
   it('establishes, unlocks, switches operator, and locks (C6 state machine)', async () => {
     const { secret } = await enroll('lifecycle');
     const { token } = await establish(secret);
@@ -399,9 +490,11 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     // Co-authorization ADDS the approving manager (C6 — approval never replaces
     // the actor); the approver is pinned in metadata, not the actor column.
     expect(
-      (byAction.get('restaurant.terminal.co-authorize')!.metadata as {
-        approvingStaffProfileId?: string;
-      }).approvingStaffProfileId
+      (
+        byAction.get('restaurant.terminal.co-authorize')!.metadata as {
+          approvingStaffProfileId?: string;
+        }
+      ).approvingStaffProfileId
     ).toBe(STAFF.M.id);
   });
 });
