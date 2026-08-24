@@ -73,7 +73,8 @@ export type BillCommandErrorReason =
   | 'PARTITION_INCOMPLETE'
   | 'RESPLIT_LOCKED'
   | 'CO_AUTH_REQUIRED'
-  | 'REASON_REQUIRED';
+  | 'REASON_REQUIRED'
+  | 'IDEMPOTENCY_CONFLICT';
 
 export class BillCommandError extends Error {
   constructor(
@@ -463,6 +464,46 @@ export type CutBillsResult = {
   replayed: boolean;
 };
 
+type CutBillsReplay = Pick<CutBillsResult, 'orderId' | 'billIds'>;
+
+const CUT_RESULT_PREFIX = 'bill.cut:';
+
+/** Persist the immutable result of one cut. Bill IDs cannot be re-derived from the
+ * live set: a later re-cut legitimately replaces that set while the original key
+ * must continue to answer with the bills its own command created. */
+function encodeCutResult(result: CutBillsReplay): string {
+  return `${CUT_RESULT_PREFIX}${JSON.stringify(result)}`;
+}
+
+function decodeCutResult(
+  resultRef: string | null,
+  requestedOrderId: string
+): CutBillsReplay | null {
+  if (!resultRef?.startsWith(CUT_RESULT_PREFIX)) return null;
+  try {
+    const decoded = JSON.parse(
+      resultRef.slice(CUT_RESULT_PREFIX.length)
+    ) as Partial<CutBillsReplay>;
+    if (
+      typeof decoded.orderId !== 'string' ||
+      !Array.isArray(decoded.billIds) ||
+      !decoded.billIds.every((id) => typeof id === 'string')
+    ) {
+      throw new Error('invalid cut replay payload');
+    }
+    if (decoded.orderId !== requestedOrderId) {
+      throw new BillCommandError(
+        'This idempotency key belongs to a different bill cut.',
+        'IDEMPOTENCY_CONFLICT'
+      );
+    }
+    return { orderId: decoded.orderId, billIds: decoded.billIds };
+  } catch (error) {
+    if (error instanceof BillCommandError) throw error;
+    throw new BillCommandError('The stored bill cut replay is invalid.', 'IDEMPOTENCY_CONFLICT');
+  }
+}
+
 /**
  * Cut bill(s) from an order (C4). With no live bills this simply creates the bill
  * set. When the order ALREADY has live bills the caller must pass `recut` (reason +
@@ -475,6 +516,18 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
   return runInTransaction(db, async (tx) => {
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.cut');
     if (idem.replay) {
+      const recorded = decodeCutResult(idem.resultRef, input.orderId);
+      if (recorded) return { ...recorded, replayed: true };
+
+      // Compatibility for records written before cut results included their bill IDs.
+      // The old shape was only the order ID; bind it to that order before consulting
+      // the live set so the same device/key can never replay against another order.
+      if (idem.resultRef !== input.orderId) {
+        throw new BillCommandError(
+          'This idempotency key belongs to a different money command or bill cut.',
+          'IDEMPOTENCY_CONFLICT'
+        );
+      }
       const billIds = await liveBillIds(tx, input.orderId);
       return { orderId: input.orderId, billIds, replayed: true };
     }
@@ -542,7 +595,11 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
       billIds.push(created.id);
     }
 
-    await recordMoneyIdempotentResult(tx, input.actor, order.id);
+    await recordMoneyIdempotentResult(
+      tx,
+      input.actor,
+      encodeCutResult({ orderId: order.id, billIds })
+    );
     return { orderId: order.id, billIds, replayed: false };
   });
 }

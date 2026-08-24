@@ -1126,6 +1126,40 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     expect([...replay.billIds].sort()).toEqual([...recut.billIds].sort());
     expect(await ledger(guest.accountId)).toEqual(afterEntries);
     expect(await liveBills(orderId)).toEqual(afterBills);
+
+    // A later re-cut replaces the live set, but it cannot rewrite what the first
+    // command's key means. Replaying the first key still returns ITS now-void bill IDs.
+    const laterRecut = await deps.bills.cutBills(db, {
+      orderId,
+      split: { kind: 'NONE' },
+      recut: recutOf(ctx.manager),
+      actor: actor('later-recut'),
+    });
+    expect(laterRecut.billIds).not.toEqual(recut.billIds);
+    const afterLaterEntries = await ledger(guest.accountId);
+    const afterLaterBills = await liveBills(orderId);
+    const delayedReplay = await deps.bills.cutBills(db, {
+      orderId,
+      split,
+      recut: recutOf(ctx.manager),
+      actor: recutActor,
+    });
+    expect(delayedReplay.replayed).toBe(true);
+    expect([...delayedReplay.billIds].sort()).toEqual([...recut.billIds].sort());
+    expect(await ledger(guest.accountId)).toEqual(afterLaterEntries);
+    expect(await liveBills(orderId)).toEqual(afterLaterBills);
+
+    // The device-scoped key is also bound to its original order. A caller cannot
+    // reuse it on another order and receive that order's unrelated live bills.
+    const other = await seedOrder(null, ['5.00']);
+    await expect(
+      deps.bills.cutBills(db, {
+        orderId: other.orderId,
+        split: { kind: 'NONE' },
+        actor: recutActor,
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    expect(await liveBills(other.orderId)).toEqual([]);
   }, 60_000);
 });
 
