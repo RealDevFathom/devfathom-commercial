@@ -288,16 +288,19 @@ export async function authenticateOperator(
     /** The terminal's device (terminal path). Omit for a back-office check,
      * where only an organization-wide credential is accepted. */
     deviceId?: string;
+    /** The terminal's server-derived branch. Terminal unlock/switch callers
+     * supply this to prevent cross-branch operator binding. */
+    branchId?: string;
     type: OperatorCredentialType;
     secret: string;
     now: Date;
   }
 ): Promise<OperatorAuthResult> {
-  const { staffProfileId, deviceId, type, secret, now } = params;
+  const { staffProfileId, deviceId, branchId, type, secret, now } = params;
 
   const [profile, credentials] = await Promise.all([
-    db.restaurantStaffProfile.findUnique({
-      where: { id: staffProfileId },
+    db.restaurantStaffProfile.findFirst({
+      where: { id: staffProfileId, ...(branchId ? { primaryBranchId: branchId } : {}) },
       select: { id: true, status: true },
     }),
     db.restaurantOperatorCredential.findMany({

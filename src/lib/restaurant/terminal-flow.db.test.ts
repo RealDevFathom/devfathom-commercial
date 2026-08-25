@@ -29,7 +29,9 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha22_term_${suffix}`;
 const branchId = `branch_${suffix}`;
+const otherBranchStaffId = `staff_other_branch_${suffix}`;
 const otherOrgId = `org_wha149_other_${suffix}`;
+const foreignStaffId = `staff_foreign_${suffix}`;
 const STAFF = {
   A: { id: `staff_a_${suffix}`, pin: '111111' },
   B: { id: `staff_b_${suffix}`, pin: '222222' },
@@ -97,6 +99,7 @@ beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
   const [
     scopedDb,
+    rlsGuard,
     devices,
     session,
     credentials,
@@ -110,6 +113,7 @@ beforeAll(async () => {
     operatorsR,
   ] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
+    import('@/lib/testing/rls-role-guard'),
     import('@/lib/restaurant/devices'),
     import('@/lib/restaurant/terminal-session'),
     import('@/lib/restaurant/operator-credentials'),
@@ -140,6 +144,8 @@ beforeAll(async () => {
       operators: operatorsR,
     },
   };
+
+  await rlsGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
 
   // A minimal, ACTIVE organization so the transport's org-status gate passes.
   await deps.withPlatformDb((tx) =>
@@ -187,7 +193,7 @@ beforeAll(async () => {
     await tx.restaurantStaffProfile.createMany({
       data: [
         {
-          id: `staff_other_branch_${suffix}`,
+          id: otherBranchStaffId,
           displayName: 'Other Branch Operator',
           primaryBranchId: otherBranchId,
           status: 'ACTIVE',
@@ -200,7 +206,7 @@ beforeAll(async () => {
         },
       ],
     });
-    for (const staffProfileId of [`staff_other_branch_${suffix}`, `staff_inactive_${suffix}`]) {
+    for (const staffProfileId of [otherBranchStaffId, `staff_inactive_${suffix}`]) {
       await tx.restaurantOperatorCredential.create({
         data: {
           staffProfileId,
@@ -216,7 +222,7 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: foreignBranchId, name: 'Foreign branch' } });
     const foreign = await tx.restaurantStaffProfile.create({
       data: {
-        id: `staff_foreign_${suffix}`,
+        id: foreignStaffId,
         displayName: 'Foreign Operator',
         primaryBranchId: foreignBranchId,
         status: 'ACTIVE',
@@ -305,6 +311,54 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     const relocked = await call(deps.routes.lock, { secret, session: token });
     expect(relocked.status).toBe(200);
     expect((relocked.json.session as { state: string }).state).toBe('LOCKED');
+  });
+
+  it('rejects crafted cross-branch operator ids on unlock and switch', async () => {
+    const { secret } = await enroll('branch-boundary');
+    const { token } = await establish(secret);
+
+    const crossBranchUnlock = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: otherBranchStaffId, type: 'PIN', secret: '333333' },
+    });
+    expect(crossBranchUnlock.status).toBe(401);
+
+    const unlocked = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+    });
+    expect(unlocked.status).toBe(200);
+
+    const crossBranchSwitch = await call(deps.routes.switchOperator, {
+      secret,
+      session: token,
+      body: { staffProfileId: otherBranchStaffId, type: 'PIN', secret: '333333' },
+    });
+    expect(crossBranchSwitch.status).toBe(401);
+    expect(
+      (crossBranchSwitch.json.session as { activeStaffProfileId?: string } | undefined)
+        ?.activeStaffProfileId
+    ).toBeUndefined();
+
+    const heartbeat = await call(deps.routes.heartbeat, { secret, session: token });
+    expect((heartbeat.json.session as { activeStaffProfileId: string }).activeStaffProfileId).toBe(
+      STAFF.A.id
+    );
+  });
+
+  it('rejects a crafted cross-tenant operator id even with its valid PIN', async () => {
+    const { secret } = await enroll('tenant-boundary');
+    const { token } = await establish(secret);
+
+    const response = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: foreignStaffId, type: 'PIN', secret: '444444' },
+    });
+
+    expect(response.status).toBe(401);
   });
 
   it('records a manager co-authorization and refuses a self-approval (C7)', async () => {
