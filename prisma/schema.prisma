@@ -2285,9 +2285,135 @@ model RestaurantBranch {
   insightDailyRollups         InsightDailyRollup[]
   insightItemMixRollups       InsightItemMixRollup[]
   labourCostFacts             LabourCostFact[]
+  taxProfileVersions          RestaurantTaxProfileVersion[]
+  taxTransactionSnapshots     RestaurantTaxTransactionSnapshot[]
 
   @@index([organizationId])
   @@map("restaurant_branches")
+}
+
+enum RestaurantTaxVersionStatus {
+  DRAFT
+  PUBLISHED
+  SUPERSEDED
+}
+
+enum RestaurantTaxPriceMode {
+  EXCLUSIVE
+  INCLUSIVE
+}
+
+/// Jurisdiction-neutral, immutable evidence describing the official source used
+/// to author a tax rule. This lane intentionally contains synthetic data only.
+model RestaurantTaxOfficialSource {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  authorityCode  String
+  documentTitle  String
+  sourceUrl      String
+  contentHash    String
+  retrievedAt    DateTime
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([organizationId, contentHash])
+  @@index([organizationId])
+  @@map("restaurant_tax_official_sources")
+}
+
+model RestaurantTaxProfileVersion {
+  id                String                     @id @default(cuid())
+  organizationId    String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  versionNumber     Int
+  status            RestaurantTaxVersionStatus @default(DRAFT)
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  approvalReference String?
+  approvedAt        DateTime?
+  publishedAt       DateTime?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  branch RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  rules  RestaurantTaxRuleVersion[]
+
+  @@unique([branchId, versionNumber])
+  @@index([organizationId])
+  @@index([branchId, status, effectiveFrom])
+  @@map("restaurant_tax_profile_versions")
+}
+
+model RestaurantTaxRuleVersion {
+  id                String                     @id @default(cuid())
+  organizationId    String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  profileVersionId  String
+  officialSourceId  String
+  ruleCode          String
+  paymentCategory   String
+  priceMode         RestaurantTaxPriceMode
+  rate              Decimal                    @db.Decimal(9, 6)
+  status            RestaurantTaxVersionStatus @default(DRAFT)
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  approvalReference String?
+  approvedAt        DateTime?
+  publishedAt       DateTime?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  profile RestaurantTaxProfileVersion @relation(fields: [profileVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([profileVersionId, ruleCode])
+  @@index([organizationId])
+  @@index([profileVersionId, paymentCategory, effectiveFrom])
+  @@map("restaurant_tax_rule_versions")
+}
+
+model RestaurantTaxTransactionSnapshot {
+  id                   String   @id @default(cuid())
+  organizationId       String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  transactionReference String
+  profileVersionId     String
+  currency             String
+  subtotal             Decimal  @db.Decimal(12, 2)
+  discountTotal        Decimal  @default(0) @db.Decimal(12, 2)
+  serviceChargeTotal   Decimal  @default(0) @db.Decimal(12, 2)
+  taxTotal             Decimal  @db.Decimal(12, 2)
+  grandTotal           Decimal  @db.Decimal(12, 2)
+  settledAt            DateTime
+  reversesSnapshotId   String?
+  reversalReason       String?
+  createdAt            DateTime @default(now())
+
+  branch  RestaurantBranch                  @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  buckets RestaurantTaxRateBucketSnapshot[]
+
+  @@unique([organizationId, transactionReference])
+  @@index([organizationId])
+  @@index([reversesSnapshotId])
+  @@map("restaurant_tax_transaction_snapshots")
+}
+
+model RestaurantTaxRateBucketSnapshot {
+  id              String                 @id @default(cuid())
+  organizationId  String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  snapshotId      String
+  ruleVersionId   String
+  paymentCategory String
+  priceMode       RestaurantTaxPriceMode
+  rate            Decimal                @db.Decimal(9, 6)
+  taxableAmount   Decimal                @db.Decimal(12, 2)
+  taxAmount       Decimal                @db.Decimal(12, 2)
+  grossAmount     Decimal                @db.Decimal(12, 2)
+  createdAt       DateTime               @default(now())
+
+  snapshot RestaurantTaxTransactionSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+
+  @@unique([snapshotId, ruleVersionId, paymentCategory])
+  @@index([organizationId])
+  @@map("restaurant_tax_rate_bucket_snapshots")
 }
 
 /// §4.1/§8/D12: branch authorization is an additional boundary above organization
