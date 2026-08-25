@@ -53,6 +53,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   const auth = await authenticateOperator(ctx.db, {
     staffProfileId,
     deviceId: ctx.device.id,
+    branchId: ctx.device.branchId,
     type,
     secret,
     now,

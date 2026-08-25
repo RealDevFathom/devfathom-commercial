@@ -288,17 +288,20 @@ export async function authenticateOperator(
     /** The terminal's device (terminal path). Omit for a back-office check,
      * where only an organization-wide credential is accepted. */
     deviceId?: string;
+    /** Trusted branch derived from the authenticated terminal device. When set,
+     * only an operator whose primary branch matches may authenticate. */
+    branchId?: string;
     type: OperatorCredentialType;
     secret: string;
     now: Date;
   }
 ): Promise<OperatorAuthResult> {
-  const { staffProfileId, deviceId, type, secret, now } = params;
+  const { staffProfileId, deviceId, branchId, type, secret, now } = params;
 
   const [profile, credentials] = await Promise.all([
     db.restaurantStaffProfile.findUnique({
       where: { id: staffProfileId },
-      select: { id: true, status: true },
+      select: { id: true, primaryBranchId: true, status: true },
     }),
     db.restaurantOperatorCredential.findMany({
       where: {
@@ -318,7 +321,12 @@ export async function authenticateOperator(
     credentials.find((row) => row.deviceId === null) ??
     null;
 
-  if (!profile || profile.status !== 'ACTIVE' || !credential) {
+  if (
+    !profile ||
+    profile.status !== 'ACTIVE' ||
+    (branchId !== undefined && profile.primaryBranchId !== branchId) ||
+    !credential
+  ) {
     // Fail closed, but still burn a compare so absence is timing-opaque.
     await verifyOperatorCredential(type, secret, await getDummyHash());
     return { ok: false, reason: 'INVALID' };
