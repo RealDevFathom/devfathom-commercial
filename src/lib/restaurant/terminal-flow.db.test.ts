@@ -29,6 +29,9 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha22_term_${suffix}`;
 const branchId = `branch_${suffix}`;
+const otherOrgId = `org_wha149_other_${suffix}`;
+const OTHER_BRANCH_STAFF = { id: `staff_other_branch_${suffix}`, pin: '333333' };
+const FOREIGN_STAFF = { id: `staff_foreign_${suffix}`, pin: '444444' };
 const STAFF = {
   A: { id: `staff_a_${suffix}`, pin: '111111' },
   B: { id: `staff_b_${suffix}`, pin: '222222' },
@@ -162,6 +165,56 @@ beforeAll(async () => {
         },
       });
     }
+    const otherBranchId = `branch_other_${suffix}`;
+    await tx.restaurantBranch.create({ data: { id: otherBranchId, name: 'Other branch' } });
+    await tx.restaurantStaffProfile.createMany({
+      data: [
+        {
+          id: OTHER_BRANCH_STAFF.id,
+          displayName: 'Other Branch Operator',
+          primaryBranchId: otherBranchId,
+          status: 'ACTIVE',
+        },
+        {
+          id: `staff_inactive_${suffix}`,
+          displayName: 'Inactive Operator',
+          primaryBranchId: branchId,
+          status: 'SUSPENDED',
+        },
+      ],
+    });
+    for (const staffProfileId of [OTHER_BRANCH_STAFF.id, `staff_inactive_${suffix}`]) {
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId,
+          type: 'PIN',
+          credentialHash: await credentials.hashOperatorCredential(
+            'PIN',
+            staffProfileId === OTHER_BRANCH_STAFF.id ? OTHER_BRANCH_STAFF.pin : '333333'
+          ),
+        },
+      });
+    }
+  });
+
+  await deps.withTenantDb(otherOrgId, async (tx) => {
+    const foreignBranchId = `branch_foreign_${suffix}`;
+    await tx.restaurantBranch.create({ data: { id: foreignBranchId, name: 'Foreign branch' } });
+    const foreign = await tx.restaurantStaffProfile.create({
+      data: {
+        id: FOREIGN_STAFF.id,
+        displayName: 'Foreign Operator',
+        primaryBranchId: foreignBranchId,
+        status: 'ACTIVE',
+      },
+    });
+    await tx.restaurantOperatorCredential.create({
+      data: {
+        staffProfileId: foreign.id,
+        type: 'PIN',
+        credentialHash: await credentials.hashOperatorCredential('PIN', FOREIGN_STAFF.pin),
+      },
+    });
   });
 });
 
@@ -205,6 +258,52 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     const relocked = await call(deps.routes.lock, { secret, session: token });
     expect(relocked.status).toBe(200);
     expect((relocked.json.session as { state: string }).state).toBe('LOCKED');
+  });
+
+  it('enforces the authenticated device branch for unlock and operator switch', async () => {
+    const { secret } = await enroll('branch-eligibility');
+    const { token } = await establish(secret);
+
+    for (const operator of [OTHER_BRANCH_STAFF, FOREIGN_STAFF]) {
+      const rejectedUnlock = await call(deps.routes.unlock, {
+        secret,
+        session: token,
+        body: { staffProfileId: operator.id, type: 'PIN', secret: operator.pin },
+      });
+      expect(rejectedUnlock).toMatchObject({
+        status: 401,
+        json: { error: 'Invalid operator credential.' },
+      });
+    }
+
+    const unlocked = await call(deps.routes.unlock, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+    });
+    expect(unlocked.status).toBe(200);
+
+    for (const operator of [OTHER_BRANCH_STAFF, FOREIGN_STAFF]) {
+      const rejectedSwitch = await call(deps.routes.switchOperator, {
+        secret,
+        session: token,
+        body: { staffProfileId: operator.id, type: 'PIN', secret: operator.pin },
+      });
+      expect(rejectedSwitch).toMatchObject({
+        status: 401,
+        json: { error: 'Invalid operator credential.' },
+      });
+    }
+
+    const switched = await call(deps.routes.switchOperator, {
+      secret,
+      session: token,
+      body: { staffProfileId: STAFF.B.id, type: 'PIN', secret: STAFF.B.pin },
+    });
+    expect(switched.status).toBe(200);
+    expect((switched.json.session as { activeStaffProfileId: string }).activeStaffProfileId).toBe(
+      STAFF.B.id
+    );
   });
 
   it('records a manager co-authorization and refuses a self-approval (C7)', async () => {
