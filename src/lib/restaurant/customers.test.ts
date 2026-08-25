@@ -5,15 +5,18 @@
  */
 import { randomBytes } from 'node:crypto';
 
+import { Client } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+const M8_TEST_OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
-const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+const describeIfDatabase =
+  TEST_DATABASE_URL && M8_TEST_OWNER_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha94_${suffix}`;
 const otherOrgId = `org_wha94_other_${suffix}`;
@@ -29,7 +32,6 @@ const t2 = new Date('2026-08-21T11:00:00.000Z');
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
-  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   customers: typeof import('./customers');
 };
 
@@ -40,33 +42,28 @@ function tenant<T>(work: (tx: ScopedDb) => Promise<T>): Promise<T> {
 }
 
 beforeAll(async () => {
-  if (!TEST_DATABASE_URL) return;
+  if (!TEST_DATABASE_URL || !M8_TEST_OWNER_DATABASE_URL) return;
+  expect(M8_TEST_OWNER_DATABASE_URL).not.toBe(TEST_DATABASE_URL);
+
+  const owner = new Client({ connectionString: M8_TEST_OWNER_DATABASE_URL });
+  await owner.connect();
+  try {
+    await owner.query(
+      `INSERT INTO "organizations"
+        ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
+       VALUES ($1, $2, 'Customer Test Co', 'Customer Test', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+              ($3, $4, 'Other Customer Test Co', 'Other Customer Test', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [orgId, `wha94-${suffix}`, otherOrgId, `wha94-other-${suffix}`]
+    );
+  } finally {
+    await owner.end();
+  }
+
   const [scopedDb, customers] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./customers'),
   ]);
-  deps = { ...scopedDb, customers };
-
-  await deps.withPlatformDb((tx) =>
-    tx.organization.createMany({
-      data: [
-        {
-          id: orgId,
-          slug: `wha94-${suffix}`,
-          legalName: 'Customer Test Co',
-          displayName: 'Customer Test',
-          status: 'ACTIVE',
-        },
-        {
-          id: otherOrgId,
-          slug: `wha94-other-${suffix}`,
-          legalName: 'Other Customer Test Co',
-          displayName: 'Other Customer Test',
-          status: 'ACTIVE',
-        },
-      ],
-    })
-  );
+  deps = { withTenantDb: scopedDb.withTenantDb, customers };
 
   await tenant(async (tx) => {
     await tx.restaurantBranch.create({
@@ -100,6 +97,18 @@ beforeAll(async () => {
 }, 60_000);
 
 describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
+  it('runs through a LOGIN NOSUPERUSER NOBYPASSRLS runtime connection', async () => {
+    const [role] = await tenant(
+      (tx) =>
+        tx.$queryRaw<
+          { rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }[]
+        >`SELECT r.rolcanlogin, r.rolsuper, r.rolbypassrls
+          FROM pg_roles r
+         WHERE r.rolname = current_user`
+    );
+    expect(role).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+  });
+
   it('normalizes email, rejects duplicates per tenant, and allows the same identifier cross-tenant', async () => {
     const first = await tenant((tx) =>
       deps.customers.createCustomer(tx, {
