@@ -589,10 +589,10 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
       constraints.rows.map(({ conname, definition }) => [conname, definition])
     );
     expect(definitions.restaurant_loyalty_points_entries_points_ck).toMatch(
-      /'REDEEM'.*points < 0.*"billId" IS NOT NULL/s
+      /'REDEEM'[\s\S]*points < 0[\s\S]*"billId" IS NOT NULL/
     );
     expect(definitions.restaurant_loyalty_points_entries_reference_ck).toMatch(
-      /"actorId" IS NOT NULL.*btrim\("actorId"\) <> ''::text.*reason IS NOT NULL.*btrim\(reason\) <> ''::text/s
+      /"actorId" IS NOT NULL[\s\S]*btrim\("actorId"\) <> ''::text[\s\S]*reason IS NOT NULL[\s\S]*btrim\(reason\) <> ''::text/
     );
 
     const triggerFunction = await client!.query<{ definition: string }>(
