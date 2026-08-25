@@ -18,6 +18,7 @@ const contractGroups = [
       'src/lib/restaurant/loyalty.test.ts',
       'src/lib/restaurant/loyalty-expiry.test.ts',
       'src/lib/restaurant/loyalty-lifecycle.db.test.ts',
+      'src/lib/restaurant/refunds.test.ts',
       'src/server/routers/restaurant-loyalty.test.ts',
     ],
   ],
@@ -26,6 +27,8 @@ const contractGroups = [
     [
       'src/lib/restaurant/insight-rollups.test.ts',
       'src/lib/restaurant/insights.test.ts',
+      'src/lib/restaurant/daily-close.test.ts',
+      'src/lib/restaurant/scheduler.test.ts',
       'src/server/routers/restaurant-insights.test.ts',
     ],
   ],
