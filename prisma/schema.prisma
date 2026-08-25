@@ -2288,6 +2288,7 @@ model RestaurantBranch {
   taxProfileVersions          RestaurantTaxProfileVersion[]
   taxTransactionSnapshots     RestaurantTaxTransactionSnapshot[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@map("restaurant_branches")
 }
@@ -2316,7 +2317,10 @@ model RestaurantTaxOfficialSource {
   expiresAt      DateTime?
   createdAt      DateTime  @default(now())
 
+  rules RestaurantTaxRuleVersion[]
+
   @@unique([organizationId, contentHash])
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@map("restaurant_tax_official_sources")
 }
@@ -2335,10 +2339,12 @@ model RestaurantTaxProfileVersion {
   createdAt         DateTime                   @default(now())
   updatedAt         DateTime                   @updatedAt
 
-  branch RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  rules  RestaurantTaxRuleVersion[]
+  branch               RestaurantBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+  rules                RestaurantTaxRuleVersion[]
+  transactionSnapshots RestaurantTaxTransactionSnapshot[]
 
   @@unique([branchId, versionNumber])
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId, status, effectiveFrom])
   @@map("restaurant_tax_profile_versions")
@@ -2362,9 +2368,12 @@ model RestaurantTaxRuleVersion {
   createdAt         DateTime                   @default(now())
   updatedAt         DateTime                   @updatedAt
 
-  profile RestaurantTaxProfileVersion @relation(fields: [profileVersionId], references: [id], onDelete: Cascade)
+  profile        RestaurantTaxProfileVersion       @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Cascade)
+  officialSource RestaurantTaxOfficialSource       @relation(fields: [organizationId, officialSourceId], references: [organizationId, id], onDelete: Restrict)
+  buckets        RestaurantTaxRateBucketSnapshot[]
 
   @@unique([profileVersionId, ruleCode])
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([profileVersionId, paymentCategory, effectiveFrom])
   @@map("restaurant_tax_rule_versions")
@@ -2387,10 +2396,14 @@ model RestaurantTaxTransactionSnapshot {
   reversalReason       String?
   createdAt            DateTime @default(now())
 
-  branch  RestaurantBranch                  @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  buckets RestaurantTaxRateBucketSnapshot[]
+  branch           RestaurantBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  profile          RestaurantTaxProfileVersion        @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
+  reversedSnapshot RestaurantTaxTransactionSnapshot?  @relation("TaxSnapshotReversal", fields: [organizationId, reversesSnapshotId], references: [organizationId, id], onDelete: Restrict)
+  reversals        RestaurantTaxTransactionSnapshot[] @relation("TaxSnapshotReversal")
+  buckets          RestaurantTaxRateBucketSnapshot[]
 
   @@unique([organizationId, transactionReference])
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([reversesSnapshotId])
   @@map("restaurant_tax_transaction_snapshots")
@@ -2409,7 +2422,8 @@ model RestaurantTaxRateBucketSnapshot {
   grossAmount     Decimal                @db.Decimal(12, 2)
   createdAt       DateTime               @default(now())
 
-  snapshot RestaurantTaxTransactionSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  snapshot RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId], references: [organizationId, id], onDelete: Restrict)
+  rule     RestaurantTaxRuleVersion         @relation(fields: [organizationId, ruleVersionId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([snapshotId, ruleVersionId, paymentCategory])
   @@index([organizationId])

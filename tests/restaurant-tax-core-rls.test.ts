@@ -36,7 +36,8 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     await client.query(`CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
     await client.query(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_tax_official_sources, restaurant_tax_profile_versions TO "${role}"`
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_tax_official_sources, restaurant_tax_profile_versions,
+       restaurant_tax_rule_versions, restaurant_tax_transaction_snapshots, restaurant_tax_rate_bucket_snapshots TO "${role}"`
     );
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client.query(
@@ -62,8 +63,48 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     );
     await client.query(
       `INSERT INTO restaurant_tax_profile_versions (id,"organizationId","branchId","versionNumber",status,"effectiveFrom","approvalReference","approvedAt","publishedAt","updatedAt")
-       VALUES ($1,$2,$3,1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now())`,
-      [`profile_a_${suffix}`, orgA, `branch_a_${suffix}`]
+       VALUES ($1,$2,$3,1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now()),
+              ($4,$5,$6,1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now())`,
+      [
+        `profile_a_${suffix}`,
+        orgA,
+        `branch_a_${suffix}`,
+        `profile_b_${suffix}`,
+        orgB,
+        `branch_b_${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO restaurant_tax_rule_versions
+       (id,"organizationId","profileVersionId","officialSourceId","ruleCode","paymentCategory","priceMode",rate,status,"effectiveFrom","approvalReference","approvedAt","publishedAt","updatedAt")
+       VALUES ($1,$2,$3,$4,'A','SYNTHETIC_CARD','EXCLUSIVE',0.1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now()),
+              ($5,$6,$7,$8,'B','SYNTHETIC_CARD','EXCLUSIVE',0.1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now())`,
+      [
+        `rule_a_${suffix}`,
+        orgA,
+        `profile_a_${suffix}`,
+        `source_a_${suffix}`,
+        `rule_b_${suffix}`,
+        orgB,
+        `profile_b_${suffix}`,
+        `source_b_${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO restaurant_tax_transaction_snapshots
+       (id,"organizationId","branchId","transactionReference","profileVersionId",currency,subtotal,"discountTotal","serviceChargeTotal","taxTotal","grandTotal","settledAt")
+       VALUES ($1,$2,$3,'original-a',$4,'XXX',100,10,5,9.5,104.5,now()),
+              ($5,$6,$7,'original-b',$8,'XXX',100,10,5,9.5,104.5,now())`,
+      [
+        `snapshot_a_${suffix}`,
+        orgA,
+        `branch_a_${suffix}`,
+        `profile_a_${suffix}`,
+        `snapshot_b_${suffix}`,
+        orgB,
+        `branch_b_${suffix}`,
+        `profile_b_${suffix}`,
+      ]
     );
   });
 
@@ -110,5 +151,105 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
       `SELECT count(*)::int AS count FROM pg_class WHERE relkind='r' AND relname LIKE 'restaurant_tax_%' AND relrowsecurity AND relforcerowsecurity`
     );
     expect(result.rows[0].count).toBe(5);
+  });
+
+  it('rejects every crafted cross-tenant tax relation under the restricted role', async () => {
+    await client.query(`SET LOCAL ROLE "${role}"`);
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [orgA]);
+    await expectPgCode('23503', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_profile_versions
+         (id,"organizationId","branchId","versionNumber","effectiveFrom","updatedAt") VALUES ($1,$2,$3,2,'2040-01-01',now())`,
+        [`cross_profile_${suffix}`, orgA, `branch_b_${suffix}`]
+      )
+    );
+    await expectPgCode('23503', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_rule_versions
+         (id,"organizationId","profileVersionId","officialSourceId","ruleCode","paymentCategory","priceMode",rate,"effectiveFrom","updatedAt")
+         VALUES ($1,$2,$3,$4,'X','X','EXCLUSIVE',0.1,'2030-01-01',now())`,
+        [`cross_rule_${suffix}`, orgA, `profile_b_${suffix}`, `source_b_${suffix}`]
+      )
+    );
+    await expectPgCode('23503', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_transaction_snapshots
+         (id,"organizationId","branchId","transactionReference","profileVersionId",currency,subtotal,"taxTotal","grandTotal","settledAt")
+         VALUES ($1,$2,$3,'cross-snapshot',$4,'XXX',1,0,1,now())`,
+        [`cross_snapshot_${suffix}`, orgA, `branch_b_${suffix}`, `profile_b_${suffix}`]
+      )
+    );
+    await expectPgCode('23503', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_rate_bucket_snapshots
+         (id,"organizationId","snapshotId","ruleVersionId","paymentCategory","priceMode",rate,"taxableAmount","taxAmount","grossAmount")
+         VALUES ($1,$2,$3,$4,'X','EXCLUSIVE',0.1,1,0.1,1.1)`,
+        [`cross_bucket_${suffix}`, orgA, `snapshot_b_${suffix}`, `rule_b_${suffix}`]
+      )
+    );
+  });
+
+  it('accepts one exact full reversal and rejects positive, over-value, duplicate, and cross-tenant reversals', async () => {
+    await client.query(`SET LOCAL ROLE "${role}"`);
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [orgA]);
+    const reversalInsert = (id: string, subtotal: number, target = `snapshot_a_${suffix}`) =>
+      client.query(
+        `INSERT INTO restaurant_tax_transaction_snapshots
+         (id,"organizationId","branchId","transactionReference","profileVersionId",currency,subtotal,"discountTotal","serviceChargeTotal","taxTotal","grandTotal","settledAt","reversesSnapshotId","reversalReason")
+         VALUES ($1,$2,$3,$1,$4,'XXX',$5,-10,-5,-9.5,-104.5,now(),$6,'synthetic correction')`,
+        [id, orgA, `branch_a_${suffix}`, `profile_a_${suffix}`, subtotal, target]
+      );
+    await expectPgCode('23514', () => reversalInsert(`positive_${suffix}`, 100));
+    await expectPgCode('23514', () => reversalInsert(`over_${suffix}`, -101));
+    await expectPgCode('23503', () =>
+      reversalInsert(`cross_tenant_${suffix}`, -100, `snapshot_b_${suffix}`)
+    );
+    await reversalInsert(`valid_reversal_${suffix}`, -100);
+    await expectPgCode('23505', () => reversalInsert(`duplicate_${suffix}`, -100));
+  });
+
+  it('uses a database exclusion constraint across two concurrent connections', async () => {
+    await client.query('RESET ROLE');
+    const concurrentOrg = `tax_concurrent_${suffix}`;
+    const concurrentBranch = `branch_concurrent_${suffix}`;
+    await client.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode","createdAt","updatedAt")
+       VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',now(),now())`,
+      [concurrentOrg]
+    );
+    await client.query(
+      `INSERT INTO restaurant_branches (id,"organizationId",name,"updatedAt") VALUES ($1,$2,'Concurrent',now())`,
+      [concurrentBranch, concurrentOrg]
+    );
+    await client.query('COMMIT');
+
+    const first = new pg.Client({ connectionString: url });
+    const second = new pg.Client({ connectionString: url });
+    await Promise.all([first.connect(), second.connect()]);
+    try {
+      await Promise.all([first.query('BEGIN'), second.query('BEGIN')]);
+      await Promise.all([
+        first.query(`SELECT set_config('app.current_organization_id',$1,true)`, [concurrentOrg]),
+        second.query(`SELECT set_config('app.current_organization_id',$1,true)`, [concurrentOrg]),
+      ]);
+      await first.query(
+        `INSERT INTO restaurant_tax_profile_versions
+         (id,"organizationId","branchId","versionNumber",status,"effectiveFrom","effectiveTo","approvalReference","approvedAt","publishedAt","updatedAt")
+         VALUES ($1,$2,$3,1,'PUBLISHED','2040-01-01','2041-01-01','SYNTHETIC',now(),now(),now())`,
+        [`concurrent_one_${suffix}`, concurrentOrg, concurrentBranch]
+      );
+      const overlapping = second.query(
+        `INSERT INTO restaurant_tax_profile_versions
+         (id,"organizationId","branchId","versionNumber",status,"effectiveFrom","effectiveTo","approvalReference","approvedAt","publishedAt","updatedAt")
+         VALUES ($1,$2,$3,2,'PUBLISHED','2040-06-01','2041-06-01','SYNTHETIC',now(),now(),now())`,
+        [`concurrent_two_${suffix}`, concurrentOrg, concurrentBranch]
+      );
+      await first.query('COMMIT');
+      await expect(overlapping).rejects.toMatchObject({ code: '23P01' });
+      await second.query('ROLLBACK');
+    } finally {
+      await Promise.all([first.end(), second.end()]);
+    }
+    await client.query('BEGIN');
   });
 });

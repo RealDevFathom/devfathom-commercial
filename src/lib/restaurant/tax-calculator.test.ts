@@ -9,6 +9,7 @@ import {
   TaxConfigurationError,
   type TaxRule,
 } from './tax-calculator';
+import { validateTaxProfileDraft } from './tax-contracts';
 
 const at = new Date('2030-06-01T00:00:00Z');
 const rule = (overrides: Partial<TaxRule> = {}): TaxRule => ({
@@ -82,5 +83,42 @@ describe('tax calculator', () => {
     expect(() => resolveTaxRule(rules as TaxRule[], category as string, at)).toThrow(
       TaxConfigurationError
     );
+  });
+});
+
+describe('tax draft validation', () => {
+  const draft = {
+    branchId: 'synthetic-branch',
+    effectiveFrom: '2030-01-01T00:00:00.000Z',
+    effectiveTo: '2031-01-01T00:00:00.000Z',
+    rules: [
+      {
+        ruleCode: 'synthetic-rule',
+        paymentCategory: 'SYNTHETIC_CARD',
+        priceMode: 'EXCLUSIVE' as const,
+        rate: '0.10',
+        officialSourceId: 'synthetic-source',
+        effectiveFrom: '2030-01-01T00:00:00.000Z',
+        effectiveTo: '2031-01-01T00:00:00.000Z',
+      },
+    ],
+  };
+
+  it('rejects a draft rate above one', () => {
+    expect(() =>
+      validateTaxProfileDraft({
+        ...draft,
+        rules: [{ ...draft.rules[0], rate: '9' }],
+      })
+    ).toThrow('Rate must be between 0 and 1');
+  });
+
+  it('rejects rule intervals outside the profile interval', () => {
+    expect(() =>
+      validateTaxProfileDraft({
+        ...draft,
+        rules: [{ ...draft.rules[0], effectiveFrom: '2029-12-31T00:00:00.000Z' }],
+      })
+    ).toThrow('must be within the profile range');
   });
 });
