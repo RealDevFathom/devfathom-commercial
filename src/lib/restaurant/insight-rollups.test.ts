@@ -215,6 +215,74 @@ describe('rollupDay handler idempotency and correction', () => {
     expect(db.insightLoyaltyLiability.upsert).toHaveBeenCalledOnce();
   });
 
+  it('leaves loyalty liability stale on ordinary replay after a backdated ledger adjustment', async () => {
+    const db = rollupDb();
+    const ledger = [
+      { accountId: 'account_1', points: 100, occurredAt: new Date('2026-08-20T17:00:00Z') },
+    ];
+    let persistedLiability = D('0');
+
+    db.insightDailyRollup.findFirst.mockResolvedValueOnce(null).mockResolvedValue({
+      id: 'rollup_1',
+      sourceDailyCloseId: 'close_1',
+      projectionVersion: 2,
+    });
+    db.insightLoyaltyLiability.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ projectionVersion: 2 });
+    db.loyaltyProgramVersion.findFirst.mockResolvedValue({
+      id: 'program_1',
+      redemptionValue: D('0.015'),
+    });
+    db.loyaltyPointsEntry.findMany.mockImplementation(async ({ where }) =>
+      ledger
+        .filter((entry) => entry.occurredAt < where.occurredAt.lt)
+        .map(({ accountId, points }) => ({ accountId, points }))
+    );
+    db.insightLoyaltyLiability.upsert.mockImplementation(async ({ update }) => {
+      persistedLiability = update.liability;
+      return { id: 'liability_1' };
+    });
+
+    const initial = await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+    });
+    expect(initial).toMatchObject({ sourceDailyCloseId: 'close_1', itemCount: 0, replayed: false });
+    expect(persistedLiability.toString()).toBe('1.5');
+
+    ledger.push({
+      accountId: 'account_1',
+      points: -40,
+      occurredAt: new Date('2026-08-20T18:00:00Z'),
+    });
+    const rawLiability = computeLoyaltyLiability(ledger, D('0.015'));
+    expect(rawLiability.toString()).toBe('0.9');
+
+    const ordinaryReplay = await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+    });
+    expect(ordinaryReplay).toMatchObject({
+      sourceDailyCloseId: 'close_1',
+      itemCount: 0,
+      replayed: true,
+    });
+    expect(persistedLiability.toString()).toBe('1.5');
+
+    const forcedRebuild = await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force: true,
+    });
+    expect(forcedRebuild).toMatchObject({
+      sourceDailyCloseId: 'close_1',
+      itemCount: 0,
+      replayed: false,
+    });
+    expect(persistedLiability.toString()).toBe('0.9');
+  });
+
   it('fails closed when raw facts do not exactly reconcile', async () => {
     const db = rollupDb({ mismatch: true });
     await expect(
