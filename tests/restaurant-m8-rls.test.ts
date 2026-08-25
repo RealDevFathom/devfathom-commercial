@@ -4,10 +4,16 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
-const client = TEST_DATABASE_URL ? new pg.Client({ connectionString: TEST_DATABASE_URL }) : null;
+const M8_TEST_OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
+const describeIfDatabase =
+  TEST_DATABASE_URL && M8_TEST_OWNER_DATABASE_URL ? describe : describe.skip;
+const runtimeClient = TEST_DATABASE_URL
+  ? new pg.Client({ connectionString: TEST_DATABASE_URL })
+  : null;
+const ownerClient = M8_TEST_OWNER_DATABASE_URL
+  ? new pg.Client({ connectionString: M8_TEST_OWNER_DATABASE_URL })
+  : null;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
-const role = `m8_rls_${suffix}`;
 
 const M8_TABLES = [
   'restaurant_customers',
@@ -82,35 +88,34 @@ const rowIds: Record<(typeof M8_TABLES)[number], [string, string]> = {
 let normalizedIdentifierProof: Array<{ kind: string; organizations: number; rows: number }> = [];
 
 async function expectDatabaseError(code: string, run: () => Promise<unknown>) {
-  await client!.query('SAVEPOINT expected_failure');
+  await runtimeClient!.query('SAVEPOINT expected_failure');
   try {
     await run();
     throw new Error(`Expected PostgreSQL error ${code}`);
   } catch (error) {
     expect(error).toMatchObject({ code });
   } finally {
-    await client!.query('ROLLBACK TO SAVEPOINT expected_failure');
-    await client!.query('RELEASE SAVEPOINT expected_failure');
+    await runtimeClient!.query('ROLLBACK TO SAVEPOINT expected_failure');
+    await runtimeClient!.query('RELEASE SAVEPOINT expected_failure');
   }
 }
 
 describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
   beforeAll(async () => {
-    const hostname = new URL(TEST_DATABASE_URL!).hostname;
-    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname)) {
+    const urls = [TEST_DATABASE_URL!, M8_TEST_OWNER_DATABASE_URL!];
+    if (
+      urls.some(
+        (url) => !['localhost', '127.0.0.1', '::1', '[::1]'].includes(new URL(url).hostname)
+      )
+    ) {
       throw new Error('Refusing to run M8 RLS probes against a non-local database.');
     }
 
-    await client!.connect();
-    await client!.query('BEGIN');
-    await client!.query(`CREATE ROLE "${role}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
-    await client!.query(`GRANT "${role}" TO CURRENT_USER`);
-    await client!.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
-    await client!.query(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON ${M8_TABLES.map((table) => `"${table}"`).join(', ')} TO "${role}"`
-    );
-    await client!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
-    await client!.query(
+    await ownerClient!.connect();
+    await runtimeClient!.connect();
+    await ownerClient!.query('BEGIN');
+    await ownerClient!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    await ownerClient!.query(
       `INSERT INTO "organizations" (
         "id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt"
       ) VALUES
@@ -120,14 +125,14 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
     );
 
     // These probes target RLS only; foreign-key parents belong to downstream lanes.
-    await client!.query(`SET LOCAL session_replication_role = 'replica'`);
-    await client!.query(
+    await ownerClient!.query(`SET LOCAL session_replication_role = 'replica'`);
+    await ownerClient!.query(
       `INSERT INTO "restaurant_customers" ("id", "organizationId", "displayName", "updatedAt") VALUES
         ($1, $2, 'Tenant A Customer', CURRENT_TIMESTAMP),
         ($3, $4, 'Tenant B Customer', CURRENT_TIMESTAMP)`,
       [ids.customerA, ids.orgA, ids.customerB, ids.orgB]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_customer_identifiers" (
         "id", "organizationId", "customerId", "kind", "normalizedValue", "updatedAt"
       ) VALUES
@@ -148,7 +153,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         `m8_phone_b_${suffix}`,
       ]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_customer_interactions" (
         "id", "organizationId", "customerId", "branchId", "orderId", "type", "idempotencyKey"
       ) VALUES
@@ -168,12 +173,12 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         `m8_order_b_${suffix}`,
       ]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_customer_tags" ("id", "organizationId", "name", "updatedAt") VALUES
         ($1, $2, 'Regular', CURRENT_TIMESTAMP), ($3, $4, 'Regular', CURRENT_TIMESTAMP)`,
       [ids.tagA, ids.orgA, ids.tagB, ids.orgB]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_customer_tag_assignments" (
         "id", "organizationId", "customerId", "tagId"
       ) VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
@@ -188,7 +193,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         ids.tagB,
       ]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_customer_consents" (
         "id", "organizationId", "customerId", "channel", "granted", "source",
         "actorId", "policyVersion", "idempotencyKey"
@@ -205,7 +210,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         ids.customerB,
       ]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_loyalty_program_versions" (
         "id", "organizationId", "versionNumber", "effectiveFrom", "earnRate", "redemptionValue", "updatedAt"
       ) VALUES
@@ -213,12 +218,12 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         ($3, $4, 1, clock_timestamp() - interval '1 minute', 1, 0.01, clock_timestamp())`,
       [ids.programA, ids.orgA, ids.programB, ids.orgB]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_loyalty_accounts" ("id", "organizationId", "customerId", "updatedAt") VALUES
         ($1, $2, $3, CURRENT_TIMESTAMP), ($4, $5, $6, CURRENT_TIMESTAMP)`,
       [ids.accountA, ids.orgA, ids.customerA, ids.accountB, ids.orgB, ids.customerB]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_loyalty_points_entries" (
         "id", "organizationId", "accountId", "programVersionId", "kind", "points",
         "actorId", "reason", "idempotencyKey"
@@ -237,7 +242,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         ids.programB,
       ]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_insight_daily_rollups" (
         "id", "organizationId", "branchId", "businessDate", "sourceDailyCloseId", "updatedAt"
       ) VALUES
@@ -254,7 +259,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         `m8_close_b_${suffix}`,
       ]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_insight_loyalty_liabilities" (
         "id", "organizationId", "businessDate", "cutoffAt", "programVersionId",
         "redemptionValue", "positivePoints", "signedPoints", "liability", "updatedAt"
@@ -263,7 +268,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         ($4, $5, DATE '2030-01-01', TIMESTAMPTZ '2030-01-02T00:00:00Z', $6, 0.01, 200, 180, 2, CURRENT_TIMESTAMP)`,
       [ids.liabilityA, ids.orgA, ids.programA, ids.liabilityB, ids.orgB, ids.programB]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_insight_item_mix_rollups" (
         "id", "organizationId", "branchId", "businessDate", "productId", "sourceDailyCloseId",
         "quantity", "updatedAt"
@@ -283,7 +288,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         `m8_close_b_${suffix}`,
       ]
     );
-    await client!.query(
+    await ownerClient!.query(
       `INSERT INTO "restaurant_labour_cost_facts" (
         "id", "organizationId", "branchId", "businessDate", "labourHours", "labourCost", "source", "idempotencyKey"
       ) VALUES
@@ -299,10 +304,10 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         `m8_branch_b_${suffix}`,
       ]
     );
-    await client!.query(`SET LOCAL session_replication_role = 'origin'`);
+    await ownerClient!.query(`SET LOCAL session_replication_role = 'origin'`);
 
     normalizedIdentifierProof = (
-      await client!.query<{ kind: string; organizations: number; rows: number }>(
+      await ownerClient!.query<{ kind: string; organizations: number; rows: number }>(
         `SELECT "kind"::text AS kind,
                 COUNT(DISTINCT "organizationId")::int AS organizations,
                 COUNT(*)::int AS rows
@@ -314,28 +319,45 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       )
     ).rows;
 
-    await client!.query(`SET LOCAL ROLE "${role}"`);
-    await client!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
-    await client!.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ids.orgA]);
+    await ownerClient!.query('COMMIT');
+    await runtimeClient!.query('BEGIN');
+    await runtimeClient!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
+    await runtimeClient!.query(`SELECT set_config('app.current_organization_id', $1, true)`, [
+      ids.orgA,
+    ]);
   }, 60_000);
 
   afterAll(async () => {
-    if (!client) return;
-    await client.query('ROLLBACK');
-    await client.end();
+    if (runtimeClient) {
+      await runtimeClient.query('ROLLBACK');
+      await runtimeClient.end();
+    }
+    if (ownerClient) {
+      await ownerClient.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
+      await ownerClient.query(`DELETE FROM "organizations" WHERE "id" IN ($1, $2)`, [
+        ids.orgA,
+        ids.orgB,
+      ]);
+      await ownerClient.end();
+    }
   });
 
-  it('proves unprivileged NOBYPASSRLS role and exact policy metadata on all 13 tables', async () => {
+  it('proves the runtime connection is LOGIN NOSUPERUSER NOBYPASSRLS and pins policy metadata', async () => {
     expect(
       (
-        await client!.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
-          `SELECT rolsuper, rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = $1`,
-          [role]
+        await runtimeClient!.query<{
+          rolcanlogin: boolean;
+          rolsuper: boolean;
+          rolbypassrls: boolean;
+        }>(
+          `SELECT rolcanlogin, rolsuper, rolbypassrls
+             FROM pg_catalog.pg_roles
+            WHERE rolname = current_user`
         )
       ).rows
-    ).toEqual([{ rolsuper: false, rolbypassrls: false }]);
+    ).toEqual([{ rolcanlogin: true, rolsuper: false, rolbypassrls: false }]);
 
-    const metadata = await client!.query<{
+    const metadata = await runtimeClient!.query<{
       table_name: string;
       enabled: boolean;
       forced: boolean;
@@ -365,48 +387,50 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
 
   it.each(M8_TABLES)('%s shows tenant A and hides tenant B', async (table) => {
     const [idA, idB] = rowIds[table];
-    const visible = await client!.query<{ id: string; organizationId: string }>(
+    const visible = await runtimeClient!.query<{ id: string; organizationId: string }>(
       `SELECT "id", "organizationId" FROM "${table}" WHERE "id" IN ($1, $2)`,
       [idA, idB]
     );
     expect(visible.rows).toEqual([{ id: idA, organizationId: ids.orgA }]);
     expect(
       (
-        await client!.query(
+        await runtimeClient!.query(
           `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
           [idB]
         )
       ).rowCount
     ).toBe(0);
-    expect((await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB])).rowCount).toBe(0);
+    expect(
+      (await runtimeClient!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB])).rowCount
+    ).toBe(0);
   });
 
   it('allows tenant A customer inserts and rejects cross-tenant writes', async () => {
     const customerId = `m8_customer_write_${suffix}`;
 
-    await client!.query(
+    await runtimeClient!.query(
       `INSERT INTO "restaurant_customers" ("id", "organizationId", "displayName", "updatedAt")
        VALUES ($1, $2, 'Tenant A Write', CURRENT_TIMESTAMP)`,
       [customerId, ids.orgA]
     );
 
     await expectDatabaseError('42501', () =>
-      client!.query(
+      runtimeClient!.query(
         `INSERT INTO "restaurant_customers" ("id", "organizationId", "displayName", "updatedAt")
          VALUES ($1, $2, 'Tenant B Write', CURRENT_TIMESTAMP)`,
         [`m8_customer_cross_tenant_${suffix}`, ids.orgB]
       )
     );
     await expectDatabaseError('42501', () =>
-      client!.query(`UPDATE "restaurant_customers" SET "organizationId" = $1 WHERE "id" = $2`, [
-        ids.orgB,
-        customerId,
-      ])
+      runtimeClient!.query(
+        `UPDATE "restaurant_customers" SET "organizationId" = $1 WHERE "id" = $2`,
+        [ids.orgB, customerId]
+      )
     );
 
     expect(
       (
-        await client!.query<{ id: string; organizationId: string }>(
+        await runtimeClient!.query<{ id: string; organizationId: string }>(
           `SELECT "id", "organizationId" FROM "restaurant_customers" WHERE "id" = $1`,
           [customerId]
         )
@@ -424,7 +448,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       ['PHONE', `+1555${suffix.slice(0, 8)}`],
     ] as const) {
       await expectDatabaseError('23505', () =>
-        client!.query(
+        runtimeClient!.query(
           `INSERT INTO "restaurant_customer_identifiers" (
             "id", "organizationId", "customerId", "kind", "normalizedValue", "updatedAt"
           ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
@@ -437,29 +461,30 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
   it.each(APPEND_ONLY)('%s denies UPDATE and DELETE on tenant A own row', async (table) => {
     const ownId = rowIds[table][0];
     expect(
-      (await client!.query(`SELECT "id" FROM "${table}" WHERE "id" = $1`, [ownId])).rowCount
+      (await runtimeClient!.query(`SELECT "id" FROM "${table}" WHERE "id" = $1`, [ownId])).rowCount
     ).toBe(1);
     expect(
       (
-        await client!.query(`UPDATE "${table}" SET "createdAt" = "createdAt" WHERE "id" = $1`, [
-          ownId,
-        ])
+        await runtimeClient!.query(
+          `UPDATE "${table}" SET "createdAt" = "createdAt" WHERE "id" = $1`,
+          [ownId]
+        )
       ).rowCount
     ).toBe(0);
-    expect((await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ownId])).rowCount).toBe(
-      0
-    );
+    expect(
+      (await runtimeClient!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ownId])).rowCount
+    ).toBe(0);
   });
 
   it('rejects UPDATE and DELETE of tenant A effective loyalty version', async () => {
     await expectDatabaseError('55000', () =>
-      client!.query(
+      runtimeClient!.query(
         `UPDATE "restaurant_loyalty_program_versions" SET "earnRate" = 2 WHERE "id" = $1`,
         [ids.programA]
       )
     );
     await expectDatabaseError('55000', () =>
-      client!.query(`DELETE FROM "restaurant_loyalty_program_versions" WHERE "id" = $1`, [
+      runtimeClient!.query(`DELETE FROM "restaurant_loyalty_program_versions" WHERE "id" = $1`, [
         ids.programA,
       ])
     );
