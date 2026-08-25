@@ -1,12 +1,16 @@
 import { z } from 'zod';
 
 const decimalString = z.string().regex(/^\d+(?:\.\d{1,6})?$/);
+const rateString = decimalString.refine(
+  (value) => Number(value) <= 1,
+  'Rate must be between 0 and 1'
+);
 
 export const taxRuleDraftSchema = z.object({
   ruleCode: z.string().trim().min(1).max(80),
   paymentCategory: z.string().trim().min(1).max(80),
   priceMode: z.enum(['EXCLUSIVE', 'INCLUSIVE']),
-  rate: decimalString,
+  rate: rateString,
   officialSourceId: z.string().trim().min(1),
   effectiveFrom: z.iso.datetime(),
   effectiveTo: z.iso.datetime().nullable().optional(),
@@ -49,6 +53,13 @@ export function validateTaxProfileDraft(input: unknown) {
     mappings.add(rule.paymentCategory);
     if (rule.effectiveTo && new Date(rule.effectiveTo) <= new Date(rule.effectiveFrom)) {
       throw new Error(`Invalid effective range for ${rule.ruleCode}`);
+    }
+    if (
+      new Date(rule.effectiveFrom) < from ||
+      (draft.effectiveTo &&
+        (!rule.effectiveTo || new Date(rule.effectiveTo) > new Date(draft.effectiveTo)))
+    ) {
+      throw new Error(`Effective range for ${rule.ruleCode} must be within the profile range`);
     }
   }
   return draft;
