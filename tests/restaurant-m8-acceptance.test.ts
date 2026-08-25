@@ -34,22 +34,39 @@ const contractGroups = [
   ],
   [
     'strict API governance, capability defaults and database enforcement',
-    ['tests/restaurant-m8-governance.test.ts', 'tests/restaurant-m8-rls.test.ts'],
+    ['tests/restaurant-m8-governance.test.ts'],
+  ],
+  [
+    'restricted-runtime tenant isolation and append-only enforcement',
+    ['tests/restaurant-m8-rls.test.ts'],
   ],
 ] as const;
 
 describe('WHA-100 M8 acceptance battery', () => {
+  it('requires separate migration-owner and restricted-runtime database connections', () => {
+    expect(process.env.M8_TEST_OWNER_DATABASE_URL).toBeTruthy();
+    expect(process.env.TEST_DATABASE_URL).toBeTruthy();
+    expect(process.env.M8_TEST_OWNER_DATABASE_URL).not.toBe(process.env.TEST_DATABASE_URL);
+  });
+
   it.each(contractGroups)(
     '%s',
     (_name, files) => {
       const result = spawnSync('bunx', ['vitest', 'run', ...files], {
         cwd: process.cwd(),
-        env: process.env,
+        env: {
+          ...process.env,
+          TEST_DATABASE_URL: _name.startsWith('restricted-runtime')
+            ? process.env.TEST_DATABASE_URL
+            : process.env.M8_TEST_OWNER_DATABASE_URL,
+        },
         encoding: 'utf8',
         timeout: 120_000,
       });
 
-      expect(result.status, [result.stdout, result.stderr].filter(Boolean).join('\n')).toBe(0);
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+      expect(result.status, output).toBe(0);
+      expect(output, output).not.toMatch(/\|\s+\d+ skipped/);
     },
     130_000
   );
