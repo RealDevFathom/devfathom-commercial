@@ -194,12 +194,18 @@ async function provisionTenant(t: Tenant, slug: string, program: { redemptionVal
   const owner = new Client({ connectionString: M8_TEST_OWNER_DATABASE_URL });
   await owner.connect();
   try {
+    await owner.query('BEGIN');
+    await owner.query(`SET LOCAL app.is_platform_admin = 'true'`);
     await owner.query(
       `INSERT INTO "organizations"
         ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
        VALUES ($1, $2, 'WHA132 Test Co', 'WHA132 Test', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [t.orgId, slug]
     );
+    await owner.query('COMMIT');
+  } catch (error) {
+    await owner.query('ROLLBACK').catch(() => {});
+    throw error;
   } finally {
     await owner.end();
   }
