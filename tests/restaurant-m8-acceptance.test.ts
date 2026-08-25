@@ -54,12 +54,7 @@ describe('WHA-100 M8 acceptance battery', () => {
     (_name, files) => {
       const result = spawnSync('bunx', ['vitest', 'run', ...files], {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          TEST_DATABASE_URL: _name.startsWith('restricted-runtime')
-            ? process.env.TEST_DATABASE_URL
-            : process.env.M8_TEST_OWNER_DATABASE_URL,
-        },
+        env: process.env,
         encoding: 'utf8',
         timeout: 120_000,
       });

@@ -48,6 +48,8 @@ beforeAll(async () => {
   const owner = new Client({ connectionString: M8_TEST_OWNER_DATABASE_URL });
   await owner.connect();
   try {
+    await owner.query('BEGIN');
+    await owner.query(`SET LOCAL app.is_platform_admin = 'true'`);
     await owner.query(
       `INSERT INTO "organizations"
         ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
@@ -55,6 +57,10 @@ beforeAll(async () => {
               ($3, $4, 'Other Customer Test Co', 'Other Customer Test', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [orgId, `wha94-${suffix}`, otherOrgId, `wha94-other-${suffix}`]
     );
+    await owner.query('COMMIT');
+  } catch (error) {
+    await owner.query('ROLLBACK').catch(() => {});
+    throw error;
   } finally {
     await owner.end();
   }
