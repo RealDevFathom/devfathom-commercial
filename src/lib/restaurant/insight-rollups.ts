@@ -288,7 +288,15 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
     });
     const existingLiability = await tx.insightLoyaltyLiability.findFirst({
       where: { businessDate },
-      select: { projectionVersion: true },
+      select: {
+        cutoffAt: true,
+        programVersionId: true,
+        redemptionValue: true,
+        positivePoints: true,
+        signedPoints: true,
+        liability: true,
+        projectionVersion: true,
+      },
     });
     const orders = await tx.restaurantOrder.findMany({
       where: { branchId: input.branchId, businessDate, status: 'CLOSED' },
@@ -314,25 +322,6 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       where: { branchId: input.branchId, businessDate },
       select: { sourceDailyCloseId: true, projectionVersion: true },
     });
-    if (
-      !input.force &&
-      existing?.sourceDailyCloseId === close.id &&
-      existing.projectionVersion === INSIGHT_PROJECTION_VERSION &&
-      existingLiability?.projectionVersion === INSIGHT_PROJECTION_VERSION &&
-      existingItems.length === items.length &&
-      existingItems.every(
-        (item) =>
-          item.sourceDailyCloseId === close.id &&
-          item.projectionVersion === INSIGHT_PROJECTION_VERSION
-      )
-    ) {
-      return {
-        dailyRollupId: existing.id,
-        sourceDailyCloseId: close.id,
-        itemCount: items.length,
-        replayed: true,
-      };
-    }
 
     const organization = await tx.organization.findUnique({
       where: { id: branch.organizationId },
@@ -362,6 +351,32 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       0
     );
     const signedPoints = loyaltyEntries.reduce((total, entry) => total + entry.points, 0);
+    if (
+      !input.force &&
+      existing?.sourceDailyCloseId === close.id &&
+      existing.projectionVersion === INSIGHT_PROJECTION_VERSION &&
+      existingLiability?.projectionVersion === INSIGHT_PROJECTION_VERSION &&
+      existingLiability.cutoffAt.getTime() === cutoffAt.getTime() &&
+      existingLiability.programVersionId === (program?.id ?? null) &&
+      existingLiability.redemptionValue.equals(program?.redemptionValue ?? ZERO) &&
+      existingLiability.positivePoints === BigInt(positivePoints) &&
+      existingLiability.signedPoints === BigInt(signedPoints) &&
+      existingLiability.liability.equals(loyaltyLiability) &&
+      existingItems.length === items.length &&
+      existingItems.every(
+        (item) =>
+          item.sourceDailyCloseId === close.id &&
+          item.projectionVersion === INSIGHT_PROJECTION_VERSION
+      )
+    ) {
+      return {
+        dailyRollupId: existing.id,
+        sourceDailyCloseId: close.id,
+        itemCount: items.length,
+        replayed: true,
+      };
+    }
+
     await tx.insightLoyaltyLiability.upsert({
       where: {
         organizationId_businessDate: { organizationId: branch.organizationId, businessDate },

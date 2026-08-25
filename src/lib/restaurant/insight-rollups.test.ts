@@ -147,20 +147,52 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
     restaurantRefund: { findMany: vi.fn(async () => [{ amount: D('3') }]) },
     restaurantDrawerSession: { findMany: vi.fn(async () => []) },
     insightDailyRollup: {
-      findFirst: vi.fn(async () => ({
-        id: 'rollup_1',
-        sourceDailyCloseId: 'close_1',
-        projectionVersion: 2,
-      })),
+      findFirst: vi.fn<
+        () => Promise<{
+          id: string;
+          sourceDailyCloseId: string;
+          projectionVersion: number;
+        } | null>
+      >(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 2 })),
       upsert: vi.fn(async () => ({ id: 'rollup_1' })),
     },
     insightLoyaltyLiability: {
-      findFirst: vi.fn(async () => ({ projectionVersion: 2 })),
-      upsert: vi.fn(async () => ({ id: 'liability_1' })),
+      findFirst: vi.fn<
+        () => Promise<{
+          cutoffAt: Date;
+          programVersionId: string | null;
+          redemptionValue: Prisma.Decimal;
+          positivePoints: bigint;
+          signedPoints: bigint;
+          liability: Prisma.Decimal;
+          projectionVersion: number;
+        } | null>
+      >(async () => ({
+        cutoffAt: new Date('2026-08-20T19:00:00.000Z'),
+        programVersionId: null,
+        redemptionValue: D('0'),
+        positivePoints: BigInt(0),
+        signedPoints: BigInt(0),
+        liability: D('0'),
+        projectionVersion: 2,
+      })),
+      upsert: vi.fn<(args?: { update: { liability: Prisma.Decimal } }) => Promise<{ id: string }>>(
+        async () => ({ id: 'liability_1' })
+      ),
     },
     restaurantOrder: { findMany: vi.fn(async () => []) },
-    loyaltyProgramVersion: { findFirst: vi.fn(async () => null) },
-    loyaltyPointsEntry: { findMany: vi.fn(async () => []) },
+    loyaltyProgramVersion: {
+      findFirst: vi.fn<() => Promise<{ id: string; redemptionValue: Prisma.Decimal } | null>>(
+        async () => null
+      ),
+    },
+    loyaltyPointsEntry: {
+      findMany: vi.fn<
+        (args?: {
+          where: { occurredAt: { lt: Date } };
+        }) => Promise<Array<{ accountId: string; points: number }>>
+      >(async () => []),
+    },
     insightItemMixRollup: {
       findMany: vi.fn(async () => []),
       deleteMany: vi.fn(async () => ({ count: 0 })),
@@ -215,73 +247,96 @@ describe('rollupDay handler idempotency and correction', () => {
     expect(db.insightLoyaltyLiability.upsert).toHaveBeenCalledOnce();
   });
 
-  it('leaves loyalty liability stale on ordinary replay after a backdated ledger adjustment', async () => {
-    const db = rollupDb();
-    const ledger = [
-      { accountId: 'account_1', points: 100, occurredAt: new Date('2026-08-20T17:00:00Z') },
-    ];
-    let persistedLiability = D('0');
+  it.each(['ADJUSTMENT', 'EXPIRY', 'REVERSAL'] as const)(
+    'refreshes loyalty liability on ordinary replay after a backdated %s',
+    async (kind) => {
+      const db = rollupDb();
+      const ledger: Array<{
+        accountId: string;
+        points: number;
+        occurredAt: Date;
+        kind: 'EARN' | 'ADJUSTMENT' | 'EXPIRY' | 'REVERSAL';
+      }> = [
+        {
+          accountId: 'account_1',
+          points: 100,
+          occurredAt: new Date('2026-08-20T17:00:00Z'),
+          kind: 'EARN',
+        },
+      ];
+      let persistedLiability = D('0');
 
-    db.insightDailyRollup.findFirst.mockResolvedValueOnce(null).mockResolvedValue({
-      id: 'rollup_1',
-      sourceDailyCloseId: 'close_1',
-      projectionVersion: 2,
-    });
-    db.insightLoyaltyLiability.findFirst
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue({ projectionVersion: 2 });
-    db.loyaltyProgramVersion.findFirst.mockResolvedValue({
-      id: 'program_1',
-      redemptionValue: D('0.015'),
-    });
-    db.loyaltyPointsEntry.findMany.mockImplementation(async ({ where }) =>
-      ledger
-        .filter((entry) => entry.occurredAt < where.occurredAt.lt)
-        .map(({ accountId, points }) => ({ accountId, points }))
-    );
-    db.insightLoyaltyLiability.upsert.mockImplementation(async ({ update }) => {
-      persistedLiability = update.liability;
-      return { id: 'liability_1' };
-    });
+      db.insightDailyRollup.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 2 });
+      db.insightLoyaltyLiability.findFirst.mockResolvedValueOnce(null).mockResolvedValue({
+        cutoffAt: new Date('2026-08-20T19:00:00.000Z'),
+        programVersionId: 'program_1',
+        redemptionValue: D('0.015'),
+        positivePoints: BigInt(100),
+        signedPoints: BigInt(100),
+        liability: D('1.5'),
+        projectionVersion: 2,
+      });
+      db.loyaltyProgramVersion.findFirst.mockResolvedValue({
+        id: 'program_1',
+        redemptionValue: D('0.015'),
+      });
+      db.loyaltyPointsEntry.findMany.mockImplementation(
+        async (args?: { where: { occurredAt: { lt: Date } } }) =>
+          ledger
+            .filter((entry) => entry.occurredAt < args!.where.occurredAt.lt)
+            .map(({ accountId, points }) => ({ accountId, points }))
+      );
+      db.insightLoyaltyLiability.upsert.mockImplementation(async (args) => {
+        persistedLiability = args!.update.liability;
+        return { id: 'liability_1' };
+      });
 
-    const initial = await rollupDay(db as unknown as ScopedDb, {
-      branchId: 'branch_1',
-      businessDate: '2026-08-20',
-    });
-    expect(initial).toMatchObject({ sourceDailyCloseId: 'close_1', itemCount: 0, replayed: false });
-    expect(persistedLiability.toString()).toBe('1.5');
+      const initial = await rollupDay(db as unknown as ScopedDb, {
+        branchId: 'branch_1',
+        businessDate: '2026-08-20',
+      });
+      expect(initial).toMatchObject({
+        sourceDailyCloseId: 'close_1',
+        itemCount: 0,
+        replayed: false,
+      });
+      expect(persistedLiability.toString()).toBe('1.5');
 
-    ledger.push({
-      accountId: 'account_1',
-      points: -40,
-      occurredAt: new Date('2026-08-20T18:00:00Z'),
-    });
-    const rawLiability = computeLoyaltyLiability(ledger, D('0.015'));
-    expect(rawLiability.toString()).toBe('0.9');
+      ledger.push({
+        accountId: 'account_1',
+        points: -40,
+        occurredAt: new Date('2026-08-20T18:00:00Z'),
+        kind,
+      });
+      const rawLiability = computeLoyaltyLiability(ledger, D('0.015'));
+      expect(rawLiability.toString()).toBe('0.9');
 
-    const ordinaryReplay = await rollupDay(db as unknown as ScopedDb, {
-      branchId: 'branch_1',
-      businessDate: '2026-08-20',
-    });
-    expect(ordinaryReplay).toMatchObject({
-      sourceDailyCloseId: 'close_1',
-      itemCount: 0,
-      replayed: true,
-    });
-    expect(persistedLiability.toString()).toBe('1.5');
+      const ordinaryReplay = await rollupDay(db as unknown as ScopedDb, {
+        branchId: 'branch_1',
+        businessDate: '2026-08-20',
+      });
+      expect(ordinaryReplay).toMatchObject({
+        sourceDailyCloseId: 'close_1',
+        itemCount: 0,
+        replayed: false,
+      });
+      expect(persistedLiability.toString()).toBe('0.9');
 
-    const forcedRebuild = await rollupDay(db as unknown as ScopedDb, {
-      branchId: 'branch_1',
-      businessDate: '2026-08-20',
-      force: true,
-    });
-    expect(forcedRebuild).toMatchObject({
-      sourceDailyCloseId: 'close_1',
-      itemCount: 0,
-      replayed: false,
-    });
-    expect(persistedLiability.toString()).toBe('0.9');
-  });
+      const forcedRebuild = await rollupDay(db as unknown as ScopedDb, {
+        branchId: 'branch_1',
+        businessDate: '2026-08-20',
+        force: true,
+      });
+      expect(forcedRebuild).toMatchObject({
+        sourceDailyCloseId: 'close_1',
+        itemCount: 0,
+        replayed: false,
+      });
+      expect(persistedLiability.toString()).toBe('0.9');
+    }
+  );
 
   it('fails closed when raw facts do not exactly reconcile', async () => {
     const db = rollupDb({ mismatch: true });
