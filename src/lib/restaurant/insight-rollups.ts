@@ -144,6 +144,35 @@ export function computeLoyaltyLiability(
   return roundMoney(multiply(sum(positivePoints), redemptionValue));
 }
 
+type LoyaltyLedgerFingerprint = {
+  positivePoints: bigint;
+  signedPoints: bigint;
+};
+
+async function computeLoyaltyLedgerFingerprint(
+  db: ScopedDb,
+  organizationId: string,
+  cutoffAt: Date
+): Promise<LoyaltyLedgerFingerprint> {
+  const [fingerprint] = await db.$queryRaw<LoyaltyLedgerFingerprint[]>(Prisma.sql`
+    WITH account_balances AS (
+      SELECT "accountId", SUM(points)::bigint AS balance
+      FROM restaurant_loyalty_points_entries
+      WHERE "organizationId" = ${organizationId}
+        AND "occurredAt" < ${cutoffAt}
+      GROUP BY "accountId"
+    )
+    SELECT
+      COALESCE(SUM(GREATEST(balance, 0)), 0)::bigint AS "positivePoints",
+      COALESCE(SUM(balance), 0)::bigint AS "signedPoints"
+    FROM account_balances
+  `);
+  if (!fingerprint) {
+    throw new RollupError('Loyalty ledger fingerprint query returned no row.', 'INVALID');
+  }
+  return fingerprint;
+}
+
 export function businessDateCutoffUtc(businessDate: string, timeZone: string): Date {
   const date = businessDateToUtcDate(businessDate);
   const desiredWallTime = Date.UTC(
@@ -334,23 +363,14 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       orderBy: { effectiveFrom: 'desc' },
       select: { id: true, redemptionValue: true },
     });
-    const loyaltyEntries = await tx.loyaltyPointsEntry.findMany({
-      where: { occurredAt: { lt: cutoffAt } },
-      select: { accountId: true, points: true },
-    });
-    const loyaltyLiability = computeLoyaltyLiability(
-      loyaltyEntries,
-      program?.redemptionValue ?? null
+    const { positivePoints, signedPoints } = await computeLoyaltyLedgerFingerprint(
+      tx,
+      branch.organizationId,
+      cutoffAt
     );
-    const balances = new Map<string, number>();
-    for (const entry of loyaltyEntries) {
-      balances.set(entry.accountId, (balances.get(entry.accountId) ?? 0) + entry.points);
-    }
-    const positivePoints = [...balances.values()].reduce(
-      (total, balance) => total + Math.max(0, balance),
-      0
-    );
-    const signedPoints = loyaltyEntries.reduce((total, entry) => total + entry.points, 0);
+    const loyaltyLiability = program
+      ? roundMoney(multiply(new Prisma.Decimal(positivePoints.toString()), program.redemptionValue))
+      : ZERO;
     if (
       !input.force &&
       existing?.sourceDailyCloseId === close.id &&
@@ -359,8 +379,8 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       existingLiability.cutoffAt.getTime() === cutoffAt.getTime() &&
       existingLiability.programVersionId === (program?.id ?? null) &&
       existingLiability.redemptionValue.equals(program?.redemptionValue ?? ZERO) &&
-      existingLiability.positivePoints === BigInt(positivePoints) &&
-      existingLiability.signedPoints === BigInt(signedPoints) &&
+      existingLiability.positivePoints === positivePoints &&
+      existingLiability.signedPoints === signedPoints &&
       existingLiability.liability.equals(loyaltyLiability) &&
       existingItems.length === items.length &&
       existingItems.every(

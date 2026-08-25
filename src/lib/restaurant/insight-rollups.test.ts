@@ -186,13 +186,9 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
         async () => null
       ),
     },
-    loyaltyPointsEntry: {
-      findMany: vi.fn<
-        (args?: {
-          where: { occurredAt: { lt: Date } };
-        }) => Promise<Array<{ accountId: string; points: number }>>
-      >(async () => []),
-    },
+    $queryRaw: vi.fn<
+      (query: Prisma.Sql) => Promise<Array<{ positivePoints: bigint; signedPoints: bigint }>>
+    >(async () => [{ positivePoints: BigInt(0), signedPoints: BigInt(0) }]),
     insightItemMixRollup: {
       findMany: vi.fn(async () => []),
       deleteMany: vi.fn(async () => ({ count: 0 })),
@@ -282,12 +278,28 @@ describe('rollupDay handler idempotency and correction', () => {
         id: 'program_1',
         redemptionValue: D('0.015'),
       });
-      db.loyaltyPointsEntry.findMany.mockImplementation(
-        async (args?: { where: { occurredAt: { lt: Date } } }) =>
-          ledger
-            .filter((entry) => entry.occurredAt < args!.where.occurredAt.lt)
-            .map(({ accountId, points }) => ({ accountId, points }))
-      );
+      db.$queryRaw.mockImplementation(async (query: Prisma.Sql) => {
+        const cutoffAt = query.values[1] as Date;
+        const balances = new Map<string, bigint>();
+        for (const entry of ledger.filter((row) => row.occurredAt < cutoffAt)) {
+          balances.set(
+            entry.accountId,
+            (balances.get(entry.accountId) ?? BigInt(0)) + BigInt(entry.points)
+          );
+        }
+        return [
+          {
+            positivePoints: [...balances.values()].reduce(
+              (total, balance) => total + (balance > 0 ? balance : BigInt(0)),
+              BigInt(0)
+            ),
+            signedPoints: [...balances.values()].reduce(
+              (total, balance) => total + balance,
+              BigInt(0)
+            ),
+          },
+        ];
+      });
       db.insightLoyaltyLiability.upsert.mockImplementation(async (args) => {
         persistedLiability = args!.update.liability;
         return { id: 'liability_1' };
@@ -337,6 +349,41 @@ describe('rollupDay handler idempotency and correction', () => {
       expect(persistedLiability.toString()).toBe('0.9');
     }
   );
+
+  it('aggregates an arbitrarily large historical ledger into one scoped fingerprint row', async () => {
+    const db = rollupDb();
+    const returnedRowCounts: number[] = [];
+    let historicalEntryCount = 1;
+    db.$queryRaw.mockImplementation(async (query: Prisma.Sql) => {
+      const rows = [
+        {
+          positivePoints: BigInt(historicalEntryCount),
+          signedPoints: BigInt(historicalEntryCount),
+        },
+      ];
+      returnedRowCounts.push(rows.length);
+      expect(query.strings.join('?')).toContain('GROUP BY "accountId"');
+      expect(query.strings.join('?')).toContain('SUM(GREATEST(balance, 0))');
+      expect(query.values).toEqual(['org_1', new Date('2026-08-20T19:00:00.000Z')]);
+      return rows;
+    });
+
+    await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force: true,
+    });
+    historicalEntryCount = 10_001;
+    await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force: true,
+    });
+
+    expect(returnedRowCounts).toEqual([1, 1]);
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+    expect('loyaltyPointsEntry' in db).toBe(false);
+  });
 
   it('fails closed when raw facts do not exactly reconcile', async () => {
     const db = rollupDb({ mismatch: true });
