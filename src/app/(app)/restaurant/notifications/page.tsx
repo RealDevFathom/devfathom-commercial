@@ -205,7 +205,7 @@ function MatrixRows({
   );
 }
 
-export function NotificationsView(props: NotificationsViewProps) {
+function NotificationsView(props: NotificationsViewProps) {
   if (props.state !== 'ready' && props.state !== 'empty') {
     const copy = {
       disabled: {

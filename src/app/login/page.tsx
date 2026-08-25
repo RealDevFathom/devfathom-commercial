@@ -30,7 +30,11 @@ const SIGN_OUT_NOTICES: Record<string, string> = {
   'workspace-unavailable': WORKSPACE_UNAVAILABLE_MESSAGE,
 };
 
-export default async function LoginPage(props: PageProps<'/login'>) {
+type LoginPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function LoginPage(props: LoginPageProps) {
   const searchParams = await props.searchParams;
   const reason = searchParams.reason;
   const notice = typeof reason === 'string' ? SIGN_OUT_NOTICES[reason] : undefined;
