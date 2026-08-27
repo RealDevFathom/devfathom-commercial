@@ -8,4 +8,4 @@
 
 - Revoked, stale, wrong-branch, or unauthorized sessions fail; sensitive actions retain actor/device context. Evidence: [`tests/restaurant-m2-contract.test.ts`](../../../tests/restaurant-m2-contract.test.ts), [`tests/restaurant-m2-terminal-threats.test.ts`](../../../tests/restaurant-m2-terminal-threats.test.ts).
 - **PLANNED (WHA-212)** — Camera live feed/storage, Hikvision/EZVIZ, Dahua/IMOU, Uniview, TP-Link presets, tenant and platform-console wizard, manual ONVIF/RTSP fallback.
-- **PLANNED** — Physical print bridge. Device registration does not imply printer or camera integration.
+- **PLANNED (WHA-243 owner decision)** — Physical print bridge. Device registration does not imply printer or camera integration.

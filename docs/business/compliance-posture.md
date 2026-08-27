@@ -9,15 +9,15 @@ This document states product boundaries, not legal advice, certification, or a c
 
 ## Pakistan tax and FBR boundary
 
-- **PLANNED LEGAL/TAX REVIEW** — Determine applicable registration, invoice/receipt fields, tax rates, fiscal-device or real-time reporting duties, retention, branch/province rules, and who submits to FBR or other authorities.
+- **PLANNED LEGAL/TAX REVIEW (WHA-243 legal/domain review)** — Determine applicable registration, invoice/receipt fields, tax rates, fiscal-device or real-time reporting duties, retention, branch/province rules, and who submits to FBR or other authorities.
 - Current bills, receipts, taxes, closes, and operator-confirmed card tenders are operational records. No FBR integration, fiscal certification, tax engine, or automatic filing is claimed. Evidence: [`docs/product/modules/checkout.md`](../product/modules/checkout.md), [`docs/admin-platform/commercial-ledger.md`](../admin-platform/commercial-ledger.md).
 
 ## Data protection boundary
 
-- **PLANNED LEGAL/PRIVACY REVIEW** — Establish controller/processor roles, lawful basis/consent wording, notices, retention/deletion, data-subject requests, subprocessors, cross-border transfers, breach process, and contract terms under applicable Pakistan law and customer obligations.
+- **PLANNED LEGAL/PRIVACY REVIEW (WHA-243 legal/domain review)** — Establish controller/processor roles, lawful basis/consent wording, notices, retention/deletion, data-subject requests, subprocessors, cross-border transfers, breach process, and contract terms under applicable Pakistan law and customer obligations.
 - Repository controls are technical evidence only. They do not prove legal compliance or production operating effectiveness.
 
 ## HACCP and SOP boundary
 
-- **PLANNED DOMAIN REVIEW** — Customers may configure SOPs and evidence for food-safety workflows, but templates, critical limits, monitoring frequency, corrective actions, verification, records, and staff competence require qualified customer/domain ownership.
+- **PLANNED DOMAIN REVIEW (WHA-243 legal/domain review)** — Customers may configure SOPs and evidence for food-safety workflows, but templates, critical limits, monitoring frequency, corrective actions, verification, records, and staff competence require qualified customer/domain ownership.
 - No HACCP certification, food-safety compliance, regulator approval, or guaranteed hazard control is claimed.

@@ -22,10 +22,10 @@ Give multi-tenant service businesses one governed workspace, with Restaurant as 
 - **PLANNED (WHA-243 Lane D)** — Restaurant dashboard beyond current M8 insight surfaces.
 - **PLANNED** — OCR menu import exists only in separate commits `45c53177ec4946f8625160a8d5a70438eab17e4f` and `8dce5caf2dfa4f8fc7f2ff42996e1a04299cf6c9`; it is not integrated here.
 - **PLANNED (WHA-212)** — Camera live feed/storage, Hikvision/EZVIZ, Dahua/IMOU, Uniview, and TP-Link presets, both-console setup wizard, plus manual ONVIF/RTSP fallback.
-- **PLANNED** — Vendor-agnostic card-terminal core and adapter await owner acquirer choice. Online gateways are **DEFERRED**. Current card tenders are operator-confirmed records only.
-- **PLANNED** — Physical print bridge and printer job delivery; current receipt data is not physical printing.
-- **PLANNED** — Staff shifts and deeper SOP reporting/scoring; see module boundary.
-- **PLANNED** — LiveKit/TURN is proposed; current meeting runtime remains JaaS/Jitsi. Evidence: [`docs/admin-platform/adr/005-self-hosted-meetings.md`](../admin-platform/adr/005-self-hosted-meetings.md).
+- **PLANNED (WHA-243 owner decision)** — Vendor-agnostic card-terminal core and adapter await owner acquirer choice. Online gateways are **DEFERRED**. Current card tenders are operator-confirmed records only.
+- **PLANNED (WHA-243 owner decision)** — Physical print bridge and printer job delivery; current receipt data is not physical printing.
+- **PLANNED (WHA-243 owner decision)** — Staff shifts and deeper SOP reporting/scoring; see module boundary.
+- **PLANNED (ADR 005)** — LiveKit/TURN is proposed; current meeting runtime remains JaaS/Jitsi. Evidence: [`docs/admin-platform/adr/005-self-hosted-meetings.md`](../admin-platform/adr/005-self-hosted-meetings.md).
 
 ## Module requirements
 

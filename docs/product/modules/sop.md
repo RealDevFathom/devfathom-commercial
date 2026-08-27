@@ -8,4 +8,4 @@
 ## Acceptance and planned depth
 
 - Due/late/missed/awaiting-verification work is filterable; evidence survives rejection/resubmission; verification is permission-gated; escalation stops on acknowledgement/exhaustion and respects quiet hours. Evidence: [`src/server/routers/restaurant-sop-execution.ts`](../../../src/server/routers/restaurant-sop-execution.ts), [`tests/restaurant-m7-acceptance.test.ts`](../../../tests/restaurant-m7-acceptance.test.ts).
-- **PLANNED** — Rich scoring, scorecards, and consolidated SOP reports. Current records can support future reporting but do not prove those product surfaces.
+- **PLANNED (WHA-243 owner decision)** — Rich scoring, scorecards, and consolidated SOP reports. Current records can support future reporting but do not prove those product surfaces.

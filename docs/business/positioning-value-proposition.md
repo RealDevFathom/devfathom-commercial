@@ -9,8 +9,8 @@ DevFathom is a governed, multi-tenant operating workspace. Restaurant is its dee
 
 ## Value hypotheses
 
-- **PLANNED / RESEARCH INPUT** — Position around operational coherence, branch control, auditable exception handling, and fewer disconnected ledgers. Validate with restaurant owners, managers, cashiers, kitchen leads, and finance operators before using outcome claims.
-- **PLANNED OWNER DECISION** — Choose primary ICP by restaurant format, branch count, current stack, and buying authority. No traction, savings, or productivity claim is repository-proved.
+- **PLANNED / RESEARCH INPUT (WHA-243 research task)** — Position around operational coherence, branch control, auditable exception handling, and fewer disconnected ledgers. Validate with restaurant owners, managers, cashiers, kitchen leads, and finance operators before using outcome claims.
+- **PLANNED OWNER DECISION (WHA-243 owner decision)** — Choose primary ICP by restaurant format, branch count, current stack, and buying authority. No traction, savings, or productivity claim is repository-proved.
 
 ## Safe commercial language
 

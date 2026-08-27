@@ -16,4 +16,4 @@ Restaurant operators manage menu-to-close workflows across branches while tenant
 - **PLANNED (Lane D)** — Broader Restaurant dashboard. Current insight reports do not satisfy it.
 - **PLANNED** — OCR import remains unintegrated separate-commit work (`45c53177ec4946f8625160a8d5a70438eab17e4f`, `8dce5caf2dfa4f8fc7f2ff42996e1a04299cf6c9`).
 - **PLANNED (WHA-212)** — Camera live feed/storage, named vendor presets, both-console wizard, manual ONVIF/RTSP fallback.
-- **PLANNED** — Card-terminal adapter after owner acquirer choice; online gateways **DEFERRED**; print bridge; staff shifts; deeper SOP scoring/reports.
+- **PLANNED (WHA-243 owner decision)** — Card-terminal adapter after owner acquirer choice; online gateways **DEFERRED**; print bridge; staff shifts; deeper SOP scoring/reports.
