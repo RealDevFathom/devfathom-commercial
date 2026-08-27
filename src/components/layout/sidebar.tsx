@@ -28,6 +28,7 @@ import {
   UtensilsCrossed,
   LayoutGrid,
   ReceiptText,
+  CalendarClock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -110,6 +111,13 @@ const navigation: NavItem[] = [
     label: 'Restaurant staff',
     href: '/restaurant/staff',
     icon: Users,
+    group: 'Firm',
+    module: 'restaurant-core',
+  },
+  {
+    label: 'Roster',
+    href: '/restaurant/staff/roster',
+    icon: CalendarClock,
     group: 'Firm',
     module: 'restaurant-core',
   },
