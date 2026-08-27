@@ -27,6 +27,8 @@ Use one status on every capability claim:
 | Operators | [Azure deployment](azure-deployment.md) | Staging, production gate, backups, and rollback |
 | Platform team | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks |
 | Product and sales | [Product and commercial pack](product-pack.md) | ICP, positioning, feature status, packaging, and customer lifecycle |
+| Product owners | [Master product PRD](product/PRD.md) | Evidence-backed current scope, acceptance boundaries, and planned decisions |
+| Restaurant team | [Restaurant vertical PRD](product/verticals/restaurant/PRD.md) | Lean vertical outcome, acceptance, and explicit non-claims |
 | Partners and customers | [Pitch-deck source](pitch-deck.md) | Evidence-safe slide narratives and speaker notes |
 | Release owners | [Living status ledger](status-ledger.md) | Evidence, blockers, owners, and next gates |
 | Documentation owners | [Documentation QA](qa.md) | Link, stale-reference, and consistency checks |
@@ -58,5 +60,6 @@ Documentation changes should cite repository paths and line ranges where practic
 - **IMPLEMENTED** — [Restaurant data model](restaurant/data-model.md) maps each milestone-owned schema group to its migration and verification evidence.
 - **IMPLEMENTED** — [Restaurant API surface](restaurant/api-surface.md) inventories the mounted tRPC and terminal REST transports and states their limits.
 - **IMPLEMENTED** — [WHA-243 corrected audit](operations/WHA-243-restaurant-documentation-audit.md) records the base-commit audit, corrected M0–M8 conclusion, planned boundaries, and proposed documentation tree.
+- **IMPLEMENTED** — Product module specs: [POS/orders/floor](product/modules/pos-orders-floor.md), [KDS](product/modules/kds.md), [catalog/menus/publications](product/modules/catalog-menus-publications.md), [checkout](product/modules/checkout.md), [cash/day close](product/modules/cash-day-close.md), [inventory](product/modules/inventory.md), [purchasing](product/modules/purchasing.md), [customers/loyalty/insights](product/modules/customers-loyalty-insights.md), [SOP](product/modules/sop.md), [terminal/device registry](product/modules/terminal-device-registry.md), and [platform console](product/modules/platform-console.md).
 
 Last reconciled: 2026-08-27 (WHA-243 correction pass).
