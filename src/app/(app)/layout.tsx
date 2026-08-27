@@ -50,8 +50,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         logoUrl: organization?.brand?.logoUrl ?? null,
         markUrl: organization?.brand?.markUrl ?? null,
         faviconUrl: organization?.brand?.faviconUrl ?? null,
-        primaryColor: organization?.brand?.primaryColor ?? '#465A4B',
-        accentColor: organization?.brand?.accentColor ?? '#B14E32',
+        primaryColor: organization?.brand?.primaryColor ?? null,
+        accentColor: organization?.brand?.accentColor ?? null,
       },
     };
   });

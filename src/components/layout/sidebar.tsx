@@ -507,7 +507,7 @@ export function TopNavigation() {
               {isActive && (
                 <m.span
                   layoutId="topnav-active"
-                  className="absolute inset-0 -z-10 rounded-full bg-foreground"
+                  className="absolute inset-0 -z-10 rounded-full bg-primary"
                   transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                 />
               )}

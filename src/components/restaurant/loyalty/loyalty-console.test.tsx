@@ -202,6 +202,7 @@ const mocks = vi.hoisted(() => {
     ].map((key) => [key, [] as unknown[]])
   ) as Record<string, unknown[]>;
   const invalidations = vi.fn();
+  const detailInputs: unknown[] = [];
   return {
     initial,
     customers: query(initial.customers),
@@ -214,6 +215,7 @@ const mocks = vi.hoisted(() => {
     enabled,
     mutations,
     invalidations,
+    detailInputs,
   };
 });
 
@@ -221,10 +223,11 @@ vi.mock('@/lib/trpc', () => {
   const query = (
     key: 'customers' | 'detail' | 'tags' | 'programs' | 'accounts' | 'account' | 'ledger'
   ) => ({
-    useQuery: (_input: unknown, options?: { enabled?: boolean }) => {
+    useQuery: (input: unknown, options?: { enabled?: boolean }) => {
       if (key in mocks.enabled) {
         mocks.enabled[key as keyof typeof mocks.enabled].push(options?.enabled ?? true);
       }
+      if (key === 'detail') mocks.detailInputs.push(input);
       return mocks[key];
     },
   });
@@ -332,6 +335,7 @@ describe('Customers & Loyalty console', () => {
     Object.values(mocks.mutations).forEach((calls) => {
       calls.length = 0;
     });
+    mocks.detailInputs.length = 0;
   });
 
   it('renders operational data with keyboard-scrollable tables and explicit consent defaults', () => {
@@ -352,6 +356,36 @@ describe('Customers & Loyalty console', () => {
       'tabindex',
       '0'
     );
+  });
+
+  it('selects customer rows with pointer and keyboard input', () => {
+    mocks.customers.data = {
+      customers: [
+        ...mocks.initial.customers.customers,
+        {
+          ...mocks.initial.customers.customers[0]!,
+          id: 'customer_2',
+          displayName: 'Grace Hopper',
+        },
+      ],
+      nextCursor: null,
+    };
+    renderConsole();
+
+    const rows = screen.getAllByRole('row').filter((row) => row.querySelector('button'));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute('data-state', 'selected');
+
+    fireEvent.click(rows[1]);
+    expect(rows[1]).toHaveAttribute('data-state', 'selected');
+    expect(rows[0]).not.toHaveAttribute('data-state');
+    expect(mocks.detailInputs.at(-1)).toEqual({ customerId: 'customer_2' });
+
+    fireEvent.keyDown(rows[0], { key: 'Enter' });
+    expect(rows[0]).toHaveAttribute('data-state', 'selected');
+
+    fireEvent.keyDown(rows[1], { key: ' ' });
+    expect(rows[1]).toHaveAttribute('data-state', 'selected');
   });
 
   it('renders the route loading state without exposing stale records', () => {
