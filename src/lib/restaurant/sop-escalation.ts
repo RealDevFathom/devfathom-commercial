@@ -31,9 +31,22 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  *   window, delivery is DEFERRED (a FIRED event is NOT written; the job re-runs on
  *   the next opportunity). Deferral is not a failure — the handler returns normally.
  *
- * Idempotency: each step fires AT MOST ONCE per policy × occurrence combination
- * (the FIRED event for a step is the guard). Re-runs observe the existing event
- * and skip ahead.
+ * Idempotency: each step fires AT MOST ONCE per policy × occurrence combination.
+ * The FIRED event for a step is the logical guard, but a guard that is only read
+ * inside a READ COMMITTED transaction does not stop two workers claiming the same
+ * step concurrently — both would read an empty ledger and both would append a
+ * FIRED event, corrupting an audit ledger that is supposed to be immutable and
+ * exact. The handler therefore takes a row lock on the occurrence before folding
+ * the ledger, which serialises concurrent runs for that occurrence without a
+ * schema change. (The notification itself was already idempotent: the outbox row
+ * carries a deterministic id and is inserted with `skipDuplicates`.)
+ *
+ * Delay anchoring: a step's `delayMinutes` is measured from the previous FIRED
+ * event, or — for the FIRST step, which has no predecessor — from the occurrence's
+ * `windowEndsAt`. Anchoring the head of the chain is what makes step 1's delay
+ * mean anything; without it the first step fired immediately no matter how it was
+ * configured, and the whole chain's timing shifted with the scheduler's cadence
+ * rather than with the SOP's due window.
  *
  * Registration: one key in restaurantJobHandlers (job-handlers.ts).
  */
@@ -62,6 +75,7 @@ type EscalationEvent = {
   id: string;
   escalationStepId: string | null;
   kind: 'FIRED' | 'ACKNOWLEDGED' | 'STOPPED';
+  createdAt: Date;
 };
 
 /** Minutes-of-day in the branch's local timezone, derived from an Intl formatter. */
@@ -97,6 +111,15 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
 
   await (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<void>) => Promise<void>)(
     async (tx) => {
+      // ── Serialise concurrent runs for this occurrence ──────────────────────
+      // Held for the rest of the transaction, so the ledger fold below and the
+      // FIRED insert that follows it are atomic with respect to another worker.
+      await tx.$queryRaw`
+        SELECT id FROM restaurant_sop_occurrences
+        WHERE id = ${payload.occurrenceId}
+        FOR UPDATE
+      `;
+
       // ── Load occurrence + policy + branch ──────────────────────────────────
       const occ = await tx.restaurantSopOccurrence.findUnique({
         where: { id: payload.occurrenceId },
@@ -104,6 +127,7 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
           id: true,
           status: true,
           branchId: true,
+          windowEndsAt: true,
           branch: { select: { timezone: true } },
           assignment: {
             select: {
@@ -160,7 +184,7 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
       const events: EscalationEvent[] = await tx.restaurantSopEscalationEvent.findMany({
         where: { occurrenceId: occ.id },
         orderBy: { createdAt: 'asc' },
-        select: { id: true, escalationStepId: true, kind: true },
+        select: { id: true, escalationStepId: true, kind: true, createdAt: true },
       });
 
       const hasStopped = events.some((e) => e.kind === 'STOPPED');
@@ -207,21 +231,16 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         return;
       }
 
-      // ── Delay check: has the delay window elapsed since the LAST fired step? ─
+      // ── Delay check ────────────────────────────────────────────────────────
+      // The delay is measured from the previous FIRED event; the first step has no
+      // predecessor, so it anchors to the occurrence's window close instead. The
+      // comparison is strict-less-than, so a step whose delay has exactly elapsed
+      // fires on this pass rather than waiting for the next one.
       const lastFiredEvent = [...events].reverse().find((e) => e.kind === 'FIRED');
-      if (lastFiredEvent) {
-        // We don't store firedAt on the event separately — use createdAt
-        const lastFired = await tx.restaurantSopEscalationEvent.findUnique({
-          where: { id: lastFiredEvent.id },
-          select: { createdAt: true },
-        });
-        if (lastFired) {
-          const delayMs = nextStep.delayMinutes * 60_000;
-          if (now.getTime() - lastFired.createdAt.getTime() < delayMs) {
-            // Delay not yet elapsed — defer silently
-            return;
-          }
-        }
+      const anchor = lastFiredEvent ? lastFiredEvent.createdAt : occ.windowEndsAt;
+      if (now.getTime() - anchor.getTime() < nextStep.delayMinutes * 60_000) {
+        // Delay not yet elapsed — defer silently
+        return;
       }
 
       // ── Quiet-hour check ──────────────────────────────────────────────────
