@@ -1,8 +1,10 @@
 /**
- * M7-L4 — SOP escalation unit tests.
+ * M7-L4 / WHA-226 — SOP escalation unit tests.
  * Covers: step firing, STOP conditions (stopOnVerified via occurrence status,
- * stopOnAcknowledged, chain exhausted), quiet-hour deferral, delay enforcement,
- * notification-request outbox append, acknowledgeEscalation idempotency.
+ * stopOnAcknowledged, chain exhausted), quiet-hour deferral, delay enforcement
+ * (including the first step's anchor on `windowEndsAt`), the occurrence row lock
+ * that serialises concurrent chain runs, notification-request outbox append, and
+ * acknowledgeEscalation idempotency.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -14,11 +16,14 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const NOW_ISO = '2026-08-20T14:00:00.000Z'; // 14:00 UTC = 840 min — not in most quiet windows
 const NOW = new Date(NOW_ISO);
+/** The chain's head anchors here: one hour before NOW. */
+const WINDOW_ENDS = new Date('2026-08-20T13:00:00.000Z');
 
 const BASE_OCCURRENCE = {
   id: 'occ_1',
   status: 'LATE',
   branchId: 'branch_1',
+  windowEndsAt: WINDOW_ENDS,
   branch: { timezone: 'UTC' },
   assignment: { template: { name: 'Open Check' } },
 };
@@ -58,6 +63,7 @@ interface DbMocks {
   eventFindUnique: ReturnType<typeof vi.fn>;
   eventCreate: ReturnType<typeof vi.fn>;
   outboxCreateMany: ReturnType<typeof vi.fn>;
+  queryRaw: ReturnType<typeof vi.fn>;
 }
 
 function makeDb(opts: {
@@ -73,7 +79,13 @@ function makeDb(opts: {
   const policyFindUnique = vi
     .fn()
     .mockResolvedValue(opts.policy !== undefined ? opts.policy : BASE_POLICY);
-  const eventFindMany = vi.fn().mockResolvedValue(opts.events ?? []);
+  // The handler folds the ledger in one read, so every event carries its own
+  // `createdAt` — that timestamp is the anchor for the next step's delay.
+  const eventFindMany = vi
+    .fn()
+    .mockResolvedValue(
+      (opts.events ?? []).map((e) => ({ createdAt: opts.lastFiredCreatedAt ?? NOW, ...e }))
+    );
   const existingAckEvent = opts.existingAckEvent !== undefined ? opts.existingAckEvent : null;
   const eventFindFirst = vi.fn().mockResolvedValue(existingAckEvent);
   const eventFindUnique = vi
@@ -89,6 +101,7 @@ function makeDb(opts: {
       ...data,
     }));
   const outboxCreateMany = vi.fn().mockResolvedValue({ count: 1 });
+  const queryRaw = vi.fn().mockResolvedValue([{ id: 'occ_1' }]);
 
   const dbObj = {
     restaurantSopOccurrence: {
@@ -112,6 +125,7 @@ function makeDb(opts: {
     restaurantEventOutbox: {
       createMany: outboxCreateMany,
     },
+    $queryRaw: queryRaw,
   };
   (dbObj as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
     fn(dbObj)
@@ -127,6 +141,7 @@ function makeDb(opts: {
       eventFindUnique,
       eventCreate,
       outboxCreateMany,
+      queryRaw,
     },
   };
 }
@@ -226,6 +241,64 @@ describe('sopEscalationHandler', () => {
     await sopEscalationHandler(makeCtx(db));
 
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('fires step 2 once the delay has exactly elapsed', async () => {
+    const { db, mocks } = makeDb({
+      events: [{ id: 'evt_a', escalationStepId: 'step_a', kind: 'FIRED' }],
+      lastFiredCreatedAt: new Date(NOW.getTime() - 30 * 60_000),
+    });
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate.mock.calls[0][0].data).toMatchObject({
+      kind: 'FIRED',
+      escalationStepId: 'step_b',
+    });
+  });
+
+  it('anchors the first step delay to the occurrence window close', async () => {
+    // step_a is given a 90-min delay but the window closed only 60 min before NOW,
+    // so the head of the chain must wait. Before the anchor existed this fired
+    // immediately, making step 1's delay configuration meaningless.
+    const { db, mocks } = makeDb({
+      policy: {
+        ...BASE_POLICY,
+        steps: [{ ...BASE_POLICY.steps[0], delayMinutes: 90 }, BASE_POLICY.steps[1]],
+      },
+    });
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('fires the first step once its window-anchored delay has elapsed', async () => {
+    const { db, mocks } = makeDb({
+      policy: {
+        ...BASE_POLICY,
+        steps: [{ ...BASE_POLICY.steps[0], delayMinutes: 45 }, BASE_POLICY.steps[1]],
+      },
+    });
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate.mock.calls[0][0].data).toMatchObject({
+      kind: 'FIRED',
+      escalationStepId: 'step_a',
+    });
+  });
+
+  it('locks the occurrence row before folding the ledger', async () => {
+    // Two workers must not both claim the same step and append duplicate FIRED
+    // events to an append-only audit ledger.
+    const { db, mocks } = makeDb({});
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    const [template] = mocks.queryRaw.mock.calls[0] as [TemplateStringsArray];
+    expect(template.join(' ').replace(/\s+/g, ' ')).toContain('FOR UPDATE');
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.eventFindMany.mock.invocationCallOrder[0]
+    );
   });
 
   it('rejects unknown payload key (strict zod)', async () => {
