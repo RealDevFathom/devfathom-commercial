@@ -5,6 +5,7 @@ import { type FormEvent, type ReactNode, useCallback, useRef, useState } from 'r
 import { CheckoutPanel, type TerminalRequest, type TerminalRequestOptions } from './checkout-panel';
 import { DrawerPanel } from './drawer-panel';
 import { MenuGrid, type AddMenuItemInput, type EffectiveMenu } from './menu-grid';
+import { OperatorSwitch, type OperatorSwitchInput } from './operator-switch';
 import { OrderTicketPanel, type OrderDetail, type VoidItemInput } from './order-ticket-panel';
 import { FathomMark } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 
 type Channel = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY';
 type Runtime = {
+  deviceId: string;
   deviceSecret: string;
   sessionToken: string;
   sessionId: string;
@@ -41,6 +43,7 @@ type EstablishResponse = {
 type SessionResponse = {
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
 };
+type LocalDraftLine = AddMenuItemInput & { lineId: string; name: string; quotedUnitPrice: string };
 
 class RequestError extends Error {
   constructor(
@@ -120,6 +123,7 @@ export function OrderPad() {
   const [orderMenu, setOrderMenu] = useState<EffectiveMenu | null>(null);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [order, setOrder] = useState<OrderDetail | null>(null);
+  const [draftLines, setDraftLines] = useState<LocalDraftLine[]>([]);
   const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -132,6 +136,7 @@ export function OrderPad() {
     setDraftMenu(null);
     setOrderMenu(null);
     setOrder(null);
+    setDraftLines([]);
     setCheckoutOrderId(null);
     setOpenOrders([]);
     idempotencyKeys.current.clear();
@@ -288,6 +293,7 @@ export function OrderPad() {
         headers: { Authorization: `Bearer ${secret}` },
       });
       setRuntime({
+        deviceId: data.device.id,
         deviceSecret: secret,
         sessionToken: data.sessionToken,
         sessionId: data.session.id,
@@ -362,6 +368,30 @@ export function OrderPad() {
     }
   }
 
+  async function switchOperator(input: OperatorSwitchInput) {
+    if (!runtime || pending) return false;
+    setPending('switch');
+    setNotice(null);
+    try {
+      const data = await request<SessionResponse>('/api/restaurant/terminal/switch', {
+        method: 'POST',
+        headers: authHeaders(runtime, true),
+        body: JSON.stringify(input),
+      });
+      setRuntime({ ...runtime, operatorId: data.session.activeStaffProfileId });
+      setNotice({
+        tone: 'success',
+        message: 'Operator switched. New actions use the incoming identity.',
+      });
+      return true;
+    } catch (error) {
+      handleError(error);
+      return false;
+    } finally {
+      setPending(null);
+    }
+  }
+
   async function mutate(
     path: string,
     body: Record<string, unknown>,
@@ -428,6 +458,25 @@ export function OrderPad() {
         }
       );
       idempotencyKeys.current.delete(intent);
+      for (const line of draftLines) {
+        await request('/api/restaurant/orders/add-item', {
+          method: 'POST',
+          headers: {
+            ...authHeaders(runtime, true),
+            'Idempotency-Key': keyFor(`draft-line:${line.lineId}`),
+          },
+          body: JSON.stringify({
+            orderId: data.orderId,
+            menuItemId: line.menuItemId,
+            quantity: line.quantity,
+            course: line.course,
+            seatNumber: line.seatNumber,
+            modifierOptionIds: line.modifierOptionIds,
+          }),
+        });
+        idempotencyKeys.current.delete(`draft-line:${line.lineId}`);
+      }
+      setDraftLines([]);
       setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
       await Promise.all([loadDetail(data.orderId, runtime, false), loadOpenOrders(runtime, false)]);
     } catch (error) {
@@ -552,6 +601,11 @@ export function OrderPad() {
           actions={
             <div className="flex flex-wrap items-center justify-end gap-2">
               <StatusPill status="active" label={`Operator ${runtime.operatorId}`} />
+              <OperatorSwitch
+                activeOperatorId={runtime.operatorId ?? ''}
+                pending={busy}
+                onSwitch={switchOperator}
+              />
               <DrawerPanel request={checkoutRequest} disabled={busy} />
               <Button
                 type="button"
@@ -641,12 +695,58 @@ export function OrderPad() {
                 </p>
                 <Button
                   type="submit"
+                  aria-label={pending === 'open' ? 'Opening…' : 'Open order'}
                   disabled={busy || !draftMenu?.channelOpen}
                   className="h-11 w-full"
                 >
-                  {pending === 'open' ? 'Opening…' : 'Open order'}
+                  {pending === 'open'
+                    ? 'Sending…'
+                    : `Send order${draftLines.length ? ` (${draftLines.length})` : ''}`}
                 </Button>
               </form>
+            </SectionCard>
+
+            <SectionCard eyebrow="Local draft" title="Composed order">
+              {draftLines.length === 0 ? (
+                <p className="text-sm text-text-muted">
+                  Tap menu items to compose. Nothing is sent until Send order.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {draftLines.map((line) => (
+                    <div
+                      key={line.lineId}
+                      className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-border-subtle px-3 py-2"
+                    >
+                      <span className="min-w-0 truncate text-sm">
+                        {line.quantity} × {line.name}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9"
+                        disabled={busy}
+                        onClick={() =>
+                          setDraftLines((current) =>
+                            current.filter((item) => item.lineId !== line.lineId)
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="h-11 w-full"
+                    disabled={busy}
+                    onClick={() => setDraftLines([])}
+                  >
+                    Discard draft
+                  </Button>
+                </div>
+              )}
             </SectionCard>
 
             <SectionCard
@@ -695,9 +795,23 @@ export function OrderPad() {
               pending={busy}
               onAdd={(input: AddMenuItemInput) => {
                 if (!order) {
+                  const item = draftMenu?.sections
+                    .flatMap((section) => section.items)
+                    .find((candidate) => candidate.id === input.menuItemId);
+                  if (!item?.price) return;
+                  const quotedUnitPrice = item.price;
+                  setDraftLines((current) => [
+                    ...current,
+                    {
+                      ...input,
+                      lineId: crypto.randomUUID(),
+                      name: item.displayName ?? item.product.name,
+                      quotedUnitPrice,
+                    },
+                  ]);
                   setNotice({
-                    tone: 'warning',
-                    message: 'Open or resume an order before adding items.',
+                    tone: 'success',
+                    message: `${item.displayName ?? item.product.name} added locally. No request was sent.`,
                   });
                   return;
                 }

@@ -21,6 +21,7 @@ export type EffectiveMenuSection = {
 };
 
 export type EffectiveMenu = {
+  version?: string;
   publicationId: string;
   channelOpen: boolean;
   menu: { id: string; name: string };
@@ -39,6 +40,7 @@ type MenuGridProps = {
   menu: EffectiveMenu | null;
   pending: boolean;
   onAdd: (input: AddMenuItemInput) => void;
+  cacheState?: 'live' | 'cached' | 'stale';
 };
 
 function ids(value: string) {
@@ -48,7 +50,7 @@ function ids(value: string) {
     .filter(Boolean);
 }
 
-export function MenuGrid({ menu, pending, onAdd }: MenuGridProps) {
+export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGridProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [quantity, setQuantity] = useState('1');
   const [course, setCourse] = useState('1');
@@ -77,11 +79,24 @@ export function MenuGrid({ menu, pending, onAdd }: MenuGridProps) {
       title={menu?.menu.name ?? 'Menu'}
       actions={
         menu ? (
-          <StatusPill
-            status={menu.channelOpen ? 'open' : 'closed'}
-            tone={menu.channelOpen ? 'success' : 'danger'}
-            label={menu.channelOpen ? 'Channel open' : 'Channel closed'}
-          />
+          <div className="flex flex-wrap gap-2">
+            <StatusPill
+              status={cacheState}
+              tone={cacheState === 'live' ? 'success' : 'warning'}
+              label={
+                cacheState === 'live'
+                  ? 'Live catalog'
+                  : cacheState === 'cached'
+                    ? 'Cached catalog'
+                    : 'Stale catalog'
+              }
+            />
+            <StatusPill
+              status={menu.channelOpen ? 'open' : 'closed'}
+              tone={menu.channelOpen ? 'success' : 'danger'}
+              label={menu.channelOpen ? 'Channel open' : 'Channel closed'}
+            />
+          </div>
         ) : null
       }
       className="min-w-0"
@@ -121,7 +136,7 @@ export function MenuGrid({ menu, pending, onAdd }: MenuGridProps) {
                         >
                           <span className="min-w-0 truncate">{name}</span>
                           <span className="shrink-0 font-mono text-xs tabular-nums">
-                            {item.price ?? 'N/A'}
+                            {!item.available ? '86' : (item.price ?? 'N/A')}
                           </span>
                         </Button>
                       );
