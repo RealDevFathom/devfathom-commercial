@@ -34,7 +34,7 @@ type DrawerPage = RouterOutputs['restaurantCash']['listDrawerSessions'];
 type DrawerDetail = RouterOutputs['restaurantCash']['getDrawerSession'];
 type ClosePage = RouterOutputs['restaurantCash']['listDailyCloses'];
 type CloseDetail = RouterOutputs['restaurantCash']['getDailyClose'];
-type MoneyTab = 'bills' | 'payments' | 'drawers' | 'daily-close';
+type MoneyTab = 'bills' | 'payments' | 'drawers' | 'daily-close' | 'terminal';
 type UiError = { message: string; data?: { code?: string } | null };
 type ReadQuery<T> = {
   data: T | undefined;
@@ -241,6 +241,13 @@ export function MoneyConsole() {
   const [refundHistory, setRefundHistory] = useState<CursorHistory>([]);
   const [drawerCursor, setDrawerCursor] = useState<string>();
   const [drawerHistory, setDrawerHistory] = useState<CursorHistory>([]);
+  const [terminalSource, setTerminalSource] = useState('terminal');
+  const [externalTerminalId, setExternalTerminalId] = useState('');
+  const [terminalDeviceId, setTerminalDeviceId] = useState('');
+  const [terminalMode, setTerminalMode] = useState<'DISABLED' | 'SIMULATION' | 'WEBHOOK'>(
+    'DISABLED'
+  );
+  const utils = trpc.useUtils();
 
   const normalizedBranchId = branchId.trim();
   const branchEnabled = posEnabled && normalizedBranchId.length > 0;
@@ -248,6 +255,7 @@ export function MoneyConsole() {
   const paymentsEnabled = branchEnabled && tab === 'payments';
   const drawersEnabled = branchEnabled && tab === 'drawers';
   const closesEnabled = branchEnabled && tab === 'daily-close';
+  const terminalEnabled = branchEnabled && tab === 'terminal';
   const listInput = {
     branchId: normalizedBranchId,
     ...(businessDate ? { businessDate } : {}),
@@ -308,6 +316,17 @@ export function MoneyConsole() {
     { dailyCloseId: selectedCloseId },
     { enabled: closesEnabled && selectedCloseId.length > 0 }
   );
+  const terminalConfigQuery = trpc.restaurantPayments.getTerminalConfig.useQuery(
+    { branchId: normalizedBranchId },
+    { enabled: terminalEnabled }
+  );
+  const reconciliationQuery = trpc.restaurantPayments.listTerminalReconciliations.useQuery(
+    { branchId: normalizedBranchId, limit: 20 },
+    { enabled: terminalEnabled }
+  );
+  const saveTerminalConfig = trpc.restaurantPayments.saveTerminalConfig.useMutation({
+    onSuccess: () => utils.restaurantPayments.getTerminalConfig.invalidate(),
+  });
 
   const resetSelections = () => {
     setSelectedBillId('');
@@ -391,6 +410,7 @@ export function MoneyConsole() {
             <TabsTrigger value="payments">Payments</TabsTrigger>
             <TabsTrigger value="drawers">Drawers</TabsTrigger>
             <TabsTrigger value="daily-close">Daily close</TabsTrigger>
+            <TabsTrigger value="terminal">Card terminal</TabsTrigger>
           </TabsList>
 
           {!branchEnabled ? (
@@ -473,6 +493,153 @@ export function MoneyConsole() {
                     ),
                 }}
               />
+            ) : null}
+          </TabsContent>
+          <TabsContent value="terminal">
+            {branchEnabled ? (
+              <div className="space-y-6">
+                <SectionCard eyebrow="Branch integration" title="Card terminal provider">
+                  <form
+                    className="grid gap-4 md:grid-cols-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      saveTerminalConfig.mutate({
+                        branchId: normalizedBranchId,
+                        source: terminalSource.trim(),
+                        externalTerminalId: externalTerminalId.trim(),
+                        deviceId: terminalDeviceId.trim(),
+                        mode: terminalMode,
+                      });
+                    }}
+                  >
+                    <Field label="Provider source">
+                      <Input
+                        value={terminalSource}
+                        onChange={(event) => setTerminalSource(event.target.value)}
+                      />
+                    </Field>
+                    <Field label="Terminal ID">
+                      <Input
+                        value={externalTerminalId}
+                        onChange={(event) => setExternalTerminalId(event.target.value)}
+                      />
+                    </Field>
+                    <Field label="Registered device ID">
+                      <Input
+                        value={terminalDeviceId}
+                        onChange={(event) => setTerminalDeviceId(event.target.value)}
+                      />
+                    </Field>
+                    <Field label="Mode" description="Simulation is for tests and demos only.">
+                      <select
+                        className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                        value={terminalMode}
+                        onChange={(event) =>
+                          setTerminalMode(event.target.value as typeof terminalMode)
+                        }
+                      >
+                        <option value="DISABLED">Disabled</option>
+                        <option value="SIMULATION">Simulation — test/demo only</option>
+                        <option value="WEBHOOK">Authenticated webhook</option>
+                      </select>
+                    </Field>
+                    <div className="md:col-span-2 flex items-center gap-3">
+                      <Button
+                        type="submit"
+                        disabled={
+                          saveTerminalConfig.isPending ||
+                          !externalTerminalId.trim() ||
+                          !terminalDeviceId.trim() ||
+                          !terminalSource.trim()
+                        }
+                      >
+                        {saveTerminalConfig.isPending ? 'Saving…' : 'Save terminal configuration'}
+                      </Button>
+                      {saveTerminalConfig.error ? (
+                        <StatusPill status="Save failed" tone="danger" />
+                      ) : null}
+                      {saveTerminalConfig.isSuccess ? (
+                        <StatusPill status="Saved" tone="success" />
+                      ) : null}
+                    </div>
+                  </form>
+                </SectionCard>
+                <SectionCard title="Configured terminals">
+                  {terminalConfigQuery.isLoading ? (
+                    <LoadingState label="Loading terminal configuration" />
+                  ) : null}
+                  {terminalConfigQuery.error ? (
+                    <ErrorState
+                      error={terminalConfigQuery.error}
+                      retry={() => void terminalConfigQuery.refetch()}
+                      subject="terminal configuration"
+                    />
+                  ) : null}
+                  {terminalConfigQuery.data?.length === 0 ? (
+                    <EmptyState
+                      title="No terminal configured"
+                      detail="Add a disabled, simulation, or webhook terminal binding above."
+                    />
+                  ) : null}
+                  {terminalConfigQuery.data?.map((config) => (
+                    <div
+                      key={config.id}
+                      className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle py-3 last:border-0"
+                    >
+                      <div>
+                        <p className="font-medium text-text-strong">{config.externalTerminalId}</p>
+                        <p className="text-xs text-text-muted">
+                          {config.source} · device {config.deviceId}
+                        </p>
+                      </div>
+                      <StatusPill
+                        status={label(config.mode)}
+                        tone={
+                          config.mode === 'WEBHOOK'
+                            ? 'success'
+                            : config.mode === 'SIMULATION'
+                              ? 'warning'
+                              : 'neutral'
+                        }
+                      />
+                    </div>
+                  ))}
+                </SectionCard>
+                <SectionCard title="Terminal reconciliation">
+                  {reconciliationQuery.isLoading ? (
+                    <LoadingState label="Loading terminal reconciliation" />
+                  ) : null}
+                  {reconciliationQuery.error ? (
+                    <ErrorState
+                      error={reconciliationQuery.error}
+                      retry={() => void reconciliationQuery.refetch()}
+                      subject="terminal reconciliation"
+                    />
+                  ) : null}
+                  {reconciliationQuery.data?.length === 0 ? (
+                    <EmptyState
+                      title="No terminal events"
+                      detail="Authenticated or simulated events will appear here without cardholder data."
+                    />
+                  ) : null}
+                  {reconciliationQuery.data?.map((row) => (
+                    <div
+                      key={row.id}
+                      className="grid gap-2 border-b border-border-subtle py-3 last:border-0 sm:grid-cols-4"
+                    >
+                      <DetailField label="Reference" value={row.externalReference} />
+                      <DetailField
+                        label="Status"
+                        value={
+                          <StatusPill status={label(row.eventStatus)} tone={tone(row.outcome)} />
+                        }
+                      />
+                      <DetailField label="Amount" value={row.amount} />
+                      <DetailField label="Outcome" value={row.failureReason ?? row.outcome} />
+                    </div>
+                  ))}
+                </SectionCard>
+              </div>
             ) : null}
           </TabsContent>
           <TabsContent value="drawers">

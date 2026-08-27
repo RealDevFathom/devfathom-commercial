@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 import type { Prisma } from '@/generated/prisma/client';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
@@ -35,6 +36,14 @@ const SOURCE = z
 const SIGNATURE_HEADER = 'x-webhook-signature';
 const IP_LIMIT = 120;
 const IP_WINDOW_MS = 60_000;
+
+function verifyTerminalSignature(signature: string | null): 'VERIFIED' | 'FAILED' {
+  const secret = process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
+  if (!secret || !signature) return 'FAILED';
+  const expected = createHash('sha256').update(secret).digest();
+  const actual = createHash('sha256').update(signature).digest();
+  return timingSafeEqual(expected, actual) ? 'VERIFIED' : 'FAILED';
+}
 
 export async function POST(
   request: Request,
@@ -79,13 +88,20 @@ export async function POST(
   }
 
   const signature = request.headers.get(SIGNATURE_HEADER);
+  const terminalEvent = parsed.data.eventType?.startsWith('terminal.') ?? false;
+  const verificationStatus = terminalEvent ? verifyTerminalSignature(signature) : undefined;
   const result = await recordInboundWebhook(createTenantDb(organization.id), {
     source: source.data,
     externalEventId: parsed.data.externalEventId,
     eventType: parsed.data.eventType ?? null,
     payload: parsed.data.payload as unknown as Prisma.InputJsonValue,
     signature,
+    verificationStatus,
   });
+
+  if (terminalEvent && verificationStatus === 'FAILED') {
+    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
+  }
 
   // 202 for a freshly-accepted envelope (enqueued for processing); 200 for a
   // duplicate that was already received (idempotent, nothing enqueued).
