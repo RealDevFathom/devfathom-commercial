@@ -1,0 +1,28 @@
+# DevFathom technical architecture
+
+Reconciled at `343478dbc75d9ad6863955e23cd7280d5cf0513f` for WHA-243.
+
+This page is the canonical product-wide architecture map. The [Restaurant architecture](../restaurant/architecture.md) remains the detailed vertical reference.
+
+## Product and runtime boundaries
+
+- **IMPLEMENTED** — DevFathom is one Next.js application containing an agency workspace, a seller-operated platform console/control plane, and the Restaurant vertical. Evidence: [`src/app/(app)`](../../src/app/%28app%29), [`src/app/platform`](../../src/app/platform), [`src/app/(app)/restaurant`](../../src/app/%28app%29/restaurant), [`src/app/platform/(console)/audit/page.test.tsx`](../../src/app/platform/%28console%29/audit/page.test.tsx).
+- **IMPLEMENTED** — Agency workspace covers organization-scoped dashboard, clients, projects, finance, people, meetings, notes, chat, settings, and organization administration through shared tenant authorization and tRPC context. Evidence: [`src/server/routers/_app.ts`](../../src/server/routers/_app.ts), [`src/server/trpc.ts`](../../src/server/trpc.ts), [`src/server/trpc.test.ts`](../../src/server/trpc.test.ts).
+- **IMPLEMENTED** — Platform console owns customer lifecycle, commercial/catalog state, entitlements, deployments, jobs, support access, operators, and platform audit. Tenant administrators cannot assume this realm. Evidence: [`src/app/platform/(console)`](../../src/app/platform/%28console%29), [`src/lib/platform/commands.ts`](../../src/lib/platform/commands.ts), [`src/lib/platform/security.test.ts`](../../src/lib/platform/security.test.ts).
+
+## Trust, tenancy, and deployment
+
+- **IMPLEMENTED** — Tenant Auth.js sessions and platform operator sessions are separate auth realms. Host routing separates admin, shared, tenant/custom, and dedicated-host contracts; authenticated server code revalidates authority. Evidence: [`src/lib/auth.ts`](../../src/lib/auth.ts), [`src/lib/platform/auth.ts`](../../src/lib/platform/auth.ts), [`src/lib/tenancy/host-routing.ts`](../../src/lib/tenancy/host-routing.ts), [`src/lib/auth/shared-login.test.ts`](../../src/lib/auth/shared-login.test.ts).
+- **IMPLEMENTED** — Shared PostgreSQL storage uses organization-scoped records, transaction-local tenant context, forced RLS, and fail-closed platform policies. Evidence: [`src/lib/tenancy/scoped-db.ts`](../../src/lib/tenancy/scoped-db.ts), [`prisma/migrations/20260728092000_row_level_security/migration.sql`](../../prisma/migrations/20260728092000_row_level_security/migration.sql), [`scripts/verify-tenant-isolation.ts`](../../scripts/verify-tenant-isolation.ts).
+- **IMPLEMENTED** — Package/module inheritance plus organization overrides gate product modules; UI visibility is not the authority. Evidence: [`src/lib/entitlements.ts`](../../src/lib/entitlements.ts), [`prisma/migrations/20260818120000_package_module_inheritance_cleanup/migration.sql`](../../prisma/migrations/20260818120000_package_module_inheritance_cleanup/migration.sql), [`src/server/routers/entitlement-cleanup.test.ts`](../../src/server/routers/entitlement-cleanup.test.ts).
+- **IMPLEMENTED** — Repository deployment boundary is Azure Container Apps with shared application infrastructure and PostgreSQL; production bootstrap and deployment contracts are tested. Evidence: [`docs/azure-deployment.md`](../azure-deployment.md), [`prisma/production-bootstrap.ts`](../../prisma/production-bootstrap.ts), [`tests/production-deployment-contract.test.ts`](../../tests/production-deployment-contract.test.ts).
+- **PLANNED (admin-platform ADR 002 / deployment lane)** — Dedicated tenant environments remain a separate deployment topology, not proof of a deployed dedicated environment. Reference: [`docs/admin-platform/adr/002-control-plane-separation.md`](../admin-platform/adr/002-control-plane-separation.md).
+
+## Vertical and media boundaries
+
+- **IMPLEMENTED (Restaurant M0–M8; WHA-8, WHA-20–WHA-101)** — Restaurant extends shared tenancy/entitlements through branch foundation, staff/device trust, catalog/menu, orders/kitchen, money, inventory/purchasing, scheduler/SOP/notifications, and customers/loyalty/insights. Evidence: [`docs/restaurant/architecture.md`](../restaurant/architecture.md), [`prisma/migrations/20260821010000_restaurant_customers_loyalty_insights/migration.sql`](../../prisma/migrations/20260821010000_restaurant_customers_loyalty_insights/migration.sql), [`tests/restaurant-m8-governance.test.ts`](../../tests/restaurant-m8-governance.test.ts).
+- **IMPLEMENTED** — Meeting media uses JaaS/Jitsi JWT minting and browser embed. Evidence: [`src/server/routers/meetings.ts`](../../src/server/routers/meetings.ts), [`src/components/meetings/meeting-call.tsx`](../../src/components/meetings/meeting-call.tsx), [`src/server/routers/meetings-bounds.test.ts`](../../src/server/routers/meetings-bounds.test.ts).
+- **PLANNED (admin-platform ADR 005 / meetings lane)** — Self-hosted LiveKit/TURN is proposed; it is not the current media runtime. Reference: [`docs/admin-platform/adr/005-self-hosted-meetings.md`](../admin-platform/adr/005-self-hosted-meetings.md).
+- **PLANNED (WHA-243 Lane C)** — Platform login/onboarding expansion remains outside implemented first-wave scope.
+- **PLANNED (WHA-243 Lane D)** — Broader dashboard work remains separate from existing agency dashboard and Restaurant M8 insights.
+- **PLANNED (WHA-243 supervisor boundary)** — Provider-backed automatic card confirmation and online gateways are not implemented. OCR remains separate-lane, not integrated. Cameras, physical printing, staff shifts, deeper SOP integrations, and external notification delivery also remain unimplemented boundaries.
