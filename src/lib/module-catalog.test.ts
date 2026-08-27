@@ -151,6 +151,14 @@ describe('module catalog routing', () => {
     // their module regardless of the caller's vertical.
     expect(moduleForPath('/projects', 'RESTAURANT')).toBe('projects');
   });
+
+  it('routes the menu-import console to the Menu and Costing module', () => {
+    expect(moduleForPath('/restaurant/menu-import')).toBe('restaurant-menu');
+    expect(moduleForPath('/restaurant/menu-import/import_123')).toBe('restaurant-menu');
+    // A lookalike sibling must not inherit the import module; the restaurant
+    // catalog's core catch-all still owns it.
+    expect(moduleForPath('/restaurant/menu-imports-archive')).toBe('restaurant-core');
+  });
 });
 
 describe('module vertical ownership', () => {
