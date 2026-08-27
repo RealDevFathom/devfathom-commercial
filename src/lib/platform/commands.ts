@@ -2024,6 +2024,171 @@ async function runCommand(
         : await db.platformModule.create({ data });
       return { targetType: 'PlatformModule', targetId: saved.id, data: saved, audit: saved };
     }
+    // CAM-L1 — one contiguous block. Platform RLS is privileged here, so every
+    // tenant write verifies branch ownership and writes organizationId itself.
+    case 'organization.camera.register': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          gatewayId: id,
+          name: requiredText,
+          sourceRef: requiredText,
+          credentialCiphertext: z.string().min(16).max(20_000),
+          assembledRtspUrl: z.string().url().max(2_000),
+        })
+        .strict()
+        .parse(payload);
+      const branch = await db.restaurantBranch.findFirst({
+        where: { id: input.branchId, organizationId: input.organizationId },
+        select: { id: true },
+      });
+      if (!branch) throw new PlatformSecurityError('Branch does not belong to organization.', 400);
+      const gateway = await db.restaurantCameraGateway.findFirst({
+        where: {
+          id: input.gatewayId,
+          branchId: input.branchId,
+          organizationId: input.organizationId,
+          status: 'ACTIVE',
+          revokedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!gateway) throw new PlatformSecurityError('Active camera gateway not found.', 400);
+      const credential = await db.restaurantCameraCredential.create({
+        data: { organizationId: input.organizationId, sealedValue: input.credentialCiphertext },
+      });
+      const saved = await db.restaurantCamera.create({
+        data: {
+          organizationId: input.organizationId,
+          branchId: input.branchId,
+          gatewayId: gateway.id,
+          credentialId: credential.id,
+          name: input.name,
+          sourceRef: input.sourceRef,
+        },
+      });
+      return {
+        targetType: 'RestaurantCamera',
+        targetId: saved.id,
+        organizationId: input.organizationId,
+        data: saved,
+        audit: omit(input, 'credentialCiphertext', 'assembledRtspUrl'),
+      };
+    }
+    case 'organization.camera.update': {
+      const input = z
+        .object({
+          id,
+          organizationId: id,
+          branchId: id,
+          name: requiredText.optional(),
+          sourceRef: requiredText.optional(),
+          enabled: z.boolean().optional(),
+          credentialCiphertext: z.string().min(16).max(20_000).optional(),
+          assembledRtspUrl: z.string().url().max(2_000).optional(),
+        })
+        .strict()
+        .parse(payload);
+      const branch = await db.restaurantBranch.findFirst({
+        where: { id: input.branchId, organizationId: input.organizationId },
+        select: { id: true },
+      });
+      if (!branch) throw new PlatformSecurityError('Branch does not belong to organization.', 400);
+      const before = await db.restaurantCamera.findFirst({
+        where: { id: input.id, branchId: input.branchId, organizationId: input.organizationId },
+      });
+      if (!before) throw new PlatformSecurityError('Camera not found.', 400);
+      if (input.credentialCiphertext) {
+        await db.restaurantCameraCredential.update({
+          where: { id: before.credentialId },
+          data: {
+            sealedValue: input.credentialCiphertext,
+            version: { increment: 1 },
+            rotatedAt: new Date(),
+          },
+        });
+      }
+      const saved = await db.restaurantCamera.update({
+        where: { id: before.id },
+        data: { name: input.name, sourceRef: input.sourceRef, enabled: input.enabled },
+      });
+      const safeAudit = omit(input, 'credentialCiphertext', 'assembledRtspUrl');
+      return {
+        targetType: 'RestaurantCamera',
+        targetId: saved.id,
+        organizationId: input.organizationId,
+        auditBefore: before,
+        data: saved,
+        audit: safeAudit,
+      };
+    }
+    case 'organization.camera.remove': {
+      const input = z.object({ id, organizationId: id }).strict().parse(payload);
+      const before = await db.restaurantCamera.findFirst({
+        where: { id: input.id, organizationId: input.organizationId },
+      });
+      if (!before) throw new PlatformSecurityError('Camera not found.', 400);
+      await db.restaurantCamera.delete({ where: { id: before.id } });
+      return {
+        targetType: 'RestaurantCamera',
+        targetId: before.id,
+        organizationId: input.organizationId,
+        auditBefore: before,
+        data: { removed: true },
+        audit: { removed: true },
+      };
+    }
+    case 'catalog.camerapreset': {
+      const input = z
+        .object({
+          id: optionalId.optional(),
+          key: z
+            .string()
+            .trim()
+            .min(2)
+            .max(80)
+            .regex(/^[a-z0-9-]+$/),
+          familyName: requiredText,
+          aliases: z.array(requiredText).max(20),
+          iconKey: requiredText,
+          rtspPort: z.coerce.number().int().min(1).max(65_535),
+          onvifPort: z.coerce.number().int().min(1).max(65_535),
+          mainStreamPathTemplate: requiredText,
+          subStreamPathTemplate: requiredText,
+          authSchemeHint: requiredText,
+          defaultUsernameHint: optionalText.optional(),
+          credentialNote: requiredText,
+          setupNote: requiredText,
+          active: z.boolean(),
+          sortOrder: z.coerce.number().int().min(0).max(10_000),
+        })
+        .strict()
+        .parse(payload);
+      const { id: presetId, ...data } = input;
+      const saved = presetId
+        ? await db.platformCameraBrandPreset.update({ where: { id: presetId }, data })
+        : await db.platformCameraBrandPreset.create({ data });
+      return {
+        targetType: 'PlatformCameraBrandPreset',
+        targetId: saved.id,
+        data: saved,
+        audit: saved,
+      };
+    }
+    case 'catalog.camerapreset.remove': {
+      const input = z.object({ id }).strict().parse(payload);
+      const before = await db.platformCameraBrandPreset.findUnique({ where: { id: input.id } });
+      if (!before) throw new PlatformSecurityError('Camera preset not found.', 400);
+      await db.platformCameraBrandPreset.delete({ where: { id: before.id } });
+      return {
+        targetType: 'PlatformCameraBrandPreset',
+        targetId: before.id,
+        auditBefore: before,
+        data: { removed: true },
+        audit: { removed: true },
+      };
+    }
     case 'catalog.package.upsert': {
       const input = z
         .object({
