@@ -7,6 +7,11 @@ import { assertMeetingManage, assertMeetingAccess } from '../authz';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '../activity';
 import { computePunctuality, findRelevantOccurrence } from '@/lib/meeting-occurrence';
+import {
+  cancelOccurrence,
+  materializeMeetingOccurrences,
+  rescheduleOccurrence,
+} from '@/lib/meetings/occurrences';
 
 /** Page size `getAll` falls back to when the caller sends no `limit` (#38). */
 const MEETINGS_PAGE_SIZE = 50;
@@ -16,6 +21,18 @@ const MEETINGS_PAGE_SIZE_MAX = 200;
 const UPCOMING_LIMIT = 50;
 /** Recurring series `getUpcoming` evaluates per call — see the query below. */
 const UPCOMING_SERIES_LIMIT = 200;
+
+function legacyRecurrenceRule(value: string | null): string | null {
+  if (!value) return null;
+  return (
+    {
+      daily: 'FREQ=DAILY',
+      weekly: 'FREQ=WEEKLY',
+      biweekly: 'FREQ=WEEKLY;INTERVAL=2',
+      monthly: 'FREQ=MONTHLY',
+    }[value] ?? null
+  );
+}
 
 export const meetingsRouter = router({
   getUpcoming: protectedProcedure.query(async ({ ctx }) => {
@@ -298,12 +315,17 @@ export const meetingsRouter = router({
       const { attendeeIds, ...meetingData } = input;
       const allAttendees = [...new Set([user.id, ...attendeeIds])];
 
-      return ctx.db.meeting.create({
-        data: {
-          ...meetingData,
-          createdById: user.id,
-          attendees: { create: allAttendees.map((userId) => ({ userId })) },
-        },
+      return ctx.db.$transaction(async (tx) => {
+        const meeting = await tx.meeting.create({
+          data: {
+            ...meetingData,
+            recurrenceRule: legacyRecurrenceRule(meetingData.recurrence),
+            createdById: user.id,
+            attendees: { create: allAttendees.map((userId) => ({ userId })) },
+          },
+        });
+        await materializeMeetingOccurrences(tx, meeting);
+        return meeting;
       });
     }),
 
@@ -340,6 +362,30 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertMeetingManage(ctx, input.id);
       return ctx.db.meeting.delete({ where: { id: input.id } });
+    }),
+
+  rescheduleOccurrence: protectedProcedure
+    .input(z.object({ occurrenceId: z.string(), startTime: z.date(), endTime: z.date() }))
+    .mutation(async ({ ctx, input }) => {
+      const occurrence = await ctx.db.meetingOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { meetingId: true },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertMeetingManage(ctx, occurrence.meetingId);
+      return rescheduleOccurrence(ctx.db, input.occurrenceId, input.startTime, input.endTime);
+    }),
+
+  cancelOccurrence: protectedProcedure
+    .input(z.object({ occurrenceId: z.string(), reason: z.string().max(500).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const occurrence = await ctx.db.meetingOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { meetingId: true },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertMeetingManage(ctx, occurrence.meetingId);
+      return cancelOccurrence(ctx.db, input.occurrenceId, ctx.session.user.id, input.reason);
     }),
 
   /**
