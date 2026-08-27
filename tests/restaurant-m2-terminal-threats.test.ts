@@ -189,6 +189,19 @@ vi.mock('@/lib/tenancy/host', async () => {
 
 vi.mock('@/lib/auth/shared-login', () => ({ resolveSharedLogin: h.resolveSharedLogin }));
 
+vi.mock('@/lib/entitlements', () => ({
+  hasModule: (entitlements: { enabledModules: string[] }, moduleKey: string) =>
+    entitlements.enabledModules.includes(moduleKey),
+  resolveOrganizationEntitlements: vi.fn(async () => ({
+    organizationId: 'org_m2',
+    seatLimit: 10,
+    activeSeats: 1,
+    enabledModules: ['restaurant-pos'],
+    modules: [],
+    limits: {},
+  })),
+}));
+
 vi.mock('next-auth/providers/credentials', () => ({
   default: (config: Record<string, unknown>) => ({ id: 'credentials', ...config }),
 }));

@@ -52,6 +52,7 @@ describe('module catalog routing', () => {
       restaurantStaff: 'restaurant-core',
       restaurantDevices: 'restaurant-core',
       restaurantCatalog: 'restaurant-menu',
+      restaurantMenuImport: 'restaurant-menu',
       restaurantMenus: 'restaurant-menu',
       restaurantFloor: 'restaurant-pos',
       restaurantOrders: 'restaurant-pos',

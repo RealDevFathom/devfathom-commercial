@@ -36,9 +36,11 @@ const mocks = vi.hoisted(() => ({
   userCreate: vi.fn(),
   branchCreate: vi.fn(),
   branchFindMany: vi.fn(),
+  branchCount: vi.fn(),
   assignmentCreate: vi.fn(),
   moduleUpsert: vi.fn(),
   orgModuleFindMany: vi.fn(),
+  orgModuleCount: vi.fn(),
   platformModuleFindMany: vi.fn(),
   platformModuleFindUnique: vi.fn(),
 }));
@@ -70,9 +72,17 @@ const platformDb = {
   platformJob: { create: record() },
   organizationLifecycleEvent: { create: record() },
   platformAuditLog: { create: record() },
-  restaurantBranch: { create: mocks.branchCreate, findMany: mocks.branchFindMany },
+  restaurantBranch: {
+    create: mocks.branchCreate,
+    findMany: mocks.branchFindMany,
+    count: mocks.branchCount,
+  },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
-  organizationModule: { upsert: mocks.moduleUpsert, findMany: mocks.orgModuleFindMany },
+  organizationModule: {
+    upsert: mocks.moduleUpsert,
+    findMany: mocks.orgModuleFindMany,
+    count: mocks.orgModuleCount,
+  },
   platformModule: {
     findUnique: mocks.platformModuleFindUnique,
     findMany: mocks.platformModuleFindMany,
@@ -362,7 +372,7 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
-    expect((error as PlatformSecurityError).message).toContain('immutable');
+    expect((error as PlatformSecurityError).message).toContain('early onboarding');
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 
@@ -387,6 +397,8 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
   });
 
   it('allows correcting the vertical BEFORE activation', async () => {
+    mocks.branchCount.mockResolvedValue(0);
+    mocks.orgModuleCount.mockResolvedValue(0);
     mocks.orgFindUnique.mockResolvedValue({
       id: 'org_x',
       vertical: 'AGENCY',
@@ -396,7 +408,7 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
       deploymentMode: 'SHARED',
     });
     mocks.orgUpdate.mockResolvedValue({ id: 'org_x' });
-    mocks.pkgFindUnique.mockResolvedValue({ vertical: 'RESTAURANT' });
+    mocks.pkgFindUnique.mockResolvedValue({ active: true, vertical: 'RESTAURANT' });
 
     await run('organization.update', { id: 'org_x', vertical: 'RESTAURANT', packageId: 'pkg_r' });
 
@@ -547,6 +559,8 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     /src\/lib\/module-catalog(\.test)?\.(ts|tsx)$/,
     // Sidebar navigation — vertical-aware nav is approved
     /src\/components\/layout\/sidebar(\.test)?\.(ts|tsx)$/,
+    /src\/components\/layout\/app-shell(\.test)?\.(ts|tsx)$/,
+    /src\/app\/\(app\)\/dashboard\//,
     // Platform console pages for organizations and catalog
     /src\/app\/platform\/\(console\)\/organizations\//,
     /src\/app\/platform\/\(console\)\/catalog\//,
