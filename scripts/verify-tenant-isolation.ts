@@ -1017,6 +1017,8 @@ async function main() {
     const loyaltyPointsB = `rloyalpts_b_${suffix}`;
     const insightDailyA = `rinsday_a_${suffix}`;
     const insightDailyB = `rinsday_b_${suffix}`;
+    const insightLiabilityA = `rinsliab_a_${suffix}`;
+    const insightLiabilityB = `rinsliab_b_${suffix}`;
     const insightItemA = `rinsitem_a_${suffix}`;
     const insightItemB = `rinsitem_b_${suffix}`;
     const labourFactA = `rlabour_a_${suffix}`;
@@ -1147,6 +1149,14 @@ async function main() {
       [insightDailyA, branchA, dailyCloseA, insightDailyB, organizationB, branchB, dailyCloseB]
     );
     await client.query(
+      `INSERT INTO "restaurant_insight_loyalty_liabilities" (
+        "id", "organizationId", "businessDate", "cutoffAt", "programVersionId",
+        "redemptionValue", "positivePoints", "signedPoints", "liability", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', DATE '2030-01-01', TIMESTAMPTZ '2030-01-02T00:00:00Z', $2, 0.01, 100, 80, 1, CURRENT_TIMESTAMP),
+               ($3, $4, DATE '2030-01-01', TIMESTAMPTZ '2030-01-02T00:00:00Z', $5, 0.01, 200, 180, 2, CURRENT_TIMESTAMP)`,
+      [insightLiabilityA, loyaltyProgramA, insightLiabilityB, organizationB, loyaltyProgramB]
+    );
+    await client.query(
       `INSERT INTO "restaurant_insight_item_mix_rollups" (
         "id", "organizationId", "branchId", "businessDate", "productId",
         "sourceDailyCloseId", "quantity", "updatedAt"
@@ -1270,6 +1280,7 @@ async function main() {
       ['restaurant_loyalty_accounts', loyaltyAccountA, loyaltyAccountB],
       ['restaurant_loyalty_points_entries', loyaltyPointsA, loyaltyPointsB],
       ['restaurant_insight_daily_rollups', insightDailyA, insightDailyB],
+      ['restaurant_insight_loyalty_liabilities', insightLiabilityA, insightLiabilityB],
       ['restaurant_insight_item_mix_rollups', insightItemA, insightItemB],
       ['restaurant_labour_cost_facts', labourFactA, labourFactB],
     ] as const) {
