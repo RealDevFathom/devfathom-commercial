@@ -119,6 +119,21 @@ const M8_COLUMNS = {
     'updatedAt',
     'projectionVersion',
   ],
+  restaurant_insight_loyalty_liabilities: [
+    'id',
+    'organizationId',
+    'businessDate',
+    'cutoffAt',
+    'programVersionId',
+    'redemptionValue',
+    'positivePoints',
+    'signedPoints',
+    'liability',
+    'projectionVersion',
+    'computedAt',
+    'createdAt',
+    'updatedAt',
+  ],
   restaurant_insight_item_mix_rollups: [
     'id',
     'organizationId',
@@ -278,6 +293,18 @@ const INDEXES: Record<string, { unique: boolean; columns: string[]; predicate?: 
     unique: true,
     columns: ['organizationId', 'branchId', 'businessDate'],
   },
+  restaurant_insight_loyalty_liabilities_organizationId_idx: {
+    unique: false,
+    columns: ['organizationId'],
+  },
+  restaurant_insight_loyalty_liabilities_programVersionId_idx: {
+    unique: false,
+    columns: ['programVersionId'],
+  },
+  restaurant_insight_loyalty_liabilities_org_date_key: {
+    unique: true,
+    columns: ['organizationId', 'businessDate'],
+  },
   restaurant_insight_item_mix_rollups_organizationId_idx: {
     unique: false,
     columns: ['organizationId'],
@@ -367,7 +394,7 @@ describe('M8 source governance', () => {
     }
   });
 
-  it('keeps generic schema and tenant-isolation verification explicit for all 12 tables', () => {
+  it('keeps generic schema and tenant-isolation verification explicit for all 13 tables', () => {
     const genericGovernance = readFileSync(
       resolve('tests/restaurant-m3-governance.test.ts'),
       'utf8'
@@ -379,7 +406,7 @@ describe('M8 source governance', () => {
       ?.map((table) => table.slice(1, -1));
 
     expect(genericM8Tables).toEqual(M8_TABLES);
-    expect(genericM8Tables).toHaveLength(12);
+    expect(genericM8Tables).toHaveLength(13);
     expect(genericGovernance).toContain("table_name LIKE 'restaurant\\_%'");
     for (const table of M8_TABLES) {
       expect(verifier).toContain(`INSERT INTO "${table}"`);
