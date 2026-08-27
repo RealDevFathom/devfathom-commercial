@@ -83,6 +83,16 @@ export type CardTenderSpec = {
   type: 'CARD';
   amount: Prisma.Decimal | string;
   tipAmount?: Prisma.Decimal | string;
+  /** Trusted, server-created terminal confirmation. Never accepted by the public
+   * checkout route; webhook processing constructs it after auth + reconciliation. */
+  terminalConfirmation?: {
+    configId: string;
+    branchId: string;
+    externalEventId: string;
+    source: string;
+    externalReference: string;
+    providerRef: string;
+  };
 };
 
 /** A non-cash/non-card tender seam, with an optional tip. */
@@ -227,6 +237,26 @@ export async function applyTender(
       receiptNumber = result.receiptNumber;
     }
 
+    if (input.tender.type === 'CARD' && input.tender.terminalConfirmation) {
+      const terminal = input.tender.terminalConfirmation;
+      await tx.restaurantTerminalReconciliation.create({
+        data: {
+          configId: terminal.configId,
+          branchId: terminal.branchId,
+          externalEventId: terminal.externalEventId,
+          source: terminal.source,
+          eventStatus: 'APPROVED',
+          externalReference: terminal.externalReference,
+          amount,
+          tipAmount: persisted.tipAmount,
+          billId: bill.id,
+          paymentId: persisted.paymentId,
+          tenderId: persisted.tenderId,
+          outcome: 'APPLIED',
+        },
+      });
+    }
+
     await recordMoneyResult(tx, input.actor, persisted.tenderId);
     return {
       tenderId: persisted.tenderId,
@@ -337,9 +367,25 @@ async function persistCardTender(
     throw new TenderError('A tip amount must not be negative.', 'INVALID_AMOUNT');
   }
 
-  const provider = getPaymentProvider('MOCK');
   const operationRef = `${bill.id}:${actor.deviceId}:${actor.idempotencyKey}`;
-  const outcome = provider.execute({ capability: 'SALE', amount, tipAmount, operationRef });
+  const outcome = tender.terminalConfirmation
+    ? {
+        approved: true,
+        status: 'CAPTURED' as const,
+        providerRef: tender.terminalConfirmation.providerRef,
+        declineCode: null,
+        event: {
+          capability: 'SALE' as const,
+          eventType: 'TERMINAL_APPROVED',
+          amount,
+          providerRef: tender.terminalConfirmation.providerRef,
+          payload: {
+            provider: 'TERMINAL',
+            externalEventId: tender.terminalConfirmation.externalEventId,
+          },
+        },
+      }
+    : getPaymentProvider('MOCK').execute({ capability: 'SALE', amount, tipAmount, operationRef });
   if (!outcome.approved) {
     // Abort the whole transaction: a decline leaves no tender/movement/payment/receipt.
     throw new TenderError(
@@ -351,7 +397,7 @@ async function persistCardTender(
   const payment = await tx.restaurantPayment.create({
     data: {
       billId: bill.id,
-      provider: 'MOCK',
+      provider: tender.terminalConfirmation ? 'TERMINAL' : 'MOCK',
       capability: 'SALE',
       status: outcome.status,
       amount,

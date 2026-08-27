@@ -10,6 +10,7 @@ import {
 import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
 import { enqueue } from '@/lib/restaurant/scheduler';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/terminal-payments';
 
 /**
  * M7-L2 / D21 — the inbound-webhook inbox seam. External providers POST an
@@ -68,6 +69,7 @@ export type RecordInboundWebhookInput = {
   payload: Prisma.InputJsonValue;
   /** The raw signature header value, if the caller presented one (STUB input). */
   signature?: string | null;
+  verificationStatus?: RestaurantWebhookVerificationStatus;
 };
 
 export type RecordInboundWebhookResult = {
@@ -139,10 +141,9 @@ export async function recordInboundWebhook(
   input: RecordInboundWebhookInput,
   now: Date = new Date()
 ): Promise<RecordInboundWebhookResult> {
-  const verificationStatus = verifyWebhookSignatureStub({
-    source: input.source,
-    signature: input.signature ?? null,
-  });
+  const verificationStatus =
+    input.verificationStatus ??
+    verifyWebhookSignatureStub({ source: input.source, signature: input.signature ?? null });
 
   try {
     return await runInboxTransaction(db, async (tx) => {
@@ -204,13 +205,30 @@ export const processInboundWebhookHandler: RestaurantJobHandler = async ({ db, j
   const { inboxId } = webhookProcessPayloadSchema.parse(job.payload);
   const now = new Date();
 
-  await runInboxTransaction(db, async (tx) => {
-    const row = await tx.restaurantWebhookInbox.findUnique({
-      where: { id: inboxId },
-      select: { id: true, status: true, verificationStatus: true },
-    });
-    if (!row || row.status !== 'PENDING') return;
+  const row = await db.restaurantWebhookInbox.findUnique({
+    where: { id: inboxId },
+    select: {
+      id: true,
+      source: true,
+      externalEventId: true,
+      eventType: true,
+      payload: true,
+      status: true,
+      verificationStatus: true,
+    },
+  });
+  if (!row || row.status !== 'PENDING') return;
 
+  if (row.verificationStatus !== 'FAILED' && row.eventType?.startsWith('terminal.')) {
+    const event = terminalEventSchema.parse(row.payload);
+    await processTerminalEvent(db, {
+      source: row.source,
+      externalEventId: row.externalEventId,
+      event,
+      requiredMode: 'WEBHOOK',
+    });
+  }
+  await runInboxTransaction(db, async (tx) => {
     const terminalStatus = row.verificationStatus === 'FAILED' ? 'DISCARDED' : 'PROCESSED';
     await tx.restaurantWebhookInbox.update({
       where: { id: inboxId },
