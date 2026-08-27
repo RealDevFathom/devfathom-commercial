@@ -471,6 +471,24 @@ const OWNER = {
   email: 'owner@chaichowk.pk',
 };
 
+/**
+ * The two agency-workspace admins, mirrored into the restaurant organization.
+ *
+ * `users.organizationId` is a single NOT NULL column and there is no membership
+ * join table, so a user belongs to exactly one organization and the product has
+ * no cross-organization workspace switcher. The unique key is
+ * (`organizationId`, `email`), so the same address can hold one row per
+ * organization — that is the only way to let these two reach the restaurant
+ * workspace without changing the schema. The agency rows are a different
+ * `organizationId` and are never touched by this seed; these rows exist solely
+ * under `org_restaurant_e2e` and carry DEMO_PASSWORD, not the operator-supplied
+ * SEED_PASSWORD that the agency rows use.
+ */
+const GUEST_ADMINS: readonly { key: string; name: string; title: string; email: string }[] = [
+  { key: 'alex', name: 'Alex Carter', title: 'Workspace Admin', email: 'alex@company.com' },
+  { key: 'jordan', name: 'Jordan Lee', title: 'Workspace Admin', email: 'jordan@company.com' },
+];
+
 type CustomerSeed = {
   key: string;
   given: string;
@@ -1272,6 +1290,39 @@ async function seedPeople(tx: Tx): Promise<void> {
       updatedAt: AT,
     },
   });
+
+  // Same shape as the owner above: ADMIN on the manager role, assigned to the
+  // one branch so branch-scoped consoles resolve for them too.
+  for (const guest of GUEST_ADMINS) {
+    await tx.user.upsert({
+      where: { id: id.user(guest.key) },
+      update: { password: passwordHash, name: guest.name, title: guest.title, updatedAt: AT },
+      create: {
+        id: id.user(guest.key),
+        organizationRoleId: BASE.managerRoleId,
+        name: guest.name,
+        email: guest.email,
+        password: passwordHash,
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        title: guest.title,
+        startDate: AT,
+        createdAt: AT,
+        updatedAt: AT,
+      },
+    });
+    await tx.restaurantBranchAssignment.upsert({
+      where: { branchId_userId: { branchId: BASE.branchId, userId: id.user(guest.key) } },
+      update: {},
+      create: {
+        id: id.assignment(guest.key),
+        branchId: BASE.branchId,
+        userId: id.user(guest.key),
+        createdAt: AT,
+        updatedAt: AT,
+      },
+    });
+  }
 
   for (const member of STAFF) {
     await tx.user.upsert({
@@ -2307,7 +2358,7 @@ function countSeeded(): Record<string, number> {
     tables: TABLES.length,
     serverSections: 2,
     staffProfiles: STAFF.length,
-    logins: STAFF.length + 1,
+    logins: STAFF.length + 1 + GUEST_ADMINS.length,
     customers: CUSTOMERS.length,
     loyaltyAccounts: CUSTOMERS.length,
     orders: ALL_ORDERS.length,
@@ -2326,6 +2377,7 @@ function countSeeded(): Record<string, number> {
 export const DEMO_SUMMARY = {
   organization: DEMO_ORG,
   owner: { ...OWNER, password: DEMO_PASSWORD },
+  guestAdmins: GUEST_ADMINS.map((guest) => ({ ...guest, password: DEMO_PASSWORD })),
   staff: STAFF,
   historyDates: HISTORY_DATES,
   today: TODAY,
