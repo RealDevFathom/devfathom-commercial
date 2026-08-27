@@ -41,6 +41,14 @@ const APPEND_ONLY = [
 const ids = {
   orgA: `m8_org_a_${suffix}`,
   orgB: `m8_org_b_${suffix}`,
+  branchA: `m8_branch_a_${suffix}`,
+  branchB: `m8_branch_b_${suffix}`,
+  staffA: `m8_staff_a_${suffix}`,
+  staffB: `m8_staff_b_${suffix}`,
+  productA: `m8_product_a_${suffix}`,
+  productB: `m8_product_b_${suffix}`,
+  closeA: `m8_close_a_${suffix}`,
+  closeB: `m8_close_b_${suffix}`,
   customerA: `m8_customer_a_${suffix}`,
   customerB: `m8_customer_b_${suffix}`,
   identifierA: `m8_identifier_a_${suffix}`,
@@ -86,6 +94,13 @@ const rowIds: Record<(typeof M8_TABLES)[number], [string, string]> = {
 };
 
 let normalizedIdentifierProof: Array<{ kind: string; organizations: number; rows: number }> = [];
+let connectionProof: Array<{
+  connection: string;
+  database: string;
+  rolcanlogin: boolean;
+  rolsuper: boolean;
+  rolbypassrls: boolean;
+}> = [];
 
 async function expectDatabaseError(code: string, run: () => Promise<unknown>) {
   await runtimeClient!.query('SAVEPOINT expected_failure');
@@ -124,8 +139,59 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       [ids.orgA, `m8-a-${suffix}`, ids.orgB, `m8-b-${suffix}`]
     );
 
-    // These probes target RLS only; foreign-key parents belong to downstream lanes.
-    await ownerClient!.query(`SET LOCAL session_replication_role = 'replica'`);
+    connectionProof = (
+      await Promise.all([
+        ['owner', ownerClient!],
+        ['runtime', runtimeClient!],
+      ] as const).then((connections) =>
+        Promise.all(
+          connections.map(async ([connection, client]) => ({
+            connection,
+            ...(
+              await client.query<{
+                database: string;
+                rolcanlogin: boolean;
+                rolsuper: boolean;
+                rolbypassrls: boolean;
+              }>(
+                `SELECT current_database() AS database, rolcanlogin, rolsuper, rolbypassrls
+                   FROM pg_catalog.pg_roles
+                  WHERE rolname = current_user`
+              )
+            ).rows[0],
+          }))
+        )
+      )
+    ).sort((left, right) => left.connection.localeCompare(right.connection));
+
+    await ownerClient!.query(
+      `INSERT INTO "restaurant_branches" ("id", "organizationId", "name", "updatedAt") VALUES
+        ($1, $2, 'M8 Branch A', CURRENT_TIMESTAMP),
+        ($3, $4, 'M8 Branch B', CURRENT_TIMESTAMP)`,
+      [ids.branchA, ids.orgA, ids.branchB, ids.orgB]
+    );
+    await ownerClient!.query(
+      `INSERT INTO "restaurant_staff_profiles" (
+        "id", "organizationId", "displayName", "primaryBranchId", "updatedAt"
+      ) VALUES
+        ($1, $2, 'M8 Staff A', $3, CURRENT_TIMESTAMP),
+        ($4, $5, 'M8 Staff B', $6, CURRENT_TIMESTAMP)`,
+      [ids.staffA, ids.orgA, ids.branchA, ids.staffB, ids.orgB, ids.branchB]
+    );
+    await ownerClient!.query(
+      `INSERT INTO "restaurant_products" ("id", "organizationId", "name", "updatedAt") VALUES
+        ($1, $2, 'M8 Product A', CURRENT_TIMESTAMP),
+        ($3, $4, 'M8 Product B', CURRENT_TIMESTAMP)`,
+      [ids.productA, ids.orgA, ids.productB, ids.orgB]
+    );
+    await ownerClient!.query(
+      `INSERT INTO "restaurant_daily_closes" (
+        "id", "organizationId", "branchId", "businessDate", "cutByStaffProfileId"
+      ) VALUES
+        ($1, $2, $3, DATE '2030-01-01', $4),
+        ($5, $6, $7, DATE '2030-01-01', $8)`,
+      [ids.closeA, ids.orgA, ids.branchA, ids.staffA, ids.closeB, ids.orgB, ids.branchB, ids.staffB]
+    );
     await ownerClient!.query(
       `INSERT INTO "restaurant_customers" ("id", "organizationId", "displayName", "updatedAt") VALUES
         ($1, $2, 'Tenant A Customer', CURRENT_TIMESTAMP),
@@ -155,22 +221,20 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
     );
     await ownerClient!.query(
       `INSERT INTO "restaurant_customer_interactions" (
-        "id", "organizationId", "customerId", "branchId", "orderId", "type", "idempotencyKey"
+        "id", "organizationId", "customerId", "branchId", "type", "idempotencyKey"
       ) VALUES
-        ($1, $2, $3, $4, $5, 'ORDER', $6),
-        ($7, $8, $9, $10, $11, 'ORDER', $6)`,
+        ($1, $2, $3, $4, 'ORDER', $5),
+        ($6, $7, $8, $9, 'ORDER', $5)`,
       [
         ids.interactionA,
         ids.orgA,
         ids.customerA,
-        `m8_branch_a_${suffix}`,
-        `m8_order_a_${suffix}`,
+        ids.branchA,
         `interaction-${suffix}`,
         ids.interactionB,
         ids.orgB,
         ids.customerB,
-        `m8_branch_b_${suffix}`,
-        `m8_order_b_${suffix}`,
+        ids.branchB,
       ]
     );
     await ownerClient!.query(
@@ -248,16 +312,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       ) VALUES
         ($1, $2, $3, DATE '2030-01-01', $4, CURRENT_TIMESTAMP),
         ($5, $6, $7, DATE '2030-01-01', $8, CURRENT_TIMESTAMP)`,
-      [
-        ids.dailyA,
-        ids.orgA,
-        `m8_branch_a_${suffix}`,
-        `m8_close_a_${suffix}`,
-        ids.dailyB,
-        ids.orgB,
-        `m8_branch_b_${suffix}`,
-        `m8_close_b_${suffix}`,
-      ]
+      [ids.dailyA, ids.orgA, ids.branchA, ids.closeA, ids.dailyB, ids.orgB, ids.branchB, ids.closeB]
     );
     await ownerClient!.query(
       `INSERT INTO "restaurant_insight_loyalty_liabilities" (
@@ -278,14 +333,14 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       [
         ids.itemA,
         ids.orgA,
-        `m8_branch_a_${suffix}`,
-        `m8_product_a_${suffix}`,
-        `m8_close_a_${suffix}`,
+        ids.branchA,
+        ids.productA,
+        ids.closeA,
         ids.itemB,
         ids.orgB,
-        `m8_branch_b_${suffix}`,
-        `m8_product_b_${suffix}`,
-        `m8_close_b_${suffix}`,
+        ids.branchB,
+        ids.productB,
+        ids.closeB,
       ]
     );
     await ownerClient!.query(
@@ -294,17 +349,8 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       ) VALUES
         ($1, $2, $3, DATE '2030-01-01', 8, 100, 'import', $4),
         ($5, $6, $7, DATE '2030-01-01', 8, 100, 'import', $4)`,
-      [
-        ids.labourA,
-        ids.orgA,
-        `m8_branch_a_${suffix}`,
-        `labour-${suffix}`,
-        ids.labourB,
-        ids.orgB,
-        `m8_branch_b_${suffix}`,
-      ]
+      [ids.labourA, ids.orgA, ids.branchA, `labour-${suffix}`, ids.labourB, ids.orgB, ids.branchB]
     );
-    await ownerClient!.query(`SET LOCAL session_replication_role = 'origin'`);
 
     normalizedIdentifierProof = (
       await ownerClient!.query<{ kind: string; organizations: number; rows: number }>(
@@ -343,6 +389,20 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
   });
 
   it('proves the runtime connection is LOGIN NOSUPERUSER NOBYPASSRLS and pins policy metadata', async () => {
+    expect(connectionProof).toHaveLength(2);
+    expect(connectionProof[0]).toMatchObject({
+      connection: 'owner',
+      rolcanlogin: true,
+      rolsuper: false,
+      rolbypassrls: false,
+    });
+    expect(connectionProof[1]).toMatchObject({
+      connection: 'runtime',
+      rolcanlogin: true,
+      rolsuper: false,
+      rolbypassrls: false,
+      database: connectionProof[0].database,
+    });
     expect(
       (
         await runtimeClient!.query<{
