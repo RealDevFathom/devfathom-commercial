@@ -130,6 +130,9 @@ export function moduleForApiScope(scope: string): string | null {
 }
 
 const ROUTE_MODULES: Array<[string, string]> = [
+  // R-lane (WHA-210): the OCR menu-import review console. Listed before the
+  // generic entries because `moduleForPath` takes the first prefix match.
+  ['/restaurant/menu-import', 'restaurant-menu'],
   ['/projects', 'projects'],
   ['/clients', 'clients'],
   ['/notes', 'notes'],

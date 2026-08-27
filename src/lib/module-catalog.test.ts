@@ -60,6 +60,13 @@ describe('module catalog routing', () => {
     expect(moduleForPath('/organization')).toBeNull();
     expect(moduleForPath('/api-docs')).toBeNull();
   });
+
+  it('routes the menu-import console to the Menu and Costing module', () => {
+    expect(moduleForPath('/restaurant/menu-import')).toBe('restaurant-menu');
+    expect(moduleForPath('/restaurant/menu-import/import_123')).toBe('restaurant-menu');
+    // A lookalike sibling must not inherit the import module.
+    expect(moduleForPath('/restaurant/menu-imports-archive')).toBeNull();
+  });
 });
 
 describe('module vertical ownership', () => {
