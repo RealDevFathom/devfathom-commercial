@@ -129,6 +129,7 @@ const M8_TABLES = [
   'restaurant_loyalty_accounts',
   'restaurant_loyalty_points_entries',
   'restaurant_insight_daily_rollups',
+  'restaurant_insight_loyalty_liabilities',
   'restaurant_insight_item_mix_rollups',
   'restaurant_labour_cost_facts',
 ] as const;
