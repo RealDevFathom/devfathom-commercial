@@ -79,16 +79,24 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
   const [assistantMounted, setAssistantMounted] = useState(false);
   if (assistantOpen && !assistantMounted) setAssistantMounted(true);
   const brandStyle = {
-    '--primary': brand.primaryColor,
-    '--primary-hover': brand.primaryColor,
-    '--primary-foreground': contrastColor(brand.primaryColor),
-    '--sidebar': brand.primaryColor,
-    '--sidebar-primary': brand.accentColor,
-    '--sidebar-foreground': contrastColor(brand.primaryColor),
-    '--sidebar-accent-foreground': contrastColor(brand.primaryColor),
-    '--accent-brand': brand.accentColor,
-    '--accent-brand-hover': brand.accentColor,
-    '--ring': brand.accentColor,
+    ...(brand.primaryColor
+      ? {
+          '--primary': brand.primaryColor,
+          '--primary-hover': brand.primaryColor,
+          '--primary-foreground': contrastColor(brand.primaryColor),
+          '--sidebar': brand.primaryColor,
+          '--sidebar-foreground': contrastColor(brand.primaryColor),
+          '--sidebar-accent-foreground': contrastColor(brand.primaryColor),
+        }
+      : {}),
+    ...(brand.accentColor
+      ? {
+          '--sidebar-primary': brand.accentColor,
+          '--accent-brand': brand.accentColor,
+          '--accent-brand-hover': brand.accentColor,
+          '--ring': brand.accentColor,
+        }
+      : {}),
   } as CSSProperties;
 
   return (

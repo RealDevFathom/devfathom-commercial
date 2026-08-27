@@ -3,6 +3,6 @@ export type TenantBrand = {
   logoUrl: string | null;
   markUrl: string | null;
   faviconUrl: string | null;
-  primaryColor: string;
-  accentColor: string;
+  primaryColor: string | null;
+  accentColor: string | null;
 };

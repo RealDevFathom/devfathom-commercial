@@ -564,6 +564,15 @@ export function LoyaltyConsole() {
                       <TableRow
                         key={customer.id}
                         data-state={customer.id === activeCustomerId ? 'selected' : undefined}
+                        tabIndex={0}
+                        className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        onClick={() => setSelectedCustomerId(customer.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setSelectedCustomerId(customer.id);
+                          }
+                        }}
                       >
                         <TableCell className="font-medium text-text-strong">
                           {customerName(customer)}

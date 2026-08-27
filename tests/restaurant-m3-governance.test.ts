@@ -134,6 +134,12 @@ const M8_TABLES = [
   'restaurant_labour_cost_facts',
 ] as const;
 
+// Completion wave (WHA-229): branch-scoped staff shift scheduling. One table,
+// listed here under the same WHA-51 "complete allowlist" contract as every
+// milestone above — a new restaurant table without a listing, or a listed table
+// that was never shipped, fails the pin below.
+const COMPLETION_WAVE_TABLES = ['restaurant_shifts'] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -460,6 +466,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M6_TABLES,
         ...M7_TABLES,
         ...M8_TABLES,
+        ...COMPLETION_WAVE_TABLES,
       ].sort()
     );
 

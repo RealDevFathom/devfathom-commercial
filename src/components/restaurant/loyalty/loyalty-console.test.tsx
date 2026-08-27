@@ -354,6 +354,35 @@ describe('Customers & Loyalty console', () => {
     );
   });
 
+  it('selects customer rows with pointer and keyboard input', () => {
+    mocks.customers.data = {
+      customers: [
+        ...mocks.initial.customers.customers,
+        {
+          ...mocks.initial.customers.customers[0]!,
+          id: 'customer_2',
+          displayName: 'Grace Hopper',
+        },
+      ],
+      nextCursor: null,
+    };
+    renderConsole();
+
+    const rows = screen.getAllByRole('row').filter((row) => row.querySelector('button'));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute('data-state', 'selected');
+
+    fireEvent.click(rows[1]);
+    expect(rows[1]).toHaveAttribute('data-state', 'selected');
+    expect(rows[0]).not.toHaveAttribute('data-state');
+
+    fireEvent.keyDown(rows[0], { key: 'Enter' });
+    expect(rows[0]).toHaveAttribute('data-state', 'selected');
+
+    fireEvent.keyDown(rows[1], { key: ' ' });
+    expect(rows[1]).toHaveAttribute('data-state', 'selected');
+  });
+
   it('renders the route loading state without exposing stale records', () => {
     mocks.customers.isLoading = true;
     renderConsole();

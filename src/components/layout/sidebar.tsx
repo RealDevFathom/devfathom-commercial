@@ -28,6 +28,7 @@ import {
   UtensilsCrossed,
   LayoutGrid,
   ReceiptText,
+  CalendarClock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -110,6 +111,13 @@ const navigation: NavItem[] = [
     label: 'Restaurant staff',
     href: '/restaurant/staff',
     icon: Users,
+    group: 'Firm',
+    module: 'restaurant-core',
+  },
+  {
+    label: 'Roster',
+    href: '/restaurant/staff/roster',
+    icon: CalendarClock,
     group: 'Firm',
     module: 'restaurant-core',
   },
@@ -507,7 +515,7 @@ export function TopNavigation() {
               {isActive && (
                 <m.span
                   layoutId="topnav-active"
-                  className="absolute inset-0 -z-10 rounded-full bg-foreground"
+                  className="absolute inset-0 -z-10 rounded-full bg-primary"
                   transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                 />
               )}
