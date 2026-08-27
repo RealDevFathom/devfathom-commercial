@@ -28,6 +28,11 @@ import {
   UtensilsCrossed,
   LayoutGrid,
   ReceiptText,
+  CookingPot,
+  PackageSearch,
+  ShoppingCart,
+  ListChecks,
+  Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -37,50 +42,47 @@ import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
 import type { TenantBrand } from '@/lib/tenant-brand';
+import { moduleForPath } from '@/lib/module-catalog';
+import type { EntitlementView } from '@/lib/module-catalog';
 
-type NavGroup = 'Workspace' | 'Firm';
+type NavGroup = 'Workspace' | 'Restaurant' | 'Firm';
 
 interface NavItem {
   label: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   group: NavGroup;
-  module?: string;
   adminOnly?: boolean;
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
 }
 
-// Grouped to match the prototype's WORKSPACE / FIRM rail. Order defines the
+// Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
 // numbered index (recomputed after RBAC filtering so numbers stay contiguous).
-const navigation: NavItem[] = [
+export const navigation: NavItem[] = [
   {
     label: 'Dashboard',
     href: '/dashboard',
     icon: LayoutDashboard,
     group: 'Workspace',
-    module: 'dashboard',
   },
   {
     label: 'Projects',
     href: '/projects',
     icon: FolderKanban,
     group: 'Workspace',
-    module: 'projects',
   },
   {
     label: 'Clients',
     href: '/clients',
     icon: Briefcase,
     group: 'Workspace',
-    module: 'clients',
   },
   {
     label: 'Notes',
     href: '/notes',
     icon: StickyNote,
     group: 'Workspace',
-    module: 'notes',
   },
   // Email stays disabled until its OAuth credentials and mailbox schema are deployed.
   {
@@ -88,14 +90,12 @@ const navigation: NavItem[] = [
     href: '/meetings',
     icon: Video,
     group: 'Workspace',
-    module: 'meetings',
   },
   {
     label: 'Chat',
     href: '/chat',
     icon: MessageSquare,
     group: 'Workspace',
-    module: 'chat',
   },
   {
     label: 'Finance',
@@ -103,79 +103,81 @@ const navigation: NavItem[] = [
     icon: DollarSign,
     adminOnly: true,
     group: 'Firm',
-    module: 'finance',
   },
-  { label: 'Team', href: '/team', icon: Users, group: 'Firm', module: 'hr' },
+  { label: 'Team', href: '/team', icon: Users, group: 'Firm' },
+  { label: 'Point of sale', href: '/pos', icon: Monitor, group: 'Restaurant' },
+  { label: 'Kitchen display', href: '/kds', icon: CookingPot, group: 'Restaurant' },
+  { label: 'Floor', href: '/restaurant/floor', icon: LayoutGrid, group: 'Restaurant' },
+  { label: 'Orders', href: '/restaurant/orders', icon: ReceiptText, group: 'Restaurant' },
+  { label: 'Money', href: '/restaurant/money', icon: DollarSign, group: 'Restaurant' },
+  {
+    label: 'Inventory',
+    href: '/restaurant/inventory',
+    icon: PackageSearch,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Purchasing',
+    href: '/restaurant/purchasing',
+    icon: ShoppingCart,
+    group: 'Restaurant',
+  },
+  { label: 'SOP board', href: '/restaurant/sop', icon: ListChecks, group: 'Restaurant' },
+  {
+    label: 'SOP admin',
+    href: '/restaurant/sop/admin',
+    icon: Settings,
+    group: 'Restaurant',
+    adminOnly: true,
+  },
   {
     label: 'Restaurant staff',
     href: '/restaurant/staff',
     icon: Users,
-    group: 'Firm',
-    module: 'restaurant-core',
+    group: 'Restaurant',
   },
   {
     label: 'Restaurant devices',
     href: '/restaurant/devices',
     icon: Monitor,
     adminOnly: true,
-    group: 'Firm',
-    module: 'restaurant-core',
+    group: 'Restaurant',
   },
   {
     label: 'Catalog',
     href: '/restaurant/catalog',
     icon: BookOpen,
-    group: 'Firm',
-    module: 'restaurant-menu',
+    group: 'Restaurant',
   },
   {
     label: 'Menus',
     href: '/restaurant/menus',
     icon: UtensilsCrossed,
-    group: 'Firm',
-    module: 'restaurant-menu',
+    group: 'Restaurant',
   },
   {
-    label: 'Floor',
-    href: '/restaurant/floor',
-    icon: LayoutGrid,
-    group: 'Firm',
-    module: 'restaurant-pos',
-  },
-  {
-    label: 'Orders',
-    href: '/restaurant/orders',
-    icon: ReceiptText,
-    group: 'Firm',
-    module: 'restaurant-pos',
-  },
-  {
-    label: 'Money',
-    href: '/restaurant/money',
-    icon: DollarSign,
-    group: 'Firm',
-    module: 'restaurant-pos',
+    label: 'Notifications',
+    href: '/restaurant/notifications',
+    icon: Bell,
+    group: 'Restaurant',
   },
   {
     label: 'Customers & Loyalty',
     href: '/restaurant/loyalty',
     icon: Users,
-    group: 'Firm',
-    module: 'restaurant-loyalty',
+    group: 'Restaurant',
   },
   {
     label: 'Restaurant Insights',
     href: '/restaurant/insights',
     icon: BarChart3,
-    group: 'Firm',
-    module: 'restaurant-insights',
+    group: 'Restaurant',
   },
   {
     label: 'Reviews',
     href: '/reviews',
     icon: ClipboardList,
     group: 'Firm',
-    module: 'reviews',
   },
   {
     label: 'Insights',
@@ -183,7 +185,6 @@ const navigation: NavItem[] = [
     icon: BarChart3,
     adminOnly: true,
     group: 'Firm',
-    module: 'hr',
   },
   {
     label: 'HR',
@@ -191,7 +192,6 @@ const navigation: NavItem[] = [
     icon: UserCog,
     hrAccess: true,
     group: 'Firm',
-    module: 'hr',
   },
   {
     label: 'Audit Log',
@@ -199,7 +199,6 @@ const navigation: NavItem[] = [
     icon: ScrollText,
     adminOnly: true,
     group: 'Firm',
-    module: 'audit',
   },
   {
     label: 'Organization',
@@ -211,21 +210,30 @@ const navigation: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
 ];
 
-const GROUP_ORDER: NavGroup[] = ['Workspace', 'Firm'];
+const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Firm'];
+
+export function visibleNavigation(
+  entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
+  role?: string
+) {
+  const isAdmin = role === 'ADMIN';
+  const isHr = role === 'HR';
+  return navigation
+    .filter((item) => {
+      const moduleKey = moduleForPath(item.href, entitlements.vertical);
+      if (moduleKey && !entitlements.enabledModules.includes(moduleKey)) return false;
+      if (item.hrAccess) return isAdmin || isHr;
+      if (item.adminOnly) return isAdmin;
+      return true;
+    })
+    .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
+}
 
 function useVisibleNavigation() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const entitlements = useEntitlements();
-  const isAdmin = session?.user?.role === 'ADMIN';
-  const isHr = session?.user?.role === 'HR';
-
-  const filteredNav = navigation.filter((item) => {
-    if (item.module && !entitlements.enabledModules.includes(item.module)) return false;
-    if (item.hrAccess) return isAdmin || isHr;
-    if (item.adminOnly) return isAdmin;
-    return true;
-  });
+  const filteredNav = visibleNavigation(entitlements, session?.user?.role);
 
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
   const matchingHrefs = filteredNav
