@@ -5,7 +5,14 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import {
+  ALL_VERTICALS,
+  VERTICALS,
+  mandatoryModulesForVertical,
+  type OrganizationVertical,
+} from '@/lib/vertical-catalog';
 
 const transitionTargets: Record<string, string[]> = {
   PROSPECT: ['ONBOARDING', 'TERMINATED'],
@@ -24,12 +31,26 @@ export default async function OrganizationDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const now = new Date();
   const data = await withPlatformDb(async (db) => {
-    const [organization, modules, packages] = await Promise.all([
+    const [organization, modules, packages, liveContracts, branchCount] = await Promise.all([
       db.organization.findUnique({
         where: { id },
         include: {
-          package: { select: { id: true, name: true, key: true } },
+          package: {
+            select: {
+              id: true,
+              name: true,
+              key: true,
+              vertical: true,
+              // Package defaults are the entitlement baseline; only enabled links
+              // to still-active catalog modules count.
+              moduleLinks: {
+                where: { enabled: true },
+                select: { moduleId: true, module: { select: { active: true } } },
+              },
+            },
+          },
           modules: {
             include: { module: true },
             orderBy: { module: { sortOrder: 'asc' } },
@@ -74,21 +95,100 @@ export default async function OrganizationDetailPage({
         },
       }),
       db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
+      // Every active package is loaded once and partitioned by vertical below:
+      // the profile form may offer only same-vertical packages (§2.3), while a
+      // pre-activation correction may offer only the target vertical's packages.
       db.platformPackage.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+      // Mirrors the live-contract predicate in `resolveOrganizationEntitlements`
+      // so the console reports the same effective source the runtime resolves.
+      db.platformContract.findMany({
+        where: {
+          organizationId: id,
+          status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
+          startDate: { lte: now },
+          OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
+        },
+        select: {
+          modules: { select: { moduleId: true, module: { select: { active: true } } } },
+        },
+      }),
+      // §2.2 — the command refuses a vertical correction once vertical-owned rows
+      // exist, so the affordance must not be offered once they do.
+      db.restaurantBranch.count({ where: { organizationId: id } }),
     ]);
-    return { organization, modules, packages };
+    return { organization, modules, packages, liveContracts, branchCount };
   });
   if (!data.organization) notFound();
   const organization = data.organization;
+  const vertical: OrganizationVertical = organization.vertical;
+  const verticalDefinition = VERTICALS[vertical];
   const assigned = new Map(organization.modules.map((item) => [item.moduleId, item]));
   const targets = transitionTargets[organization.status] ?? [];
+
+  // §2.3 — a package may only be assigned when its vertical matches; the command
+  // rejects a mismatch, so the console never offers one.
+  const assignablePackages = data.packages.filter((item) => item.vertical === vertical);
+
+  // §6 — the enablement guard rejects any module whose owning vertical differs
+  // from the organization's, so only grantable modules are listed.
+  const catalogModules = data.modules.filter(
+    (module) => verticalForModuleKey(module.key) === vertical
+  );
+  const mandatoryKeys = new Set(mandatoryModulesForVertical(vertical).map((module) => module.key));
+
+  const packageModuleIds = new Set(
+    (organization.package?.moduleLinks ?? [])
+      .filter((link) => link.module.active)
+      .map((link) => link.moduleId)
+  );
+  const contractModuleIds = new Set(
+    data.liveContracts.flatMap((contract) =>
+      contract.modules.filter((link) => link.module.active).map((link) => link.moduleId)
+    )
+  );
+
+  /**
+   * The same precedence `resolveOrganizationEntitlements` applies at runtime:
+   * package defaults are the baseline, a live contract can add a module, and an
+   * organization override is final — including an explicit disable and its
+   * start/expiry window. Reported so an operator acts on the effective state
+   * rather than on the override row alone.
+   */
+  function effectiveEntitlement(moduleId: string) {
+    const override = assigned.get(moduleId);
+    if (override) {
+      const inWindow =
+        override.startsAt <= now && (!override.expiresAt || override.expiresAt > now);
+      return {
+        source: 'OVERRIDE' as const,
+        enabled: inWindow && (override.status === 'ENABLED' || override.status === 'TRIAL'),
+        override,
+      };
+    }
+    if (contractModuleIds.has(moduleId)) return { source: 'CONTRACT' as const, enabled: true };
+    if (packageModuleIds.has(moduleId)) return { source: 'PACKAGE' as const, enabled: true };
+    return { source: 'NONE' as const, enabled: false };
+  }
+
+  // §2.2 — a vertical correction is an early-onboarding-only repair. Lane B
+  // requires all four conditions server-side; the affordance mirrors them exactly
+  // so the console never shows an action the command would reject.
+  const correctionTarget = ALL_VERTICALS.find((option) => option !== vertical);
+  const correctionPackages = correctionTarget
+    ? data.packages.filter((item) => item.vertical === correctionTarget)
+    : [];
+  const correctionAllowed =
+    organization.status === 'ONBOARDING' &&
+    organization.activatedAt === null &&
+    data.branchCount === 0 &&
+    organization.modules.length === 0;
 
   return (
     <div className="mx-auto max-w-[1480px]">
       <PlatformPageHeading
         eyebrow={`Organizations / ${organization.slug}`}
         title={organization.displayName}
-        description={`${organization.legalName} · ${organization.deploymentMode.toLowerCase()} deployment · ${organization._count.users}/${organization.seatLimit} seats`}
+        description={`${organization.legalName} · ${verticalDefinition.label} · ${organization.deploymentMode.toLowerCase()} deployment · ${organization._count.users}/${organization.seatLimit} seats`}
         action={<PlatformStatus value={organization.status} />}
       />
 
@@ -174,7 +274,86 @@ export default async function OrganizationDetailPage({
             )}
           </section>
 
-          <section id="profile" className="scroll-mt-24">
+          <section id="profile" className="scroll-mt-24 space-y-7">
+            <div className="border border-border-default bg-surface-card">
+              <div className="border-b border-border-subtle px-5 py-4">
+                <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent-brand">
+                  Immutable
+                </p>
+                <h2 className="mt-1 font-display text-xl font-semibold">Organization type</h2>
+                <p className="mt-1 text-xs text-text-muted">
+                  The type is chosen once at onboarding. It governs which packages, modules, and
+                  workspace surfaces exist, and it cannot be changed after activation.
+                </p>
+              </div>
+              <div className="grid gap-4 p-5 sm:grid-cols-[1fr_auto] sm:items-start">
+                <div>
+                  <p className="text-sm font-semibold text-text-strong">
+                    {verticalDefinition.label}
+                  </p>
+                  <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.14em] text-text-muted">
+                    {vertical}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-text-muted">
+                    {verticalDefinition.description}
+                  </p>
+                </div>
+                <PlatformStatus value="LOCKED" />
+              </div>
+              {correctionAllowed && correctionTarget ? (
+                <div className="border-t border-border-subtle p-5">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-warning">
+                    Early onboarding correction
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-text-muted">
+                    This organization is still in onboarding, has never been activated, and owns no
+                    branches or module overrides, so the type may still be corrected to{' '}
+                    {VERTICALS[correctionTarget].label}. The replacement package is required in the
+                    same command; the correction disappears as soon as setup starts.
+                  </p>
+                  {correctionPackages.length ? (
+                    <div className="mt-4">
+                      <PlatformCommandForm
+                        compact
+                        action="organization.update"
+                        submitLabel={`Correct type to ${VERTICALS[correctionTarget].label}`}
+                        fields={[
+                          {
+                            name: 'id',
+                            label: 'Organization',
+                            type: 'hidden',
+                            defaultValue: organization.id,
+                          },
+                          {
+                            name: 'vertical',
+                            label: 'Corrected type',
+                            type: 'hidden',
+                            defaultValue: correctionTarget,
+                          },
+                          {
+                            name: 'packageId',
+                            label: `${VERTICALS[correctionTarget].label} package`,
+                            type: 'select',
+                            required: true,
+                            help: 'A correction must move the organization and its package together.',
+                            options: correctionPackages.map((item) => ({
+                              label: item.name,
+                              value: item.id,
+                            })),
+                          },
+                        ]}
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-4 text-xs text-text-muted">
+                      No active {VERTICALS[correctionTarget].label} package is published, so the
+                      type cannot be corrected until one exists.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
             <PlatformCommandForm
               action="organization.update"
               title="Workspace profile"
@@ -202,7 +381,11 @@ export default async function OrganizationDetailPage({
                   name: 'packageId',
                   label: 'Commercial package',
                   type: 'select',
-                  options: data.packages.map((item) => ({ label: item.name, value: item.id })),
+                  help: `Only active ${verticalDefinition.label} packages can be assigned.`,
+                  options: assignablePackages.map((item) => ({
+                    label: item.name,
+                    value: item.id,
+                  })),
                   defaultValue: organization.packageId,
                 },
                 {
@@ -271,13 +454,25 @@ export default async function OrganizationDetailPage({
               </p>
               <h2 className="mt-1 font-display text-xl font-semibold">Modules</h2>
               <p className="mt-1 text-xs text-text-muted">
-                Organization overrides take precedence over package defaults.
+                Only {verticalDefinition.label} modules are listed. Each row shows where the
+                effective entitlement comes from: a package default, a live contract, an
+                organization override, or nothing at all.
               </p>
             </div>
             <div className="divide-y divide-border-subtle">
-              {data.modules.map((module) => {
-                const link = assigned.get(module.id);
-                const enabled = link?.status === 'ENABLED' || link?.status === 'TRIAL';
+              {catalogModules.map((module) => {
+                const entitlement = effectiveEntitlement(module.id);
+                const isMandatory = mandatoryKeys.has(module.key);
+                // An inherited-enabled module needs no "Enable": writing an ENABLED
+                // override would duplicate the package/contract grant and then mask
+                // any later change to it. Disable stays available because it writes
+                // a genuine override — except on a mandatory module, which the
+                // command refuses to disable.
+                const canDisable = entitlement.enabled && !isMandatory;
+                const canEnable = !entitlement.enabled;
+                // Resetting a mandatory module could drop it below the vertical's
+                // floor, so inherited-only is not offered there.
+                const canReset = entitlement.source === 'OVERRIDE' && !isMandatory;
                 return (
                   <div
                     key={module.id}
@@ -288,23 +483,44 @@ export default async function OrganizationDetailPage({
                       <p className="mt-1 text-xs text-text-muted">
                         {module.category} · {module.key}
                       </p>
+                      <p className="mt-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-text-faint">
+                        Source: {entitlement.source}
+                        {isMandatory ? ' · mandatory' : ''}
+                      </p>
                     </div>
-                    <PlatformStatus value={link?.status ?? 'PACKAGE_DEFAULT'} />
+                    <PlatformStatus value={entitlement.enabled ? 'ACTIVE' : 'INACTIVE'} />
                     <div className="flex flex-wrap justify-end gap-2">
-                      <PlatformCommandButton
-                        action="organization.module"
-                        label={enabled ? 'Disable' : 'Enable'}
-                        tone={enabled ? 'quiet' : 'default'}
-                        payload={{
-                          organizationId: organization.id,
-                          moduleId: module.id,
-                          status: enabled ? 'DISABLED' : 'ENABLED',
-                          seatLimit: null,
-                          expiresAt: null,
-                          reason: `Operator ${enabled ? 'disabled' : 'enabled'} module entitlement`,
-                        }}
-                      />
-                      {link ? (
+                      {canEnable ? (
+                        <PlatformCommandButton
+                          action="organization.module"
+                          label="Enable"
+                          tone="default"
+                          payload={{
+                            organizationId: organization.id,
+                            moduleId: module.id,
+                            status: 'ENABLED',
+                            seatLimit: null,
+                            expiresAt: null,
+                            reason: 'Operator enabled module entitlement',
+                          }}
+                        />
+                      ) : null}
+                      {canDisable ? (
+                        <PlatformCommandButton
+                          action="organization.module"
+                          label="Disable"
+                          tone="quiet"
+                          payload={{
+                            organizationId: organization.id,
+                            moduleId: module.id,
+                            status: 'DISABLED',
+                            seatLimit: null,
+                            expiresAt: null,
+                            reason: 'Operator disabled module entitlement',
+                          }}
+                        />
+                      ) : null}
+                      {canReset ? (
                         <PlatformCommandButton
                           action="organization.module.reset"
                           label="Use inherited"
@@ -315,10 +531,21 @@ export default async function OrganizationDetailPage({
                           }}
                         />
                       ) : null}
+                      {!canEnable && !canDisable && !canReset ? (
+                        <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-text-faint">
+                          Always enabled
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 );
               })}
+              {!catalogModules.length ? (
+                <p className="px-5 py-4 text-xs text-text-muted">
+                  No active module is published for the {verticalDefinition.label} vertical yet.
+                  Publish one under Modules and plans before granting entitlements.
+                </p>
+              ) : null}
             </div>
           </section>
 
@@ -1389,6 +1616,13 @@ export default async function OrganizationDetailPage({
               <div>
                 <dt className="text-text-muted">Organization ID</dt>
                 <dd className="mt-1 break-all font-mono text-[10px]">{organization.id}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Organization type</dt>
+                <dd className="mt-1">
+                  {verticalDefinition.label}{' '}
+                  <span className="font-mono text-[9px] text-text-faint">immutable</span>
+                </dd>
               </div>
               <div>
                 <dt className="text-text-muted">Package</dt>
