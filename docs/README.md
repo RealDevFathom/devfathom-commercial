@@ -20,6 +20,9 @@ Use one status on every capability claim:
 | Audience | Document | Purpose |
 | --- | --- | --- |
 | Everyone | [Technical overview](technical-overview.md) | Product boundaries, architecture, tenancy, and operating model |
+| Developers | [Canonical architecture](technical/architecture.md) | Product-wide runtime, trust, deployment, vertical, and meetings boundaries |
+| Developers | [Canonical data model](technical/data-model.md) | Product-wide ownership, tenancy, identity, and entitlement model |
+| Developers | [Canonical API surface](technical/api-surface.md) | Product-wide tenant, platform, tRPC, and REST transport map |
 | Developers | [Local setup](LOCAL_SETUP.md) | Local environment and verification |
 | Operators | [Azure deployment](azure-deployment.md) | Staging, production gate, backups, and rollback |
 | Platform team | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks |
@@ -30,6 +33,7 @@ Use one status on every capability claim:
 
 ## Technical reference
 
+- Canonical first-wave maps: [architecture](technical/architecture.md), [data model](technical/data-model.md), and [API surface](technical/api-surface.md)
 - [Tenant/RLS architecture](admin-platform/architecture-tenancy.md)
 - [Identity and access](admin-platform/identity-access.md)
 - [Platform control desk](admin-platform/control-plane.md)
@@ -49,9 +53,10 @@ Documentation changes should cite repository paths and line ranges where practic
 
 ## Restaurant reference
 
+- These pages preserve Restaurant M0–M8 vertical detail. Product-wide canonical boundaries live under [`docs/technical/`](technical/architecture.md).
 - **IMPLEMENTED** — [Restaurant technical architecture](restaurant/architecture.md) maps the M0–M8 runtime and trust boundaries to repository evidence.
 - **IMPLEMENTED** — [Restaurant data model](restaurant/data-model.md) maps each milestone-owned schema group to its migration and verification evidence.
 - **IMPLEMENTED** — [Restaurant API surface](restaurant/api-surface.md) inventories the mounted tRPC and terminal REST transports and states their limits.
 - **IMPLEMENTED** — [WHA-243 corrected audit](operations/WHA-243-restaurant-documentation-audit.md) records the base-commit audit, corrected M0–M8 conclusion, planned boundaries, and proposed documentation tree.
 
-Last reconciled: 2026-08-27 (WHA-243 first documentation wave).
+Last reconciled: 2026-08-27 (WHA-243 correction pass).
