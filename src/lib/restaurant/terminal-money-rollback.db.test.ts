@@ -316,7 +316,13 @@ beforeAll(async () => {
         },
       });
       await tx.restaurantStaffProfile.create({
-        data: { id: staffId, displayName: `Staff ${tag}`, status: 'ACTIVE', userId },
+        data: {
+          id: staffId,
+          displayName: `Staff ${tag}`,
+          primaryBranchId: ctx.branch,
+          status: 'ACTIVE',
+          userId,
+        },
       });
       await tx.restaurantOperatorCredential.create({
         data: {

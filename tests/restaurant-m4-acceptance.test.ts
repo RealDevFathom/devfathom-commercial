@@ -329,7 +329,13 @@ beforeAll(async () => {
       [ids.managerA, 'Manager A', MANAGER_PIN, undefined],
     ] as const) {
       await tx.restaurantStaffProfile.create({
-        data: { id, displayName, status: 'ACTIVE', ...(userId ? { userId } : {}) },
+        data: {
+          id,
+          displayName,
+          primaryBranchId: ids.branchA,
+          status: 'ACTIVE',
+          ...(userId ? { userId } : {}),
+        },
       });
       await tx.restaurantOperatorCredential.create({
         data: {
@@ -399,7 +405,12 @@ beforeAll(async () => {
   await deps.withTenantDb(ids.orgB, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ids.branchB, name: 'Tenant B' } });
     await tx.restaurantStaffProfile.create({
-      data: { id: ids.operatorB, displayName: 'Operator B', status: 'ACTIVE' },
+      data: {
+        id: ids.operatorB,
+        displayName: 'Operator B',
+        primaryBranchId: ids.branchB,
+        status: 'ACTIVE',
+      },
     });
     await tx.restaurantOperatorCredential.create({
       data: {

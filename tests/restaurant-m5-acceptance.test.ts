@@ -34,7 +34,7 @@ type Deps = {
   terminal: { establish: RouteModule; unlock: RouteModule };
 };
 
-type Device = { deviceId: string; secret: string };
+type Device = { branchId: string; deviceId: string; secret: string };
 
 const suffix = randomBytes(6).toString('hex');
 const PIN = '424242';
@@ -99,6 +99,12 @@ async function call(
 }
 
 async function unlock(device: Device): Promise<string> {
+  await deps.withTenantDb(orgId, (tx) =>
+    tx.restaurantStaffProfile.updateMany({
+      where: { id: { in: [ids.operator, ids.manager] } },
+      data: { primaryBranchId: device.branchId },
+    })
+  );
   const established = await call(deps.terminal.establish, { secret: device.secret });
   expect(established.status).toBe(201);
   const session = established.json.sessionToken as string;
@@ -256,7 +262,13 @@ beforeAll(async () => {
         },
       });
       await tx.restaurantStaffProfile.create({
-        data: { id: staffId, displayName: label, status: 'ACTIVE', userId },
+        data: {
+          id: staffId,
+          displayName: label,
+          primaryBranchId: ids.splitBranch,
+          status: 'ACTIVE',
+          userId,
+        },
       });
       await tx.restaurantOperatorCredential.create({
         data: {
@@ -265,6 +277,12 @@ beforeAll(async () => {
           credentialHash: await deps.hashOperatorCredential('PIN', PIN),
         },
       });
+      await tx.restaurantBranchAssignment.createMany({
+        data: [ids.moneyBranch, ids.crossBranch, ids.receiptBranch].map((branchId) => ({
+          branchId,
+          userId,
+        })),
+      });
     }
 
     for (const branchId of [ids.splitBranch, ids.moneyBranch, ids.crossBranch, ids.receiptBranch]) {
@@ -272,7 +290,7 @@ beforeAll(async () => {
         branchId,
         name: `POS ${branchId}`,
       });
-      devices.set(branchId, { deviceId: device.id, secret });
+      devices.set(branchId, { branchId, deviceId: device.id, secret });
     }
   });
 }, 60_000);

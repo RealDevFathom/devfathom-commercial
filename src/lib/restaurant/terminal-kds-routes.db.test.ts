@@ -55,6 +55,7 @@ const ctx = {
   branchReplay: `branch_r_${suffix}`,
   branchB: `branch_b_${suffix}`,
   staffA: `staff_a_${suffix}`,
+  staffReplay: `staff_replay_${suffix}`,
   staffB: `staff_b_${suffix}`,
   productA: `prod_a_${suffix}`,
   productB: `prod_b_${suffix}`,
@@ -287,11 +288,31 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchA, name: 'A' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchReplay, name: 'Replay' } });
     await tx.restaurantStaffProfile.create({
-      data: { id: ctx.staffA, displayName: 'Operator A', status: 'ACTIVE' },
+      data: {
+        id: ctx.staffA,
+        displayName: 'Operator A',
+        primaryBranchId: ctx.branchA,
+        status: 'ACTIVE',
+      },
     });
     await tx.restaurantOperatorCredential.create({
       data: {
         staffProfileId: ctx.staffA,
+        type: 'PIN',
+        credentialHash: await deps.hashOperatorCredential('PIN', PIN),
+      },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: ctx.staffReplay,
+        displayName: 'Replay Operator',
+        primaryBranchId: ctx.branchReplay,
+        status: 'ACTIVE',
+      },
+    });
+    await tx.restaurantOperatorCredential.create({
+      data: {
+        staffProfileId: ctx.staffReplay,
         type: 'PIN',
         credentialHash: await deps.hashOperatorCredential('PIN', PIN),
       },
@@ -308,7 +329,12 @@ beforeAll(async () => {
   await deps.withTenantDb(orgB, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchB, name: 'B' } });
     await tx.restaurantStaffProfile.create({
-      data: { id: ctx.staffB, displayName: 'Operator B', status: 'ACTIVE' },
+      data: {
+        id: ctx.staffB,
+        displayName: 'Operator B',
+        primaryBranchId: ctx.branchB,
+        status: 'ACTIVE',
+      },
     });
     await tx.restaurantOperatorCredential.create({
       data: {
@@ -401,7 +427,7 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
   });
 
   it('replays a device-scoped idempotent open and creates nothing on the second call (C7)', async () => {
-    const token = await establishUnlock(ctx.posReplay.secret);
+    const token = await establishUnlock(ctx.posReplay.secret, ctx.staffReplay);
     const key = `open-${suffix}`;
     const first = await call(deps.routes.open, {
       secret: ctx.posReplay.secret,

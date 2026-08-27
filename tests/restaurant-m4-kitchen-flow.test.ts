@@ -214,7 +214,12 @@ beforeAll(async () => {
       data: { id: ids.branch, name: 'Kitchen', timezone: 'UTC', businessDayCutoff: '00:00' },
     });
     await tx.restaurantStaffProfile.create({
-      data: { id: ids.operator, displayName: 'Kitchen Operator', status: 'ACTIVE' },
+      data: {
+        id: ids.operator,
+        displayName: 'Kitchen Operator',
+        primaryBranchId: ids.branch,
+        status: 'ACTIVE',
+      },
     });
     await tx.restaurantOperatorCredential.create({
       data: {

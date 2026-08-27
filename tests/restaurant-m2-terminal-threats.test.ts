@@ -268,6 +268,7 @@ function addOperator(staffProfileId: string, deviceId: string | null = null) {
     id: staffProfileId,
     organizationId: ORG,
     displayName: staffProfileId,
+    primaryBranchId: BRANCH,
     status: 'ACTIVE',
   });
   h.store.credentials.push({

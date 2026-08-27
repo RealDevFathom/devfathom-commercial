@@ -245,7 +245,12 @@ beforeAll(async () => {
       [ids.approver, 'Approver'],
     ] as const) {
       await tx.restaurantStaffProfile.create({
-        data: { id: staffProfileId, displayName, status: 'ACTIVE' },
+        data: {
+          id: staffProfileId,
+          displayName,
+          primaryBranchId: ids.branch,
+          status: 'ACTIVE',
+        },
       });
       await tx.restaurantOperatorCredential.create({
         data: {

@@ -116,7 +116,17 @@ async function enroll(branchId: string, name: string) {
   return { deviceId: device.id, secret };
 }
 
-async function establishUnlock(secret: string, staffProfileId = ctx.staffA): Promise<string> {
+async function establishUnlock(
+  secret: string,
+  staffProfileId = ctx.staffA,
+  branchId = ctx.branchA
+): Promise<string> {
+  await deps.withTenantDb(orgA, (tx) =>
+    tx.restaurantStaffProfile.updateMany({
+      where: { id: { in: [staffProfileId, ctx.managerA] } },
+      data: { primaryBranchId: branchId },
+    })
+  );
   const established = await call(deps.terminal.establish, { secret });
   expect(established.status).toBe(201);
   const token = established.json.sessionToken as string;
@@ -306,7 +316,7 @@ beforeAll(async () => {
       [ctx.staffNoCap, ctx.userNoCap, 'No-cap Op'],
     ] as const) {
       await tx.restaurantStaffProfile.create({
-        data: { id, displayName: name, status: 'ACTIVE', userId },
+        data: { id, displayName: name, primaryBranchId: ctx.branchA, status: 'ACTIVE', userId },
       });
       await tx.restaurantOperatorCredential.create({
         data: {
@@ -314,6 +324,9 @@ beforeAll(async () => {
           type: 'PIN',
           credentialHash: await deps.hashOperatorCredential('PIN', PIN),
         },
+      });
+      await tx.restaurantBranchAssignment.createMany({
+        data: [ctx.branchDay, ctx.branchReplay].map((branchId) => ({ branchId, userId })),
       });
     }
   });
@@ -513,7 +526,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
     const closeKey = uniqueKey('dayclose');
 
     beforeAll(async () => {
-      token = await establishUnlock(ctx.posDay.secret);
+      token = await establishUnlock(ctx.posDay.secret, ctx.staffA, ctx.branchDay);
       const open = await call(deps.routes.drawerOpen, {
         secret: ctx.posDay.secret,
         session: token,
@@ -616,7 +629,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
   // ── Idempotent replay writes nothing (all money tables asserted) ────────────
   describe('idempotent replay', () => {
     it('a replayed card tender returns the original result and creates nothing (C11)', async () => {
-      const token = await establishUnlock(ctx.posReplay.secret);
+      const token = await establishUnlock(ctx.posReplay.secret, ctx.staffA, ctx.branchReplay);
       const { orderId } = await seedOrder(ctx.branchReplay, ctx.posReplay.deviceId, TODAY, [
         '12.00',
       ]);
