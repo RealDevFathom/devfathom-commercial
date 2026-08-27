@@ -155,7 +155,12 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: branchId, name: 'Main' } });
     for (const staff of Object.values(STAFF)) {
       await tx.restaurantStaffProfile.create({
-        data: { id: staff.id, displayName: staff.id, status: 'ACTIVE' },
+        data: {
+          id: staff.id,
+          displayName: staff.id,
+          primaryBranchId: branchId,
+          status: 'ACTIVE',
+        },
       });
       await tx.restaurantOperatorCredential.create({
         data: {
@@ -498,9 +503,11 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     // Co-authorization ADDS the approving manager (C6 — approval never replaces
     // the actor); the approver is pinned in metadata, not the actor column.
     expect(
-      (byAction.get('restaurant.terminal.co-authorize')!.metadata as {
-        approvingStaffProfileId?: string;
-      }).approvingStaffProfileId
+      (
+        byAction.get('restaurant.terminal.co-authorize')!.metadata as {
+          approvingStaffProfileId?: string;
+        }
+      ).approvingStaffProfileId
     ).toBe(STAFF.M.id);
   });
 });

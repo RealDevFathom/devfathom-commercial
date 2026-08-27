@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const M8_TEST_OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
 const describeIfDatabase =
   TEST_DATABASE_URL && M8_TEST_OWNER_DATABASE_URL ? describe : describe.skip;
