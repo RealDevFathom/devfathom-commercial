@@ -6,6 +6,10 @@ import 'dotenv/config';
 import pg from 'pg';
 
 import { PrismaClient } from '../src/generated/prisma/client.js';
+import {
+  seedRestaurantDemoControlPlane,
+  seedRestaurantDemoTenant,
+} from './seed-restaurant-demo.js';
 
 export const RESTAURANT_E2E = {
   organizationId: 'org_chai_chowk',
@@ -605,6 +609,30 @@ async function main() {
     console.log(
       `Seeded and verified Chai Chowk (${RESTAURANT_E2E.organizationId}): Alex belongs to ${[...alexOrganizations].join(', ')}; roles=${verification.ownedRows.roles}, staff=${verification.ownedRows.staff}, products=${verification.ownedRows.products}, leaked fixture rows=${verification.leakedRows.count}.`
     );
+
+    // Showcase layer (SEED DATA ONLY, WHA-223). Skipped unless asked for, so CI
+    // keeps seeding exactly the minimal fixture the Playwright specs assert on.
+    if (process.env.RESTAURANT_DEMO_SEED === '1') {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          `SELECT set_config('app.current_organization_id', '', true), set_config('app.is_platform_admin', 'true', true)`
+        );
+        await seedRestaurantDemoControlPlane(tx);
+      });
+
+      const counts = await prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(
+            `SELECT set_config('app.current_organization_id', $1, true), set_config('app.is_platform_admin', 'false', true)`,
+            RESTAURANT_E2E.organizationId
+          );
+          return seedRestaurantDemoTenant(tx);
+        },
+        { timeout: 180_000, maxWait: 30_000 }
+      );
+
+      console.log(`Seeded restaurant showcase demo data: ${JSON.stringify(counts)}`);
+    }
   } finally {
     await prisma.$disconnect();
     await pool.end();
