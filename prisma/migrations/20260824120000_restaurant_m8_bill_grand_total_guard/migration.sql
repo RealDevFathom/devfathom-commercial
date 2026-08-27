@@ -36,7 +36,13 @@ DO $$
 DECLARE
   offending bigint;
 BEGIN
-  SELECT count(*) INTO offending FROM "restaurant_bills" WHERE "grandTotal" < 0;
+  SELECT count(*) INTO offending
+    FROM "restaurant_bills"
+   WHERE "grandTotal" < 0
+     AND (
+       current_setting('app.is_platform_admin', true) = 'true'
+       OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+     );
   IF offending > 0 THEN
     RAISE EXCEPTION
       'restaurant_bills holds % row(s) with grandTotal < 0; constraint restaurant_bills_grandTotal_nonneg_ck cannot be established.',
