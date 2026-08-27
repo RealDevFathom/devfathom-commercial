@@ -180,6 +180,22 @@ afterEach(() => {
 });
 
 describe('OrderPad transport', () => {
+  it('composes item taps locally without a round trip', async () => {
+    const fetch = transport();
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '00000000-0000-4000-8000-000000000099'
+    );
+    await unlock(fetch);
+    const callsBeforeTap = fetch.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+
+    expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
+    expect(screen.getByText('1 × Coffee')).toBeVisible();
+    expect(screen.getByText('Coffee added locally. No request was sent.')).toBeVisible();
+  });
+
   it('reuses an uncertain retry key, creates a fresh later key, and pins the active menu', async () => {
     const fetch = transport({ failedOpenAttempts: 1 });
     vi.spyOn(globalThis.crypto, 'randomUUID')
