@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 
 export const MEETING_MATERIALIZATION_WINDOW_DAYS = 30;
@@ -58,11 +58,33 @@ export async function materializeMeetingOccurrences(db: Db, series: Series, now 
     slot = nextSlot(slot, series.recurrenceRule);
   }
   if (rows.length) await db.meetingOccurrence.createMany({ data: rows, skipDuplicates: true });
-  await db.meeting.update({ where: { id: series.id }, data: { materializedThrough: horizon } });
-  return db.meetingOccurrence.findMany({
+  const materializedThrough = rows.at(-1)?.seriesSlotStart ?? series.materializedThrough;
+  if (materializedThrough) {
+    await db.meeting.update({ where: { id: series.id }, data: { materializedThrough } });
+  }
+  const occurrences = await db.meetingOccurrence.findMany({
     where: { meetingId: series.id, seriesSlotStart: { lte: horizon } },
     orderBy: { seriesSlotStart: 'asc' },
   });
+  const participants = await db.meetingParticipant.findMany({
+    where: { meetingId: series.id },
+    select: { id: true, userId: true, displayName: true },
+  });
+  if (occurrences.length && participants.length) {
+    await db.meetingOccurrenceParticipant.createMany({
+      data: occurrences.flatMap((occurrence) =>
+        participants.map((participant) => ({
+          organizationId: series.organizationId,
+          occurrenceId: occurrence.id,
+          participantId: participant.id,
+          userId: participant.userId,
+          displayName: participant.displayName,
+        }))
+      ),
+      skipDuplicates: true,
+    });
+  }
+  return occurrences;
 }
 
 export function rescheduleOccurrence(
@@ -104,4 +126,21 @@ export async function issueGuestSecret(db: Db, occurrenceParticipantId: string, 
 
 export function hashGuestSecret(secret: string) {
   return createHash('sha256').update(secret).digest('hex');
+}
+
+export function guestSecretIsValid(
+  grant: {
+    guestTokenHash: string | null;
+    guestTokenExpiresAt: Date | null;
+    guestTokenRevokedAt: Date | null;
+  },
+  secret: string,
+  now = new Date()
+) {
+  if (!grant.guestTokenHash || !grant.guestTokenExpiresAt || grant.guestTokenRevokedAt)
+    return false;
+  if (grant.guestTokenExpiresAt <= now) return false;
+  const expected = Buffer.from(grant.guestTokenHash, 'hex');
+  const actual = Buffer.from(hashGuestSecret(secret), 'hex');
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }

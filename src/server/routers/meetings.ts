@@ -9,6 +9,7 @@ import { logActivity } from '../activity';
 import { computePunctuality, findRelevantOccurrence } from '@/lib/meeting-occurrence';
 import {
   cancelOccurrence,
+  issueGuestSecret,
   materializeMeetingOccurrences,
   rescheduleOccurrence,
 } from '@/lib/meetings/occurrences';
@@ -314,6 +315,16 @@ export const meetingsRouter = router({
 
       const { attendeeIds, ...meetingData } = input;
       const allAttendees = [...new Set([user.id, ...attendeeIds])];
+      const attendeeUsers = await ctx.db.user.findMany({
+        where: { id: { in: allAttendees } },
+        select: { id: true, name: true },
+      });
+      if (attendeeUsers.length !== allAttendees.length) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'One or more attendees do not exist.',
+        });
+      }
 
       return ctx.db.$transaction(async (tx) => {
         const meeting = await tx.meeting.create({
@@ -322,6 +333,12 @@ export const meetingsRouter = router({
             recurrenceRule: legacyRecurrenceRule(meetingData.recurrence),
             createdById: user.id,
             attendees: { create: allAttendees.map((userId) => ({ userId })) },
+            participants: {
+              create: attendeeUsers.map((attendee) => ({
+                userId: attendee.id,
+                displayName: attendee.name,
+              })),
+            },
           },
         });
         await materializeMeetingOccurrences(tx, meeting);
@@ -386,6 +403,84 @@ export const meetingsRouter = router({
       if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
       await assertMeetingManage(ctx, occurrence.meetingId);
       return cancelOccurrence(ctx.db, input.occurrenceId, ctx.session.user.id, input.reason);
+    }),
+
+  getOccurrenceJoinLocator: protectedProcedure
+    .input(z.object({ occurrenceId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const occurrence = await ctx.db.meetingOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: {
+          meetingId: true,
+          publicId: true,
+          joinOpensAt: true,
+          joinClosesAt: true,
+          status: true,
+        },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertMeetingAccess(ctx, occurrence.meetingId);
+      const now = new Date();
+      if (
+        occurrence.status === 'CANCELLED' ||
+        now < occurrence.joinOpensAt ||
+        now > occurrence.joinClosesAt
+      ) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'This occurrence is not joinable.',
+        });
+      }
+      return { publicId: occurrence.publicId };
+    }),
+
+  inviteGuestToOccurrence: protectedProcedure
+    .input(
+      z.object({
+        occurrenceId: z.string(),
+        email: z.string().email(),
+        displayName: z.string().min(1),
+        expiresAt: z.date(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const occurrence = await ctx.db.meetingOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { meetingId: true, publicId: true, organizationId: true },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertMeetingManage(ctx, occurrence.meetingId);
+      return ctx.db.$transaction(async (tx) => {
+        const participant = await tx.meetingParticipant.upsert({
+          where: {
+            meetingId_email: { meetingId: occurrence.meetingId, email: input.email.toLowerCase() },
+          },
+          create: {
+            organizationId: occurrence.organizationId,
+            meetingId: occurrence.meetingId,
+            email: input.email.toLowerCase(),
+            displayName: input.displayName,
+          },
+          update: { displayName: input.displayName },
+        });
+        const grant = await tx.meetingOccurrenceParticipant.upsert({
+          where: {
+            occurrenceId_participantId: {
+              occurrenceId: input.occurrenceId,
+              participantId: participant.id,
+            },
+          },
+          create: {
+            organizationId: occurrence.organizationId,
+            occurrenceId: input.occurrenceId,
+            participantId: participant.id,
+            displayName: input.displayName,
+          },
+          update: { displayName: input.displayName },
+        });
+        const secret = await issueGuestSecret(tx, grant.id, input.expiresAt);
+        return { publicId: occurrence.publicId, secret, expiresAt: input.expiresAt };
+      });
     }),
 
   /**
