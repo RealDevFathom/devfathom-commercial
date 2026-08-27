@@ -8,6 +8,94 @@ generator client {
   output   = "../src/generated/prisma"
 }
 
+// CAM-L1 camera registry. Kept separate from RestaurantRegisteredDevice so a
+// camera gateway cannot participate in POS/KDS trust relations.
+model RestaurantCameraGateway {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  name              String
+  gatewaySecretHash String    @unique
+  status            String    @default("ACTIVE")
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  baseUrl           String
+  retentionDays     Int       @default(7)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([organizationId, branchId])
+  @@map("restaurant_camera_gateways")
+}
+
+model RestaurantCameraCredential {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sealedValue    String
+  version        Int       @default(1)
+  rotatedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId])
+  @@map("restaurant_camera_credentials")
+}
+
+model RestaurantCamera {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  gatewayId      String
+  branchId       String
+  credentialId   String
+  name           String
+  sourceRef      String
+  enabled        Boolean   @default(true)
+  lastSeenAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId, branchId])
+  @@index([gatewayId])
+  @@map("restaurant_cameras")
+}
+
+model RestaurantCameraStreamGrant {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  cameraId       String
+  viewerId       String
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, cameraId, viewerId])
+  @@index([expiresAt])
+  @@map("restaurant_camera_stream_grants")
+}
+
+model PlatformCameraBrandPreset {
+  id                     String   @id @default(cuid())
+  key                    String   @unique
+  familyName             String
+  aliases                String[]
+  iconKey                String
+  rtspPort               Int      @default(554)
+  onvifPort              Int      @default(80)
+  mainStreamPathTemplate String
+  subStreamPathTemplate  String
+  authSchemeHint         String
+  defaultUsernameHint    String?
+  credentialNote         String
+  setupNote              String
+  active                 Boolean  @default(true)
+  sortOrder              Int      @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([active, sortOrder])
+  @@map("platform_camera_brand_presets")
+}
+
 datasource db {
   provider = "postgresql"
 }

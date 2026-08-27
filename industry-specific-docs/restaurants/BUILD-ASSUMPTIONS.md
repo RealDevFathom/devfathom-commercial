@@ -1207,3 +1207,11 @@ independently re-verified. M5 rollup verification closed.
 - `customers:read`, `loyalty:redeem`, `reports:financial`, `workforce:rates`, and `restaurant:configure` use the
   existing org-role custom-decision path with empty static policies, so absent grants deny by default.
   `vertical-catalog.ts` already contains the module/capability keys and remains untouched.
+
+# Camera gateway assumptions (CAM-L1)
+
+- A gateway is one registered, branch-bound device; individual cameras are sources behind it.
+- V1 transport is HLS and storage is gateway-local. No cloud storage or second WebRTC stack is assumed.
+- Preset values are editable starting hints, not verified hardware facts; ONVIF Profile S discovery is authoritative.
+- Gateway health becomes stale after five one-minute heartbeat intervals. Audio and clip export default off.
+- The app reaches the gateway over an owner-provided private network path; no inbound port-forward is requested.
