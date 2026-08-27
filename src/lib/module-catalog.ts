@@ -82,14 +82,17 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // trail — gate on the POS module (`restaurant-pos`), the licensed surface that
   // runs checkout and settlement.
   restaurantPayments: 'restaurant-pos',
-  // M6-L2: inventory operations console — stock on hand, movement ledger, physical
-  // counts, transfers, wastage and low-stock rules — gate on the POS module
-  // (`restaurant-pos`), the licensed surface that runs inventory and procurement.
-  restaurantInventory: 'restaurant-pos',
-  // M6-L3: purchasing & suppliers console — suppliers, purchase-order lifecycle,
-  // goods receiving and supplier returns — gate on the POS module
-  // (`restaurant-pos`), the licensed surface that runs procurement and inventory.
-  restaurantPurchasing: 'restaurant-pos',
+  // WHA-138 Lane A: inventory operations — stock on hand, movement ledger,
+  // physical counts, transfers, wastage and low-stock rules — gate on the
+  // vertical catalog's own Inventory module (`restaurant-inventory`), not on
+  // POS: a purchasing-only or back-office tenant runs inventory without ever
+  // licensing the register.
+  restaurantInventory: 'restaurant-inventory',
+  // WHA-138 Lane A: purchasing & suppliers — suppliers, purchase-order
+  // lifecycle, goods receiving and supplier returns — gate on the catalog's
+  // Purchasing module (`restaurant-purchasing`), the key the packages actually
+  // sell for this surface.
+  restaurantPurchasing: 'restaurant-purchasing',
   // M7-L2: background-operations console — scheduler queue browse, job execution
   // history, dead-letter review + requeue, transactional-outbox status and webhook
   // inbox — gate on the SOP/automation module (`restaurant-sop`), the licensed
@@ -125,7 +128,14 @@ export function moduleForApiScope(scope: string): string | null {
   );
 }
 
-const ROUTE_MODULES: Array<[string, string]> = [
+/**
+ * WHA-138 Lane A / plan §3 — the central route → module catalog. Order matters:
+ * `moduleForPath` returns the FIRST entry whose prefix matches, so a specific
+ * restaurant surface (`/restaurant/inventory`) must precede the `/restaurant`
+ * core catch-all. Exported so navigation derives module ownership from this
+ * catalog instead of repeating module strings in the sidebar.
+ */
+export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/projects', 'projects'],
   ['/clients', 'clients'],
   ['/notes', 'notes'],
@@ -139,12 +149,47 @@ const ROUTE_MODULES: Array<[string, string]> = [
   ['/audit-logs', 'audit'],
   ['/email', 'email'],
   ['/dashboard', 'dashboard'],
+  // Restaurant terminal surfaces (device-authenticated pages outside the tenant
+  // AppShell; the same module also gates their REST transport in terminal-auth).
+  ['/pos', 'restaurant-pos'],
+  ['/kds', 'restaurant-pos'],
+  // Restaurant back-office consoles — §3 route table. Same keys as the tRPC
+  // procedure map above so hiding a nav entry and rejecting the direct route
+  // can never disagree.
+  ['/restaurant/floor', 'restaurant-pos'],
+  ['/restaurant/orders', 'restaurant-pos'],
+  ['/restaurant/money', 'restaurant-pos'],
+  ['/restaurant/inventory', 'restaurant-inventory'],
+  ['/restaurant/purchasing', 'restaurant-purchasing'],
+  // `/restaurant/sop/admin` shares the SOP module; the extra admin/capability
+  // check on that surface is authorization, not entitlement.
+  ['/restaurant/sop', 'restaurant-sop'],
+  ['/restaurant/loyalty', 'restaurant-loyalty'],
+  ['/restaurant/insights', 'restaurant-insights'],
+  ['/restaurant/catalog', 'restaurant-menu'],
+  ['/restaurant/menus', 'restaurant-menu'],
+  // Core-owned back-office surfaces, then the `/restaurant` core catch-all —
+  // the vertical catalog owns the `/restaurant` route prefix via
+  // `restaurant-core` (mandatory for every restaurant organization).
+  ['/restaurant/staff', 'restaurant-core'],
+  ['/restaurant/devices', 'restaurant-core'],
+  ['/restaurant/notifications', 'restaurant-core'],
+  ['/restaurant', 'restaurant-core'],
 ];
 
-export function moduleForPath(pathname: string): string | null {
-  return (
+/**
+ * Resolve the module that owns a route. §3 — the Dashboard surface is
+ * vertical-dispatched: for a RESTAURANT organization `/dashboard` belongs to
+ * mandatory `restaurant-core` (restaurant packages never include the Agency
+ * `dashboard` module, which would strand the default login destination on a
+ * disabled-module screen). Callers that cannot supply a vertical keep the
+ * legacy Agency behavior.
+ */
+export function moduleForPath(pathname: string, vertical?: OrganizationVertical): string | null {
+  const moduleKey =
     ROUTE_MODULES.find(
       ([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`)
-    )?.[1] ?? null
-  );
+    )?.[1] ?? null;
+  if (moduleKey === 'dashboard' && vertical === 'RESTAURANT') return 'restaurant-core';
+  return moduleKey;
 }
