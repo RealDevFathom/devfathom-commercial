@@ -29,6 +29,7 @@ Use one status on every capability claim:
 | Product and sales | [Product and commercial pack](product-pack.md) | ICP, positioning, feature status, packaging, and customer lifecycle |
 | Product owners | [Master product PRD](product/PRD.md) | Evidence-backed current scope, acceptance boundaries, and planned decisions |
 | Restaurant team | [Restaurant vertical PRD](product/verticals/restaurant/PRD.md) | Lean vertical outcome, acceptance, and explicit non-claims |
+| Business owners | [Business documentation](business/positioning-value-proposition.md) | Evidence-safe positioning, packaging, pricing, market research, GTM, support, and compliance decisions |
 | Partners and customers | [Pitch-deck source](pitch-deck.md) | Evidence-safe slide narratives and speaker notes |
 | Release owners | [Living status ledger](status-ledger.md) | Evidence, blockers, owners, and next gates |
 | Documentation owners | [Documentation QA](qa.md) | Link, stale-reference, and consistency checks |
@@ -52,6 +53,16 @@ Use one status on every capability claim:
 ## Working rules
 
 Documentation changes should cite repository paths and line ranges where practical, distinguish current code from decisions, avoid secret values and customer data, and preserve the web-only boundary. Azure is the deployment platform; no Vercel deployment instructions belong in current operating guidance. Mobile apps are future work; responsive mobile web is part of the current web surface where implemented.
+
+## Business reference
+
+- [Positioning and value proposition](business/positioning-value-proposition.md)
+- [Packaging and tiers](business/packaging-tiers.md)
+- [Pricing inputs](business/pricing-inputs.md)
+- [Pakistan restaurant market context](business/pakistan-restaurant-market-context.md)
+- [GTM and onboarding](business/gtm-onboarding.md)
+- [Support and SLA outline](business/support-sla.md)
+- [Compliance posture](business/compliance-posture.md)
 
 ## Restaurant reference
 
