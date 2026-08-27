@@ -17,12 +17,18 @@ import { OrderInvariantError, OrderTransitionError } from './order-state-machine
 import {
   addItemBody,
   buildActor,
+  canonicalJson,
+  effectiveMenuETag,
+  effectiveMenuQuery,
+  effectiveMenuVersion,
   fireBody,
   idempotencyKeyFromRequest,
+  ifNoneMatchSatisfied,
   openOrderBody,
   orderErrorResponse,
   requireActingOperator,
   voidBody,
+  type TerminalEffectiveMenu,
 } from './terminal-orders';
 import type { TerminalContext } from './terminal-auth';
 
@@ -145,5 +151,144 @@ describe('orderErrorResponse — domain error → HTTP status (no internals leak
       new OrderCommandError('The order does not exist.', 'ORDER_NOT_FOUND')
     )!;
     expect(await res.json()).toEqual({ error: 'The order does not exist.' });
+  });
+});
+
+// ── M9-L1: the effective-menu catalog contract (criterion 5) ─────────────────
+
+describe('effectiveMenuQuery — STRICT device-authed query (C7)', () => {
+  it('accepts the documented parameters', () => {
+    expect(effectiveMenuQuery.safeParse({ channel: 'DINE_IN' }).success).toBe(true);
+    expect(
+      effectiveMenuQuery.safeParse({
+        channel: 'TAKEAWAY',
+        publicationId: 'pub-1',
+        at: '2026-08-27T10:00:00.000Z',
+      }).success
+    ).toBe(true);
+  });
+
+  it('rejects an unknown search parameter instead of silently ignoring it', () => {
+    const bad = effectiveMenuQuery.safeParse({ channel: 'DINE_IN', branchId: 'b1' });
+    expect(bad.success).toBe(false); // branchId is device-derived, never the query
+    expect(effectiveMenuQuery.safeParse({ channel: 'DINE_IN', at: 'yesterday' }).success).toBe(
+      false
+    );
+    expect(effectiveMenuQuery.safeParse({ channel: 'DRIVE_THRU' }).success).toBe(false);
+    expect(effectiveMenuQuery.safeParse({}).success).toBe(false);
+  });
+});
+
+describe('canonicalJson', () => {
+  it('serialises structurally identical values to identical bytes', () => {
+    expect(canonicalJson({ b: 1, a: 2 })).toBe(canonicalJson({ a: 2, b: 1 }));
+    expect(canonicalJson({ n: { z: 1, a: [1, { y: 2, x: 3 }] } })).toBe(
+      '{"n":{"a":[1,{"x":3,"y":2}],"z":1}}'
+    );
+  });
+
+  it('keeps array order significant and normalises absent values', () => {
+    expect(canonicalJson([1, 2])).not.toBe(canonicalJson([2, 1]));
+    expect(canonicalJson({ a: undefined, b: null })).toBe('{"b":null}');
+    expect(canonicalJson(new Date('2026-08-27T10:00:00.000Z'))).toBe('"2026-08-27T10:00:00.000Z"');
+  });
+});
+
+describe('effectiveMenuVersion — deterministic catalog version', () => {
+  const menu = (
+    overrides: {
+      price?: string | null;
+      available?: boolean;
+      channelOpen?: boolean;
+      publicationId?: string;
+      priceSource?: string;
+    } = {}
+  ) =>
+    ({
+      publicationId: overrides.publicationId ?? 'pub-1',
+      branchId: 'branch-1',
+      channel: 'DINE_IN',
+      channelOpen: overrides.channelOpen ?? true,
+      menu: { id: 'menu-1', name: 'All day', nameLocalized: { ur: 'سارا دن', en: 'All day' } },
+      sections: [
+        {
+          id: 'sec-1',
+          name: 'Grill',
+          nameLocalized: null,
+          sortOrder: 1,
+          items: [
+            {
+              id: 'mi-1',
+              productId: 'prod-1',
+              variantId: null,
+              displayName: 'Seekh Kebab',
+              nameLocalized: null,
+              sortOrder: 1,
+              product: {
+                id: 'prod-1',
+                name: 'Seekh Kebab',
+                type: 'FOOD',
+                status: 'ACTIVE',
+                nameLocalized: null,
+                descriptionLocalized: null,
+              },
+              variant: null,
+              price: overrides.price === undefined ? '450.00' : overrides.price,
+              priceSource: overrides.priceSource ?? 'PUBLICATION_LIST',
+              available: overrides.available ?? true,
+            },
+          ],
+        },
+      ],
+    }) as unknown as TerminalEffectiveMenu;
+
+  it('is stable across calls and across localized-blob key order', () => {
+    const first = effectiveMenuVersion(menu());
+    expect(effectiveMenuVersion(menu())).toBe(first);
+    expect(first).toMatch(/^v1:[0-9a-f]{32}$/);
+
+    const reordered = JSON.parse(JSON.stringify(menu())) as unknown as TerminalEffectiveMenu & {
+      menu: { nameLocalized: Record<string, string> };
+    };
+    reordered.menu.nameLocalized = { en: 'All day', ur: 'سارا دن' };
+    expect(effectiveMenuVersion(reordered)).toBe(first);
+  });
+
+  it('changes on a price, price-source, publication, channel or 86 change', () => {
+    const base = effectiveMenuVersion(menu());
+    expect(effectiveMenuVersion(menu({ price: '525.00' }))).not.toBe(base);
+    expect(effectiveMenuVersion(menu({ price: null }))).not.toBe(base);
+    expect(effectiveMenuVersion(menu({ priceSource: 'OVERRIDE' }))).not.toBe(base);
+    expect(effectiveMenuVersion(menu({ available: false }))).not.toBe(base);
+    expect(effectiveMenuVersion(menu({ channelOpen: false }))).not.toBe(base);
+    expect(effectiveMenuVersion(menu({ publicationId: 'pub-2' }))).not.toBe(base);
+  });
+
+  it('changes when an item leaves the publication', () => {
+    const emptied = JSON.parse(JSON.stringify(menu())) as unknown as TerminalEffectiveMenu;
+    emptied.sections[0].items = [];
+    expect(effectiveMenuVersion(emptied)).not.toBe(effectiveMenuVersion(menu()));
+  });
+});
+
+describe('ETag negotiation', () => {
+  it('wraps a version as a strong entity tag', () => {
+    expect(effectiveMenuETag('v1:abc')).toBe('"v1:abc"');
+  });
+
+  it('matches the list, weak and wildcard forms of If-None-Match', () => {
+    const etag = effectiveMenuETag('v1:abc');
+    expect(ifNoneMatchSatisfied('"v1:abc"', etag)).toBe(true);
+    expect(ifNoneMatchSatisfied('W/"v1:abc"', etag)).toBe(true);
+    expect(ifNoneMatchSatisfied('"v1:zzz", "v1:abc"', etag)).toBe(true);
+    expect(ifNoneMatchSatisfied('*', etag)).toBe(true);
+  });
+
+  it('does not match a stale or absent tag', () => {
+    const etag = effectiveMenuETag('v1:abc');
+    expect(ifNoneMatchSatisfied(null, etag)).toBe(false);
+    expect(ifNoneMatchSatisfied('', etag)).toBe(false);
+    expect(ifNoneMatchSatisfied('"v1:zzz"', etag)).toBe(false);
+    expect(ifNoneMatchSatisfied('v1:abc', etag)).toBe(false); // unquoted is not a tag
   });
 });

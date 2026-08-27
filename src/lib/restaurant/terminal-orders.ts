@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -654,6 +656,80 @@ export async function resolveTerminalEffectiveMenu(
     },
     sections,
   };
+}
+
+// ── Effective-menu version / ETag (M9-L1, criterion 5) ───────────────────────
+
+/**
+ * The device-authed effective-menu query. STRICT like every other terminal input
+ * (C7): an unknown search parameter is a 400, never silently ignored, so a client
+ * cannot believe it asked for something the server never read.
+ */
+export const effectiveMenuQuery = z
+  .object({
+    channel: CHANNEL,
+    publicationId: ID.optional(),
+    at: z.string().datetime().optional(),
+  })
+  .strict();
+
+export type TerminalEffectiveMenu = NonNullable<
+  Awaited<ReturnType<typeof resolveTerminalEffectiveMenu>>
+>;
+
+/** The version algorithm; bumping it invalidates every cached catalog at once. */
+const EFFECTIVE_MENU_VERSION_PREFIX = 'v1';
+
+/**
+ * Serialize a JSON value with object keys in a stable order, so two structurally
+ * identical payloads always produce the same bytes. Property order out of Prisma is
+ * stable for our own literals, but the localized-name blobs are free-form JSON whose
+ * key order is not guaranteed — without this, an identical menu could hash twice.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  if (value instanceof Date) return JSON.stringify(value.toISOString());
+  if (typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, child]) => child !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`);
+  return `{${entries.join(',')}}`;
+}
+
+/**
+ * A deterministic version for one resolved effective menu (M9 §3.6). It is derived
+ * from the COMPLETE resolved payload — publication, channel openness, every section,
+ * item, winning price, price source and availability flag — because a publication's
+ * children and its time windows change without any single row version to watch. Two
+ * identical payloads therefore always produce the same version, and any price, tax,
+ * publication, channel or 86 change produces a different one.
+ */
+export function effectiveMenuVersion(menu: TerminalEffectiveMenu): string {
+  const digest = createHash('sha256').update(canonicalJson(menu)).digest('hex').slice(0, 32);
+  return `${EFFECTIVE_MENU_VERSION_PREFIX}:${digest}`;
+}
+
+/** The strong entity tag for a version. */
+export function effectiveMenuETag(version: string): string {
+  return `"${version}"`;
+}
+
+/**
+ * Whether an `If-None-Match` request matches the current entity tag (so the route
+ * can answer 304 and the terminal can keep the catalog it already has). Handles the
+ * comma-separated list form and the `W/` weak prefix; `*` matches any existing
+ * entity, per RFC 9110.
+ */
+export function ifNoneMatchSatisfied(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  const normalize = (tag: string) => tag.trim().replace(/^W\//, '');
+  const target = normalize(etag);
+  return header
+    .split(',')
+    .map(normalize)
+    .some((candidate) => candidate === '*' || candidate === target);
 }
 
 /** The publication shape the effective-menu resolver loads (mirrors the M3 read). */
