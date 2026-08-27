@@ -14,7 +14,7 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
-import type { TenantBrand } from '@/lib/tenant-brand';
+import { tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { toast } from 'sonner';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
@@ -23,14 +23,6 @@ const AssistantPanel = dynamic(
   () => import('@/components/assistant/assistant-panel').then((m) => m.AssistantPanel),
   { ssr: false }
 );
-
-function contrastColor(hex: string): string {
-  const value = hex.replace('#', '');
-  const [red, green, blue] = [0, 2, 4].map((offset) =>
-    Number.parseInt(value.slice(offset, offset + 2), 16)
-  );
-  return (red * 299 + green * 587 + blue * 114) / 1000 > 145 ? '#111110' : '#FFFCF6';
-}
 
 function EndSupportAccessButton() {
   const [pending, setPending] = useState(false);
@@ -87,18 +79,7 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
   // state survives close/reopen.
   const [assistantMounted, setAssistantMounted] = useState(false);
   if (assistantOpen && !assistantMounted) setAssistantMounted(true);
-  const brandStyle = {
-    '--primary': brand.primaryColor,
-    '--primary-hover': brand.primaryColor,
-    '--primary-foreground': contrastColor(brand.primaryColor),
-    '--sidebar': brand.primaryColor,
-    '--sidebar-primary': brand.accentColor,
-    '--sidebar-foreground': contrastColor(brand.primaryColor),
-    '--sidebar-accent-foreground': contrastColor(brand.primaryColor),
-    '--accent-brand': brand.accentColor,
-    '--accent-brand-hover': brand.accentColor,
-    '--ring': brand.accentColor,
-  } as CSSProperties;
+  const brandStyle = tenantBrandTokens(brand) as CSSProperties;
 
   return (
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
