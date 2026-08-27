@@ -47,4 +47,11 @@ Use one status on every capability claim:
 
 Documentation changes should cite repository paths and line ranges where practical, distinguish current code from decisions, avoid secret values and customer data, and preserve the web-only boundary. Azure is the deployment platform; no Vercel deployment instructions belong in current operating guidance. Mobile apps are future work; responsive mobile web is part of the current web surface where implemented.
 
-Last reconciled: 2026-08-08.
+## Restaurant reference
+
+- **IMPLEMENTED** — [Restaurant technical architecture](restaurant/architecture.md) maps the M0–M8 runtime and trust boundaries to repository evidence.
+- **IMPLEMENTED** — [Restaurant data model](restaurant/data-model.md) maps each milestone-owned schema group to its migration and verification evidence.
+- **IMPLEMENTED** — [Restaurant API surface](restaurant/api-surface.md) inventories the mounted tRPC and terminal REST transports and states their limits.
+- **IMPLEMENTED** — [WHA-243 corrected audit](operations/WHA-243-restaurant-documentation-audit.md) records the base-commit audit, corrected M0–M8 conclusion, planned boundaries, and proposed documentation tree.
+
+Last reconciled: 2026-08-27 (WHA-243 first documentation wave).
