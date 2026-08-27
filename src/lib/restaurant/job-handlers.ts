@@ -21,6 +21,9 @@ import {
 } from '@/lib/restaurant/notification-fanout';
 import { LOYALTY_EXPIRY_JOB, loyaltyExpiryHandler } from '@/lib/restaurant/loyalty-expiry';
 import { INSIGHTS_ROLLUP_DAY_JOB, rollupDayHandler } from '@/lib/restaurant/insight-rollups';
+// R-lane (WHA-194): OCR menu extraction. Runs off the queue because a vision
+// call takes tens of seconds — far too long to hold an upload request open.
+import { MENU_IMPORT_EXTRACT_JOB, menuImportExtractHandler } from '@/lib/restaurant/menu-import';
 
 /**
  * M7-L1 — the typed job-handler registry. The scheduler primitive
@@ -70,6 +73,7 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   [NOTIFICATION_FANOUT_JOB]: notificationFanoutHandler,
   [LOYALTY_EXPIRY_JOB]: loyaltyExpiryHandler,
   [INSIGHTS_ROLLUP_DAY_JOB]: rollupDayHandler,
+  [MENU_IMPORT_EXTRACT_JOB]: menuImportExtractHandler,
 };
 
 /** Look up the handler registered for a job type (undefined when none is). */

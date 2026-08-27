@@ -303,6 +303,11 @@ export const RESTAURANT_CAPABILITIES: readonly string[] = [
   // the new `kitchen` namespace. Additive-only — no existing capability changes.
   'orders:take',
   'kitchen:operate',
+  // R-lane (additive, WHA-194): `menu:import` gates OCR menu import on the
+  // existing `menu` namespace. Kept distinct from `menu:write` because a single
+  // import creates products, categories and draft prices in bulk from untrusted
+  // OCR output. Additive-only — no existing capability changes.
+  'menu:import',
 ];
 
 export type RoleTemplate = {
