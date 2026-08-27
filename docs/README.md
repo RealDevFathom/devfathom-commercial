@@ -9,7 +9,7 @@ Use one status on every capability claim:
 - **IMPLEMENTED** — present in the current repository and covered by a cited verification or source path.
 - **IN PROGRESS** — an identified implementation workstream is active, but has not yet cleared merge, verification, and deployment gates.
 - **PARTIAL** — some code or design exists, but a production dependency, integration, or release gate remains.
-- **PLANNED** — an accepted design or ADR exists; implementation is not complete.
+- **PLANNED (explicit WHA-243/lane/ADR/commit reference required)** — an accepted design or ADR exists; implementation is not complete.
 - **BLOCKED** — work cannot proceed until a named external decision, credential, environment, or owner action exists.
 - **FUTURE** — intentionally outside the current web scope or roadmap horizon.
 

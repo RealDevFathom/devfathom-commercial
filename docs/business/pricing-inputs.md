@@ -7,8 +7,8 @@
 
 ## Decision model
 
-- **PLANNED OWNER DECISION** — Price metric: branch, terminal, active user, module, transaction band, or hybrid.
-- **PLANNED RESEARCH INPUT** — Willingness-to-pay by restaurant format/size, current software spend, payment hardware economics, support burden, onboarding effort, cloud/media/storage cost, local taxes, reseller/acquirer margin, churn risk, and discount policy.
-- **PLANNED OWNER/FINANCE DECISION** — Currency, billing frequency, implementation fee, minimum contract, overages, annual discount, tax treatment, refund/cancellation terms, and enterprise custom pricing.
+- **PLANNED OWNER DECISION (WHA-243 owner decision)** — Price metric: branch, terminal, active user, module, transaction band, or hybrid.
+- **PLANNED RESEARCH INPUT (WHA-243 research task)** — Willingness-to-pay by restaurant format/size, current software spend, payment hardware economics, support burden, onboarding effort, cloud/media/storage cost, local taxes, reseller/acquirer margin, churn risk, and discount policy.
+- **PLANNED OWNER/FINANCE DECISION (WHA-243 owner decision)** — Currency, billing frequency, implementation fee, minimum contract, overages, annual discount, tax treatment, refund/cancellation terms, and enterprise custom pricing.
 
 Do not publish numbers until source, assumptions, margin target, approval owner, and review date are recorded.

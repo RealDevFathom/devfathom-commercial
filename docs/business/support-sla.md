@@ -7,7 +7,7 @@
 
 ## Proposed policy schedule
 
-- **PLANNED OWNER APPROVAL** — Support hours, channels, authorized contacts, severity definitions, acknowledgement/update/restore targets, escalation chain, maintenance notice, service credits, exclusions, dependency treatment, data-request handling, and incident communications.
-- **PLANNED OWNER APPROVAL** — Normal versus enterprise coverage, named technical contact, onboarding/hypercare, and optional dedicated-environment operations.
+- **PLANNED OWNER APPROVAL (WHA-243 owner decision)** — Support hours, channels, authorized contacts, severity definitions, acknowledgement/update/restore targets, escalation chain, maintenance notice, service credits, exclusions, dependency treatment, data-request handling, and incident communications.
+- **PLANNED OWNER APPROVAL (WHA-243 owner decision)** — Normal versus enterprise coverage, named technical contact, onboarding/hypercare, and optional dedicated-environment operations.
 
 Avoid uptime, response-time, recovery-time, 24/7, or service-credit promises until monitoring evidence, staffing model, dependency assumptions, and signed contract schedule exist.

@@ -9,11 +9,11 @@
 
 | Entitlement area | Normal offer | Enterprise offer | Decision state |
 | --- | --- | --- | --- |
-| Restaurant core and selected operational modules | Package defaults plus contracted modules | Contracted modules plus organization exceptions | **PLANNED OWNER APPROVAL** |
-| Seats and usage limits | Shared standard limits | Negotiated limits | **PLANNED OWNER APPROVAL** |
-| Environment | Shared tenant topology | Dedicated environment option | **PLANNED; DELIVERY GATED** |
-| Identity/domain | Standard tenant access | SSO/SCIM/custom domain option | **PLANNED COMMERCIAL MAPPING; implementation is partial/deployment-specific** |
-| Support/SLA | Standard support policy | Named support/SLA schedule | **PLANNED OWNER APPROVAL** |
-| Data retention/export | Standard policy | Contract schedule | **PLANNED OWNER/LEGAL APPROVAL** |
+| Restaurant core and selected operational modules | Package defaults plus contracted modules | Contracted modules plus organization exceptions | **PLANNED OWNER APPROVAL (WHA-243 owner decision)** |
+| Seats and usage limits | Shared standard limits | Negotiated limits | **PLANNED OWNER APPROVAL (WHA-243 owner decision)** |
+| Environment | Shared tenant topology | Dedicated environment option | **PLANNED; DELIVERY GATED (WHA-243 owner decision)** |
+| Identity/domain | Standard tenant access | SSO/SCIM/custom domain option | **PLANNED COMMERCIAL MAPPING (WHA-243 owner decision); implementation is partial/deployment-specific** |
+| Support/SLA | Standard support policy | Named support/SLA schedule | **PLANNED OWNER APPROVAL (WHA-243 owner decision)** |
+| Data retention/export | Standard policy | Contract schedule | **PLANNED OWNER/LEGAL APPROVAL (WHA-243 owner decision)** |
 
 No tier names, module bundles, limits, prices, response times, or enterprise promises are approved here.
