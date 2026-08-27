@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KdsBoard } from './kds-board';
 
 type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
-type ItemDisplayStatus = TicketDisplayStatus | 'SERVED';
+type ItemDisplayStatus = TicketDisplayStatus | 'HELD' | 'SERVED';
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -73,7 +73,7 @@ function queue(
 
 async function flush() {
   await act(async () => {
-    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    for (let index = 0; index < 16; index += 1) await Promise.resolve();
   });
 }
 
@@ -125,6 +125,88 @@ describe('KdsBoard transport', () => {
     expect(screen.queryByText('Gap response')).not.toBeInTheDocument();
   });
 
+  it('fully resyncs after a cursor regression', async () => {
+    vi.useFakeTimers();
+    const payloads = [
+      queue([ticket(1, 'Original ticket', 'NEW')], { cursor: 7 }),
+      queue([ticket(2, 'Regressed ticket', 'COOKING')], { cursor: 6 }),
+      queue([ticket(3, 'Replacement ticket', 'READY')], { cursor: 8 }),
+    ];
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => json(payloads.shift()));
+    vi.stubGlobal('fetch', fetch);
+
+    render(<KdsBoard />);
+    await connect();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/restaurant/kds/queue?limit=50',
+      '/api/restaurant/kds/queue?sinceCursor=7&limit=50',
+      '/api/restaurant/kds/queue?limit=50',
+    ]);
+    expect(screen.getByText('Replacement ticket')).toBeVisible();
+    expect(screen.queryByText('Regressed ticket')).not.toBeInTheDocument();
+  });
+
+  it('refreshes immediately on online and visible events', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => json(queue([])));
+    vi.stubGlobal('fetch', fetch);
+
+    render(<KdsBoard />);
+    await connect();
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event('online'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('backs off degraded polling to a bounded interval and shows last confirmed sync', async () => {
+    vi.useFakeTimers();
+    const responses: Array<Response | Error> = [
+      json(queue([ticket(1, 'Confirmed ticket', 'NEW')], { cursor: 4 })),
+      new TypeError('offline'),
+      new TypeError('still offline'),
+      new TypeError('still offline'),
+      new TypeError('still offline'),
+    ];
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response ?? json(queue([]));
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    render(<KdsBoard />);
+    await connect();
+    expect(screen.getByText(/Last synced/)).toBeVisible();
+
+    for (const delay of [5_000, 10_000, 20_000, 30_000]) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(delay);
+      });
+    }
+
+    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(screen.getByText('degraded')).toBeVisible();
+    expect(
+      screen.getByText(/Showing the last confirmed station state while recovery continues/)
+    ).toBeVisible();
+    expect(screen.getByText('Confirmed ticket')).toBeVisible();
+  });
+
   it('maps bump and recall requests and preserves only an uncertain retry key', async () => {
     vi.useFakeTimers();
     const activeQueue = queue([ticket(2, 'Burger', 'COOKING'), ticket(3, 'Soup', 'READY')]);
@@ -135,6 +217,7 @@ describe('KdsBoard transport', () => {
       if (path.endsWith('/bump')) {
         bumpAttempts += 1;
         if (bumpAttempts === 1) throw new TypeError('network failed');
+        if (bumpAttempts === 2) return json({ error: 'Outcome not confirmed.' }, 503);
         return json({ action: 'BUMP' });
       }
       if (path.endsWith('/recall')) return json({ action: 'RECALL' });
@@ -154,6 +237,9 @@ describe('KdsBoard transport', () => {
     expect(screen.getByText('Network request failed. Retry this action.')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Mark ready Burger for order 42' }));
     await flush();
+    expect(screen.getByText('Outcome not confirmed.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark ready Burger for order 42' }));
+    await flush();
     fireEvent.click(screen.getByRole('button', { name: 'Recall Soup for order 43' }));
     await flush();
 
@@ -161,9 +247,11 @@ describe('KdsBoard transport', () => {
     expect(posts.map(([input]) => String(input))).toEqual([
       '/api/restaurant/kds/bump',
       '/api/restaurant/kds/bump',
+      '/api/restaurant/kds/bump',
       '/api/restaurant/kds/recall',
     ]);
     expect(posts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { orderItemId: 'item-2', operatorStaffProfileId: 'staff-1' },
       { orderItemId: 'item-2', operatorStaffProfileId: 'staff-1' },
       { orderItemId: 'item-2', operatorStaffProfileId: 'staff-1' },
       { orderItemId: 'item-3', operatorStaffProfileId: 'staff-1' },
@@ -172,8 +260,10 @@ describe('KdsBoard transport', () => {
       'Bearer device-secret',
       'Bearer device-secret',
       'Bearer device-secret',
+      'Bearer device-secret',
     ]);
     expect(posts.map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
+      '00000000-0000-4000-8000-000000000047',
       '00000000-0000-4000-8000-000000000047',
       '00000000-0000-4000-8000-000000000047',
       '00000000-0000-4000-8000-000000000048',
@@ -210,6 +300,15 @@ describe('KdsBoard transport', () => {
       itemStatus: 'SERVED',
       displayStatus: 'SERVED',
     });
+    mixedTicket.items.push({
+      orderItemId: 'held-item',
+      name: 'Held dessert',
+      course: 3,
+      seatNumber: 4,
+      quantity: 1,
+      itemStatus: 'HELD',
+      displayStatus: 'HELD',
+    });
     const fetchImplementation: typeof globalThis.fetch = async () => json(queue([mixedTicket]));
     vi.stubGlobal('fetch', vi.fn(fetchImplementation));
 
@@ -219,5 +318,7 @@ describe('KdsBoard transport', () => {
     expect(screen.getByText('Served salad')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Start New pasta for order 44' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /Served salad/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Course 3 · HOLD — DO NOT FIRE/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Held dessert/ })).not.toBeInTheDocument();
   });
 });
