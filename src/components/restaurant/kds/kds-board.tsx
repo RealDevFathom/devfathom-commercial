@@ -65,6 +65,7 @@ const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: 'numeric',
   minute: '2-digit',
 });
+const POLL_DELAYS = [5_000, 10_000, 20_000, 30_000] as const;
 
 class RequestError extends Error {
   constructor(
@@ -120,11 +121,12 @@ export function KdsBoard() {
   const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
+  const [lastSync, setLastSync] = useState<Date | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const cursor = useRef<number | null>(null);
   const epoch = useRef(0);
-  const queueFlight = useRef<Promise<void> | null>(null);
+  const queueFlight = useRef<Promise<boolean> | null>(null);
   const pendingMutation = useRef(false);
   const idempotencyKeys = useRef(new Map<string, string>());
 
@@ -137,43 +139,47 @@ export function KdsBoard() {
     setQueue(null);
     setLoading(false);
     setQueueError(null);
+    setLastSync(null);
     setPending(null);
     setNotice(message ? { tone: 'danger', message } : null);
   }, []);
 
   const loadQueue = useCallback(
     async (activeRuntime: Runtime, sinceCursor?: number) => {
-      if (queueFlight.current) await queueFlight.current;
+      if (queueFlight.current) return queueFlight.current;
       const requestEpoch = epoch.current;
       const flight = (async () => {
         try {
           const headers = { Authorization: `Bearer ${activeRuntime.deviceSecret}` };
           let next = await request<QueuePayload>(queuePath(sinceCursor), { headers });
-          if (sinceCursor !== undefined && next.gap) {
+          if (sinceCursor !== undefined && (next.gap || next.cursor < sinceCursor)) {
             next = await request<QueuePayload>(queuePath(), { headers });
           }
-          if (requestEpoch !== epoch.current) return;
+          if (requestEpoch !== epoch.current) return false;
           cursor.current = next.cursor;
           setQueue(next);
           setQueueError(null);
+          setLastSync(new Date());
+          return true;
         } catch (error) {
-          if (requestEpoch !== epoch.current) return;
+          if (requestEpoch !== epoch.current) return false;
           if (error instanceof RequestError && (error.status === 401 || error.status === 403)) {
             disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
-            return;
+            return false;
           }
           setQueueError(
             error instanceof RequestError
               ? error.message
               : 'Queue refresh failed. Retrying automatically.'
           );
+          return false;
         } finally {
           if (requestEpoch === epoch.current) setLoading(false);
         }
       })();
       queueFlight.current = flight;
       try {
-        await flight;
+        return await flight;
       } finally {
         if (queueFlight.current === flight) queueFlight.current = null;
       }
@@ -185,14 +191,31 @@ export function KdsBoard() {
     if (!runtime) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      await loadQueue(runtime, cursor.current ?? undefined);
-      if (!stopped) timer = setTimeout(() => void poll(), 5_000);
+    let failures = 0;
+    const schedule = (delay: number) => {
+      if (timer) clearTimeout(timer);
+      if (!stopped) timer = setTimeout(() => void poll(), delay);
     };
+    const poll = async () => {
+      const succeeded = await loadQueue(runtime, cursor.current ?? undefined);
+      failures = succeeded ? 0 : Math.min(failures + 1, POLL_DELAYS.length - 1);
+      schedule(POLL_DELAYS[failures]);
+    };
+    const refreshNow = () => {
+      failures = 0;
+      schedule(0);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refreshNow();
+    };
+    window.addEventListener('online', refreshNow);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     void poll();
     return () => {
       stopped = true;
       if (timer) clearTimeout(timer);
+      window.removeEventListener('online', refreshNow);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [loadQueue, runtime]);
 
@@ -205,6 +228,7 @@ export function KdsBoard() {
     cursor.current = null;
     setQueue(null);
     setQueueError(null);
+    setLastSync(null);
     setNotice(null);
     setLoading(true);
     setRuntime({ deviceSecret: secret, operatorStaffProfileId: operatorId });
@@ -245,7 +269,9 @@ export function KdsBoard() {
       setNotice({ tone: 'success', message: action.success });
       await loadQueue(runtime);
     } catch (error) {
-      if (error instanceof RequestError) idempotencyKeys.current.delete(intent);
+      if (error instanceof RequestError && error.status < 500) {
+        idempotencyKeys.current.delete(intent);
+      }
       if (error instanceof RequestError && (error.status === 401 || error.status === 403)) {
         disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
       } else {
@@ -370,6 +396,28 @@ export function KdsBoard() {
             </Button>
           </div>
         ) : null}
+        {lastSync ? (
+          <div
+            role="status"
+            className={`flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm ${
+              queueError
+                ? 'border-warning/30 bg-warning/10 text-text-body'
+                : 'border-border-subtle bg-surface-sunken text-text-muted'
+            }`}
+          >
+            <StatusPill
+              status={queueError ? 'degraded' : 'synced'}
+              tone={queueError ? 'warning' : 'success'}
+            />
+            <span>
+              Last synced{' '}
+              <time dateTime={lastSync.toISOString()}>{TIME_FORMATTER.format(lastSync)}</time>
+              {queueError
+                ? ' · Showing the last confirmed station state while recovery continues.'
+                : ''}
+            </span>
+          </div>
+        ) : null}
         {notice ? <Notice notice={notice} /> : null}
         {queue?.hasMore ? (
           <Notice
@@ -474,7 +522,8 @@ function TicketCard({
                 <div className="min-w-0 flex-1">
                   <p className="break-words text-sm font-semibold text-text-strong">{item.name}</p>
                   <p className="font-mono text-[0.6875rem] text-text-muted">
-                    Course {item.course}
+                    Course {item.course} ·{' '}
+                    {item.displayStatus === 'HELD' ? 'HOLD — DO NOT FIRE' : 'FIRE'}
                     {item.seatNumber === null ? '' : ` · Seat ${item.seatNumber}`}
                   </p>
                 </div>
