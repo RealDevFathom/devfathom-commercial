@@ -27,6 +27,47 @@ The seeded catalog maps product surfaces and API scopes to keys such as:
 
 `src/lib/module-catalog.ts` is authoritative for navigation, tRPC procedure, and REST scope mappings.
 
+## Restaurant route and procedure map
+
+`ROUTE_MODULES` / `moduleForPath` own the route → module contract for both verticals; navigation
+must derive module ownership from this catalog rather than repeating module strings. The
+restaurant surfaces map as follows (plan §3):
+
+| Surface                         | Route                                                                   | Effective module                                                          |
+| ------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Dashboard                       | `/dashboard`                                                            | `restaurant-core` for a `RESTAURANT` organization; `dashboard` for Agency |
+| POS register                    | `/pos`                                                                  | `restaurant-pos`                                                          |
+| KDS                             | `/kds`                                                                  | `restaurant-pos`                                                          |
+| Floor / orders / money          | `/restaurant/floor`, `/restaurant/orders`, `/restaurant/money`          | `restaurant-pos`                                                          |
+| Inventory                       | `/restaurant/inventory`                                                 | `restaurant-inventory`                                                    |
+| Purchasing                      | `/restaurant/purchasing`                                                | `restaurant-purchasing`                                                   |
+| SOP board and admin             | `/restaurant/sop`, `/restaurant/sop/admin`                              | `restaurant-sop` (admin adds an authorization check, not an entitlement)  |
+| Customers & loyalty             | `/restaurant/loyalty`                                                   | `restaurant-loyalty`                                                      |
+| Insights                        | `/restaurant/insights`                                                  | `restaurant-insights`                                                     |
+| Catalog / menus                 | `/restaurant/catalog`, `/restaurant/menus`                              | `restaurant-menu`                                                         |
+| Staff / devices / notifications | `/restaurant/staff`, `/restaurant/devices`, `/restaurant/notifications` | `restaurant-core`                                                         |
+| Any other `/restaurant/*`       | —                                                                       | `restaurant-core` (the vertical catalog owns the `/restaurant` prefix)    |
+
+`moduleForPath(pathname, vertical)` dispatches only the Dashboard entry by vertical; callers that
+cannot supply a vertical keep the legacy Agency `dashboard` result.
+
+tRPC procedure namespaces follow the same keys: `restaurantCustomers` and `restaurantLoyalty`
+both gate on the combined `restaurant-loyalty` product module (there is no `restaurant-customers`
+key in the catalog), and `restaurantInventory` / `restaurantPurchasing` gate on
+`restaurant-inventory` / `restaurant-purchasing`, not on POS. The `dashboard` procedure namespace
+stays an Agency module: a restaurant organization never licenses it, so agency dashboard data
+procedures fail closed for restaurant tenants.
+
+## Terminal entitlement boundary
+
+`/pos` and `/kds` are device-authenticated surfaces outside the tenant AppShell, so navigation
+hiding never protects them. `src/lib/restaurant/terminal-auth.ts` therefore enforces the
+**effective** `restaurant-pos` entitlement (package → contract → override, via
+`resolveOrganizationEntitlements`) on every `withDeviceAuth` and `withTerminalAuth` request,
+inside the request's tenant transaction. A disabled module answers `403` before the handler runs
+and before the device/session check-in is recorded; because the snapshot is resolved fresh per
+request, disabling POS takes effect on a terminal's very next call, even mid-session.
+
 ## Package vertical metadata
 
 Every package records one organization vertical. Production bootstrap creates `agency-suite` as
@@ -42,6 +83,7 @@ do not seed restaurant tenant data or claim that linked restaurant features are 
 - `ModuleBoundary` prevents direct navigation to a disabled page.
 - tRPC middleware maps procedures to modules and rejects disabled access.
 - REST authentication maps API scopes to modules before handlers run.
+- Terminal (POS/KDS) device and session authentication requires the effective `restaurant-pos` module and answers 403 when it is disabled.
 - Organization admin actions require the relevant module and tenant admin capability.
 - Jobs are created only from authorized platform commands and validate required state again during execution.
 

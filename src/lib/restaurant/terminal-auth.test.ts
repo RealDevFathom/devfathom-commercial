@@ -18,6 +18,10 @@ type Row = Record<string, unknown>;
 const h = vi.hoisted(() => ({
   store: { devices: [] as Row[], sessions: [] as Row[], orgs: [] as Row[] },
   rate: { ok: true },
+  // WHA-138 Lane A: the EFFECTIVE entitlement snapshot the wrapper resolves per
+  // request. Enabled by default so the pre-existing transport cases stay valid;
+  // the entitlement cases below flip it off.
+  entitlements: { enabled: ['restaurant-pos'] as string[] },
 }));
 
 function findBy(rows: Row[], where: Record<string, unknown>): Row | null {
@@ -25,6 +29,14 @@ function findBy(rows: Row[], where: Record<string, unknown>): Row | null {
     rows.find((row) => Object.entries(where).every(([key, value]) => row[key] === value)) ?? null
   );
 }
+
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: async (organizationId: string) => ({
+    organizationId,
+    enabledModules: h.entitlements.enabled,
+  }),
+  hasModule: (view: { enabledModules: string[] }, key: string) => view.enabledModules.includes(key),
+}));
 
 vi.mock('@/lib/rate-limit', () => ({
   clientIp: () => '203.0.113.5',
@@ -114,6 +126,7 @@ beforeEach(() => {
   h.store.sessions = [];
   h.store.orgs = [];
   h.rate.ok = true;
+  h.entitlements.enabled = ['restaurant-pos'];
 });
 
 describe('withDeviceAuth', () => {
@@ -161,6 +174,28 @@ describe('withDeviceAuth', () => {
     h.rate.ok = false;
     const handler = withDeviceAuth(() => new Response('ok'));
     expect((await handler(req({ authorization: `Bearer ${deviceSecret}` }))).status).toBe(429);
+  });
+
+  // WHA-138 Lane A: entitlement is enforced by the transport itself, so a
+  // trusted device on a tenant whose POS module is disabled is rejected even
+  // though nothing in navigation was involved.
+  it('rejects a trusted device with 403 when restaurant-pos is disabled', async () => {
+    seedDevice();
+    h.entitlements.enabled = [];
+    const inner = vi.fn(() => new Response('ok'));
+    const handler = withDeviceAuth(inner);
+    const res = await handler(req({ authorization: `Bearer ${deviceSecret}` }));
+    expect(res.status).toBe(403);
+    expect(inner).not.toHaveBeenCalled();
+    // The gate runs before the check-in, so a disabled tenant records nothing.
+    expect(h.store.devices[0].lastSeenAt).toBeNull();
+  });
+
+  it('runs the handler when restaurant-pos is enabled via any effective source', async () => {
+    seedDevice();
+    h.entitlements.enabled = ['restaurant-core', 'restaurant-pos'];
+    const handler = withDeviceAuth(() => new Response('ok'));
+    expect((await handler(req({ authorization: `Bearer ${deviceSecret}` }))).status).toBe(200);
   });
 });
 
@@ -214,6 +249,23 @@ describe('withTerminalAuth', () => {
       req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken })
     );
     expect(res.status).toBe(401);
+  });
+
+  // WHA-138 Lane A: a live, otherwise-valid session is still refused when the
+  // tenant's POS entitlement is disabled — the module can be turned off
+  // mid-session and takes effect on the very next request (no trust cache).
+  it('rejects a live session with 403 when restaurant-pos is disabled', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    h.entitlements.enabled = ['restaurant-core'];
+    const inner = vi.fn(() => new Response('ok'));
+    const handler = withTerminalAuth(inner);
+    const res = await handler(
+      req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken })
+    );
+    expect(res.status).toBe(403);
+    expect(inner).not.toHaveBeenCalled();
+    expect(h.store.devices[0].lastSeenAt).toBeNull();
   });
 });
 
