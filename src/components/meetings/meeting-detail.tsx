@@ -82,10 +82,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
               size="lg"
               className="h-10 px-4"
               nativeButton={false}
-              render={<Link href={`/meetings/${meetingId}/call`} />}
+              render={<Link href="#occurrences" />}
             >
               <Video className="h-4 w-4" />
-              Join call
+              Choose occurrence
             </Button>
           }
         />
@@ -138,7 +138,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-secondary text-xs font-semibold text-foreground">
                     {a.user.avatar ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={a.user.avatar} alt={a.user.name} className="h-full w-full object-cover" />
+                      <img
+                        src={a.user.avatar}
+                        alt={a.user.name}
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
                       initials(a.user.name)
                     )}
@@ -169,7 +173,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                       <div
                         className={cn(
                           'h-full rounded-full',
-                          a.rate >= 75 ? 'bg-emerald-500' : a.rate >= 40 ? 'bg-amber-500' : 'bg-red-500'
+                          a.rate >= 75
+                            ? 'bg-emerald-500'
+                            : a.rate >= 40
+                              ? 'bg-amber-500'
+                              : 'bg-red-500'
                         )}
                         style={{ width: `${Math.min(100, a.rate)}%` }}
                       />
