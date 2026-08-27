@@ -7,6 +7,7 @@ import type {
   RestaurantRegisteredDevice,
   RestaurantTerminalSession,
 } from '@/generated/prisma/client';
+import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
   isDeviceSecretFormat,
@@ -157,6 +158,29 @@ function respondToEscapedError(
   return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
 }
 
+/**
+ * WHA-138 Lane A — POS/KDS terminals are licensed by the `restaurant-pos`
+ * module, so the terminal transport enforces the EFFECTIVE entitlement
+ * (package → contract → override) on every device- and session-authenticated
+ * request. Navigation hiding is UX only; a disabled module must be rejected
+ * here independent of anything a client renders. Resolved FRESH inside the
+ * request's tenant transaction (no trust cache — an operator override that
+ * disables POS takes effect on the terminal's very next request). Returns the
+ * 403 to send, or null when the module is enabled.
+ */
+const TERMINAL_MODULE_KEY = 'restaurant-pos';
+
+async function rejectDisabledTerminalModule(
+  db: ScopedDb,
+  organizationId: string
+): Promise<NextResponse | null> {
+  const entitlements = await resolveOrganizationEntitlements(organizationId, db);
+  if (!hasModule(entitlements, TERMINAL_MODULE_KEY)) {
+    return forbidden('The POS and Fulfilment module is not enabled for this organization.');
+  }
+  return null;
+}
+
 type DeviceDiscovery = { deviceId: string; organizationId: string };
 
 /**
@@ -233,6 +257,8 @@ export function withDeviceAuth<T extends unknown[]>(
         if (!device || !isDeviceUsable(device)) {
           return forbidden('This device has been revoked.');
         }
+        const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
+        if (entitlementRejection) return entitlementRejection;
         await touchDeviceLastSeen(db, device.id, now);
         return handler({ organizationId: auth.organizationId, device, db }, request, ...args);
       });
@@ -282,6 +308,9 @@ export function withTerminalAuth<T extends unknown[]>(
 
         const verdict = evaluateTerminalSession(session, device, now);
         if (!verdict.ok) return sessionRejection(verdict.reason);
+
+        const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
+        if (entitlementRejection) return entitlementRejection;
 
         await Promise.all([
           touchDeviceLastSeen(db, device.id, now),
