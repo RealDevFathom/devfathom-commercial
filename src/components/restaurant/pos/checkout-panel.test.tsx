@@ -147,3 +147,211 @@ describe('CheckoutPanel', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+/**
+ * M9-L2 — the CONNECTED guest/loyalty flow on an open bill: masked-only search results, the
+ * attach and redeem round-trips (with their idempotency intents), and the server-authoritative
+ * permission model. Nothing here may cache PII or gate a capability client-side.
+ */
+describe('CheckoutPanel guest and loyalty', () => {
+  const noGuest = {
+    billId: 'bill-1',
+    orderId: 'order-1',
+    billStatus: 'OPEN',
+    customerId: null,
+    accountId: null,
+    accountActive: false,
+    balance: 0,
+    redemptionValue: '0.50',
+    outstanding: '24.00',
+    maxRedeemablePoints: 0,
+    redeemedValue: '0',
+  };
+
+  const enrolled = {
+    ...noGuest,
+    customerId: 'cust-1',
+    accountId: 'acct-1',
+    accountActive: true,
+    balance: 1000,
+    maxRedeemablePoints: 48,
+  };
+
+  const match = {
+    customerId: 'cust-1',
+    displayName: 'Ali Raza',
+    identifiers: [
+      { id: 'i1', kind: 'EMAIL' as const, masked: 'a••@example.com' },
+      { id: 'i2', kind: 'PHONE' as const, masked: '•••• 4567' },
+    ],
+  };
+
+  /** Route each terminal call to a scripted reply and record what was sent. */
+  function router(script: {
+    loyalty?: () => unknown;
+    search?: () => unknown;
+    attach?: () => unknown;
+    redeem?: () => unknown;
+  }) {
+    const calls: { path: string; options?: TerminalRequestOptions }[] = [];
+    const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
+      calls.push({ path, options });
+      if (path.includes('/summary')) return billed as T;
+      if (path.includes('/customer/search')) return (script.search?.() ?? { customers: [] }) as T;
+      if (path.includes('/customer/attach')) return (script.attach?.() ?? {}) as T;
+      if (path.includes('/checkout/loyalty')) {
+        if (options?.method === 'POST') return (script.redeem?.() ?? {}) as T;
+        return (script.loyalty?.() ?? noGuest) as T;
+      }
+      return {} as T;
+    };
+    return { calls, request };
+  }
+
+  it('reads the loyalty snapshot for the open bill and offers guest search', async () => {
+    const { calls, request } = router({});
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByLabelText('Find guest')).toBeVisible();
+    expect(
+      calls.some(({ path }) => path === '/api/restaurant/checkout/loyalty?billId=bill-1')
+    ).toBe(true);
+  });
+
+  it('shows only MASKED identifiers for a search hit — never a contactable address', async () => {
+    const { request } = router({ search: () => ({ customers: [match] }) });
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText('Find guest'), { target: { value: 'ali' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText('Ali Raza')).toBeVisible();
+    expect(screen.getByText('a••@example.com · •••• 4567')).toBeVisible();
+    expect(screen.queryByText(/ali@example\.com/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\+92300/)).not.toBeInTheDocument();
+  });
+
+  it('will not search on a single character, so the customer book cannot be dumped', async () => {
+    const { calls, request } = router({});
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText('Find guest'), { target: { value: 'a' } });
+    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+    expect(calls.some(({ path }) => path.includes('/customer/search'))).toBe(false);
+  });
+
+  it('attaches the chosen guest and drops the masked results from the pad', async () => {
+    let snapshot: unknown = noGuest;
+    const { calls, request } = router({
+      search: () => ({ customers: [match] }),
+      attach: () => {
+        snapshot = enrolled;
+        return {};
+      },
+      loyalty: () => snapshot,
+    });
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText('Find guest'), { target: { value: 'ali' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach' }));
+
+    expect(await screen.findByText('Points balance')).toBeVisible();
+    expect(screen.getByText('1000')).toBeVisible();
+    expect(screen.queryByText('a••@example.com · •••• 4567')).not.toBeInTheDocument();
+    expect(calls.find(({ path }) => path.includes('/customer/attach'))?.options).toEqual({
+      method: 'POST',
+      body: { orderId: 'order-1', customerId: 'cust-1' },
+      intent: 'customer-attach:{"orderId":"order-1","customerId":"cust-1"}',
+    });
+  });
+
+  it('redeems POINTS (never an amount) and carries a stable idempotency intent', async () => {
+    const { calls, request } = router({
+      loyalty: () => enrolled,
+      redeem: () => ({ value: '20.00', balance: 960 }),
+    });
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText('Points to redeem (up to 48)'), {
+      target: { value: '40' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Redeem' }));
+
+    expect(await screen.findByText('Redeemed 20.00 off this bill.')).toBeVisible();
+    const redeem = calls.find(
+      ({ path, options }) =>
+        path === '/api/restaurant/checkout/loyalty' && options?.method === 'POST'
+    );
+    expect(redeem?.options).toEqual({
+      method: 'POST',
+      body: { billId: 'bill-1', accountId: 'acct-1', points: 40 },
+      intent: 'loyalty-redeem:{"billId":"bill-1","accountId":"acct-1","points":40}',
+    });
+    // No money field is ever sent — the server prices the discount.
+    expect(JSON.stringify(redeem?.options?.body)).not.toContain('amount');
+    expect(JSON.stringify(redeem?.options?.body)).not.toContain('value');
+  });
+
+  it('refuses a fractional point entry without troubling the server', async () => {
+    const { calls, request } = router({ loyalty: () => enrolled });
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText('Points to redeem (up to 48)'), {
+      target: { value: '2.5' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Redeem' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Enter a whole number of points to redeem.'
+    );
+    expect(
+      calls.some(({ path, options }) => path.includes('/loyalty') && options?.method === 'POST')
+    ).toBe(false);
+  });
+
+  it('surfaces a server 403 rather than hiding the control client-side', async () => {
+    const denied = Object.assign(
+      new Error('This operator lacks the "loyalty:redeem" capability.'),
+      {
+        status: 403,
+      }
+    );
+    const { request } = router({
+      loyalty: () => {
+        throw denied;
+      },
+    });
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    // The section still renders and reports the SERVER's decision; it never pretends to
+    // enforce the capability itself, and offers no retry that would loop on a hard denial.
+    expect(await screen.findByText('Guest & loyalty')).toBeVisible();
+    expect(
+      screen.getByText('Permission denied: This operator lacks the "loyalty:redeem" capability.')
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Retry loyalty' })).not.toBeInTheDocument();
+  });
+
+  it('says nothing is redeemable when the bill is already covered', async () => {
+    const { request } = router({
+      loyalty: () => ({ ...enrolled, maxRedeemablePoints: 0, outstanding: '0' }),
+    });
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Nothing is redeemable against the remaining 0.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Redeem' })).toBeDisabled();
+  });
+
+  it('reports an unenrolled guest instead of offering a redemption keypad', async () => {
+    const { request } = router({
+      loyalty: () => ({ ...enrolled, accountId: null, accountActive: false, balance: 0 }),
+    });
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText('This guest has no active loyalty balance to redeem.')
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Redeem' })).not.toBeInTheDocument();
+  });
+});
