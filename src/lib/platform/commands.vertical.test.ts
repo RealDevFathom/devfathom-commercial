@@ -25,9 +25,11 @@ const mocks = vi.hoisted(() => ({
   userCreate: vi.fn(),
   branchCreate: vi.fn(),
   branchFindMany: vi.fn(),
+  branchCount: vi.fn(),
   assignmentCreate: vi.fn(),
   moduleUpsert: vi.fn(),
   orgModuleFindMany: vi.fn(),
+  orgModuleCount: vi.fn(),
   platformModuleFindUnique: vi.fn(),
   platformModuleFindMany: vi.fn(),
 }));
@@ -63,9 +65,17 @@ const platformDb = {
   platformJob: { create: record() },
   organizationLifecycleEvent: { create: record() },
   platformAuditLog: { create: record() },
-  restaurantBranch: { create: mocks.branchCreate, findMany: mocks.branchFindMany },
+  restaurantBranch: {
+    create: mocks.branchCreate,
+    findMany: mocks.branchFindMany,
+    count: mocks.branchCount,
+  },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
-  organizationModule: { upsert: mocks.moduleUpsert, findMany: mocks.orgModuleFindMany },
+  organizationModule: {
+    upsert: mocks.moduleUpsert,
+    findMany: mocks.orgModuleFindMany,
+    count: mocks.orgModuleCount,
+  },
   platformModule: {
     findUnique: mocks.platformModuleFindUnique,
     findMany: mocks.platformModuleFindMany,
@@ -223,6 +233,8 @@ describe('organization.update vertical immutability + package compatibility', ()
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.orgUpdate.mockResolvedValue({ id: 'org_1' });
+    mocks.branchCount.mockResolvedValue(0);
+    mocks.orgModuleCount.mockResolvedValue(0);
   });
 
   it('allows a pre-activation vertical correction with a compatible package', async () => {
@@ -234,7 +246,7 @@ describe('organization.update vertical immutability + package compatibility', ()
       status: 'ONBOARDING',
       deploymentMode: 'SHARED',
     });
-    mocks.pkgFindUnique.mockResolvedValue({ vertical: 'RESTAURANT' });
+    mocks.pkgFindUnique.mockResolvedValue({ active: true, vertical: 'RESTAURANT' });
 
     await run('organization.update', {
       id: 'org_1',
@@ -261,7 +273,7 @@ describe('organization.update vertical immutability + package compatibility', ()
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
-    expect((error as PlatformSecurityError).message).toContain('immutable');
+    expect((error as PlatformSecurityError).message).toContain('early onboarding');
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 
@@ -293,7 +305,7 @@ describe('organization.update vertical immutability + package compatibility', ()
       status: 'ACTIVE',
       deploymentMode: 'SHARED',
     });
-    mocks.pkgFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
+    mocks.pkgFindUnique.mockResolvedValue({ active: true, vertical: 'AGENCY' });
 
     const error = await caught(run('organization.update', { id: 'org_1', packageId: 'pkg_a' }));
 
@@ -311,12 +323,38 @@ describe('organization.update vertical immutability + package compatibility', ()
       status: 'ONBOARDING',
       deploymentMode: 'SHARED',
     });
-    mocks.pkgFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
-
     const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' }));
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
+    expect((error as PlatformSecurityError).message).toContain('together');
+    expect(mocks.pkgFindUnique).not.toHaveBeenCalled();
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects correction after vertical-owned rows exist', async () => {
+    mocks.orgFindUnique.mockResolvedValue({
+      id: 'org_1',
+      vertical: 'AGENCY',
+      activatedAt: null,
+      packageId: 'pkg_a',
+      status: 'ONBOARDING',
+      deploymentMode: 'SHARED',
+    });
+    mocks.branchCount.mockResolvedValue(1);
+
+    const error = await caught(
+      run('organization.update', {
+        id: 'org_1',
+        vertical: 'RESTAURANT',
+        packageId: 'pkg_r',
+      })
+    );
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({ status: 400 });
+    expect((error as PlatformSecurityError).message).toContain('setup has started');
+    expect(mocks.pkgFindUnique).not.toHaveBeenCalled();
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 });
@@ -377,6 +415,29 @@ describe('organization.module enablement guard', () => {
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(mocks.moduleUpsert).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['DISABLED', 'ONBOARDING'],
+    ['EXPIRED', 'ACTIVE'],
+  ] as const)(
+    'rejects %s for mandatory Restaurant Core while %s',
+    async (status, organizationStatus) => {
+      mocks.orgFindUnique.mockResolvedValue({
+        vertical: 'RESTAURANT',
+        status: organizationStatus,
+      });
+      mocks.platformModuleFindUnique.mockResolvedValue({ key: 'restaurant-core' });
+
+      const error = await caught(
+        run('organization.module', { ...modulePayload('mod_core'), status })
+      );
+
+      expect(error).toBeInstanceOf(PlatformSecurityError);
+      expect(error).toMatchObject({ status: 400 });
+      expect((error as PlatformSecurityError).message).toContain('mandatory');
+      expect(mocks.moduleUpsert).not.toHaveBeenCalled();
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

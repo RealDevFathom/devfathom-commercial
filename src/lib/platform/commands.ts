@@ -369,7 +369,8 @@ const organizationInput = z.object({
   timezone: z.string().trim().min(1).max(100).default('UTC'),
   locale: z.string().trim().min(2).max(20).default('en'),
   currency: currency.default('USD'),
-  seatLimit: z.coerce.number().int().min(1).max(100_000),
+  // Legacy callers may omit seats; the selected package supplies the baseline.
+  seatLimit: z.coerce.number().int().min(1).max(100_000).optional(),
   gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
   dataResidency: optionalText.optional(),
   primaryContactName: requiredText,
@@ -416,7 +417,7 @@ async function bootstrapOrganization(
       timezone: input.timezone,
       locale: input.locale,
       currency: input.currency,
-      seatLimit: input.seatLimit,
+      seatLimit: input.seatLimit ?? packageRecord.defaultSeats,
       gracePeriodDays: input.gracePeriodDays,
       dataResidency: input.dataResidency,
       primaryContactName: input.primaryContactName,
@@ -604,13 +605,35 @@ async function runCommand(
       const { id: organizationId, ...data } = input;
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
-      // §2.2 — the vertical is immutable once the organization has been activated;
-      // a pre-activation correction is still permitted.
-      if (data.vertical && data.vertical !== before.vertical && before.activatedAt) {
-        throw new PlatformSecurityError(
-          'The organization vertical is immutable once the organization is activated.',
-          400
-        );
+      const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
+      // A vertical correction is deliberately narrower than ordinary onboarding
+      // edits: it is an early correction only, before activation or any
+      // vertical-owned branch/entitlement rows exist. The replacement package is
+      // required in the same command so the organization can never commit a
+      // vertical/package mismatch between requests.
+      if (changesVertical) {
+        if (before.status !== 'ONBOARDING' || before.activatedAt !== null) {
+          throw new PlatformSecurityError(
+            'The organization vertical can only be corrected during early onboarding.',
+            400
+          );
+        }
+        if (data.packageId === undefined || data.packageId === null) {
+          throw new PlatformSecurityError(
+            'Correct the organization vertical and commercial package together.',
+            400
+          );
+        }
+        const [branchCount, moduleOverrideCount] = await Promise.all([
+          db.restaurantBranch.count({ where: { organizationId } }),
+          db.organizationModule.count({ where: { organizationId } }),
+        ]);
+        if (branchCount > 0 || moduleOverrideCount > 0) {
+          throw new PlatformSecurityError(
+            'The organization vertical cannot be corrected after vertical setup has started.',
+            400
+          );
+        }
       }
       // §2.3 — a package (being changed now or already assigned) must match the
       // organization's resulting vertical. Rejected server-side even when a
@@ -620,9 +643,9 @@ async function runCommand(
       if (nextPackageId && (data.packageId !== undefined || data.vertical !== undefined)) {
         const nextPackage = await db.platformPackage.findUnique({
           where: { id: nextPackageId },
-          select: { vertical: true },
+          select: { active: true, vertical: true },
         });
-        if (!nextPackage) {
+        if (!nextPackage?.active) {
           throw new PlatformSecurityError('Choose an active commercial package.', 400);
         }
         if (!isPackageCompatibleWithVertical(nextPackage.vertical ?? 'AGENCY', nextVertical)) {
@@ -790,6 +813,19 @@ async function runCommand(
       if (verticalForModuleKey(targetModule.key) !== targetOrg.vertical) {
         throw new PlatformSecurityError(
           `The ${targetModule.key} module does not belong to the ${targetOrg.vertical} vertical.`,
+          400
+        );
+      }
+      const mandatoryKeys = mandatoryModulesForVertical(targetOrg.vertical).map(
+        (module) => module.key
+      );
+      if (
+        mandatoryKeys.includes(targetModule.key) &&
+        input.status !== 'ENABLED' &&
+        input.status !== 'TRIAL'
+      ) {
+        throw new PlatformSecurityError(
+          `The mandatory ${targetModule.key} module cannot be disabled.`,
           400
         );
       }
