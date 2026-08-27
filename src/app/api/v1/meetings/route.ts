@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { authorizeGuestOccurrence } from '@/lib/meetings/guest-access';
+import {
+  materializeMeetingOccurrences,
+  recurrenceRuleFromLegacy,
+} from '@/lib/meetings/occurrences';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 
 export const GET = withApiAuth('meetings:read', async (ctx, request) => {
@@ -57,19 +61,33 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   const allAttendees = [...new Set([ctx.userId, ...attendeeIds])];
 
   // REST-07: validate attendee ids exist before insert (bad id → raw FK 500).
-  const foundAttendees = await ctx.db.user.count({ where: { id: { in: allAttendees } } });
-  if (foundAttendees !== allAttendees.length) {
+  const attendeeUsers = await ctx.db.user.findMany({
+    where: { id: { in: allAttendees } },
+    select: { id: true, name: true },
+  });
+  if (attendeeUsers.length !== allAttendees.length) {
     return NextResponse.json({ error: 'One or more attendeeIds do not exist.' }, { status: 400 });
   }
 
-  const meeting = await ctx.db.meeting.create({
-    data: {
-      ...rest,
-      startTime: new Date(startTime),
-      endTime: new Date(endTime),
-      createdById: ctx.userId,
-      attendees: { create: allAttendees.map((userId) => ({ userId })) },
-    },
+  const meeting = await ctx.db.$transaction(async (tx) => {
+    const created = await tx.meeting.create({
+      data: {
+        ...rest,
+        recurrenceRule: recurrenceRuleFromLegacy(rest.recurrence),
+        startTime: new Date(startTime),
+        endTime: new Date(endTime),
+        createdById: ctx.userId,
+        attendees: { create: allAttendees.map((userId) => ({ userId })) },
+        participants: {
+          create: attendeeUsers.map((attendee) => ({
+            userId: attendee.id,
+            displayName: attendee.name,
+          })),
+        },
+      },
+    });
+    await materializeMeetingOccurrences(tx, created);
+    return created;
   });
   return NextResponse.json({ data: meeting }, { status: 201 });
 });

@@ -11,6 +11,7 @@ import {
   cancelOccurrence,
   issueGuestSecret,
   materializeMeetingOccurrences,
+  recurrenceRuleFromLegacy,
   rescheduleOccurrence,
 } from '@/lib/meetings/occurrences';
 
@@ -22,18 +23,6 @@ const MEETINGS_PAGE_SIZE_MAX = 200;
 const UPCOMING_LIMIT = 50;
 /** Recurring series `getUpcoming` evaluates per call — see the query below. */
 const UPCOMING_SERIES_LIMIT = 200;
-
-function legacyRecurrenceRule(value: string | null): string | null {
-  if (!value) return null;
-  return (
-    {
-      daily: 'FREQ=DAILY',
-      weekly: 'FREQ=WEEKLY',
-      biweekly: 'FREQ=WEEKLY;INTERVAL=2',
-      monthly: 'FREQ=MONTHLY',
-    }[value] ?? null
-  );
-}
 
 export const meetingsRouter = router({
   getUpcoming: protectedProcedure.query(async ({ ctx }) => {
@@ -330,7 +319,7 @@ export const meetingsRouter = router({
         const meeting = await tx.meeting.create({
           data: {
             ...meetingData,
-            recurrenceRule: legacyRecurrenceRule(meetingData.recurrence),
+            recurrenceRule: recurrenceRuleFromLegacy(meetingData.recurrence),
             createdById: user.id,
             attendees: { create: allAttendees.map((userId) => ({ userId })) },
             participants: {

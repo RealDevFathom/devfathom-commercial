@@ -19,6 +19,10 @@ import { Prisma } from '@/generated/prisma/client';
 import * as authz from '@/lib/authz';
 import { appUrl, templates } from '@/lib/email';
 import { findRelevantOccurrence, computePunctuality } from '@/lib/meeting-occurrence';
+import {
+  materializeMeetingOccurrences,
+  recurrenceRuleFromLegacy,
+} from '@/lib/meetings/occurrences';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 
 const DAY_MS = 86_400_000;
@@ -264,17 +268,32 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         }
 
         const allAttendees = [...new Set([user.id, ...resolvedIds])];
-        const meeting = await db.meeting.create({
-          data: {
-            title,
-            description: description ?? null,
-            startTime: start,
-            endTime: end,
-            location: location ?? null,
-            recurrence: recurrence ?? null,
-            createdById: user.id,
-            attendees: { create: allAttendees.map((userId) => ({ userId })) },
-          },
+        const attendeeUsers = await db.user.findMany({
+          where: { id: { in: allAttendees } },
+          select: { id: true, name: true },
+        });
+        const meeting = await db.$transaction(async (tx) => {
+          const created = await tx.meeting.create({
+            data: {
+              title,
+              description: description ?? null,
+              startTime: start,
+              endTime: end,
+              location: location ?? null,
+              recurrence: recurrence ?? null,
+              recurrenceRule: recurrenceRuleFromLegacy(recurrence),
+              createdById: user.id,
+              attendees: { create: allAttendees.map((userId) => ({ userId })) },
+              participants: {
+                create: attendeeUsers.map((attendee) => ({
+                  userId: attendee.id,
+                  displayName: attendee.name,
+                })),
+              },
+            },
+          });
+          await materializeMeetingOccurrences(tx, created);
+          return created;
         });
 
         // Side effects: invite + notify everyone except the organizer (in-app +

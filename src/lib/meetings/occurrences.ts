@@ -13,6 +13,18 @@ type Series = {
   materializedThrough: Date | null;
 };
 
+export function recurrenceRuleFromLegacy(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return (
+    {
+      daily: 'FREQ=DAILY',
+      weekly: 'FREQ=WEEKLY',
+      biweekly: 'FREQ=WEEKLY;INTERVAL=2',
+      monthly: 'FREQ=MONTHLY',
+    }[value] ?? null
+  );
+}
+
 function nextSlot(value: Date, rule: string): Date {
   const next = new Date(value);
   const parts = new Map(rule.split(';').map((part) => part.split('=', 2) as [string, string]));
