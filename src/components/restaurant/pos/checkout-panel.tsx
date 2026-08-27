@@ -11,6 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
@@ -78,6 +80,374 @@ const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> =
   BILLS_OPEN: 'Payment is still due on one or more bills.',
   TOTAL_MISMATCH: 'Bill totals do not match the order total.',
 };
+
+/** The redemption panel's read model (`GET /api/restaurant/checkout/loyalty`). Ids and
+ * money only — the server sends no guest PII to a pad. */
+type LoyaltySnapshot = {
+  billId: string;
+  orderId: string;
+  billStatus: string;
+  customerId: string | null;
+  accountId: string | null;
+  accountActive: boolean;
+  balance: number;
+  redemptionValue: string;
+  outstanding: string;
+  maxRedeemablePoints: number;
+  redeemedValue: string;
+};
+
+/** A search hit. `masked` is all the pad ever receives of an email or phone number. */
+type CustomerMatch = {
+  customerId: string;
+  displayName: string | null;
+  identifiers: { id: string; kind: 'EMAIL' | 'PHONE'; masked: string }[];
+};
+
+const MIN_SEARCH_LENGTH = 2;
+
+/**
+ * Guest + loyalty for ONE open bill — CONNECTED-ONLY.
+ *
+ * Every read and write here is a live server round-trip: nothing is cached, queued or
+ * replayed from local state, because a redemption moves an append-only ledger and discounts a
+ * live bill. Search results hold MASKED identifiers only and are dropped when the guest is
+ * attached, so no contactable address is ever retained on the pad.
+ *
+ * Authorization is the SERVER'S: this renders whatever it is given and surfaces a 403 as a
+ * message. It never hides a control to "enforce" a capability, because a hidden control is
+ * not a permission check — `customers:read` and `loyalty:redeem` are enforced on every route.
+ *
+ * `maxRedeemablePoints` is a keypad affordance, not a limit: the server re-derives the balance
+ * and outstanding-balance bounds under row locks, so an edited value is refused, not honoured.
+ */
+function GuestLoyaltySection({
+  orderId,
+  billId,
+  request,
+  disabled,
+  onRedeemed,
+}: {
+  orderId: string;
+  billId: string;
+  request: TerminalRequest;
+  disabled: boolean;
+  onRedeemed: () => Promise<void>;
+}) {
+  const [snapshot, setSnapshot] = useState<LoyaltySnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [denied, setDenied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+  const [matches, setMatches] = useState<CustomerMatch[] | null>(null);
+  const [points, setPoints] = useState('');
+  const [redeemed, setRedeemed] = useState<string | null>(null);
+
+  const fetchSnapshot = useCallback(
+    () =>
+      request<LoyaltySnapshot>(
+        `/api/restaurant/checkout/loyalty?billId=${encodeURIComponent(billId)}`
+      ),
+    [billId, request]
+  );
+
+  /** Re-read after a mutation, or on an explicit retry — both already outside render. */
+  const loadSnapshot = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setDenied(false);
+    try {
+      setSnapshot(await fetchSnapshot());
+    } catch (requestError) {
+      const details = errorDetails(requestError);
+      setSnapshot(null);
+      setDenied(details.status === 403);
+      setError(details.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchSnapshot]);
+
+  // The first read settles state in the promise callbacks rather than synchronously in the
+  // effect body (the panel's existing summary idiom), so the mount does not cascade a render.
+  // `active` drops a reply that lands after the bill changed or the panel unmounted.
+  useEffect(() => {
+    let active = true;
+    void fetchSnapshot()
+      .then((next) => {
+        if (!active) return;
+        setSnapshot(next);
+        setDenied(false);
+        setError(null);
+      })
+      .catch((requestError: unknown) => {
+        if (!active) return;
+        const details = errorDetails(requestError);
+        setSnapshot(null);
+        setDenied(details.status === 403);
+        setError(details.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [fetchSnapshot]);
+
+  async function runSearch() {
+    const term = query.trim();
+    if (term.length < MIN_SEARCH_LENGTH || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const found = await request<{ customers: CustomerMatch[] }>(
+        `/api/restaurant/orders/customer/search?query=${encodeURIComponent(term)}`
+      );
+      setMatches(found.customers);
+    } catch (requestError) {
+      const details = errorDetails(requestError);
+      setDenied(details.status === 403);
+      setError(details.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function attach(customerId: string) {
+    if (busy) return;
+    const body = { orderId, customerId };
+    setBusy(true);
+    setError(null);
+    try {
+      await request<unknown>('/api/restaurant/orders/customer/attach', {
+        method: 'POST',
+        body,
+        intent: `customer-attach:${JSON.stringify(body)}`,
+      });
+      // Masked identifiers are discarded the moment they are no longer needed.
+      setMatches(null);
+      setQuery('');
+      await loadSnapshot();
+    } catch (requestError) {
+      const details = errorDetails(requestError);
+      setDenied(details.status === 403);
+      setError(details.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function redeem() {
+    const count = Number(points);
+    if (!snapshot?.accountId || busy) return;
+    if (!Number.isInteger(count) || count <= 0) {
+      setError('Enter a whole number of points to redeem.');
+      return;
+    }
+    const body = { billId, accountId: snapshot.accountId, points: count };
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await request<{ value: string; balance: number }>(
+        '/api/restaurant/checkout/loyalty',
+        { method: 'POST', body, intent: `loyalty-redeem:${JSON.stringify(body)}` }
+      );
+      setRedeemed(result.value);
+      setPoints('');
+      await loadSnapshot();
+      await onRedeemed();
+    } catch (requestError) {
+      const details = errorDetails(requestError);
+      setDenied(details.status === 403);
+      setError(details.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) {
+    return <p className="text-sm text-text-muted">Loading guest and loyalty…</p>;
+  }
+
+  if (!snapshot) {
+    // Keep the heading so the failure is attributable to THIS section rather than reading as a
+    // checkout-wide error. A hard denial offers no retry — looping on a 403 cannot succeed.
+    return (
+      <div className="space-y-3 border-t border-border pt-4">
+        <h4 className="text-sm font-semibold text-text-strong">Guest &amp; loyalty</h4>
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+        {denied ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void loadSnapshot()}
+            className="h-11"
+          >
+            Retry loyalty
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  const controlsDisabled = disabled || busy;
+  const canRedeem = snapshot.accountId !== null && snapshot.accountActive && snapshot.balance > 0;
+
+  return (
+    <div className="space-y-4 border-t border-border pt-4">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-sm font-semibold text-text-strong">Guest &amp; loyalty</h4>
+        {snapshot.customerId ? (
+          <StatusPill status={canRedeem ? 'enrolled' : 'not enrolled'} tone="neutral" />
+        ) : null}
+      </div>
+
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+
+      {redeemed ? (
+        <p role="status" className="text-sm text-text-muted">
+          Redeemed {redeemed} off this bill.
+        </p>
+      ) : null}
+
+      {snapshot.customerId === null ? (
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor={`guest-search-${billId}`}>Find guest</Label>
+            <div className="flex gap-2">
+              <Input
+                id={`guest-search-${billId}`}
+                value={query}
+                disabled={controlsDisabled}
+                autoComplete="off"
+                placeholder="Name, email, or phone"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void runSearch();
+                  }
+                }}
+                className="h-11"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={controlsDisabled || query.trim().length < MIN_SEARCH_LENGTH}
+                onClick={() => void runSearch()}
+                className="h-11 shrink-0"
+              >
+                {busy ? 'Searching…' : 'Search'}
+              </Button>
+            </div>
+          </div>
+
+          {matches?.length === 0 ? (
+            <p className="text-sm text-text-muted">No guest matches that search.</p>
+          ) : null}
+
+          {matches?.length ? (
+            <ul className="grid gap-2">
+              {matches.map((match) => (
+                <li
+                  key={match.customerId}
+                  className="flex items-center justify-between gap-3 rounded-lg bg-surface-sunken p-3"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm text-text-strong">
+                      {match.displayName ?? 'Unnamed guest'}
+                    </span>
+                    <span className="block truncate text-xs text-text-muted">
+                      {match.identifiers.map((identifier) => identifier.masked).join(' · ')}
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={controlsDisabled}
+                    onClick={() => void attach(match.customerId)}
+                    className="h-11 shrink-0"
+                  >
+                    Attach
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <dl className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <dt className="text-xs text-text-muted">Points balance</dt>
+              <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
+                {snapshot.balance}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-text-muted">Value per point</dt>
+              <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
+                {snapshot.redemptionValue}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-text-muted">Already redeemed</dt>
+              <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
+                {snapshot.redeemedValue}
+              </dd>
+            </div>
+          </dl>
+
+          {canRedeem ? (
+            <div className="space-y-1.5">
+              <Label htmlFor={`loyalty-points-${billId}`}>
+                Points to redeem (up to {snapshot.maxRedeemablePoints})
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id={`loyalty-points-${billId}`}
+                  value={points}
+                  disabled={controlsDisabled || snapshot.maxRedeemablePoints === 0}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  onChange={(event) => setPoints(event.target.value)}
+                  className="h-11 font-mono tabular-nums"
+                />
+                <Button
+                  type="button"
+                  disabled={
+                    controlsDisabled || snapshot.maxRedeemablePoints === 0 || !points.trim()
+                  }
+                  onClick={() => void redeem()}
+                  className="h-11 shrink-0"
+                >
+                  {busy ? 'Redeeming…' : 'Redeem'}
+                </Button>
+              </div>
+              {snapshot.maxRedeemablePoints === 0 ? (
+                <p className="text-sm text-text-muted">
+                  Nothing is redeemable against the remaining {snapshot.outstanding}.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-text-muted">
+              This guest has no active loyalty balance to redeem.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanelProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
@@ -161,6 +531,22 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * A redemption discounts the bill, so any remaining-due this panel is still holding from an
+   * earlier tender is now too HIGH. Drop the cached override and reload, letting the bill's
+   * freshly-read `grandTotal` price the tender pad — a stale override would ask the guest for
+   * money the redemption has already covered.
+   */
+  async function loyaltyRedeemed(billId: string) {
+    setRemainingDueByBill((current) => {
+      if (!(billId in current)) return current;
+      const rest = { ...current };
+      delete rest[billId];
+      return rest;
+    });
+    await loadSummary();
   }
 
   async function tenderApplied(result: TenderResult) {
@@ -325,14 +711,25 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
                   </div>
                 </dl>
                 {bill.status === 'OPEN' ? (
-                  <TenderPad
-                    billId={bill.id}
-                    amountDue={remainingDueByBill[bill.id]}
-                    request={request}
-                    disabled={busy}
-                    onApplied={tenderApplied}
-                    onPendingChange={setTenderPending}
-                  />
+                  <>
+                    <TenderPad
+                      billId={bill.id}
+                      amountDue={remainingDueByBill[bill.id]}
+                      request={request}
+                      disabled={busy}
+                      onApplied={tenderApplied}
+                      onPendingChange={setTenderPending}
+                    />
+                    {orderId ? (
+                      <GuestLoyaltySection
+                        orderId={orderId}
+                        billId={bill.id}
+                        request={request}
+                        disabled={busy || tenderPending}
+                        onRedeemed={() => loyaltyRedeemed(bill.id)}
+                      />
+                    ) : null}
+                  </>
                 ) : null}
                 {bill.status === 'SETTLED' ? (
                   <ReceiptView billId={bill.id} request={request} />

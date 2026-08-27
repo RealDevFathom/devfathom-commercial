@@ -48,7 +48,13 @@ function wholePoints(value: Prisma.Decimal): number {
   return points.toNumber();
 }
 
-async function effectiveProgram(tx: ScopedDb, at: Date) {
+/**
+ * The single program version in force at `at` — the latest one whose `effectiveFrom`
+ * has already passed. Exported so the POS read model can price a redemption preview
+ * off exactly the version `redeemLoyaltyPoints` will book against, instead of forking
+ * a second "which program applies" rule.
+ */
+export async function effectiveProgram(tx: ScopedDb, at: Date) {
   const program = await tx.loyaltyProgramVersion.findFirst({
     where: { effectiveFrom: { lte: at } },
     orderBy: [{ effectiveFrom: 'desc' }, { versionNumber: 'desc' }],
