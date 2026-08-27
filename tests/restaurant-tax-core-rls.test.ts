@@ -34,6 +34,7 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     await client.connect();
     await client.query('BEGIN');
     await client.query(`CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS`);
+    await client.query(`GRANT "${role}" TO CURRENT_USER`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_tax_official_sources, restaurant_tax_profile_versions,
@@ -49,63 +50,53 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
       `INSERT INTO restaurant_branches (id,"organizationId",name,"updatedAt") VALUES ($1,$2,'A',now()),($3,$4,'B',now())`,
       [`branch_a_${suffix}`, orgA, `branch_b_${suffix}`, orgB]
     );
-    await client.query(
-      `INSERT INTO restaurant_tax_official_sources (id,"organizationId","authorityCode","documentTitle","sourceUrl","contentHash","retrievedAt")
-       VALUES ($1,$2,'SYNTHETIC','Fixture','https://example.invalid/a',$3,now()),($4,$5,'SYNTHETIC','Fixture','https://example.invalid/b',$6,now())`,
-      [
-        `source_a_${suffix}`,
-        orgA,
-        `hash_a_${suffix}`,
-        `source_b_${suffix}`,
-        orgB,
-        `hash_b_${suffix}`,
-      ]
-    );
-    await client.query(
-      `INSERT INTO restaurant_tax_profile_versions (id,"organizationId","branchId","versionNumber",status,"effectiveFrom","approvalReference","approvedAt","publishedAt","updatedAt")
-       VALUES ($1,$2,$3,1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now()),
-              ($4,$5,$6,1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now())`,
-      [
-        `profile_a_${suffix}`,
-        orgA,
-        `branch_a_${suffix}`,
-        `profile_b_${suffix}`,
-        orgB,
-        `branch_b_${suffix}`,
-      ]
-    );
-    await client.query(
-      `INSERT INTO restaurant_tax_rule_versions
-       (id,"organizationId","profileVersionId","officialSourceId","ruleCode","paymentCategory","priceMode",rate,status,"effectiveFrom","approvalReference","approvedAt","publishedAt","updatedAt")
-       VALUES ($1,$2,$3,$4,'A','SYNTHETIC_CARD','EXCLUSIVE',0.1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now()),
-              ($5,$6,$7,$8,'B','SYNTHETIC_CARD','EXCLUSIVE',0.1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now())`,
-      [
-        `rule_a_${suffix}`,
-        orgA,
-        `profile_a_${suffix}`,
-        `source_a_${suffix}`,
-        `rule_b_${suffix}`,
-        orgB,
-        `profile_b_${suffix}`,
-        `source_b_${suffix}`,
-      ]
-    );
-    await client.query(
-      `INSERT INTO restaurant_tax_transaction_snapshots
-       (id,"organizationId","branchId","transactionReference","profileVersionId",currency,subtotal,"discountTotal","serviceChargeTotal","taxTotal","grandTotal","settledAt")
-       VALUES ($1,$2,$3,'original-a',$4,'XXX',100,10,5,9.5,104.5,now()),
-              ($5,$6,$7,'original-b',$8,'XXX',100,10,5,9.5,104.5,now())`,
-      [
-        `snapshot_a_${suffix}`,
-        orgA,
-        `branch_a_${suffix}`,
-        `profile_a_${suffix}`,
-        `snapshot_b_${suffix}`,
-        orgB,
-        `branch_b_${suffix}`,
-        `profile_b_${suffix}`,
-      ]
-    );
+    for (const tenant of [
+      { key: 'a', organizationId: orgA },
+      { key: 'b', organizationId: orgB },
+    ] as const) {
+      await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [
+        tenant.organizationId,
+      ]);
+      await client.query(
+        `INSERT INTO restaurant_tax_official_sources (id,"organizationId","authorityCode","documentTitle","sourceUrl","contentHash","retrievedAt")
+         VALUES ($1,$2,'SYNTHETIC','Fixture',$3,$4,now())`,
+        [
+          `source_${tenant.key}_${suffix}`,
+          tenant.organizationId,
+          `https://example.invalid/${tenant.key}`,
+          `hash_${tenant.key}_${suffix}`,
+        ]
+      );
+      await client.query(
+        `INSERT INTO restaurant_tax_profile_versions (id,"organizationId","branchId","versionNumber",status,"effectiveFrom","approvalReference","approvedAt","publishedAt","updatedAt")
+         VALUES ($1,$2,$3,1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now())`,
+        [`profile_${tenant.key}_${suffix}`, tenant.organizationId, `branch_${tenant.key}_${suffix}`]
+      );
+      await client.query(
+        `INSERT INTO restaurant_tax_rule_versions
+         (id,"organizationId","profileVersionId","officialSourceId","ruleCode","paymentCategory","priceMode",rate,status,"effectiveFrom","approvalReference","approvedAt","publishedAt","updatedAt")
+         VALUES ($1,$2,$3,$4,$5,'SYNTHETIC_CARD','EXCLUSIVE',0.1,'PUBLISHED','2030-01-01','SYNTHETIC',now(),now(),now())`,
+        [
+          `rule_${tenant.key}_${suffix}`,
+          tenant.organizationId,
+          `profile_${tenant.key}_${suffix}`,
+          `source_${tenant.key}_${suffix}`,
+          tenant.key.toUpperCase(),
+        ]
+      );
+      await client.query(
+        `INSERT INTO restaurant_tax_transaction_snapshots
+         (id,"organizationId","branchId","transactionReference","profileVersionId",currency,subtotal,"discountTotal","serviceChargeTotal","taxTotal","grandTotal","settledAt")
+         VALUES ($1,$2,$3,$4,$5,'XXX',100,10,5,9.5,104.5,now())`,
+        [
+          `snapshot_${tenant.key}_${suffix}`,
+          tenant.organizationId,
+          `branch_${tenant.key}_${suffix}`,
+          `original-${tenant.key}`,
+          `profile_${tenant.key}_${suffix}`,
+        ]
+      );
+    }
   });
 
   afterAll(async () => {
