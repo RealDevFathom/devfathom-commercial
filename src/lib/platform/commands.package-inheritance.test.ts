@@ -44,6 +44,7 @@ const platformDb = {
       id: 'pkg_1',
       active: true,
       name: 'Growth',
+      defaultSeats: 25,
       // A module-bearing package: onboarding used to copy these into
       // organization_modules; it must not anymore.
       moduleLinks: [

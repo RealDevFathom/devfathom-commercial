@@ -25,7 +25,13 @@ function record(model: string) {
 
 const platformDb = {
   platformPackage: {
-    findUnique: vi.fn(async () => ({ id: 'pkg_1', active: true, name: 'Growth', moduleLinks: [] })),
+    findUnique: vi.fn(async () => ({
+      id: 'pkg_1',
+      active: true,
+      name: 'Growth',
+      defaultSeats: 42,
+      moduleLinks: [],
+    })),
   },
   organization: { create: vi.fn(async () => ({ id: 'org_new', slug: 'acme' })) },
   organizationRole: { create: vi.fn(async () => ({ id: 'role_admin' })) },
@@ -103,6 +109,25 @@ describe('organization.create admin email', () => {
       expect.objectContaining({
         data: expect.objectContaining({ email: 'admin@acme.com' }),
       })
+    );
+  });
+});
+
+describe('organization.create package seat fallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it('inherits package default seats when a legacy payload omits seatLimit', async () => {
+    const { seatLimit: _omitted, ...legacyPayload } = payload('admin@acme.com');
+    expect(_omitted).toBe(25);
+
+    await executePlatformCommand(actor, 'organization.create', legacyPayload, request);
+
+    expect(platformDb.organization.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ seatLimit: 42 }) })
     );
   });
 });
