@@ -117,6 +117,22 @@ const M8_COLUMNS = {
     'computedAt',
     'createdAt',
     'updatedAt',
+    'projectionVersion',
+  ],
+  restaurant_insight_loyalty_liabilities: [
+    'id',
+    'organizationId',
+    'businessDate',
+    'cutoffAt',
+    'programVersionId',
+    'redemptionValue',
+    'positivePoints',
+    'signedPoints',
+    'liability',
+    'projectionVersion',
+    'computedAt',
+    'createdAt',
+    'updatedAt',
   ],
   restaurant_insight_item_mix_rollups: [
     'id',
@@ -132,6 +148,7 @@ const M8_COLUMNS = {
     'computedAt',
     'createdAt',
     'updatedAt',
+    'projectionVersion',
   ],
   restaurant_labour_cost_facts: [
     'id',
@@ -192,7 +209,10 @@ const INDEXES: Record<string, { unique: boolean; columns: string[]; predicate?: 
     columns: ['organizationId', 'idempotencyKey'],
   },
   restaurant_customer_tags_organizationId_idx: { unique: false, columns: ['organizationId'] },
-  restaurant_customer_tags_org_name_key: { unique: true, columns: ['lower(btrim(name))'] },
+  restaurant_customer_tags_org_name_key: {
+    unique: true,
+    columns: ['organizationId', 'lower(btrim(name))'],
+  },
   restaurant_customer_tag_assignments_organizationId_idx: {
     unique: false,
     columns: ['organizationId'],
@@ -273,6 +293,18 @@ const INDEXES: Record<string, { unique: boolean; columns: string[]; predicate?: 
     unique: true,
     columns: ['organizationId', 'branchId', 'businessDate'],
   },
+  restaurant_insight_loyalty_liabilities_organizationId_idx: {
+    unique: false,
+    columns: ['organizationId'],
+  },
+  restaurant_insight_loyalty_liabilities_programVersionId_idx: {
+    unique: false,
+    columns: ['programVersionId'],
+  },
+  restaurant_insight_loyalty_liabilities_org_date_key: {
+    unique: true,
+    columns: ['organizationId', 'businessDate'],
+  },
   restaurant_insight_item_mix_rollups_organizationId_idx: {
     unique: false,
     columns: ['organizationId'],
@@ -312,7 +344,7 @@ const CHECK_CONSTRAINTS = {
   restaurant_customer_tags_name_ck: /btrim.*name.*<> ''/,
   restaurant_customer_consents_provenance_ck: /source.*actorId.*policyVersion.*idempotencyKey/,
   restaurant_loyalty_program_versions_values_ck:
-    /versionNumber.*>= 1.*earnRate.*>= 0.*redemptionValue.*> 0.*expiryDays.*>= 1/,
+    /versionNumber.*>= 1.*earnRate.*>= \(0\)::numeric.*redemptionValue.*> \(0\)::numeric.*expiryDays IS NULL.*expiryDays.*>= 1/,
   restaurant_loyalty_accounts_active_ck: /active.*deactivatedAt.*IS NULL/,
   restaurant_loyalty_points_entries_points_ck:
     /EARN.*points.*> 0.*billId.*IS NOT NULL.*REDEEM.*points.*< 0.*billId.*IS NOT NULL.*REVERSAL.*EXPIRY.*points.*< 0.*ADJUSTMENT.*points.*<> 0/,
@@ -321,7 +353,7 @@ const CHECK_CONSTRAINTS = {
   restaurant_insight_daily_rollups_counts_ck: /orderCount.*>= 0.*coverCount.*>= 0/,
   restaurant_insight_item_mix_rollups_quantity_ck: /quantity.*>= 0/,
   restaurant_labour_cost_facts_values_ck:
-    /labourHours.*>= 0.*labourCost.*>= 0.*source.*idempotencyKey/,
+    /labourHours.*>= \(0\)::numeric.*labourCost.*>= \(0\)::numeric.*source.*idempotencyKey/,
 } as const;
 
 const normalize = (value: string) => value.replaceAll('"', '').replaceAll(/\s+/g, ' ').trim();
@@ -362,7 +394,7 @@ describe('M8 source governance', () => {
     }
   });
 
-  it('keeps generic schema and tenant-isolation verification explicit for all 12 tables', () => {
+  it('keeps generic schema and tenant-isolation verification explicit for all 13 tables', () => {
     const genericGovernance = readFileSync(
       resolve('tests/restaurant-m3-governance.test.ts'),
       'utf8'
@@ -374,7 +406,7 @@ describe('M8 source governance', () => {
       ?.map((table) => table.slice(1, -1));
 
     expect(genericM8Tables).toEqual(M8_TABLES);
-    expect(genericM8Tables).toHaveLength(12);
+    expect(genericM8Tables).toHaveLength(13);
     expect(genericGovernance).toContain("table_name LIKE 'restaurant\\_%'");
     for (const table of M8_TABLES) {
       expect(verifier).toContain(`INSERT INTO "${table}"`);
@@ -516,7 +548,7 @@ describeIfDatabase('M8 schema governance (real PostgreSQL)', () => {
       `SELECT table_row.relname AS table_name,
               table_row.relrowsecurity AS enabled,
               table_row.relforcerowsecurity AS forced,
-              array_agg(DISTINCT policy_row.polcmd ORDER BY policy_row.polcmd) AS commands
+              array_to_json(array_agg(DISTINCT policy_row.polcmd ORDER BY policy_row.polcmd)) AS commands
          FROM pg_catalog.pg_class table_row
          JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
          JOIN pg_catalog.pg_policy policy_row ON policy_row.polrelid = table_row.oid

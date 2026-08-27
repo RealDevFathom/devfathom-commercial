@@ -54,11 +54,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+const M8_TEST_OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
-const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+const describeIfDatabase =
+  TEST_DATABASE_URL && M8_TEST_OWNER_DATABASE_URL ? describe : describe.skip;
 
 /** Assert a money value by Decimal VALUE (never a float, never an epsilon). */
 const eqMoney = (actual: unknown, expected: string) =>
@@ -75,7 +77,6 @@ const businessDate = new Date(`${TODAY}T00:00:00.000Z`);
 type Deps = {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
-  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   enrollDevice: (typeof import('./devices'))['enrollDevice'];
   bills: typeof import('./bills');
   loyalty: typeof import('./loyalty');
@@ -190,17 +191,24 @@ const actor = (label: string, t: Tenant = ctx) => ({
 
 /** Seed one organization's branch / catalog / staff / device / loyalty program. */
 async function provisionTenant(t: Tenant, slug: string, program: { redemptionValue: string }) {
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
-      data: {
-        id: t.orgId,
-        slug,
-        legalName: 'WHA132 Test Co',
-        displayName: 'WHA132 Test',
-        status: 'ACTIVE',
-      },
-    })
-  );
+  const owner = new Client({ connectionString: M8_TEST_OWNER_DATABASE_URL });
+  await owner.connect();
+  try {
+    await owner.query('BEGIN');
+    await owner.query(`SET LOCAL app.is_platform_admin = 'true'`);
+    await owner.query(
+      `INSERT INTO "organizations"
+        ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
+       VALUES ($1, $2, 'WHA132 Test Co', 'WHA132 Test', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [t.orgId, slug]
+    );
+    await owner.query('COMMIT');
+  } catch (error) {
+    await owner.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    await owner.end();
+  }
   await deps.withTenantDb(t.orgId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: t.branch, name: 'Lifecycle' } });
     await tx.restaurantProduct.create({ data: { id: t.product, name: 'Plate' } });
@@ -388,7 +396,8 @@ function billLines(billId: string, t: Tenant = ctx) {
 }
 
 beforeAll(async () => {
-  if (!TEST_DATABASE_URL) return;
+  if (!TEST_DATABASE_URL || !M8_TEST_OWNER_DATABASE_URL) return;
+  expect(M8_TEST_OWNER_DATABASE_URL).not.toBe(TEST_DATABASE_URL);
   const [scopedDb, devices, bills, loyalty, tenders, refunds, drawers, orders] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./devices'),
@@ -402,7 +411,6 @@ beforeAll(async () => {
   deps = {
     createTenantDb: scopedDb.createTenantDb,
     withTenantDb: scopedDb.withTenantDb,
-    withPlatformDb: scopedDb.withPlatformDb,
     enrollDevice: devices.enrollDevice,
     bills,
     loyalty,
@@ -769,7 +777,7 @@ describeIfDatabase('M8 grandTotal guard migration — fails closed', () => {
   const constraint = 'restaurant_bills_grandTotal_nonneg_ck';
 
   async function connect() {
-    const client = new Client({ connectionString: TEST_DATABASE_URL });
+    const client = new Client({ connectionString: M8_TEST_OWNER_DATABASE_URL });
     await client.connect();
     return client;
   }
@@ -1410,8 +1418,8 @@ describeIfDatabase('M8 correction B — the role and the tenancy this battery ra
       orgId,
       (tx) =>
         tx.$queryRaw<
-          { current_user: string; rolsuper: boolean; rolbypassrls: boolean }[]
-        >`SELECT current_user::text AS current_user, r.rolsuper, r.rolbypassrls
+          { current_user: string; rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }[]
+        >`SELECT current_user::text AS current_user, r.rolcanlogin, r.rolsuper, r.rolbypassrls
           FROM pg_roles r
          WHERE r.rolname = current_user`
     );
@@ -1419,6 +1427,7 @@ describeIfDatabase('M8 correction B — the role and the tenancy this battery ra
     // SUPERUSER or BYPASSRLS role would silently satisfy every isolation check below by
     // ignoring the policies entirely, so this battery's verdict would be worthless.
     expect(role).toBeDefined();
+    expect(role!.rolcanlogin, `${role!.current_user} cannot LOGIN`).toBe(true);
     expect(role!.rolsuper, `${role!.current_user} is SUPERUSER`).toBe(false);
     expect(role!.rolbypassrls, `${role!.current_user} has BYPASSRLS`).toBe(false);
   });
@@ -1549,11 +1558,17 @@ describeIfDatabase('M8 correction B — the role and the tenancy this battery ra
     expect(composite?.constraint).toBe('tenant_loyalty_points_billId_fk');
 
     // Neither attempt left anything behind, in either tenant.
-    const planted = await deps.withPlatformDb((tx) =>
-      tx.loyaltyPointsEntry.count({
-        where: { idempotencyKey: { in: [`cross:policy:${suffix}`, `cross:fk:${suffix}`] } },
-      })
-    );
+    const planted =
+      (await deps.withTenantDb(orgId, (tx) =>
+        tx.loyaltyPointsEntry.count({
+          where: { idempotencyKey: { in: [`cross:policy:${suffix}`, `cross:fk:${suffix}`] } },
+        })
+      )) +
+      (await deps.withTenantDb(orgB, (tx) =>
+        tx.loyaltyPointsEntry.count({
+          where: { idempotencyKey: { in: [`cross:policy:${suffix}`, `cross:fk:${suffix}`] } },
+        })
+      ));
     expect(planted).toBe(0);
   });
 });

@@ -54,9 +54,10 @@ describe('notification request outbox', () => {
   });
 
   it('appends a deterministic pending outbox row', async () => {
-    const createMany = vi.fn(async (_input: { data: Row[]; skipDuplicates: boolean }) => ({
-      count: 1,
-    }));
+    const createMany = vi.fn(async (input: { data: Row[]; skipDuplicates: boolean }) => {
+      void input;
+      return { count: 1 };
+    });
     const tx = { restaurantEventOutbox: { createMany } } as unknown as ScopedDb;
     const first = await appendNotificationRequest(tx, REQUEST);
     const second = await appendNotificationRequest(tx, REQUEST);

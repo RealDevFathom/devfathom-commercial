@@ -300,6 +300,7 @@ const M8_COLUMNS = {
     'computedAt',
     'createdAt',
     'updatedAt',
+    'projectionVersion',
   ],
   restaurant_insight_item_mix_rollups: [
     'id',
@@ -315,6 +316,7 @@ const M8_COLUMNS = {
     'computedAt',
     'createdAt',
     'updatedAt',
+    'projectionVersion',
   ],
   restaurant_labour_cost_facts: [
     'id',
