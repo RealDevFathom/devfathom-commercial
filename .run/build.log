@@ -1,0 +1,181 @@
+
+> company-hub@0.1.0 build
+> prisma generate && next build
+
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma.
+
+✔ Generated Prisma Client (7.9.1) to ./src/generated/prisma in 793ms
+
+▲ Next.js 16.2.12 (Turbopack)
+- Experiments (use with caution):
+  · cpus: 1
+  · optimizePackageImports
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 17.7s
+  Running TypeScript ...
+  Finished TypeScript in 33.6s ...
+  Collecting page data using 1 worker ...
+  Generating static pages using 1 worker (0/114) ...
+  Generating static pages using 1 worker (28/114) 
+  Generating static pages using 1 worker (56/114) 
+  Generating static pages using 1 worker (85/114) 
+✓ Generating static pages using 1 worker (114/114) in 527ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api-docs
+├ ƒ /api/ably-token
+├ ƒ /api/assistant
+├ ƒ /api/auth/[...nextauth]
+├ ƒ /api/files/[name]
+├ ƒ /api/health
+├ ƒ /api/login
+├ ƒ /api/password-reset
+├ ƒ /api/platform/control
+├ ƒ /api/platform/jobs/process
+├ ƒ /api/platform/mfa
+├ ƒ /api/platform/session
+├ ƒ /api/platform/support
+├ ƒ /api/restaurant/cash/day/close
+├ ƒ /api/restaurant/cash/day/correct
+├ ƒ /api/restaurant/cash/day/preview
+├ ƒ /api/restaurant/cash/drawer/close
+├ ƒ /api/restaurant/cash/drawer/movement
+├ ƒ /api/restaurant/cash/drawer/open
+├ ƒ /api/restaurant/checkout/bill
+├ ƒ /api/restaurant/checkout/comp
+├ ƒ /api/restaurant/checkout/receipt
+├ ƒ /api/restaurant/checkout/refund
+├ ƒ /api/restaurant/checkout/summary
+├ ƒ /api/restaurant/checkout/tender
+├ ƒ /api/restaurant/kds/ack
+├ ƒ /api/restaurant/kds/bump
+├ ƒ /api/restaurant/kds/queue
+├ ƒ /api/restaurant/kds/recall
+├ ƒ /api/restaurant/orders/add-item
+├ ƒ /api/restaurant/orders/cancel
+├ ƒ /api/restaurant/orders/close
+├ ƒ /api/restaurant/orders/detail
+├ ƒ /api/restaurant/orders/effective-menu
+├ ƒ /api/restaurant/orders/fire
+├ ƒ /api/restaurant/orders/hold
+├ ƒ /api/restaurant/orders/mark-served
+├ ƒ /api/restaurant/orders/merge-tables
+├ ƒ /api/restaurant/orders/move-table
+├ ƒ /api/restaurant/orders/open
+├ ƒ /api/restaurant/orders/open-orders
+├ ƒ /api/restaurant/orders/remake
+├ ƒ /api/restaurant/orders/void
+├ ƒ /api/restaurant/terminal/co-authorize
+├ ƒ /api/restaurant/terminal/establish
+├ ƒ /api/restaurant/terminal/heartbeat
+├ ƒ /api/restaurant/terminal/lock
+├ ƒ /api/restaurant/terminal/switch
+├ ƒ /api/restaurant/terminal/unlock
+├ ƒ /api/restaurant/webhooks/[source]
+├ ƒ /api/scim/v2/Groups
+├ ƒ /api/scim/v2/Groups/[id]
+├ ƒ /api/scim/v2/ResourceTypes
+├ ƒ /api/scim/v2/Schemas
+├ ƒ /api/scim/v2/ServiceProviderConfig
+├ ƒ /api/scim/v2/Users
+├ ƒ /api/scim/v2/Users/[id]
+├ ƒ /api/sso/oidc/[connectionId]/callback
+├ ƒ /api/sso/oidc/[connectionId]/start
+├ ƒ /api/sso/saml/[connectionId]/callback
+├ ƒ /api/sso/saml/[connectionId]/metadata
+├ ƒ /api/sso/saml/[connectionId]/start
+├ ƒ /api/support-session
+├ ƒ /api/support-session/launch
+├ ƒ /api/trpc/[trpc]
+├ ƒ /api/upload
+├ ƒ /api/v1/boards/[id]
+├ ƒ /api/v1/clients
+├ ƒ /api/v1/clients/[id]
+├ ƒ /api/v1/finance/summary
+├ ƒ /api/v1/invoices
+├ ƒ /api/v1/invoices/[id]
+├ ƒ /api/v1/meetings
+├ ƒ /api/v1/projects
+├ ƒ /api/v1/projects/[id]
+├ ƒ /api/v1/spec
+├ ƒ /api/v1/tasks
+├ ƒ /api/v1/tasks/[id]
+├ ƒ /api/v1/tasks/[id]/comments
+├ ƒ /api/v1/team
+├ ƒ /api/v1/transactions
+├ ƒ /api/v1/transactions/[id]
+├ ƒ /audit-logs
+├ ○ /brand
+├ ○ /brand/preview
+├ ƒ /chat
+├ ƒ /clients
+├ ƒ /clients/[id]
+├ ƒ /dashboard
+├ ƒ /email
+├ ƒ /email/oauth/callback
+├ ƒ /finance
+├ ƒ /finance/invoices/[id]/print
+├ ○ /forgot-password
+├ ƒ /hr
+├ ƒ /invite/[token]
+├ ○ /kds
+├ ƒ /login
+├ ƒ /meetings
+├ ƒ /meetings/[id]
+├ ƒ /meetings/[id]/call
+├ ƒ /notes
+├ ƒ /notes/[id]
+├ ƒ /organization
+├ ƒ /platform
+├ ƒ /platform/audit
+├ ƒ /platform/catalog
+├ ƒ /platform/commercial
+├ ƒ /platform/crm
+├ ƒ /platform/deployments
+├ ƒ /platform/jobs
+├ ƒ /platform/login
+├ ƒ /platform/operators
+├ ƒ /platform/organizations
+├ ƒ /platform/organizations/[id]
+├ ƒ /platform/organizations/new
+├ ƒ /platform/settings
+├ ○ /pos
+├ ƒ /projects
+├ ƒ /projects/[id]
+├ ƒ /projects/[id]/board/[boardId]
+├ ƒ /projects/import
+├ ƒ /reset-password/[token]
+├ ƒ /restaurant/catalog
+├ ƒ /restaurant/devices
+├ ƒ /restaurant/floor
+├ ƒ /restaurant/insights
+├ ƒ /restaurant/inventory
+├ ƒ /restaurant/loyalty
+├ ƒ /restaurant/menus
+├ ƒ /restaurant/money
+├ ƒ /restaurant/notifications
+├ ƒ /restaurant/orders
+├ ƒ /restaurant/purchasing
+├ ƒ /restaurant/sop
+├ ƒ /restaurant/sop/admin
+├ ƒ /restaurant/staff
+├ ƒ /reviews
+├ ƒ /settings
+├ ○ /sso/complete
+├ ƒ /team
+├ ƒ /team/[id]
+├ ƒ /team/stats
+└ ○ /terminal
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
