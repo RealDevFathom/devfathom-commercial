@@ -37,8 +37,95 @@ const moneyOrNull = (value: Prisma.Decimal | null): string | null =>
 const dateOnly = (value: Date): string => value.toISOString().slice(0, 10);
 
 const readProcedure = capabilityProcedure('money:read');
+const configureProcedure = capabilityProcedure('restaurant:configure');
 
 export const restaurantPaymentsRouter = router({
+  getTerminalConfig: configureProcedure
+    .input(z.object({ branchId: ID }).strict())
+    .query(({ ctx, input }) =>
+      ctx.db.restaurantTerminalProviderConfig.findMany({
+        where: { branchId: input.branchId },
+        orderBy: [{ source: 'asc' }, { externalTerminalId: 'asc' }],
+        select: {
+          id: true,
+          branchId: true,
+          source: true,
+          externalTerminalId: true,
+          deviceId: true,
+          mode: true,
+          updatedAt: true,
+        },
+      })
+    ),
+
+  saveTerminalConfig: configureProcedure
+    .input(
+      z
+        .object({
+          branchId: ID,
+          source: z
+            .string()
+            .min(1)
+            .max(100)
+            .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
+          externalTerminalId: z.string().min(1).max(200),
+          deviceId: ID,
+          mode: z.enum(['DISABLED', 'SIMULATION', 'WEBHOOK']),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.organization?.id ?? ctx.session?.user.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'NOT_FOUND' });
+      const [branch, device] = await Promise.all([
+        ctx.db.restaurantBranch.findUnique({ where: { id: input.branchId }, select: { id: true } }),
+        ctx.db.restaurantRegisteredDevice.findFirst({
+          where: { id: input.deviceId, branchId: input.branchId, status: 'ACTIVE' },
+          select: { id: true },
+        }),
+      ]);
+      if (!branch || !device) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Branch and active terminal device must belong to this tenant and match.',
+        });
+      }
+      return ctx.db.restaurantTerminalProviderConfig.upsert({
+        where: {
+          organizationId_source_externalTerminalId: {
+            organizationId,
+            source: input.source,
+            externalTerminalId: input.externalTerminalId,
+          },
+        },
+        create: input,
+        update: { branchId: input.branchId, deviceId: input.deviceId, mode: input.mode },
+        select: {
+          id: true,
+          branchId: true,
+          source: true,
+          externalTerminalId: true,
+          deviceId: true,
+          mode: true,
+        },
+      });
+    }),
+
+  listTerminalReconciliations: readProcedure
+    .input(z.object({ branchId: ID, limit: z.number().int().min(1).max(100).optional() }).strict())
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.restaurantTerminalReconciliation.findMany({
+        where: { branchId: input.branchId },
+        orderBy: [{ processedAt: 'desc' }, { id: 'desc' }],
+        take: input.limit ?? 50,
+      });
+      return rows.map((row) => ({
+        ...row,
+        amount: money(row.amount),
+        tipAmount: money(row.tipAmount),
+      }));
+    }),
+
   // ── Tenders ─────────────────────────────────────────────────────────────────
   listTenders: readProcedure
     .input(

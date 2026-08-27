@@ -2380,6 +2380,8 @@ model RestaurantBranch {
   staffCapabilityGrants       RestaurantStaffCapabilityGrant[]
   // B1/WHA-285: so is the append-only trail of per-person overrides.
   staffCapabilityAudits       RestaurantStaffCapabilityAudit[]
+  terminalProviderConfigs     RestaurantTerminalProviderConfig[]
+  terminalReconciliations     RestaurantTerminalReconciliation[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -2521,6 +2523,60 @@ model RestaurantTaxRateBucketSnapshot {
   @@unique([snapshotId, ruleVersionId, paymentCategory])
   @@index([organizationId])
   @@map("restaurant_tax_rate_bucket_snapshots")
+}
+
+model RestaurantTerminalProviderConfig {
+  id                 String                         @id @default(cuid())
+  organizationId     String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  source             String
+  externalTerminalId String
+  deviceId           String
+  mode               RestaurantTerminalProviderMode @default(DISABLED)
+  createdAt          DateTime                       @default(now())
+  updatedAt          DateTime                       @updatedAt
+
+  branch          RestaurantBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+  device          RestaurantRegisteredDevice         @relation(fields: [organizationId, deviceId], references: [organizationId, id], onDelete: Restrict)
+  reconciliations RestaurantTerminalReconciliation[]
+
+  @@unique([organizationId, source, externalTerminalId])
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_terminal_provider_configs")
+}
+
+model RestaurantTerminalReconciliation {
+  id                String                        @id @default(cuid())
+  organizationId    String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  configId          String
+  branchId          String
+  externalEventId   String
+  source            String
+  eventStatus       RestaurantTerminalEventStatus
+  externalReference String
+  amount            Decimal                       @db.Decimal(12, 2)
+  tipAmount         Decimal                       @default(0) @db.Decimal(12, 2)
+  billId            String?
+  paymentId         String?
+  tenderId          String?
+  outcome           String
+  failureReason     String?
+  processedAt       DateTime                      @default(now())
+  createdAt         DateTime                      @default(now())
+
+  config  RestaurantTerminalProviderConfig @relation(fields: [organizationId, configId], references: [organizationId, id], onDelete: Restrict)
+  branch  RestaurantBranch                 @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  bill    RestaurantBill?                  @relation(fields: [organizationId, billId], references: [organizationId, id], onDelete: Restrict)
+  payment RestaurantPayment?               @relation(fields: [organizationId, paymentId], references: [organizationId, id], onDelete: Restrict)
+  tender  RestaurantTender?                @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, source, externalEventId])
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([branchId, processedAt])
+  @@map("restaurant_terminal_reconciliations")
 }
 
 /// §4.1/§8/D12: branch authorization is an additional boundary above organization
@@ -2720,6 +2776,7 @@ model RestaurantRegisteredDevice {
   bills                     RestaurantBill[]
   payments                  RestaurantPayment[]
   tenders                   RestaurantTender[]
+  terminalProviderConfigs   RestaurantTerminalProviderConfig[]
   refunds                   RestaurantRefund[]
   drawerSessions            RestaurantDrawerSession[]
   drawerMovements           RestaurantDrawerMovement[]
@@ -2731,6 +2788,7 @@ model RestaurantRegisteredDevice {
   inventoryPurchaseReceipts RestaurantPurchaseReceipt[]
   inventoryIdempotencyKeys  RestaurantInventoryIdempotencyKey[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId])
   @@index([status])
@@ -4191,6 +4249,20 @@ enum RestaurantTenderType {
 /// network I/O; D23 not built).
 enum RestaurantPaymentProvider {
   MOCK
+  TERMINAL
+}
+
+enum RestaurantTerminalProviderMode {
+  DISABLED
+  SIMULATION
+  WEBHOOK
+}
+
+enum RestaurantTerminalEventStatus {
+  INITIATED
+  APPROVED
+  DECLINED
+  VOIDED
 }
 
 /// M5/C6: the capability set a provider declares and an operation exercises. The
@@ -4283,17 +4355,19 @@ model RestaurantBill {
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
 
-  order                RestaurantOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  branch               RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  openerStaff          RestaurantStaffProfile     @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
-  device               RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  voidCoAuthorization  RestaurantCoAuthorization? @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
-  lines                RestaurantBillLine[]
-  payments             RestaurantPayment[]
-  tenders              RestaurantTender[]
-  refunds              RestaurantRefund[]
-  loyaltyPointsEntries LoyaltyPointsEntry[]
+  order                   RestaurantOrder                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch                  RestaurantBranch                   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  openerStaff             RestaurantStaffProfile             @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
+  device                  RestaurantRegisteredDevice         @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  voidCoAuthorization     RestaurantCoAuthorization?         @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
+  lines                   RestaurantBillLine[]
+  payments                RestaurantPayment[]
+  tenders                 RestaurantTender[]
+  refunds                 RestaurantRefund[]
+  loyaltyPointsEntries    LoyaltyPointsEntry[]
+  terminalReconciliations RestaurantTerminalReconciliation[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([orderId])
   @@index([branchId])
@@ -4357,13 +4431,15 @@ model RestaurantPayment {
   createdAt      DateTime                    @default(now())
   updatedAt      DateTime                    @updatedAt
 
-  bill    RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
-  staff   RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
-  device  RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  events  RestaurantPaymentEvent[]
-  tenders RestaurantTender[]
-  refunds RestaurantRefund[]
+  bill                    RestaurantBill                     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  staff                   RestaurantStaffProfile             @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device                  RestaurantRegisteredDevice         @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  events                  RestaurantPaymentEvent[]
+  tenders                 RestaurantTender[]
+  refunds                 RestaurantRefund[]
+  terminalReconciliations RestaurantTerminalReconciliation[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([billId])
   @@index([status])
@@ -4415,14 +4491,16 @@ model RestaurantTender {
   deviceId        String
   createdAt       DateTime             @default(now())
 
-  bill            RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
-  drawerSession   RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
-  payment         RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  staff           RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
-  device          RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  refunds         RestaurantRefund[]
-  drawerMovements RestaurantDrawerMovement[]
+  bill                    RestaurantBill                     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  drawerSession           RestaurantDrawerSession?           @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment                 RestaurantPayment?                 @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff                   RestaurantStaffProfile             @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device                  RestaurantRegisteredDevice         @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  refunds                 RestaurantRefund[]
+  drawerMovements         RestaurantDrawerMovement[]
+  terminalReconciliations RestaurantTerminalReconciliation[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([billId])
   @@index([businessDate])

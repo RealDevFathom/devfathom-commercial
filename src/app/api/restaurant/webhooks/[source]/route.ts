@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type { Prisma } from '@/generated/prisma/client';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { recordInboundWebhook, webhookEnvelopeSchema } from '@/lib/restaurant/webhook-inbox';
+import { terminalEventSchema } from '@/lib/restaurant/terminal-payments';
 import { requestHost, resolveExplicitOrganizationByHost } from '@/lib/tenancy/host';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -36,6 +38,20 @@ const SIGNATURE_HEADER = 'x-webhook-signature';
 const IP_LIMIT = 120;
 const IP_WINDOW_MS = 60_000;
 
+export function verifyTerminalSignature(
+  source: string,
+  rawBody: string,
+  signature: string | null
+): 'VERIFIED' | 'FAILED' {
+  const secret = process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
+  if (!secret || !signature) return 'FAILED';
+  const encoded = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+  if (!/^[a-f\d]{64}$/i.test(encoded)) return 'FAILED';
+  const expected = createHmac('sha256', secret).update(`${source}.${rawBody}`).digest();
+  const actual = Buffer.from(encoded, 'hex');
+  return timingSafeEqual(expected, actual) ? 'VERIFIED' : 'FAILED';
+}
+
 export async function POST(
   request: Request,
   context: { params: Promise<{ source: string }> }
@@ -63,9 +79,11 @@ export async function POST(
     return NextResponse.json({ error: 'Unknown tenant.' }, { status: 404 });
   }
 
+  let rawBody: string;
   let body: unknown;
   try {
-    body = await request.json();
+    rawBody = await request.text();
+    body = JSON.parse(rawBody) as unknown;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
   }
@@ -79,13 +97,25 @@ export async function POST(
   }
 
   const signature = request.headers.get(SIGNATURE_HEADER);
+  const terminalEvent = parsed.data.eventType?.startsWith('terminal.') ?? false;
+  if (terminalEvent && !terminalEventSchema.safeParse(parsed.data.payload).success) {
+    return NextResponse.json({ error: 'Invalid terminal event.' }, { status: 400 });
+  }
+  const verificationStatus = terminalEvent
+    ? verifyTerminalSignature(source.data, rawBody, signature)
+    : undefined;
   const result = await recordInboundWebhook(createTenantDb(organization.id), {
     source: source.data,
     externalEventId: parsed.data.externalEventId,
     eventType: parsed.data.eventType ?? null,
     payload: parsed.data.payload as unknown as Prisma.InputJsonValue,
     signature,
+    verificationStatus,
   });
+
+  if (terminalEvent && verificationStatus === 'FAILED') {
+    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
+  }
 
   // 202 for a freshly-accepted envelope (enqueued for processing); 200 for a
   // duplicate that was already received (idempotent, nothing enqueued).

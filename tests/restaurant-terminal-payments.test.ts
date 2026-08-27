@@ -1,0 +1,156 @@
+import { createHmac } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+const { applyTenderInTransaction } = vi.hoisted(() => ({ applyTenderInTransaction: vi.fn() }));
+vi.mock('@/lib/restaurant/tenders', () => ({ applyTenderInTransaction }));
+
+import {
+  processTerminalEvent,
+  simulateTerminalEvent,
+  terminalEventSchema,
+} from '@/lib/restaurant/terminal-payments';
+import { verifyTerminalSignature } from '@/app/api/restaurant/webhooks/[source]/route';
+
+const baseEvent = {
+  status: 'approved' as const,
+  terminalId: 'counter-1',
+  reference: 'bill-1',
+  amount: '12.50',
+  tipAmount: '1.00',
+  staffProfileId: 'staff-1',
+  providerReference: 'provider-ref-1',
+};
+
+function makeDb(overrides: Record<string, unknown> = {}) {
+  const created: Record<string, unknown>[] = [];
+  const db = {
+    restaurantTerminalReconciliation: {
+      findFirst: vi.fn(async () => null),
+      findFirstOrThrow: vi.fn(async () => ({ id: 'recon-1', outcome: 'APPLIED' })),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        created.push(data);
+        return { id: 'recon-1', ...data };
+      }),
+    },
+    restaurantTerminalProviderConfig: {
+      findFirst: vi.fn(async () => ({
+        id: 'config-1',
+        branchId: 'branch-1',
+        deviceId: 'device-1',
+        mode: 'WEBHOOK',
+      })),
+    },
+    restaurantBill: {
+      findFirst: vi.fn(async () => ({ id: 'bill-1', grandTotal: '12.50', tenders: [] })),
+    },
+    restaurantStaffProfile: { findFirst: vi.fn(async () => ({ id: 'staff-1' })) },
+    $transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(db)),
+    ...overrides,
+  };
+  return { db, created };
+}
+
+describe('provider-neutral terminal payments', () => {
+  beforeEach(() => {
+    applyTenderInTransaction.mockReset();
+    applyTenderInTransaction.mockResolvedValue({
+      tenderId: 'tender-1',
+      paymentId: 'payment-1',
+      settled: true,
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
+  });
+
+  it('strictly accepts only the card-terminal event contract', () => {
+    expect(terminalEventSchema.parse(baseEvent)).toEqual(baseEvent);
+    expect(() => terminalEventSchema.parse({ ...baseEvent, pan: '4111111111111111' })).toThrow();
+  });
+
+  it('authenticates the exact source and raw webhook body with HMAC-SHA256', () => {
+    process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET = 'test-terminal-secret';
+    const source = 'provider-neutral';
+    const rawBody = JSON.stringify({ externalEventId: 'event-1', payload: baseEvent });
+    const signature = createHmac('sha256', 'test-terminal-secret')
+      .update(`${source}.${rawBody}`)
+      .digest('hex');
+
+    expect(verifyTerminalSignature(source, rawBody, `sha256=${signature}`)).toBe('VERIFIED');
+    expect(verifyTerminalSignature('other-source', rawBody, signature)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, `${rawBody} `, signature)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, 'not-a-signature')).toBe('FAILED');
+  });
+
+  it('turns an approved event into the existing CARD tender path exactly once', async () => {
+    const { db } = makeDb();
+    const result = await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-1',
+      event: baseEvent,
+      requiredMode: 'WEBHOOK',
+    });
+
+    expect(applyTenderInTransaction).toHaveBeenCalledOnce();
+    expect(applyTenderInTransaction).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        billId: 'bill-1',
+        tender: expect.objectContaining({ type: 'CARD', amount: expect.anything() }),
+        actor: expect.objectContaining({ idempotencyKey: 'terminal:event-1' }),
+      })
+    );
+    expect(result.reconciliation).toMatchObject({ outcome: 'APPLIED' });
+  });
+
+  it('records an amount mismatch and never tenders', async () => {
+    const { db, created } = makeDb();
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-mismatch',
+      event: { ...baseEvent, amount: '12.49' },
+      requiredMode: 'WEBHOOK',
+    });
+    expect(applyTenderInTransaction).not.toHaveBeenCalled();
+    expect(created[0]).toMatchObject({ outcome: 'REJECTED', failureReason: 'AMOUNT_MISMATCH' });
+  });
+
+  it('returns the reconciliation on replay without another tender', async () => {
+    const { db } = makeDb();
+    db.restaurantTerminalReconciliation.findFirst.mockResolvedValueOnce({
+      id: 'recon-existing',
+      outcome: 'APPLIED',
+    } as never);
+    const result = await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-1',
+      event: baseEvent,
+    });
+    expect(result).toMatchObject({ replayed: true });
+    expect(applyTenderInTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects cross-tenant/unconfigured terminals and labels simulation mode', async () => {
+    const missing = makeDb({
+      restaurantTerminalProviderConfig: { findFirst: vi.fn(async () => null) },
+    }).db;
+    await expect(
+      processTerminalEvent(missing as never, {
+        source: 'provider-neutral',
+        externalEventId: 'event-x',
+        event: baseEvent,
+      })
+    ).rejects.toMatchObject({ reason: 'CONFIG_NOT_FOUND' });
+
+    const webhookOnly = makeDb().db;
+    await expect(
+      simulateTerminalEvent(webhookOnly as never, {
+        source: 'provider-neutral',
+        externalEventId: 'event-sim',
+        event: baseEvent,
+      })
+    ).rejects.toMatchObject({ reason: 'MODE_MISMATCH' });
+  });
+});
