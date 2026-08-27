@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { HydrationBoundary } from '@tanstack/react-query';
 import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
+import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -10,6 +11,7 @@ export const metadata: Metadata = {
 export default async function DashboardPage() {
   const ssr = await createSSRHelpers();
   const helpers = ssr?.helpers;
+  const restaurant = ssr?.entitlements.vertical === 'RESTAURANT';
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
@@ -22,7 +24,7 @@ export default async function DashboardPage() {
   //
   // `.prefetch()` never throws — react-query captures errors into the cache, so
   // an UNAUTHORIZED/FORBIDDEN result degrades gracefully to the client fetch.
-  if (helpers) {
+  if (helpers && !restaurant) {
     await Promise.all([
       helpers.dashboard.getStats.prefetch(),
       helpers.dashboard.getRecentActivity.prefetch(),
@@ -36,7 +38,11 @@ export default async function DashboardPage() {
 
   return (
     <HydrationBoundary state={helpers?.dehydrate()}>
-      <DashboardContent />
+      {restaurant ? (
+        <RestaurantDashboardContent enabledModules={ssr.entitlements.enabledModules} />
+      ) : (
+        <DashboardContent />
+      )}
     </HydrationBoundary>
   );
 }

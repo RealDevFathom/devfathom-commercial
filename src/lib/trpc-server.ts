@@ -35,5 +35,10 @@ export async function createSSRHelpers() {
     support: actor.support,
   });
   const helpers = createServerSideHelpers({ router: appRouter, ctx, transformer: superjson });
-  return { helpers, session: ctx.session };
+  return {
+    helpers,
+    session: ctx.session,
+    organization: ctx.organization,
+    entitlements: ctx.entitlements,
+  };
 }

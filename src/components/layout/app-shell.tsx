@@ -10,6 +10,7 @@ import { useAssistant } from '@/lib/assistant-store';
 import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { moduleForPath } from '@/lib/module-catalog';
+import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
@@ -65,12 +66,20 @@ function EndSupportAccessButton() {
   );
 }
 
+export function isPathModuleEnabled(
+  pathname: string,
+  entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
+) {
+  const moduleKey = moduleForPath(pathname, entitlements.vertical);
+  return !moduleKey || entitlements.enabledModules.includes(moduleKey);
+}
+
 export function AppShell({ children, brand }: { children: React.ReactNode; brand: TenantBrand }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
   const { data: session } = useSession();
   const entitlements = useEntitlements();
-  const currentModule = moduleForPath(pathname);
+  const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled = !currentModule || entitlements.enabledModules.includes(currentModule);
   const immersive = pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
   const assistantOpen = useAssistant((s) => s.open);
