@@ -24,6 +24,7 @@ import { restaurantStaffRouter } from './restaurant-staff';
 import { restaurantDevicesRouter } from './restaurant-devices';
 import { restaurantCatalogRouter } from './restaurant-catalog';
 import { restaurantMenusRouter } from './restaurant-menus';
+import { restaurantMenuImportRouter } from './restaurant-menu-import';
 import { restaurantFloorRouter } from './restaurant-floor';
 import { restaurantOrdersRouter } from './restaurant-orders';
 import { restaurantBillsRouter } from './restaurant-bills';
@@ -65,6 +66,7 @@ export const appRouter = router({
   restaurantDevices: restaurantDevicesRouter,
   restaurantCatalog: restaurantCatalogRouter,
   restaurantMenus: restaurantMenusRouter,
+  restaurantMenuImport: restaurantMenuImportRouter,
   restaurantFloor: restaurantFloorRouter,
   restaurantOrders: restaurantOrdersRouter,
   restaurantBills: restaurantBillsRouter,

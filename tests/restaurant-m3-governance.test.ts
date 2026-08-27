@@ -134,6 +134,16 @@ const M8_TABLES = [
   'restaurant_labour_cost_facts',
 ] as const;
 
+// R-lane (WHA-194): OCR menu import — upload, per-page extraction and the review
+// queue that gates catalog creation. Listed here under the same WHA-51 complete
+// allowlist contract as every set above: a new restaurant table that is not
+// listed, or a listed table that is not shipped, fails the pin below.
+const MENU_IMPORT_TABLES = [
+  'restaurant_menu_imports',
+  'restaurant_menu_import_pages',
+  'restaurant_menu_import_lines',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -460,6 +470,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M6_TABLES,
         ...M7_TABLES,
         ...M8_TABLES,
+        ...MENU_IMPORT_TABLES,
       ].sort()
     );
 

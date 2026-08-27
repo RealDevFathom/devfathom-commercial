@@ -64,6 +64,7 @@ export const ALL_ACTIONS = [
   'reports:financial', // restaurant M8: financial reports and exports — org-role driven
   'workforce:rates', // restaurant M8: restricted labour-cost facts — org-role driven, default deny
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
+  'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -184,4 +185,12 @@ export const POLICIES: Record<Action, Policy[]> = {
   'reports:financial': [],
   'workforce:rates': [],
   'restaurant:configure': [],
+
+  // R-lane WHA-194: OCR menu import. Held separate from `menu:write` on purpose
+  // — importing a menu creates products, categories and draft prices in bulk
+  // from untrusted OCR output, which is a strictly larger blast radius than
+  // editing one dish. Org-role-driven through the DB `customDecision` path with
+  // no static agency-role policy, so it is DEFAULT DENY until an organization
+  // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
+  'menu:import': [],
 };

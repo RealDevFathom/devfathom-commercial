@@ -1,6 +1,6 @@
 import { DefaultAzureCredential } from '@azure/identity';
 import { BlobServiceClient } from '@azure/storage-blob';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const localRoot = join(process.cwd(), 'private-uploads');
@@ -43,4 +43,20 @@ export async function getUpload(organizationId: string, filename: string): Promi
     return blobs.getBlockBlobClient(`${organizationId}/${filename}`).downloadToBuffer();
   }
   return readFile(join(localRoot, organizationId, filename));
+}
+
+/**
+ * Remove an upload. Idempotent — deleting an object that is already gone is a
+ * success, so a retried cleanup (a redelivered job, a re-run purge) does not
+ * fail after the first pass. Callers that hold a retention obligation depend on
+ * this: WHA-194 deletes a menu-import source on commit, on discard, and when a
+ * stale draft is purged, and each of those paths can run twice.
+ */
+export async function deleteUpload(organizationId: string, filename: string): Promise<void> {
+  const blobs = container();
+  if (blobs) {
+    await blobs.getBlockBlobClient(`${organizationId}/${filename}`).deleteIfExists();
+    return;
+  }
+  await rm(join(localRoot, organizationId, filename), { force: true });
 }
