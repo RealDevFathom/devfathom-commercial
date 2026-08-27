@@ -70,9 +70,17 @@ const platformDb = {
   platformJob: { create: record() },
   organizationLifecycleEvent: { create: record() },
   platformAuditLog: { create: record() },
-  restaurantBranch: { create: mocks.branchCreate, findMany: mocks.branchFindMany },
+  restaurantBranch: {
+    create: mocks.branchCreate,
+    findMany: mocks.branchFindMany,
+    count: vi.fn(async () => 0),
+  },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
-  organizationModule: { upsert: mocks.moduleUpsert, findMany: mocks.orgModuleFindMany },
+  organizationModule: {
+    upsert: mocks.moduleUpsert,
+    findMany: mocks.orgModuleFindMany,
+    count: vi.fn(async () => 0),
+  },
   platformModule: {
     findUnique: mocks.platformModuleFindUnique,
     findMany: mocks.platformModuleFindMany,
@@ -362,7 +370,9 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
-    expect((error as PlatformSecurityError).message).toContain('immutable');
+    expect((error as PlatformSecurityError).message).toContain(
+      'can only be corrected during early onboarding'
+    );
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 
@@ -396,7 +406,7 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
       deploymentMode: 'SHARED',
     });
     mocks.orgUpdate.mockResolvedValue({ id: 'org_x' });
-    mocks.pkgFindUnique.mockResolvedValue({ vertical: 'RESTAURANT' });
+    mocks.pkgFindUnique.mockResolvedValue({ active: true, vertical: 'RESTAURANT' });
 
     await run('organization.update', { id: 'org_x', vertical: 'RESTAURANT', packageId: 'pkg_r' });
 
