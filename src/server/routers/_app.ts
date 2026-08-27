@@ -21,6 +21,7 @@ import { webhooksRouter } from './webhooks';
 import { emailRouter } from './email';
 import { organizationAdminRouter } from './organization-admin';
 import { restaurantStaffRouter } from './restaurant-staff';
+import { restaurantShiftsRouter } from './restaurant-shifts';
 import { restaurantDevicesRouter } from './restaurant-devices';
 import { restaurantCamerasRouter } from './restaurant-cameras';
 import { restaurantCatalogRouter } from './restaurant-catalog';
@@ -64,6 +65,7 @@ export const appRouter = router({
   email: emailRouter,
   organizationAdmin: organizationAdminRouter,
   restaurantStaff: restaurantStaffRouter,
+  restaurantShifts: restaurantShiftsRouter,
   restaurantDevices: restaurantDevicesRouter,
   restaurantCameras: restaurantCamerasRouter,
   restaurantCatalog: restaurantCatalogRouter,

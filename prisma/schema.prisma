@@ -2330,6 +2330,11 @@ model RestaurantBranch {
   // timezone + this cutoff (src/lib/restaurant/business-date.ts) and stamped
   // explicitly, never recomputed later from UTC (§11.1 / BUILD-ASSUMPTIONS).
   businessDayCutoff String   @default("00:00")
+  // Completion wave: when true, an operator may only sign in at this branch's
+  // terminals while holding an active, eligible `RestaurantShift`. Opt-in with a
+  // conservative `false` default so a branch that does not roster keeps its
+  // existing M2 sign-in behaviour untouched.
+  shiftSignInEnforced Boolean @default(false)
   address           String?
   active            Boolean  @default(true)
   isDefault         Boolean  @default(false)
@@ -2373,6 +2378,8 @@ model RestaurantBranch {
   insightDailyRollups         InsightDailyRollup[]
   insightItemMixRollups       InsightItemMixRollup[]
   labourCostFacts             LabourCostFact[]
+  // Completion wave: the branch's rostered shifts (scheduling only).
+  shifts                      RestaurantShift[]
   taxProfileVersions          RestaurantTaxProfileVersion[]
   taxTransactionSnapshots     RestaurantTaxTransactionSnapshot[]
   // SOP-1: job-role holdings and direct capability grants are branch-scoped.
@@ -2703,6 +2710,10 @@ model RestaurantStaffProfile {
   sopAssignmentsTargeted RestaurantSopAssignment[]           @relation("SopAssignmentAssignee")
   sopOccurrencesAssigned RestaurantSopOccurrence[]           @relation("SopOccurrenceAssignee")
   sopOccurrencesClaimed  RestaurantSopOccurrence[]           @relation("SopOccurrenceClaimer")
+
+  // Completion wave: rostered shifts for this operator. A profile may hold many
+  // shifts in different roles; they may never overlap in time (shifts.ts).
+  shifts                 RestaurantShift[]
 
   @@index([organizationId])
   @@index([userId])
@@ -7184,6 +7195,60 @@ model RestaurantPromotionAuditEvent {
   @@index([organizationId, action, occurredAt], map: "promo_audit_org_action_time_idx")
   @@index([organizationId, promotionVersionId], map: "promo_audit_org_version_idx")
   @@map("restaurant_promotion_audit_events")
+
+// Completion wave — staff shifts and the shift-aware operator sign-in boundary.
+// Org-scoped under forced RLS (C1) and branch-scoped like every other operating
+// surface. This is scheduling ONLY: no timeclock, no attendance, no payroll and
+// no labour optimization live here (those stay out of scope — the labour seam
+// above remains the imported-cost boundary).
+// ===========================================================================
+
+/// A scheduled shift is either still on the roster (SCHEDULED) or withdrawn
+/// (CANCELLED). Cancellation is a soft, auditable state rather than a delete, so
+/// a roster that has already been published never silently loses a row; a
+/// cancelled shift never grants sign-in and never blocks a replacement shift.
+enum RestaurantShiftStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+/// A branch-scoped rostered shift for ONE staff operator.
+///
+/// `businessDate` is stamped ONCE at create/reschedule time from the branch's
+/// timezone + `businessDayCutoff` (`src/lib/restaurant/business-date.ts`, §11.1)
+/// so a 01:30 shift on a 04:00-cutoff branch belongs to the operating day that
+/// has not yet closed — it is never recomputed later from `startAt`.
+/// `startAt`/`endAt` are UTC instants; branch-local rendering happens at read
+/// time (the M7 convention).
+///
+/// `role` is a free-text roster label (Cashier, Kitchen, Shift Manager …), NOT
+/// an authorization input: permissions keep coming from ABAC and the org role.
+/// It exists so one staff profile can hold several different roles across the
+/// week; the overlap rule below is role-agnostic, because a person cannot work
+/// two shifts at once whatever the labels say.
+model RestaurantShift {
+  id             String                @id @default(cuid())
+  organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  staffProfileId String
+  businessDate   DateTime              @db.Date
+  startAt        DateTime
+  endAt          DateTime
+  role           String?
+  notes          String?
+  status         RestaurantShiftStatus @default(SCHEDULED)
+  cancelledAt    DateTime?
+  cancelReason   String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  branch       RestaurantBranch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  staffProfile RestaurantStaffProfile @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([branchId, businessDate])
+  @@index([staffProfileId, startAt])
+  @@map("restaurant_shifts")
 }
 
 model PlatformUser {

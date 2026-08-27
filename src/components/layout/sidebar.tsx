@@ -35,6 +35,8 @@ import {
   ShieldCheck,
   Bell,
   Camera,
+
+  CalendarClock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -146,6 +148,13 @@ export const navigation: NavItem[] = [
     href: '/restaurant/staff',
     icon: Users,
     group: 'Restaurant',
+  },
+  {
+    label: 'Roster',
+    href: '/restaurant/staff/roster',
+    icon: CalendarClock,
+    group: 'Firm',
+    module: 'restaurant-core',
   },
   {
     label: 'Restaurant devices',

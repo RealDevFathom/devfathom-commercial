@@ -24,6 +24,7 @@ import {
   verifyOperatorCredential,
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
+import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
 import {
   evaluateTerminalSession,
   isTerminalSessionTokenFormat,
@@ -339,7 +340,20 @@ export function withTerminalAuth<T extends unknown[]>(
 export type OperatorAuthResult =
   | { ok: true; credentialId: string; staffProfileId: string }
   | { ok: false; reason: 'INVALID' }
-  | { ok: false; reason: 'LOCKED'; retryAfterMs: number };
+  | { ok: false; reason: 'LOCKED'; retryAfterMs: number }
+  /**
+   * Completion wave: the credential is GENUINE but the branch enforces rostered
+   * sign-in and this operator holds no active, eligible shift. It is a distinct
+   * result from `INVALID` on purpose — nothing secret is disclosed by it (the
+   * caller already proved the credential), and a terminal that cannot tell "not
+   * on shift" from "wrong PIN" makes staff retype a correct PIN until it locks.
+   */
+  | {
+      ok: false;
+      reason: 'NO_ACTIVE_SHIFT';
+      shiftReason: ShiftDenialReason;
+      nextShiftStartsAt: Date | null;
+    };
 
 /**
  * A constant, valid bcrypt hash used to burn a compare when no credential is
@@ -364,6 +378,11 @@ function getDummyHash(): Promise<string> {
  * secret advances the durable counter; a correct secret clears it. Selects the
  * device-scoped credential over an org-wide one, and refuses a
  * non-ACTIVE staff profile. `now` is a SERVER timestamp (client time untrusted).
+ *
+ * When `branchId` is supplied (the terminal path) and that branch opted into
+ * `shiftSignInEnforced`, a proven credential is additionally checked against the
+ * roster and may be refused with `NO_ACTIVE_SHIFT` (see `shifts.ts`). Branches
+ * that do not roster are unaffected — the column defaults to false.
  */
 export async function authenticateOperator(
   db: ScopedDb,
@@ -382,11 +401,21 @@ export async function authenticateOperator(
 ): Promise<OperatorAuthResult> {
   const { staffProfileId, deviceId, branchId, type, secret, now } = params;
 
-  const [profile, credentials] = await Promise.all([
+  const [profile, branch, credentials] = await Promise.all([
     db.restaurantStaffProfile.findUnique({
       where: { id: staffProfileId },
       select: { id: true, primaryBranchId: true, status: true },
     }),
+    // Completion wave: whether THIS branch requires a rostered shift. Read
+    // alongside the profile so the enforced path costs no extra round trip, and
+    // read from the DB every time so turning rostering on takes effect at the
+    // next sign-in rather than when some cache expires.
+    branchId === undefined
+      ? Promise.resolve(null)
+      : db.restaurantBranch.findUnique({
+          where: { id: branchId },
+          select: { id: true, shiftSignInEnforced: true },
+        }),
     db.restaurantOperatorCredential.findMany({
       where: {
         staffProfileId,
@@ -434,5 +463,22 @@ export async function authenticateOperator(
       data: clearLockout(),
     });
   }
+
+  // Completion wave: the shift gate runs AFTER the credential is proven, so a
+  // roster lookup can never become an oracle for which staff ids or PINs exist,
+  // and a correct PIN still clears the lockout counters above even when the
+  // operator turns out not to be on shift.
+  if (branchId !== undefined && branch?.shiftSignInEnforced) {
+    const eligibility = await resolveShiftEligibility(db, { staffProfileId, branchId, now });
+    if (!eligibility.eligible) {
+      return {
+        ok: false,
+        reason: 'NO_ACTIVE_SHIFT',
+        shiftReason: eligibility.reason,
+        nextShiftStartsAt: eligibility.nextShiftStartsAt,
+      };
+    }
+  }
+
   return { ok: true, credentialId: credential.id, staffProfileId };
 }
