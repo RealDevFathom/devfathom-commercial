@@ -36,14 +36,24 @@ import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
  *
  * The sweep therefore owns exactly ONE transition:
  *
- *   SCHEDULED / IN_PROGRESS (never submitted) → MISSED
+ *   SCHEDULED / IN_PROGRESS / LATE, and never submitted → MISSED
  *     when  windowEndsAt + graceMinutes  has strictly elapsed.
  *
- * LATE stays where it belongs: stamped by the request path at submission time.
- * An overdue-but-unsubmitted occurrence remains SCHEDULED/IN_PROGRESS until the
- * grace boundary passes, which keeps it workable and keeps the escalation chain
- * (sop-escalation.ts) running against it — escalation stops on VERIFIED / WAIVED /
- * REJECTED, none of which this sweep produces.
+ * The `submittedAt IS NULL` guard — not the status list — is what protects
+ * submitted work. That distinction matters: it is why LATE can stay in the swept
+ * set without reviving defect 2. A LATE row that carries a submission is a real
+ * late submission awaiting a verifier and the guard excludes it; a LATE row with
+ * no submission is an occurrence that was never handed in, and MISSED is exactly
+ * what it is. The sweep no longer WRITES LATE, so going forward that state can
+ * only come from `submitOccurrence` (which always stamps `submittedAt`) — the
+ * LATE branch therefore only ever resolves rows left by the previous sweep.
+ *
+ * LATE otherwise stays where it belongs: stamped by the request path at
+ * submission time. An overdue-but-unsubmitted occurrence remains
+ * SCHEDULED/IN_PROGRESS until the grace boundary passes, which keeps it workable
+ * and keeps the escalation chain (sop-escalation.ts) running against it —
+ * escalation stops on VERIFIED / WAIVED / REJECTED, none of which this sweep
+ * produces.
  *
  * ## Determinism
  *
@@ -102,7 +112,7 @@ export async function sopLateMissedHandler({ db, job }: RestaurantJobContext): P
     SET    status = 'MISSED', "updatedAt" = ${now}
     FROM   restaurant_sop_assignments asgn
     WHERE  occ."assignmentId" = asgn.id
-      AND  occ.status IN ('SCHEDULED', 'IN_PROGRESS')
+      AND  occ.status IN ('SCHEDULED', 'IN_PROGRESS', 'LATE')
       AND  occ."submittedAt" IS NULL
       AND  (occ."windowEndsAt" + (INTERVAL '1 minute' * asgn."graceMinutes")) < ${now}
   `;

@@ -1139,19 +1139,25 @@ export function SopAdminView({
             </div>
           </SectionCard>
 
-          <SectionCard eyebrow="Contract boundary" title="Escalation policies">
+          <SectionCard eyebrow="Related surface" title="Escalation policies">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="max-w-3xl">
                 <p className="text-sm leading-relaxed text-text-body">
-                  Escalation-policy configuration is not available from the current L3 SOP authoring
-                  contract. This console does not read or persist escalation rules.
+                  Escalation chains, compliance scoring, and occurrence audit history live in SOP
+                  oversight. This authoring console still owns templates, versions, evidence
+                  requirements, and branch schedules only.
                 </p>
                 <p className="mt-2 text-sm leading-relaxed text-text-muted">
-                  Templates, evidence requirements, and branch schedules remain ready for a future
-                  server-owned escalation policy without implying policy is active today.
+                  Escalation policies are configured per organization or branch and apply to the
+                  occurrences these assignments generate.
                 </p>
               </div>
-              <StatusPill status="Information only" tone="info" />
+              <Link
+                className={`${buttonVariants({ variant: 'secondary' })} min-h-11 shrink-0`}
+                href="/restaurant/sop/oversight"
+              >
+                Open SOP oversight
+              </Link>
             </div>
           </SectionCard>
         </>

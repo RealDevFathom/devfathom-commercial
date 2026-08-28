@@ -100,9 +100,12 @@ describe('sopLateMissedHandler', () => {
     await sopLateMissedHandler(ctx);
 
     const sql = sweepSql(executeRaw);
-    // A submitted-late occurrence (status LATE, submittedAt set) is awaiting
-    // verification and must survive the sweep.
-    expect(sql).toContain("occ.status IN ('SCHEDULED', 'IN_PROGRESS')");
+    expect(sql).toContain("occ.status IN ('SCHEDULED', 'IN_PROGRESS', 'LATE')");
+    // The NULL-submission guard — not the status list — is what protects
+    // submitted work. A submitted-late occurrence (status LATE, submittedAt set)
+    // is awaiting verification and must survive the sweep; a LATE row with no
+    // submission was never handed in and is genuinely missed. Dropping this
+    // guard would silently rewrite real submissions to MISSED.
     expect(sql).toContain('occ."submittedAt" IS NULL');
   });
 

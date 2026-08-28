@@ -39,6 +39,19 @@ import {
   installAllSopPacks,
   installSopPack,
 } from '@/lib/restaurant/sop-template-packs';
+import {
+  SopEscalationConfigError,
+  createEscalationPolicy,
+  getEscalationPolicy,
+  listEscalationPolicies,
+  removeEscalationStep,
+  setEscalationPolicyActive,
+  updateEscalationPolicy,
+  upsertEscalationStep,
+} from '@/lib/restaurant/sop-escalation';
+import { buildScoreReport } from '@/lib/restaurant/sop-score';
+import { getOccurrenceAuditTrail } from '@/lib/restaurant/sop-audit';
+import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 
 /**
  * M7-L3 — the SOP authoring console (back-office server surface).
@@ -81,6 +94,12 @@ function mapSopError(err: unknown): never {
       message: err.message,
     });
   }
+  if (err instanceof SopEscalationConfigError) {
+    throw new TRPCError({
+      code: err.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: err.message,
+    });
+  }
   throw err;
 }
 
@@ -94,6 +113,8 @@ const FREQUENCY = z.enum(['ONCE', 'DAILY', 'WEEKLY', 'MONTHLY']);
 const MINUTES_OF_DAY = z.number().int().min(0).max(1439);
 const DAYS_OF_WEEK = z.array(z.number().int().min(0).max(6)).max(7);
 const MONTH_DAY = z.number().int().min(1).max(31).nullable();
+const ESCALATION_SCOPE = z.enum(['ORG', 'BRANCH']);
+const NOTIFICATION_CHANNEL = z.enum(['IN_APP', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP']);
 
 /**
  * SOP-1: the assignee target, as a discriminated union so an input naming a
@@ -601,5 +622,203 @@ export const restaurantSopRouter = router({
         });
       }
       return outcome;
+    }),
+
+  // ── Escalation policy configuration ─────────────────────────────────────────
+  // Read/write over the EXISTING M7 policy model — the chain that
+  // `sopEscalationHandler` already interprets, previously configurable only
+  // through a database session.
+
+  listEscalationPolicies: manageProcedure
+    .input(
+      z
+        .object({ branchId: z.string().optional(), activeOnly: z.boolean().optional() })
+        .strict()
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await listEscalationPolicies(ctx.db, input ?? {});
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  getEscalationPolicy: manageProcedure
+    .input(z.object({ id: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await getEscalationPolicy(ctx.db, input.id);
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  createEscalationPolicy: manageProcedure
+    .input(
+      z
+        .object({
+          name: NAME,
+          scope: ESCALATION_SCOPE,
+          branchId: z.string().nullable().default(null),
+          stopOnAcknowledged: z.boolean().default(true),
+          stopOnVerified: z.boolean().default(true),
+          quietHoursStartMinutes: MINUTES_OF_DAY.nullable().default(null),
+          quietHoursEndMinutes: MINUTES_OF_DAY.nullable().default(null),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const policy = await createEscalationPolicy(ctx.db, input);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopEscalationPolicy',
+          targetId: policy.id,
+          targetLabel: policy.name,
+          description: `Created SOP escalation policy "${policy.name}" (${policy.scope})`,
+        });
+        return policy;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  updateEscalationPolicy: manageProcedure
+    .input(
+      z
+        .object({
+          id: z.string(),
+          name: NAME.optional(),
+          stopOnAcknowledged: z.boolean().optional(),
+          stopOnVerified: z.boolean().optional(),
+          quietHoursStartMinutes: MINUTES_OF_DAY.nullable().optional(),
+          quietHoursEndMinutes: MINUTES_OF_DAY.nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const policy = await updateEscalationPolicy(ctx.db, input);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopEscalationPolicy',
+          targetId: policy.id,
+          targetLabel: policy.name,
+          description: `Updated SOP escalation policy "${policy.name}"`,
+        });
+        return policy;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  setEscalationPolicyActive: manageProcedure
+    .input(z.object({ id: z.string(), active: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const policy = await setEscalationPolicyActive(ctx.db, input.id, input.active);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopEscalationPolicy',
+          targetId: policy.id,
+          targetLabel: policy.name,
+          description: `${input.active ? 'Activated' : 'Deactivated'} SOP escalation policy "${policy.name}"`,
+        });
+        return policy;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  upsertEscalationStep: manageProcedure
+    .input(
+      z
+        .object({
+          policyId: z.string(),
+          stepOrder: z.number().int().min(1).max(50),
+          delayMinutes: z.number().int().min(0).max(10_080),
+          target: z.string().min(1).max(200),
+          channel: NOTIFICATION_CHANNEL,
+          maxAttempts: z.number().int().min(1).max(10).default(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const step = await upsertEscalationStep(ctx.db, input);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopEscalationStep',
+          targetId: step.id,
+          description: `Configured escalation step ${step.stepOrder} on policy ${input.policyId}`,
+        });
+        return step;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  removeEscalationStep: manageProcedure
+    .input(z.object({ policyId: z.string(), stepOrder: z.number().int().min(1).max(50) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const removed = await removeEscalationStep(ctx.db, input.policyId, input.stepOrder);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopEscalationStep',
+          targetId: removed.id,
+          description: `Removed escalation step ${input.stepOrder} from policy ${input.policyId}`,
+        });
+        return removed;
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  // ── Performance scoring ─────────────────────────────────────────────────────
+
+  /**
+   * Compliance score over a business-date window. The response carries the
+   * formula, window, denominator and exclusions that produced every number, so
+   * the UI can show how a score was reached rather than asserting it.
+   */
+  scoreReport: manageProcedure
+    .input(
+      z
+        .object({
+          from: DATE_ISO,
+          to: DATE_ISO,
+          branchId: z.string().nullable().default(null),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      if (input.from > input.to) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'The window start must not be after its end.',
+        });
+      }
+      try {
+        return await buildScoreReport(ctx.db, {
+          fromBusinessDate: businessDateToUtcDate(input.from),
+          toBusinessDate: businessDateToUtcDate(input.to),
+          branchId: input.branchId,
+        });
+      } catch (err) {
+        mapSopError(err);
+      }
+    }),
+
+  // ── Audit history ───────────────────────────────────────────────────────────
+
+  /**
+   * The immutable trail for one occurrence, folded from the append-only step,
+   * evidence, verification and escalation records. Read-only by construction.
+   */
+  occurrenceAuditTrail: manageProcedure
+    .input(z.object({ occurrenceId: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      const trail = await getOccurrenceAuditTrail(ctx.db, input.occurrenceId);
+      if (!trail) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      }
+      return trail;
     }),
 });
