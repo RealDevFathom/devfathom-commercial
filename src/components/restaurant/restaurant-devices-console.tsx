@@ -1,12 +1,13 @@
 'use client';
 
 import { useMemo, useState, type FormEvent } from 'react';
+import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 import { Copy } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -60,6 +61,7 @@ export function RestaurantDevicesConsole() {
   const restaurantModule = entitlements.modules.find((module) => module.key === 'restaurant-core');
   const restaurantEnabled =
     restaurantModule?.enabled ?? entitlements.enabledModules.includes('restaurant-core');
+  const camerasEnabled = entitlements.enabledModules.includes('restaurant-integrations');
   const utils = trpc.useUtils();
   const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, {
     enabled: restaurantEnabled,
@@ -165,15 +167,25 @@ export function RestaurantDevicesConsole() {
         description="Enroll, monitor, and revoke restaurant terminals with manager co-authorization."
         actions={
           restaurantEnabled && !permissionDenied ? (
-            <Button
-              className="min-h-11"
-              onClick={() => {
-                enrollment.reset();
-                setEnrollOpen(true);
-              }}
-            >
-              Enroll device
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {camerasEnabled ? (
+                <Link
+                  className={buttonVariants({ variant: 'secondary' })}
+                  href="/restaurant/integrations/cameras"
+                >
+                  Cameras →
+                </Link>
+              ) : null}
+              <Button
+                className="min-h-11"
+                onClick={() => {
+                  enrollment.reset();
+                  setEnrollOpen(true);
+                }}
+              >
+                Enroll device
+              </Button>
+            </div>
           ) : null
         }
       />

@@ -34,6 +34,7 @@ const contentSecurityPolicy = [
   // (/api/files, plain <img>) or as data:/blob: previews — no external host needed.
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
+  "media-src 'self' blob:",
   // SEC-01: the explicit Ably/JaaS wss: allowlist above is authoritative — drop
   // the blanket `ws: wss:` (which let a WebSocket reach ANY host, nullifying the
   // allowlist) and the stale Socket.IO origin (which had leaked as localhost:3001).
