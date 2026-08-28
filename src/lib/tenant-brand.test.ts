@@ -1,13 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { tenantBrandTokens, type TenantBrand } from './tenant-brand';
+import { assertWorkspaceIdentity, tenantBrandTokens, type TenantBrand } from './tenant-brand';
 
 const brand = (primaryColor: string | null, accentColor: string | null): TenantBrand => ({
+  organizationId: 'org_1',
   displayName: 'Chai Chowk Cafe',
   logoUrl: null,
   markUrl: null,
   faviconUrl: null,
   primaryColor,
   accentColor,
+});
+
+describe('workspace identity', () => {
+  it('fails closed when displayed and authenticated organizations diverge', () => {
+    expect(() => assertWorkspaceIdentity('org_session', 'org_displayed')).toThrow(
+      'Workspace identity does not match the authenticated organization.'
+    );
+  });
+
+  it('accepts identity derived from the authenticated organization', () => {
+    expect(() => assertWorkspaceIdentity('org_1', 'org_1')).not.toThrow();
+  });
 });
 
 describe('tenantBrandTokens', () => {

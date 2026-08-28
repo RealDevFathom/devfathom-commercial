@@ -14,7 +14,7 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
-import { tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
+import { assertWorkspaceIdentity, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { toast } from 'sonner';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
@@ -66,7 +66,16 @@ export function isPathModuleEnabled(
   return !moduleKey || entitlements.enabledModules.includes(moduleKey);
 }
 
-export function AppShell({ children, brand }: { children: React.ReactNode; brand: TenantBrand }) {
+export function AppShell({
+  children,
+  brand,
+  sessionOrganizationId,
+}: {
+  children: React.ReactNode;
+  brand: TenantBrand;
+  sessionOrganizationId: string;
+}) {
+  assertWorkspaceIdentity(sessionOrganizationId, brand.organizationId);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
   const { data: session } = useSession();
