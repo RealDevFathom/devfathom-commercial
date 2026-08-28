@@ -44,97 +44,105 @@ export default async function CatalogPage() {
             <h2 className="mt-1 font-display text-xl font-semibold">Camera brand presets</h2>
             <div className="mt-5 grid gap-4 lg:grid-cols-2">
               {data.cameraPresets.map((preset) => (
-                <PlatformCommandForm
-                  key={preset.id}
-                  compact
-                  action="catalog.camerapreset"
-                  submitLabel="Update preset"
-                  fields={[
-                    { name: 'id', label: 'Preset', type: 'hidden', defaultValue: preset.id },
-                    { name: 'key', label: 'Key', required: true, defaultValue: preset.key },
-                    {
-                      name: 'familyName',
-                      label: 'Brand family',
-                      required: true,
-                      defaultValue: preset.familyName,
-                    },
-                    {
-                      name: 'aliases',
-                      label: 'Aliases',
-                      type: 'json',
-                      required: true,
-                      defaultValue: preset.aliases,
-                    },
-                    {
-                      name: 'iconKey',
-                      label: 'Icon',
-                      required: true,
-                      defaultValue: preset.iconKey,
-                    },
-                    {
-                      name: 'rtspPort',
-                      label: 'RTSP port',
-                      type: 'number',
-                      required: true,
-                      defaultValue: preset.rtspPort,
-                    },
-                    {
-                      name: 'onvifPort',
-                      label: 'ONVIF port',
-                      type: 'number',
-                      required: true,
-                      defaultValue: preset.onvifPort,
-                    },
-                    {
-                      name: 'mainStreamPathTemplate',
-                      label: 'Main stream path',
-                      required: true,
-                      defaultValue: preset.mainStreamPathTemplate,
-                    },
-                    {
-                      name: 'subStreamPathTemplate',
-                      label: 'Sub stream path',
-                      required: true,
-                      defaultValue: preset.subStreamPathTemplate,
-                    },
-                    {
-                      name: 'authSchemeHint',
-                      label: 'Authentication',
-                      required: true,
-                      defaultValue: preset.authSchemeHint,
-                    },
-                    {
-                      name: 'defaultUsernameHint',
-                      label: 'Username hint',
-                      defaultValue: preset.defaultUsernameHint,
-                    },
-                    {
-                      name: 'credentialNote',
-                      label: 'Credential note',
-                      required: true,
-                      defaultValue: preset.credentialNote,
-                    },
-                    {
-                      name: 'setupNote',
-                      label: 'Setup note',
-                      required: true,
-                      defaultValue: preset.setupNote,
-                    },
-                    {
-                      name: 'active',
-                      label: 'Active',
-                      type: 'checkbox',
-                      defaultValue: preset.active,
-                    },
-                    {
-                      name: 'sortOrder',
-                      label: 'Sort order',
-                      type: 'number',
-                      required: true,
-                      defaultValue: preset.sortOrder,
-                    },
-                  ]}
-                />
+                <div key={preset.id} className="space-y-2 border border-border-subtle p-4">
+                  <PlatformCommandForm
+                    compact
+                    action="catalog.camerapreset"
+                    submitLabel="Update preset"
+                    fields={[
+                      { name: 'id', label: 'Preset', type: 'hidden', defaultValue: preset.id },
+                      { name: 'key', label: 'Key', required: true, defaultValue: preset.key },
+                      {
+                        name: 'familyName',
+                        label: 'Brand family',
+                        required: true,
+                        defaultValue: preset.familyName,
+                      },
+                      {
+                        name: 'aliases',
+                        label: 'Aliases',
+                        type: 'json',
+                        required: true,
+                        defaultValue: preset.aliases,
+                      },
+                      {
+                        name: 'iconKey',
+                        label: 'Icon',
+                        required: true,
+                        defaultValue: preset.iconKey,
+                      },
+                      {
+                        name: 'rtspPort',
+                        label: 'RTSP port',
+                        type: 'number',
+                        required: true,
+                        defaultValue: preset.rtspPort,
+                      },
+                      {
+                        name: 'onvifPort',
+                        label: 'ONVIF port',
+                        type: 'number',
+                        required: true,
+                        defaultValue: preset.onvifPort,
+                      },
+                      {
+                        name: 'mainStreamPathTemplate',
+                        label: 'Main stream path',
+                        required: true,
+                        defaultValue: preset.mainStreamPathTemplate,
+                      },
+                      {
+                        name: 'subStreamPathTemplate',
+                        label: 'Sub stream path',
+                        required: true,
+                        defaultValue: preset.subStreamPathTemplate,
+                      },
+                      {
+                        name: 'authSchemeHint',
+                        label: 'Authentication',
+                        required: true,
+                        defaultValue: preset.authSchemeHint,
+                      },
+                      {
+                        name: 'defaultUsernameHint',
+                        label: 'Username hint',
+                        defaultValue: preset.defaultUsernameHint,
+                      },
+                      {
+                        name: 'credentialNote',
+                        label: 'Credential note',
+                        required: true,
+                        defaultValue: preset.credentialNote,
+                      },
+                      {
+                        name: 'setupNote',
+                        label: 'Setup note',
+                        required: true,
+                        defaultValue: preset.setupNote,
+                      },
+                      {
+                        name: 'active',
+                        label: 'Active',
+                        type: 'checkbox',
+                        defaultValue: preset.active,
+                      },
+                      {
+                        name: 'sortOrder',
+                        label: 'Sort order',
+                        type: 'number',
+                        required: true,
+                        defaultValue: preset.sortOrder,
+                      },
+                    ]}
+                  />
+                  <PlatformCommandButton
+                    action="catalog.camerapreset.remove"
+                    label="Remove preset"
+                    tone="danger"
+                    confirm={`Remove ${preset.familyName}? Registered cameras will remain active.`}
+                    payload={{ id: preset.id }}
+                  />
+                </div>
               ))}
             </div>
           </section>
