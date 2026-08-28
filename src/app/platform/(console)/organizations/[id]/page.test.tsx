@@ -158,6 +158,63 @@ describe('OrganizationDetailPage vertical presentation', () => {
   });
 });
 
+describe('OrganizationDetailPage entitlement limit diagnostics', () => {
+  it('shows which bootstrapped key supplied the limit', async () => {
+    await renderDetail({
+      org: organization({
+        package: {
+          id: 'pkg_r1',
+          key: 'restaurant-growth',
+          name: 'Restaurant Growth',
+          vertical: 'RESTAURANT',
+          moduleLinks: [
+            {
+              moduleId: 'mod_core',
+              limits: { 'sop.templates.max': 25 },
+              module: { active: true, key: 'restaurant-core' },
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Bootstrapped compatibility key restaurant-core.sop.templates.max resolves to 25'
+    );
+  });
+
+  it('shows an actionable fault when both supported keys are absent', async () => {
+    await renderDetail({
+      org: organization({
+        package: {
+          id: 'pkg_r1',
+          key: 'restaurant-growth',
+          name: 'Restaurant Growth',
+          vertical: 'RESTAURANT',
+          moduleLinks: [],
+        },
+      }),
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'neither sop.templates.max nor restaurant-core.sop.templates.max is set'
+    );
+  });
+
+  it('distinguishes a deliberate explicit zero', async () => {
+    await renderDetail({
+      org: organization({
+        limits: [{ id: 'limit_1', key: 'sop.templates.max', value: 0, period: null }],
+      }),
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Explicit key sop.templates.max resolves to 0'
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Zero is a deliberate disable');
+  });
+});
+
 describe('OrganizationDetailPage effective entitlement source', () => {
   it('reports NONE and offers only Enable when nothing grants the module', async () => {
     await renderDetail();
