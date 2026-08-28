@@ -17,16 +17,20 @@ Use one status on every capability claim:
 
 ## Start here
 
-| Audience | Document | Purpose |
-| --- | --- | --- |
-| Everyone | [Technical overview](technical-overview.md) | Product boundaries, architecture, tenancy, and operating model |
-| Developers | [Local setup](LOCAL_SETUP.md) | Local environment and verification |
-| Operators | [Azure deployment](azure-deployment.md) | Staging, production gate, backups, and rollback |
-| Platform team | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks |
-| Product and sales | [Product and commercial pack](product-pack.md) | ICP, positioning, feature status, packaging, and customer lifecycle |
-| Partners and customers | [Pitch-deck source](pitch-deck.md) | Evidence-safe slide narratives and speaker notes |
-| Release owners | [Living status ledger](status-ledger.md) | Evidence, blockers, owners, and next gates |
-| Documentation owners | [Documentation QA](qa.md) | Link, stale-reference, and consistency checks |
+| Audience               | Document                                            | Purpose                                                             |
+| ---------------------- | --------------------------------------------------- | ------------------------------------------------------------------- |
+| Everyone               | [Technical overview](technical-overview.md)         | Product boundaries, architecture, tenancy, and operating model      |
+| Developers             | [Local setup](LOCAL_SETUP.md)                       | Local environment and verification                                  |
+| Operators              | [Azure deployment](azure-deployment.md)             | Staging, production gate, backups, and rollback                     |
+| Platform team          | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks                             |
+| Product and sales      | [Product and commercial pack](product-pack.md)      | ICP, positioning, feature status, packaging, and customer lifecycle |
+| Partners and customers | [Pitch-deck source](pitch-deck.md)                  | Evidence-safe slide narratives and speaker notes                    |
+| Release owners         | [Living status ledger](status-ledger.md)            | Evidence, blockers, owners, and next gates                          |
+| Documentation owners   | [Documentation QA](qa.md)                           | Link, stale-reference, and consistency checks                       |
+
+## Module PRDs
+
+- [Kitchen Display System (KDS)](product/modules/kds.md) — station queue, ticket lifecycle, actions, permissions, and acceptance criteria
 
 ## Technical reference
 
