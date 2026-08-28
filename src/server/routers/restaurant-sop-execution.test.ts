@@ -7,7 +7,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn(async () => true),
+  can: vi.fn(async (...args: unknown[]) => {
+    void args;
+    return true;
+  }),
   annotateAudit: vi.fn(),
 }));
 
@@ -69,6 +72,7 @@ function makeDb() {
     restaurantNotificationDelivery: model(),
     restaurantStaffProfile: model(),
     restaurantBranchAssignment: model(),
+    restaurantBranch: model(),
   };
   db.$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   return db as Record<string, Delegate> & { $transaction: ReturnType<typeof vi.fn> };
@@ -202,6 +206,35 @@ describe('listOccurrences', () => {
 });
 
 describe('SOP reporting', () => {
+  it('lists every active branch for restaurant configurators', async () => {
+    db.restaurantBranch.findMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+
+    await expect(caller().reportBranches()).resolves.toEqual([{ id: 'branch_1', name: 'Main' }]);
+    expect(db.restaurantBranch.findMany).toHaveBeenCalledWith({
+      where: { active: true },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      select: { id: true, name: true },
+    });
+  });
+
+  it('lists only assigned branches for a report-capable non-configurator', async () => {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'reports:operational');
+
+    await caller().reportBranches();
+
+    expect(db.restaurantBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          active: true,
+          OR: [
+            { staffProfiles: { some: { userId: 'user_1', status: 'ACTIVE' } } },
+            { assignments: { some: { userId: 'user_1' } } },
+          ],
+        },
+      })
+    );
+  });
+
   it('composes date, branch and department filters and reconciles the fixture', async () => {
     db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'staff_1' });
     db.restaurantSopOccurrence.findMany.mockResolvedValue([
