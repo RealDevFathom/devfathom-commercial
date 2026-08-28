@@ -124,6 +124,71 @@ describe('startOccurrence', () => {
 // ── completeStep ───────────────────────────────────────────────────────────────
 
 describe('completeStep', () => {
+  it('blocks required photo and signature proof until both are captured', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'IN_PROGRESS',
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+    });
+    db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
+      id: STEP_ID,
+      completed: false,
+      completedAt: null,
+      templateStep: { requiresPhoto: true, requiresSignature: true },
+      evidence: [{ mimeType: 'image/jpeg' }],
+    });
+
+    await expect(
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+        actorStaffProfileId: 'staff_1',
+      })
+    ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+    expect(db.restaurantSopOccurrenceStep.update).not.toHaveBeenCalled();
+
+    db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
+      id: STEP_ID,
+      completed: false,
+      completedAt: null,
+      templateStep: { requiresPhoto: true, requiresSignature: true },
+      evidence: [
+        { mimeType: 'image/jpeg' },
+        { mimeType: 'application/vnd.devfathom.signature+json' },
+      ],
+    });
+    db.restaurantSopOccurrenceStep.update.mockResolvedValue({ id: STEP_ID, completedAt: NOW });
+
+    await expect(
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+        actorStaffProfileId: 'staff_1',
+      })
+    ).resolves.toMatchObject({ completed: true });
+  });
+
+  it('allows only the direct assignee or role-pool claimant to complete work', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'IN_PROGRESS',
+      assignedStaffProfileId: null,
+      poolJobRoleId: 'role_1',
+      claimedByStaffProfileId: 'staff_claimant',
+    });
+
+    await expect(
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+        actorStaffProfileId: 'staff_other',
+      })
+    ).rejects.toMatchObject({ reason: 'NOT_OWNER' });
+    expect(db.restaurantSopOccurrenceStep.findUnique).not.toHaveBeenCalled();
+  });
+
   it('marks a step completed on an IN_PROGRESS occurrence', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
     db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
