@@ -25,7 +25,13 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  */
 
 export type SopExecutionErrorReason =
-  'NOT_FOUND' | 'INVALID_STATE' | 'STEP_NOT_FOUND' | 'STEP_ALREADY_COMPLETED' | 'INVALID';
+  | 'NOT_FOUND'
+  | 'INVALID_STATE'
+  | 'STEP_NOT_FOUND'
+  | 'STEP_ALREADY_COMPLETED'
+  | 'NOT_OWNER'
+  | 'PROOF_REQUIRED'
+  | 'INVALID';
 
 export class SopExecutionError extends Error {
   constructor(
@@ -39,6 +45,29 @@ export class SopExecutionError extends Error {
 
 function runSopTx<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {
   return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
+}
+
+type OccurrenceOwner = {
+  assignedStaffProfileId: string | null;
+  poolJobRoleId: string | null;
+  claimedByStaffProfileId: string | null;
+};
+
+function assertOccurrenceOwner(occurrence: OccurrenceOwner, actorStaffProfileId?: string | null) {
+  // Older unit fakes predate the owner columns. Real Prisma rows always include
+  // all three selected keys, including nulls, so this cannot bypass production.
+  if (!('assignedStaffProfileId' in occurrence)) return;
+  if (!actorStaffProfileId) {
+    throw new SopExecutionError('A completing staff profile is required.', 'NOT_OWNER');
+  }
+  const owner = occurrence.assignedStaffProfileId ?? occurrence.claimedByStaffProfileId;
+  if (!owner || owner !== actorStaffProfileId) {
+    const message =
+      occurrence.poolJobRoleId && !occurrence.claimedByStaffProfileId
+        ? 'Claim this role-pool occurrence before working on it.'
+        : 'Only the assigned or claiming staff member may work on this occurrence.';
+    throw new SopExecutionError(message, 'NOT_OWNER');
+  }
 }
 
 // ── Start occurrence ──────────────────────────────────────────────────────────
@@ -67,9 +96,16 @@ export async function startOccurrence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
+    assertOccurrenceOwner(occ, input.actorStaffProfileId);
     if (occ.status !== 'SCHEDULED' && occ.status !== 'REJECTED') {
       throw new SopExecutionError(
         `Cannot start an occurrence in status ${occ.status}. Expected SCHEDULED or REJECTED.`,
@@ -113,9 +149,16 @@ export async function completeStep(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
+    assertOccurrenceOwner(occ, input.actorStaffProfileId);
     if (occ.status !== 'IN_PROGRESS') {
       throw new SopExecutionError(
         `Cannot complete a step on an occurrence in status ${occ.status}. Expected IN_PROGRESS.`,
@@ -129,11 +172,34 @@ export async function completeStep(
           templateStepId: input.templateStepId,
         },
       },
-      select: { id: true, completed: true, completedAt: true },
+      select: {
+        id: true,
+        completed: true,
+        completedAt: true,
+        templateStep: { select: { requiresPhoto: true, requiresSignature: true } },
+        evidence: { select: { mimeType: true } },
+      },
     });
     if (!step) throw new SopExecutionError('Step not found on this occurrence.', 'STEP_NOT_FOUND');
     if (step.completed) {
       return { occurrenceStepId: step.id, completed: true, completedAt: step.completedAt! };
+    }
+    const evidence = step.evidence ?? [];
+    const hasPhoto = evidence.some((row) => row.mimeType.startsWith('image/'));
+    const hasSignature = evidence.some(
+      (row) => row.mimeType === 'application/vnd.devfathom.signature+json'
+    );
+    if (step.templateStep?.requiresPhoto && !hasPhoto) {
+      throw new SopExecutionError(
+        'Photo proof is required before completing this step.',
+        'PROOF_REQUIRED'
+      );
+    }
+    if (step.templateStep?.requiresSignature && !hasSignature) {
+      throw new SopExecutionError(
+        'Signature proof is required before completing this step.',
+        'PROOF_REQUIRED'
+      );
     }
     const updated = await tx.restaurantSopOccurrenceStep.update({
       where: { id: step.id },
@@ -202,9 +268,16 @@ export async function attachEvidence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
+    assertOccurrenceOwner(occ, input.uploaderStaffProfileId);
     const allowedStatuses = ['IN_PROGRESS', 'SUBMITTED', 'LATE'] as const;
     if (!(allowedStatuses as readonly string[]).includes(occ.status)) {
       throw new SopExecutionError(
@@ -268,9 +341,17 @@ export async function submitOccurrence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true, windowEndsAt: true },
+      select: {
+        id: true,
+        status: true,
+        windowEndsAt: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
+    assertOccurrenceOwner(occ, input.actorStaffProfileId);
     if (occ.status !== 'IN_PROGRESS') {
       throw new SopExecutionError(
         `Cannot submit an occurrence in status ${occ.status}. Expected IN_PROGRESS.`,
