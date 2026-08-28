@@ -12,6 +12,7 @@ const publicPaths = [
   '/terminal',
   '/pos',
   '/kds',
+  '/meet/',
   '/api/auth',
   '/brand',
 ];

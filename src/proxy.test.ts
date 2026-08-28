@@ -59,4 +59,17 @@ describe('platform host routing', () => {
     expect(response.headers.get('x-middleware-next')).toBe('1');
     expect(response.headers.get('location')).toBeNull();
   });
+
+  it('allows public occurrence links without exposing authenticated meetings pages', () => {
+    const publicMeeting = proxy(tenantRequest('/meet/occurrence-public-id'));
+    expect(publicMeeting.status).toBe(200);
+    expect(publicMeeting.headers.get('x-middleware-next')).toBe('1');
+    expect(publicMeeting.headers.get('location')).toBeNull();
+
+    const meetingsWorkspace = proxy(tenantRequest('/meetings'));
+    expect(meetingsWorkspace.status).toBe(307);
+    expect(meetingsWorkspace.headers.get('location')).toBe(
+      'http://acme.localhost:3000/login?callbackUrl=%2Fmeetings'
+    );
+  });
 });
