@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -92,6 +93,54 @@ function statusTone(status: string): StatusTone {
   return status === 'INACTIVE' ? 'neutral' : 'info';
 }
 
+const TEMPLATE_LIMIT_KEY = 'sop.templates.max';
+
+/**
+ * Active-template quota presentation states.
+ *
+ * `exhausted` means the plan grants this workspace a quota and the workspace has
+ * used all of it — the remedy is in-product (archive a template). It is
+ * deliberately distinct from the module-level "not in your plan" state, whose
+ * remedy is commercial. `unconfigured` is neither: an absent limit is a platform
+ * configuration fault, not a plan that permits zero templates, so it must never
+ * render as `0 active · 0 allowed`.
+ */
+type TemplateCapacity =
+  | { kind: 'available'; limit: number; used: number; remaining: number }
+  | { kind: 'exhausted'; limit: number; used: number }
+  | { kind: 'unconfigured'; used: number };
+
+/**
+ * Reads the limit without collapsing "absent" into `0`. `EntitlementView.limits`
+ * is typed `Record<string, number>`, so the index signature over-promises and an
+ * unconfigured key still arrives as `undefined` at runtime.
+ */
+function readTemplateLimit(limits: Record<string, number>): number | undefined {
+  return TEMPLATE_LIMIT_KEY in limits ? limits[TEMPLATE_LIMIT_KEY] : undefined;
+}
+
+/**
+ * WHA-265 owns the shared resolver policy for absent limits (declare-every-limit
+ * with loud platform diagnostics vs. absent-means-unlimited). That contract does
+ * not exist yet, so this view does not invent it: an unconfigured limit keeps the
+ * pre-existing fail-closed behaviour (creation stays disabled) and simply stops
+ * claiming the plan allows zero. When the policy lands, only this function
+ * changes — if absent means unlimited it returns `available`, otherwise the
+ * `unconfigured` branch stays as-is.
+ */
+function resolveTemplateCapacity(
+  limit: number | undefined,
+  activeCount: number
+): TemplateCapacity {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 0) {
+    return { kind: 'unconfigured', used: activeCount };
+  }
+  const remaining = Math.max(0, limit - activeCount);
+  return remaining === 0
+    ? { kind: 'exhausted', limit, used: activeCount }
+    : { kind: 'available', limit, used: activeCount, remaining };
+}
+
 function recurrenceLabel(assignment: SopAssignment) {
   const interval = assignment.interval === 1 ? '' : ` every ${assignment.interval}`;
   if (assignment.frequency === 'WEEKLY' && assignment.daysOfWeek.length) {
@@ -133,7 +182,13 @@ function QueryLoading() {
 
 export type SopAdminViewProps = {
   moduleEnabled: boolean;
-  templateLimit: number;
+  /**
+   * How the module reached its current state. `NONE` means the plan never
+   * granted it; the other sources mean it was granted and then switched off.
+   */
+  moduleSource?: 'PACKAGE' | 'CONTRACT' | 'OVERRIDE' | 'NONE';
+  /** `undefined` when the platform never configured `sop.templates.max`. */
+  templateLimit: number | undefined;
   templates: SopTemplate[];
   assignments: SopAssignment[];
   selectedTemplateId: string;
@@ -163,6 +218,7 @@ export type SopAdminViewProps = {
 
 export function SopAdminView({
   moduleEnabled,
+  moduleSource,
   templateLimit,
   templates,
   assignments,
@@ -198,7 +254,9 @@ export function SopAdminView({
     versions.find((item) => item.id === selectedVersionId) ?? versions[0] ?? null;
   const draftVersion = versions.find((item) => item.status === 'DRAFT');
   const activeTemplateCount = templates.filter((template) => template.isActive).length;
-  const atLimit = activeTemplateCount >= templateLimit;
+  const capacity = resolveTemplateCapacity(templateLimit, activeTemplateCount);
+  const canCreateTemplate = capacity.kind === 'available';
+  const notInPlan = moduleSource === 'NONE';
   const anyPending = pendingAction != null;
 
   return (
@@ -209,11 +267,25 @@ export function SopAdminView({
         description="Author controlled procedures, publish immutable versions, and schedule branch work."
         actions={
           moduleEnabled ? (
-            <StatusPill
-              status={atLimit ? 'Limit reached' : 'Template capacity'}
-              tone={atLimit ? 'warning' : 'info'}
-              label={`${activeTemplateCount} / ${templateLimit} active`}
-            />
+            capacity.kind === 'unconfigured' ? (
+              <StatusPill
+                status="Limit not configured"
+                tone="danger"
+                label={`Limit not configured · ${capacity.used} active`}
+              />
+            ) : capacity.kind === 'exhausted' ? (
+              <StatusPill
+                status="Limit reached"
+                tone="warning"
+                label={`Limit reached · ${capacity.used} / ${capacity.limit} active`}
+              />
+            ) : (
+              <StatusPill
+                status="Template capacity"
+                tone="info"
+                label={`Template capacity · ${capacity.used} / ${capacity.limit} active`}
+              />
+            )
           ) : null
         }
       />
@@ -239,15 +311,40 @@ export function SopAdminView({
       ) : null}
 
       {!moduleEnabled ? (
-        <SectionCard title="SOP & Compliance unavailable">
-          <div className="space-y-3" role="status">
-            <StatusPill status="Disabled" tone="warning" />
-            <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
-              Enable the Restaurant SOP & Compliance module to manage templates and branch
-              schedules.
-            </p>
-          </div>
-        </SectionCard>
+        notInPlan ? (
+          <SectionCard title="SOP & Compliance is not in this plan">
+            <div className="space-y-3" role="status">
+              <StatusPill status="Not in plan" tone="neutral" />
+              <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
+                Your organization’s current plan does not include SOP &amp; Compliance, so there is
+                no template quota to spend here. Nothing has been used up and no data is missing.
+              </p>
+              <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
+                Contact your administrator or DevFathom sales to add the module. Your current
+                package and contract are listed on the organization page.
+              </p>
+              <Link
+                className={`${buttonVariants({ variant: 'secondary' })} min-h-11`}
+                href="/organization"
+              >
+                Review plan &amp; modules
+              </Link>
+            </div>
+          </SectionCard>
+        ) : (
+          <SectionCard title="SOP & Compliance is turned off">
+            <div className="space-y-3" role="status">
+              <StatusPill status="Disabled" tone="warning" />
+              <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
+                SOP &amp; Compliance is included in your plan but is currently switched off for this
+                organization. Existing templates, versions, and schedules are retained.
+              </p>
+              <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
+                Ask your platform administrator to re-enable the module to resume authoring.
+              </p>
+            </div>
+          </SectionCard>
+        )
       ) : state === 'loading' ? (
         <QueryLoading />
       ) : state === 'permission' ? (
@@ -277,15 +374,29 @@ export function SopAdminView({
             eyebrow="sop.templates.max"
             title="Template library"
             actions={
-              <StatusPill
-                status={atLimit ? 'At limit' : 'Available'}
-                tone={atLimit ? 'warning' : 'success'}
-                label={`${activeTemplateCount} active · ${templateLimit} allowed`}
-              />
+              capacity.kind === 'unconfigured' ? (
+                <StatusPill
+                  status="Allowance not configured"
+                  tone="danger"
+                  label={`Allowance not configured · ${capacity.used} active`}
+                />
+              ) : capacity.kind === 'exhausted' ? (
+                <StatusPill
+                  status="Quota used"
+                  tone="warning"
+                  label={`Quota used · ${capacity.used} active · ${capacity.limit} allowed`}
+                />
+              ) : (
+                <StatusPill
+                  status="Available"
+                  tone="success"
+                  label={`Available · ${capacity.used} active · ${capacity.limit} allowed`}
+                />
+              )
             }
           >
             <form id="new-template" className="mb-6" onSubmit={onCreateTemplate}>
-              <fieldset disabled={atLimit || anyPending}>
+              <fieldset disabled={!canCreateTemplate || anyPending}>
                 <legend className="font-display text-base font-semibold text-text-strong">
                   Create template
                 </legend>
@@ -309,13 +420,22 @@ export function SopAdminView({
               </fieldset>
               <p
                 id="template-limit-note"
-                className={`mt-2 text-xs ${atLimit ? 'text-warning' : 'text-text-faint'}`}
+                data-capacity={capacity.kind}
+                className={`mt-2 text-xs ${
+                  capacity.kind === 'unconfigured'
+                    ? 'text-destructive'
+                    : capacity.kind === 'exhausted'
+                      ? 'text-warning'
+                      : 'text-text-faint'
+                }`}
               >
-                {atLimit
-                  ? 'Create is disabled because the active-template entitlement limit is reached.'
-                  : `${templateLimit - activeTemplateCount} active template slot${
-                      templateLimit - activeTemplateCount === 1 ? '' : 's'
-                    } remaining.`}
+                {capacity.kind === 'unconfigured'
+                  ? 'The active-template allowance is not configured for this plan. Creating templates is paused until a platform administrator sets sop.templates.max — this is a configuration fault, not a used-up quota.'
+                  : capacity.kind === 'exhausted'
+                    ? `Your plan’s active-template quota is fully used (${capacity.limit} of ${capacity.limit}). Archive an active template below to free a slot.`
+                    : `${capacity.remaining} active template slot${
+                        capacity.remaining === 1 ? '' : 's'
+                      } remaining.`}
               </p>
             </form>
 
@@ -379,9 +499,11 @@ export function SopAdminView({
                               type="button"
                               size="sm"
                               variant="outline"
-                              disabled={anyPending || (!template.isActive && atLimit)}
+                              disabled={anyPending || (!template.isActive && !canCreateTemplate)}
                               aria-describedby={
-                                !template.isActive && atLimit ? 'template-limit-note' : undefined
+                                !template.isActive && !canCreateTemplate
+                                  ? 'template-limit-note'
+                                  : undefined
                               }
                               onClick={() =>
                                 onSetTemplateActive(template.id, !template.isActive, template.name)
@@ -980,7 +1102,7 @@ export default function RestaurantSopAdminPage() {
   const sopModule = entitlements.modules.find((module) => module.key === 'restaurant-sop');
   const moduleEnabled =
     sopModule?.enabled ?? entitlements.enabledModules.includes('restaurant-sop');
-  const templateLimit = entitlements.limits['sop.templates.max'] ?? 0;
+  const templateLimit = readTemplateLimit(entitlements.limits);
   const utils = trpc.useUtils();
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedVersionId, setSelectedVersionId] = useState('');
@@ -1200,6 +1322,7 @@ export default function RestaurantSopAdminPage() {
   return (
     <SopAdminView
       moduleEnabled={moduleEnabled}
+      moduleSource={sopModule?.source ?? 'NONE'}
       templateLimit={templateLimit}
       templates={templates}
       assignments={assignmentsQuery.data ?? []}
