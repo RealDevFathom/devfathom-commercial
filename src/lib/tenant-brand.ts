@@ -67,6 +67,7 @@ export function tenantBrandTokens(brand: TenantBrand): Record<string, string> {
           '--primary-foreground': contrastColor(brand.primaryColor),
           '--sidebar': brand.primaryColor,
           '--sidebar-foreground': contrastColor(brand.primaryColor),
+          '--sidebar-accent': brand.primaryColor,
           '--sidebar-accent-foreground': contrastColor(brand.primaryColor),
         }
       : {}),
