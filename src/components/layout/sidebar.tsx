@@ -32,6 +32,7 @@ import {
   PackageSearch,
   ShoppingCart,
   ListChecks,
+  ShieldCheck,
   Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -127,6 +128,13 @@ export const navigation: NavItem[] = [
     label: 'SOP admin',
     href: '/restaurant/sop/admin',
     icon: Settings,
+    group: 'Restaurant',
+    adminOnly: true,
+  },
+  {
+    label: 'SOP oversight',
+    href: '/restaurant/sop/oversight',
+    icon: ShieldCheck,
     group: 'Restaurant',
     adminOnly: true,
   },
