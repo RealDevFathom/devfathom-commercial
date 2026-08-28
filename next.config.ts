@@ -46,6 +46,8 @@ const contentSecurityPolicy = [
   // (/api/files, plain <img>) or as data:/blob: previews — no external host needed.
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
+  // Camera playback streams through /api/restaurant/cameras/*/stream as blob: media.
+  "media-src 'self' blob:",
   // SEC-01: the explicit Ably/LiveKit wss: allowlist above is authoritative — drop
   // the blanket `ws: wss:` (which let a WebSocket reach ANY host, nullifying the
   // allowlist) and the stale Socket.IO origin (which had leaked as localhost:3001).
