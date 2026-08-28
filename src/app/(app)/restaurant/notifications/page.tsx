@@ -12,8 +12,33 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { RESTAURANT_NOTIFICATION_CHANNELS } from '@/lib/restaurant/notifications';
 import type { AppRouter } from '@/server/routers/_app';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantNotificationsRouter } from '@/server/routers/restaurant-notifications';
 import { createTRPCContext } from '@/server/trpc';
+
+/**
+ * Resolve the tenant actor first, then hand the resolved session and
+ * organization to the context factory.
+ *
+ * `createTRPCContext()` with no argument cannot stand in for this. It forwards
+ * `{ request: undefined, session: undefined }` to `resolveTenantActor`, whose
+ * `'session' in options` check reads that explicitly-undefined key as "the
+ * caller already resolved the session". Auth.js is then never consulted, the
+ * organization is always null, and the factory throws `Workspace not found.`
+ * as an unhandled Server Component error on every request and every host.
+ */
+async function tenantContext() {
+  const actor = await resolveTenantActor();
+  if (!actor) return null;
+  return createTRPCContext({
+    session: actor.session,
+    organization: actor.organization,
+    support: actor.support,
+  });
+}
+
+/** The notification action maps a throw to an error notice, so this reads there. */
+const NO_ACTOR = 'Your session is no longer active. Sign in again and retry.';
 
 const route = '/restaurant/notifications';
 const category = 'sop.escalation';
@@ -622,7 +647,11 @@ export default async function RestaurantNotificationsPage({
   const cursor = queryValue(query.cursor);
   const requestedBranchId = queryValue(query.branch);
   const retryHref = pageHref(filter, requestedBranchId, cursor);
-  const ctx = await createTRPCContext();
+  const ctx = await tenantContext();
+  // Tenancy did not resolve. Entitlements are unknowable here, so show the
+  // permission surface rather than let a missing workspace reach the user as an
+  // unhandled Server Component crash.
+  if (!ctx) return <NotificationsView state="permission" />;
 
   if (!hasModule(ctx.entitlements, 'restaurant-core')) {
     return <NotificationsView state="disabled" />;
@@ -634,7 +663,8 @@ export default async function RestaurantNotificationsPage({
 
     let next: string;
     try {
-      const actionCtx = await createTRPCContext();
+      const actionCtx = await tenantContext();
+      if (!actionCtx) throw new Error(NO_ACTOR);
       const caller = restaurantNotificationsRouter.createCaller(actionCtx);
       const intent = field(form, 'intent');
       let success: string;
