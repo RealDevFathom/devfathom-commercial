@@ -124,11 +124,18 @@ async function insertFixture(
   rowId: string,
   referenceId = rowId
 ) {
-  const columns = fixtureColumns.get(table);
-  if (!columns) throw new Error(`Missing M7 fixture metadata for ${table}`);
-  const values = columns.map((column) => fixtureValue(column, organizationId, rowId, referenceId));
+  const fixtureMetadata = fixtureColumns.get(table);
+  if (!fixtureMetadata) throw new Error(`Missing M7 fixture metadata for ${table}`);
+  const columns = fixtureMetadata.map((column) => column.column_name);
+  const values = fixtureMetadata.map((column) =>
+    fixtureValue(column, organizationId, rowId, referenceId)
+  );
+  if (table === 'restaurant_sop_assignments') {
+    columns.push('assigneeTargetType', 'assigneeStaffProfileId');
+    values.push('PERSON', referenceId);
+  }
   await client!.query(
-    `INSERT INTO "${table}" (${columns.map((column) => `"${column.column_name}"`).join(', ')})
+    `INSERT INTO "${table}" (${columns.map((column) => `"${column}"`).join(', ')})
      VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')})`,
     values
   );
