@@ -33,6 +33,7 @@ import {
   ShoppingCart,
   ListChecks,
   Bell,
+  Camera,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -55,6 +56,7 @@ interface NavItem {
   adminOnly?: boolean;
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
+  module?: string;
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -144,6 +146,14 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   {
+    label: 'Cameras',
+    href: '/restaurant/integrations/cameras',
+    icon: Camera,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-integrations',
+  },
+  {
     label: 'Catalog',
     href: '/restaurant/catalog',
     icon: BookOpen,
@@ -220,7 +230,7 @@ export function visibleNavigation(
   const isHr = role === 'HR';
   return navigation
     .filter((item) => {
-      const moduleKey = moduleForPath(item.href, entitlements.vertical);
+      const moduleKey = item.module ?? moduleForPath(item.href, entitlements.vertical);
       if (moduleKey && !entitlements.enabledModules.includes(moduleKey)) return false;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;
