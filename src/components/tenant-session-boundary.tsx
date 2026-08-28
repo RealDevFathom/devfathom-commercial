@@ -23,7 +23,13 @@ export function TenantSessionBoundary({
   children: React.ReactNode;
 }) {
   return (
-    <SessionProvider session={session} refetchOnWindowFocus={false}>
+    // WHA-276: the tenant-identity invariant is enforced by comparing the live
+    // session's organizationId against the organization the chrome is showing,
+    // so the client has to be allowed to notice that the cookie changed. With
+    // refetching disabled a tab left open on organization A never re-reads
+    // /api/auth/session, so it would keep rendering A's identity over B's data
+    // indefinitely. Focus is the exact moment the user returns to a stale tab.
+    <SessionProvider session={session} refetchOnWindowFocus>
       <EntitlementsProvider value={entitlements}>
         <RealtimeProvider enabled={realtimeEnabled}>{children}</RealtimeProvider>
       </EntitlementsProvider>
