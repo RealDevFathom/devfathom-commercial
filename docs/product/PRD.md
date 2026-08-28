@@ -20,7 +20,7 @@ Give multi-tenant service businesses one governed workspace, with Restaurant as 
 
 - **PLANNED (WHA-243 Lane C)** — Complete platform login/onboarding acceptance; existing login files do not close Lane C.
 - **PLANNED (WHA-243 Lane D)** — Restaurant dashboard beyond current M8 insight surfaces.
-- **PLANNED** — OCR menu import exists only in separate commits `45c53177ec4946f8625160a8d5a70438eab17e4f` and `8dce5caf2dfa4f8fc7f2ff42996e1a04299cf6c9`; it is not integrated here.
+- **IMPLEMENTED** — OCR-assisted menu upload, extraction, human review, and draft catalog import. Evidence: [`menu-import-ocr.md`](menu-import-ocr.md).
 - **PLANNED (WHA-212)** — Camera live feed/storage, Hikvision/EZVIZ, Dahua/IMOU, Uniview, and TP-Link presets, both-console setup wizard, plus manual ONVIF/RTSP fallback.
 - **PLANNED (WHA-243 owner decision)** — Vendor-agnostic card-terminal core and adapter await owner acquirer choice. Online gateways are **DEFERRED**. Current card tenders are operator-confirmed records only.
 - **PLANNED (WHA-243 owner decision)** — Physical print bridge and printer job delivery; current receipt data is not physical printing.
@@ -29,4 +29,6 @@ Give multi-tenant service businesses one governed workspace, with Restaurant as 
 
 ## Module requirements
 
-[POS, orders, floor](modules/pos-orders-floor.md) · [KDS](modules/kds.md) · [catalog and menus](modules/catalog-menus-publications.md) · [checkout](modules/checkout.md) · [cash and close](modules/cash-day-close.md) · [inventory](modules/inventory.md) · [purchasing](modules/purchasing.md) · [customers, loyalty, insights](modules/customers-loyalty-insights.md) · [SOP](modules/sop.md) · [terminals and devices](modules/terminal-device-registry.md) · [platform console](modules/platform-console.md)
+Canonical PRDs: [POS and terminal](pos-terminal.md) · [KDS](kds.md) · [customers and loyalty](customers-loyalty.md) · [SOP](sop.md) · [menu import and OCR](menu-import-ocr.md) · [platform and entitlements](platform-entitlements.md) · [tax](tax.md)
+
+Supporting module notes: [catalog and menus](modules/catalog-menus-publications.md) · [checkout](modules/checkout.md) · [cash and close](modules/cash-day-close.md) · [inventory](modules/inventory.md) · [purchasing](modules/purchasing.md)

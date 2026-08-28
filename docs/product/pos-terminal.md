@@ -1,0 +1,43 @@
+# POS and terminal PRD
+
+This is the canonical product requirement for restaurant POS and terminal behavior at the current union. “Restaurant admin” means a tenant `User` acting through the app; “operator” means a restaurant staff profile using a trusted terminal; neither is a platform administrator. Platform administrators manage organizations and entitlements in a separate realm and do not become terminal operators. Evidence: [`prisma/schema.prisma`](../../prisma/schema.prisma), [`src/lib/restaurant/terminal-auth.ts`](../../src/lib/restaurant/terminal-auth.ts), [`tests/restaurant-m2-contract.test.ts`](../../tests/restaurant-m2-contract.test.ts) — `keeps operator credential modules and tables transitively unreachable from web auth`.
+
+## Problem
+
+Restaurants need a branch-bound register that can authenticate a staff operator, preserve an order through service and settlement, and tolerate intermittent connectivity without duplicating commands or trusting stale catalog data.
+
+## Users and roles
+
+- **Operator:** unlocks or switches a registered POS device with PIN/badge credentials and performs capability-gated order and money commands. Credentials cannot create a web session. Evidence: [`src/lib/restaurant/operator-credentials.ts`](../../src/lib/restaurant/operator-credentials.ts), [`src/app/api/restaurant/terminal/unlock/route.ts`](../../src/app/api/restaurant/terminal/unlock/route.ts), [`tests/restaurant-m2-terminal-threats.test.ts`](../../tests/restaurant-m2-terminal-threats.test.ts) — `rejects PIN and badge values in the NextAuth credentials provider`.
+- **Restaurant admin:** manages staff, branch assignments, devices, catalog, and permissions through tenant tRPC/app surfaces; it is not a platform-admin capability. Evidence: [`src/server/routers/restaurant-staff.ts`](../../src/server/routers/restaurant-staff.ts), [`src/server/routers/restaurant-devices.ts`](../../src/server/routers/restaurant-devices.ts).
+- **Platform admin:** controls the organization/module lifecycle in `/platform`; the platform session is not accepted as a terminal operator session. Evidence: [`src/app/platform/(console)/layout.tsx`](../../src/app/platform/%28console%29/layout.tsx), [`src/lib/platform/auth.ts`](../../src/lib/platform/auth.ts).
+
+## Current behaviour
+
+- A trusted, non-revoked POS device establishes a branch-bound terminal session, then unlocks or switches to an active operator who is eligible for that same branch. Every request revalidates device, session, organization, entitlement, and operator state. Evidence: [`src/lib/restaurant/terminal-session.ts`](../../src/lib/restaurant/terminal-session.ts), [`src/lib/restaurant/terminal-auth.ts`](../../src/lib/restaurant/terminal-auth.ts), [`src/lib/restaurant/terminal-session.test.ts`](../../src/lib/restaurant/terminal-session.test.ts) — `rejects an active operator from another branch`.
+- The lifecycle is open order → add/void items → hold/fire/remake/serve → bill/comp/tender/refund → close/cancel, with state guards and immutable item/pricing snapshots. Evidence: [`src/lib/restaurant/orders.ts`](../../src/lib/restaurant/orders.ts), [`src/lib/restaurant/order-state-machine.ts`](../../src/lib/restaurant/order-state-machine.ts), [`src/app/api/restaurant/orders`](../../src/app/api/restaurant/orders), [`tests/restaurant-m4-acceptance.test.ts`](../../tests/restaurant-m4-acceptance.test.ts) — `rejects closing a terminal order while an active item remains` and `keeps item snapshots after catalog, menu-name, and price edits`.
+- CASH, CARD, and OTHER tenders are recorded. Cash participates in drawer/day-close ledgers. CARD is operator-confirmed unless a configured adapter flow supplies provider events; raw cardholder data is rejected. Evidence: [`src/lib/restaurant/tenders.ts`](../../src/lib/restaurant/tenders.ts), [`src/lib/restaurant/payment-adapter.ts`](../../src/lib/restaurant/payment-adapter.ts), [`src/app/api/restaurant/checkout/tender/route.ts`](../../src/app/api/restaurant/checkout/tender/route.ts), [`src/lib/restaurant/payment-adapter.test.ts`](../../src/lib/restaurant/payment-adapter.test.ts) — `rejects a payload carrying cardholder data before it is written`.
+- Offline drafts persist per organization/branch/device in IndexedDB with an allowlisted effective-menu cache. Unlock, reconnect, browser-online, visibility, periodic, and manual events refresh the catalog. Evidence: [`src/lib/restaurant/pos-client-store.ts`](../../src/lib/restaurant/pos-client-store.ts), [`src/lib/restaurant/pos-client-store.test.ts`](../../src/lib/restaurant/pos-client-store.test.ts) — `stores the catalog on unlock and restores it after a reload` and `always refreshes on unlock, reconnect, online, visibility and manual`.
+- Offline replay is FIFO and limited to OPEN_ORDER, ADD_ITEM, and FIRE. Stable per-command keys reach server device-scoped idempotency records; conflicts require review, transient failures retain the key, session expiry pauses, and confirmed revocation purges device-bound work. Evidence: [`src/lib/restaurant/pos-command-queue.ts`](../../src/lib/restaurant/pos-command-queue.ts), [`src/lib/restaurant/pos-command-queue.test.ts`](../../src/lib/restaurant/pos-command-queue.test.ts) — `replays the same key after a reload and produces exactly one server result` and `purges device-bound work on confirmed revocation, reports the count, and submits nothing later`.
+
+## Data model
+
+`RestaurantStaffProfile`, `RestaurantOperatorCredential`, `RestaurantRegisteredDevice`, `RestaurantTerminalSession`, `RestaurantOrder`, item/event/outbox/ticket records, `RestaurantOrderIdempotencyKey`, bills/tenders/refunds, drawer sessions, and `RestaurantMoneyIdempotencyKey` hold server truth. Browser cache/queue state is deliberately not a Prisma model. Evidence: [`prisma/schema.prisma`](../../prisma/schema.prisma), [`src/lib/restaurant/pos-client-store.ts`](../../src/lib/restaurant/pos-client-store.ts).
+
+## API surface
+
+- Terminal trust: `/api/restaurant/terminal/{establish,unlock,switch,lock,heartbeat,co-authorize}`. Evidence: [`src/app/api/restaurant/terminal`](../../src/app/api/restaurant/terminal).
+- Order lifecycle: `/api/restaurant/orders/{effective-menu,open,add-item,void,hold,fire,remake,mark-served,move-table,merge-tables,close,cancel,detail,open-orders}`. Evidence: [`src/app/api/restaurant/orders`](../../src/app/api/restaurant/orders).
+- Settlement: `/api/restaurant/checkout/*` and `/api/restaurant/cash/*`. Evidence: [`src/app/api/restaurant/checkout`](../../src/app/api/restaurant/checkout), [`src/app/api/restaurant/cash`](../../src/app/api/restaurant/cash).
+
+## Edge cases and failure modes
+
+- Wrong-branch, suspended, archived, locked-out, revoked, stale, or differently entitled identities fail closed; lockout is durable. Evidence: [`tests/restaurant-m2-terminal-threats.test.ts`](../../tests/restaurant-m2-terminal-threats.test.ts) — `DB-revalidates held device/session tokens after mid-session revocation` and `locks after five failures, emits Retry-After, then accepts after that server interval`.
+- A stale catalog can flag unavailable/removed/repriced/closed-channel lines for human review; already accepted server lines are not repriced. Unknown cache schema or corrupt storage is unrecoverable rather than inherited. Evidence: [`src/lib/restaurant/pos-command-queue.test.ts`](../../src/lib/restaurant/pos-command-queue.test.ts) — `flags an 86d item, a removed item, a changed price and a closed channel`; [`src/lib/restaurant/pos-client-store.test.ts`](../../src/lib/restaurant/pos-client-store.test.ts) — `fails closed on an unknown schema version and on a corrupt record`.
+- Failed transactional commands roll back their idempotency key so a corrected retry is possible. Evidence: [`tests/restaurant-terminal-order-rollback.db.test.ts`](../../tests/restaurant-terminal-order-rollback.db.test.ts) — `rolls a mapped close refusal back, leaving the same key available for a corrected retry`.
+
+## Gaps
+
+- **NOT IMPLEMENTED:** offline void, hold, remake, serve, tender, refund, and close; only open/add/fire enter the offline queue. Evidence: [`src/lib/restaurant/pos-command-queue.ts`](../../src/lib/restaurant/pos-command-queue.ts).
+- **NOT IMPLEMENTED:** a general physical printer bridge. Receipt records are not proof of printing. Evidence: [`src/app/api/restaurant/checkout/receipt/route.ts`](../../src/app/api/restaurant/checkout/receipt/route.ts).
+- **PARTIAL:** card adapter seams and provider-event safety exist, but no repository evidence proves a production acquirer deployment. Evidence: [`src/lib/restaurant/payment-adapter.ts`](../../src/lib/restaurant/payment-adapter.ts).

@@ -7,4 +7,4 @@
 ## Acceptance and boundary
 
 - Published effective menus resolve by branch/date without crossing tenant ownership. Evidence: [`tests/restaurant-m3-acceptance.test.ts`](../../../tests/restaurant-m3-acceptance.test.ts), [`tests/restaurant-m3-governance.test.ts`](../../../tests/restaurant-m3-governance.test.ts).
-- **PLANNED** — OCR menu import from commits `45c53177ec4946f8625160a8d5a70438eab17e4f` and `8dce5caf2dfa4f8fc7f2ff42996e1a04299cf6c9` is separate, not integrated.
+- **IMPLEMENTED** — OCR-assisted upload, extraction, review, and draft catalog import are documented canonically in [menu import and OCR PRD](../menu-import-ocr.md).
