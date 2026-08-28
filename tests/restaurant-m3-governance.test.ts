@@ -155,6 +155,24 @@ const MENU_IMPORT_TABLES = [
   'restaurant_menu_import_lines',
 ] as const;
 
+// Promotions Lane A (WHA-288): the versioned checkout discount layer — the
+// promotion identity, its effective-dated rule versions and their target,
+// channel, branch and cap children, plus the immutable application snapshots and
+// the append-only redemption ledger that enforces the caps. Listed here under
+// the same WHA-51 complete allowlist contract as every set above: a new
+// restaurant table that is not listed, or a listed table that is not shipped,
+// fails the pin below.
+const PROMOTION_TABLES = [
+  'restaurant_promotions',
+  'restaurant_promotion_versions',
+  'restaurant_promotion_targets',
+  'restaurant_promotion_channels',
+  'restaurant_promotion_branches',
+  'restaurant_promotion_caps',
+  'restaurant_promotion_applications',
+  'restaurant_promotion_redemptions',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -483,6 +501,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M8_TABLES,
         ...TAX_CORE_TABLES,
         ...MENU_IMPORT_TABLES,
+        ...PROMOTION_TABLES,
       ].sort()
     );
 
