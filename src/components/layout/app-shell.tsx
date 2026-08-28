@@ -16,6 +16,7 @@ import { useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { toast } from 'sonner';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
 // chunk; only fetched once the user first opens the assistant.
@@ -83,22 +84,22 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
 
   return (
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
-      {/* Mobile overlay */}
-      {mobileMenuOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
-            onClick={() => setMobileMenuOpen(false)}
-          />
-          <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
+      <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          aria-label="Main navigation"
+          className="w-[min(20rem,88vw)] gap-0 border-0 bg-transparent p-0 shadow-none lg:hidden"
+        >
+          <div className="relative h-full w-full">
             <Sidebar
               brand={brand}
               onNavigate={() => setMobileMenuOpen(false)}
               collapsible={false}
             />
           </div>
-        </>
-      )}
+        </SheetContent>
+      </Sheet>
 
       <div className="studio-shell flex h-full min-w-0 flex-1 flex-col overflow-hidden">
         {session?.user.isSupportSession ? (
