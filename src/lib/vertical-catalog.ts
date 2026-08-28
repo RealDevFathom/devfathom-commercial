@@ -102,6 +102,18 @@ export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): s
   return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'LEADERSHIP';
 }
 
+/**
+ * The department a non-administrator provisioned from an identity provider
+ * (SSO just-in-time, SCIM) is filed under when the directory asserts no
+ * department of its own. The sibling of `adminDepartmentKeyForVertical`: an
+ * agency's directory user defaults to Engineering, as the pre-WHA-278 hardcoded
+ * pair asserted, while a restaurant's belongs front of house rather than in the
+ * kitchen. Always a key present in `departmentsForVertical`.
+ */
+export function memberDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'ENGINEERING';
+}
+
 // ---------------------------------------------------------------------------
 // §6 — Commercial restaurant module map (ten modules)
 // ---------------------------------------------------------------------------

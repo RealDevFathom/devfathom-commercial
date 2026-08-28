@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import pg from 'pg';
 
+import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
+
 const { Client } = pg;
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -99,6 +101,25 @@ async function main() {
     ) VALUES ($1, $2, 'Isolation B', 'Isolation B', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [organizationB, `isolation-${suffix}`]
     );
+    // WHA-290: `users.department` is a composite foreign key onto
+    // `organization_departments`, so this fixture organization needs its own
+    // catalog before it can hold the tenant B user below (and before the
+    // later 42501 probe inserts an ENGINEERING employee into it). Organization
+    // B is created without a vertical, so it takes the AGENCY default.
+    for (const department of defaultDepartmentRowsForVertical('AGENCY')) {
+      await client.query(
+        `INSERT INTO "organization_departments" (
+        "id", "organizationId", "key", "name", "sortOrder", "createdAt", "updatedAt"
+      ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [
+          `department_${suffix}_${department.key.toLowerCase()}`,
+          organizationB,
+          department.key,
+          department.name,
+          department.sortOrder,
+        ]
+      );
+    }
     await client.query(
       `INSERT INTO "users" (
       "id", "organizationId", "name", "email", "role", "department", "title",
