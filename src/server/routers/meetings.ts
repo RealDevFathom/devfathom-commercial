@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import jwt from 'jsonwebtoken';
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
 import { assertMeetingManage, assertMeetingAccess } from '../authz';
@@ -572,79 +571,9 @@ export const meetingsRouter = router({
     }),
 
   /**
-   * Mint a short-lived JaaS (8x8-hosted Jitsi) JWT so the caller can join this
-   * meeting's embedded video room.
-   *
-   * SECURITY: the RSA private key (JAAS_PRIVATE_KEY) never leaves the server —
-   * signing happens only here. The token is scoped to `meeting-${id}` (not '*'),
-   * lives 2 hours, and only the meeting creator or an admin is granted the
-   * moderator flag. Access is gated identically to the rest of this router via
-   * assertMeetingAccess (creator, attendee, or admin only).
-   */
-  getCallToken: protectedProcedure
-    .input(z.object({ meetingId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertMeetingAccess(ctx, input.meetingId);
-
-      const appId = process.env.NEXT_PUBLIC_JAAS_APP_ID;
-      const kid = process.env.JAAS_KID;
-      // Tolerate PEMs stored single-line with escaped newlines (Vercel dashboard,
-      // .env) as well as real multiline values.
-      const privateKey = process.env.JAAS_PRIVATE_KEY?.replace(/\\n/g, '\n');
-      if (!appId || !kid || !privateKey) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Video calling is not configured.',
-        });
-      }
-
-      const meeting = await ctx.db.meeting.findUnique({
-        where: { id: input.meetingId },
-        select: { createdById: true },
-      });
-      if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
-
-      const { id, name, email, image, role } = ctx.session.user;
-      const isModerator = role === 'ADMIN' || meeting.createdById === id;
-
-      const iat = Math.floor(Date.now() / 1000);
-      const token = jwt.sign(
-        {
-          aud: 'jitsi',
-          iss: 'chat',
-          sub: appId,
-          room: `meeting-${input.meetingId}`,
-          iat,
-          nbf: iat - 5,
-          exp: iat + 7200, // 2-hour token
-          context: {
-            user: {
-              id,
-              name,
-              email,
-              avatar: image ?? undefined,
-              moderator: isModerator,
-            },
-            // MVP: premium features stay off until the JaaS plan supports them.
-            features: {
-              recording: false,
-              transcription: false,
-              livestreaming: false,
-              'outbound-call': false,
-            },
-          },
-        },
-        privateKey,
-        { algorithm: 'RS256', header: { alg: 'RS256', kid, typ: 'JWT' } }
-      );
-
-      return { jwt: token, roomName: `${appId}/meeting-${input.meetingId}` };
-    }),
-
-  /**
    * Record that the current user joined the embedded video call. Upserts the
    * per-occurrence MeetingAttendanceLog row (idempotent per occurrence). Gated
-   * identically to getCallToken via assertMeetingAccess.
+   * identically to the rest of this router via assertMeetingAccess.
    */
   logJoin: protectedProcedure
     .input(z.object({ meetingId: z.string() }))
@@ -720,7 +649,7 @@ export const meetingsRouter = router({
    * Stamp leftAt on the user's open attendance record for the current
    * occurrence when they leave the call. updateMany so leaving without a
    * recorded join (or after it's already stamped) is a harmless no-op. Gated
-   * identically to getCallToken.
+   * identically to the rest of this router via assertMeetingAccess.
    */
   logLeave: protectedProcedure
     .input(z.object({ meetingId: z.string() }))
