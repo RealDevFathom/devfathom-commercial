@@ -69,9 +69,11 @@ function mapExecutionError(err: unknown): never {
     const code =
       err.reason === 'NOT_FOUND'
         ? 'NOT_FOUND'
-        : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
-          ? 'CONFLICT'
-          : 'BAD_REQUEST';
+        : err.reason === 'NOT_OWNER'
+          ? 'FORBIDDEN'
+          : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
   }
   if (err instanceof SopVerificationError) {
