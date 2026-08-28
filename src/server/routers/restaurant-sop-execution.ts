@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
-import { router, capabilityProcedure } from '../trpc';
+import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
   SopExecutionError,
@@ -23,6 +23,9 @@ import {
   type EntitlementSnapshot,
   type SopDepthCapability,
 } from '@/lib/module-catalog';
+import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
+import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { can, subjectFromSession } from '@/lib/abac';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -47,6 +50,7 @@ import {
 
 const completeProcedure = capabilityProcedure('sop:complete');
 const verifyProcedure = capabilityProcedure('sop:verify');
+const reportProcedure = capabilityProcedure('reports:operational');
 
 /**
  * Fail closed on an SOP depth the caller's organization is not entitled to.
@@ -95,6 +99,48 @@ function mapExecutionError(err: unknown): never {
 const OCCURRENCE_ID = z.string().min(1);
 const OPTIONAL_ACTOR = z.string().min(1).nullable().optional();
 const OPTIONAL_REASON = z.string().max(2_000).nullable().optional();
+const REPORT_DATE = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    try {
+      businessDateToUtcDate(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Invalid calendar date.');
+const DEPARTMENT = z.enum([
+  'LEADERSHIP',
+  'ENGINEERING',
+  'PRODUCT',
+  'QUALITY',
+  'MARKETING',
+  'DESIGN',
+]);
+
+async function requireReportBranch(ctx: TRPCContext, branchId: string) {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const [staff, assignment] = await Promise.all([
+    ctx.db.restaurantStaffProfile.findFirst({
+      where: { userId: user.id, status: 'ACTIVE', primaryBranchId: branchId },
+      select: { id: true },
+    }),
+    ctx.db.restaurantBranchAssignment.findFirst({
+      where: { userId: user.id, branchId },
+      select: { id: true },
+    }),
+  ]);
+  if (staff || assignment) return;
+  const allowed = await can(subjectFromSession(user), 'restaurant:configure', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+  });
+  if (!allowed) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not authorized for this branch.' });
+  }
+}
 
 // ── Read: branch board ────────────────────────────────────────────────────────
 
@@ -125,6 +171,71 @@ const BoardFilterSchema = z
   .strict();
 
 export const restaurantSopExecutionRouter = router({
+  report: reportProcedure
+    .input(
+      z
+        .object({
+          branchId: z.string().min(1),
+          from: REPORT_DATE,
+          to: REPORT_DATE,
+          department: DEPARTMENT.optional(),
+        })
+        .strict()
+        .refine((input) => input.from <= input.to, {
+          message: 'From date must be on or before to date.',
+          path: ['from'],
+        })
+    )
+    .query(async ({ ctx, input }) => {
+      await requireReportBranch(ctx, input.branchId);
+      const departmentScope = input.department
+        ? {
+            OR: [
+              { assignedStaff: { user: { department: input.department } } },
+              { claimedBy: { user: { department: input.department } } },
+              { steps: { some: { completedBy: { user: { department: input.department } } } } },
+            ],
+          }
+        : {};
+      const rows = await ctx.db.restaurantSopOccurrence.findMany({
+        where: {
+          branchId: input.branchId,
+          businessDate: {
+            gte: businessDateToUtcDate(input.from),
+            lte: businessDateToUtcDate(input.to),
+          },
+          ...departmentScope,
+        },
+        orderBy: [{ businessDate: 'asc' }, { dueAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          status: true,
+          dueAt: true,
+          windowEndsAt: true,
+          submittedAt: true,
+          resolvedAt: true,
+          assignedStaff: {
+            select: { id: true, displayName: true, user: { select: { department: true } } },
+          },
+          claimedBy: {
+            select: { id: true, displayName: true, user: { select: { department: true } } },
+          },
+          steps: {
+            select: {
+              completed: true,
+              completedBy: {
+                select: { id: true, displayName: true, user: { select: { department: true } } },
+              },
+            },
+          },
+          evidence: { select: { id: true } },
+          verifications: { select: { action: true } },
+          escalationEvents: { select: { kind: true } },
+        },
+      });
+      return summarizeSopReport(rows);
+    }),
+
   // ── Board: list occurrences ───────────────────────────────────────────────
 
   listOccurrences: completeProcedure.input(BoardFilterSchema).query(async ({ ctx, input }) => {

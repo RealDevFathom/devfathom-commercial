@@ -67,6 +67,8 @@ function makeDb() {
     restaurantCoAuthorization: model(),
     restaurantNotification: model(),
     restaurantNotificationDelivery: model(),
+    restaurantStaffProfile: model(),
+    restaurantBranchAssignment: model(),
   };
   db.$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   return db as Record<string, Delegate> & { $transaction: ReturnType<typeof vi.fn> };
@@ -196,6 +198,65 @@ describe('listOccurrences', () => {
     const result = await caller().listOccurrences({ branchId: 'branch_1' });
     expect(result.items).toHaveLength(50);
     expect(result.nextCursor).toBe('o49');
+  });
+});
+
+describe('SOP reporting', () => {
+  it('composes date, branch and department filters and reconciles the fixture', async () => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'staff_1' });
+    db.restaurantSopOccurrence.findMany.mockResolvedValue([
+      {
+        id: 'verified',
+        status: 'VERIFIED',
+        dueAt: new Date('2026-08-20T09:00:00Z'),
+        windowEndsAt: new Date('2026-08-20T10:00:00Z'),
+        submittedAt: new Date('2026-08-20T09:30:00Z'),
+        resolvedAt: new Date('2026-08-20T09:45:00Z'),
+        assignedStaff: {
+          id: 'staff_1',
+          displayName: 'Alex',
+          user: { department: 'QUALITY' },
+        },
+        claimedBy: null,
+        steps: [],
+        evidence: [{ id: 'proof' }],
+        verifications: [{ action: 'VERIFY' }],
+        escalationEvents: [],
+      },
+    ]);
+
+    const result = await caller().report({
+      branchId: 'branch_1',
+      from: '2026-08-20',
+      to: '2026-08-20',
+      department: 'QUALITY',
+    });
+
+    expect(result).toMatchObject({ total: 1, onTime: 1, verified: 1, performanceScore: 100 });
+    expect(db.restaurantSopOccurrence.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ branchId: 'branch_1', OR: expect.any(Array) }),
+      })
+    );
+  });
+
+  it('denies a report-capable user without branch proof', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(
+      caller().report({ branchId: 'other_branch', from: '2026-08-20', to: '2026-08-20' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantSopOccurrence.findMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects inverted ranges and unknown report input', async () => {
+    await expect(
+      caller().report({
+        branchId: 'branch_1',
+        from: '2026-08-21',
+        to: '2026-08-20',
+        extra: true,
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });
 
