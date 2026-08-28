@@ -5,12 +5,24 @@ import { PLATFORM_MODULES } from '../../prisma/production-bootstrap';
 import {
   PROCEDURE_MODULES,
   ROUTE_MODULES,
+  SOP_DEPTH_REQUIREMENTS,
+  evaluateEntitlementRequirement,
+  evaluateSopDepth,
+  hasSopDepth,
   moduleForApiScope,
   moduleForPath,
   moduleForProcedure,
+  sopDepthDenialMessage,
   verticalForModuleKey,
+  type EntitlementSnapshot,
+  type SopDepthCapability,
 } from './module-catalog';
-import { RESTAURANT_MODULES } from './vertical-catalog';
+import {
+  RESTAURANT_LIMIT_KEY_NAMES,
+  RESTAURANT_MODULES,
+  packageByKey,
+  RESTAURANT_PACKAGES,
+} from './vertical-catalog';
 
 describe('module catalog routing', () => {
   it.each([
@@ -177,4 +189,222 @@ describe('module vertical ownership', () => {
       expect(verticalForModuleKey(key)).toBe('AGENCY');
     }
   );
+});
+
+// ---------------------------------------------------------------------------
+// WHA-264 — SOP depth entitlement gating
+// ---------------------------------------------------------------------------
+
+/**
+ * Build an entitlement snapshot the way `resolveOrganizationEntitlements` would
+ * for an organization holding exactly one commercial package. The fixture reads
+ * the catalog rather than restating module keys or limit values, so a repricing
+ * moves these expectations through the catalog — which is the whole point of
+ * gating on modules and limits instead of on a package key.
+ */
+function entitlementsForPackage(packageKey: string): EntitlementSnapshot {
+  const pkg = packageByKey(packageKey);
+  if (!pkg) throw new Error(`Unknown package ${packageKey}`);
+  return { enabledModules: [...pkg.moduleKeys], limits: { ...pkg.defaultLimits } };
+}
+
+const ALL_SOP_DEPTHS = Object.keys(SOP_DEPTH_REQUIREMENTS) as SopDepthCapability[];
+
+describe('entitlement requirement evaluation', () => {
+  const snapshot: EntitlementSnapshot = {
+    enabledModules: ['restaurant-sop'],
+    limits: { 'sop.evidenceRetentionDays': 90 },
+  };
+
+  it('allows a requirement whose modules and limits are all satisfied', () => {
+    expect(
+      evaluateEntitlementRequirement(snapshot, {
+        modules: ['restaurant-sop'],
+        limits: [{ key: 'sop.evidenceRetentionDays', atLeast: 90 }],
+      })
+    ).toEqual({ allowed: true, missingModules: [], unmetLimits: [] });
+  });
+
+  it('denies and reports every missing module', () => {
+    const result = evaluateEntitlementRequirement(snapshot, {
+      modules: ['restaurant-sop', 'restaurant-insights', 'restaurant-integrations'],
+      limits: [],
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.missingModules).toEqual(['restaurant-insights', 'restaurant-integrations']);
+  });
+
+  it('fails closed on a limit key the organization was never granted', () => {
+    const result = evaluateEntitlementRequirement(snapshot, {
+      modules: [],
+      limits: [{ key: 'restaurantInsights.retentionMonths', atLeast: 1 }],
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.unmetLimits).toEqual([
+      { key: 'restaurantInsights.retentionMonths', required: 1, granted: 0 },
+    ]);
+  });
+
+  it('treats the threshold as inclusive', () => {
+    const at = evaluateEntitlementRequirement(snapshot, {
+      modules: [],
+      limits: [{ key: 'sop.evidenceRetentionDays', atLeast: 90 }],
+    });
+    const below = evaluateEntitlementRequirement(snapshot, {
+      modules: [],
+      limits: [{ key: 'sop.evidenceRetentionDays', atLeast: 91 }],
+    });
+    expect(at.allowed).toBe(true);
+    expect(below.allowed).toBe(false);
+  });
+});
+
+describe('SOP depth requirements are catalog-only', () => {
+  const catalogModuleKeys = RESTAURANT_MODULES.map((module) => module.key);
+
+  it.each(ALL_SOP_DEPTHS)('%s requires only real catalog module keys', (capability) => {
+    for (const key of SOP_DEPTH_REQUIREMENTS[capability].modules) {
+      expect(catalogModuleKeys).toContain(key);
+    }
+  });
+
+  it.each(ALL_SOP_DEPTHS)('%s requires only real catalog limit keys', (capability) => {
+    for (const limit of SOP_DEPTH_REQUIREMENTS[capability].limits) {
+      expect(RESTAURANT_LIMIT_KEY_NAMES).toContain(limit.key);
+    }
+  });
+
+  it('never names a commercial package', () => {
+    const serialized = JSON.stringify(SOP_DEPTH_REQUIREMENTS);
+    for (const pkg of RESTAURANT_PACKAGES) {
+      expect(serialized).not.toContain(pkg.key);
+      expect(serialized).not.toContain(pkg.name);
+    }
+  });
+
+  it('gates every depth on the SOP module itself', () => {
+    for (const capability of ALL_SOP_DEPTHS) {
+      expect(SOP_DEPTH_REQUIREMENTS[capability].modules).toContain('restaurant-sop');
+    }
+  });
+});
+
+describe('SOP depth allow/deny across adjacent tiers', () => {
+  // The commercial intent, asserted end-to-end through the catalog: entry-level
+  // licensing runs SOPs; the mid tier adds the proof/verification/escalation
+  // family; the top tier adds cross-branch reporting and retention/export.
+  const MATRIX: Array<[string, Record<SopDepthCapability, boolean>]> = [
+    [
+      'restaurant-essentials',
+      {
+        'sop.execution': true,
+        'sop.evidence': false,
+        'sop.verification': false,
+        'sop.waiver': false,
+        'sop.escalation': false,
+        'sop.crossBranchReporting': false,
+        'sop.retentionExport': false,
+      },
+    ],
+    [
+      'restaurant-operations',
+      {
+        'sop.execution': true,
+        'sop.evidence': true,
+        'sop.verification': true,
+        'sop.waiver': true,
+        'sop.escalation': true,
+        'sop.crossBranchReporting': false,
+        'sop.retentionExport': false,
+      },
+    ],
+    [
+      'restaurant-enterprise',
+      {
+        'sop.execution': true,
+        'sop.evidence': true,
+        'sop.verification': true,
+        'sop.waiver': true,
+        'sop.escalation': true,
+        'sop.crossBranchReporting': true,
+        'sop.retentionExport': true,
+      },
+    ],
+  ];
+
+  it.each(MATRIX)('%s resolves the expected SOP depth', (packageKey, expected) => {
+    const entitlements = entitlementsForPackage(packageKey);
+    const actual = Object.fromEntries(
+      ALL_SOP_DEPTHS.map((capability) => [capability, hasSopDepth(entitlements, capability)])
+    );
+    expect(actual).toEqual(expected);
+  });
+
+  it('is monotonic — a higher tier never loses a depth the tier below has', () => {
+    const [entry, mid, top] = MATRIX.map(([key]) => entitlementsForPackage(key));
+    for (const capability of ALL_SOP_DEPTHS) {
+      if (hasSopDepth(entry, capability)) expect(hasSopDepth(mid, capability)).toBe(true);
+      if (hasSopDepth(mid, capability)) expect(hasSopDepth(top, capability)).toBe(true);
+    }
+  });
+
+  it('follows the limit catalog, not the package key: raising retention grants the proof family', () => {
+    const entry = entitlementsForPackage('restaurant-essentials');
+    expect(hasSopDepth(entry, 'sop.verification')).toBe(false);
+
+    // A contract/override that lifts only the evidence-retention limit — the
+    // same package key, a deeper SOP surface.
+    const withAuditRetention: EntitlementSnapshot = {
+      enabledModules: entry.enabledModules,
+      limits: { ...entry.limits, 'sop.evidenceRetentionDays': 365 },
+    };
+    expect(hasSopDepth(withAuditRetention, 'sop.verification')).toBe(true);
+    expect(hasSopDepth(withAuditRetention, 'sop.evidence')).toBe(true);
+    expect(hasSopDepth(withAuditRetention, 'sop.waiver')).toBe(true);
+    // …but not the depths that need modules it still does not hold.
+    expect(hasSopDepth(withAuditRetention, 'sop.escalation')).toBe(false);
+    expect(hasSopDepth(withAuditRetention, 'sop.crossBranchReporting')).toBe(false);
+  });
+
+  it('denies every depth when the SOP module itself is disabled', () => {
+    const top = entitlementsForPackage('restaurant-enterprise');
+    const withoutSop: EntitlementSnapshot = {
+      enabledModules: top.enabledModules.filter((key) => key !== 'restaurant-sop'),
+      limits: top.limits,
+    };
+    for (const capability of ALL_SOP_DEPTHS) {
+      expect(hasSopDepth(withoutSop, capability)).toBe(false);
+    }
+  });
+
+  it('denies every depth for an organization holding no restaurant modules', () => {
+    const none: EntitlementSnapshot = { enabledModules: [], limits: {} };
+    for (const capability of ALL_SOP_DEPTHS) {
+      expect(hasSopDepth(none, capability)).toBe(false);
+    }
+  });
+});
+
+describe('SOP depth denial messages', () => {
+  it('names the missing catalog keys and never a package', () => {
+    const entry = entitlementsForPackage('restaurant-essentials');
+    const result = evaluateSopDepth(entry, 'sop.escalation');
+    const message = sopDepthDenialMessage('sop.escalation', result);
+
+    expect(message).toContain('restaurant-integrations');
+    expect(message).toContain('integrations.connections.max');
+    for (const pkg of RESTAURANT_PACKAGES) {
+      expect(message).not.toContain(pkg.key);
+      expect(message).not.toContain(pkg.name);
+    }
+  });
+
+  it('reports the granted value alongside the requirement', () => {
+    const entry = entitlementsForPackage('restaurant-essentials');
+    const message = sopDepthDenialMessage(
+      'sop.verification',
+      evaluateSopDepth(entry, 'sop.verification')
+    );
+    expect(message).toMatch(/sop\.evidenceRetentionDays of at least 365 \(granted 90\)/);
+  });
 });

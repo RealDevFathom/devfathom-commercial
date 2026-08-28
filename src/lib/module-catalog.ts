@@ -200,3 +200,215 @@ export function moduleForPath(pathname: string, vertical?: OrganizationVertical)
   if (moduleKey === 'dashboard' && vertical === 'RESTAURANT') return 'restaurant-core';
   return moduleKey;
 }
+
+// ---------------------------------------------------------------------------
+// WHA-264 — entitlement requirements (module + limit catalog driven)
+// ---------------------------------------------------------------------------
+
+/**
+ * A declarative entitlement requirement, expressed ONLY in terms of the
+ * server-owned catalogs: commercial module keys (`vertical-catalog`
+ * `RESTAURANT_MODULES`) and limit keys (`RESTAURANT_LIMIT_KEYS`).
+ *
+ * A requirement never names a commercial package. Packages are one of several
+ * ways an organization acquires modules and limits (a contract or an override
+ * grants the same shapes, see `resolveOrganizationEntitlements`), so gating on a
+ * package key would deny an organization that legitimately holds the underlying
+ * entitlement and would break the moment the package matrix is repriced.
+ */
+export type EntitlementRequirement = {
+  /** Every listed module key must be ENABLED on the organization. */
+  modules: readonly string[];
+  /**
+   * Every listed limit key must be granted with at least `atLeast`. A limit key
+   * the organization was never granted counts as `0` — absence is denial, so a
+   * requirement fails closed.
+   */
+  limits: ReadonlyArray<{ key: string; atLeast: number }>;
+};
+
+/** The subset of `EntitlementView` a requirement is evaluated against. */
+export type EntitlementSnapshot = Pick<EntitlementView, 'enabledModules' | 'limits'>;
+
+export type EntitlementRequirementResult = {
+  allowed: boolean;
+  /** Required module keys the organization does not have enabled. */
+  missingModules: string[];
+  /** Required limit keys granted below the requirement (absent counts as 0). */
+  unmetLimits: Array<{ key: string; required: number; granted: number }>;
+};
+
+/**
+ * Evaluate a requirement against an organization's resolved entitlements.
+ * Pure and fail-closed: an unknown module key or an ungranted limit key denies.
+ */
+export function evaluateEntitlementRequirement(
+  entitlements: EntitlementSnapshot,
+  requirement: EntitlementRequirement
+): EntitlementRequirementResult {
+  const missingModules = requirement.modules.filter(
+    (key) => !entitlements.enabledModules.includes(key)
+  );
+  const unmetLimits = requirement.limits
+    .map((limit) => ({
+      key: limit.key,
+      required: limit.atLeast,
+      granted: entitlements.limits[limit.key] ?? 0,
+    }))
+    .filter((limit) => limit.granted < limit.required);
+
+  return {
+    allowed: missingModules.length === 0 && unmetLimits.length === 0,
+    missingModules,
+    unmetLimits,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// WHA-264 — SOP depth catalog
+// ---------------------------------------------------------------------------
+
+/**
+ * The SOP feature depths the product sells. Every restaurant package includes
+ * the `restaurant-sop` module, so module presence alone only separates "SOP at
+ * all" from "no SOP" — the depth *within* the module is expressed by the limit
+ * catalog, which is what the requirements below read.
+ */
+export type SopDepthCapability =
+  | 'sop.execution'
+  | 'sop.evidence'
+  | 'sop.verification'
+  | 'sop.waiver'
+  | 'sop.escalation'
+  | 'sop.crossBranchReporting'
+  | 'sop.retentionExport';
+
+/**
+ * Evidence retention long enough to survive a full audit cycle. Manager
+ * verification, rejection, co-authorized waiver and the sha256 proof trail are
+ * only meaningful when the decision and the artifact it was made against are
+ * still retained when an auditor arrives, so the whole proof family gates on
+ * this one catalog limit rather than on a tier name.
+ */
+export const AUDIT_EVIDENCE_RETENTION_DAYS = 365;
+
+/**
+ * Multi-year statutory retention. Exporting an evidence archive and reporting
+ * over historical periods are only offered where the contracted retention
+ * window actually spans multiple years.
+ */
+export const STATUTORY_EVIDENCE_RETENTION_DAYS = 1_095;
+
+/** Cross-BRANCH reporting is meaningless below two licensed branches. */
+export const MULTI_BRANCH_MIN_LOCATIONS = 2;
+
+/** Analytics retention that spans more than the operating year. */
+export const MULTI_YEAR_ANALYTICS_RETENTION_MONTHS = 36;
+
+/** At least one licensed external connection for escalation fan-out. */
+export const MIN_INTEGRATION_CONNECTIONS = 1;
+
+/**
+ * The SOP depth → catalog requirement table. This table is the ONLY place that
+ * decides how deep an organization's SOP surface goes; every consumer asks it
+ * rather than branching on a package, a plan name or an organization id.
+ */
+export const SOP_DEPTH_REQUIREMENTS: Readonly<Record<SopDepthCapability, EntitlementRequirement>> =
+  {
+    /** Run an occurrence: start, complete steps, submit, read the branch board. */
+    'sop.execution': {
+      modules: ['restaurant-sop'],
+      limits: [],
+    },
+    /** Attach sha256-addressed proof to an occurrence or one of its steps. */
+    'sop.evidence': {
+      modules: ['restaurant-sop'],
+      limits: [{ key: 'sop.evidenceRetentionDays', atLeast: AUDIT_EVIDENCE_RETENTION_DAYS }],
+    },
+    /** Manager verify / reject of a submitted occurrence. */
+    'sop.verification': {
+      modules: ['restaurant-sop'],
+      limits: [{ key: 'sop.evidenceRetentionDays', atLeast: AUDIT_EVIDENCE_RETENTION_DAYS }],
+    },
+    /** Co-authorized waiver — a second manager excuses an occurrence. */
+    'sop.waiver': {
+      modules: ['restaurant-sop'],
+      limits: [{ key: 'sop.evidenceRetentionDays', atLeast: AUDIT_EVIDENCE_RETENTION_DAYS }],
+    },
+    /**
+     * Escalation chains. Fan-out is delivered over the organization's licensed
+     * external connections, so escalation gates on the Integrations module and on
+     * having at least one connection in the limit catalog.
+     */
+    'sop.escalation': {
+      modules: ['restaurant-sop', 'restaurant-integrations'],
+      limits: [{ key: 'integrations.connections.max', atLeast: MIN_INTEGRATION_CONNECTIONS }],
+    },
+    /** Compliance reporting/analytics rolled up across branches. */
+    'sop.crossBranchReporting': {
+      modules: ['restaurant-sop', 'restaurant-insights'],
+      limits: [
+        { key: 'restaurant.locations.max', atLeast: MULTI_BRANCH_MIN_LOCATIONS },
+        {
+          key: 'restaurantInsights.retentionMonths',
+          atLeast: MULTI_YEAR_ANALYTICS_RETENTION_MONTHS,
+        },
+      ],
+    },
+    /** Long-horizon retention and evidence-archive export. */
+    'sop.retentionExport': {
+      modules: ['restaurant-sop', 'restaurant-insights'],
+      limits: [
+        { key: 'sop.evidenceRetentionDays', atLeast: STATUTORY_EVIDENCE_RETENTION_DAYS },
+        {
+          key: 'restaurantInsights.retentionMonths',
+          atLeast: MULTI_YEAR_ANALYTICS_RETENTION_MONTHS,
+        },
+      ],
+    },
+  };
+
+/** Human label used in denial messages; never a package or plan name. */
+const SOP_DEPTH_LABELS: Readonly<Record<SopDepthCapability, string>> = {
+  'sop.execution': 'SOP execution',
+  'sop.evidence': 'SOP evidence capture',
+  'sop.verification': 'SOP manager verification',
+  'sop.waiver': 'SOP co-authorized waiver',
+  'sop.escalation': 'SOP escalation',
+  'sop.crossBranchReporting': 'cross-branch SOP reporting',
+  'sop.retentionExport': 'SOP retention and export',
+};
+
+export function evaluateSopDepth(
+  entitlements: EntitlementSnapshot,
+  capability: SopDepthCapability
+): EntitlementRequirementResult {
+  return evaluateEntitlementRequirement(entitlements, SOP_DEPTH_REQUIREMENTS[capability]);
+}
+
+export function hasSopDepth(
+  entitlements: EntitlementSnapshot,
+  capability: SopDepthCapability
+): boolean {
+  return evaluateSopDepth(entitlements, capability).allowed;
+}
+
+/**
+ * Denial message for a failed SOP depth check. Reports the catalog keys the
+ * organization is short of — no package name, and nothing about any other
+ * tenant.
+ */
+export function sopDepthDenialMessage(
+  capability: SopDepthCapability,
+  result: EntitlementRequirementResult
+): string {
+  const reasons: string[] = [];
+  if (result.missingModules.length > 0) {
+    reasons.push(`requires the ${result.missingModules.join(', ')} module(s)`);
+  }
+  for (const limit of result.unmetLimits) {
+    reasons.push(`requires ${limit.key} of at least ${limit.required} (granted ${limit.granted})`);
+  }
+  const detail = reasons.length > 0 ? `: ${reasons.join('; ')}` : '';
+  return `${SOP_DEPTH_LABELS[capability]} is not included in this organization's entitlements${detail}.`;
+}
