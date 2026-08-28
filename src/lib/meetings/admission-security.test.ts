@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   participantByToken: vi.fn(),
   canAccessMeeting: vi.fn(),
   toJwt: vi.fn(() => Promise.resolve('signed-livekit-token')),
+  grants: [] as unknown[],
+  organizationById: vi.fn(),
+  organizationByHost: vi.fn(),
+  classifyHost: vi.fn(),
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -26,9 +30,18 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
     }),
 }));
 vi.mock('@/lib/authz', () => ({ canAccessMeeting: mocks.canAccessMeeting }));
+vi.mock('@/lib/tenancy/host', () => ({
+  resolveOrganizationById: mocks.organizationById,
+  resolveExplicitOrganizationByHost: mocks.organizationByHost,
+  isTenantLifecycleAccessible: (status: string) =>
+    ['ONBOARDING', 'ACTIVE', 'GRACE'].includes(status),
+}));
+vi.mock('@/lib/tenancy/host-routing', () => ({ classifyHost: mocks.classifyHost }));
 vi.mock('livekit-server-sdk', () => ({
   AccessToken: class {
-    addGrant() {}
+    addGrant(grant: unknown) {
+      mocks.grants.push(grant);
+    }
     toJwt = mocks.toJwt;
   },
 }));
@@ -37,6 +50,7 @@ import { admitToMeeting, hashGuestToken } from './admission';
 
 const publicId = '7e3c19c6-79a4-4db1-a436-68efbf00f309';
 const now = new Date('2026-08-27T10:00:00Z');
+const sharedHost = 'www.devfathom.com';
 const occurrence = {
   id: 'occ_1',
   meetingId: 'meeting_1',
@@ -51,9 +65,21 @@ const occurrence = {
   meeting: { title: 'Private planning', createdById: 'host_1' },
 };
 
+const validGuest = {
+  id: 'guest_1',
+  occurrenceId: 'occ_1',
+  displayName: 'Guest',
+  roleOverride: null,
+  guestTokenExpiresAt: new Date('2026-08-27T10:30:00Z'),
+  guestTokenRevokedAt: null,
+  removedAt: null,
+  lobbyStatus: 'ADMITTED',
+};
+
 describe('meeting admission isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.grants.length = 0;
     vi.stubEnv('NEXT_PUBLIC_LIVEKIT_URL', 'wss://meet.example.test');
     vi.stubEnv('LIVEKIT_API_KEY', 'test-key');
     vi.stubEnv('LIVEKIT_API_SECRET', 'test-secret');
@@ -62,24 +88,22 @@ describe('meeting admission isolation', () => {
     mocks.participantByUser.mockResolvedValue(null);
     mocks.participantByToken.mockResolvedValue(null);
     mocks.canAccessMeeting.mockResolvedValue(false);
+    mocks.organizationById.mockResolvedValue({ id: 'org_a', status: 'ACTIVE' });
+    mocks.classifyHost.mockReturnValue({ kind: 'shared', host: sharedHost });
+    mocks.organizationByHost.mockResolvedValue(null);
   });
 
   it('admits a valid occurrence-scoped guest without exposing the room name', async () => {
-    mocks.participantByToken.mockResolvedValue({
-      id: 'guest_1',
-      occurrenceId: 'occ_1',
-      displayName: 'Guest',
-      roleOverride: 'OBSERVER',
-      guestTokenExpiresAt: new Date('2026-08-27T10:30:00Z'),
-      guestTokenRevokedAt: null,
-      removedAt: null,
-      lobbyStatus: 'ADMITTED',
+    mocks.participantByToken.mockResolvedValue({ ...validGuest, roleOverride: 'OBSERVER' });
+    const result = await admitToMeeting({
+      publicId,
+      host: sharedHost,
+      guestToken: 'guest-secret',
+      now,
     });
-    const result = await admitToMeeting({ publicId, guestToken: 'guest-secret', now });
     expect(result).toMatchObject({
-      token: 'signed-livekit-token',
-      title: 'Private planning',
-      role: 'OBSERVER',
+      status: 'admitted',
+      admission: { token: 'signed-livekit-token', title: 'Private planning', role: 'OBSERVER' },
     });
     expect(JSON.stringify(result)).not.toContain('mtg_randomroom');
     expect(mocks.participantByToken).toHaveBeenCalledWith(
@@ -87,28 +111,58 @@ describe('meeting admission isolation', () => {
     );
   });
 
+  it('scopes the media grant to the occurrence room and withholds publish from an observer', async () => {
+    mocks.participantByToken.mockResolvedValue({ ...validGuest, roleOverride: 'OBSERVER' });
+    await admitToMeeting({ publicId, host: sharedHost, guestToken: 'guest-secret', now });
+    expect(mocks.grants).toEqual([
+      {
+        room: 'mtg_randomroom',
+        roomJoin: true,
+        canPublish: false,
+        canPublishData: false,
+        canSubscribe: true,
+        roomAdmin: false,
+      },
+    ]);
+  });
+
   it('rejects a valid guest credential scoped to another occurrence', async () => {
-    mocks.participantByToken.mockResolvedValue({
-      id: 'guest_2',
-      occurrenceId: 'occ_other',
-      displayName: 'Guest',
-      roleOverride: null,
-      guestTokenExpiresAt: new Date('2026-08-27T10:30:00Z'),
-      guestTokenRevokedAt: null,
-      removedAt: null,
-      lobbyStatus: 'ADMITTED',
-    });
-    await expect(admitToMeeting({ publicId, guestToken: 'guest-secret', now })).resolves.toBeNull();
+    mocks.participantByToken.mockResolvedValue({ ...validGuest, occurrenceId: 'occ_other' });
+    await expect(
+      admitToMeeting({ publicId, host: sharedHost, guestToken: 'guest-secret', now })
+    ).resolves.toEqual({ status: 'refused' });
+  });
+
+  it.each([
+    ['expired', { guestTokenExpiresAt: new Date('2026-08-27T09:59:00Z') }],
+    ['never given an expiry', { guestTokenExpiresAt: null }],
+    ['revoked', { guestTokenRevokedAt: new Date('2026-08-27T09:00:00Z') }],
+    ['removed from the occurrence', { removedAt: new Date('2026-08-27T09:00:00Z') }],
+    ['denied at the lobby', { lobbyStatus: 'DENIED' }],
+  ])('refuses a guest credential that is %s', async (_label, override) => {
+    mocks.participantByToken.mockResolvedValue({ ...validGuest, ...override });
+    await expect(
+      admitToMeeting({ publicId, host: sharedHost, guestToken: 'guest-secret', now })
+    ).resolves.toEqual({ status: 'refused' });
+  });
+
+  it('holds a credential-proven guest in the lobby without minting a token', async () => {
+    mocks.participantByToken.mockResolvedValue({ ...validGuest, lobbyStatus: 'WAITING' });
+    await expect(
+      admitToMeeting({ publicId, host: sharedHost, guestToken: 'guest-secret', now })
+    ).resolves.toEqual({ status: 'waiting' });
+    expect(mocks.toJwt).not.toHaveBeenCalled();
   });
 
   it('does not use a cross-tenant session as meeting authority', async () => {
     await expect(
       admitToMeeting({
         publicId,
+        host: sharedHost,
         now,
         sessionUser: { id: 'admin_b', organizationId: 'org_b', role: 'ADMIN' },
       })
-    ).resolves.toBeNull();
+    ).resolves.toEqual({ status: 'refused' });
     expect(mocks.canAccessMeeting).not.toHaveBeenCalled();
   });
 
@@ -121,9 +175,128 @@ describe('meeting admission isolation', () => {
     });
     const result = await admitToMeeting({
       publicId,
+      host: sharedHost,
       now,
       sessionUser: { id: 'member_1', organizationId: 'org_a', role: 'MEMBER' },
     });
-    expect(result).toMatchObject({ token: 'signed-livekit-token', role: 'PRESENTER' });
+    expect(result).toMatchObject({
+      status: 'admitted',
+      admission: { token: 'signed-livekit-token', role: 'PRESENTER' },
+    });
+  });
+
+  /**
+   * MEET-004 D7. A mismatch must be refused exactly like an unknown public id —
+   * never a redirect, which would confirm the occurrence belongs to some other
+   * named organization.
+   */
+  describe('host cross-check', () => {
+    it('refuses a tenant host that names a different organization', async () => {
+      mocks.participantByToken.mockResolvedValue(validGuest);
+      mocks.classifyHost.mockReturnValue({ kind: 'tenant', host: 'other.devfathom.com' });
+      mocks.organizationByHost.mockResolvedValue({ id: 'org_b', status: 'ACTIVE' });
+      await expect(
+        admitToMeeting({
+          publicId,
+          host: 'other.devfathom.com',
+          guestToken: 'guest-secret',
+          now,
+        })
+      ).resolves.toEqual({ status: 'refused' });
+      expect(mocks.tenantOccurrence).not.toHaveBeenCalled();
+    });
+
+    it('refuses a tenant host that names no organization at all', async () => {
+      mocks.participantByToken.mockResolvedValue(validGuest);
+      mocks.classifyHost.mockReturnValue({ kind: 'tenant', host: 'localhost' });
+      mocks.organizationByHost.mockResolvedValue(null);
+      await expect(
+        admitToMeeting({ publicId, host: 'localhost', guestToken: 'guest-secret', now })
+      ).resolves.toEqual({ status: 'refused' });
+    });
+
+    it('admits on the occurrence own tenant host', async () => {
+      mocks.participantByToken.mockResolvedValue(validGuest);
+      mocks.classifyHost.mockReturnValue({ kind: 'tenant', host: 'acme.devfathom.com' });
+      mocks.organizationByHost.mockResolvedValue({ id: 'org_a', status: 'ACTIVE' });
+      await expect(
+        admitToMeeting({
+          publicId,
+          host: 'acme.devfathom.com',
+          guestToken: 'guest-secret',
+          now,
+        })
+      ).resolves.toMatchObject({ status: 'admitted' });
+    });
+
+    it('uses the strict host resolver, never the permissive one', async () => {
+      mocks.participantByToken.mockResolvedValue(validGuest);
+      mocks.classifyHost.mockReturnValue({ kind: 'tenant', host: 'acme.devfathom.com' });
+      mocks.organizationByHost.mockResolvedValue({ id: 'org_a', status: 'ACTIVE' });
+      await admitToMeeting({ publicId, host: 'acme.devfathom.com', guestToken: 'g', now });
+      expect(mocks.organizationByHost).toHaveBeenCalledWith('acme.devfathom.com');
+    });
+
+    it('refuses the platform control-plane host', async () => {
+      mocks.participantByToken.mockResolvedValue(validGuest);
+      mocks.classifyHost.mockReturnValue({ kind: 'platform', host: 'admin.devfathom.com' });
+      await expect(
+        admitToMeeting({
+          publicId,
+          host: 'admin.devfathom.com',
+          guestToken: 'guest-secret',
+          now,
+        })
+      ).resolves.toEqual({ status: 'refused' });
+    });
+  });
+
+  /**
+   * MEET-004 step 4. A workspace that may not serve traffic is unroutable, not
+   * a distinct error, so its status stays unobservable without a session.
+   */
+  describe('workspace lifecycle', () => {
+    it.each([['SUSPENDED'], ['CLOSED'], ['PENDING']])(
+      'refuses a valid guest when the workspace is %s',
+      async (status) => {
+        mocks.participantByToken.mockResolvedValue(validGuest);
+        mocks.organizationById.mockResolvedValue({ id: 'org_a', status });
+        await expect(
+          admitToMeeting({ publicId, host: sharedHost, guestToken: 'guest-secret', now })
+        ).resolves.toEqual({ status: 'refused' });
+        expect(mocks.tenantOccurrence).not.toHaveBeenCalled();
+      }
+    );
+
+    it('refuses when the resolved organization no longer exists', async () => {
+      mocks.participantByToken.mockResolvedValue(validGuest);
+      mocks.organizationById.mockResolvedValue(null);
+      await expect(
+        admitToMeeting({ publicId, host: sharedHost, guestToken: 'guest-secret', now })
+      ).resolves.toEqual({ status: 'refused' });
+    });
+  });
+
+  it('refuses an unknown public id before entering tenant scope', async () => {
+    mocks.platformOccurrence.mockResolvedValue(null);
+    await expect(
+      admitToMeeting({ publicId, host: sharedHost, guestToken: 'guest-secret', now })
+    ).resolves.toEqual({ status: 'refused' });
+    expect(mocks.organizationById).not.toHaveBeenCalled();
+    expect(mocks.tenantOccurrence).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed public id without any database round trip', async () => {
+    await expect(
+      admitToMeeting({ publicId: 'not-a-uuid', host: sharedHost, guestToken: 'g', now })
+    ).resolves.toEqual({ status: 'refused' });
+    expect(mocks.platformOccurrence).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bare link holder who presents no credential at all', async () => {
+    await expect(admitToMeeting({ publicId, host: sharedHost, now })).resolves.toEqual({
+      status: 'refused',
+    });
+    expect(mocks.toJwt).not.toHaveBeenCalled();
   });
 });

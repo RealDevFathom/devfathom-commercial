@@ -14,8 +14,24 @@ import type { NextConfig } from 'next';
 const ablyOrigins =
   'https://*.ably.io https://*.ably-realtime.com https://*.ably.net ' +
   'wss://*.ably.io wss://*.ably-realtime.com wss://*.ably.net';
-const liveKitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-const liveKitOrigin = liveKitUrl ? new URL(liveKitUrl).origin : '';
+// Self-hosted LiveKit: the browser opens a WebSocket to the SFU and fetches
+// over https, both on this one origin. `ws:`/`wss:` are special schemes, so
+// `URL.origin` serialises them rather than returning "null".
+//
+// An unset or unparseable value yields an empty allowance, which FAILS CLOSED —
+// the call cannot connect — rather than widening `connect-src`. A malformed
+// value must not take the whole build down with an opaque URL error, so it is
+// caught here and left to surface as a blocked connection instead.
+function liveKitConnectSrc(): string {
+  const value = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+  if (!value) return '';
+  try {
+    return new URL(value).origin;
+  } catch {
+    return '';
+  }
+}
+const liveKitOrigin = liveKitConnectSrc();
 // Dev/HMR (Turbopack) needs 'unsafe-eval'; keep it OUT of production.
 const isDev = process.env.NODE_ENV !== 'production';
 const scriptSrc = isDev
