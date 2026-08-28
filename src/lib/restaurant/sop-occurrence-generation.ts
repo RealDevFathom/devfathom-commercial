@@ -11,6 +11,7 @@ import {
   assignmentRecurrenceRule,
   resolveLatestPublishedVersion,
 } from '@/lib/restaurant/sop-templates';
+import { occurrenceOwnerColumns } from '@/lib/restaurant/sop-assignment';
 
 /**
  * M7-L3 / §SOP — SOP occurrence generation (a scheduler handler, M7-L1/D13).
@@ -142,6 +143,12 @@ export async function generateDueSopOccurrences(
     const missing = occurrences.filter((occ) => !existingDates.has(occ.businessDate));
     if (missing.length === 0) continue;
 
+    // SOP-1: freeze the owner path onto each occurrence, exactly as the template
+    // version is pinned. A PERSON target assigns directly; a ROLE target opens an
+    // unclaimed branch pool item. Re-targeting the assignment later changes who
+    // owes FUTURE occurrences only — already-generated history is never rewritten.
+    const owner = occurrenceOwnerColumns(assignment);
+
     // Seed each occurrence's checklist from the pinned version's steps.
     const versionSteps = await db.restaurantSopTemplateStep.findMany({
       where: { templateVersionId: version.id },
@@ -161,6 +168,8 @@ export async function generateDueSopOccurrences(
               status: 'SCHEDULED',
               dueAt: occ.dueAt,
               windowEndsAt: occ.windowEndsAt,
+              assignedStaffProfileId: owner.assignedStaffProfileId,
+              poolJobRoleId: owner.poolJobRoleId,
               steps: {
                 create: versionSteps.map((step) => ({ templateStepId: step.id })),
               },
