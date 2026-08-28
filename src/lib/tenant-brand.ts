@@ -1,4 +1,5 @@
 export type TenantBrand = {
+  organizationId: string;
   displayName: string;
   logoUrl: string | null;
   markUrl: string | null;
@@ -6,6 +7,15 @@ export type TenantBrand = {
   primaryColor: string | null;
   accentColor: string | null;
 };
+
+export function assertWorkspaceIdentity(
+  sessionOrganizationId: string,
+  displayedOrganizationId: string
+): void {
+  if (sessionOrganizationId !== displayedOrganizationId) {
+    throw new Error('Workspace identity does not match the authenticated organization.');
+  }
+}
 
 function contrastColor(hex: string): string {
   const value = hex.replace('#', '');

@@ -5,6 +5,7 @@ import { TenantSessionBoundary } from '@/components/tenant-session-boundary';
 import { resolveTenantActor, resolveTenantSessionDenial } from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { assertWorkspaceIdentity } from '@/lib/tenant-brand';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // SEC-03 / AUTH-02: a single server-side auth guard for every /(app) page. The
@@ -30,6 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       db.organization.findUnique({
         where: { id: actor.organization.id },
         select: {
+          id: true,
           displayName: true,
           brand: {
             select: {
@@ -46,6 +48,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     return {
       entitlements: entitlementSnapshot,
       brand: {
+        organizationId: organization?.id ?? actor.organization.id,
         displayName: organization?.displayName ?? actor.organization.displayName,
         logoUrl: organization?.brand?.logoUrl ?? null,
         markUrl: organization?.brand?.markUrl ?? null,
@@ -55,13 +58,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       },
     };
   });
+  assertWorkspaceIdentity(actor.session.user.organizationId, brand.organizationId);
   return (
     <TenantSessionBoundary
       session={actor.session}
       entitlements={entitlements}
       realtimeEnabled={Boolean(process.env.ABLY_API_KEY)}
     >
-      <AppShell brand={brand}>{children}</AppShell>
+      <AppShell brand={brand} sessionOrganizationId={actor.session.user.organizationId}>
+        {children}
+      </AppShell>
     </TenantSessionBoundary>
   );
 }
