@@ -8,7 +8,7 @@ import pg from 'pg';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 
 export const RESTAURANT_E2E = {
-  organizationId: 'org_restaurant_e2e',
+  organizationId: 'org_chai_chowk',
   branchId: 'branch_restaurant_e2e',
   posDeviceId: 'device_restaurant_e2e_pos',
   kdsDeviceId: 'device_restaurant_e2e_kds',
@@ -21,6 +21,8 @@ export const RESTAURANT_E2E = {
 } as const;
 
 const IDS = {
+  alexUser: 'user_chai_chowk_alex',
+  alexStaff: 'staff_chai_chowk_alex',
   operatorUser: 'user_restaurant_e2e_operator',
   managerUser: 'user_restaurant_e2e_manager',
   operatorRole: 'role_restaurant_e2e_operator',
@@ -51,6 +53,8 @@ const IDS = {
 const FIXED_AT = new Date('2026-08-27T00:00:00.000Z');
 const BUSINESS_DATE = new Date('2026-08-27T00:00:00.000Z');
 const PIN_BCRYPT_SALT = '$2b$12$abcdefghijklmnopqrstuu';
+const DEVFATHOM_ORGANIZATION_ID = 'org_devfathom';
+const ALEX_EMAIL = 'alex@company.com';
 
 function deviceSecretHash(secret: string): string {
   return createHash('sha256').update(secret).digest('hex');
@@ -62,6 +66,7 @@ async function main() {
 
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
+  let devFathomAlexPassword: string | null = null;
 
   try {
     const [role] = await prisma.$queryRaw<
@@ -79,18 +84,40 @@ async function main() {
       await tx.$executeRawUnsafe(
         `SELECT set_config('app.current_organization_id', '', true), set_config('app.is_platform_admin', 'true', true)`
       );
+      const devFathomAlex = await tx.user.findUnique({
+        where: {
+          organizationId_email: {
+            organizationId: DEVFATHOM_ORGANIZATION_ID,
+            email: ALEX_EMAIL,
+          },
+        },
+        select: { password: true },
+      });
+      if (!devFathomAlex) {
+        throw new Error('Seed org_devfathom before Chai Chowk so Alex can belong to both tenants.');
+      }
+      devFathomAlexPassword = devFathomAlex.password;
+
       await tx.organization.upsert({
         where: { id: RESTAURANT_E2E.organizationId },
-        update: {},
-        create: {
-          id: RESTAURANT_E2E.organizationId,
-          slug: 'restaurant-e2e',
-          legalName: 'Restaurant E2E Test Organization',
-          displayName: 'Restaurant E2E',
+        update: {
+          slug: 'chai-chowk',
+          legalName: 'Chai Chowk Cafe LLC',
+          displayName: 'Chai Chowk Café',
           vertical: 'RESTAURANT',
           status: 'ACTIVE',
-          timezone: 'UTC',
-          currency: 'USD',
+          timezone: 'Asia/Karachi',
+          currency: 'PKR',
+        },
+        create: {
+          id: RESTAURANT_E2E.organizationId,
+          slug: 'chai-chowk',
+          legalName: 'Chai Chowk Cafe LLC',
+          displayName: 'Chai Chowk Café',
+          vertical: 'RESTAURANT',
+          status: 'ACTIVE',
+          timezone: 'Asia/Karachi',
+          currency: 'PKR',
           createdAt: FIXED_AT,
           updatedAt: FIXED_AT,
         },
@@ -105,11 +132,11 @@ async function main() {
         );
         await tx.restaurantBranch.upsert({
           where: { id: RESTAURANT_E2E.branchId },
-          update: {},
+          update: { name: 'Gulberg Café', timezone: 'Asia/Karachi', isDefault: true },
           create: {
             id: RESTAURANT_E2E.branchId,
-            name: 'Test Kitchen',
-            timezone: 'UTC',
+            name: 'Gulberg Café',
+            timezone: 'Asia/Karachi',
             isDefault: true,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
@@ -117,7 +144,7 @@ async function main() {
         });
         await tx.organizationRole.upsert({
           where: { id: IDS.operatorRole },
-          update: {},
+          update: { name: 'Chai Chowk Operator' },
           create: {
             id: IDS.operatorRole,
             key: 'restaurant-e2e-operator',
@@ -138,7 +165,7 @@ async function main() {
         });
         await tx.organizationRole.upsert({
           where: { id: IDS.managerRole },
-          update: {},
+          update: { name: 'Chai Chowk Manager' },
           create: {
             id: IDS.managerRole,
             key: 'restaurant-e2e-manager',
@@ -159,11 +186,20 @@ async function main() {
         });
         for (const user of [
           {
+            id: IDS.alexUser,
+            roleId: IDS.managerRole,
+            name: 'Alex Carter',
+            email: ALEX_EMAIL,
+            title: 'Owner',
+            password: devFathomAlexPassword,
+          },
+          {
             id: IDS.operatorUser,
             roleId: IDS.operatorRole,
             name: 'E2E Operator',
             email: 'operator@restaurant-e2e.test',
             title: 'Operator',
+            password: null,
           },
           {
             id: IDS.managerUser,
@@ -171,16 +207,25 @@ async function main() {
             name: 'E2E Manager',
             email: 'manager@restaurant-e2e.test',
             title: 'Manager',
+            password: null,
           },
         ]) {
           await tx.user.upsert({
             where: { id: user.id },
-            update: {},
+            update: {
+              organizationRoleId: user.roleId,
+              name: user.name,
+              email: user.email,
+              password: user.password,
+              title: user.title,
+              status: 'ACTIVE',
+            },
             create: {
               id: user.id,
               organizationRoleId: user.roleId,
               name: user.name,
               email: user.email,
+              password: user.password,
               department: 'LEADERSHIP',
               title: user.title,
               startDate: FIXED_AT,
@@ -201,6 +246,13 @@ async function main() {
           });
         }
         for (const staff of [
+          {
+            id: IDS.alexStaff,
+            userId: IDS.alexUser,
+            name: 'Alex Carter',
+            pin: RESTAURANT_E2E.managerPin,
+            credentialId: 'credential_chai_chowk_alex',
+          },
           {
             id: RESTAURANT_E2E.operatorId,
             userId: IDS.operatorUser,
@@ -310,10 +362,10 @@ async function main() {
 
         await tx.restaurantBrand.upsert({
           where: { id: IDS.brand },
-          update: {},
+          update: { name: 'Chai Chowk', isDefault: true },
           create: {
             id: IDS.brand,
-            name: 'E2E Kitchen',
+            name: 'Chai Chowk',
             isDefault: true,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
@@ -326,21 +378,21 @@ async function main() {
         });
         await tx.restaurantProduct.upsert({
           where: { id: IDS.product },
-          update: {},
+          update: { categoryId: IDS.category, name: 'Chicken Tikka Bun' },
           create: {
             id: IDS.product,
             categoryId: IDS.category,
-            name: 'Test Burger',
+            name: 'Chicken Tikka Bun',
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },
         });
         await tx.restaurantPriceList.upsert({
           where: { id: IDS.priceList },
-          update: {},
+          update: { name: 'Chai Chowk Prices', isDefault: true },
           create: {
             id: IDS.priceList,
-            name: 'E2E Prices',
+            name: 'Chai Chowk Prices',
             isDefault: true,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
@@ -374,11 +426,11 @@ async function main() {
         });
         await tx.restaurantMenu.upsert({
           where: { id: IDS.menu },
-          update: {},
+          update: { brandId: IDS.brand, name: 'Chai Chowk Menu' },
           create: {
             id: IDS.menu,
             brandId: IDS.brand,
-            name: 'E2E Menu',
+            name: 'Chai Chowk Menu',
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },
@@ -502,7 +554,57 @@ async function main() {
       { timeout: 30_000 }
     );
 
-    console.log(`Seeded restaurant E2E fixture for ${RESTAURANT_E2E.organizationId}.`);
+    const verification = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `SELECT set_config('app.current_organization_id', '', true), set_config('app.is_platform_admin', 'true', true)`
+      );
+      const [alexMemberships, ownedRows, leakedRows] = await Promise.all([
+        tx.user.findMany({
+          where: { email: ALEX_EMAIL },
+          select: { organizationId: true },
+          orderBy: { organizationId: 'asc' },
+        }),
+        tx.$queryRaw<Array<{ roles: bigint; staff: bigint; products: bigint }>>`
+          SELECT
+            (SELECT count(*) FROM organization_roles WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS roles,
+            (SELECT count(*) FROM restaurant_staff_profiles WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS staff,
+            (SELECT count(*) FROM restaurant_products WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS products
+        `,
+        tx.$queryRaw<Array<{ count: bigint }>>`
+          SELECT count(*) AS count
+          FROM (
+            SELECT "organizationId" FROM organization_roles WHERE id IN (${IDS.operatorRole}, ${IDS.managerRole})
+            UNION ALL
+            SELECT "organizationId" FROM restaurant_staff_profiles WHERE id IN (${IDS.alexStaff}, ${RESTAURANT_E2E.operatorId}, ${RESTAURANT_E2E.managerId})
+            UNION ALL
+            SELECT "organizationId" FROM restaurant_products WHERE id = ${IDS.product}
+          ) fixture_rows
+          WHERE "organizationId" <> ${RESTAURANT_E2E.organizationId}
+        `,
+      ]);
+      return { alexMemberships, ownedRows: ownedRows[0], leakedRows: leakedRows[0] };
+    });
+
+    const alexOrganizations = new Set(
+      verification.alexMemberships.map(({ organizationId }) => organizationId)
+    );
+    if (
+      String(RESTAURANT_E2E.organizationId) === DEVFATHOM_ORGANIZATION_ID ||
+      !alexOrganizations.has(DEVFATHOM_ORGANIZATION_ID) ||
+      !alexOrganizations.has(RESTAURANT_E2E.organizationId) ||
+      !verification.ownedRows ||
+      Number(verification.ownedRows.roles) < 2 ||
+      Number(verification.ownedRows.staff) < 3 ||
+      Number(verification.ownedRows.products) < 1 ||
+      !verification.leakedRows ||
+      Number(verification.leakedRows.count) !== 0
+    ) {
+      throw new Error('Chai Chowk tenant-separation verification failed.');
+    }
+
+    console.log(
+      `Seeded and verified Chai Chowk (${RESTAURANT_E2E.organizationId}): Alex belongs to ${[...alexOrganizations].join(', ')}; roles=${verification.ownedRows.roles}, staff=${verification.ownedRows.staff}, products=${verification.ownedRows.products}, leaked fixture rows=${verification.leakedRows.count}.`
+    );
   } finally {
     await prisma.$disconnect();
     await pool.end();
