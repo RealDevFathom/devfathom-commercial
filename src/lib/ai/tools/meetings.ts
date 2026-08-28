@@ -18,7 +18,10 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import * as authz from '@/lib/authz';
 import { appUrl, templates } from '@/lib/email';
-import { findRelevantOccurrence, computePunctuality } from '@/lib/meeting-occurrence';
+import { computePunctuality } from '@/lib/meeting-occurrence';
+import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
+import { resolveRelevantOccurrence } from '@/lib/meetings/occurrences';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 
 const DAY_MS = 86_400_000;
@@ -162,8 +165,14 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           select: { name: true },
         });
 
-        // Per-occurrence attendance for the occurrence the meeting is "at" now.
-        const occurrence = findRelevantOccurrence(m.startTime, m.endTime, m.recurrence, h.now());
+        // Per-occurrence attendance for the occurrence the meeting is "at" now,
+        // read from the materialised occurrence rows (WHA-235) so a rescheduled
+        // or cancelled instance is reported as it actually stands. Falls back to
+        // the meeting's own times for a series with no occurrence row.
+        const resolved = await resolveRelevantOccurrence(db, meetingId, h.now());
+        const occurrence = resolved
+          ? { start: resolved.start, end: resolved.end }
+          : { start: m.startTime, end: m.endTime };
         const logs = await db.meetingAttendanceLog.findMany({
           where: { meetingId, occurrenceStart: occurrence.start },
           select: { userId: true, joinedAt: true },
@@ -272,10 +281,18 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
             endTime: end,
             location: location ?? null,
             recurrence: recurrence ?? null,
+            // WHA-235: written together with the legacy value, exactly as
+            // `meetings.create` does — the assistant must not produce series the
+            // materialiser cannot see.
+            recurrenceRule: legacyRecurrenceToRule(recurrence ?? null),
             createdById: user.id,
             attendees: { create: allAttendees.map((userId) => ({ userId })) },
           },
         });
+
+        // Materialise so the new series has occurrence rows (and therefore a
+        // join link) before the invite emails below go out.
+        await materializeMeetingOccurrences(db, meeting.id);
 
         // Side effects: invite + notify everyone except the organizer (in-app +
         // a branded meetingInvite email, fire-and-forget).
@@ -370,7 +387,11 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         if (title != null) data.title = title;
         if (description != null) data.description = description;
         if (location != null) data.location = location;
-        if (recurrence != null) data.recurrence = recurrence;
+        if (recurrence != null) {
+          data.recurrence = recurrence;
+          // Keep the pair in step, as `meetings.update` does.
+          data.recurrenceRule = legacyRecurrenceToRule(recurrence);
+        }
         if (startTime != null) {
           const d = parseDate(startTime);
           if (!d)
@@ -417,6 +438,11 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
             recurrence: true,
           },
         });
+
+        // Reconcile after the edit, as `meetings.update` does: add the slots the
+        // new rule produces, cancel the FUTURE ones that left it, touch nothing
+        // already in the past.
+        await materializeMeetingOccurrences(db, meetingId);
 
         h.audit({
           category: 'MEETING',
@@ -513,20 +539,18 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         const attendee = await db.meetingAttendee.findUnique({
           where: { meetingId_userId: { meetingId, userId: h.ctx.userId } },
           include: {
-            meeting: {
-              select: { id: true, title: true, startTime: true, endTime: true, recurrence: true },
-            },
+            meeting: { select: { id: true, title: true, startTime: true, endTime: true } },
           },
         });
         if (!attendee) return { error: 'You are not on the attendee list for this meeting.' };
 
         const now = h.now();
-        const occurrence = findRelevantOccurrence(
-          attendee.meeting.startTime,
-          attendee.meeting.endTime,
-          attendee.meeting.recurrence,
-          now
-        );
+        // Same occurrence resolution the router's `markJoined` uses, so the
+        // assistant and the UI write attendance under the same key.
+        const resolvedOccurrence = await resolveRelevantOccurrence(db, meetingId, now);
+        const occurrence = resolvedOccurrence
+          ? { start: resolvedOccurrence.start, end: resolvedOccurrence.end }
+          : { start: attendee.meeting.startTime, end: attendee.meeting.endTime };
 
         // Attendance window: only [start - 5min, end] counts, so attendance for
         // past or not-yet-started occurrences can't be back-filled.

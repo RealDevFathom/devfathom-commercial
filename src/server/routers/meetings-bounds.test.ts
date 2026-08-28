@@ -27,6 +27,7 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 
 // The router reaches `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: the context here
@@ -181,6 +182,7 @@ describeIfDatabase('meeting list bounds, against PostgreSQL', () => {
       endTime: Date;
       createdById: string;
       recurrence?: string;
+      recurrenceRule?: string;
     }> = [];
     const attendees: Array<{ meetingId: string; userId: string }> = [];
 
@@ -191,7 +193,15 @@ describeIfDatabase('meeting list bounds, against PostgreSQL', () => {
         startTime: new Date(startMs),
         endTime: new Date(startMs + HOUR),
         createdById: attendeeId,
-        ...(recurrence ? { recurrence } : {}),
+        // WHA-235: written as a PAIR, matching what `meetings.create` now
+        // persists. `getUpcoming`'s recurring-series query selects on
+        // `recurrenceRule`, so a fixture carrying only the deprecated
+        // `recurrence` column would describe series no production write path
+        // can produce — and would leave the SERIES_CEILING assertion below
+        // measuring an empty set rather than a bound.
+        ...(recurrence
+          ? { recurrence, recurrenceRule: legacyRecurrenceToRule(recurrence) ?? undefined }
+          : {}),
       });
       attendees.push({ meetingId, userId: attendeeId });
     };

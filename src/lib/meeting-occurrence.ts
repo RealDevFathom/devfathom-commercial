@@ -1,13 +1,35 @@
 /**
- * Helpers for computing meeting occurrence times + punctuality.
+ * Punctuality, plus the LEGACY recurrence walkers that predate materialised
+ * occurrences.
  *
  * Background: recurring meetings are stored as a single Meeting row whose
  * `startTime`/`endTime` are the ORIGINAL occurrence. The actual occurrence
- * the user joined is computed on the fly from the recurrence pattern.
+ * the user joined used to be computed on the fly from the recurrence pattern.
  *
  * Without this, joining today's standup that originally started yesterday
  * gets reported as "1440 minutes late". With this, it correctly reports
  * the offset from today's occurrence.
+ *
+ * DEPRECATED AS A SOURCE OF OCCURRENCE TIMES (WHA-235). The walkers below
+ * recompute a series from the deprecated `Meeting.recurrence` column, in the
+ * SERVER's timezone, and so cannot see a reschedule, a cancellation, or a
+ * retitle — those are exceptions recorded on `MeetingOccurrence`, which is now
+ * materialised by `@/lib/meetings/materialize` and read through
+ * `@/lib/meetings/occurrences`. Every production read path in the meetings lane
+ * has moved to those. `findRelevantOccurrence` is gone entirely, replaced by
+ * `resolveRelevantOccurrence`.
+ *
+ * What remains here is remains for one reason each:
+ *
+ *  - `computePunctuality` is imported by `src/app/(app)/meetings/meetings-content.tsx`,
+ *    which is a Lane 2/3 file. Its signature is unchanged so that file still
+ *    compiles. Server callers already pass `recurrence: null` — the occurrence
+ *    is resolved before punctuality is computed, so the walker never runs.
+ *  - `countPastOccurrences` and `ON_TIME_THRESHOLD_MINUTES` are imported by
+ *    `src/server/routers/team-stats.ts`, which is outside this lane. Porting
+ *    team stats onto occurrence rows is a separate, owned change.
+ *
+ * Do not add new callers. Read `@/lib/meetings/occurrences` instead.
  */
 
 /**
@@ -61,70 +83,6 @@ export function computeOccurrenceStart(
   }
 
   return lastValid;
-}
-
-/**
- * Find the "currently relevant" occurrence of a meeting — the one the user
- * would be joining if they clicked Join right now.
- *
- * Semantics:
- * - If the meeting is currently live, return that occurrence
- * - If we're in a gap, return whichever is closest (prev or next)
- * - For non-recurring meetings, just returns the meeting's own start/end
- */
-export function findRelevantOccurrence(
-  originalStart: Date,
-  originalEnd: Date,
-  recurrence: string | null,
-  now: Date
-): { start: Date; end: Date } {
-  if (!recurrence) {
-    return { start: new Date(originalStart), end: new Date(originalEnd) };
-  }
-
-  const duration = originalEnd.getTime() - originalStart.getTime();
-  const current = new Date(originalStart);
-  let prev: { start: Date; end: Date } | null = null;
-
-  for (let i = 0; i < 5000; i++) {
-    const start = new Date(current);
-    const end = new Date(current.getTime() + duration);
-
-    // Currently live — this is the one
-    if (start.getTime() <= now.getTime() && now.getTime() < end.getTime()) {
-      return { start, end };
-    }
-
-    // RT-10: we've crossed past now and the next occurrence hasn't started yet.
-    // Keep showing the most recent PAST occurrence until the next one actually
-    // begins — otherwise, in the latter half of the gap, the list jumps to the
-    // next (empty) occurrence and the just-finished occurrence's attendance
-    // disappears early.
-    if (start.getTime() > now.getTime()) {
-      return prev ?? { start, end };
-    }
-
-    prev = { start, end };
-
-    switch (recurrence) {
-      case 'daily':
-        current.setDate(current.getDate() + 1);
-        break;
-      case 'weekly':
-        current.setDate(current.getDate() + 7);
-        break;
-      case 'biweekly':
-        current.setDate(current.getDate() + 14);
-        break;
-      case 'monthly':
-        current.setMonth(current.getMonth() + 1);
-        break;
-      default:
-        return { start: new Date(originalStart), end: new Date(originalEnd) };
-    }
-  }
-
-  return prev ?? { start: new Date(originalStart), end: new Date(originalEnd) };
 }
 
 /**
