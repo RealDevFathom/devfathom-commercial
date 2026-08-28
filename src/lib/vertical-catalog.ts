@@ -51,6 +51,31 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
 
 export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT'];
 
+export type DepartmentDefinition = {
+  key: string;
+  name: string;
+};
+
+export const AGENCY_DEPARTMENTS: readonly DepartmentDefinition[] = [
+  { key: 'LEADERSHIP', name: 'Leadership' },
+  { key: 'ENGINEERING', name: 'Engineering' },
+  { key: 'PRODUCT', name: 'Product' },
+  { key: 'QUALITY', name: 'Quality' },
+  { key: 'MARKETING', name: 'Marketing' },
+  { key: 'DESIGN', name: 'Design' },
+];
+
+export const RESTAURANT_DEPARTMENTS: readonly DepartmentDefinition[] = [
+  { key: 'KITCHEN', name: 'Kitchen' },
+  { key: 'FRONT_OF_HOUSE', name: 'Front of House' },
+];
+
+export function departmentsForVertical(
+  vertical: OrganizationVertical
+): readonly DepartmentDefinition[] {
+  return vertical === RESTAURANT ? RESTAURANT_DEPARTMENTS : AGENCY_DEPARTMENTS;
+}
+
 // ---------------------------------------------------------------------------
 // §6 — Commercial restaurant module map (ten modules)
 // ---------------------------------------------------------------------------
