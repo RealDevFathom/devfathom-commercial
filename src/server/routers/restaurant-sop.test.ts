@@ -105,6 +105,21 @@ function caller(limits: Record<string, number> = { 'sop.templates.max': 25 }) {
 }
 
 describe('createTemplate — entitlement-driven sop.templates.max', () => {
+  it('fails loudly when neither supported key is configured', async () => {
+    await expect(caller({}).createTemplate({ name: 'Opening' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: expect.stringContaining('sop.templates.max'),
+    });
+    expect(db.restaurantSopTemplate.create).not.toHaveBeenCalled();
+  });
+
+  it('uses the bootstrapped compatibility key', async () => {
+    db.restaurantSopTemplate.count.mockResolvedValue(1);
+    await expect(
+      caller({ 'restaurant-core.sop.templates.max': 5 }).createTemplate({ name: 'Opening' })
+    ).resolves.toMatchObject({ name: 'Opening' });
+  });
+
   it('creates when under the cap and annotates the audit', async () => {
     db.restaurantSopTemplate.count.mockResolvedValue(1);
     const created = await caller({ 'sop.templates.max': 5 }).createTemplate({ name: 'Opening' });

@@ -6,6 +6,7 @@ import {
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
 import { verticalForModuleKey } from '@/lib/module-catalog';
+import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import {
   ALL_VERTICALS,
@@ -47,7 +48,11 @@ export default async function OrganizationDetailPage({
               // to still-active catalog modules count.
               moduleLinks: {
                 where: { enabled: true },
-                select: { moduleId: true, module: { select: { active: true } } },
+                select: {
+                  moduleId: true,
+                  limits: true,
+                  module: { select: { active: true, key: true } },
+                },
               },
             },
           },
@@ -124,6 +129,20 @@ export default async function OrganizationDetailPage({
   const verticalDefinition = VERTICALS[vertical];
   const assigned = new Map(organization.modules.map((item) => [item.moduleId, item]));
   const targets = transitionTargets[organization.status] ?? [];
+  const packageLimits: Record<string, number> = {};
+  for (const link of organization.package?.moduleLinks ?? []) {
+    if (!link.limits || typeof link.limits !== 'object' || Array.isArray(link.limits)) continue;
+    for (const [key, value] of Object.entries(link.limits)) {
+      if (typeof value === 'number') packageLimits[`${link.module.key}.${key}`] = value;
+    }
+  }
+  const sopLimitDiagnostic = resolveEntitlementLimit(
+    {
+      ...packageLimits,
+      ...Object.fromEntries(organization.limits.map((limit) => [limit.key, limit.value])),
+    },
+    SOP_TEMPLATES_LIMIT
+  );
 
   // §2.3 — a package may only be assigned when its vertical matches; the command
   // rejects a mismatch, so the console never offers one.
@@ -555,6 +574,25 @@ export default async function OrganizationDetailPage({
           >
             <div className="border-b border-border-subtle px-5 py-4">
               <h2 className="font-display text-xl font-semibold">Limits and usage</h2>
+            </div>
+            <div
+              role={sopLimitDiagnostic.status === 'missing' ? 'alert' : 'status'}
+              className={`mx-5 mt-5 border px-4 py-3 text-xs ${
+                sopLimitDiagnostic.status === 'missing'
+                  ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                  : sopLimitDiagnostic.source === 'bootstrapped'
+                    ? 'border-warning/40 bg-warning/10 text-warning-foreground'
+                    : 'border-border-default bg-surface-sunken text-text-body'
+              }`}
+            >
+              <p className="font-mono text-[9px] uppercase tracking-[0.14em]">
+                SOP entitlement configuration
+              </p>
+              <p className="mt-1">
+                {sopLimitDiagnostic.status === 'missing'
+                  ? `Configuration fault: neither ${sopLimitDiagnostic.explicitKey} nor ${sopLimitDiagnostic.bootstrappedKey} is set. Set an explicit non-negative value; zero deliberately disables new templates.`
+                  : `${sopLimitDiagnostic.source === 'explicit' ? 'Explicit' : 'Bootstrapped compatibility'} key ${sopLimitDiagnostic.key} resolves to ${sopLimitDiagnostic.value}. ${sopLimitDiagnostic.value === 0 ? 'Zero is a deliberate disable.' : 'SOP template creation is limited to this value.'}`}
+              </p>
             </div>
             <div className="grid gap-6 p-5 lg:grid-cols-2">
               <div>

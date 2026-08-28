@@ -27,6 +27,7 @@ import {
   assignmentRecurrenceRule,
 } from '@/lib/restaurant/sop-templates';
 import { RecurrenceError, enumerateOccurrences } from '@/lib/restaurant/sop-recurrence';
+import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 import {
   type AssigneeTarget,
   AssigneeTargetError,
@@ -126,6 +127,17 @@ const ASSIGNEE_TARGET = z.discriminatedUnion('type', [
   z.object({ type: z.literal('role'), jobRoleId: z.string() }).strict(),
 ]) satisfies z.ZodType<AssigneeTarget>;
 
+function sopTemplatesMax(limits: Record<string, number>): number {
+  const resolution = resolveEntitlementLimit(limits, SOP_TEMPLATES_LIMIT);
+  if (resolution.status === 'missing') {
+    throw new TRPCError({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: `The SOP template entitlement limit is not configured. Set ${resolution.explicitKey} (preferred) or ${resolution.bootstrappedKey}.`,
+    });
+  }
+  return resolution.value;
+}
+
 /** The recurrence fields shared by createAssignment and previewSchedule. */
 const recurrenceShape = {
   frequency: FREQUENCY,
@@ -153,8 +165,7 @@ export const restaurantSopRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const templatesMax =
-          (ctx.entitlements.limits as Record<string, number>)['sop.templates.max'] ?? 0;
+        const templatesMax = sopTemplatesMax(ctx.entitlements.limits);
         const template = await createTemplate(ctx.db, input, templatesMax);
         annotateAudit(ctx, {
           targetType: 'RestaurantSopTemplate',
@@ -192,8 +203,7 @@ export const restaurantSopRouter = router({
     .input(z.object({ id: z.string(), isActive: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        const templatesMax =
-          (ctx.entitlements.limits as Record<string, number>)['sop.templates.max'] ?? 0;
+        const templatesMax = sopTemplatesMax(ctx.entitlements.limits);
         return await setTemplateActive(ctx.db, input.id, input.isActive, templatesMax);
       } catch (err) {
         mapSopError(err);
