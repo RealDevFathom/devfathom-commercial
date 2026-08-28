@@ -29,15 +29,6 @@ enum ResignationStatus {
   WITHDRAWN
 }
 
-enum Department {
-  LEADERSHIP
-  ENGINEERING
-  PRODUCT
-  QUALITY
-  MARKETING
-  DESIGN
-}
-
 enum UserStatus {
   ACTIVE
   INACTIVE
@@ -409,7 +400,7 @@ model User {
   email              String
   password           String?
   role               Role       @default(EMPLOYEE)
-  department         Department
+  department         String
   title              String
   avatar             String?
   phone              String?
@@ -436,6 +427,7 @@ model User {
 
   // Relations
   organization                Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departmentDefinition        OrganizationDepartment         @relation(fields: [organizationId, department], references: [organizationId, key], onDelete: Restrict, onUpdate: Cascade)
   organizationRole            OrganizationRole?              @relation(fields: [organizationRoleId], references: [id], onDelete: SetNull)
   permissionOverrides         UserPermissionOverride[]
   projectMembers              ProjectMember[]
@@ -2193,6 +2185,7 @@ model Organization {
 
   package                   PlatformPackage?                 @relation(fields: [packageId], references: [id], onDelete: SetNull)
   users                     User[]
+  departments               OrganizationDepartment[]
   roles                     OrganizationRole[]
   permissionOverrides       UserPermissionOverride[]
   modules                   OrganizationModule[]
@@ -2224,6 +2217,25 @@ model Organization {
   @@index([packageId])
   @@index([vertical])
   @@map("organizations")
+}
+
+/// Tenant-owned department vocabulary. Keys are stable identifiers retained in
+/// User.department for API compatibility; labels are tenant-editable display text.
+model OrganizationDepartment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  label          String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users        User[]
+
+  @@unique([organizationId, key])
+  @@unique([organizationId, label])
+  @@index([organizationId])
+  @@map("organization_departments")
 }
 
 /// §4/§4.1: branch-first schema. A restaurant company is one organization; its

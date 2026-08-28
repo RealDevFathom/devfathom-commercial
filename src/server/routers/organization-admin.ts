@@ -16,6 +16,13 @@ const optionalEmail = z
   .union([z.email().max(254), z.literal('')])
   .transform((value) => value.trim().toLowerCase() || null);
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+const departmentKey = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Z][A-Z0-9_]*$/);
+const departmentLabel = z.string().trim().min(1).max(100);
 const hostname = z
   .string()
   .trim()
@@ -34,6 +41,59 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  departments: adminProcedure.query(async ({ ctx }) => {
+    const id = organizationId(ctx);
+    return ctx.db.organizationDepartment.findMany({
+      where: { organizationId: id },
+      orderBy: [{ label: 'asc' }, { key: 'asc' }],
+    });
+  }),
+
+  createDepartment: adminProcedure
+    .input(z.object({ key: departmentKey, label: departmentLabel }))
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      return ctx.db.organizationDepartment.create({
+        data: { organizationId: id, key: input.key, label: input.label },
+      });
+    }),
+
+  updateDepartment: adminProcedure
+    .input(z.object({ key: departmentKey, label: departmentLabel }))
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const result = await ctx.db.organizationDepartment.updateMany({
+        where: { organizationId: id, key: input.key },
+        data: { label: input.label },
+      });
+      if (result.count !== 1) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
+      }
+      return { success: true };
+    }),
+
+  removeDepartment: adminProcedure
+    .input(z.object({ key: departmentKey }))
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const inUse = await ctx.db.user.count({
+        where: { organizationId: id, department: input.key },
+      });
+      if (inUse > 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Reassign ${inUse} member(s) before removing this department.`,
+        });
+      }
+      const result = await ctx.db.organizationDepartment.deleteMany({
+        where: { organizationId: id, key: input.key },
+      });
+      if (result.count !== 1) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
+      }
+      return { success: true };
+    }),
+
   overview: adminProcedure.query(async ({ ctx }) => {
     const id = organizationId(ctx);
     const organization = await ctx.db.organization.findUnique({
@@ -314,14 +374,7 @@ export const organizationAdminRouter = router({
         status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED']),
         organizationRoleId: z.string().nullable(),
         title: z.string().trim().min(1).max(150),
-        department: z.enum([
-          'LEADERSHIP',
-          'ENGINEERING',
-          'PRODUCT',
-          'QUALITY',
-          'MARKETING',
-          'DESIGN',
-        ]),
+        department: departmentKey,
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -350,6 +403,13 @@ export const organizationAdminRouter = router({
           select: { id: true },
         });
         if (!role) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid custom role.' });
+      }
+      const department = await ctx.db.organizationDepartment.findUnique({
+        where: { organizationId_key: { organizationId: id, key: input.department } },
+        select: { key: true },
+      });
+      if (!department) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
       }
       if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });

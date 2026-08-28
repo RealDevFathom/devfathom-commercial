@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALL_VERTICALS,
+  DEPARTMENT_DEFAULTS,
   RESTAURANT_CAPABILITIES,
   RESTAURANT_CAPABILITY_NAMESPACES,
   RESTAURANT_LIMIT_KEYS,
@@ -9,6 +10,7 @@ import {
   RESTAURANT_PACKAGES,
   RESTAURANT_ROLE_TEMPLATES,
   VERTICALS,
+  departmentDefaultsForVertical,
   assertPackageCompatibleWithVertical,
   isPackageCompatibleWithVertical,
   isRestaurantModuleKey,
@@ -26,6 +28,28 @@ describe('vertical definitions (§2)', () => {
     expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT']);
     expect(VERTICALS.AGENCY.label).toBe('Agency');
     expect(VERTICALS.RESTAURANT.label).toBe('Restaurant');
+  });
+});
+
+describe('vertical department defaults', () => {
+  it('preserves the agency vocabulary for compatibility', () => {
+    expect(departmentDefaultsForVertical('AGENCY').map(({ key }) => key)).toEqual([
+      'LEADERSHIP',
+      'ENGINEERING',
+      'PRODUCT',
+      'QUALITY',
+      'MARKETING',
+      'DESIGN',
+    ]);
+  });
+
+  it('uses restaurant defaults without agency leakage', () => {
+    expect(DEPARTMENT_DEFAULTS.RESTAURANT).toEqual([
+      { key: 'LEADERSHIP', label: 'Leadership' },
+      { key: 'KITCHEN', label: 'Kitchen' },
+      { key: 'FRONT_OF_HOUSE', label: 'Front of House' },
+    ]);
+    expect(DEPARTMENT_DEFAULTS.RESTAURANT.map(({ key }) => key)).not.toContain('ENGINEERING');
   });
 });
 

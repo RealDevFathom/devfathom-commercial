@@ -51,6 +51,35 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
 
 export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT'];
 
+export type DepartmentDefinition = { key: string; label: string };
+
+/** Defaults copied into each tenant at provisioning/migration time. Tenants own
+ * the copied rows thereafter; this catalog never overwrites their edits. */
+export const DEPARTMENT_DEFAULTS: Record<
+  OrganizationVertical,
+  readonly DepartmentDefinition[]
+> = {
+  AGENCY: [
+    { key: 'LEADERSHIP', label: 'Leadership' },
+    { key: 'ENGINEERING', label: 'Engineering' },
+    { key: 'PRODUCT', label: 'Product' },
+    { key: 'QUALITY', label: 'Quality' },
+    { key: 'MARKETING', label: 'Marketing' },
+    { key: 'DESIGN', label: 'Design' },
+  ],
+  RESTAURANT: [
+    { key: 'LEADERSHIP', label: 'Leadership' },
+    { key: 'KITCHEN', label: 'Kitchen' },
+    { key: 'FRONT_OF_HOUSE', label: 'Front of House' },
+  ],
+};
+
+export function departmentDefaultsForVertical(
+  vertical: OrganizationVertical
+): readonly DepartmentDefinition[] {
+  return DEPARTMENT_DEFAULTS[vertical];
+}
+
 // ---------------------------------------------------------------------------
 // §6 — Commercial restaurant module map (ten modules)
 // ---------------------------------------------------------------------------
