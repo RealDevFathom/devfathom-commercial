@@ -18,14 +18,18 @@ import {
 import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
 import {
   JobRoleError,
+  clearStaffCapabilityOverride,
   createJobRole,
   ensureDefaultJobRoles,
   listJobRoles,
   listRoleHoldersAtBranch,
+  listStaffCapabilityAudit,
+  listStaffCapabilityOverrides,
   listStaffJobRoleAudit,
   listStaffJobRoles,
-  resolveStaffCapabilities,
+  resolveStaffCapabilityDecision,
   setJobRoleCapabilities,
+  setStaffCapabilityOverride,
   setStaffJobRoles,
   updateJobRole,
 } from '@/lib/restaurant/job-roles';
@@ -478,16 +482,122 @@ export const restaurantStaffRouter = router({
       })
     ),
 
-  /** The union of held-role capabilities and direct grants at one branch. */
+  /**
+   * B1/WHA-285: set ONE person's override for ONE capability at ONE branch.
+   * `DENY` takes an inherited capability away from this person only — the role
+   * itself is untouched and keeps granting it to everyone else who holds it.
+   */
+  setStaffCapabilityOverride: staffProcedure
+    .input(
+      z
+        .object({
+          staffProfileId: z.string(),
+          branchId: z.string(),
+          capability: z.string().min(1).max(120),
+          effect: z.enum(['ALLOW', 'DENY']),
+          actorStaffProfileId: z.string().nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await setStaffCapabilityOverride(ctx.db, {
+          staffProfileId: input.staffProfileId,
+          branchId: input.branchId,
+          capability: input.capability,
+          effect: input.effect,
+          actorStaffProfileId: input.actorStaffProfileId ?? null,
+        });
+        if (result.changed) {
+          annotateAudit(ctx, {
+            targetType: 'RestaurantStaffProfile',
+            targetId: input.staffProfileId,
+            description: `Capability ${input.effect === 'DENY' ? 'denied' : 'allowed'}: ${input.capability} at branch ${input.branchId}`,
+            metadata: { capability: input.capability, effect: input.effect },
+          });
+        }
+        return result;
+      } catch (err) {
+        mapJobRoleError(err);
+      }
+    }),
+
+  /** Remove an override so the person falls back to what their roles grant. */
+  clearStaffCapabilityOverride: staffProcedure
+    .input(
+      z
+        .object({
+          staffProfileId: z.string(),
+          branchId: z.string(),
+          capability: z.string().min(1).max(120),
+          actorStaffProfileId: z.string().nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await clearStaffCapabilityOverride(ctx.db, {
+          staffProfileId: input.staffProfileId,
+          branchId: input.branchId,
+          capability: input.capability,
+          actorStaffProfileId: input.actorStaffProfileId ?? null,
+        });
+        if (result.changed) {
+          annotateAudit(ctx, {
+            targetType: 'RestaurantStaffProfile',
+            targetId: input.staffProfileId,
+            description: `Capability override cleared: ${input.capability} at branch ${input.branchId}`,
+            metadata: { capability: input.capability },
+          });
+        }
+        return result;
+      } catch (err) {
+        mapJobRoleError(err);
+      }
+    }),
+
+  listStaffCapabilityOverrides: staffProcedure
+    .input(z.object({ staffProfileId: z.string(), branchId: z.string().optional() }).strict())
+    .query(({ ctx, input }) =>
+      listStaffCapabilityOverrides(ctx.db, input.staffProfileId, { branchId: input.branchId })
+    ),
+
+  listStaffCapabilityAudit: staffProcedure
+    .input(
+      z
+        .object({
+          staffProfileId: z.string(),
+          branchId: z.string().optional(),
+          take: z.number().int().min(1).max(500).default(100),
+        })
+        .strict()
+    )
+    .query(({ ctx, input }) =>
+      listStaffCapabilityAudit(ctx.db, input.staffProfileId, {
+        branchId: input.branchId,
+        take: input.take,
+      })
+    ),
+
+  /**
+   * What this person may actually do at one branch, and why. `effective` is the
+   * authorization answer; the other three sets are the layers it came from, so a
+   * console can show "denied despite the supervisor role" rather than a bare gap.
+   */
   resolveStaffCapabilities: staffProcedure
     .input(z.object({ staffProfileId: z.string(), branchId: z.string() }).strict())
     .query(async ({ ctx, input }) => {
-      const capabilities = await resolveStaffCapabilities(
+      const decision = await resolveStaffCapabilityDecision(
         ctx.db,
         input.staffProfileId,
         input.branchId
       );
-      return { capabilities: [...capabilities].sort() };
+      return {
+        capabilities: [...decision.effective].sort(),
+        inherited: [...decision.inherited].sort(),
+        allowed: [...decision.allowed].sort(),
+        denied: [...decision.denied].sort(),
+      };
     }),
 
   /** Who could be assigned a role's pooled work at a branch. */
