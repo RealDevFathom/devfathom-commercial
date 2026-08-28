@@ -100,7 +100,7 @@ export async function createTemplate(
     const activeCount = await tx.restaurantSopTemplate.count({ where: { isActive: true } });
     if (activeCount >= templatesMax) {
       throw new SopTemplateError(
-        `This plan allows at most ${templatesMax} active SOP template(s).`,
+        `At most ${templatesMax} SOP templates may be active.`,
         'TEMPLATE_LIMIT_REACHED'
       );
     }
@@ -150,7 +150,7 @@ export async function setTemplateActive(
       const activeCount = await tx.restaurantSopTemplate.count({ where: { isActive: true } });
       if (activeCount >= templatesMax) {
         throw new SopTemplateError(
-          `This plan allows at most ${templatesMax} active SOP template(s).`,
+          `At most ${templatesMax} SOP templates may be active.`,
           'TEMPLATE_LIMIT_REACHED'
         );
       }

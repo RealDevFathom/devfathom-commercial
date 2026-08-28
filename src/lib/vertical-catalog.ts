@@ -253,7 +253,8 @@ export const RESTAURANT_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
   { key: 'inventory.stockLocations.max', countedUnit: 'Active branch stock locations' },
   {
     key: 'sop.templates.max',
-    countedUnit: 'Active SOP template families, not immutable historical versions',
+    countedUnit:
+      'Active SOP template families, not immutable historical versions; a high anti-abuse guardrail, not package-tier pricing',
   },
   {
     key: 'sop.evidenceRetentionDays',
@@ -749,6 +750,9 @@ const OPERATIONS_MODULES: readonly string[] = [
 
 const ENTERPRISE_MODULES: readonly string[] = RESTAURANT_MODULES.map((module) => module.key);
 
+/** Operational safety ceiling shared by every package; SOP template count is not tier-priced. */
+export const SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL = 1000;
+
 export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
   {
     key: 'restaurant-essentials',
@@ -764,7 +768,7 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
       'pos.concurrentRegisters.max': 2,
       'restaurant.operators.max': 10,
       'inventory.stockLocations.max': 1,
-      'sop.templates.max': 25,
+      'sop.templates.max': SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
       'sop.evidenceRetentionDays': 90,
     },
   },
@@ -782,7 +786,7 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
       'pos.concurrentRegisters.max': 10,
       'restaurant.operators.max': 100,
       'inventory.stockLocations.max': 10,
-      'sop.templates.max': 100,
+      'sop.templates.max': SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
       'sop.evidenceRetentionDays': 365,
       'loyalty.activeCustomers.max': 25000,
       'integrations.connections.max': 10,
@@ -805,7 +809,7 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
       'pos.concurrentRegisters.max': 250,
       'restaurant.operators.max': 2500,
       'inventory.stockLocations.max': 250,
-      'sop.templates.max': 1000,
+      'sop.templates.max': SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
       'sop.evidenceRetentionDays': 1095,
       'loyalty.activeCustomers.max': 1000000,
       'integrations.connections.max': 100,
