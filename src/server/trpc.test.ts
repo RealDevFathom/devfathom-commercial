@@ -16,6 +16,7 @@ import { z } from 'zod';
 const mocks = vi.hoisted(() => ({
   recordTrpcAudit: vi.fn(),
   can: vi.fn(async () => true),
+  hasModule: vi.fn(() => true),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -24,7 +25,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: vi.fn(() => true),
+  hasModule: mocks.hasModule,
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
@@ -41,6 +42,7 @@ import {
   adminProcedure,
   capabilityProcedure,
   entitlementIndependentAdminProcedure,
+  entitlementIndependentHistoryProcedure,
   hrProcedure,
   protectedProcedure,
   router,
@@ -71,6 +73,7 @@ const probe = router({
   cleanupWrite: entitlementIndependentAdminProcedure
     .input(z.object({}).optional())
     .mutation(() => 'ok'),
+  historyRead: entitlementIndependentHistoryProcedure.query(() => 'ok'),
   hrRead: hrProcedure.query(() => 'ok'),
   hrWrite: hrProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
   capabilityRead: capabilityProcedure('team:view').query(() => 'ok'),
@@ -87,6 +90,7 @@ const CALLS: Array<[string, (caller: ReturnType<typeof probe.createCaller>) => P
     ['admin write', (c) => c.adminWrite({})],
     ['entitlement-independent admin read', (c) => c.cleanupRead()],
     ['entitlement-independent admin write', (c) => c.cleanupWrite({})],
+    ['entitlement-independent history read', (c) => c.historyRead()],
     ['hr read', (c) => c.hrRead()],
     ['hr write', (c) => c.hrWrite({})],
     ['capability read', (c) => c.capabilityRead()],
@@ -154,6 +158,7 @@ describe('procedure guards reject an unusable session', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
   });
 
   for (const [label, user, code, message] of REJECTED_SESSIONS) {
@@ -175,6 +180,7 @@ describe('procedure guards admit a healthy session', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
   });
 
   it.each(CALLS)('allows %s for an ACTIVE session', async (_name, call) => {
@@ -198,5 +204,12 @@ describe('procedure guards admit a healthy session', () => {
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
+  });
+
+  it('keeps authenticated history readable and audited when its module is disabled', async () => {
+    mocks.hasModule.mockReturnValue(false);
+    const caller = probe.createCaller(contextFor({ ...ADMIN, status: 'ACTIVE' }));
+    await expect(caller.historyRead()).resolves.toBe('ok');
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledTimes(1);
   });
 });

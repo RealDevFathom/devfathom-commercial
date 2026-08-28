@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
-import { router, protectedProcedure } from '../trpc';
+import { entitlementIndependentHistoryProcedure, protectedProcedure, router } from '../trpc';
 import { assertMeetingManage, assertMeetingAccess } from '../authz';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '../activity';
@@ -264,7 +264,7 @@ export const meetingsRouter = router({
    * its own, so exhausting Past cannot disturb the upcoming surfaces or
    * `getAll`.
    */
-  getPast: protectedProcedure
+  getPast: entitlementIndependentHistoryProcedure
     .input(
       z
         .object({
