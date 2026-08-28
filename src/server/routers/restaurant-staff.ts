@@ -16,6 +16,19 @@ import {
   rotateOperatorCredential,
 } from '@/lib/restaurant/credential-lifecycle';
 import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
+import {
+  JobRoleError,
+  createJobRole,
+  ensureDefaultJobRoles,
+  listJobRoles,
+  listRoleHoldersAtBranch,
+  listStaffJobRoleAudit,
+  listStaffJobRoles,
+  resolveStaffCapabilities,
+  setJobRoleCapabilities,
+  setStaffJobRoles,
+  updateJobRole,
+} from '@/lib/restaurant/job-roles';
 
 /**
  * M2-L2 — back-office server surface for restaurant staff CRUD and operator
@@ -61,6 +74,22 @@ function mapCredentialError(err: unknown): never {
       err.reason === 'ALREADY_EXISTS' || err.reason === 'REVOKED'
         ? 'CONFLICT'
         : err.reason === 'NOT_FOUND' || err.reason === 'STAFF_NOT_FOUND'
+          ? 'NOT_FOUND'
+          : 'BAD_REQUEST';
+    throw new TRPCError({ code, message: err.message });
+  }
+  throw err;
+}
+
+/** Translate a job-role domain error into the right tRPC status. */
+function mapJobRoleError(err: unknown): never {
+  if (err instanceof JobRoleError) {
+    const code =
+      err.reason === 'KEY_TAKEN' || err.reason === 'ROLE_INACTIVE'
+        ? 'CONFLICT'
+        : err.reason === 'NOT_FOUND' ||
+            err.reason === 'BRANCH_NOT_FOUND' ||
+            err.reason === 'STAFF_NOT_FOUND'
           ? 'NOT_FOUND'
           : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
@@ -288,4 +317,181 @@ export const restaurantStaffRouter = router({
         mapCredentialError(err);
       }
     }),
+
+  // ── Job roles (SOP-1) ─────────────────────────────────────────────────────
+  //
+  // Job-role administration is staff administration, so it reuses this router's
+  // `staff:manage` gate rather than inventing a capability. Every mutation is
+  // immediately effective (nothing caches a capability set) and audited twice
+  // over: through `annotateAudit` for the back-office trail, and through the
+  // append-only `restaurant_staff_job_role_audits` table inside the domain module.
+
+  listJobRoles: staffProcedure
+    .input(z.object({ activeOnly: z.boolean().default(false) }).strict())
+    .query(({ ctx, input }) => listJobRoles(ctx.db, { activeOnly: input.activeOnly })),
+
+  seedDefaultJobRoles: staffProcedure.mutation(async ({ ctx }) => {
+    const result = await ensureDefaultJobRoles(ctx.db);
+    if (result.created.length > 0) {
+      annotateAudit(ctx, {
+        targetType: 'RestaurantJobRole',
+        targetId: result.created[0]!,
+        description: `Seeded default job roles: ${result.created.join(', ')}`,
+      });
+    }
+    return result;
+  }),
+
+  createJobRole: staffProcedure
+    .input(
+      z
+        .object({
+          key: z.string().min(1).max(80),
+          name: z.string().min(1).max(120),
+          description: z.string().max(2_000).nullable().optional(),
+          capabilities: z.array(z.string().min(1).max(120)).max(64).default([]),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const role = await createJobRole(ctx.db, input);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantJobRole',
+          targetId: role.id,
+          description: `Created job role "${role.key}"`,
+        });
+        return role;
+      } catch (err) {
+        mapJobRoleError(err);
+      }
+    }),
+
+  updateJobRole: staffProcedure
+    .input(
+      z
+        .object({
+          id: z.string(),
+          name: z.string().min(1).max(120).optional(),
+          description: z.string().max(2_000).nullable().optional(),
+          active: z.boolean().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...patch } = input;
+      try {
+        const role = await updateJobRole(ctx.db, id, patch);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantJobRole',
+          targetId: role.id,
+          description: `Updated job role "${role.key}"`,
+        });
+        return role;
+      } catch (err) {
+        mapJobRoleError(err);
+      }
+    }),
+
+  setJobRoleCapabilities: staffProcedure
+    .input(
+      z
+        .object({
+          jobRoleId: z.string(),
+          capabilities: z.array(z.string().min(1).max(120)).max(64),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await setJobRoleCapabilities(ctx.db, input.jobRoleId, input.capabilities);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantJobRole',
+          targetId: input.jobRoleId,
+          description: `Set job-role capabilities (${input.capabilities.length})`,
+        });
+        return result;
+      } catch (err) {
+        mapJobRoleError(err);
+      }
+    }),
+
+  listStaffJobRoles: staffProcedure
+    .input(z.object({ staffProfileId: z.string(), branchId: z.string().optional() }).strict())
+    .query(({ ctx, input }) =>
+      listStaffJobRoles(ctx.db, input.staffProfileId, { branchId: input.branchId })
+    ),
+
+  /**
+   * The admin console's multi-select save. `jobRoleIds` is the COMPLETE desired
+   * set for this person at this branch — roles missing from it are revoked. It is
+   * branch-scoped by design: saving the Downtown tab must not disturb the same
+   * person's roles at another branch.
+   */
+  setStaffJobRoles: staffProcedure
+    .input(
+      z
+        .object({
+          staffProfileId: z.string(),
+          branchId: z.string(),
+          jobRoleIds: z.array(z.string()).max(64),
+          actorStaffProfileId: z.string().nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await setStaffJobRoles(ctx.db, {
+          staffProfileId: input.staffProfileId,
+          branchId: input.branchId,
+          jobRoleIds: input.jobRoleIds,
+          actorStaffProfileId: input.actorStaffProfileId ?? null,
+        });
+        if (result.granted.length > 0 || result.revoked.length > 0) {
+          annotateAudit(ctx, {
+            targetType: 'RestaurantStaffProfile',
+            targetId: input.staffProfileId,
+            description: `Job roles updated at branch ${input.branchId}: +${result.granted.length} / -${result.revoked.length}`,
+            metadata: { granted: result.granted, revoked: result.revoked },
+          });
+        }
+        return result;
+      } catch (err) {
+        mapJobRoleError(err);
+      }
+    }),
+
+  listStaffJobRoleAudit: staffProcedure
+    .input(
+      z
+        .object({
+          staffProfileId: z.string(),
+          branchId: z.string().optional(),
+          take: z.number().int().min(1).max(500).default(100),
+        })
+        .strict()
+    )
+    .query(({ ctx, input }) =>
+      listStaffJobRoleAudit(ctx.db, input.staffProfileId, {
+        branchId: input.branchId,
+        take: input.take,
+      })
+    ),
+
+  /** The union of held-role capabilities and direct grants at one branch. */
+  resolveStaffCapabilities: staffProcedure
+    .input(z.object({ staffProfileId: z.string(), branchId: z.string() }).strict())
+    .query(async ({ ctx, input }) => {
+      const capabilities = await resolveStaffCapabilities(
+        ctx.db,
+        input.staffProfileId,
+        input.branchId
+      );
+      return { capabilities: [...capabilities].sort() };
+    }),
+
+  /** Who could be assigned a role's pooled work at a branch. */
+  listRoleHolders: staffProcedure
+    .input(z.object({ jobRoleId: z.string(), branchId: z.string() }).strict())
+    .query(({ ctx, input }) => listRoleHoldersAtBranch(ctx.db, input.jobRoleId, input.branchId)),
 });

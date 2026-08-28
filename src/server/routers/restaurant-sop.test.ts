@@ -65,6 +65,9 @@ function makeDb() {
     restaurantSopTemplateStep: model(),
     restaurantSopAssignment: model(),
     restaurantBranch: model(),
+    // SOP-1: createAssignment now resolves an assignee target before persisting.
+    restaurantJobRole: model(),
+    restaurantStaffProfile: model(),
   };
   (db as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
     fn(db)
@@ -176,6 +179,7 @@ describe('createAssignment — recurrence validation mapping', () => {
         frequency: 'DAILY',
         startDate: '2026-05-10',
         endDate: '2026-05-01',
+        assigneeTarget: { type: 'role', jobRoleId: 'jr1' },
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
@@ -183,6 +187,7 @@ describe('createAssignment — recurrence validation mapping', () => {
   it('creates when the branch, template, and rule are valid', async () => {
     db.restaurantBranch.findUnique.mockResolvedValue({ id: 'b1' });
     db.restaurantSopTemplate.findUnique.mockResolvedValue({ id: 't1' });
+    db.restaurantJobRole.findUnique.mockResolvedValue({ id: 'jr1', key: 'barista', active: true });
     const created = await caller().createAssignment({
       branchId: 'b1',
       templateId: 't1',
@@ -191,6 +196,7 @@ describe('createAssignment — recurrence validation mapping', () => {
       daysOfWeek: [1, 3, 5],
       startDate: '2026-05-01',
       dueTimeMinutes: 360,
+      assigneeTarget: { type: 'role', jobRoleId: 'jr1' },
     });
     expect(created.branchId).toBe('b1');
     expect(db.restaurantSopAssignment.create).toHaveBeenCalledTimes(1);

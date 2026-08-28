@@ -2287,6 +2287,9 @@ model RestaurantBranch {
   labourCostFacts             LabourCostFact[]
   taxProfileVersions          RestaurantTaxProfileVersion[]
   taxTransactionSnapshots     RestaurantTaxTransactionSnapshot[]
+  // SOP-1: job-role holdings and direct capability grants are branch-scoped.
+  staffJobRoles               RestaurantStaffJobRole[]
+  staffCapabilityGrants       RestaurantStaffCapabilityGrant[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -2537,6 +2540,19 @@ model RestaurantStaffProfile {
   sopVerifications       RestaurantSopVerification[]
   sopEscalationEvents    RestaurantSopEscalationEvent[]
   notifications          RestaurantNotification[]
+  // SOP-1: branch-scoped job-role holdings (many-to-many), the direct capability
+  // grants that union with them, the append-only membership audit (as subject,
+  // actor, or grantor), and the two SOP assignee paths — a PERSON-target
+  // assignment, an occurrence assigned directly, and an occurrence this operator
+  // claimed out of a role pool.
+  jobRoles               RestaurantStaffJobRole[]            @relation("StaffJobRoleHolder")
+  jobRolesGranted        RestaurantStaffJobRole[]            @relation("StaffJobRoleGrantor")
+  directCapabilityGrants RestaurantStaffCapabilityGrant[]    @relation("StaffDirectCapabilityGrant")
+  jobRoleAudits          RestaurantStaffJobRoleAudit[]       @relation("StaffJobRoleAuditSubject")
+  jobRoleAuditsActed     RestaurantStaffJobRoleAudit[]       @relation("StaffJobRoleAuditActor")
+  sopAssignmentsTargeted RestaurantSopAssignment[]           @relation("SopAssignmentAssignee")
+  sopOccurrencesAssigned RestaurantSopOccurrence[]           @relation("SopOccurrenceAssignee")
+  sopOccurrencesClaimed  RestaurantSopOccurrence[]           @relation("SopOccurrenceClaimer")
 
   @@index([organizationId])
   @@index([userId])
@@ -5196,6 +5212,29 @@ enum RestaurantSopRecurrenceFrequency {
   MONTHLY
 }
 
+/// SOP-1: how an assignment names WHO owes the work. PERSON pins one named staff
+/// profile (`assigneeStaffProfileId`) and every generated occurrence is assigned
+/// directly. ROLE pins one job role (`assigneeJobRoleId`) and every generated
+/// occurrence becomes an unclaimed, branch-scoped POOL item any eligible holder
+/// of that role may claim. A CHECK constraint in the migration enforces that
+/// exactly the matching column is set, so the two modes never overlap on one
+/// assignment row. The modes coexist ACROSS assignments: the same template may
+/// carry a ROLE assignment and a PERSON assignment on the same branch, and the
+/// per-staff resolver unions and de-duplicates the two paths.
+enum RestaurantSopAssigneeTargetType {
+  PERSON
+  ROLE
+}
+
+/// SOP-1: an audited job-role membership change. GRANTED adds a (staff, role,
+/// branch) holding; REVOKED removes it. Both are appended to an append-only
+/// trail so an immediately-effective multi-select edit stays reconstructible
+/// after the membership row itself is gone.
+enum RestaurantStaffJobRoleChangeKind {
+  GRANTED
+  REVOKED
+}
+
 /// M7/§11.5: the scope an escalation policy applies to. ORG applies org-wide;
 /// BRANCH narrows to one branch (branchId set).
 enum RestaurantSopEscalationScope {
@@ -5408,14 +5447,28 @@ model RestaurantSopAssignment {
   createdAt      DateTime                         @default(now())
   updatedAt      DateTime                         @updatedAt
 
-  branch      RestaurantBranch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  template    RestaurantSopTemplate     @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  occurrences RestaurantSopOccurrence[]
+  // SOP-1: the assignee target. Exactly one of the two id columns is set, and it
+  // must be the one matching `assigneeTargetType` — a CHECK constraint in the
+  // migration enforces both halves, so an inconsistent row cannot exist even if
+  // a caller bypasses the domain module. Pre-existing rows migrate to a PERSON
+  // target only when they already name a person; the backfill defaults them to
+  // ROLE with a seeded fallback role so no row is left violating the CHECK.
+  assigneeTargetType     RestaurantSopAssigneeTargetType @default(ROLE)
+  assigneeStaffProfileId String?
+  assigneeJobRoleId      String?
+
+  branch          RestaurantBranch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  template        RestaurantSopTemplate     @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  assigneeStaff   RestaurantStaffProfile?   @relation("SopAssignmentAssignee", fields: [assigneeStaffProfileId], references: [id], onDelete: Cascade)
+  assigneeJobRole RestaurantJobRole?        @relation(fields: [assigneeJobRoleId], references: [id], onDelete: Cascade)
+  occurrences     RestaurantSopOccurrence[]
 
   @@index([organizationId])
   @@index([branchId])
   @@index([templateId])
   @@index([active])
+  @@index([assigneeStaffProfileId])
+  @@index([assigneeJobRoleId])
   @@map("restaurant_sop_assignments")
 }
 
@@ -5440,9 +5493,25 @@ model RestaurantSopOccurrence {
   createdAt         DateTime                      @default(now())
   updatedAt         DateTime                      @updatedAt
 
+  // SOP-1: WHO owes this occurrence, frozen at generation time so a later edit to
+  // the assignment never rewrites recorded history (the same C3 rule the pinned
+  // templateVersionId follows).
+  //   PERSON target → `assignedStaffProfileId` is set and `poolJobRoleId` is null.
+  //   ROLE   target → `poolJobRoleId` is set and the occurrence starts UNCLAIMED.
+  // The first claim is an atomic conditional UPDATE guarded by
+  // `claimedByStaffProfileId IS NULL`, so exactly one concurrent claimer wins;
+  // re-claiming by the same holder is idempotent rather than an error.
+  assignedStaffProfileId  String?
+  poolJobRoleId           String?
+  claimedByStaffProfileId String?
+  claimedAt               DateTime?
+
   assignment       RestaurantSopAssignment        @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   templateVersion  RestaurantSopTemplateVersion   @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
   branch           RestaurantBranch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  assignedStaff    RestaurantStaffProfile?        @relation("SopOccurrenceAssignee", fields: [assignedStaffProfileId], references: [id], onDelete: SetNull)
+  poolJobRole      RestaurantJobRole?             @relation(fields: [poolJobRoleId], references: [id], onDelete: SetNull)
+  claimedBy        RestaurantStaffProfile?        @relation("SopOccurrenceClaimer", fields: [claimedByStaffProfileId], references: [id], onDelete: SetNull)
   steps            RestaurantSopOccurrenceStep[]
   evidence         RestaurantSopEvidence[]
   verifications    RestaurantSopVerification[]
@@ -5456,6 +5525,10 @@ model RestaurantSopOccurrence {
   @@index([status])
   @@index([businessDate])
   @@index([dueAt])
+  @@index([assignedStaffProfileId])
+  @@index([claimedByStaffProfileId])
+  // The pool query: unclaimed ROLE-target occurrences for one role at one branch.
+  @@index([poolJobRoleId, branchId, claimedByStaffProfileId])
   @@map("restaurant_sop_occurrences")
 }
 
@@ -5616,6 +5689,138 @@ model RestaurantSopEscalationEvent {
   @@index([escalationStepId])
   @@index([actorStaffProfileId])
   @@map("restaurant_sop_escalation_events")
+}
+
+/// SOP-1: a restaurant JOB ROLE (barista, cashier, kitchen, manager, …) as a
+/// first-class record. This is deliberately a SEPARATE concept from the platform
+/// `OrganizationRole`, and the audit that produced it is recorded here rather
+/// than repeated in prose: `OrganizationRole` is keyed to a `User` through the
+/// SINGULAR `User.organizationRoleId` column, so it can express neither "this
+/// operator has no web login" (C3 — a staff profile need not be a `User`) nor
+/// "this person is a barista AND a cashier". Job roles are therefore keyed to the
+/// STAFF PROFILE and held many-to-many, per branch. There is still exactly ONE
+/// role concept for restaurant job duties — this one; nothing else grants a
+/// restaurant job role, and the platform role continues to govern back-office
+/// web permissions untouched.
+model RestaurantJobRole {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  name           String
+  description    String?
+  isSystem       Boolean  @default(false)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  capabilities    RestaurantJobRoleCapability[]
+  holdings        RestaurantStaffJobRole[]
+  auditEntries    RestaurantStaffJobRoleAudit[]
+  sopAssignments  RestaurantSopAssignment[]
+  poolOccurrences RestaurantSopOccurrence[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+  @@index([active])
+  @@map("restaurant_job_roles")
+}
+
+/// SOP-1: one capability granted by a job role. A staff profile's effective
+/// capability set is the UNION over every role they hold (in scope) plus their
+/// direct per-staff grants — never the intersection, and never "the last role
+/// wins". A capability appearing on several held roles resolves once.
+model RestaurantJobRoleCapability {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  jobRoleId      String
+  capability     String
+  createdAt      DateTime @default(now())
+
+  jobRole RestaurantJobRole @relation(fields: [jobRoleId], references: [id], onDelete: Cascade)
+
+  @@unique([jobRoleId, capability])
+  @@index([organizationId])
+  @@index([jobRoleId])
+  @@map("restaurant_job_role_capabilities")
+}
+
+/// SOP-1: the many-to-many holding — this staff profile holds this job role AT
+/// THIS BRANCH. `branchId` is NOT NULL on purpose: a nullable "all branches"
+/// sentinel would defeat the unique index (PostgreSQL treats NULLs as distinct,
+/// so the same org-wide holding could be inserted twice). Org-wide duty is
+/// expressed as one holding per branch, which keeps pool eligibility a plain
+/// branch-equality lookup.
+model RestaurantStaffJobRole {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  staffProfileId   String
+  jobRoleId        String
+  branchId         String
+  grantedByStaffId String?
+  grantedAt        DateTime @default(now())
+
+  staffProfile RestaurantStaffProfile  @relation("StaffJobRoleHolder", fields: [staffProfileId], references: [id], onDelete: Cascade)
+  jobRole      RestaurantJobRole       @relation(fields: [jobRoleId], references: [id], onDelete: Cascade)
+  branch       RestaurantBranch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  grantedBy    RestaurantStaffProfile? @relation("StaffJobRoleGrantor", fields: [grantedByStaffId], references: [id], onDelete: SetNull)
+
+  @@unique([staffProfileId, jobRoleId, branchId])
+  @@index([organizationId])
+  @@index([staffProfileId])
+  @@index([jobRoleId])
+  @@index([branchId])
+  @@index([jobRoleId, branchId])
+  @@map("restaurant_staff_job_roles")
+}
+
+/// SOP-1: a capability granted DIRECTLY to one staff profile at one branch,
+/// outside any role. This is the "plus direct grants" half of permission
+/// resolution; it unions with the held-role capabilities and never subtracts.
+model RestaurantStaffCapabilityGrant {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  staffProfileId String
+  branchId       String
+  capability     String
+  createdAt      DateTime @default(now())
+
+  staffProfile RestaurantStaffProfile @relation("StaffDirectCapabilityGrant", fields: [staffProfileId], references: [id], onDelete: Cascade)
+  branch       RestaurantBranch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([staffProfileId, branchId, capability])
+  @@index([organizationId])
+  @@index([staffProfileId])
+  @@index([branchId])
+  @@map("restaurant_staff_capability_grants")
+}
+
+/// SOP-1: the APPEND-ONLY audit trail for job-role membership. The migration
+/// grants SELECT + INSERT policies only (the M5/M6 append-only pattern — UPDATE
+/// and DELETE are denied by policy omission under FORCE RLS), so a revoke can
+/// never be erased. `jobRoleId` is `SetNull` rather than `Cascade` because
+/// deleting a role must not delete the record that people once held it; the
+/// denormalised `jobRoleKey` keeps the entry readable afterwards.
+model RestaurantStaffJobRoleAudit {
+  id                  String                           @id @default(cuid())
+  organizationId      String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  staffProfileId      String
+  jobRoleId           String?
+  jobRoleKey          String
+  branchId            String
+  change              RestaurantStaffJobRoleChangeKind
+  actorStaffProfileId String?
+  createdAt           DateTime                         @default(now())
+
+  staffProfile RestaurantStaffProfile  @relation("StaffJobRoleAuditSubject", fields: [staffProfileId], references: [id], onDelete: Cascade)
+  jobRole      RestaurantJobRole?      @relation(fields: [jobRoleId], references: [id], onDelete: SetNull)
+  actor        RestaurantStaffProfile? @relation("StaffJobRoleAuditActor", fields: [actorStaffProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([staffProfileId])
+  @@index([jobRoleId])
+  @@index([branchId])
+  @@index([createdAt])
+  @@map("restaurant_staff_job_role_audits")
 }
 
 /// M7/D21: an in-app notification addressed to a staff operator, optionally
