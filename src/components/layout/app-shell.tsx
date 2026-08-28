@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
@@ -81,16 +81,33 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
   if (assistantOpen && !assistantMounted) setAssistantMounted(true);
   const brandStyle = tenantBrandTokens(brand) as CSSProperties;
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false);
+    };
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [mobileMenuOpen]);
+
   return (
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
       {/* Mobile overlay */}
       {mobileMenuOpen && (
         <>
           <div
+            aria-hidden="true"
             className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile navigation"
+            className="fixed inset-y-0 left-0 z-50 lg:hidden"
+          >
             <Sidebar
               brand={brand}
               onNavigate={() => setMobileMenuOpen(false)}
