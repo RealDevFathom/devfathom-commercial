@@ -166,6 +166,21 @@ const MENU_IMPORT_TABLES = [
   'restaurant_menu_import_lines',
 ] as const;
 
+// B-wave job roles: B0/SOP-1 (WHA-224, integrated by WHA-284) shipped the job-role
+// record, its capabilities, the staff↔role holding, the per-person capability
+// overrides and the append-only membership trail; B1 (WHA-285) added the
+// append-only trail for those overrides. Listed here under the same WHA-51
+// complete allowlist contract as every set above — the first five were shipped
+// without a listing, which is why this pin was already red before B1.
+const JOB_ROLE_TABLES = [
+  'restaurant_job_roles',
+  'restaurant_job_role_capabilities',
+  'restaurant_staff_job_roles',
+  'restaurant_staff_capability_grants',
+  'restaurant_staff_job_role_audits',
+  'restaurant_staff_capability_audits',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -495,6 +510,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M8_TABLES,
         ...TAX_CORE_TABLES,
         ...MENU_IMPORT_TABLES,
+        ...JOB_ROLE_TABLES,
       ].sort()
     );
 

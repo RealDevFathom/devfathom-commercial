@@ -7,11 +7,13 @@ import {
   RESTAURANT_LIMIT_KEYS,
   RESTAURANT_MODULES,
   RESTAURANT_PACKAGES,
+  RESTAURANT_JOB_ROLE_TEMPLATES,
   RESTAURANT_ROLE_TEMPLATES,
   VERTICALS,
   assertPackageCompatibleWithVertical,
   isPackageCompatibleWithVertical,
   isRestaurantModuleKey,
+  jobRoleTemplatesForVertical,
   limitKeysForVertical,
   mandatoryModulesForVertical,
   modulesForVertical,
@@ -128,6 +130,39 @@ describe('role templates and capabilities (§8)', () => {
     expect(new Set(RESTAURANT_CAPABILITIES).size).toBe(RESTAURANT_CAPABILITIES.length);
     expect(new Set(RESTAURANT_CAPABILITY_NAMESPACES).size).toBe(
       RESTAURANT_CAPABILITY_NAMESPACES.length
+    );
+  });
+});
+
+describe('B1/WHA-285 job-role profiles (§8 cont.)', () => {
+  it('supplies the ten floor job-role templates', () => {
+    expect(RESTAURANT_JOB_ROLE_TEMPLATES).toHaveLength(10);
+  });
+
+  it('jobRoleTemplatesForVertical is restaurant-only', () => {
+    expect(jobRoleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_JOB_ROLE_TEMPLATES);
+    expect(jobRoleTemplatesForVertical('AGENCY')).toEqual([]);
+  });
+
+  it('draws every job-role capability from the catalog, and never uses `*`', () => {
+    // The ORGANIZATION-role owner template may use `*`; a job role may not, because
+    // a per-person DENY has to be able to subtract a named capability from it.
+    for (const role of RESTAURANT_JOB_ROLE_TEMPLATES) {
+      for (const capability of role.capabilities) {
+        expect(capability).not.toBe('*');
+        expect(RESTAURANT_CAPABILITIES).toContain(capability);
+        expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain(capability.split(':')[0]);
+      }
+    }
+  });
+
+  it('keeps the two §8 template lists separate objects', () => {
+    // Job roles key a staff profile; organization roles key an app user. Shared
+    // keys are the same job on different subjects, never the same record.
+    expect(RESTAURANT_JOB_ROLE_TEMPLATES).not.toBe(RESTAURANT_ROLE_TEMPLATES);
+    expect(RESTAURANT_ROLE_TEMPLATES.some((role) => role.key === 'shift-supervisor')).toBe(false);
+    expect(RESTAURANT_JOB_ROLE_TEMPLATES.some((role) => role.key === 'general-manager')).toBe(
+      false
     );
   });
 });
