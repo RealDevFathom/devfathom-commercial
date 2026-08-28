@@ -63,6 +63,7 @@ const platformDb = {
     })),
   },
   organizationRole: { create: vi.fn(async () => ({ id: 'role_admin' })) },
+  organizationDepartment: { createMany: vi.fn(async () => ({ count: 6 })) },
   user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
   organizationModule: {
     createMany: mocks.moduleCreateMany,
