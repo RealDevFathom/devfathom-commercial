@@ -46,11 +46,22 @@ vi.mock('@/lib/trpc', () => ({
       restaurantStaff: {
         list: { invalidate: mocks.invalidate },
         listCredentials: { invalidate: mocks.invalidate },
+        // SOP-1: the job-roles dialog invalidates its own two queries on save.
+        listStaffJobRoles: { invalidate: mocks.invalidate },
+        listStaffJobRoleAudit: { invalidate: mocks.invalidate },
       },
     }),
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
       listCredentials: { useQuery: () => mocks.credentials },
+      // SOP-1: the job-roles dialog is mounted (closed) by the console, so its
+      // hooks must resolve even though these cases never open it.
+      listJobRoles: { useQuery: () => ({ data: [], isLoading: false }) },
+      listStaffJobRoles: { useQuery: () => ({ data: [], isLoading: false }) },
+      listStaffJobRoleAudit: { useQuery: () => ({ data: [], isLoading: false }) },
+      setStaffJobRoles: {
+        useMutation: () => ({ mutate: mocks.noopMutate, isPending: false }),
+      },
       create: {
         useMutation: () => ({
           mutate: mocks.noopMutate,
