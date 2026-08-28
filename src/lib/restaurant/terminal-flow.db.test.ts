@@ -138,9 +138,11 @@ beforeAll(async () => {
     },
   };
 
-  // A minimal, ACTIVE organization so the transport's org-status gate passes.
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  // A minimal, ACTIVE organization so the transport's org-status gate passes,
+  // entitled to `restaurant-pos` so the WHA-192 module gate passes too (the
+  // transport answers 403 before the handler when POS is disabled).
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha22-term-${suffix}`,
@@ -148,8 +150,22 @@ beforeAll(async () => {
         displayName: 'Terminal Test',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    const posModule = await tx.platformModule.upsert({
+      where: { key: 'restaurant-pos' },
+      update: {},
+      create: { key: 'restaurant-pos', name: 'POS and Fulfilment', category: 'Operations' },
+    });
+    await tx.organizationModule.create({
+      data: {
+        organizationId: orgId,
+        moduleId: posModule.id,
+        // Backdated: suites that travel to a past business date must stay
+        // entitled — the override only applies once `startsAt` has passed.
+        startsAt: new Date(0),
+      },
+    });
+  });
 
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: branchId, name: 'Main' } });

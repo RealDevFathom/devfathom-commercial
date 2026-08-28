@@ -220,8 +220,10 @@ beforeAll(async () => {
   };
 
   await assertRlsEnforcingRole(deps.withPlatformDb);
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  // ACTIVE and entitled to `restaurant-pos`: the terminal transport answers 403
+  // before the handler when the module is disabled (WHA-192).
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha143-${suffix}`,
@@ -229,8 +231,22 @@ beforeAll(async () => {
         displayName: 'WHA-143 Rollback',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    const posModule = await tx.platformModule.upsert({
+      where: { key: 'restaurant-pos' },
+      update: {},
+      create: { key: 'restaurant-pos', name: 'POS and Fulfilment', category: 'Operations' },
+    });
+    await tx.organizationModule.create({
+      data: {
+        organizationId: orgId,
+        moduleId: posModule.id,
+        // Backdated: suites that travel to a past business date must stay
+        // entitled — the override only applies once `startsAt` has passed.
+        startsAt: new Date(0),
+      },
+    });
+  });
 
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ids.branch, name: 'Rollback' } });
