@@ -134,6 +134,18 @@ const M8_TABLES = [
   'restaurant_labour_cost_facts',
 ] as const;
 
+// Tax core: the immutable official-source register plus the versioned profile,
+// rule, transaction and rate-bucket snapshot tables. Listed here under the same
+// WHA-51 complete allowlist contract as every set above: a new restaurant table
+// that is not listed, or a listed table that is not shipped, fails the pin below.
+const TAX_CORE_TABLES = [
+  'restaurant_tax_official_sources',
+  'restaurant_tax_profile_versions',
+  'restaurant_tax_rule_versions',
+  'restaurant_tax_transaction_snapshots',
+  'restaurant_tax_rate_bucket_snapshots',
+] as const;
+
 // R-lane (WHA-194): OCR menu import — upload, per-page extraction and the review
 // queue that gates catalog creation. Listed here under the same WHA-51 complete
 // allowlist contract as every set above: a new restaurant table that is not
@@ -470,6 +482,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M6_TABLES,
         ...M7_TABLES,
         ...M8_TABLES,
+        ...TAX_CORE_TABLES,
         ...MENU_IMPORT_TABLES,
       ].sort()
     );
