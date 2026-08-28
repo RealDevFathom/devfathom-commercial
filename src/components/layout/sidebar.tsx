@@ -123,6 +123,7 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   { label: 'SOP board', href: '/restaurant/sop', icon: ListChecks, group: 'Restaurant' },
+  { label: 'SOP reports', href: '/restaurant/sop/reports', icon: BarChart3, group: 'Restaurant' },
   {
     label: 'SOP admin',
     href: '/restaurant/sop/admin',
