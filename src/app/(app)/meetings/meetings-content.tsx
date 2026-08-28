@@ -727,14 +727,15 @@ const MeetingCard = memo(function MeetingCard({
           )}
         </div>
 
-        {/* Opens the in-app JaaS video room for active attendees. */}
+        {/* Sends an attendee to the occurrence list, because the room is
+            occurrence-scoped and the series alone does not name one. */}
         {(() => {
           const isAttendee = meeting.attendees.some((a) => a.user.id === currentUserId);
           const hasEnded = renderedAt >= end.getTime();
           if (!isAttendee || hasEnded) return null;
           return (
             <Link
-              href={`/meetings/${meeting.id}/call`}
+              href={`/meetings/${meeting.id}#occurrences`}
               className="flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
               title="Join in-app video call"
             >
