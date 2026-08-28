@@ -2,8 +2,8 @@
 
 | Field                         | Value                                                                                                                                          |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Document version              | `1.0`                                                                                                                                          |
-| Document status               | `PROPOSED — AWAITING ACCEPTANCE (WHA-267)`                                                                                                     |
+| Document version              | `1.1`                                                                                                                                          |
+| Document status               | `ACCEPTED — PROVISIONAL (board delivery-acceptance 2026-08-28, WHA-267; no independent review; defects are raised as WHA-267 comments, not worked around silently)` |
 | Spec level                    | `L3 — full specification with testable contracts`                                                                                              |
 | Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                                 |
 | Product                       | DevFathom Commercial — restaurant vertical, loyalty module                                                                                     |
@@ -379,7 +379,7 @@ Platform-issuer credentials (all platform-scope; **no per-tenant issuer credenti
 
 ## 19. Implementation dependency DAG and lanes
 
-Non-overlapping file lanes, one owner each. This DAG is the routing input for the follow-on milestone; **no lane starts until this document is accepted**.
+Non-overlapping file lanes, one owner each. This DAG is the routing input for the follow-on milestone. Acceptance gate satisfied: the board accepted delivery on 2026-08-28 (provisional, no independent review) — lanes may start, treating this document as the governing contract; a lane that finds a defect raises it as a WHA-267 comment rather than working around it silently.
 
 ```
 L1 ──┬── L2 ──┬── L6
@@ -412,4 +412,4 @@ File-conflict notes for the router: `proxy.ts` is touched by L2 and L4 — seque
 
 ## 21. Document lifecycle
 
-This revision is published for acceptance (WHA-267). Upon acceptance, the follow-on milestone routes lanes L1–L8 through the Chief of Staff with this document as the governing contract; any deviation requires an accepted ADR linking the affected section (§1.1 precedence of the restaurant plan applies to this document identically).
+Version 1.0 was published for acceptance (WHA-267) and accepted by the board on 2026-08-28 as a provisional delivery-acceptance (no independent review; version 1.1 records that status). The follow-on milestone routes lanes L1–L8 through the Chief of Staff with this document as the governing contract; any deviation requires an accepted ADR linking the affected section (§1.1 precedence of the restaurant plan applies to this document identically). Defects found during implementation are raised as WHA-267 comments, not worked around silently.
