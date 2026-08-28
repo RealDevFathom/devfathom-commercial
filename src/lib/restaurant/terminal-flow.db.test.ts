@@ -139,8 +139,8 @@ beforeAll(async () => {
   };
 
   // A minimal, ACTIVE organization so the transport's org-status gate passes.
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha22-term-${suffix}`,
@@ -148,8 +148,16 @@ beforeAll(async () => {
         displayName: 'Terminal Test',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    const posModule = await tx.platformModule.upsert({
+      where: { key: 'restaurant-pos' },
+      update: {},
+      create: { key: 'restaurant-pos', name: 'POS', category: 'Operations' },
+    });
+    await tx.organizationModule.create({
+      data: { organizationId: orgId, moduleId: posModule.id },
+    });
+  });
 
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: branchId, name: 'Main' } });

@@ -271,8 +271,8 @@ beforeAll(async () => {
     [orgA, `wha44-a-${suffix}`],
     [orgB, `wha44-b-${suffix}`],
   ] as const) {
-    await deps.withPlatformDb((tx) =>
-      tx.organization.create({
+    await deps.withPlatformDb(async (tx) => {
+      await tx.organization.create({
         data: {
           id: orgId,
           slug,
@@ -280,8 +280,16 @@ beforeAll(async () => {
           displayName: 'M4L4 Test',
           status: 'ACTIVE',
         },
-      })
-    );
+      });
+      const posModule = await tx.platformModule.upsert({
+        where: { key: 'restaurant-pos' },
+        update: {},
+        create: { key: 'restaurant-pos', name: 'POS', category: 'Operations' },
+      });
+      await tx.organizationModule.create({
+        data: { organizationId: orgId, moduleId: posModule.id },
+      });
+    });
   }
 
   await deps.withTenantDb(orgA, async (tx) => {

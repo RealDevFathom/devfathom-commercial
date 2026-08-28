@@ -256,8 +256,8 @@ beforeAll(async () => {
     terminal: { establish, unlock },
   };
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgA,
         slug: `wha59-${suffix}`,
@@ -265,8 +265,16 @@ beforeAll(async () => {
         displayName: 'M5L5 Test',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    const posModule = await tx.platformModule.upsert({
+      where: { key: 'restaurant-pos' },
+      update: {},
+      create: { key: 'restaurant-pos', name: 'POS', category: 'Operations' },
+    });
+    await tx.organizationModule.create({
+      data: { organizationId: orgA, moduleId: posModule.id },
+    });
+  });
 
   await deps.withTenantDb(orgA, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchA, name: 'A' } });

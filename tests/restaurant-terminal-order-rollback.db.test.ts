@@ -220,8 +220,8 @@ beforeAll(async () => {
   };
 
   await assertRlsEnforcingRole(deps.withPlatformDb);
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha143-${suffix}`,
@@ -229,8 +229,16 @@ beforeAll(async () => {
         displayName: 'WHA-143 Rollback',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    const posModule = await tx.platformModule.upsert({
+      where: { key: 'restaurant-pos' },
+      update: {},
+      create: { key: 'restaurant-pos', name: 'POS', category: 'Operations' },
+    });
+    await tx.organizationModule.create({
+      data: { organizationId: orgId, moduleId: posModule.id },
+    });
+  });
 
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ids.branch, name: 'Rollback' } });
