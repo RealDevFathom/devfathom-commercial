@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -235,7 +234,13 @@ export const restaurantCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
       await requireBranch(ctx.db, input.branchId);
-      const key = process.env.CAMERA_CREDENTIAL_KEY ?? randomBytes(32).toString('base64');
+      const key = process.env.CAMERA_CREDENTIAL_KEY;
+      if (!key) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Camera credential storage is not configured.',
+        });
+      }
       const credential = await ctx.db.restaurantCameraCredential.create({
         data: {
           sealedValue: sealCameraCredential(

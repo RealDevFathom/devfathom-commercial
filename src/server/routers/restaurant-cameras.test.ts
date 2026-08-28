@@ -13,4 +13,10 @@ describe('restaurant cameras router security contract', () => {
     expect(source).toContain('approvingStaffProfileId: input.approvingStaffProfileId');
     expect(source).toContain('authenticateOperator');
   });
+  test('fails closed when persistent camera credential encryption is not configured', () => {
+    expect(source).toContain('const key = process.env.CAMERA_CREDENTIAL_KEY;');
+    expect(source).toContain("code: 'INTERNAL_SERVER_ERROR'");
+    expect(source).toContain('Camera credential storage is not configured.');
+    expect(source).not.toContain("process.env.CAMERA_CREDENTIAL_KEY ?? randomBytes");
+  });
 });
