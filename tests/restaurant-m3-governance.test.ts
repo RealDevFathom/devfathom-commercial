@@ -115,6 +115,17 @@ const M7_TABLES = [
   'restaurant_notification_deliveries',
 ] as const;
 
+// SOP-1 (WHA-224): restaurant job roles, staff role membership/audit records,
+// and capability grants. Exact list keeps the WHA-51 complete allowlist pin
+// aligned with the tables shipped by the SOP job-role assignment migration.
+const SOP_JOB_ROLE_TABLES = [
+  'restaurant_job_role_capabilities',
+  'restaurant_job_roles',
+  'restaurant_staff_capability_grants',
+  'restaurant_staff_job_role_audits',
+  'restaurant_staff_job_roles',
+] as const;
+
 // M8 customer identity/consent, loyalty ledger, insight projections and
 // restricted labour-cost seam. Exact list keeps generic restaurant governance
 // fail-closed when a table is added without an explicit review.
@@ -480,6 +491,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M5_TABLES,
         ...M6_TABLES,
         ...M7_TABLES,
+        ...SOP_JOB_ROLE_TABLES,
         ...M8_TABLES,
         ...TAX_CORE_TABLES,
         ...MENU_IMPORT_TABLES,

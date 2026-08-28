@@ -102,6 +102,9 @@ const M7_COLUMNS = {
     'active',
     'createdAt',
     'updatedAt',
+    'assigneeJobRoleId',
+    'assigneeStaffProfileId',
+    'assigneeTargetType',
   ],
   restaurant_sop_occurrences: [
     'id',
