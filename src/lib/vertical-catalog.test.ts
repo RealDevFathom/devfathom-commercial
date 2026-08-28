@@ -8,6 +8,7 @@ import {
   RESTAURANT_MODULES,
   RESTAURANT_PACKAGES,
   RESTAURANT_ROLE_TEMPLATES,
+  SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
   VERTICALS,
   assertPackageCompatibleWithVertical,
   isPackageCompatibleWithVertical,
@@ -291,6 +292,13 @@ describe('commercial packages (§13)', () => {
     expect(enterprise.moduleKeys).toHaveLength(RESTAURANT_MODULES.length);
     for (const key of essentials.moduleKeys) expect(operations.moduleKeys).toContain(key);
     for (const key of operations.moduleKeys) expect(enterprise.moduleKeys).toContain(key);
+  });
+
+  it('uses one high anti-abuse SOP template guardrail across every package', () => {
+    expect(SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL).toBe(1000);
+    for (const pkg of RESTAURANT_PACKAGES) {
+      expect(pkg.defaultLimits['sop.templates.max']).toBe(SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL);
+    }
   });
 
   it('every default limit uses a defined §7 limit key', () => {
