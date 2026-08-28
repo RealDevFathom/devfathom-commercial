@@ -48,7 +48,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     return {
       entitlements: entitlementSnapshot,
       brand: {
-        organizationId: organization?.id ?? actor.organization.id,
+        // WHA-276: the chrome is only allowed to display an identity it can
+        // attribute to a tenant, so the brand carries the organization it was
+        // resolved for. `resolveTenantActor` has already proven this equals the
+        // session's organizationId (host and session must agree, and the shared
+        // host resolves by the session's own id).
+        organizationId: actor.organization.id,
         displayName: organization?.displayName ?? actor.organization.displayName,
         logoUrl: organization?.brand?.logoUrl ?? null,
         markUrl: organization?.brand?.markUrl ?? null,
