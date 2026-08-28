@@ -29,6 +29,10 @@ Use one status on every capability claim:
 | Release owners | [Living status ledger](status-ledger.md) | Evidence, blockers, owners, and next gates |
 | Documentation owners | [Documentation QA](qa.md) | Link, stale-reference, and consistency checks |
 
+## Module PRDs
+
+- [Kitchen Display System (KDS)](product/modules/kds.md) — station queue, ticket lifecycle, actions, permissions, and acceptance criteria
+
 ## Technical reference
 
 - [Tenant/RLS architecture](admin-platform/architecture-tenancy.md)
