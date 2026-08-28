@@ -201,9 +201,9 @@ export function LoyaltyConsole() {
 
   const customers = customersQuery.data?.customers ?? [];
   const activeCustomerId =
-    (selectedCustomerId && customers.some((customer) => customer.id === selectedCustomerId)
+    selectedCustomerId && customers.some((customer) => customer.id === selectedCustomerId)
       ? selectedCustomerId
-      : customers[0]?.id) ?? null;
+      : null;
   const detailQuery = trpc.restaurantCustomers.detail.useQuery(
     { customerId: activeCustomerId ?? '' },
     { enabled: moduleEnabled && Boolean(activeCustomerId) }

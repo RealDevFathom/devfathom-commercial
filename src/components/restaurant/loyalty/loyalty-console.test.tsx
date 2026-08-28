@@ -336,6 +336,7 @@ describe('Customers & Loyalty console', () => {
 
   it('renders operational data with keyboard-scrollable tables and explicit consent defaults', () => {
     renderConsole();
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
 
     expect(
       screen.getByRole('heading', { level: 1, name: 'Customers & Loyalty' })
@@ -368,6 +369,32 @@ describe('Customers & Loyalty console', () => {
 
     expect(screen.getByText('No customers found')).toBeInTheDocument();
     expect(screen.getByText('No customer selected')).toBeInTheDocument();
+  });
+
+  it('waits for an explicit customer selection and allows the selection to change', () => {
+    const secondCustomer = {
+      ...mocks.initial.customers.customers[0]!,
+      id: 'customer_2',
+      displayName: 'Grace Hopper',
+      givenName: 'Grace',
+      familyName: 'Hopper',
+      identifiers: [],
+      interactions: [],
+      tags: [],
+    };
+    mocks.customers.data = {
+      customers: [...mocks.initial.customers.customers, secondCustomer],
+      nextCursor: null,
+    };
+    renderConsole();
+
+    expect(screen.getByText('No customer selected')).toBeInTheDocument();
+    const viewButtons = screen.getAllByRole('button', { name: 'View' });
+    fireEvent.click(viewButtons[0]!);
+    expect(viewButtons[0]).toHaveAccessibleName('Selected');
+    fireEvent.click(viewButtons[1]!);
+    expect(viewButtons[0]).toHaveAccessibleName('View');
+    expect(viewButtons[1]).toHaveAccessibleName('Selected');
   });
 
   it('renders a retryable generic error state', () => {
@@ -416,6 +443,7 @@ describe('Customers & Loyalty console', () => {
 
   it('routes tag assignment through the named customer contract and announces success', () => {
     renderConsole();
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
     fireEvent.change(screen.getByLabelText('Assign tag'), { target: { value: 'tag_vip' } });
     fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
 
