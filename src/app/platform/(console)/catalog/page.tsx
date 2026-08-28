@@ -8,7 +8,7 @@ import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
 export default async function CatalogPage() {
   const data = await withPlatformDb(async (db) => {
-    const [modules, packages] = await Promise.all([
+    const [modules, packages, cameraPresets] = await Promise.all([
       db.platformModule.findMany({
         orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }],
         include: { _count: { select: { organizations: true, contracts: true } } },
@@ -20,8 +20,11 @@ export default async function CatalogPage() {
           _count: { select: { organizations: true } },
         },
       }),
+      db.platformCameraBrandPreset.findMany({
+        orderBy: [{ sortOrder: 'asc' }, { familyName: 'asc' }],
+      }),
     ]);
-    return { modules, packages };
+    return { modules, packages, cameraPresets };
   });
 
   return (
@@ -34,6 +37,107 @@ export default async function CatalogPage() {
 
       <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="min-w-0 space-y-7">
+          <section className="border border-border-default bg-surface-card p-5">
+            <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent-brand">
+              Camera catalog
+            </p>
+            <h2 className="mt-1 font-display text-xl font-semibold">Camera brand presets</h2>
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              {data.cameraPresets.map((preset) => (
+                <PlatformCommandForm
+                  key={preset.id}
+                  compact
+                  action="catalog.camerapreset"
+                  submitLabel="Update preset"
+                  fields={[
+                    { name: 'id', label: 'Preset', type: 'hidden', defaultValue: preset.id },
+                    { name: 'key', label: 'Key', required: true, defaultValue: preset.key },
+                    {
+                      name: 'familyName',
+                      label: 'Brand family',
+                      required: true,
+                      defaultValue: preset.familyName,
+                    },
+                    {
+                      name: 'aliases',
+                      label: 'Aliases',
+                      type: 'json',
+                      required: true,
+                      defaultValue: preset.aliases,
+                    },
+                    {
+                      name: 'iconKey',
+                      label: 'Icon',
+                      required: true,
+                      defaultValue: preset.iconKey,
+                    },
+                    {
+                      name: 'rtspPort',
+                      label: 'RTSP port',
+                      type: 'number',
+                      required: true,
+                      defaultValue: preset.rtspPort,
+                    },
+                    {
+                      name: 'onvifPort',
+                      label: 'ONVIF port',
+                      type: 'number',
+                      required: true,
+                      defaultValue: preset.onvifPort,
+                    },
+                    {
+                      name: 'mainStreamPathTemplate',
+                      label: 'Main stream path',
+                      required: true,
+                      defaultValue: preset.mainStreamPathTemplate,
+                    },
+                    {
+                      name: 'subStreamPathTemplate',
+                      label: 'Sub stream path',
+                      required: true,
+                      defaultValue: preset.subStreamPathTemplate,
+                    },
+                    {
+                      name: 'authSchemeHint',
+                      label: 'Authentication',
+                      required: true,
+                      defaultValue: preset.authSchemeHint,
+                    },
+                    {
+                      name: 'defaultUsernameHint',
+                      label: 'Username hint',
+                      defaultValue: preset.defaultUsernameHint,
+                    },
+                    {
+                      name: 'credentialNote',
+                      label: 'Credential note',
+                      required: true,
+                      defaultValue: preset.credentialNote,
+                    },
+                    {
+                      name: 'setupNote',
+                      label: 'Setup note',
+                      required: true,
+                      defaultValue: preset.setupNote,
+                    },
+                    {
+                      name: 'active',
+                      label: 'Active',
+                      type: 'checkbox',
+                      defaultValue: preset.active,
+                    },
+                    {
+                      name: 'sortOrder',
+                      label: 'Sort order',
+                      type: 'number',
+                      required: true,
+                      defaultValue: preset.sortOrder,
+                    },
+                  ]}
+                />
+              ))}
+            </div>
+          </section>
           <section className="border border-border-default bg-surface-card">
             <div className="border-b border-border-subtle px-5 py-4">
               <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent-brand">
@@ -254,6 +358,64 @@ export default async function CatalogPage() {
         </div>
 
         <aside className="space-y-4">
+          <details open className="group border border-border-default bg-surface-card">
+            <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 text-xs font-semibold">
+              Add camera brand preset
+              <Plus className="h-4 w-4 transition group-open:rotate-45" />
+            </summary>
+            <div className="border-t border-border-subtle px-5">
+              <PlatformCommandForm
+                compact
+                action="catalog.camerapreset"
+                submitLabel="Create preset"
+                fields={[
+                  { name: 'key', label: 'Key', required: true },
+                  { name: 'familyName', label: 'Brand family', required: true },
+                  {
+                    name: 'aliases',
+                    label: 'Aliases',
+                    type: 'json',
+                    required: true,
+                    defaultValue: [],
+                  },
+                  { name: 'iconKey', label: 'Icon', required: true, defaultValue: 'camera' },
+                  {
+                    name: 'rtspPort',
+                    label: 'RTSP port',
+                    type: 'number',
+                    required: true,
+                    defaultValue: 554,
+                  },
+                  {
+                    name: 'onvifPort',
+                    label: 'ONVIF port',
+                    type: 'number',
+                    required: true,
+                    defaultValue: 80,
+                  },
+                  { name: 'mainStreamPathTemplate', label: 'Main stream path', required: true },
+                  { name: 'subStreamPathTemplate', label: 'Sub stream path', required: true },
+                  {
+                    name: 'authSchemeHint',
+                    label: 'Authentication',
+                    required: true,
+                    defaultValue: 'digest',
+                  },
+                  { name: 'defaultUsernameHint', label: 'Username hint' },
+                  { name: 'credentialNote', label: 'Credential note', required: true },
+                  { name: 'setupNote', label: 'Setup note', required: true },
+                  { name: 'active', label: 'Active', type: 'checkbox', defaultValue: true },
+                  {
+                    name: 'sortOrder',
+                    label: 'Sort order',
+                    type: 'number',
+                    required: true,
+                    defaultValue: 0,
+                  },
+                ]}
+              />
+            </div>
+          </details>
           <details open className="group border border-border-default bg-surface-card">
             <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 text-xs font-semibold">
               Register module
