@@ -2290,6 +2290,8 @@ model RestaurantBranch {
   // SOP-1: job-role holdings and direct capability grants are branch-scoped.
   staffJobRoles               RestaurantStaffJobRole[]
   staffCapabilityGrants       RestaurantStaffCapabilityGrant[]
+  // B1/WHA-285: so is the append-only trail of per-person overrides.
+  staffCapabilityAudits       RestaurantStaffCapabilityAudit[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -2550,6 +2552,10 @@ model RestaurantStaffProfile {
   directCapabilityGrants RestaurantStaffCapabilityGrant[]    @relation("StaffDirectCapabilityGrant")
   jobRoleAudits          RestaurantStaffJobRoleAudit[]       @relation("StaffJobRoleAuditSubject")
   jobRoleAuditsActed     RestaurantStaffJobRoleAudit[]       @relation("StaffJobRoleAuditActor")
+  // B1/WHA-285: the append-only trail of this person's capability overrides, and
+  // the ones they set on somebody else.
+  capabilityAudits       RestaurantStaffCapabilityAudit[]    @relation("StaffCapabilityAuditSubject")
+  capabilityAuditsActed  RestaurantStaffCapabilityAudit[]    @relation("StaffCapabilityAuditActor")
   sopAssignmentsTargeted RestaurantSopAssignment[]           @relation("SopAssignmentAssignee")
   sopOccurrencesAssigned RestaurantSopOccurrence[]           @relation("SopOccurrenceAssignee")
   sopOccurrencesClaimed  RestaurantSopOccurrence[]           @relation("SopOccurrenceClaimer")
@@ -5235,6 +5241,24 @@ enum RestaurantStaffJobRoleChangeKind {
   REVOKED
 }
 
+/// B1/WHA-285: the direction of a per-person capability override. ALLOW adds a
+/// capability the person's roles did not grant; DENY removes one they did — for
+/// that person only, leaving the role untouched. DENY is evaluated LAST, so it
+/// beats both the role union and any direct ALLOW.
+enum RestaurantStaffCapabilityEffect {
+  ALLOW
+  DENY
+}
+
+/// B1/WHA-285: an audited per-person capability-override change. ALLOWED and
+/// DENIED name the effect the override was set to; CLEARED means the override
+/// itself was removed and the person fell back to what their roles grant.
+enum RestaurantStaffCapabilityAuditKind {
+  ALLOWED
+  DENIED
+  CLEARED
+}
+
 /// M7/§11.5: the scope an escalation policy applies to. ORG applies org-wide;
 /// BRANCH narrows to one branch (branchId set).
 enum RestaurantSopEscalationScope {
@@ -5773,16 +5797,32 @@ model RestaurantStaffJobRole {
   @@map("restaurant_staff_job_roles")
 }
 
-/// SOP-1: a capability granted DIRECTLY to one staff profile at one branch,
-/// outside any role. This is the "plus direct grants" half of permission
-/// resolution; it unions with the held-role capabilities and never subtracts.
+/// SOP-1 + B1: a per-person capability OVERRIDE at one branch, outside any role.
+///
+/// `effect = ALLOW` is the original "plus direct grants" half of resolution: it
+/// unions on top of the held-role capabilities. `effect = DENY` (B1/WHA-285) is
+/// its subtractive twin: it removes an INHERITED capability from one person
+/// without touching the role, so the role keeps meaning what it means for
+/// everyone else who holds it.
+///
+/// The table keeps its `..._grants` name on purpose. Renaming it would be a
+/// breaking DDL across every existing reference for zero functional gain; the
+/// `effect` discriminant carries the meaning instead.
+///
+/// PRECEDENCE IS STRUCTURAL, NOT A RUNTIME TIEBREAK. The unique index is
+/// (staffProfileId, branchId, capability) with NO `effect` in it, so one person
+/// cannot simultaneously hold an ALLOW and a DENY for the same capability at the
+/// same branch — the ambiguity is impossible to store, not merely resolved late.
+/// What remains is a single ordering: DENY beats what a ROLE inherited.
 model RestaurantStaffCapabilityGrant {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String                          @id @default(cuid())
+  organizationId String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   staffProfileId String
   branchId       String
   capability     String
-  createdAt      DateTime @default(now())
+  effect         RestaurantStaffCapabilityEffect @default(ALLOW)
+  createdAt      DateTime                        @default(now())
+  updatedAt      DateTime                        @default(now()) @updatedAt
 
   staffProfile RestaurantStaffProfile @relation("StaffDirectCapabilityGrant", fields: [staffProfileId], references: [id], onDelete: Cascade)
   branch       RestaurantBranch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
@@ -5792,6 +5832,37 @@ model RestaurantStaffCapabilityGrant {
   @@index([staffProfileId])
   @@index([branchId])
   @@map("restaurant_staff_capability_grants")
+}
+
+/// B1/WHA-285: the APPEND-ONLY audit trail for per-person capability overrides,
+/// the exact counterpart of `restaurant_staff_job_role_audits` for the other half
+/// of resolution. It is a SEPARATE table rather than extra rows in the membership
+/// trail because that trail's subject is a (role, branch) holding and its
+/// `jobRoleKey` is NOT NULL; overloading it would have meant relaxing a live
+/// invariant to store a different subject.
+///
+/// ALLOWED/DENIED record the effect an override was set to; CLEARED records its
+/// removal, and is written BEFORE the delete so "this person stopped being denied
+/// refunds on the 4th" survives the row it removed.
+model RestaurantStaffCapabilityAudit {
+  id                  String                              @id @default(cuid())
+  organizationId      String                              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  staffProfileId      String
+  branchId            String
+  capability          String
+  change              RestaurantStaffCapabilityAuditKind
+  actorStaffProfileId String?
+  createdAt           DateTime                            @default(now())
+
+  staffProfile RestaurantStaffProfile  @relation("StaffCapabilityAuditSubject", fields: [staffProfileId], references: [id], onDelete: Cascade)
+  branch       RestaurantBranch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  actor        RestaurantStaffProfile? @relation("StaffCapabilityAuditActor", fields: [actorStaffProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([staffProfileId])
+  @@index([branchId])
+  @@index([createdAt])
+  @@map("restaurant_staff_capability_audits")
 }
 
 /// SOP-1: the APPEND-ONLY audit trail for job-role membership. The migration

@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 /**
  * SOP-1 / WHA-224 — restaurant JOB ROLES and their resolution.
@@ -23,11 +24,31 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * restaurant vertical grants one. `OrganizationRole` keeps governing back-office
  * web permissions and is not touched.
  *
- * UNIONS, NEVER OVERRIDES. Everything derived from a person's roles is a union:
- * capabilities are the union over every held role plus their direct grants, and
- * SOP pool eligibility is the union over every held role. Holding two roles can
- * only ever add; it can never subtract, and there is no "primary role" tiebreak
- * because there is no tie to break.
+ * ROLES ONLY EVER UNION. Everything derived from a person's ROLES is a union:
+ * capabilities are the union over every held role, and SOP pool eligibility is
+ * the union over every held role. Holding two roles can only ever add; it can
+ * never subtract, and there is no "primary role" tiebreak because there is no
+ * tie to break.
+ *
+ * B1/WHA-285 — THE ONE THING THAT SUBTRACTS. A person may also carry per-person
+ * OVERRIDES at a branch, and those have a direction: `ALLOW` adds a capability
+ * their roles did not grant, `DENY` removes one their roles did. Precedence is
+ * stated once, here, and implemented in exactly one place
+ * ({@link resolveStaffCapabilityDecision}):
+ *
+ *     effective = (union over active held roles ∪ direct ALLOW) \ direct DENY
+ *
+ * DENY is evaluated LAST and therefore beats both. The competing ordering —
+ * "a direct ALLOW should be able to re-grant what a DENY took" — is not merely
+ * rejected, it is unrepresentable: the overrides table is UNIQUE on
+ * (staffProfileId, branchId, capability) with no `effect` in the key, so the
+ * same person cannot hold an ALLOW and a DENY for one capability at one branch.
+ * The only ordering left to state is deny-over-inherited.
+ *
+ * A DENY NEVER MUTATES THE ROLE. Taking `payments:refund` away from one shift
+ * supervisor leaves the `shift-supervisor` role granting `payments:refund` to
+ * everyone else who holds it. That is the whole reason this layer exists rather
+ * than "edit the role" or "invent a narrower role".
  *
  * IMMEDIATELY EFFECTIVE + AUDITED. Membership edits take effect on the next read
  * (there is no cached capability set to invalidate), and every grant/revoke is
@@ -65,42 +86,31 @@ export function normalizeJobRoleKey(key: string): string {
 }
 
 /**
- * The starter job roles a restaurant organization gets. These are the owner's own
- * examples; they are seeded as `isSystem` so the admin UI can mark them as
- * built-in, but they are ordinary rows — renameable, deactivatable, and in no way
- * privileged over roles an operator adds later.
+ * The starter job roles a restaurant organization gets.
+ *
+ * B1/WHA-285: the profiles are no longer authored here. They are VERTICAL-SUPPLIED
+ * — `RESTAURANT_JOB_ROLE_TEMPLATES` in `vertical-catalog.ts` §8 — so the catalog
+ * stays the single place a vertical's shape is declared, and a second vertical
+ * supplies its own floor roles without editing this module.
+ *
+ * The constant is imported directly rather than through the catalog's
+ * `jobRoleTemplatesForVertical()` selector: this module is not an approved
+ * consumer of the vertical enum under the §2.3 scattered-conditional audit
+ * (`tests/vertical-foundation.test.ts`), and everything under
+ * `src/lib/restaurant/` is already restaurant-only by construction, so there is
+ * no vertical to branch on here. Callers that DO hold an organization's vertical
+ * use the selector.
+ *
+ * They are seeded as `isSystem` so the admin UI can mark them as built-in, but
+ * they are ordinary rows — renameable, deactivatable, and in no way privileged
+ * over roles an operator adds later.
  */
 export const DEFAULT_JOB_ROLES: ReadonlyArray<{
   key: string;
   name: string;
   description: string;
   capabilities: readonly string[];
-}> = [
-  {
-    key: 'barista',
-    name: 'Barista',
-    description: 'Prepares beverages at the bar station.',
-    capabilities: ['sop:complete'],
-  },
-  {
-    key: 'cashier',
-    name: 'Cashier',
-    description: 'Operates the register and handles guest checkout.',
-    capabilities: ['sop:complete'],
-  },
-  {
-    key: 'kitchen',
-    name: 'Kitchen',
-    description: 'Works the kitchen line and prep stations.',
-    capabilities: ['sop:complete'],
-  },
-  {
-    key: 'manager',
-    name: 'Manager',
-    description: 'Runs the shift floor and owns branch compliance.',
-    capabilities: ['sop:complete', 'sop:manage', 'sop:verify'],
-  },
-];
+}> = RESTAURANT_JOB_ROLE_TEMPLATES;
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
@@ -148,6 +158,13 @@ export async function createJobRole(db: ScopedDb, input: CreateJobRoleInput) {
  * existing key is left exactly as the operator has since edited it, so re-running
  * this never reverts a rename or re-grants a capability that was deliberately
  * removed.
+ *
+ * That contract has a consequence worth stating plainly: when the vertical
+ * catalog later WIDENS a template's capabilities, organizations that already own
+ * that key do NOT pick the additions up. Missing keys are created; existing rows
+ * are never reconciled. Silently re-granting a capability an operator removed on
+ * purpose would be a privilege escalation performed by a seed function, which is
+ * strictly worse than a role that lags its template.
  */
 export async function ensureDefaultJobRoles(db: ScopedDb) {
   const existing = await db.restaurantJobRole.findMany({ select: { key: true } });
@@ -439,36 +456,230 @@ export function listStaffJobRoleAudit(
   });
 }
 
-// ── Resolution (the unions) ──────────────────────────────────────────────────
+// ── Per-person overrides (the only subtractive layer) ────────────────────────
+
+export type StaffCapabilityEffect = 'ALLOW' | 'DENY';
+
+export type SetStaffCapabilityOverrideInput = {
+  staffProfileId: string;
+  branchId: string;
+  capability: string;
+  effect: StaffCapabilityEffect;
+  actorStaffProfileId?: string | null;
+};
 
 /**
- * This person's effective capabilities AT THIS BRANCH: the union over every
- * ACTIVE role they hold there, plus their direct per-staff grants. Deactivating a
- * role withdraws what it granted without deleting anyone's holding, so the change
- * is reversible; a capability reachable by several paths resolves once.
+ * Set ONE person's override for ONE capability at ONE branch.
+ *
+ * Upsert, not insert-or-fail: flipping an existing ALLOW to a DENY is the normal
+ * administrative act ("she may no longer refund"), and making the caller delete
+ * first would leave a window in which the person had neither. The unique key
+ * carries no `effect`, so the flip is a single row update — the person is never
+ * momentarily un-overridden.
+ *
+ * Idempotent, and audited only when something actually changed. Re-asserting the
+ * same effect writes no second audit entry, for the same reason
+ * {@link grantJobRole} does not: a double-click must not manufacture a compliance
+ * event that records no change.
+ *
+ * The capability string is NOT validated against the vertical catalog. Role
+ * capabilities are not validated either, and the two must agree or a deny could
+ * silently fail to match the grant it is meant to cancel. Denying a capability
+ * nobody has is inert, which is the safe direction to be wrong in.
  */
-export async function resolveStaffCapabilities(
+export async function setStaffCapabilityOverride(
+  db: ScopedDb,
+  input: SetStaffCapabilityOverrideInput
+) {
+  const capability = input.capability.trim();
+  if (capability.length === 0) {
+    throw new JobRoleError('A capability override requires a capability.', 'INVALID');
+  }
+  await Promise.all([assertStaff(db, input.staffProfileId), assertBranch(db, input.branchId)]);
+
+  const key = {
+    staffProfileId_branchId_capability: {
+      staffProfileId: input.staffProfileId,
+      branchId: input.branchId,
+      capability,
+    },
+  };
+  const existing = await db.restaurantStaffCapabilityGrant.findUnique({
+    where: key,
+    select: { id: true, effect: true },
+  });
+  if (existing?.effect === input.effect) {
+    return { override: existing, changed: false };
+  }
+
+  const override = existing
+    ? await db.restaurantStaffCapabilityGrant.update({
+        where: { id: existing.id },
+        data: { effect: input.effect },
+        select: { id: true, effect: true },
+      })
+    : await db.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: input.staffProfileId,
+          branchId: input.branchId,
+          capability,
+          effect: input.effect,
+        },
+        select: { id: true, effect: true },
+      });
+
+  await db.restaurantStaffCapabilityAudit.create({
+    data: {
+      staffProfileId: input.staffProfileId,
+      branchId: input.branchId,
+      capability,
+      change: input.effect === 'DENY' ? 'DENIED' : 'ALLOWED',
+      actorStaffProfileId: input.actorStaffProfileId ?? null,
+    },
+  });
+  return { override, changed: true };
+}
+
+export type ClearStaffCapabilityOverrideInput = {
+  staffProfileId: string;
+  branchId: string;
+  capability: string;
+  actorStaffProfileId?: string | null;
+};
+
+/**
+ * Remove an override so the person falls back to whatever their roles grant.
+ * Idempotent, and — like {@link revokeJobRole} — audited BEFORE the delete, so
+ * "the deny was lifted" survives the row that carried it.
+ */
+export async function clearStaffCapabilityOverride(
+  db: ScopedDb,
+  input: ClearStaffCapabilityOverrideInput
+) {
+  const capability = input.capability.trim();
+  const existing = await db.restaurantStaffCapabilityGrant.findUnique({
+    where: {
+      staffProfileId_branchId_capability: {
+        staffProfileId: input.staffProfileId,
+        branchId: input.branchId,
+        capability,
+      },
+    },
+    select: { id: true },
+  });
+  if (!existing) return { changed: false };
+
+  await db.restaurantStaffCapabilityAudit.create({
+    data: {
+      staffProfileId: input.staffProfileId,
+      branchId: input.branchId,
+      capability,
+      change: 'CLEARED',
+      actorStaffProfileId: input.actorStaffProfileId ?? null,
+    },
+  });
+  await db.restaurantStaffCapabilityGrant.delete({ where: { id: existing.id } });
+  return { changed: true };
+}
+
+/** Every override on this person, optionally narrowed to one branch. */
+export function listStaffCapabilityOverrides(
+  db: ScopedDb,
+  staffProfileId: string,
+  opts: { branchId?: string } = {}
+) {
+  return db.restaurantStaffCapabilityGrant.findMany({
+    where: { staffProfileId, ...(opts.branchId ? { branchId: opts.branchId } : {}) },
+    select: { id: true, branchId: true, capability: true, effect: true, createdAt: true },
+    orderBy: [{ branchId: 'asc' }, { capability: 'asc' }],
+  });
+}
+
+/** The append-only override trail for one person, newest first. */
+export function listStaffCapabilityAudit(
+  db: ScopedDb,
+  staffProfileId: string,
+  opts: { branchId?: string; take?: number } = {}
+) {
+  return db.restaurantStaffCapabilityAudit.findMany({
+    where: { staffProfileId, ...(opts.branchId ? { branchId: opts.branchId } : {}) },
+    orderBy: { createdAt: 'desc' },
+    take: opts.take ?? 100,
+  });
+}
+
+// ── Resolution (the union, then the one subtraction) ─────────────────────────
+
+/**
+ * Every layer of a resolution, kept separate rather than pre-collapsed. An admin
+ * console has to be able to say "she has this BECAUSE of the supervisor role" and
+ * "she lacks that DESPITE it", and a caller that only wants the answer takes
+ * `effective`.
+ */
+export type StaffCapabilityResolution = {
+  /** Union over every ACTIVE role held at this branch. */
+  inherited: Set<string>;
+  /** Direct per-person ALLOW overrides. */
+  allowed: Set<string>;
+  /** Direct per-person DENY overrides. */
+  denied: Set<string>;
+  /** `(inherited ∪ allowed) \ denied` — what authorization must consult. */
+  effective: Set<string>;
+};
+
+/**
+ * This person's capability resolution AT THIS BRANCH, layer by layer.
+ *
+ * Deactivating a role withdraws what it granted without deleting anyone's
+ * holding, so the change is reversible; a capability reachable by several paths
+ * resolves once. DENY is applied last and unconditionally — see the module
+ * header for why that ordering is the only one representable.
+ */
+export async function resolveStaffCapabilityDecision(
   db: ScopedDb,
   staffProfileId: string,
   branchId: string
-): Promise<Set<string>> {
-  const [holdings, directGrants] = await Promise.all([
+): Promise<StaffCapabilityResolution> {
+  const [holdings, overrides] = await Promise.all([
     db.restaurantStaffJobRole.findMany({
       where: { staffProfileId, branchId, jobRole: { active: true } },
       select: { jobRole: { select: { capabilities: { select: { capability: true } } } } },
     }),
     db.restaurantStaffCapabilityGrant.findMany({
       where: { staffProfileId, branchId },
-      select: { capability: true },
+      select: { capability: true, effect: true },
     }),
   ]);
 
-  const capabilities = new Set<string>();
+  const inherited = new Set<string>();
   for (const holding of holdings) {
-    for (const row of holding.jobRole.capabilities) capabilities.add(row.capability);
+    for (const row of holding.jobRole.capabilities) inherited.add(row.capability);
   }
-  for (const row of directGrants) capabilities.add(row.capability);
-  return capabilities;
+
+  const allowed = new Set<string>();
+  const denied = new Set<string>();
+  for (const row of overrides) {
+    (row.effect === 'DENY' ? denied : allowed).add(row.capability);
+  }
+
+  const effective = new Set<string>([...inherited, ...allowed]);
+  for (const capability of denied) effective.delete(capability);
+
+  return { inherited, allowed, denied, effective };
+}
+
+/**
+ * This person's effective capabilities AT THIS BRANCH. The authorization-facing
+ * shorthand for {@link resolveStaffCapabilityDecision}; identical to reading its
+ * `effective` set, and the deny subtraction is already applied.
+ */
+export async function resolveStaffCapabilities(
+  db: ScopedDb,
+  staffProfileId: string,
+  branchId: string
+): Promise<Set<string>> {
+  const { effective } = await resolveStaffCapabilityDecision(db, staffProfileId, branchId);
+  return effective;
 }
 
 /** Convenience predicate over {@link resolveStaffCapabilities}. */

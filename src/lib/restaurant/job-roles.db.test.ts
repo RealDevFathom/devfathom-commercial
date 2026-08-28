@@ -113,16 +113,37 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('SOP-1 job roles — the many-to-many holding', () => {
-  it('seeds the four default roles idempotently', async () => {
+  it('seeds the ten vertical-supplied roles idempotently', async () => {
     const second = await tenant((tx) => deps.jobRoles.ensureDefaultJobRoles(tx));
     expect(second.created).toEqual([]);
     const roles = await tenant((tx) => deps.jobRoles.listJobRoles(tx));
     expect(roles.map((role) => role.key).sort()).toEqual([
+      'accountant',
       'barista',
       'cashier',
+      'delivery-rider',
+      'host',
       'kitchen',
       'manager',
+      'owner',
+      'server',
+      'shift-supervisor',
     ]);
+    // Seeding is a create-if-missing, so a second pass must not duplicate a
+    // capability row either — the union would still be correct, but the audit
+    // story "when did this role gain this power" would not be.
+    const cashier = roles.find((role) => role.key === 'cashier')!;
+    expect(cashier.capabilities.map((row) => row.capability).sort()).toEqual([
+      'cash:close',
+      'cash:open',
+      'menu:read',
+      'orders:read',
+      'orders:take',
+      'payments:collect',
+      'pos:operate',
+      'sop:complete',
+    ]);
+    expect(cashier.isSystem).toBe(true);
   });
 
   it('lets ONE person hold TWO roles at once — the owner’s barista-plus-cashier case', async () => {
@@ -146,8 +167,9 @@ describeIfDatabase('SOP-1 job roles — the many-to-many holding', () => {
   });
 
   it('resolves capabilities as a UNION over held roles plus direct grants', async () => {
-    // barista and cashier both grant sop:complete; manager adds two more. Granting
-    // manager on top must ADD, and the duplicate sop:complete must resolve once.
+    // barista and cashier overlap heavily (both take orders and read the menu);
+    // manager adds a great deal more. Granting manager on top must ADD, and every
+    // capability reachable by several roles must resolve exactly once.
     await tenant((tx) =>
       deps.jobRoles.grantJobRole(tx, {
         staffProfileId: ids.sam,
@@ -157,20 +179,50 @@ describeIfDatabase('SOP-1 job roles — the many-to-many holding', () => {
       })
     );
     await tenant((tx) =>
-      tx.restaurantStaffCapabilityGrant.create({
-        data: { staffProfileId: ids.sam, branchId: ids.branchA, capability: 'sop:export' },
+      deps.jobRoles.setStaffCapabilityOverride(tx, {
+        staffProfileId: ids.sam,
+        branchId: ids.branchA,
+        capability: 'sop:export',
+        effect: 'ALLOW',
+        actorStaffProfileId: ids.admin,
       })
     );
 
-    const capabilities = await tenant((tx) =>
+    const decision = await tenant((tx) =>
+      deps.jobRoles.resolveStaffCapabilityDecision(tx, ids.sam, ids.branchA)
+    );
+
+    // The union is exactly what the three held roles grant, plus the direct grant —
+    // computed from the SEEDED ROWS rather than the template constant, so this
+    // asserts the join and not the catalogue.
+    const heldRoleCapabilities = await tenant(async (tx) => {
+      const rows = await tx.restaurantJobRoleCapability.findMany({
+        where: { jobRoleId: { in: [roleIds.barista!, roleIds.cashier!, roleIds.manager!] } },
+        select: { capability: true },
+      });
+      return new Set(rows.map((row) => row.capability));
+    });
+    expect([...decision.inherited].sort()).toEqual([...heldRoleCapabilities].sort());
+    expect([...decision.allowed]).toEqual(['sop:export']);
+    expect([...decision.denied]).toEqual([]);
+    expect([...decision.effective].sort()).toEqual(
+      [...new Set([...heldRoleCapabilities, 'sop:export'])].sort()
+    );
+
+    // Spot-check the three provenances by name so a silently emptied template
+    // cannot make the set-equality above trivially true.
+    expect(decision.effective.has('kitchen:operate')).toBe(true); // barista + manager
+    expect(decision.effective.has('cash:open')).toBe(true); // cashier + manager
+    expect(decision.effective.has('staff:manage')).toBe(true); // manager only
+    expect(decision.effective.has('sop:export')).toBe(true); // direct grant only
+    // Reachable from all three roles, and present once — it is a Set, by contract.
+    expect([...decision.effective].filter((c) => c === 'menu:read')).toHaveLength(1);
+
+    // The shorthand and the layered form must never disagree.
+    const shorthand = await tenant((tx) =>
       deps.jobRoles.resolveStaffCapabilities(tx, ids.sam, ids.branchA)
     );
-    expect([...capabilities].sort()).toEqual([
-      'sop:complete',
-      'sop:export',
-      'sop:manage',
-      'sop:verify',
-    ]);
+    expect([...shorthand].sort()).toEqual([...decision.effective].sort());
   });
 
   it('scopes holdings to the branch they were granted at', async () => {
@@ -216,7 +268,10 @@ describeIfDatabase('SOP-1 job roles — the many-to-many holding', () => {
     const capabilities = await tenant((tx) =>
       deps.jobRoles.resolveStaffCapabilities(tx, ids.sam, ids.branchA)
     );
-    expect([...capabilities].sort()).toEqual(['sop:complete', 'sop:export']);
+    expect(capabilities.has('staff:manage')).toBe(false); // manager-only, withdrawn
+    expect(capabilities.has('cash:open')).toBe(false); // cashier-only, withdrawn
+    expect(capabilities.has('kitchen:operate')).toBe(true); // still barista + kitchen
+    expect(capabilities.has('sop:export')).toBe(true); // the direct grant outlives both
   });
 
   it('is idempotent: re-granting an existing holding writes no second audit entry', async () => {
@@ -288,6 +343,309 @@ describeIfDatabase('SOP-1 job roles — the many-to-many holding', () => {
       tx.restaurantJobRole.findMany({ select: { id: true } })
     );
     expect(otherSees).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B1 / WHA-285 — the per-person override layer.
+//
+// Jo and Admin both work branch B so the deny story can be told properly: it is
+// only interesting if taking a capability from ONE holder demonstrably leaves it
+// with the OTHER, and leaves the role itself alone.
+// ---------------------------------------------------------------------------
+describeIfDatabase('B1 per-person capability overrides', () => {
+  const REFUND = 'payments:refund';
+  const DISCOUNT = 'orders:discount';
+
+  beforeAll(async () => {
+    if (!TEST_DATABASE_URL || !OWNER_DATABASE_URL) return;
+    await tenant(async (tx) => {
+      for (const staffProfileId of [ids.jo, ids.admin]) {
+        await deps.jobRoles.grantJobRole(tx, {
+          staffProfileId,
+          jobRoleId: roleIds.cashier!,
+          branchId: ids.branchB,
+          actorStaffProfileId: ids.admin,
+        });
+      }
+    });
+  });
+
+  it('starts from a cashier who may take money but not discount or refund', async () => {
+    const decision = await tenant((tx) =>
+      deps.jobRoles.resolveStaffCapabilityDecision(tx, ids.jo, ids.branchB)
+    );
+    expect(decision.effective.has('payments:collect')).toBe(true);
+    expect(decision.effective.has(DISCOUNT)).toBe(false);
+    expect(decision.effective.has(REFUND)).toBe(false);
+  });
+
+  it('applies a DIRECT extra: this cashier alone may apply a discount', async () => {
+    const result = await tenant((tx) =>
+      deps.jobRoles.setStaffCapabilityOverride(tx, {
+        staffProfileId: ids.jo,
+        branchId: ids.branchB,
+        capability: DISCOUNT,
+        effect: 'ALLOW',
+        actorStaffProfileId: ids.admin,
+      })
+    );
+    expect(result.changed).toBe(true);
+
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.jo, ids.branchB, DISCOUNT))
+    ).toBe(true);
+
+    // The ROLE is untouched, so the other cashier at this branch still may not.
+    const roleCapabilities = await tenant((tx) =>
+      tx.restaurantJobRoleCapability.findMany({
+        where: { jobRoleId: roleIds.cashier! },
+        select: { capability: true },
+      })
+    );
+    expect(roleCapabilities.map((row) => row.capability)).not.toContain(DISCOUNT);
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.admin, ids.branchB, DISCOUNT))
+    ).toBe(false);
+  });
+
+  it('DENIES an INHERITED capability for one person, leaving the role and its other holders intact', async () => {
+    // Both cashiers pick up shift-supervisor, which inherits refunds…
+    await tenant(async (tx) => {
+      for (const staffProfileId of [ids.jo, ids.admin]) {
+        await deps.jobRoles.grantJobRole(tx, {
+          staffProfileId,
+          jobRoleId: roleIds['shift-supervisor']!,
+          branchId: ids.branchB,
+          actorStaffProfileId: ids.admin,
+        });
+      }
+    });
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.jo, ids.branchB, REFUND))
+    ).toBe(true);
+
+    // …and Jo alone loses it.
+    const result = await tenant((tx) =>
+      deps.jobRoles.setStaffCapabilityOverride(tx, {
+        staffProfileId: ids.jo,
+        branchId: ids.branchB,
+        capability: REFUND,
+        effect: 'DENY',
+        actorStaffProfileId: ids.admin,
+      })
+    );
+    expect(result.changed).toBe(true);
+
+    const decision = await tenant((tx) =>
+      deps.jobRoles.resolveStaffCapabilityDecision(tx, ids.jo, ids.branchB)
+    );
+    // The provenance survives the subtraction: she still INHERITS it, and is
+    // denied it. A console needs both halves to explain the gap.
+    expect(decision.inherited.has(REFUND)).toBe(true);
+    expect(decision.denied.has(REFUND)).toBe(true);
+    expect(decision.effective.has(REFUND)).toBe(false);
+
+    // The role still grants it, and the other holder still has it.
+    const roleCapabilities = await tenant((tx) =>
+      tx.restaurantJobRoleCapability.findMany({
+        where: { jobRoleId: roleIds['shift-supervisor']! },
+        select: { capability: true },
+      })
+    );
+    expect(roleCapabilities.map((row) => row.capability)).toContain(REFUND);
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.admin, ids.branchB, REFUND))
+    ).toBe(true);
+
+    // Nothing else Jo inherited was collateral damage.
+    expect(decision.effective.has('orders:void')).toBe(true);
+    expect(decision.effective.has('payments:collect')).toBe(true);
+  });
+
+  it('is branch-scoped: a deny at one branch does not follow the person to another', async () => {
+    await tenant((tx) =>
+      deps.jobRoles.grantJobRole(tx, {
+        staffProfileId: ids.jo,
+        jobRoleId: roleIds['shift-supervisor']!,
+        branchId: ids.branchA,
+        actorStaffProfileId: ids.admin,
+      })
+    );
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.jo, ids.branchA, REFUND))
+    ).toBe(true);
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.jo, ids.branchB, REFUND))
+    ).toBe(false);
+  });
+
+  it('lets DENY beat a DIRECT allow — and refuses to store both at once', async () => {
+    // Jo's discount override flips ALLOW → DENY. It is ONE row, so there is never
+    // a moment where both effects exist and a tiebreak would be needed.
+    const flipped = await tenant((tx) =>
+      deps.jobRoles.setStaffCapabilityOverride(tx, {
+        staffProfileId: ids.jo,
+        branchId: ids.branchB,
+        capability: DISCOUNT,
+        effect: 'DENY',
+        actorStaffProfileId: ids.admin,
+      })
+    );
+    expect(flipped.changed).toBe(true);
+
+    const rows = await tenant((tx) =>
+      tx.restaurantStaffCapabilityGrant.findMany({
+        where: { staffProfileId: ids.jo, branchId: ids.branchB, capability: DISCOUNT },
+        select: { effect: true },
+      })
+    );
+    expect(rows).toEqual([{ effect: 'DENY' }]);
+
+    const decision = await tenant((tx) =>
+      deps.jobRoles.resolveStaffCapabilityDecision(tx, ids.jo, ids.branchB)
+    );
+    expect(decision.allowed.has(DISCOUNT)).toBe(false);
+    expect(decision.denied.has(DISCOUNT)).toBe(true);
+    // shift-supervisor DOES inherit orders:discount, so this also proves the deny
+    // outranks the role union, not merely the vanished direct grant.
+    expect(decision.inherited.has(DISCOUNT)).toBe(true);
+    expect(decision.effective.has(DISCOUNT)).toBe(false);
+
+    // The DB, not the resolver, is what makes the ambiguity unrepresentable.
+    await expect(
+      tenant((tx) =>
+        tx.restaurantStaffCapabilityGrant.create({
+          data: {
+            staffProfileId: ids.jo,
+            branchId: ids.branchB,
+            capability: DISCOUNT,
+            effect: 'ALLOW',
+          },
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it('re-asserting the same effect changes nothing and writes no second audit entry', async () => {
+    const before = await tenant((tx) =>
+      deps.jobRoles.listStaffCapabilityAudit(tx, ids.jo, { branchId: ids.branchB, take: 500 })
+    );
+    const again = await tenant((tx) =>
+      deps.jobRoles.setStaffCapabilityOverride(tx, {
+        staffProfileId: ids.jo,
+        branchId: ids.branchB,
+        capability: REFUND,
+        effect: 'DENY',
+        actorStaffProfileId: ids.admin,
+      })
+    );
+    expect(again.changed).toBe(false);
+    const after = await tenant((tx) =>
+      deps.jobRoles.listStaffCapabilityAudit(tx, ids.jo, { branchId: ids.branchB, take: 500 })
+    );
+    expect(after.length).toBe(before.length);
+  });
+
+  it('clears an override so the person falls back to what their roles grant', async () => {
+    const cleared = await tenant((tx) =>
+      deps.jobRoles.clearStaffCapabilityOverride(tx, {
+        staffProfileId: ids.jo,
+        branchId: ids.branchB,
+        capability: REFUND,
+        actorStaffProfileId: ids.admin,
+      })
+    );
+    expect(cleared.changed).toBe(true);
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.jo, ids.branchB, REFUND))
+    ).toBe(true);
+
+    // Idempotent: clearing what is not there is a no-op, not an error.
+    const twice = await tenant((tx) =>
+      deps.jobRoles.clearStaffCapabilityOverride(tx, {
+        staffProfileId: ids.jo,
+        branchId: ids.branchB,
+        capability: REFUND,
+        actorStaffProfileId: ids.admin,
+      })
+    );
+    expect(twice.changed).toBe(false);
+  });
+
+  it('audits every override change, and the CLEARED record outlives the row it removed', async () => {
+    const trail = await tenant((tx) =>
+      deps.jobRoles.listStaffCapabilityAudit(tx, ids.jo, { branchId: ids.branchB, take: 500 })
+    );
+    const count = (capability: string, change: string) =>
+      trail.filter((entry) => entry.capability === capability && entry.change === change).length;
+
+    expect(count(DISCOUNT, 'ALLOWED')).toBe(1);
+    expect(count(DISCOUNT, 'DENIED')).toBe(1);
+    expect(count(REFUND, 'DENIED')).toBe(1);
+    expect(count(REFUND, 'CLEARED')).toBe(1);
+    expect(trail.every((entry) => entry.actorStaffProfileId === ids.admin)).toBe(true);
+
+    // The refund override is gone; the trail still explains that it existed.
+    const live = await tenant((tx) =>
+      deps.jobRoles.listStaffCapabilityOverrides(tx, ids.jo, { branchId: ids.branchB })
+    );
+    expect(live.map((row) => row.capability)).toEqual([DISCOUNT]);
+    expect(live[0]!.effect).toBe('DENY');
+  });
+
+  it('DB-enforces the override audit trail as append-only under forced RLS', async () => {
+    const entry = await tenant((tx) =>
+      tx.restaurantStaffCapabilityAudit.findFirst({ where: { staffProfileId: ids.jo } })
+    );
+    expect(entry).not.toBeNull();
+
+    await expect(
+      tenant((tx) =>
+        tx.restaurantStaffCapabilityAudit.update({
+          where: { id: entry!.id },
+          data: { change: 'ALLOWED' },
+        })
+      )
+    ).rejects.toThrow();
+
+    await expect(
+      tenant((tx) => tx.restaurantStaffCapabilityAudit.delete({ where: { id: entry!.id } }))
+    ).rejects.toThrow();
+
+    const still = await tenant((tx) =>
+      tx.restaurantStaffCapabilityAudit.findUnique({ where: { id: entry!.id } })
+    );
+    expect(still).not.toBeNull();
+  });
+
+  it('isolates overrides and their audit across tenants under forced RLS', async () => {
+    const [overrides, audits] = await deps.withTenantDb(otherOrgId, async (tx) => [
+      await tx.restaurantStaffCapabilityGrant.findMany({ select: { id: true } }),
+      await tx.restaurantStaffCapabilityAudit.findMany({ select: { id: true } }),
+    ]);
+    expect(overrides).toEqual([]);
+    expect(audits).toEqual([]);
+
+    // And the other tenant cannot deny OUR staff anything: the row would carry
+    // ITS organizationId, which the composite tenant FK proves at COMMIT.
+    await expect(
+      deps.withTenantDb(otherOrgId, (tx) =>
+        tx.restaurantStaffCapabilityAudit.create({
+          data: {
+            staffProfileId: ids.jo,
+            branchId: ids.branchB,
+            capability: REFUND,
+            change: 'DENIED',
+          },
+        })
+      )
+    ).rejects.toThrow();
+
+    // Our own resolution is unchanged by that attempt.
+    expect(
+      await tenant((tx) => deps.jobRoles.staffHasCapability(tx, ids.jo, ids.branchB, REFUND))
+    ).toBe(true);
   });
 });
 
