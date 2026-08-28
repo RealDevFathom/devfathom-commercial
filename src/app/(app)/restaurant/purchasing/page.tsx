@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/table';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantPurchasingRouter } from '@/server/routers/restaurant-purchasing';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -45,6 +46,30 @@ function formatDate(value: Date | string | null | undefined) {
     new Date(value)
   );
 }
+
+/**
+ * Resolve the tenant actor first, then hand the resolved session and
+ * organization to the context factory.
+ *
+ * `createTRPCContext()` with no argument cannot stand in for this. It forwards
+ * `{ request: undefined, session: undefined }` to `resolveTenantActor`, whose
+ * `'session' in options` check reads that explicitly-undefined key as "the
+ * caller already resolved the session". Auth.js is then never consulted, the
+ * organization is always null, and the factory throws `Workspace not found.`
+ * as an unhandled Server Component error on every request and every host.
+ */
+async function tenantContext() {
+  const actor = await resolveTenantActor();
+  if (!actor) return null;
+  return createTRPCContext({
+    session: actor.session,
+    organization: actor.organization,
+    support: actor.support,
+  });
+}
+
+/** Every action below maps a throw to an error notice, so this reads there. */
+const NO_ACTOR = 'Your session is no longer active. Sign in again and retry.';
 
 function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
   return (
@@ -74,7 +99,12 @@ export default async function PurchasingPage({
   searchParams: Promise<{ notice?: string; kind?: string; selected?: string }>;
 }) {
   const query = await searchParams;
-  const ctx = await createTRPCContext();
+  const ctx = await tenantContext();
+  // Tenancy did not resolve. Entitlements are unknowable here, so show the
+  // permission surface rather than let a missing workspace reach the user as an
+  // unhandled Server Component crash.
+  if (!ctx) return <AccessState moduleEnabled />;
+
   const user = ctx.session?.user;
   const moduleEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
 
@@ -164,7 +194,8 @@ export default async function PurchasingPage({
     'use server';
     let next: string;
     try {
-      const actionCtx = await createTRPCContext();
+      const actionCtx = await tenantContext();
+      if (!actionCtx) throw new Error(NO_ACTOR);
       const actionCaller = restaurantPurchasingRouter.createCaller(actionCtx);
       await actionCaller.createSupplier({
         name: field(form, 'name'),
@@ -185,7 +216,8 @@ export default async function PurchasingPage({
     'use server';
     let next: string;
     try {
-      const actionCtx = await createTRPCContext();
+      const actionCtx = await tenantContext();
+      if (!actionCtx) throw new Error(NO_ACTOR);
       const actionCaller = restaurantPurchasingRouter.createCaller(actionCtx);
       const locationId = field(form, 'locationId');
       const stockItemId = field(form, 'stockItemId');
@@ -233,7 +265,8 @@ export default async function PurchasingPage({
     const purchaseOrderId = field(form, 'purchaseOrderId');
     let next: string;
     try {
-      const actionCtx = await createTRPCContext();
+      const actionCtx = await tenantContext();
+      if (!actionCtx) throw new Error(NO_ACTOR);
       await restaurantPurchasingRouter
         .createCaller(actionCtx)
         .submitPurchaseOrder({ purchaseOrderId });
@@ -254,7 +287,8 @@ export default async function PurchasingPage({
     const purchaseOrderId = field(form, 'purchaseOrderId');
     let next: string;
     try {
-      const actionCtx = await createTRPCContext();
+      const actionCtx = await tenantContext();
+      if (!actionCtx) throw new Error(NO_ACTOR);
       await restaurantPurchasingRouter
         .createCaller(actionCtx)
         .approvePurchaseOrder({ purchaseOrderId });
@@ -275,7 +309,8 @@ export default async function PurchasingPage({
     const purchaseOrderId = field(form, 'purchaseOrderId');
     let next: string;
     try {
-      const actionCtx = await createTRPCContext();
+      const actionCtx = await tenantContext();
+      if (!actionCtx) throw new Error(NO_ACTOR);
       const actionCaller = restaurantPurchasingRouter.createCaller(actionCtx);
       const order = await actionCaller.getPurchaseOrder({ purchaseOrderId });
       const defaultLocation = await actionCtx.db.restaurantStockLocation.findFirst({

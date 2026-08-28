@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantInventoryRouter } from '@/server/routers/restaurant-inventory';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -27,6 +28,27 @@ function formatDate(value: Date | string | null | undefined) {
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(
     new Date(value)
   );
+}
+
+/**
+ * Resolve the tenant actor first, then hand the resolved session and
+ * organization to the context factory.
+ *
+ * `createTRPCContext()` with no argument cannot stand in for this. It forwards
+ * `{ request: undefined, session: undefined }` to `resolveTenantActor`, whose
+ * `'session' in options` check reads that explicitly-undefined key as "the
+ * caller already resolved the session". Auth.js is then never consulted, the
+ * organization is always null, and the factory throws `Workspace not found.`
+ * as an unhandled Server Component error on every request and every host.
+ */
+async function tenantContext() {
+  const actor = await resolveTenantActor();
+  if (!actor) return null;
+  return createTRPCContext({
+    session: actor.session,
+    organization: actor.organization,
+    support: actor.support,
+  });
 }
 
 function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
@@ -48,7 +70,12 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
 }
 
 export default async function InventoryPage() {
-  const ctx = await createTRPCContext();
+  const ctx = await tenantContext();
+  // Tenancy did not resolve. Entitlements are unknowable here, so show the
+  // permission surface rather than let a missing workspace reach the user as an
+  // unhandled Server Component crash.
+  if (!ctx) return <AccessState moduleEnabled />;
+
   const user = ctx.session?.user;
   const moduleEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
 
