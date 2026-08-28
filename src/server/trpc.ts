@@ -227,6 +227,11 @@ export const protectedProcedure = t.procedure
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
+/** Authenticated, audited tenant access to retained history after entitlement removal. */
+export const entitlementIndependentHistoryProcedure = t.procedure
+  .use(auditAll)
+  .use(requireActiveUser);
+
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
 // role ADMIN). Identical behaviour to the previous literal check, but the
 // decision flows through the one engine. Audits mutations AND sensitive reads.
