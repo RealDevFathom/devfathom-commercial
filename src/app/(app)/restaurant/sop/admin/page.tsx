@@ -5,6 +5,7 @@ import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
+import type { EntitlementView } from '@/lib/module-catalog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
@@ -41,6 +42,86 @@ type PendingAction =
   | 'reorder-steps'
   | 'create-assignment'
   | 'toggle-assignment';
+
+/**
+ * The console has two unrelated reasons a template cannot be created, and they
+ * are not interchangeable. `unavailable` means the module was never granted, so
+ * the remedy is commercial and lives outside this product. `granted` means the
+ * module is on and the active-template quota governs, so the remedy is
+ * operational and lives on this page. Rendering both as the same amber warning
+ * told operators to go free a slot when no slot could ever exist.
+ */
+export type SopEntitlementGrant =
+  | { status: 'unavailable'; reason: 'not-in-plan' | 'administratively-disabled' }
+  | { status: 'granted'; templateLimit: number | null };
+
+/**
+ * Reads the grant off the existing entitlement view. `source === 'OVERRIDE'` on
+ * a disabled module means a granted module was switched off for this
+ * organization; every other disabled case means the plan never included it —
+ * the same split the settings console already draws.
+ */
+export function resolveSopEntitlement(entitlements: EntitlementView): SopEntitlementGrant {
+  const sopModule = entitlements.modules.find((module) => module.key === 'restaurant-sop');
+  const enabled = sopModule?.enabled ?? entitlements.enabledModules.includes('restaurant-sop');
+  if (!enabled) {
+    return {
+      status: 'unavailable',
+      reason: sopModule?.source === 'OVERRIDE' ? 'administratively-disabled' : 'not-in-plan',
+    };
+  }
+  const limit = entitlements.limits['sop.templates.max'];
+  return { status: 'granted', templateLimit: typeof limit === 'number' ? limit : null };
+}
+
+/**
+ * `unmeasured` is the state a missing `sop.templates.max` used to collapse into
+ * via `?? 0`, which rendered a truthful-looking "0 active · 0 allowed". An
+ * absent limit is unknown capacity, not zero capacity, so it reports neither.
+ */
+export type TemplateCapacity =
+  | { kind: 'unmeasured' }
+  | { kind: 'exhausted'; activeCount: number; limit: number }
+  | { kind: 'available'; activeCount: number; limit: number; remaining: number };
+
+export function resolveTemplateCapacity(
+  templateLimit: number | null,
+  activeCount: number
+): TemplateCapacity {
+  if (templateLimit == null) return { kind: 'unmeasured' };
+  const remaining = templateLimit - activeCount;
+  return remaining > 0
+    ? { kind: 'available', activeCount, limit: templateLimit, remaining }
+    : { kind: 'exhausted', activeCount, limit: templateLimit };
+}
+
+/**
+ * `StatusPill` renders `label ?? status`, so the state word has to live inside
+ * the label or the pill degrades to colour-only — banned by the Studio contract
+ * (§6 status, §9 "state is never communicated by color alone").
+ */
+function capacityPill(capacity: TemplateCapacity): {
+  status: string;
+  tone: StatusTone;
+  label: string;
+} {
+  switch (capacity.kind) {
+    case 'unmeasured':
+      return { status: 'Capacity unknown', tone: 'neutral', label: 'Capacity unknown' };
+    case 'exhausted':
+      return {
+        status: 'Limit reached',
+        tone: 'warning',
+        label: `Limit reached · ${capacity.activeCount} of ${capacity.limit} active`,
+      };
+    case 'available':
+      return {
+        status: 'Within limit',
+        tone: 'success',
+        label: `${capacity.activeCount} of ${capacity.limit} active`,
+      };
+  }
+}
 
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
@@ -132,8 +213,7 @@ function QueryLoading() {
 }
 
 export type SopAdminViewProps = {
-  moduleEnabled: boolean;
-  templateLimit: number;
+  entitlement: SopEntitlementGrant;
   templates: SopTemplate[];
   assignments: SopAssignment[];
   selectedTemplateId: string;
@@ -162,8 +242,7 @@ export type SopAdminViewProps = {
 };
 
 export function SopAdminView({
-  moduleEnabled,
-  templateLimit,
+  entitlement,
   templates,
   assignments,
   selectedTemplateId,
@@ -198,7 +277,14 @@ export function SopAdminView({
     versions.find((item) => item.id === selectedVersionId) ?? versions[0] ?? null;
   const draftVersion = versions.find((item) => item.status === 'DRAFT');
   const activeTemplateCount = templates.filter((template) => template.isActive).length;
-  const atLimit = activeTemplateCount >= templateLimit;
+  const capacity: TemplateCapacity =
+    entitlement.status === 'granted'
+      ? resolveTemplateCapacity(entitlement.templateLimit, activeTemplateCount)
+      : { kind: 'unmeasured' };
+  // Fails closed exactly as the router does (`sop.templates.max ?? 0`): only a
+  // published, unexhausted quota may enable create. Unknown capacity blocks the
+  // form, but it is reported as unknown rather than as an exhausted limit.
+  const createBlocked = capacity.kind !== 'available';
   const anyPending = pendingAction != null;
 
   return (
@@ -208,13 +294,14 @@ export function SopAdminView({
         heading="SOP administration"
         description="Author controlled procedures, publish immutable versions, and schedule branch work."
         actions={
-          moduleEnabled ? (
+          entitlement.status === 'unavailable' ? (
             <StatusPill
-              status={atLimit ? 'Limit reached' : 'Template capacity'}
-              tone={atLimit ? 'warning' : 'info'}
-              label={`${activeTemplateCount} / ${templateLimit} active`}
+              status={entitlement.reason === 'not-in-plan' ? 'Not in plan' : 'Turned off'}
+              tone="neutral"
             />
-          ) : null
+          ) : (
+            <StatusPill {...capacityPill(capacity)} />
+          )
         }
       />
 
@@ -238,13 +325,27 @@ export function SopAdminView({
         </div>
       ) : null}
 
-      {!moduleEnabled ? (
-        <SectionCard title="SOP & Compliance unavailable">
+      {entitlement.status === 'unavailable' ? (
+        <SectionCard
+          title={
+            entitlement.reason === 'not-in-plan'
+              ? 'SOP & Compliance is not included in your plan'
+              : 'SOP & Compliance is turned off for this organization'
+          }
+        >
           <div className="space-y-3" role="status">
-            <StatusPill status="Disabled" tone="warning" />
+            <StatusPill
+              status={entitlement.reason === 'not-in-plan' ? 'Not in plan' : 'Turned off'}
+              tone="neutral"
+            />
             <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
-              Enable the Restaurant SOP & Compliance module to manage templates and branch
-              schedules.
+              {entitlement.reason === 'not-in-plan'
+                ? 'This feature is not included in your organization’s current plan. Contact your administrator or DevFathom sales to enable it.'
+                : 'SOP & Compliance is disabled for this organization. Existing templates and branch schedules are preserved and stay unavailable until it is re-enabled. Contact your platform administrator to enable it.'}
+            </p>
+            <p className="max-w-2xl text-sm leading-relaxed text-text-faint">
+              This is not a usage limit. No template quota applies while the module is unavailable,
+              and archiving templates will not restore access.
             </p>
           </div>
         </SectionCard>
@@ -276,16 +377,10 @@ export function SopAdminView({
           <SectionCard
             eyebrow="sop.templates.max"
             title="Template library"
-            actions={
-              <StatusPill
-                status={atLimit ? 'At limit' : 'Available'}
-                tone={atLimit ? 'warning' : 'success'}
-                label={`${activeTemplateCount} active · ${templateLimit} allowed`}
-              />
-            }
+            actions={<StatusPill {...capacityPill(capacity)} />}
           >
             <form id="new-template" className="mb-6" onSubmit={onCreateTemplate}>
-              <fieldset disabled={atLimit || anyPending}>
+              <fieldset disabled={createBlocked || anyPending}>
                 <legend className="font-display text-base font-semibold text-text-strong">
                   Create template
                 </legend>
@@ -309,13 +404,25 @@ export function SopAdminView({
               </fieldset>
               <p
                 id="template-limit-note"
-                className={`mt-2 text-xs ${atLimit ? 'text-warning' : 'text-text-faint'}`}
+                className={`mt-2 text-xs ${
+                  capacity.kind === 'exhausted'
+                    ? 'text-warning'
+                    : capacity.kind === 'unmeasured'
+                      ? 'text-text-muted'
+                      : 'text-text-faint'
+                }`}
               >
-                {atLimit
-                  ? 'Create is disabled because the active-template entitlement limit is reached.'
-                  : `${templateLimit - activeTemplateCount} active template slot${
-                      templateLimit - activeTemplateCount === 1 ? '' : 's'
-                    } remaining.`}
+                {capacity.kind === 'exhausted'
+                  ? `Create is disabled: ${
+                      capacity.limit === 1
+                        ? 'the 1 active template slot included in your plan is'
+                        : `all ${capacity.limit} active template slots included in your plan are`
+                    } in use. Archive an active template below to free a slot.`
+                  : capacity.kind === 'unmeasured'
+                    ? 'Create is disabled: your plan has not published an active-template limit, so capacity cannot be confirmed. Contact your administrator to publish sop.templates.max.'
+                    : `${capacity.remaining} active template slot${
+                        capacity.remaining === 1 ? '' : 's'
+                      } remaining.`}
               </p>
             </form>
 
@@ -379,9 +486,11 @@ export function SopAdminView({
                               type="button"
                               size="sm"
                               variant="outline"
-                              disabled={anyPending || (!template.isActive && atLimit)}
+                              disabled={anyPending || (!template.isActive && createBlocked)}
                               aria-describedby={
-                                !template.isActive && atLimit ? 'template-limit-note' : undefined
+                                !template.isActive && createBlocked
+                                  ? 'template-limit-note'
+                                  : undefined
                               }
                               onClick={() =>
                                 onSetTemplateActive(template.id, !template.isActive, template.name)
@@ -977,10 +1086,8 @@ export function SopAdminView({
 
 export default function RestaurantSopAdminPage() {
   const entitlements = useEntitlements();
-  const sopModule = entitlements.modules.find((module) => module.key === 'restaurant-sop');
-  const moduleEnabled =
-    sopModule?.enabled ?? entitlements.enabledModules.includes('restaurant-sop');
-  const templateLimit = entitlements.limits['sop.templates.max'] ?? 0;
+  const entitlement = resolveSopEntitlement(entitlements);
+  const moduleEnabled = entitlement.status === 'granted';
   const utils = trpc.useUtils();
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedVersionId, setSelectedVersionId] = useState('');
@@ -1199,8 +1306,7 @@ export default function RestaurantSopAdminPage() {
 
   return (
     <SopAdminView
-      moduleEnabled={moduleEnabled}
-      templateLimit={templateLimit}
+      entitlement={entitlement}
       templates={templates}
       assignments={assignmentsQuery.data ?? []}
       selectedTemplateId={selectedTemplate?.id ?? ''}
