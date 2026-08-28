@@ -86,11 +86,8 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
     return <State kind="permission" />;
   }
 
-  const branches = await ctx.db.restaurantBranch.findMany({
-    where: { active: true },
-    orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-    select: { id: true, name: true },
-  });
+  const caller = restaurantSopExecutionRouter.createCaller(ctx);
+  const branches = await caller.reportBranches();
   if (!branches.length) {
     return (
       <main className="min-w-0 space-y-6">
@@ -119,9 +116,7 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
 
   let report;
   try {
-    report = await restaurantSopExecutionRouter
-      .createCaller(ctx)
-      .report({ branchId: branch.id, from, to, department });
+    report = await caller.report({ branchId: branch.id, from, to, department });
   } catch (error) {
     return (
       <State
