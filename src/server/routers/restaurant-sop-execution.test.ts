@@ -31,6 +31,7 @@ vi.mock('@/lib/abac', async () => {
 });
 
 import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
+import { packageByKey } from '@/lib/vertical-catalog';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
 
@@ -79,16 +80,31 @@ beforeEach(() => {
   mocks.annotateAudit.mockReset();
 });
 
-function caller() {
+/**
+ * WHA-264 — an entitlement view as `resolveOrganizationEntitlements` would build
+ * it for an organization holding exactly one commercial package. Derived from
+ * the catalog so the fixtures move with a repricing instead of restating module
+ * keys and limit values here.
+ */
+function entitlementsForPackage(packageKey: string) {
+  const pkg = packageByKey(packageKey);
+  if (!pkg) throw new Error(`Unknown package ${packageKey}`);
+  return {
+    enabledModules: [...pkg.moduleKeys],
+    activeSeats: 1,
+    seatLimit: 50,
+    modules: [],
+    limits: { ...pkg.defaultLimits } as Record<string, number>,
+  };
+}
+
+/** The deepest tier — the default for every pre-existing behavioural test. */
+const FULL_ENTITLEMENTS = entitlementsForPackage('restaurant-enterprise');
+
+function caller(entitlements: ReturnType<typeof entitlementsForPackage> = FULL_ENTITLEMENTS) {
   return restaurantSopExecutionRouter.createCaller({
     db: db as never,
-    entitlements: {
-      enabledModules: ['restaurant-sop'],
-      activeSeats: 1,
-      seatLimit: 50,
-      modules: [],
-      limits: {},
-    },
+    entitlements,
     session: {
       expires: 'later',
       user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
@@ -292,5 +308,198 @@ describe('acknowledge', () => {
 
     const result = await caller().acknowledge({ occurrenceId: OCC_ID });
     expect(result.occurrenceId).toBe(OCC_ID);
+  });
+});
+
+// ── WHA-264: SOP depth entitlement gating ─────────────────────────────────────
+
+describe('SOP depth entitlement gating', () => {
+  const ESSENTIALS = entitlementsForPackage('restaurant-essentials');
+  const OPERATIONS = entitlementsForPackage('restaurant-operations');
+  const ENTERPRISE = entitlementsForPackage('restaurant-enterprise');
+
+  /** Put every command on a state where only the entitlement gate can refuse. */
+  function primeHappyPath() {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'SUBMITTED',
+      windowEndsAt: new Date(Date.now() + 3_600_000),
+    });
+    db.restaurantSopVerification.create.mockResolvedValue({ id: 'ver_1', createdAt: new Date() });
+    db.restaurantCoAuthorization.create.mockResolvedValue({ id: 'coauth_1' });
+    db.restaurantSopEvidence.create.mockResolvedValue({ id: 'ev_1', createdAt: new Date() });
+    db.restaurantSopEscalationEvent.findFirst.mockResolvedValue(null);
+    db.restaurantSopEscalationEvent.create.mockResolvedValue({ id: 'evt_1' });
+  }
+
+  const EVIDENCE_INPUT = {
+    occurrenceId: OCC_ID,
+    contentHashHex: 'a'.repeat(64),
+    mimeType: 'image/jpeg',
+    sizeBytes: 1024,
+  };
+  const WAIVE_INPUT = {
+    occurrenceId: OCC_ID,
+    actorStaffProfileId: 'staff_a',
+    approvingStaffProfileId: 'staff_b',
+    reason: 'Emergency',
+  };
+
+  beforeEach(primeHappyPath);
+
+  // ── Entry tier: execution only ──────────────────────────────────────────────
+
+  describe('an organization licensed for execution only', () => {
+    it('may read the branch board and run an occurrence', async () => {
+      db.restaurantSopOccurrence.findMany.mockResolvedValue([]);
+      await expect(caller(ESSENTIALS).listOccurrences({ branchId: 'branch_1' })).resolves.toEqual({
+        items: [],
+        nextCursor: null,
+      });
+
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SCHEDULED' });
+      await expect(caller(ESSENTIALS).start({ occurrenceId: OCC_ID })).resolves.toMatchObject({
+        status: 'IN_PROGRESS',
+      });
+    });
+
+    it('is refused evidence capture', async () => {
+      await expect(caller(ESSENTIALS).attachEvidence(EVIDENCE_INPUT)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    });
+
+    it.each([['verify'], ['reject']] as const)('is refused %s', async (command) => {
+      await expect(caller(ESSENTIALS)[command]({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    });
+
+    it('is refused a co-authorized waiver', async () => {
+      await expect(caller(ESSENTIALS).waive(WAIVE_INPUT)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    });
+
+    it('is refused escalation acknowledgement', async () => {
+      await expect(caller(ESSENTIALS).acknowledge({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    });
+
+    it('refuses BEFORE touching the database', async () => {
+      db.restaurantSopVerification.create.mockClear();
+      await expect(caller(ESSENTIALS).verify({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.restaurantSopVerification.create).not.toHaveBeenCalled();
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    });
+
+    it('explains the denial with catalog keys and never a package name', async () => {
+      let message = '';
+      try {
+        await caller(ESSENTIALS).acknowledge({ occurrenceId: OCC_ID });
+        throw new Error('Expected the entitlement gate to refuse.');
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toContain('restaurant-integrations');
+      expect(message).toContain('integrations.connections.max');
+      expect(message).not.toContain('essentials');
+      expect(message).not.toContain('Essentials');
+      expect(message).not.toContain('Operations');
+      expect(message).not.toContain('Enterprise');
+    });
+  });
+
+  // ── Adjacent tier: the proof/verification family ────────────────────────────
+
+  describe('the adjacent tier that adds proof and verification', () => {
+    it('may capture evidence', async () => {
+      await expect(caller(OPERATIONS).attachEvidence(EVIDENCE_INPUT)).resolves.toMatchObject({
+        evidenceId: 'ev_1',
+      });
+    });
+
+    it('may verify, reject and waive', async () => {
+      await expect(caller(OPERATIONS).verify({ occurrenceId: OCC_ID })).resolves.toMatchObject({
+        action: 'VERIFY',
+      });
+      await expect(caller(OPERATIONS).reject({ occurrenceId: OCC_ID })).resolves.toMatchObject({
+        action: 'REJECT',
+      });
+      await expect(caller(OPERATIONS).waive(WAIVE_INPUT)).resolves.toMatchObject({
+        action: 'WAIVE',
+      });
+    });
+
+    it('may acknowledge an escalation', async () => {
+      await expect(caller(OPERATIONS).acknowledge({ occurrenceId: OCC_ID })).resolves.toMatchObject(
+        { occurrenceId: OCC_ID }
+      );
+    });
+  });
+
+  // ── Deepest tier keeps everything the tier below has ────────────────────────
+
+  it('the deepest tier retains every command the tier below holds', async () => {
+    await expect(caller(ENTERPRISE).attachEvidence(EVIDENCE_INPUT)).resolves.toBeTruthy();
+    await expect(caller(ENTERPRISE).verify({ occurrenceId: OCC_ID })).resolves.toBeTruthy();
+    await expect(caller(ENTERPRISE).waive(WAIVE_INPUT)).resolves.toBeTruthy();
+    await expect(caller(ENTERPRISE).acknowledge({ occurrenceId: OCC_ID })).resolves.toBeTruthy();
+  });
+
+  // ── Module boundary ─────────────────────────────────────────────────────────
+
+  it('refuses even bare execution when the SOP module is disabled', async () => {
+    const withoutSop = {
+      ...ENTERPRISE,
+      enabledModules: ENTERPRISE.enabledModules.filter((key) => key !== 'restaurant-sop'),
+    };
+    db.restaurantSopOccurrence.findMany.mockResolvedValue([]);
+    await expect(
+      caller(withoutSop).listOccurrences({ branchId: 'branch_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller(withoutSop).start({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  // ── Tenant boundary ─────────────────────────────────────────────────────────
+
+  it('decides from the calling organization own entitlements, not another tenant', async () => {
+    // Same process, same db, two organizations on different licensing. Neither
+    // caller can borrow the other's depth.
+    const deepTenant = caller(ENTERPRISE);
+    const shallowTenant = caller(ESSENTIALS);
+
+    await expect(deepTenant.verify({ occurrenceId: OCC_ID })).resolves.toMatchObject({
+      action: 'VERIFY',
+    });
+    await expect(shallowTenant.verify({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    // …and the deep tenant acting again is still allowed: the shallow tenant's
+    // denial did not leak into shared state.
+    await expect(deepTenant.verify({ occurrenceId: OCC_ID })).resolves.toMatchObject({
+      action: 'VERIFY',
+    });
+  });
+
+  // ── Entitlement and authorization are independent gates ─────────────────────
+
+  it('still requires the capability when the organization is fully entitled', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller(ENTERPRISE).verify({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('still requires the entitlement when the caller holds the capability', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller(ESSENTIALS).verify({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
   });
 });
