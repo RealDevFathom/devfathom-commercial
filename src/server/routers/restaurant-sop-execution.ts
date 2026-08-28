@@ -140,6 +140,30 @@ const BoardFilterSchema = z
   .strict();
 
 export const restaurantSopExecutionRouter = router({
+  reportBranches: reportProcedure.query(async ({ ctx }) => {
+    const user = ctx.session!.user;
+    const canConfigure = await can(subjectFromSession(user), 'restaurant:configure', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    });
+
+    return ctx.db.restaurantBranch.findMany({
+      where: {
+        active: true,
+        ...(canConfigure
+          ? {}
+          : {
+              OR: [
+                { staffProfiles: { some: { userId: user.id, status: 'ACTIVE' } } },
+                { assignments: { some: { userId: user.id } } },
+              ],
+            }),
+      },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      select: { id: true, name: true },
+    });
+  }),
+
   report: reportProcedure
     .input(
       z
