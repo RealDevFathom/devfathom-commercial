@@ -6412,6 +6412,543 @@ model RestaurantMenuImportLine {
   @@map("restaurant_menu_import_lines")
 }
 
+// ---------------------------------------------------------------------------
+// WHA-288 / promotions Lane A — the checkout discount layer specified by
+// docs/specs/restaurant-promotions.md (WHA-279).
+//
+// Shape of this block, and why:
+//   - A mutable `RestaurantPromotion` identity owns immutable published
+//     `RestaurantPromotionVersion` rows (§3.1). Only DRAFT rows mutate; the
+//     migration enforces that with a trigger Prisma cannot express.
+//   - Checkout appends ONE `RestaurantPromotionEvaluationSnapshot` per accepted
+//     evaluation, carrying every candidate (accepted AND rejected, §5.1) plus
+//     the unit-level allocations. Reconstruction reads snapshots only — it never
+//     joins live promotion, catalog, branch or tax configuration (§5.2).
+//   - Caps are a locked counter + append-only reservation ledger (§6). No
+//     read-then-write counter authorizes a capped benefit.
+//
+// Deliberate modelling decisions:
+//   - `orderId`, `billId`, `branchId`, `priceListVersionId`, `terminalDeviceId`
+//     and the actor columns are SCALAR, with no Prisma relation. A relation
+//     would require a back-relation field on RestaurantOrder/RestaurantBill/
+//     RestaurantBranch, and this lane owns promotion symbols only. Same-tenant
+//     integrity for those references is enforced in the migration by
+//     `guard_promotion_tenant_ref()` triggers, which is what §10 actually asks
+//     for; §5.2 already rules that snapshot payloads — not FKs — are
+//     authoritative for reconstruction.
+//   - Every promotion-owned table carries `@@unique([organizationId, id])` so
+//     the FKs BETWEEN these tables are composite and same-tenant by
+//     construction (§10).
+//   - `offlinePolicy`, `setRevisionId/Hash`, `source` and `taxTreatment` are
+//     declared seams for the offline (WHA-282) and tax/loyalty (WHA-281) lanes.
+//     Lane A writes and validates them; it implements no cache, queue or tax
+//     integration.
+// ---------------------------------------------------------------------------
+
+enum RestaurantPromotionStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum RestaurantPromotionVersionStatus {
+  DRAFT
+  PUBLISHED
+  SUPERSEDED
+}
+
+/// §3.1 authority. AUTOMATIC needs no actor; COUPON_CODE matches a keyed hash;
+/// STAFF/MANAGER additionally snapshot the acting staff and authorization.
+enum RestaurantPromotionActivationMode {
+  AUTOMATIC
+  COUPON_CODE
+  STAFF
+  MANAGER
+}
+
+/// §3.3. One version carries exactly one target expression.
+enum RestaurantPromotionTargetKind {
+  ITEM
+  CATEGORY
+  ORDER
+}
+
+/// §3.4 — the closed initial benefit set.
+enum RestaurantPromotionBenefitKind {
+  PERCENT_OFF
+  AMOUNT_OFF
+  FIXED_PRICE
+  BUY_X_GET_Y_PERCENT
+  BUY_X_GET_Y_AMOUNT
+  BUY_X_GET_Y_FREE
+  BUNDLE_PRICE
+}
+
+enum RestaurantPromotionApplicationBasis {
+  LINE
+  UNIT
+  ORDER
+}
+
+/// §4.2 stacking. EXCLUSIVE rejects every other candidate once accepted;
+/// GROUP_EXCLUSIVE admits at most one identity per `stackingGroup`.
+enum RestaurantPromotionStackingMode {
+  EXCLUSIVE
+  GROUP_EXCLUSIVE
+  STACKABLE
+}
+
+/// §7 seam. A capped, segmented or manager-authorized rule is ONLINE_ONLY and
+/// may never be quoted from an offline cache.
+enum RestaurantPromotionOfflinePolicy {
+  ALLOW
+  ONLINE_ONLY
+}
+
+enum RestaurantPromotionEvaluationSource {
+  ONLINE
+  OFFLINE_RECONCILED
+}
+
+/// §6. Per-order limits are settled inside the evaluation and need no ledger;
+/// these three scopes do.
+enum RestaurantPromotionCapScopeKind {
+  GLOBAL
+  CUSTOMER
+  BUDGET
+}
+
+enum RestaurantPromotionReservationState {
+  RESERVED
+  CONSUMED
+  RELEASED
+}
+
+/// §5.1 — rejected candidates are retained, so the outcome is explicit.
+enum RestaurantPromotionCandidateOutcome {
+  ACCEPTED
+  REJECTED
+}
+
+/// §10 append-only audit surface.
+enum RestaurantPromotionAuditAction {
+  DRAFT_CREATED
+  DRAFT_EDITED
+  PUBLISHED
+  SUPERSEDED
+  ARCHIVED
+  EMERGENCY_DISABLED
+  EVALUATED
+  CAP_RESERVED
+  CAP_CONSUMED
+  CAP_RELEASED
+  OFFLINE_MISMATCH
+  REVERSED
+}
+
+/// §3.1 stable identity. `code` is unique per tenant and never reused; the
+/// identity itself carries no schedule, benefit or money — those live on the
+/// immutable versions it owns.
+model RestaurantPromotion {
+  id             String                    @id @default(cuid())
+  organizationId String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  code           String
+  name           String
+  status         RestaurantPromotionStatus @default(ACTIVE)
+  archivedAt     DateTime?
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  versions RestaurantPromotionVersion[]
+
+  @@unique([organizationId, code], map: "promo_org_code_key")
+  @@unique([organizationId, id], map: "promo_org_id_key")
+  @@index([organizationId], map: "promo_org_idx")
+  @@index([organizationId, status], map: "promo_org_status_idx")
+  @@map("restaurant_promotions")
+}
+
+/// §3.1 immutable-after-publication version. Every field the evaluator reads is
+/// normalized here; `ruleSnapshot`/`ruleHash` are the canonical reconstruction
+/// and audit boundary over the same content.
+model RestaurantPromotionVersion {
+  id             String                           @id @default(cuid())
+  organizationId String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionId    String
+  versionNumber  Int
+  status         RestaurantPromotionVersionStatus @default(DRAFT)
+
+  // §3.2 schedule. `dayMask` bit 0 = Monday .. bit 6 = Sunday. A null minute
+  // window means the whole selected local day; `startMinute > endMinute` is an
+  // overnight window anchored on the selected day.
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  timezone      String
+  dayMask       Int       @default(127)
+  startMinute   Int?
+  endMinute     Int?
+
+  // §3.1 authority. Coupon plaintext is NEVER stored (§10) — only a keyed hash.
+  activationMode          RestaurantPromotionActivationMode @default(AUTOMATIC)
+  couponCodeHash          String?
+  requiredPermission      String?
+  requiresCoAuthorization Boolean                           @default(false)
+  approvedByStaffId       String?
+  approvalReference       String?
+  publishedAt             DateTime?
+  supersededAt            DateTime?
+
+  // §3.3 target expression.
+  targetKind         RestaurantPromotionTargetKind
+  targetProductIds   String[]                      @default([])
+  targetVariantIds   String[]                      @default([])
+  targetCategoryIds  String[]                      @default([])
+  includeDescendants Boolean                       @default(false)
+  componentTargeting Boolean                       @default(false)
+
+  // §3.3 filters common to every target.
+  allowedBranchIds   String[]                 @default([])
+  allowedChannels    RestaurantOrderChannel[] @default([])
+  customerSegmentRef String?
+  minimumQuantity    Int?
+  minimumAmount      Decimal?                 @db.Decimal(12, 2)
+
+  // §3.4 benefit. `benefitBasisPoints` is 1500 for 15%; FIXED_PRICE/BUNDLE_PRICE
+  // use `benefitAmount` as the stated total, never a surcharge.
+  benefitKind        RestaurantPromotionBenefitKind
+  benefitBasisPoints Int?
+  benefitAmount      Decimal?                            @db.Decimal(12, 2)
+  buyQuantity        Int?
+  getQuantity        Int?
+  applicationBasis   RestaurantPromotionApplicationBasis @default(ORDER)
+  maxBenefitAmount   Decimal?                            @db.Decimal(12, 2)
+  currency           String
+
+  // §4.2 canonical ordering and stacking.
+  priority                Int                             @default(0)
+  stackingGroup           String                          @default("")
+  stackingMode            RestaurantPromotionStackingMode @default(STACKABLE)
+  stopFurtherProcessing   Boolean                         @default(false)
+  maxApplicationsPerOrder Int?
+
+  // §6 caps. Per-order is evaluated in-memory; the other three reserve.
+  perOrderCap    Int?
+  globalCap      Int?
+  perCustomerCap Int?
+  budgetAmount   Decimal? @db.Decimal(12, 2)
+
+  // §7 seam.
+  offlinePolicy RestaurantPromotionOfflinePolicy @default(ONLINE_ONLY)
+
+  // §3.1 canonical snapshot + hash over its canonical serialization.
+  ruleSnapshot Json
+  ruleHash     String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  promotion    RestaurantPromotion                      @relation(fields: [organizationId, promotionId], references: [organizationId, id], onDelete: Cascade, map: "promo_version_promotion_fkey")
+  components   RestaurantPromotionRuleComponent[]
+  candidates   RestaurantPromotionCandidateSnapshot[]
+  applications RestaurantPromotionApplicationSnapshot[]
+  capCounters  RestaurantPromotionCapCounter[]
+
+  @@unique([organizationId, promotionId, versionNumber], map: "promo_version_org_promo_number_key")
+  @@unique([organizationId, id], map: "promo_version_org_id_key")
+  @@index([organizationId], map: "promo_version_org_idx")
+  @@index([organizationId, status, effectiveFrom], map: "promo_version_org_status_effective_idx")
+  @@index([organizationId, promotionId, status], map: "promo_version_org_promo_status_idx")
+  @@map("restaurant_promotion_versions")
+}
+
+/// §3.4/§8 BUNDLE_PRICE components. A promotion bundle owns its own immutable
+/// requirement rows because combo composition carries no quantities-with-
+/// alternatives, benefit allocation, versioning or audit semantics.
+model RestaurantPromotionRuleComponent {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionVersionId String
+  ordinal            Int
+  productIds         String[] @default([])
+  variantIds         String[] @default([])
+  categoryIds        String[] @default([])
+  quantity           Int      @default(1)
+  createdAt          DateTime @default(now())
+
+  version RestaurantPromotionVersion @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Cascade, map: "promo_component_version_fkey")
+
+  @@unique([organizationId, promotionVersionId, ordinal], map: "promo_component_org_version_ordinal_key")
+  @@unique([organizationId, id], map: "promo_component_org_id_key")
+  @@index([organizationId], map: "promo_component_org_idx")
+  @@map("restaurant_promotion_rule_components")
+}
+
+/// §5.1 the append-only order evaluation snapshot: everything required to
+/// reproduce the result WITHOUT reading current configuration.
+model RestaurantPromotionEvaluationSnapshot {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+
+  orderId        String
+  branchId       String
+  channel        RestaurantOrderChannel
+  currency       String
+  idempotencyKey String
+
+  // §3.2 resolved schedule facts, so an auditor never re-reads a branch timezone.
+  evaluatedAt      DateTime
+  timezone         String
+  localDate        String
+  localMinute      Int
+  utcOffsetMinutes Int
+
+  engineVersion String
+  moneyVersion  String
+
+  // §7 seam: which promotion-set revision produced this, and from where.
+  setRevisionId    String
+  setRevisionHash  String
+  source           RestaurantPromotionEvaluationSource @default(ONLINE)
+  terminalDeviceId String?
+
+  priceListVersionId String?
+
+  /// Complete pre-discount input lines (§5.1): item, product/variant, category
+  /// ancestry, quantity, unit price, modifier deltas, comp allocation, extended.
+  inputLines        Json
+  /// The rest of the canonical evaluation input — customer segments, coupon
+  /// fingerprints, authority actor, online flag. Kept separate so `inputLines`
+  /// stays exactly the payload §5.1 enumerates, while a replay still holds
+  /// every input it needs WITHOUT reading live configuration.
+  evaluationContext Json
+  inputHash         String
+  outputHash        String
+
+  discountTotal Decimal @default(0) @db.Decimal(12, 2)
+
+  // §5.2 corrections append a reversal that negates the original.
+  reversesSnapshotId String?
+  reversalReason     String?
+
+  createdAt DateTime @default(now())
+
+  candidates       RestaurantPromotionCandidateSnapshot[]
+  applications     RestaurantPromotionApplicationSnapshot[]
+  billApplications RestaurantPromotionBillApplicationSnapshot[]
+  reservations     RestaurantPromotionCapReservation[]
+  reversedSnapshot RestaurantPromotionEvaluationSnapshot?       @relation("PromotionEvaluationReversal", fields: [organizationId, reversesSnapshotId], references: [organizationId, id], onDelete: Restrict, map: "promo_eval_reversedsnapshot_fkey")
+  reversals        RestaurantPromotionEvaluationSnapshot[]      @relation("PromotionEvaluationReversal")
+
+  @@unique([organizationId, idempotencyKey], map: "promo_eval_org_key_key")
+  @@unique([organizationId, id], map: "promo_eval_org_id_key")
+  @@index([organizationId], map: "promo_eval_org_idx")
+  @@index([organizationId, orderId], map: "promo_eval_org_order_idx")
+  @@index([organizationId, branchId, evaluatedAt], map: "promo_eval_org_branch_time_idx")
+  @@map("restaurant_promotion_evaluation_snapshots")
+}
+
+/// §5.1 every CONSIDERED candidate in canonical order, accepted or not —
+/// explaining why a lower-priority rule won is part of reconstruction.
+model RestaurantPromotionCandidateSnapshot {
+  id                 String @id @default(cuid())
+  organizationId     String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  evaluationId       String
+  ordinal            Int
+  promotionId        String
+  promotionVersionId String
+  versionNumber      Int
+  ruleHash           String
+
+  /// The full canonical rule content as it stood at evaluation time.
+  ruleSnapshot Json
+
+  activationMode     RestaurantPromotionActivationMode
+  authorityActorId   String?
+  authorityReference String?
+  /// Non-reversible fingerprint only — coupon plaintext is never stored (§10).
+  couponFingerprint  String?
+
+  outcome    RestaurantPromotionCandidateOutcome
+  reasonCode String
+  createdAt  DateTime                            @default(now())
+
+  evaluation RestaurantPromotionEvaluationSnapshot @relation(fields: [organizationId, evaluationId], references: [organizationId, id], onDelete: Restrict, map: "promo_candidate_evaluation_fkey")
+  version    RestaurantPromotionVersion            @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Restrict, map: "promo_candidate_version_fkey")
+
+  @@unique([organizationId, evaluationId, ordinal], map: "promo_candidate_org_eval_ordinal_key")
+  @@unique([organizationId, id], map: "promo_candidate_org_id_key")
+  @@index([organizationId], map: "promo_candidate_org_idx")
+  @@index([organizationId, promotionVersionId], map: "promo_candidate_org_version_idx")
+  @@map("restaurant_promotion_candidate_snapshots")
+}
+
+/// §5.1 an ACCEPTED application: unrounded and rounded benefit, the cap
+/// reservation that authorized it, and its per-unit allocation rows.
+model RestaurantPromotionApplicationSnapshot {
+  id                 String                         @id @default(cuid())
+  organizationId     String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  evaluationId       String
+  applicationOrdinal Int
+  promotionId        String
+  promotionVersionId String
+  ruleHash           String
+  benefitKind        RestaurantPromotionBenefitKind
+  /// The exact pre-rounding benefit, retained so the rounding is auditable.
+  unroundedBenefit   Decimal                        @db.Decimal(18, 6)
+  roundedBenefit     Decimal                        @db.Decimal(12, 2)
+  qualifyingAmount   Decimal                        @db.Decimal(12, 2)
+  discountedQuantity Int                            @default(0)
+  reservationId      String?
+
+  createdAt DateTime @default(now())
+
+  evaluation       RestaurantPromotionEvaluationSnapshot        @relation(fields: [organizationId, evaluationId], references: [organizationId, id], onDelete: Restrict, map: "promo_app_evaluation_fkey")
+  version          RestaurantPromotionVersion                   @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Restrict, map: "promo_app_version_fkey")
+  allocations      RestaurantPromotionUnitAllocation[]
+  billApplications RestaurantPromotionBillApplicationSnapshot[]
+
+  @@unique([organizationId, evaluationId, applicationOrdinal], map: "promo_app_org_eval_ordinal_key")
+  @@unique([organizationId, id], map: "promo_app_org_id_key")
+  @@index([organizationId], map: "promo_app_org_idx")
+  @@index([organizationId, promotionVersionId], map: "promo_app_org_version_idx")
+  @@map("restaurant_promotion_application_snapshots")
+}
+
+/// §4.1/§4.2 the stable unit key `(orderItemId, unitOrdinal)` and the cents this
+/// application put on it. Item-mix and refunds read these rows; they are never
+/// guessed during projection (§9).
+model RestaurantPromotionUnitAllocation {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  applicationId   String
+  orderItemId     String
+  unitOrdinal     Int
+  allocatedAmount Decimal  @db.Decimal(12, 2)
+  createdAt       DateTime @default(now())
+
+  application RestaurantPromotionApplicationSnapshot @relation(fields: [organizationId, applicationId], references: [organizationId, id], onDelete: Restrict, map: "promo_alloc_application_fkey")
+
+  @@unique([organizationId, applicationId, orderItemId, unitOrdinal], map: "promo_alloc_org_app_item_unit_key")
+  @@unique([organizationId, id], map: "promo_alloc_org_id_key")
+  @@index([organizationId], map: "promo_alloc_org_idx")
+  @@index([organizationId, orderItemId], map: "promo_alloc_org_item_idx")
+  @@map("restaurant_promotion_unit_allocations")
+}
+
+/// §5.2 the per-bill immutable application. `taxTreatment` is written by this
+/// lane and consumed by the tax lane (WHA-281); re-split or void-and-recut
+/// appends NEW rows against the same evaluation and rewrites no settled history.
+model RestaurantPromotionBillApplicationSnapshot {
+  id                 String  @id @default(cuid())
+  organizationId     String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  billId             String
+  orderId            String
+  evaluationId       String
+  applicationId      String
+  promotionId        String
+  promotionVersionId String
+  ruleHash           String
+  authorityActorId   String?
+  applicationOrdinal Int
+  subtotalBasis      Decimal @db.Decimal(12, 2)
+  computedAmount     Decimal @db.Decimal(12, 2)
+  /// BEFORE_TAX | AFTER_TAX, pinned from the governing tax rule (§4.3).
+  taxTreatment       String?
+
+  reversesBillApplicationId String?
+  reversalReason            String?
+
+  createdAt DateTime @default(now())
+
+  evaluation      RestaurantPromotionEvaluationSnapshot        @relation(fields: [organizationId, evaluationId], references: [organizationId, id], onDelete: Restrict, map: "promo_bill_app_evaluation_fkey")
+  application     RestaurantPromotionApplicationSnapshot       @relation(fields: [organizationId, applicationId], references: [organizationId, id], onDelete: Restrict, map: "promo_bill_app_application_fkey")
+  reversedApplied RestaurantPromotionBillApplicationSnapshot?  @relation("PromotionBillApplicationReversal", fields: [organizationId, reversesBillApplicationId], references: [organizationId, id], onDelete: Restrict, map: "promo_bill_app_reversedapplied_fkey")
+  reversals       RestaurantPromotionBillApplicationSnapshot[] @relation("PromotionBillApplicationReversal")
+
+  @@unique([organizationId, id], map: "promo_bill_app_org_id_key")
+  @@index([organizationId], map: "promo_bill_app_org_idx")
+  @@index([organizationId, billId], map: "promo_bill_app_org_bill_idx")
+  @@index([organizationId, orderId], map: "promo_bill_app_org_order_idx")
+  @@map("restaurant_promotion_bill_application_snapshots")
+}
+
+/// §6 the locked counter. Committed consumption lives here; live reservations
+/// live in the ledger below. Authorization reads BOTH under one row lock.
+model RestaurantPromotionCapCounter {
+  id                 String                          @id @default(cuid())
+  organizationId     String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionVersionId String
+  scopeKind          RestaurantPromotionCapScopeKind
+  /// "" for GLOBAL/BUDGET; the customer identifier for CUSTOMER.
+  scopeKey           String                          @default("")
+  capCount           Int?
+  capAmount          Decimal?                        @db.Decimal(12, 2)
+  consumedCount      Int                             @default(0)
+  consumedAmount     Decimal                         @default(0) @db.Decimal(12, 2)
+  createdAt          DateTime                        @default(now())
+  updatedAt          DateTime                        @updatedAt
+
+  version      RestaurantPromotionVersion          @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Restrict, map: "promo_cap_ctr_version_fkey")
+  reservations RestaurantPromotionCapReservation[]
+
+  @@unique([organizationId, promotionVersionId, scopeKind, scopeKey], map: "promo_cap_ctr_org_version_scope_scopekey_key")
+  @@unique([organizationId, id], map: "promo_cap_ctr_org_id_key")
+  @@index([organizationId], map: "promo_cap_ctr_org_idx")
+  @@map("restaurant_promotion_cap_counters")
+}
+
+/// §6 the append-only reservation/consumption ledger, keyed by
+/// `(promotionVersionId, scopeKey, evaluationId, applicationOrdinal)` so a
+/// replay of the same evaluation returns the ORIGINAL reservation.
+model RestaurantPromotionCapReservation {
+  id                 String                              @id @default(cuid())
+  organizationId     String                              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  counterId          String
+  promotionVersionId String
+  scopeKind          RestaurantPromotionCapScopeKind
+  scopeKey           String                              @default("")
+  evaluationId       String
+  applicationOrdinal Int
+  reservedCount      Int                                 @default(1)
+  reservedAmount     Decimal                             @default(0) @db.Decimal(12, 2)
+  state              RestaurantPromotionReservationState @default(RESERVED)
+  expiresAt          DateTime?
+  settledAt          DateTime?
+  releasedAt         DateTime?
+  createdAt          DateTime                            @default(now())
+
+  counter    RestaurantPromotionCapCounter         @relation(fields: [organizationId, counterId], references: [organizationId, id], onDelete: Restrict, map: "promo_cap_res_counter_fkey")
+  evaluation RestaurantPromotionEvaluationSnapshot @relation(fields: [organizationId, evaluationId], references: [organizationId, id], onDelete: Restrict, map: "promo_cap_res_evaluation_fkey")
+
+  @@unique([organizationId, promotionVersionId, scopeKind, scopeKey, evaluationId, applicationOrdinal], map: "promo_cap_res_org_version_scope_scopekey_eval_ordinal_key")
+  @@unique([organizationId, id], map: "promo_cap_res_org_id_key")
+  @@index([organizationId], map: "promo_cap_res_org_idx")
+  @@index([organizationId, counterId, state], map: "promo_cap_res_org_counter_state_idx")
+  @@map("restaurant_promotion_cap_reservations")
+}
+
+/// §10 append-only audit. Records IDs, hashes, reason codes, actor/device and
+/// timestamps — never sensitive rule inputs or coupon plaintext.
+model RestaurantPromotionAuditEvent {
+  id                 String                         @id @default(cuid())
+  organizationId     String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  action             RestaurantPromotionAuditAction
+  promotionId        String?
+  promotionVersionId String?
+  evaluationId       String?
+  reasonCode         String?
+  actorUserId        String?
+  actorStaffId       String?
+  deviceId           String?
+  payloadHash        String?
+  occurredAt         DateTime                       @default(now())
+  createdAt          DateTime                       @default(now())
+
+  @@index([organizationId], map: "promo_audit_org_idx")
+  @@index([organizationId, action, occurredAt], map: "promo_audit_org_action_time_idx")
+  @@index([organizationId, promotionVersionId], map: "promo_audit_org_version_idx")
+  @@map("restaurant_promotion_audit_events")
+}
+
 model PlatformUser {
   id                  String       @id @default(cuid())
   name                String
