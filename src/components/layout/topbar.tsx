@@ -25,6 +25,7 @@ import {
   Loader2,
   Sparkles,
   Plus,
+  Repeat2,
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { cn } from '@/lib/utils';
@@ -345,6 +346,10 @@ export function Topbar({
                 <DropdownMenuItem onClick={() => router.push('/settings')}>
                   <User className="mr-2 h-4 w-4" />
                   Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void signOutEverything('/login')}>
+                  <Repeat2 className="mr-2 h-4 w-4" />
+                  Switch organization
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
