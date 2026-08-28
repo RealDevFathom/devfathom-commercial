@@ -121,6 +121,26 @@ describe('createTemplate — entitlement-driven sop.templates.max', () => {
       caller({ 'sop.templates.max': 5 }).createTemplate({ name: 'Too many' })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
+
+  it('preserves a deliberate zero instead of treating it as absent', async () => {
+    db.restaurantSopTemplate.count.mockResolvedValue(0);
+    await expect(
+      caller({ 'sop.templates.max': 0 }).createTemplate({ name: 'Disabled by policy' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('uses the bootstrapped package limit when no explicit override exists', async () => {
+    db.restaurantSopTemplate.count.mockResolvedValue(1);
+    await expect(
+      caller({ 'restaurant-core.sop.templates.max': 5 }).createTemplate({ name: 'Opening' })
+    ).resolves.toMatchObject({ name: 'Opening' });
+  });
+
+  it('fails loudly when both limit keys are absent', async () => {
+    await expect(caller({}).createTemplate({ name: 'Unconfigured' })).rejects.toThrow(
+      'Entitlement limit is not configured'
+    );
+  });
 });
 
 describe('strict-zod boundary', () => {

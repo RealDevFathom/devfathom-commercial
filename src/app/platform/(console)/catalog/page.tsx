@@ -4,7 +4,14 @@ import {
   PlatformCommandForm,
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
+import {
+  packageEntitlementLimits,
+  resolveRequiredEntitlementLimit,
+} from '@/lib/entitlement-limits';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+
+const SOP_TEMPLATES_LIMIT = 'sop.templates.max';
+const BOOTSTRAPPED_SOP_TEMPLATES_LIMIT = `restaurant-core.${SOP_TEMPLATES_LIMIT}`;
 
 export default async function CatalogPage() {
   const data = await withPlatformDb(async (db) => {
@@ -23,6 +30,26 @@ export default async function CatalogPage() {
     ]);
     return { modules, packages };
   });
+  const sopLimitDiagnostics = data.packages
+    .filter((item) =>
+      item.moduleLinks.some((link) => link.enabled && link.module.key === 'restaurant-sop')
+    )
+    .map((item) => {
+      try {
+        return {
+          packageId: item.id,
+          packageName: item.name,
+          resolution: resolveRequiredEntitlementLimit(
+            packageEntitlementLimits(item.moduleLinks),
+            SOP_TEMPLATES_LIMIT,
+            BOOTSTRAPPED_SOP_TEMPLATES_LIMIT
+          ),
+        };
+      } catch {
+        return { packageId: item.id, packageName: item.name, resolution: null };
+      }
+    });
+  const missingSopLimits = sopLimitDiagnostics.filter((diagnostic) => !diagnostic.resolution);
 
   return (
     <div className="mx-auto max-w-[1480px]">
@@ -31,6 +58,23 @@ export default async function CatalogPage() {
         title="Modules and packages"
         description="The product catalog behind contracts and organization entitlements. Package changes are versioned; tenant overrides remain explicit."
       />
+
+      {missingSopLimits.length > 0 ? (
+        <section
+          aria-labelledby="sop-limit-configuration-title"
+          className="mt-7 border border-destructive/35 bg-destructive/10 px-5 py-4 text-destructive"
+        >
+          <p className="font-mono text-[9px] uppercase tracking-[0.14em]">Configuration fault</p>
+          <h2 id="sop-limit-configuration-title" className="mt-1 text-sm font-semibold">
+            SOP template limits are missing
+          </h2>
+          <p className="mt-2 text-xs leading-5">
+            Add <code>{SOP_TEMPLATES_LIMIT}</code> to the restaurant-core module limits for:{' '}
+            {missingSopLimits.map((item) => item.packageName).join(', ')}. Until configured, SOP
+            template creation fails loudly instead of silently acting as a zero limit.
+          </p>
+        </section>
+      ) : null}
 
       <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="min-w-0 space-y-7">
@@ -152,6 +196,12 @@ export default async function CatalogPage() {
             <div className="grid gap-px bg-border-subtle lg:grid-cols-2">
               {data.packages.map((item) => {
                 const linked = new Map(item.moduleLinks.map((link) => [link.moduleId, link]));
+                const sopLimit = sopLimitDiagnostics.find(
+                  (diagnostic) => diagnostic.packageId === item.id
+                )?.resolution;
+                const includesSop = sopLimitDiagnostics.some(
+                  (diagnostic) => diagnostic.packageId === item.id
+                );
                 return (
                   <article key={item.id} className="bg-surface-card p-5">
                     <div className="flex items-start justify-between gap-3">
@@ -170,6 +220,23 @@ export default async function CatalogPage() {
                       <span>{item.defaultSeats} default seats</span>
                       <span>{item._count.organizations} organizations</span>
                     </div>
+                    {includesSop ? (
+                      <div className="mt-3 text-xs">
+                        <p className="font-mono text-[8px] uppercase tracking-[0.1em] text-text-faint">
+                          SOP template limit
+                        </p>
+                        {sopLimit ? (
+                          <p className="mt-1 text-text-muted">
+                            {sopLimit.value === 0 ? 'Deliberate zero' : sopLimit.value} via{' '}
+                            <code>{sopLimit.key}</code> ({sopLimit.source})
+                          </p>
+                        ) : (
+                          <p className="mt-1 font-semibold text-destructive">
+                            Missing {SOP_TEMPLATES_LIMIT} and {BOOTSTRAPPED_SOP_TEMPLATES_LIMIT}
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
                     <div className="mt-4 space-y-2">
                       {data.modules.map((module) => {
                         const link = linked.get(module.id);

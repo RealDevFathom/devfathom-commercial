@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+import { resolveRequiredEntitlementLimit } from '@/lib/entitlement-limits';
 import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure } from '../trpc';
@@ -117,6 +119,17 @@ const recurrenceShape = {
   windowMinutes: z.number().int().min(0).max(1440).default(1440),
 } as const;
 
+const SOP_TEMPLATES_LIMIT = 'sop.templates.max';
+const BOOTSTRAPPED_SOP_TEMPLATES_LIMIT = `restaurant-core.${SOP_TEMPLATES_LIMIT}`;
+
+function sopTemplatesMax(limits: Record<string, number>): number {
+  return resolveRequiredEntitlementLimit(
+    limits,
+    SOP_TEMPLATES_LIMIT,
+    BOOTSTRAPPED_SOP_TEMPLATES_LIMIT
+  ).value;
+}
+
 export const restaurantSopRouter = router({
   // ── Templates ───────────────────────────────────────────────────────────────
 
@@ -132,8 +145,7 @@ export const restaurantSopRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const templatesMax =
-          (ctx.entitlements.limits as Record<string, number>)['sop.templates.max'] ?? 0;
+        const templatesMax = sopTemplatesMax(ctx.entitlements.limits);
         const template = await createTemplate(ctx.db, input, templatesMax);
         annotateAudit(ctx, {
           targetType: 'RestaurantSopTemplate',
@@ -171,8 +183,7 @@ export const restaurantSopRouter = router({
     .input(z.object({ id: z.string(), isActive: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        const templatesMax =
-          (ctx.entitlements.limits as Record<string, number>)['sop.templates.max'] ?? 0;
+        const templatesMax = sopTemplatesMax(ctx.entitlements.limits);
         return await setTemplateActive(ctx.db, input.id, input.isActive, templatesMax);
       } catch (err) {
         mapSopError(err);
