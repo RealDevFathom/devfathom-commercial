@@ -893,7 +893,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         });
         if (!before) return { error: 'That team member was not found.' };
 
-        const data: Prisma.UserUpdateInput = {};
+        const data: Prisma.UserUncheckedUpdateInput = {};
         const changes: Record<string, { before: unknown; after: unknown }> = {};
         if (role != null && role !== before.role) {
           // Changing a role is privilege escalation/de-escalation: never demote

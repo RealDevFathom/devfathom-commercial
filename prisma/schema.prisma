@@ -117,15 +117,6 @@ enum ResignationStatus {
   WITHDRAWN
 }
 
-enum Department {
-  LEADERSHIP
-  ENGINEERING
-  PRODUCT
-  QUALITY
-  MARKETING
-  DESIGN
-}
-
 enum UserStatus {
   ACTIVE
   INACTIVE
@@ -497,7 +488,7 @@ model User {
   email              String
   password           String?
   role               Role       @default(EMPLOYEE)
-  department         Department
+  department         String
   title              String
   avatar             String?
   phone              String?
@@ -524,6 +515,7 @@ model User {
 
   // Relations
   organization                Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationDepartment      OrganizationDepartment         @relation(fields: [organizationId, department], references: [organizationId, key])
   organizationRole            OrganizationRole?              @relation(fields: [organizationRoleId], references: [id], onDelete: SetNull)
   permissionOverrides         UserPermissionOverride[]
   projectMembers              ProjectMember[]
@@ -2282,6 +2274,7 @@ model Organization {
   package                   PlatformPackage?                 @relation(fields: [packageId], references: [id], onDelete: SetNull)
   users                     User[]
   roles                     OrganizationRole[]
+  departments               OrganizationDepartment[]
   permissionOverrides       UserPermissionOverride[]
   modules                   OrganizationModule[]
   limits                    OrganizationLimit[]
@@ -7483,6 +7476,25 @@ model OrganizationRole {
   @@unique([organizationId, key])
   @@index([organizationId])
   @@map("organization_roles")
+}
+
+model OrganizationDepartment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  name           String
+  active         Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users        User[]
+
+  @@unique([organizationId, key])
+  @@unique([organizationId, name])
+  @@index([organizationId, active, sortOrder])
+  @@map("organization_departments")
 }
 
 model OrganizationRolePermission {

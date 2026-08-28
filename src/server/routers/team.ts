@@ -113,14 +113,7 @@ export const teamRouter = router({
         // alex@company.com without the guard ever firing.
         email: emailSchema,
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
-        department: z.enum([
-          'LEADERSHIP',
-          'ENGINEERING',
-          'PRODUCT',
-          'QUALITY',
-          'MARKETING',
-          'DESIGN',
-        ]),
+        department: z.string().trim().min(2).max(80).regex(/^[A-Z0-9_]+$/),
         title: z.string().min(1),
         phone: z.string().optional(),
         bio: z.string().optional(),
@@ -129,6 +122,11 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const email = input.email;
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { key: input.department, active: true },
+        select: { id: true },
+      });
+      if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
       const existing = await ctx.db.user.findFirst({
         where: { email },
         select: { id: true, status: true },
@@ -714,9 +712,7 @@ export const teamRouter = router({
         name: z.string().min(1).optional(),
         email: z.string().email().optional(),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).optional(),
-        department: z
-          .enum(['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN'])
-          .optional(),
+        department: z.string().trim().min(2).max(80).regex(/^[A-Z0-9_]+$/).optional(),
         title: z.string().min(1).optional(),
         phone: z.string().nullable().optional(),
         bio: z.string().nullable().optional(),
@@ -726,6 +722,13 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      if (input.department) {
+        const department = await ctx.db.organizationDepartment.findFirst({
+          where: { key: input.department, active: true },
+          select: { id: true },
+        });
+        if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+      }
       const auditFields = [
         'name',
         'email',

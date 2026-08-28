@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
   invitationUpsert: vi.fn(),
+  departmentFindFirst: vi.fn(),
   sendEmail: vi.fn(),
   can: vi.fn(async () => true),
 }));
@@ -43,6 +44,7 @@ import type { TRPCContext } from '../trpc';
 
 const db = {
   user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+  organizationDepartment: { findFirst: mocks.departmentFindFirst },
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
@@ -77,6 +79,7 @@ describe('team.inviteMember duplicate guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -108,5 +111,14 @@ describe('team.inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+  });
+
+  it('rejects a department outside the tenant catalog', async () => {
+    mocks.departmentFindFirst.mockResolvedValue(null);
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'new.person@company.com' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 });
