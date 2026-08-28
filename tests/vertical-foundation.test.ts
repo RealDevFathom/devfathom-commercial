@@ -564,6 +564,11 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // Platform console pages for organizations and catalog
     /src\/app\/platform\/\(console\)\/organizations\//,
     /src\/app\/platform\/\(console\)\/catalog\//,
+    // WHA-290 — the identity paths derive a department from the vertical
+    // catalog rather than branching on the vertical themselves, so only this
+    // module's database battery names a vertical: it has to CREATE a restaurant
+    // organization to prove the composite foreign key admits what it writes.
+    /src\/lib\/department-provisioning\.db\.test\.ts$/,
     // Generated Prisma client — read-only, not authored here
     /src\/generated\//,
   ];

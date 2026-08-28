@@ -11,6 +11,10 @@ import {
 } from '@/lib/scim';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { emailSchema, normalizeEmail } from '@/lib/email-address';
+import {
+  EmptyDepartmentCatalogError,
+  resolveProvisionedDepartmentKey,
+} from '@/lib/department-provisioning';
 
 const createUserSchema = z.object({
   schemas: z.array(z.string()).optional(),
@@ -87,6 +91,11 @@ export async function POST(request: Request) {
         return scimError(403, 'The organization seat limit has been reached.');
       }
       const role = scimRole(input.roles?.[0]?.value);
+      // WHA-290: the same tenant-configured catalog the SSO JIT path resolves
+      // against. SCIM asserts an identity, not a department, so a hardcoded
+      // agency-era key would raise the composite foreign key in any tenant that
+      // does not have it — a restaurant has KITCHEN/FRONT_OF_HOUSE only.
+      const department = await resolveProvisionedDepartmentKey(ctx.db, ctx.organizationId, role);
       const user = await ctx.db.user.create({
         data: {
           organizationId: ctx.organizationId,
@@ -94,7 +103,7 @@ export async function POST(request: Request) {
           email,
           password: null,
           role,
-          department: role === 'ADMIN' ? 'LEADERSHIP' : 'ENGINEERING',
+          department,
           title: role === 'ADMIN' ? 'Organization administrator' : 'Team member',
           status: input.active ? 'ACTIVE' : 'INACTIVE',
         },
@@ -120,6 +129,12 @@ export async function POST(request: Request) {
     } catch (error) {
       if (error instanceof z.ZodError) {
         return scimError(400, error.issues[0]?.message ?? 'Invalid SCIM user.', 'invalidValue');
+      }
+      // The tenant deactivated every department, so no user can be filed at
+      // all. Answer the directory with the reason rather than a bare 500 or a
+      // raw `users_organizationId_department_fkey`.
+      if (error instanceof EmptyDepartmentCatalogError) {
+        return scimError(409, error.message, 'mutability');
       }
       throw error;
     }

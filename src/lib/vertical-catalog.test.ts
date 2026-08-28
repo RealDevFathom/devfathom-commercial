@@ -12,8 +12,11 @@ import {
   RESTAURANT_JOB_ROLE_TEMPLATES,
   RESTAURANT_ROLE_TEMPLATES,
   VERTICALS,
+  adminDepartmentKeyForVertical,
   assertPackageCompatibleWithVertical,
+  defaultDepartmentRowsForVertical,
   departmentsForVertical,
+  memberDepartmentKeyForVertical,
   isPackageCompatibleWithVertical,
   isRestaurantModuleKey,
   jobRoleTemplatesForVertical,
@@ -47,6 +50,35 @@ describe('vertical department defaults', () => {
       { key: 'FRONT_OF_HOUSE', name: 'Front of House' },
     ]);
     expect(RESTAURANT_DEPARTMENTS.map((department) => department.key)).not.toContain('ENGINEERING');
+  });
+
+  // WHA-290 — the identity paths derive a department instead of taking one, so
+  // both declared defaults must be keys the vertical's own catalog contains.
+  it('declares provisioning defaults that exist in each vertical catalog', () => {
+    for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+      const keys = departmentsForVertical(vertical).map((department) => department.key);
+      expect(keys).toContain(adminDepartmentKeyForVertical(vertical));
+      expect(keys).toContain(memberDepartmentKeyForVertical(vertical));
+    }
+  });
+
+  it('keeps the pre-WHA-278 agency pair and gives a restaurant a floor department', () => {
+    expect(adminDepartmentKeyForVertical('AGENCY')).toBe('LEADERSHIP');
+    expect(memberDepartmentKeyForVertical('AGENCY')).toBe('ENGINEERING');
+    expect(adminDepartmentKeyForVertical('RESTAURANT')).toBe('FRONT_OF_HOUSE');
+    expect(memberDepartmentKeyForVertical('RESTAURANT')).toBe('FRONT_OF_HOUSE');
+  });
+
+  it('numbers default rows in catalog order for every vertical', () => {
+    for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+      expect(defaultDepartmentRowsForVertical(vertical)).toEqual(
+        departmentsForVertical(vertical).map((department, index) => ({
+          key: department.key,
+          name: department.name,
+          sortOrder: index,
+        }))
+      );
+    }
   });
 });
 
