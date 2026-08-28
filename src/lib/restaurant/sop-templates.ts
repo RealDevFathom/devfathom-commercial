@@ -8,6 +8,11 @@ import {
   type RecurrenceRule,
   assertValidRule,
 } from '@/lib/restaurant/sop-recurrence';
+import {
+  type AssigneeTarget,
+  assertAssigneeTarget,
+  assigneeTargetColumns,
+} from '@/lib/restaurant/sop-assignment';
 
 /**
  * M7-L3 / §SOP — SOP template authoring: the template family → version → step
@@ -532,6 +537,12 @@ export type CreateAssignmentInput = AssignmentRuleFields & {
   branchId: string;
   templateId: string;
   graceMinutes: number;
+  /**
+   * SOP-1: who owes the work — a named person, or a job role whose branch holders
+   * may claim it. Required: an assignment with no assignee is work nobody owns,
+   * and the DB CHECK would reject the row anyway.
+   */
+  assigneeTarget: AssigneeTarget;
 };
 
 function ruleOf(fields: AssignmentRuleFields): RecurrenceRule {
@@ -588,10 +599,12 @@ export async function createAssignment(db: ScopedDb, input: CreateAssignmentInpu
   if (!branch) throw new SopTemplateError(`Branch ${input.branchId} was not found.`, 'NOT_FOUND');
   if (!template)
     throw new SopTemplateError(`Template ${input.templateId} was not found.`, 'NOT_FOUND');
+  await assertAssigneeTarget(db, input.assigneeTarget);
   return db.restaurantSopAssignment.create({
     data: {
       branchId: input.branchId,
       templateId: input.templateId,
+      ...assigneeTargetColumns(input.assigneeTarget),
       frequency: input.frequency,
       interval: input.interval,
       daysOfWeek: input.daysOfWeek,
@@ -605,7 +618,14 @@ export async function createAssignment(db: ScopedDb, input: CreateAssignmentInpu
   });
 }
 
-export type UpdateAssignmentInput = Partial<AssignmentRuleFields & { graceMinutes: number }>;
+export type UpdateAssignmentInput = Partial<AssignmentRuleFields & { graceMinutes: number }> & {
+  /**
+   * SOP-1: re-target the assignment. Applies to occurrences generated FROM NOW ON
+   * — already-materialised occurrences keep the owner they were stamped with, the
+   * same way they keep their pinned template version.
+   */
+  assigneeTarget?: AssigneeTarget;
+};
 
 /**
  * Update an assignment's recurrence/config. The full effective rule (existing
@@ -632,10 +652,12 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
     windowMinutes: patch.windowMinutes ?? existing.windowMinutes,
   };
   assertValidRule(ruleOf(merged));
+  if (patch.assigneeTarget) await assertAssigneeTarget(db, patch.assigneeTarget);
 
   return db.restaurantSopAssignment.update({
     where: { id },
     data: {
+      ...(patch.assigneeTarget ? assigneeTargetColumns(patch.assigneeTarget) : {}),
       frequency: merged.frequency,
       interval: merged.interval,
       daysOfWeek: merged.daysOfWeek,

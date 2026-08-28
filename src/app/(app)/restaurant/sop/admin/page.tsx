@@ -28,6 +28,9 @@ type RouterOutputs = inferRouterOutputs<AppRouter>;
 type SopTemplate = RouterOutputs['restaurantSop']['listTemplates'][number];
 type SopAssignment = RouterOutputs['restaurantSop']['listAssignments'][number];
 type SopVersion = RouterOutputs['restaurantSop']['getVersion'];
+type AssignableJobRole = RouterOutputs['restaurantSop']['listAssignableJobRoles'][number];
+/** SOP-1: which of the two assignment modes the form is currently composing. */
+type AssigneeMode = 'role' | 'person';
 type UiError = { message: string; data?: { code?: string } | null };
 type Frequency = 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY';
 type PendingAction =
@@ -136,6 +139,7 @@ export type SopAdminViewProps = {
   templateLimit: number;
   templates: SopTemplate[];
   assignments: SopAssignment[];
+  jobRoles: AssignableJobRole[];
   selectedTemplateId: string;
   selectedVersionId: string;
   version: SopVersion | null;
@@ -166,6 +170,7 @@ export function SopAdminView({
   templateLimit,
   templates,
   assignments,
+  jobRoles,
   selectedTemplateId,
   selectedVersionId,
   version,
@@ -191,6 +196,10 @@ export function SopAdminView({
   onToggleAssignment,
 }: SopAdminViewProps) {
   const [frequency, setFrequency] = useState<Frequency>('DAILY');
+  // SOP-1: the two assignment modes are mutually exclusive per assignment, so the
+  // form swaps one control for the other rather than showing both and validating
+  // afterwards — an invalid combination is never expressible.
+  const [assigneeMode, setAssigneeMode] = useState<AssigneeMode>('role');
   const selectedTemplate =
     templates.find((template) => template.id === selectedTemplateId) ?? templates[0] ?? null;
   const versions = selectedTemplate?.versions ?? [];
@@ -767,6 +776,63 @@ export function SopAdminView({
                       No branch-directory procedure exists in the L3 authoring contract. Enter a
                       known branch ID; the server validates tenant scope.
                     </p>
+                    <label className="space-y-1.5 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                      <span className={labelClass}>Assign to</span>
+                      <select
+                        name="assigneeMode"
+                        className={selectClass}
+                        value={assigneeMode}
+                        onChange={(event) => setAssigneeMode(event.target.value as AssigneeMode)}
+                        aria-describedby="assignee-mode-help"
+                      >
+                        <option value="role">A job role (claimable pool)</option>
+                        <option value="person">A named person (assigned directly)</option>
+                      </select>
+                    </label>
+                    <p
+                      id="assignee-mode-help"
+                      className="text-xs leading-relaxed text-text-faint sm:col-span-2 xl:col-span-1 2xl:col-span-2"
+                    >
+                      {assigneeMode === 'role'
+                        ? 'Every occurrence becomes an unclaimed item in that role’s branch pool. Any holder of the role at the branch can claim it; the first claim wins.'
+                        : 'Every occurrence is assigned directly to this person. There is nothing to claim.'}
+                    </p>
+                    {assigneeMode === 'role' ? (
+                      <label className="space-y-1.5 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                        <span className={labelClass}>Job role</span>
+                        {jobRoles.length ? (
+                          <select name="assigneeJobRoleId" required className={selectClass}>
+                            {jobRoles.map((role) => (
+                              <option key={role.id} value={role.id}>
+                                {role.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <p className="rounded-md border border-dashed border-border-subtle px-3 py-2 text-xs text-text-muted">
+                            No active job roles yet. Create them in staff administration before
+                            pooling work to a role.
+                          </p>
+                        )}
+                      </label>
+                    ) : (
+                      <label className="space-y-1.5 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                        <span className={labelClass}>Staff profile ID</span>
+                        <Input
+                          name="assigneeStaffProfileId"
+                          required
+                          className="h-11 font-mono"
+                          aria-describedby="assignee-staff-help"
+                        />
+                        <span
+                          id="assignee-staff-help"
+                          className="block text-xs leading-relaxed text-text-faint"
+                        >
+                          As with the branch, the authoring contract exposes no staff directory
+                          here. The server validates the profile is in tenant scope.
+                        </span>
+                      </label>
+                    )}
                     <label className="space-y-1.5">
                       <span className={labelClass}>Frequency</span>
                       <select
@@ -991,6 +1057,9 @@ export default function RestaurantSopAdminPage() {
     { includeInactive: true },
     { enabled: moduleEnabled }
   );
+  const jobRolesQuery = trpc.restaurantSop.listAssignableJobRoles.useQuery(undefined, {
+    enabled: moduleEnabled,
+  });
   const assignmentsQuery = trpc.restaurantSop.listAssignments.useQuery(undefined, {
     enabled: moduleEnabled,
   });
@@ -1178,10 +1247,18 @@ export default function RestaurantSopAdminPage() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const frequency = formText(data, 'frequency') as Frequency;
+    // SOP-1: the form renders exactly one of the two assignee controls, so the
+    // mode decides which field to read. Reading both and picking a winner would
+    // let a stale hidden value survive a mode switch.
+    const assigneeTarget =
+      formText(data, 'assigneeMode') === 'person'
+        ? ({ type: 'person', staffProfileId: formText(data, 'assigneeStaffProfileId') } as const)
+        : ({ type: 'role', jobRoleId: formText(data, 'assigneeJobRoleId') } as const);
     createAssignment.mutate(
       {
         branchId: formText(data, 'branchId'),
         templateId: selectedTemplate.id,
+        assigneeTarget,
         frequency,
         interval: formNumber(data, 'interval', 1),
         daysOfWeek:
@@ -1203,6 +1280,7 @@ export default function RestaurantSopAdminPage() {
       templateLimit={templateLimit}
       templates={templates}
       assignments={assignmentsQuery.data ?? []}
+      jobRoles={jobRolesQuery.data ?? []}
       selectedTemplateId={selectedTemplate?.id ?? ''}
       selectedVersionId={selectedVersion?.id ?? ''}
       version={versionQuery.data ?? null}
