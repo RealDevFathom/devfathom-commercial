@@ -462,6 +462,76 @@ export function meetingInvite(p: {
   };
 }
 
+/**
+ * Guest invitation to ONE meeting occurrence (WHA-235).
+ *
+ * DELIBERATELY NOT A ONE-CLICK LINK, and that is the whole difference between
+ * this and `invitation` above. An invite token is designed to travel in a URL;
+ * a live meeting credential is not — a URL lands in browser history, `Referer`
+ * headers, proxy and server access logs, and chat-app link previews.
+ *
+ * So this template carries two separate things and never combines them:
+ *   - `joinUrl`, which is the occurrence's `publicId` and nothing else. It is a
+ *     LOCATOR: holding it proves nothing.
+ *   - `passcode`, rendered as text for the guest to TYPE. It is the credential.
+ *
+ * A caller MUST NOT append the passcode to `joinUrl`. The parameters are
+ * separate here so that doing so has to be a deliberate act rather than a
+ * convenience.
+ */
+export function meetingGuestInvite(p: {
+  recipientName: string;
+  title: string;
+  organizerName: string;
+  whenLabel: string;
+  durationLabel?: string;
+  /** Locator only — `/join/<publicId>`. Never carries the passcode. */
+  joinUrl: string;
+  /** Shown once. Typed by the guest, never placed in a link. */
+  passcode: string;
+  expiresLabel: string;
+  agenda?: string;
+}): EmailContent {
+  const rows: MetaRow[] = [{ label: 'When', value: p.whenLabel }];
+  if (p.durationLabel) rows.push({ label: 'Duration', value: p.durationLabel });
+  rows.push({ label: 'Host', value: p.organizerName });
+  rows.push({ label: 'Passcode valid until', value: p.expiresLabel });
+
+  return {
+    subject: `You're invited: ${p.title}`,
+    html: renderDocument({
+      preheader: `${p.organizerName} invited you as a guest · ${p.whenLabel}.`,
+      body: [
+        eyebrow('Guest invite'),
+        heading(p.title),
+        paragraph(`${esc(p.organizerName)} invited you to join as a guest.`),
+        detailCard(rows),
+        p.agenda ? quote(p.agenda) : '',
+        button('Open the meeting', p.joinUrl),
+        paragraph(
+          `You'll be asked for this passcode: <strong>${esc(p.passcode)}</strong>. ` +
+            `It is shown only in this email, works only for this one meeting, and ` +
+            `expires afterwards. Please don't forward it.`
+        ),
+      ].join(''),
+    }),
+    text: text([
+      `You're invited: ${p.title}`,
+      ``,
+      `${p.organizerName} invited you to join as a guest.`,
+      `When: ${p.whenLabel}`,
+      p.durationLabel && `Duration: ${p.durationLabel}`,
+      ``,
+      `Open the meeting: ${p.joinUrl}`,
+      `Passcode: ${p.passcode}`,
+      `Passcode valid until: ${p.expiresLabel}`,
+      ``,
+      `The passcode is shown only in this email and works only for this one`,
+      `meeting. Please don't forward it.`,
+    ]),
+  };
+}
+
 export function meetingReminder(p: {
   title: string;
   whenLabel: string;
