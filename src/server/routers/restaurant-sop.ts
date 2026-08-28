@@ -27,6 +27,18 @@ import {
   assignmentRecurrenceRule,
 } from '@/lib/restaurant/sop-templates';
 import { RecurrenceError, enumerateOccurrences } from '@/lib/restaurant/sop-recurrence';
+import {
+  type AssigneeTarget,
+  AssigneeTargetError,
+  claimSopOccurrence,
+  listClaimablePoolOccurrences,
+  listStaffSopOccurrences,
+} from '@/lib/restaurant/sop-assignment';
+import {
+  SOP_TEMPLATE_PACKS,
+  installAllSopPacks,
+  installSopPack,
+} from '@/lib/restaurant/sop-template-packs';
 
 /**
  * M7-L3 — the SOP authoring console (back-office server surface).
@@ -43,6 +55,8 @@ import { RecurrenceError, enumerateOccurrences } from '@/lib/restaurant/sop-recu
  */
 
 const manageProcedure = capabilityProcedure('sop:manage');
+/** SOP-1: doing the work (claiming from a pool, reading your own queue). */
+const completeProcedure = capabilityProcedure('sop:complete');
 
 /** Translate SOP/recurrence domain errors to tRPC status. Rethrows unknowns. */
 function mapSopError(err: unknown): never {
@@ -61,6 +75,12 @@ function mapSopError(err: unknown): never {
   if (err instanceof RecurrenceError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
   }
+  if (err instanceof AssigneeTargetError) {
+    throw new TRPCError({
+      code: err.reason === 'ROLE_INACTIVE' ? 'CONFLICT' : 'BAD_REQUEST',
+      message: err.message,
+    });
+  }
   throw err;
 }
 
@@ -74,6 +94,16 @@ const FREQUENCY = z.enum(['ONCE', 'DAILY', 'WEEKLY', 'MONTHLY']);
 const MINUTES_OF_DAY = z.number().int().min(0).max(1439);
 const DAYS_OF_WEEK = z.array(z.number().int().min(0).max(6)).max(7);
 const MONTH_DAY = z.number().int().min(1).max(31).nullable();
+
+/**
+ * SOP-1: the assignee target, as a discriminated union so an input naming a
+ * person cannot also smuggle a role id past the strict boundary. The DB CHECK is
+ * the last line of defence; this is the first.
+ */
+const ASSIGNEE_TARGET = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('person'), staffProfileId: z.string() }).strict(),
+  z.object({ type: z.literal('role'), jobRoleId: z.string() }).strict(),
+]) satisfies z.ZodType<AssigneeTarget>;
 
 /** The recurrence fields shared by createAssignment and previewSchedule. */
 const recurrenceShape = {
@@ -309,6 +339,7 @@ export const restaurantSopRouter = router({
           branchId: z.string(),
           templateId: z.string(),
           graceMinutes: z.number().int().min(0).max(1440).default(0),
+          assigneeTarget: ASSIGNEE_TARGET,
           ...recurrenceShape,
         })
         .strict()
@@ -316,10 +347,14 @@ export const restaurantSopRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const assignment = await createAssignment(ctx.db, input);
+        const targetLabel =
+          input.assigneeTarget.type === 'person'
+            ? `staff ${input.assigneeTarget.staffProfileId}`
+            : `role pool ${input.assigneeTarget.jobRoleId}`;
         annotateAudit(ctx, {
           targetType: 'RestaurantSopAssignment',
           targetId: assignment.id,
-          description: `Assigned SOP template ${input.templateId} to branch ${input.branchId}`,
+          description: `Assigned SOP template ${input.templateId} to branch ${input.branchId} for ${targetLabel}`,
         });
         return assignment;
       } catch (err) {
@@ -341,6 +376,7 @@ export const restaurantSopRouter = router({
           dueTimeMinutes: MINUTES_OF_DAY.optional(),
           windowMinutes: z.number().int().min(0).max(1440).optional(),
           graceMinutes: z.number().int().min(0).max(1440).optional(),
+          assigneeTarget: ASSIGNEE_TARGET.optional(),
         })
         .strict()
     )
@@ -449,5 +485,121 @@ export const restaurantSopRouter = router({
       } catch (err) {
         mapSopError(err);
       }
+    }),
+
+  /**
+   * The job roles an assignment may be pooled to. Deliberately duplicated here
+   * rather than reused from the staff router: this console gates on `sop:manage`,
+   * and an SOP author who is not also a staff administrator must still be able to
+   * pick a role. It returns identity only — no membership, no capabilities — so it
+   * widens nothing.
+   */
+  listAssignableJobRoles: manageProcedure.query(({ ctx }) =>
+    ctx.db.restaurantJobRole.findMany({
+      where: { active: true },
+      select: { id: true, key: true, name: true },
+      orderBy: { name: 'asc' },
+    })
+  ),
+
+  // ── Starter packs ─────────────────────────────────────────────────────────
+
+  /** The nine packs on offer. Static catalogue — no tenant read. */
+  listPacks: manageProcedure.query(() =>
+    SOP_TEMPLATE_PACKS.map((pack) => ({
+      key: pack.key,
+      name: pack.name,
+      category: pack.category,
+      description: pack.description,
+      defaultJobRoleKey: pack.defaultJobRoleKey,
+      suggestedRecurrence: pack.suggestedRecurrence,
+      stepCount: pack.steps.length,
+    }))
+  ),
+
+  installPack: manageProcedure
+    .input(z.object({ packKey: z.string() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const pack = SOP_TEMPLATE_PACKS.find((candidate) => candidate.key === input.packKey);
+      if (!pack) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Unknown SOP pack "${input.packKey}".` });
+      }
+      const result = await installSopPack(ctx.db, input.packKey);
+      if (result.created) {
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopTemplate',
+          targetId: result.templateId,
+          description: `Installed SOP pack "${pack.name}"`,
+        });
+      }
+      return result;
+    }),
+
+  installAllPacks: manageProcedure.mutation(async ({ ctx }) => {
+    const results = await installAllSopPacks(ctx.db);
+    const created = results.filter((result) => result.created);
+    if (created.length > 0) {
+      annotateAudit(ctx, {
+        targetType: 'RestaurantSopTemplate',
+        targetId: created[0]!.templateId,
+        description: `Installed ${created.length} SOP starter pack(s)`,
+      });
+    }
+    return results;
+  }),
+
+  // ── Assignment pools ──────────────────────────────────────────────────────
+  //
+  // These read and mutate one operator's own work queue. They gate on
+  // `sop:complete` rather than `sop:manage`: claiming a checklist off your role's
+  // pool is doing the work, not administering it, and requiring the authoring
+  // capability would lock every barista out of their own list.
+
+  /** Unclaimed pool items at a branch this operator is eligible to take. */
+  listClaimablePool: completeProcedure
+    .input(z.object({ staffProfileId: z.string(), branchId: z.string() }).strict())
+    .query(({ ctx, input }) =>
+      listClaimablePoolOccurrences(ctx.db, input.staffProfileId, { branchId: input.branchId })
+    ),
+
+  /**
+   * Everything owed by this operator at a branch, from BOTH assignment modes,
+   * unioned and de-duplicated (see `listStaffSopOccurrences`).
+   */
+  listMySopOccurrences: completeProcedure
+    .input(z.object({ staffProfileId: z.string(), branchId: z.string() }).strict())
+    .query(({ ctx, input }) =>
+      listStaffSopOccurrences(ctx.db, input.staffProfileId, { branchId: input.branchId })
+    ),
+
+  /**
+   * Take a pool occurrence. Never throws on a lost race — the outcome is data, so
+   * the client can say "Jamie already picked this up" instead of showing an error
+   * for a perfectly ordinary event. A genuinely ineligible or non-pool occurrence
+   * IS an error.
+   */
+  claimOccurrence: completeProcedure
+    .input(z.object({ occurrenceId: z.string(), staffProfileId: z.string() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const outcome = await claimSopOccurrence(ctx.db, input.occurrenceId, input.staffProfileId);
+      if (outcome.status === 'NOT_CLAIMABLE') {
+        throw new TRPCError({
+          code: outcome.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'FORBIDDEN',
+          message:
+            outcome.reason === 'NOT_ELIGIBLE'
+              ? 'You do not hold the job role this checklist is pooled to at this branch.'
+              : outcome.reason === 'NOT_FOUND'
+                ? 'That checklist occurrence was not found.'
+                : 'That checklist is not a claimable pool item.',
+        });
+      }
+      if (outcome.status === 'CLAIMED') {
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopOccurrence',
+          targetId: input.occurrenceId,
+          description: `Claimed SOP occurrence from role pool`,
+        });
+      }
+      return outcome;
     }),
 });

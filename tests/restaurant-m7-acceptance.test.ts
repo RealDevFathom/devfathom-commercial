@@ -636,6 +636,9 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
       dueTimeMinutes: 600,
       windowMinutes: 60,
       graceMinutes: 15,
+      // SOP-1: an assignment must now name an assignee. A PERSON target keeps
+      // this M7 DST assertion about scheduling only, with no pool to claim.
+      assigneeTarget: { type: 'person', staffProfileId: ids.operator },
     });
     const generated = await deps.withTenantDb(orgId, (tx) =>
       deps.occurrenceGeneration.generateDueSopOccurrences(tx, {
