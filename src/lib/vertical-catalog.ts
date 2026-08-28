@@ -55,10 +55,7 @@ export type DepartmentDefinition = { key: string; label: string };
 
 /** Defaults copied into each tenant at provisioning/migration time. Tenants own
  * the copied rows thereafter; this catalog never overwrites their edits. */
-export const DEPARTMENT_DEFAULTS: Record<
-  OrganizationVertical,
-  readonly DepartmentDefinition[]
-> = {
+export const DEPARTMENT_DEFAULTS: Record<OrganizationVertical, readonly DepartmentDefinition[]> = {
   AGENCY: [
     { key: 'LEADERSHIP', label: 'Leadership' },
     { key: 'ENGINEERING', label: 'Engineering' },

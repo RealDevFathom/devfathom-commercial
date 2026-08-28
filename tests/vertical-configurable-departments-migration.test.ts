@@ -22,9 +22,9 @@ describe('vertical-configurable departments migration', () => {
   });
 
   it('contains restaurant defaults and no restaurant agency leakage', () => {
-    const restaurantRows = [...sql.matchAll(/\('RESTAURANT'::"OrganizationVertical", '([^']+)'/g)].map(
-      (match) => match[1]
-    );
+    const restaurantRows = [
+      ...sql.matchAll(/\('RESTAURANT'::"OrganizationVertical", '([^']+)'/g),
+    ].map((match) => match[1]);
     expect(restaurantRows).toEqual(['LEADERSHIP', 'KITCHEN', 'FRONT_OF_HOUSE']);
     expect(restaurantRows).not.toContain('ENGINEERING');
   });
