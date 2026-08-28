@@ -6,6 +6,10 @@ import 'dotenv/config';
 import pg from 'pg';
 
 import { PrismaClient } from '../src/generated/prisma/client.js';
+import {
+  adminDepartmentKeyForVertical,
+  defaultDepartmentRowsForVertical,
+} from '../src/lib/vertical-catalog.js';
 
 export const RESTAURANT_E2E = {
   organizationId: 'org_restaurant_e2e',
@@ -95,6 +99,22 @@ async function main() {
           updatedAt: FIXED_AT,
         },
       });
+      // WHA-290: `User.department` is a composite foreign key onto
+      // `organization_departments`, so this RESTAURANT organization's own
+      // catalog (KITCHEN, FRONT_OF_HOUSE — it has no LEADERSHIP) must exist
+      // before the operator and manager below. `organizationId` is passed
+      // explicitly because this transaction runs with an empty tenant GUC, so
+      // the column's `current_setting` default would resolve to ''.
+      await tx.organizationDepartment.createMany({
+        data: defaultDepartmentRowsForVertical('RESTAURANT').map((department) => ({
+          ...department,
+          id: `department_restaurant_e2e_${department.key.toLowerCase()}`,
+          organizationId: RESTAURANT_E2E.organizationId,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        })),
+        skipDuplicates: true,
+      });
     });
 
     await prisma.$transaction(
@@ -181,7 +201,9 @@ async function main() {
               organizationRoleId: user.roleId,
               name: user.name,
               email: user.email,
-              department: 'LEADERSHIP',
+              // A restaurant has no LEADERSHIP department; both fixture users
+              // work the floor.
+              department: adminDepartmentKeyForVertical('RESTAURANT'),
               title: user.title,
               startDate: FIXED_AT,
               createdAt: FIXED_AT,

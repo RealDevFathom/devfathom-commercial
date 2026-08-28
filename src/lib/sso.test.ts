@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
   entitlements: vi.fn(async () => ({ activeSeats: 1, seatLimit: 50 })),
+  // WHA-290: JIT provisioning resolves the department from the tenant's own
+  // catalog, so the fake tenant client has to answer for both.
+  organizationFindUnique: vi.fn(async () => ({ vertical: 'AGENCY' })),
+  departmentFindMany: vi.fn(async () => [{ key: 'LEADERSHIP' }, { key: 'ENGINEERING' }]),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -25,6 +29,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
     async (_organizationId: string, run: (db: unknown) => Promise<unknown>) =>
       await run({
         user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+        organization: { findUnique: mocks.organizationFindUnique },
+        organizationDepartment: { findMany: mocks.departmentFindMany },
       })
   ),
 }));
@@ -45,6 +51,10 @@ describe('provisionIdentityUser', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.entitlements.mockResolvedValue({ activeSeats: 1, seatLimit: 50 });
+    // `clearAllMocks` clears calls, not implementations, so the catalog fakes
+    // are restored to the agency default for every case.
+    mocks.organizationFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
+    mocks.departmentFindMany.mockResolvedValue([{ key: 'LEADERSHIP' }, { key: 'ENGINEERING' }]);
   });
 
   it('matches the existing member when the IdP asserts a different casing', async () => {
@@ -101,5 +111,53 @@ describe('provisionIdentityUser', () => {
     await expect(provisionIdentityUser(connection, { email: 'ALEX@COMPANY.COM' })).rejects.toThrow(
       'The matching organization account is inactive.'
     );
+  });
+
+  // WHA-290 — `User.department` is a composite foreign key onto
+  // `organization_departments`. A hardcoded agency-era key raised
+  // `users_organizationId_department_fkey` in any tenant that does not have it,
+  // so JIT provisioning has to derive the key from the tenant's own catalog.
+  //
+  // The per-vertical cases live in `department-provisioning.db.test.ts`, where
+  // they are proved against the real constraint; this file keeps to what is
+  // observable at the SSO call site and stays free of vertical literals (the
+  // §16 scattered-conditional audit).
+  describe('tenant department catalog', () => {
+    it('keeps the agency default when the tenant still has it', async () => {
+      mocks.findFirst.mockResolvedValue(null);
+      mocks.create.mockResolvedValue({ id: 'user_3' });
+
+      await provisionIdentityUser(connection, { email: 'new@company.com', name: 'New' });
+
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ department: 'ENGINEERING' }),
+        })
+      );
+    });
+
+    it('falls back to an active department when the tenant removed the default', async () => {
+      mocks.findFirst.mockResolvedValue(null);
+      mocks.create.mockResolvedValue({ id: 'user_4' });
+      mocks.departmentFindMany.mockResolvedValue([{ key: 'OPERATIONS' }, { key: 'DESIGN' }]);
+
+      await provisionIdentityUser(connection, { email: 'new@company.com', name: 'New' });
+
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ department: 'OPERATIONS' }),
+        })
+      );
+    });
+
+    it('states why it cannot provision when the tenant deactivated every department', async () => {
+      mocks.findFirst.mockResolvedValue(null);
+      mocks.departmentFindMany.mockResolvedValue([]);
+
+      await expect(
+        provisionIdentityUser(connection, { email: 'new@company.com', name: 'New' })
+      ).rejects.toThrow('no active department');
+      expect(mocks.create).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,7 +1,12 @@
 import { hash } from 'bcryptjs';
 
 import type { Prisma } from '../src/generated/prisma/client.js';
-import { RESTAURANT_MODULES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
+import {
+  adminDepartmentKeyForVertical,
+  defaultDepartmentRowsForVertical,
+  RESTAURANT_MODULES,
+  RESTAURANT_PACKAGES,
+} from '../src/lib/vertical-catalog.js';
 
 export const PLATFORM_MODULES = [
   ['dashboard', 'Dashboard', 'Core', '/dashboard'],
@@ -88,7 +93,7 @@ export async function bootstrapProduction(
     },
   });
 
-  await tx.organization.upsert({
+  const organization = await tx.organization.upsert({
     where: { id: input.organizationId },
     update: {},
     create: {
@@ -103,6 +108,20 @@ export async function bootstrapProduction(
       gracePeriodDays: 14,
       activatedAt: new Date(),
     },
+  });
+
+  // WHA-290: seed this organization's department catalog before the
+  // administrator below, for the same reason bootstrapOrganization does —
+  // `User.department` is a composite foreign key onto `organization_departments`
+  // and an organization with an empty catalog cannot hold a single user. The
+  // vertical is read back from the row so a re-run against an already-converted
+  // organization seeds ITS vertical's departments, not the create default's.
+  await tx.organizationDepartment.createMany({
+    data: defaultDepartmentRowsForVertical(organization.vertical).map((department) => ({
+      organizationId: organization.id,
+      ...department,
+    })),
+    skipDuplicates: true,
   });
 
   for (const [key, name, category, routePrefix] of PLATFORM_MODULES) {
@@ -238,7 +257,7 @@ export async function bootstrapProduction(
         email: adminEmail,
         password: await hashPassword(adminPassword),
         role: 'ADMIN',
-        department: 'LEADERSHIP',
+        department: adminDepartmentKeyForVertical(organization.vertical),
         title: input.adminTitle,
         status: 'ACTIVE',
       },
