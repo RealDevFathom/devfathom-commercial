@@ -2287,6 +2287,10 @@ model RestaurantBranch {
   labourCostFacts             LabourCostFact[]
   taxProfileVersions          RestaurantTaxProfileVersion[]
   taxTransactionSnapshots     RestaurantTaxTransactionSnapshot[]
+  // Promotions Lane A: branch scope rows on a promotion version, and the
+  // immutable application snapshots stamped against this branch.
+  promotionBranchScopes       RestaurantPromotionBranch[]
+  promotionApplications       RestaurantPromotionApplication[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -2811,6 +2815,9 @@ model RestaurantCategory {
   // M4-L1: station routing rules that target this category (category-level
   // routing is the fallback below a product-level rule, above the branch default).
   stationRoutingRules RestaurantStationRoutingRule[]
+  // Promotions Lane A: promotion-version target rows scoping an offer to this
+  // category (category targets match a product through its own categoryId).
+  promotionTargets    RestaurantPromotionTarget[]
 
   @@index([organizationId])
   @@index([parentId])
@@ -2850,6 +2857,9 @@ model RestaurantProduct {
   orderItems            RestaurantOrderItem[]
   stationRoutingRules   RestaurantStationRoutingRule[]
   insightItemMixRollups InsightItemMixRollup[]
+  // Promotions Lane A: promotion-version target rows scoping an offer to this
+  // product.
+  promotionTargets      RestaurantPromotionTarget[]
 
   @@index([organizationId])
   @@index([categoryId])
@@ -3734,23 +3744,26 @@ model RestaurantOrder {
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
 
-  branch               RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  section              RestaurantServerSection?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
-  serverStaff          RestaurantStaffProfile?          @relation("OrderServerStaff", fields: [serverStaffProfileId], references: [id], onDelete: SetNull)
-  openingStaff         RestaurantStaffProfile           @relation("OrderOpeningStaff", fields: [staffProfileId], references: [id], onDelete: Restrict)
-  openingDevice        RestaurantRegisteredDevice       @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
-  publication          RestaurantBranchMenuPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
-  priceListVersion     RestaurantPriceListVersion?      @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
-  customer             RestaurantCustomer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  items                RestaurantOrderItem[]
-  orderTables          RestaurantOrderTable[]
-  events               RestaurantOrderEvent[]
-  kitchenTickets       RestaurantKitchenTicket[]
-  bills                RestaurantBill[]
+  branch                RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  section               RestaurantServerSection?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  serverStaff           RestaurantStaffProfile?          @relation("OrderServerStaff", fields: [serverStaffProfileId], references: [id], onDelete: SetNull)
+  openingStaff          RestaurantStaffProfile           @relation("OrderOpeningStaff", fields: [staffProfileId], references: [id], onDelete: Restrict)
+  openingDevice         RestaurantRegisteredDevice       @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
+  publication           RestaurantBranchMenuPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
+  priceListVersion      RestaurantPriceListVersion?      @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
+  customer              RestaurantCustomer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items                 RestaurantOrderItem[]
+  orderTables           RestaurantOrderTable[]
+  events                RestaurantOrderEvent[]
+  kitchenTickets        RestaurantKitchenTicket[]
+  bills                 RestaurantBill[]
   // M6-L1: RECIPE_CONSUMPTION / SALE_REVERSAL movements posted at order close and
   // for post-close corrections reference the originating order (nullable, SetNull).
-  stockMovements       RestaurantStockMovement[]
-  customerInteractions CustomerInteraction[]
+  stockMovements        RestaurantStockMovement[]
+  customerInteractions  CustomerInteraction[]
+  // Promotions Lane A: the immutable promotion application snapshots stamped on
+  // this order. RESTRICT on removal — discount history is never rewritten.
+  promotionApplications RestaurantPromotionApplication[]
 
   @@unique([branchId, businessDate, orderNumber])
   @@index([organizationId])
@@ -4173,16 +4186,19 @@ model RestaurantBill {
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
 
-  order                RestaurantOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  branch               RestaurantBranch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  openerStaff          RestaurantStaffProfile     @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
-  device               RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  voidCoAuthorization  RestaurantCoAuthorization? @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
-  lines                RestaurantBillLine[]
-  payments             RestaurantPayment[]
-  tenders              RestaurantTender[]
-  refunds              RestaurantRefund[]
-  loyaltyPointsEntries LoyaltyPointsEntry[]
+  order                 RestaurantOrder                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch                RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  openerStaff           RestaurantStaffProfile           @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
+  device                RestaurantRegisteredDevice       @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  voidCoAuthorization   RestaurantCoAuthorization?       @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
+  lines                 RestaurantBillLine[]
+  payments              RestaurantPayment[]
+  tenders               RestaurantTender[]
+  refunds               RestaurantRefund[]
+  loyaltyPointsEntries  LoyaltyPointsEntry[]
+  // Promotions Lane A: the immutable promotion application snapshots attributed
+  // to this bill once the order is divided. RESTRICT on removal.
+  promotionApplications RestaurantPromotionApplication[]
 
   @@index([organizationId])
   @@index([orderId])
@@ -6135,7 +6151,7 @@ model RestaurantMenuImportPage {
   warnings       String[]
   createdAt      DateTime @default(now())
 
-  import RestaurantMenuImport      @relation(fields: [importId], references: [id], onDelete: Cascade)
+  import RestaurantMenuImport       @relation(fields: [importId], references: [id], onDelete: Cascade)
   lines  RestaurantMenuImportLine[]
 
   @@unique([importId, pageNumber])
@@ -6205,6 +6221,345 @@ model RestaurantMenuImportLine {
   @@index([pageId])
   @@index([organizationId, matchKey])
   @@map("restaurant_menu_import_lines")
+}
+
+// ===========================================================================
+// Promotions Lane A / WHA-288 — the time-boxed checkout discount layer.
+//
+// The layer is SEPARATE from price lists: a price list answers "what does this
+// item cost", a promotion answers "what comes off the check right now, and by
+// whose authority". Nothing here rewrites a price-list entry or an order-item
+// unit-price snapshot; a promotion only ever produces a discount amount plus an
+// immutable record of how that amount was reached.
+//
+// Three rules are load-bearing:
+//   1. VERSIONED, EFFECTIVE-DATED RULES. A promotion is a stable identity; its
+//      whole rule body lives on RestaurantPromotionVersion under the same
+//      DRAFT -> ACTIVE -> SUPERSEDED lifecycle as price-list versions
+//      (RestaurantVersionStatus / effective-dating.ts). An ACTIVE version is
+//      frozen by DB trigger, so a rule that was in force at a past instant is
+//      still readable, unchanged, years later.
+//   2. IMMUTABLE APPLICATION SNAPSHOTS. RestaurantPromotionApplication copies
+//      everything needed to re-derive the discount — promotion id, version id,
+//      versionNumber, ruleCode, benefit kind and value, authority, and the
+//      computed amount — so a six-month-old check reconstructs from the
+//      snapshot ALONE, with no read of the (possibly superseded) rule. The
+//      table is append-only (UPDATE/DELETE rejected by trigger), and its
+//      parents are RESTRICT: discount history is never rewritten or orphaned.
+//   3. CAP SAFETY BY UNIQUE INDEX, NOT BY COUNTING. Each redemption claims an
+//      explicit `ordinal` under (version, capScope, capKey); the unique index
+//      is what makes an over-claim impossible when two terminals race. A read-
+//      then-count check can be beaten by a concurrent writer; a unique index
+//      cannot. See promotion-caps.ts.
+//
+// Org-scoped under forced RLS in the accompanying migration, like every other
+// restaurant table. Money is Decimal(12,2) via money.ts; a percentage benefit
+// is a Decimal(9,6) rate in [0,1], matching the tax-core rate convention.
+// ===========================================================================
+
+/// What a promotion version discounts. ORDER applies to the whole check;
+/// CATEGORY and PRODUCT apply only to the matching order items (the target rows
+/// on the version name them). Combo component entities are deliberately NOT
+/// referenced here — a combo is priced by the catalog, not by this layer.
+enum RestaurantPromotionTargetScope {
+  ORDER
+  CATEGORY
+  PRODUCT
+}
+
+/// The benefit a version confers. PERCENTAGE_OFF uses `benefitRate`;
+/// AMOUNT_OFF and FIXED_PRICE use `benefitAmount`; FREE_ITEM and BUY_X_GET_Y
+/// use `buyQuantity`/`getQuantity` and discount the CHEAPEST qualifying units
+/// (the deterministic choice — the guest never picks which unit is free).
+enum RestaurantPromotionBenefitKind {
+  PERCENTAGE_OFF
+  AMOUNT_OFF
+  FIXED_PRICE
+  FREE_ITEM
+  BUY_X_GET_Y
+}
+
+/// By whose authority an application was made — the audit answer to "why is
+/// this discount on the check". AUTOMATIC fired from the rule alone;
+/// CUSTOMER_CODE required the guest to present the promotion code;
+/// MANAGER_OVERRIDE was applied by a named operator outside the automatic path
+/// and always carries `authorizedByStaffProfileId`.
+enum RestaurantPromotionAuthority {
+  AUTOMATIC
+  CUSTOMER_CODE
+  MANAGER_OVERRIDE
+}
+
+/// The scope a redemption cap counts over. PER_ORDER caps applications on one
+/// order, PER_GUEST caps them per customer across all orders, TOTAL caps them
+/// across the whole tenant for the life of the version.
+enum RestaurantPromotionCapScope {
+  PER_ORDER
+  PER_GUEST
+  TOTAL
+}
+
+/// Whether a version tolerates company on the same check. EXCLUSIVE wins its
+/// slot and closes the set; STACKABLE composes with other STACKABLE versions in
+/// the deterministic order pinned by promotion-rules.ts.
+enum RestaurantPromotionStackingMode {
+  EXCLUSIVE
+  STACKABLE
+}
+
+/// A promotion's stable identity across every revision of its rule. `code` is
+/// the optional guest-presented code; it is unique per organization when set
+/// (NULLs stay distinct, so uncoded automatic offers are unconstrained).
+model RestaurantPromotion {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  code           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  versions     RestaurantPromotionVersion[]
+  applications RestaurantPromotionApplication[]
+
+  @@unique([organizationId, code])
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@map("restaurant_promotions")
+}
+
+/// The entire rule body of one revision, frozen once ACTIVE (DB trigger).
+///
+/// Windows compose as an AND: the instant must fall inside the
+/// `effectiveFrom`/`effectiveTo` calendar range, the branch-local weekday bit
+/// must be set in `dayMask`, and the branch-local minute-of-day must fall in
+/// the `startMinuteOfDay`..`endMinuteOfDay` daily window. A daily window whose
+/// start is GREATER than its end wraps past midnight (a 22:00-02:00 late-night
+/// offer) — that is a supported configuration, not a validation error.
+///
+/// `dayMask` is a 7-bit mask, bit 0 = Sunday .. bit 6 = Saturday; the default
+/// 127 means every day. An empty channel or branch child set means "all
+/// channels" / "all branches" — scoping is opt-in, absence is not a deny.
+model RestaurantPromotionVersion {
+  id             String                  @id @default(cuid())
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionId    String
+  versionNumber  Int
+  /// Stable, human-readable identifier of this rule, snapshotted onto every
+  /// application so a reconstruction never has to read the version row.
+  ruleCode       String
+  status         RestaurantVersionStatus @default(DRAFT)
+
+  effectiveFrom    DateTime
+  effectiveTo      DateTime?
+  /// Branch-local minute-of-day window (0..1439), both-or-neither. Start > end
+  /// wraps past midnight.
+  startMinuteOfDay Int?
+  endMinuteOfDay   Int?
+  /// 7-bit branch-local weekday mask, bit 0 = Sunday. 127 = every day.
+  dayMask          Int       @default(127)
+
+  targetScope   RestaurantPromotionTargetScope @default(ORDER)
+  benefitKind   RestaurantPromotionBenefitKind
+  /// PERCENTAGE_OFF rate in [0,1] at 6dp — the tax-core rate convention.
+  benefitRate   Decimal?                       @db.Decimal(9, 6)
+  /// AMOUNT_OFF / FIXED_PRICE money at the 2dp money scale.
+  benefitAmount Decimal?                       @db.Decimal(12, 2)
+  /// BUY_X_GET_Y / FREE_ITEM quantities. FREE_ITEM has no buy requirement.
+  buyQuantity   Int?
+  getQuantity   Int?
+
+  /// Minimums the check must clear before the benefit is offered at all.
+  minimumSubtotal       Decimal? @db.Decimal(12, 2)
+  minimumItemQuantity   Int?
+  /// Optional ceiling on the discount this version may ever produce on one
+  /// order — the guard that keeps a percentage offer bounded.
+  maximumDiscountAmount Decimal? @db.Decimal(12, 2)
+
+  stacking RestaurantPromotionStackingMode @default(EXCLUSIVE)
+  /// Higher priority is considered first; ties break on ruleCode (ascending),
+  /// so the evaluation order is total and reproducible.
+  priority Int                             @default(0)
+
+  activatedAt  DateTime?
+  supersededAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  promotion    RestaurantPromotion              @relation(fields: [organizationId, promotionId], references: [organizationId, id], onDelete: Cascade, map: "restaurant_promotion_version_promotion_fkey")
+  targets      RestaurantPromotionTarget[]
+  channels     RestaurantPromotionChannel[]
+  branchScopes RestaurantPromotionBranch[]
+  caps         RestaurantPromotionCap[]
+  applications RestaurantPromotionApplication[]
+  redemptions  RestaurantPromotionRedemption[]
+
+  @@unique([promotionId, versionNumber])
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([promotionId])
+  @@index([status, effectiveFrom])
+  @@map("restaurant_promotion_versions")
+}
+
+/// A catalog target of a CATEGORY- or PRODUCT-scoped version. Exactly one of
+/// `productId`/`categoryId` is set (CHECK in the migration). Referenced catalog
+/// rows are protected from deletion (Restrict) — archival is the path.
+model RestaurantPromotionTarget {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionVersionId String
+  productId          String?
+  categoryId         String?
+  createdAt          DateTime @default(now())
+
+  promotionVersion RestaurantPromotionVersion @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Cascade, map: "restaurant_promotion_target_version_fkey")
+  product          RestaurantProduct?         @relation(fields: [productId], references: [id], onDelete: Restrict, map: "restaurant_promotion_target_product_fkey")
+  category         RestaurantCategory?        @relation(fields: [categoryId], references: [id], onDelete: Restrict, map: "restaurant_promotion_target_category_fkey")
+
+  @@index([organizationId])
+  @@index([promotionVersionId])
+  @@index([productId])
+  @@index([categoryId])
+  @@map("restaurant_promotion_targets")
+}
+
+/// An order channel a version is limited to. No rows = every channel.
+model RestaurantPromotionChannel {
+  id                 String                 @id @default(cuid())
+  organizationId     String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionVersionId String
+  channel            RestaurantOrderChannel
+  createdAt          DateTime               @default(now())
+
+  promotionVersion RestaurantPromotionVersion @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Cascade, map: "restaurant_promotion_channel_version_fkey")
+
+  @@unique([promotionVersionId, channel])
+  @@index([organizationId])
+  @@map("restaurant_promotion_channels")
+}
+
+/// A branch a version is limited to. No rows = every branch.
+model RestaurantPromotionBranch {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionVersionId String
+  branchId           String
+  createdAt          DateTime @default(now())
+
+  promotionVersion RestaurantPromotionVersion @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Cascade, map: "restaurant_promotion_branch_version_fkey")
+  branch           RestaurantBranch           @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, map: "restaurant_promotion_branch_branch_fkey")
+
+  @@unique([promotionVersionId, branchId])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_promotion_branches")
+}
+
+/// A redemption ceiling on a version, at most one row per scope.
+/// `maxRedemptions` is the count of applications permitted within the scope's
+/// key; the enforcement mechanism is the ordinal unique index on
+/// RestaurantPromotionRedemption, not an application-side count.
+model RestaurantPromotionCap {
+  id                 String                      @id @default(cuid())
+  organizationId     String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionVersionId String
+  scope              RestaurantPromotionCapScope
+  maxRedemptions     Int
+  createdAt          DateTime                    @default(now())
+
+  promotionVersion RestaurantPromotionVersion @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Cascade, map: "restaurant_promotion_cap_version_fkey")
+
+  @@unique([promotionVersionId, scope])
+  @@index([organizationId])
+  @@map("restaurant_promotion_caps")
+}
+
+/// The IMMUTABLE record that a promotion came off a specific check.
+///
+/// Everything needed to re-derive the number is copied here at application
+/// time: the promotion and version ids, the `versionNumber` and `ruleCode`, the
+/// benefit kind and its value, the authority (and the operator behind a manager
+/// override), the target scope, and the computed `discountAmount`. A
+/// reconstruction reads THIS ROW, never the rule — so a superseded, retired or
+/// re-coded promotion still explains a two-year-old receipt exactly.
+///
+/// `customerId` and `authorizedByStaffProfileId` are deliberately bare snapshot
+/// columns with NO foreign key: an immutable row must not be rewritten by a
+/// SetNull cascade, and a customer erasure must not be blocked by a Restrict.
+/// `sequence` is the application's position in the deterministic stacking order
+/// on its order, and is what makes reconstruction order-stable.
+model RestaurantPromotionApplication {
+  id                 String @id @default(cuid())
+  organizationId     String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionId        String
+  promotionVersionId String
+
+  /// Rule snapshot — sufficient on its own to explain the amount.
+  versionNumber Int
+  ruleCode      String
+  promotionCode String?
+  targetScope   RestaurantPromotionTargetScope
+  benefitKind   RestaurantPromotionBenefitKind
+  benefitRate   Decimal?                       @db.Decimal(9, 6)
+  benefitAmount Decimal?                       @db.Decimal(12, 2)
+
+  /// Authority snapshot — MANAGER_OVERRIDE always names the operator (CHECK).
+  authority                  RestaurantPromotionAuthority
+  authorizedByStaffProfileId String?
+
+  /// Placement + the money that came off.
+  orderId        String
+  billId         String?
+  branchId       String
+  customerId     String?
+  businessDate   DateTime @db.Date
+  sequence       Int
+  discountAmount Decimal  @db.Decimal(12, 2)
+  appliedAt      DateTime @default(now())
+
+  promotion        RestaurantPromotion             @relation(fields: [organizationId, promotionId], references: [organizationId, id], onDelete: Restrict, map: "restaurant_promotion_application_promotion_fkey")
+  promotionVersion RestaurantPromotionVersion      @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Restrict, map: "restaurant_promotion_application_version_fkey")
+  order            RestaurantOrder                 @relation(fields: [orderId], references: [id], onDelete: Restrict, map: "restaurant_promotion_application_order_fkey")
+  bill             RestaurantBill?                 @relation(fields: [billId], references: [id], onDelete: Restrict, map: "restaurant_promotion_application_bill_fkey")
+  branch           RestaurantBranch                @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "restaurant_promotion_application_branch_fkey")
+  redemptions      RestaurantPromotionRedemption[]
+
+  @@unique([orderId, sequence])
+  @@index([organizationId])
+  @@index([promotionVersionId])
+  @@index([orderId])
+  @@index([billId])
+  @@index([branchId, businessDate])
+  @@index([customerId])
+  @@map("restaurant_promotion_applications")
+}
+
+/// The append-only cap ledger. One row = one claimed slot under a cap's key.
+///
+/// `capKey` is the scope's identity (the order id for PER_ORDER, the customer
+/// id for PER_GUEST, the literal '*' for TOTAL) and `ordinal` is the 1-based
+/// slot number within it. The unique index on
+/// (promotionVersionId, capScope, capKey, ordinal) is the WHOLE concurrency
+/// story: two terminals racing for the last slot both compute the same ordinal,
+/// one INSERT wins and the other takes a 23505 — so the cap can never be
+/// exceeded, no matter the interleaving, and no lock is taken.
+model RestaurantPromotionRedemption {
+  id                 String                      @id @default(cuid())
+  organizationId     String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  promotionVersionId String
+  capScope           RestaurantPromotionCapScope
+  capKey             String
+  ordinal            Int
+  applicationId      String
+  createdAt          DateTime                    @default(now())
+
+  promotionVersion RestaurantPromotionVersion     @relation(fields: [organizationId, promotionVersionId], references: [organizationId, id], onDelete: Restrict, map: "restaurant_promotion_redemption_version_fkey")
+  application      RestaurantPromotionApplication @relation(fields: [applicationId], references: [id], onDelete: Restrict, map: "restaurant_promotion_redemption_application_fkey")
+
+  @@unique([promotionVersionId, capScope, capKey, ordinal])
+  @@index([organizationId])
+  @@index([applicationId])
+  @@map("restaurant_promotion_redemptions")
 }
 
 model PlatformUser {
