@@ -13,8 +13,33 @@ import { Textarea } from '@/components/ui/textarea';
 import { can, subjectFromSession } from '@/lib/abac';
 import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import { hasModule } from '@/lib/entitlements';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantSopExecutionRouter } from '@/server/routers/restaurant-sop-execution';
 import { createTRPCContext } from '@/server/trpc';
+
+/**
+ * Resolve the tenant actor first, then hand the resolved session and
+ * organization to the context factory.
+ *
+ * `createTRPCContext()` with no argument cannot stand in for this. It forwards
+ * `{ request: undefined, session: undefined }` to `resolveTenantActor`, whose
+ * `'session' in options` check reads that explicitly-undefined key as "the
+ * caller already resolved the session". Auth.js is then never consulted, the
+ * organization is always null, and the factory throws `Workspace not found.`
+ * as an unhandled Server Component error on every request and every host.
+ */
+async function tenantContext() {
+  const actor = await resolveTenantActor();
+  if (!actor) return null;
+  return createTRPCContext({
+    session: actor.session,
+    organization: actor.organization,
+    support: actor.support,
+  });
+}
+
+/** The command action maps a throw to an error notice, so this reads there. */
+const NO_ACTOR = 'Your session is no longer active. Sign in again and retry.';
 
 const route = '/restaurant/sop';
 const selectClass =
@@ -996,7 +1021,12 @@ export function SopBoardView(props: SopBoardViewProps) {
 
 export default async function SopPage({ searchParams }: { searchParams: SearchParams }) {
   const query = await searchParams;
-  const ctx = await createTRPCContext();
+  const ctx = await tenantContext();
+  // Tenancy did not resolve. Entitlements are unknowable here, so show the
+  // permission surface rather than let a missing workspace reach the user as an
+  // unhandled Server Component crash.
+  if (!ctx) return <SopBoardView state="permission" />;
+
   const moduleEnabled = hasModule(ctx.entitlements, 'restaurant-sop');
   const user = ctx.session?.user;
 
@@ -1016,7 +1046,8 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
 
     let next: string;
     try {
-      const actionCtx = await createTRPCContext();
+      const actionCtx = await tenantContext();
+      if (!actionCtx) throw new Error(NO_ACTOR);
       const caller = restaurantSopExecutionRouter.createCaller(actionCtx);
       const occurrenceId = field(form, 'occurrenceId');
       const actorStaffProfileId = optionalField(form, 'actorStaffProfileId');
