@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
 import { admitToMeeting, GENERIC_ADMISSION_ERROR } from '@/lib/meetings/admission';
+import { requestHost } from '@/lib/tenancy/host';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 export const dynamic = 'force-dynamic';
@@ -31,10 +32,16 @@ export async function POST(
     );
   }
 
-  const actor = await resolveTenantActor({ request });
+  // This route is reachable without a session, and a session that disagrees
+  // with the host makes `resolveTenantActor` throw (404/409/423). None of those
+  // are answerable here: distinguishing them would leak whether the host names
+  // a workspace at all. Fall back to the anonymous path and let admission
+  // decide on the credential alone.
+  const actor = await resolveTenantActor({ request }).catch(() => null);
   const { publicId } = await params;
-  const admission = await admitToMeeting({
+  const outcome = await admitToMeeting({
     publicId,
+    host: requestHost(request),
     guestToken: parsed.data.accessCode,
     sessionUser: actor?.session.user
       ? {
@@ -43,7 +50,11 @@ export async function POST(
           role: actor.session.user.role,
         }
       : null,
-  }).catch(() => null);
+  }).catch(() => ({ status: 'refused' }) as const);
 
-  return admission ? NextResponse.json(admission) : unavailable();
+  if (outcome.status === 'admitted') return NextResponse.json(outcome.admission);
+  // 200, not an error: the caller proved a credential and is being held in the
+  // lobby. A refusal below stays byte-identical to every other refusal.
+  if (outcome.status === 'waiting') return NextResponse.json({ waiting: true } as const);
+  return unavailable();
 }
