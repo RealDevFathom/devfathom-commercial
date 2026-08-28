@@ -20,6 +20,8 @@ import { emailSchema } from '@/lib/email-address';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
 import {
+  adminDepartmentKeyForVertical,
+  defaultDepartmentRowsForVertical,
   isPackageCompatibleWithVertical,
   mandatoryModulesForVertical,
   modulesForVertical,
@@ -437,6 +439,16 @@ async function bootstrapOrganization(
       },
     },
   });
+  // WHA-278 — seed the tenant's department catalog from the vertical catalog
+  // before any user exists. `User.department` is a composite foreign key onto
+  // `organization_departments`, so the administrator below cannot be created
+  // until its vertical's departments are present.
+  await db.organizationDepartment.createMany({
+    data: defaultDepartmentRowsForVertical(input.vertical).map((department) => ({
+      organizationId: organization.id,
+      ...department,
+    })),
+  });
   // D20: the operator onboarding form had no duplicate guard at all — a repeat
   // submission would have surfaced a raw Prisma unique-constraint error in the
   // control plane. The organization is new, so a clash can only come from a
@@ -456,7 +468,7 @@ async function bootstrapOrganization(
       email: input.adminEmail,
       password,
       role: 'ADMIN',
-      department: 'LEADERSHIP',
+      department: adminDepartmentKeyForVertical(input.vertical),
       title: 'Organization administrator',
       status: 'ACTIVE',
     },

@@ -76,6 +76,32 @@ export function departmentsForVertical(
   return vertical === RESTAURANT ? RESTAURANT_DEPARTMENTS : AGENCY_DEPARTMENTS;
 }
 
+/**
+ * The rows a newly provisioned organization starts with. `User.department` is a
+ * composite foreign key onto `organization_departments`, so an organization with
+ * an empty catalog cannot hold a single user: provisioning must seed these
+ * before it creates the administrator.
+ */
+export function defaultDepartmentRowsForVertical(
+  vertical: OrganizationVertical
+): { key: string; name: string; sortOrder: number }[] {
+  return departmentsForVertical(vertical).map((department, index) => ({
+    key: department.key,
+    name: department.name,
+    sortOrder: index,
+  }));
+}
+
+/**
+ * The department a newly provisioned organization administrator is filed under.
+ * Declared per vertical rather than inferred from catalog ordering: an agency
+ * administrator leads, while a restaurant administrator belongs front of house
+ * rather than in the kitchen. Always a key present in `departmentsForVertical`.
+ */
+export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'LEADERSHIP';
+}
+
 // ---------------------------------------------------------------------------
 // §6 — Commercial restaurant module map (ten modules)
 // ---------------------------------------------------------------------------
