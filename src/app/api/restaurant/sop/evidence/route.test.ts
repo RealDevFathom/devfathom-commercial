@@ -74,11 +74,29 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('POST SOP evidence', () => {
+  function warnings() {
+    return vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  }
+
+  function expectWarningAt(warn: ReturnType<typeof warnings>, stage: string) {
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      'restaurant_sop_evidence_capture_failed',
+      JSON.stringify({
+        event: 'restaurant_sop_evidence_capture_failed',
+        stage,
+        errorClass: 'Error',
+      })
+    );
+  }
+
   it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
+    const warn = warnings();
     const response = await POST(
       request({
         url: 'http://internal-runtime:3000/api/restaurant/sop/evidence',
@@ -107,6 +125,7 @@ describe('POST SOP evidence', () => {
         uploaderStaffProfileId: 'staff-1',
       })
     );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('accepts a genuine parsed multipart file from a different File realm', async () => {
@@ -189,5 +208,86 @@ describe('POST SOP evidence', () => {
     response = await POST(request());
     expect(response.headers.get('location')).not.toContain('sensitive');
     expect(mocks.deleteUpload).toHaveBeenCalledWith('org-1', expect.stringMatching(/^sop-/));
+  });
+
+  it.each([
+    ['file_validation', () => request({ type: 'image/gif' })],
+    [
+      'context',
+      () => {
+        mocks.createTRPCContext.mockRejectedValueOnce(new Error('context secret'));
+        return request();
+      },
+    ],
+    [
+      'authorization',
+      () => {
+        mocks.can.mockRejectedValueOnce(new Error('authorization secret'));
+        return request();
+      },
+    ],
+    [
+      'storage',
+      () => {
+        mocks.putUpload.mockRejectedValueOnce(new Error('storage secret'));
+        return request();
+      },
+    ],
+    [
+      'attach',
+      () => {
+        mocks.attachEvidence.mockRejectedValueOnce(new Error('attach secret'));
+        return request();
+      },
+    ],
+  ] as const)('warns with the exact %s failure stage', async (stage, makeRequest) => {
+    const warn = warnings();
+
+    const response = await POST(makeRequest());
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
+    expectWarningAt(warn, stage);
+    expect(mocks.deleteUpload).toHaveBeenCalledTimes(
+      stage === 'storage' || stage === 'attach' ? 1 : 0
+    );
+  });
+
+  it('excludes sensitive request and error details from serialized warnings', async () => {
+    const warn = warnings();
+    mocks.attachEvidence.mockRejectedValueOnce(
+      new Error(
+        'secret tenant-1 user-1 staff-1 occurrence-1 step-1 proof.jpg image/jpeg 5 deadbeef'
+      )
+    );
+
+    await POST(request());
+
+    const serialized = warn.mock.calls.flat().join(' ');
+    for (const sensitive of [
+      'secret',
+      'tenant-1',
+      'user-1',
+      'staff-1',
+      'occurrence-1',
+      'step-1',
+      'proof.jpg',
+      'image/jpeg',
+      'deadbeef',
+    ]) {
+      expect(serialized).not.toContain(sensitive);
+    }
+  });
+
+  it('keeps the generic redirect when warning emission fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {
+      throw new Error('logger unavailable');
+    });
+    mocks.createTRPCContext.mockRejectedValueOnce(new Error('context secret'));
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
   });
 });

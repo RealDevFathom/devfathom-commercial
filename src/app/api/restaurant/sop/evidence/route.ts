@@ -15,6 +15,23 @@ const EVIDENCE_TYPES = {
   'image/webp': 'webp',
 } as const;
 
+type EvidenceCaptureStage = 'file_validation' | 'context' | 'authorization' | 'storage' | 'attach';
+
+function warnEvidenceCaptureFailure(stage: EvidenceCaptureStage, error: unknown) {
+  try {
+    console.warn(
+      'restaurant_sop_evidence_capture_failed',
+      JSON.stringify({
+        event: 'restaurant_sop_evidence_capture_failed',
+        stage,
+        errorClass: error instanceof Error ? error.name : typeof error,
+      })
+    );
+  } catch {
+    // Telemetry must never change the public failure response.
+  }
+}
+
 async function readEvidenceFile(value: FormDataEntryValue | null) {
   const tag = Object.prototype.toString.call(value);
   if (
@@ -82,6 +99,7 @@ export async function POST(request: Request) {
 
   let storedFilename: string | null = null;
   let organizationId: string | null = null;
+  let stage: EvidenceCaptureStage = 'file_validation';
   try {
     const file = form.get('file');
     const purpose = String(form.get('evidencePurpose') ?? '').trim();
@@ -96,9 +114,11 @@ export async function POST(request: Request) {
       throw new Error('Occurrence, checklist step, and uploader are required.');
     }
 
+    stage = 'context';
     const ctx = await createTRPCContext({ req: request });
     organizationId = ctx.organization?.id ?? ctx.session?.user?.organizationId ?? null;
     if (!organizationId || !ctx.session?.user) throw new Error('Workspace not found.');
+    stage = 'authorization';
     const allowed = await can(subjectFromSession(ctx.session.user), 'sop:complete', undefined, {
       db: ctx.db,
       source: 'TRPC',
@@ -107,8 +127,10 @@ export async function POST(request: Request) {
 
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;
+    stage = 'storage';
     await putUpload(organizationId, storedFilename, bytes, baseType);
 
+    stage = 'attach';
     await attachEvidence(ctx.db, {
       occurrenceId,
       occurrenceStepId,
@@ -119,10 +141,11 @@ export async function POST(request: Request) {
       uploaderStaffProfileId,
     });
     return NextResponse.redirect(destination(request, form, 'Proof captured.', 'success'), 303);
-  } catch {
+  } catch (error) {
     if (storedFilename && organizationId) {
       await deleteUpload(organizationId, storedFilename).catch(() => undefined);
     }
+    warnEvidenceCaptureFailure(stage, error);
     return NextResponse.redirect(
       destination(request, form, 'Proof capture failed. Check the file and try again.', 'error'),
       303
