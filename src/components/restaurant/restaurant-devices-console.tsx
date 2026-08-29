@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from './restaurant-branch-select';
 
 type Device = inferRouterOutputs<AppRouter>['restaurantDevices']['list'][number];
 type UiError = { message: string; data?: { code?: string } | null };
@@ -68,6 +69,9 @@ export function RestaurantDevicesConsole() {
     refetchInterval: 60_000,
   });
   const staffQuery = trpc.restaurantStaff.list.useQuery(undefined, { enabled: restaurantEnabled });
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: restaurantEnabled,
+  });
 
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [revealedEnrollment, setRevealedEnrollment] = useState<{
@@ -100,14 +104,6 @@ export function RestaurantDevicesConsole() {
     },
   });
 
-  const branches = useMemo(() => {
-    const values = new Map<string, string>();
-    for (const device of devicesQuery.data ?? []) values.set(device.branch.id, device.branch.name);
-    for (const staff of staffQuery.data ?? []) {
-      if (staff.primaryBranch) values.set(staff.primaryBranch.id, staff.primaryBranch.name);
-    }
-    return [...values.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [devicesQuery.data, staffQuery.data]);
   const activeStaff = useMemo(
     () => (staffQuery.data ?? []).filter((staff) => staff.status === 'ACTIVE'),
     [staffQuery.data]
@@ -334,7 +330,7 @@ export function RestaurantDevicesConsole() {
           <DialogHeader>
             <DialogTitle>Enroll restaurant device</DialogTitle>
             <DialogDescription>
-              Assign a terminal to a branch. Any valid branch ID is accepted.
+              Assign a terminal to an active branch in this workspace.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={submitEnrollment}>
@@ -349,22 +345,16 @@ export function RestaurantDevicesConsole() {
             </label>
             <div className="space-y-1.5">
               <label htmlFor="device-branch-id" className={labelClass}>
-                Branch ID
+                Branch
               </label>
-              <Input
+              <RestaurantBranchSelect
                 id="device-branch-id"
                 name="branchId"
                 required
-                list="device-branch-options"
-                className="h-11"
+                branches={branchesQuery.data ?? []}
+                loading={branchesQuery.isLoading}
+                error={Boolean(branchesQuery.error)}
               />
-              <datalist id="device-branch-options">
-                {branches.map(([id, name]) => (
-                  <option key={id} value={id}>
-                    {name}
-                  </option>
-                ))}
-              </datalist>
             </div>
             <DialogFooter>
               <Button

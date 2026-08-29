@@ -10,7 +10,19 @@ vi.mock('next/link', () => ({
   ),
 }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('@/lib/trpc', () => ({ trpc: {} }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    restaurantStaff: {
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
+  },
+}));
 vi.mock('@/components/entitlements-provider', () => ({ useEntitlements: () => ({}) }));
 
 import { SopAdminView, type SopAdminViewProps } from './page';

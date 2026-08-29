@@ -46,6 +46,15 @@ function createTransport() {
         201
       );
     }
+    if (path.endsWith('/operators')) {
+      return json({
+        operators: [
+          { staffProfileId: 'staff-a', displayName: 'Amina Khan', role: 'Cashier' },
+          { staffProfileId: 'staff-b', displayName: 'Bilal Shah', role: 'Supervisor' },
+          { staffProfileId: 'manager-a', displayName: 'Mina Ali', role: 'Manager' },
+        ],
+      });
+    }
     if (path.endsWith('/unlock')) {
       transport.actor = body.staffProfileId;
       return json({
@@ -106,10 +115,11 @@ async function enroll() {
   });
   fireEvent.click(submit);
   await screen.findByRole('heading', { name: 'Unlock terminal' });
+  await waitFor(() => expect(screen.getByLabelText('Operator')).toBeEnabled());
 }
 
 async function unlock(operator = 'staff-a') {
-  fireEvent.change(screen.getByLabelText('Operator profile ID'), {
+  fireEvent.change(screen.getByLabelText('Operator'), {
     target: { value: operator },
   });
   fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
@@ -150,7 +160,7 @@ describe('terminal console transitions', () => {
     });
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
     fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
-    fireEvent.change(screen.getByLabelText('Incoming operator profile ID'), {
+    fireEvent.change(screen.getByLabelText('Incoming operator'), {
       target: { value: 'staff-b' },
     });
     fireEvent.change(screen.getByLabelText('Incoming operator PIN'), {
@@ -159,7 +169,7 @@ describe('terminal console transitions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Lock terminal' }));
     await screen.findByRole('heading', { name: 'Unlock terminal' });
-    expect(screen.getByLabelText('Operator profile ID')).toHaveValue('');
+    expect(screen.getByLabelText('Operator')).toHaveValue('');
     expect(screen.getByLabelText('Operator PIN')).toHaveValue('');
 
     await unlock();
@@ -222,7 +232,7 @@ describe('terminal console transitions', () => {
     });
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
     fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
-    fireEvent.change(screen.getByLabelText('Incoming operator profile ID'), {
+    fireEvent.change(screen.getByLabelText('Incoming operator'), {
       target: { value: 'staff-b' },
     });
     fireEvent.change(screen.getByLabelText('Incoming operator PIN'), {
@@ -239,7 +249,7 @@ describe('terminal console transitions', () => {
     expect(callsTo(transport.fetch, '/heartbeat')).toBe(1);
     expect(screen.getByText('Acting operator').parentElement).toHaveTextContent('staff-a');
     expect(screen.queryByText('Connection degraded')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Incoming operator profile ID')).toHaveValue('');
+    expect(screen.getByLabelText('Incoming operator')).toHaveValue('');
     expect(screen.getByLabelText('Incoming operator PIN')).toHaveValue('');
     fireEvent.click(screen.getByRole('button', { name: 'Manager approval' }));
     expect(screen.getByLabelText('Approving manager profile ID')).toHaveValue('');

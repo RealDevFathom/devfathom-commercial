@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
-import { router, capabilityProcedure } from '../trpc';
+import { router, capabilityProcedure, protectedProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
   StaffProfileError,
@@ -104,6 +104,16 @@ function mapJobRoleError(err: unknown): never {
 const staffProcedure = capabilityProcedure('staff:manage');
 
 export const restaurantStaffRouter = router({
+  // Non-sensitive tenant directory used by every restaurant console. RLS keeps
+  // the rows in-tenant; callers do not need staff-management permission merely
+  // to choose the branch for an otherwise-authorized workflow.
+  listBranches: protectedProcedure.query(({ ctx }) =>
+    ctx.db.restaurantBranch.findMany({
+      select: { id: true, name: true, active: true, isDefault: true },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    })
+  ),
+
   // ── Staff profiles ────────────────────────────────────────────────────────
   list: staffProcedure
     .input(

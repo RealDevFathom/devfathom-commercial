@@ -17,7 +17,7 @@ export function isValidPin(pin: string): boolean {
 }
 
 export function validateOperatorCredential(staffProfileId: string, pin: string): string | null {
-  if (staffProfileId.trim().length === 0) return 'Enter the incoming operator profile ID.';
+  if (staffProfileId.trim().length === 0) return 'Select the incoming operator.';
   if (!isValidPin(pin)) return 'PIN must contain 4–8 digits.';
   return null;
 }

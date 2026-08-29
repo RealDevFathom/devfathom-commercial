@@ -53,6 +53,13 @@ vi.mock('@/lib/trpc', () => ({
     }),
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
       listCredentials: { useQuery: () => mocks.credentials },
       // SOP-1: the job-roles dialog is mounted (closed) by the console, so its
       // hooks must resolve even though these cases never open it.

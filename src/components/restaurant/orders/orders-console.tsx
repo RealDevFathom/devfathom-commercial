@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '../restaurant-branch-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type OrderPage = RouterOutputs['restaurantOrders']['listOrders'];
@@ -110,6 +111,9 @@ export function OrdersConsole() {
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
   const utils = trpc.useUtils();
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: posEnabled,
+  });
   const [branchId, setBranchId] = useState('');
   const [businessDate, setBusinessDate] = useState('');
   const [status, setStatus] = useState<'' | OrderStatus>('');
@@ -223,13 +227,13 @@ export function OrdersConsole() {
         <>
           <SectionCard eyebrow="Order ledger" title="Filters">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_11rem_12rem_11rem_8rem]">
-              <Field label="Branch ID">
-                <Input
-                  aria-label="Branch ID"
+              <Field label="Branch">
+                <RestaurantBranchSelect
+                  branches={branchesQuery.data ?? []}
+                  loading={branchesQuery.isLoading}
+                  error={Boolean(branchesQuery.error)}
                   value={branchId}
-                  onChange={(event) => updateBranch(event.target.value)}
-                  placeholder="branch_…"
-                  className="h-11"
+                  onChange={updateBranch}
                 />
               </Field>
               <Field label="Business date">
@@ -296,8 +300,8 @@ export function OrdersConsole() {
           {!listEnabled ? (
             <SectionCard title="Choose a branch">
               <EmptyState
-                title="Branch ID required"
-                detail="Enter a branch ID to load its order ledger."
+                title="Branch required"
+                detail="Select a branch to load its order ledger."
               />
             </SectionCard>
           ) : permissionDenied ? (
@@ -584,7 +588,6 @@ function OrderDetailPanel({
 
         <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <DetailField label="Order ID" value={order.id} />
-          <DetailField label="Branch ID" value={order.branchId} />
           <DetailField label="Business date" value={order.businessDate} />
           <DetailField label="Covers" value={order.coverCount} />
           <DetailField label="Section ID" value={order.sectionId} />

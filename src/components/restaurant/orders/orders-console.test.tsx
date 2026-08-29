@@ -65,6 +65,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    restaurantStaff: {
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
     useUtils: () => ({
       restaurantOrders: {
         listOrders: { invalidate: mocks.invalidate },
@@ -138,7 +147,7 @@ describe('OrdersConsole', () => {
 
     renderConsole();
     expect(mocks.listCalls.at(-1)?.enabled).toBe(false);
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     expect(mocks.listCalls.at(-1)).toEqual({
       input: { branchId: 'branch_1', limit: 25 },
       enabled: true,
@@ -157,7 +166,7 @@ describe('OrdersConsole', () => {
       '00000000-0000-4000-8000-000000000045'
     );
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     fireEvent.click(screen.getByRole('button', { name: 'View order 42' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
 

@@ -682,6 +682,7 @@ export function OrderPad() {
               />
               <OperatorSwitch
                 activeOperatorId={runtime.operator?.staffProfileId ?? ''}
+                operators={operators}
                 pending={busy}
                 onSwitch={switchOperator}
               />

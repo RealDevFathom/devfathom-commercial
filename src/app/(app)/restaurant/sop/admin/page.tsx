@@ -24,6 +24,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '@/components/restaurant/restaurant-branch-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type SopTemplate = RouterOutputs['restaurantSop']['listTemplates'][number];
@@ -248,6 +249,9 @@ export function SopAdminView({
   onCreateAssignment,
   onToggleAssignment,
 }: SopAdminViewProps) {
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: moduleEnabled,
+  });
   const [frequency, setFrequency] = useState<Frequency>('DAILY');
   // SOP-1: the two assignment modes are mutually exclusive per assignment, so the
   // form swaps one control for the other rather than showing both and validating
@@ -880,21 +884,15 @@ export function SopAdminView({
                   </p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                     <label className="space-y-1.5 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
-                      <span className={labelClass}>Branch ID</span>
-                      <Input
+                      <span className={labelClass}>Branch</span>
+                      <RestaurantBranchSelect
                         name="branchId"
                         required
-                        className="h-11 font-mono"
-                        aria-describedby="branch-id-help"
+                        branches={branchesQuery.data ?? []}
+                        loading={branchesQuery.isLoading}
+                        error={Boolean(branchesQuery.error)}
                       />
                     </label>
-                    <p
-                      id="branch-id-help"
-                      className="text-xs leading-relaxed text-text-faint sm:col-span-2 xl:col-span-1 2xl:col-span-2"
-                    >
-                      No branch-directory procedure exists in the L3 authoring contract. Enter a
-                      known branch ID; the server validates tenant scope.
-                    </p>
                     <label className="space-y-1.5 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
                       <span className={labelClass}>Assign to</span>
                       <select

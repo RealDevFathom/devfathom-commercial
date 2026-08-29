@@ -9,10 +9,12 @@ export type OperatorSwitchInput = { staffProfileId: string; type: 'PIN'; secret:
 
 export function OperatorSwitch({
   activeOperatorId,
+  operators,
   pending,
   onSwitch,
 }: {
   activeOperatorId: string;
+  operators: Array<{ staffProfileId: string; displayName: string; role: string }>;
   pending: boolean;
   onSwitch: (input: OperatorSwitchInput) => Promise<boolean>;
 }) {
@@ -55,14 +57,24 @@ export function OperatorSwitch({
       <p className="text-sm font-semibold text-text-strong">Incoming operator</p>
       <p className="text-xs text-text-muted">Currently acting: {activeOperatorId}</p>
       <div className="space-y-1.5">
-        <Label htmlFor="switch-operator-id">Operator profile ID</Label>
-        <Input
+        <Label htmlFor="switch-operator-id">Operator</Label>
+        <select
           id="switch-operator-id"
           autoFocus
           value={staffProfileId}
           onChange={(event) => setStaffProfileId(event.target.value)}
-          className="h-11"
-        />
+          disabled={pending || operators.length === 0}
+          className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <option value="" disabled>
+            {operators.length ? 'Select an operator' : 'No eligible operators for this branch'}
+          </option>
+          {operators.map((operator) => (
+            <option key={operator.staffProfileId} value={operator.staffProfileId}>
+              {operator.displayName} — {operator.role}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="switch-operator-pin">Operator PIN</Label>
@@ -82,7 +94,7 @@ export function OperatorSwitch({
         </p>
       ) : null}
       <div className="flex gap-2">
-        <Button type="submit" disabled={pending} className="h-11 flex-1">
+        <Button type="submit" disabled={pending || operators.length === 0} className="h-11 flex-1">
           {pending ? 'Switching…' : 'Confirm switch'}
         </Button>
         <Button

@@ -22,6 +22,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '../restaurant-branch-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type BillPage = RouterOutputs['restaurantBills']['listBills'];
@@ -226,6 +227,9 @@ export function MoneyConsole() {
   const entitlements = useEntitlements();
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: posEnabled,
+  });
   const [branchId, setBranchId] = useState('');
   const [businessDate, setBusinessDate] = useState('');
   const [tab, setTab] = useState<MoneyTab>('bills');
@@ -370,13 +374,13 @@ export function MoneyConsole() {
 
       <SectionCard eyebrow="Money ledger" title="Filters">
         <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Branch ID" description="Required before any money read runs.">
-            <Input
-              aria-label="Branch ID"
+          <Field label="Branch" description="Required before any money read runs.">
+            <RestaurantBranchSelect
+              branches={branchesQuery.data ?? []}
+              loading={branchesQuery.isLoading}
+              error={Boolean(branchesQuery.error)}
               value={branchId}
-              onChange={(event) => updateBranch(event.target.value)}
-              placeholder="branch_…"
-              className="h-11"
+              onChange={updateBranch}
               disabled={!posEnabled}
             />
           </Field>
@@ -418,7 +422,7 @@ export function MoneyConsole() {
               <div className="space-y-3" role="status">
                 <StatusPill status="Reads disabled" tone="neutral" />
                 <p className="text-sm text-text-muted">
-                  Enter a branch ID to load the selected read-only ledger.
+                  Select a branch to load the selected read-only ledger.
                 </p>
               </div>
             </SectionCard>

@@ -63,6 +63,13 @@ vi.mock('@/lib/trpc', () => ({
       },
     },
     restaurantStaff: {
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
       list: {
         useQuery: (_input: undefined, options: { enabled: boolean }) => {
           mocks.staffQueryEnabled.push(options.enabled);
@@ -202,7 +209,7 @@ describe('Restaurant device security UI', () => {
     renderConsole(true);
     fireEvent.click(screen.getByRole('button', { name: 'Enroll device' }));
     fireEvent.change(screen.getByLabelText('Device name'), { target: { value: 'Expo terminal' } });
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Enroll' }));
 
     expect(screen.getByText('rdk_once_only')).toBeInTheDocument();

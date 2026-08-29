@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '@/components/restaurant/restaurant-branch-select';
 
 /**
  * WHA-226 — SOP oversight: escalation policy configuration, performance scoring,
@@ -184,6 +185,9 @@ export default function RestaurantSopOversightPage() {
     sopModule?.enabled ?? entitlements.enabledModules.includes('restaurant-sop');
 
   const utils = trpc.useUtils();
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: moduleEnabled,
+  });
   const [statusMessage, setStatusMessage] = useState('');
   const [mutationError, setMutationError] = useState('');
   const [selectedPolicyId, setSelectedPolicyId] = useState('');
@@ -450,9 +454,17 @@ export default function RestaurantSopOversightPage() {
               </div>
               <div className="space-y-1.5">
                 <label className={labelClass} htmlFor="policy-branch">
-                  Branch id (branch scope only)
+                  Branch (branch scope only)
                 </label>
-                <Input id="policy-branch" name="branchId" placeholder="Leave blank for org scope" />
+                <RestaurantBranchSelect
+                  id="policy-branch"
+                  name="branchId"
+                  branches={branchesQuery.data ?? []}
+                  loading={branchesQuery.isLoading}
+                  error={Boolean(branchesQuery.error)}
+                  allowEmpty
+                  emptyLabel="Organization scope"
+                />
               </div>
               <div className="flex items-end">
                 <Button type="submit" disabled={anyPending}>
