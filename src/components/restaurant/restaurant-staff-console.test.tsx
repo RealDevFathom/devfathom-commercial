@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -310,5 +310,53 @@ describe('Restaurant staff role profiles', () => {
     expect(mocks.roleSave).toHaveBeenLastCalledWith(
       expect.objectContaining({ jobRoleIds: ['cashier'] })
     );
+  });
+
+  it('uses an opaque modal, traps focus, closes with Escape, and restores trigger focus', async () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    const trigger = screen.getByRole('button', { name: 'Job roles' });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'Shift Lead — role profile' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(document.querySelector('[data-slot="dialog-overlay"]')).toHaveClass('bg-surface-page');
+    expect(trigger.closest('[aria-hidden="true"]')).toHaveAttribute('data-base-ui-inert');
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+
+    const save = within(dialog).getByRole('button', { name: 'Save role profiles' });
+    save.focus();
+    fireEvent.keyDown(save, { key: 'Tab' });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    const close = within(dialog).getAllByRole('button', { name: 'Close' })[0]!;
+    close.focus();
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it('pins AA text tokens and an internal mobile scroll region', () => {
+    openProfile();
+    const dialog = screen.getByRole('dialog', { name: 'Shift Lead — role profile' });
+    expect(dialog).toHaveClass(
+      'max-h-[calc(100dvh-2rem)]',
+      'grid-rows-[auto_minmax(0,1fr)_auto]',
+      'overflow-hidden'
+    );
+    expect(screen.getByTestId('role-dialog-scroll-region')).toHaveClass(
+      'min-h-0',
+      'overflow-y-auto'
+    );
+    for (const count of screen.getAllByText('2 inherited capabilities')) {
+      expect(count).toHaveClass('text-text-strong');
+    }
+    expect(screen.getByText('Inherited from role')).toHaveClass('!text-text-strong');
   });
 });
