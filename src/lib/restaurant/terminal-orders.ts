@@ -329,6 +329,16 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
         await requireOrderInDeviceBranch(ctx.db, data.orderId, ctx.device.branchId);
       }
 
+      const data = parsed.data as unknown;
+      if (
+        typeof data === 'object' &&
+        data !== null &&
+        'orderId' in data &&
+        typeof data.orderId === 'string'
+      ) {
+        await requireOrderInDeviceBranch(ctx.db, data.orderId, ctx.device.branchId);
+      }
+
       const actor = buildActor(operator.staffProfileId, ctx.device.id, key);
       const result = await run({ ctx, data: parsed.data, actor });
       return NextResponse.json(result as Record<string, unknown>, { status: successStatus });
