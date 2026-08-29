@@ -2313,26 +2313,26 @@ model Organization {
 /// the operational tables (bare RLS-guarded organizationId, no cross-org
 /// aggregation — D09); a partial unique index enforces one default branch per org.
 model RestaurantBranch {
-  id                String   @id @default(cuid())
-  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  name              String
-  timezone          String   @default("UTC")
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name                String
+  timezone            String   @default("UTC")
   // M4-L1/C5: the branch-local wall-clock time (24h "HH:MM") at which one
   // business day rolls into the next. Additive with a conservative "00:00"
   // default (midnight = calendar day); the order business date is resolved from
   // timezone + this cutoff (src/lib/restaurant/business-date.ts) and stamped
   // explicitly, never recomputed later from UTC (§11.1 / BUILD-ASSUMPTIONS).
-  businessDayCutoff String   @default("00:00")
+  businessDayCutoff   String   @default("00:00")
   // Completion wave: when true, an operator may only sign in at this branch's
   // terminals while holding an active, eligible `RestaurantShift`. Opt-in with a
   // conservative `false` default so a branch that does not roster keeps its
   // existing M2 sign-in behaviour untouched.
-  shiftSignInEnforced Boolean @default(false)
-  address           String?
-  active            Boolean  @default(true)
-  isDefault         Boolean  @default(false)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  shiftSignInEnforced Boolean  @default(false)
+  address             String?
+  active              Boolean  @default(true)
+  isDefault           Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   assignments                 RestaurantBranchAssignment[]
   // M2-L1: staff pinned to this branch as their primary, and devices registered
@@ -2710,7 +2710,9 @@ model RestaurantStaffProfile {
 
   // Completion wave: rostered shifts for this operator. A profile may hold many
   // shifts in different roles; they may never overlap in time (shifts.ts).
-  shifts                 RestaurantShift[]
+  shifts                RestaurantShift[]
+  shiftSwapRequests     RestaurantShiftSwapRequest[] @relation("ShiftSwapRequester")
+  shiftSwapReplacements RestaurantShiftSwapRequest[] @relation("ShiftSwapReplacement")
 
   @@index([organizationId])
   @@index([userId])
@@ -7424,6 +7426,12 @@ enum RestaurantShiftStatus {
   CANCELLED
 }
 
+enum RestaurantShiftSwapStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
 /// A branch-scoped rostered shift for ONE staff operator.
 ///
 /// `businessDate` is stamped ONCE at create/reschedule time from the branch's
@@ -7451,16 +7459,59 @@ model RestaurantShift {
   status         RestaurantShiftStatus @default(SCHEDULED)
   cancelledAt    DateTime?
   cancelReason   String?
+  clockedInAt    DateTime?
+  lateArrivalAt  DateTime?
+  clockedOutAt   DateTime?
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
 
-  branch       RestaurantBranch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  staffProfile RestaurantStaffProfile @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+  branch       RestaurantBranch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  staffProfile RestaurantStaffProfile       @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+  breaks       RestaurantShiftBreak[]
+  swapRequests RestaurantShiftSwapRequest[]
 
   @@index([organizationId])
   @@index([branchId, businessDate])
   @@index([staffProfileId, startAt])
   @@map("restaurant_shifts")
+}
+
+model RestaurantShiftBreak {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  shiftId        String
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  shift RestaurantShift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([shiftId, startedAt])
+  @@map("restaurant_shift_breaks")
+}
+
+model RestaurantShiftSwapRequest {
+  id                        String                    @id @default(cuid())
+  organizationId            String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  shiftId                   String
+  requestedByStaffProfileId String
+  replacementStaffProfileId String?
+  status                    RestaurantShiftSwapStatus @default(REQUESTED)
+  note                      String?
+  reviewedAt                DateTime?
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+
+  shift       RestaurantShift         @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  requestedBy RestaurantStaffProfile  @relation("ShiftSwapRequester", fields: [requestedByStaffProfileId], references: [id], onDelete: Cascade)
+  replacement RestaurantStaffProfile? @relation("ShiftSwapReplacement", fields: [replacementStaffProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([shiftId, status])
+  @@index([requestedByStaffProfileId, status])
+  @@map("restaurant_shift_swap_requests")
 }
 
 model PlatformUser {
