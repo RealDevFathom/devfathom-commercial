@@ -10,8 +10,18 @@ export type PaymentCategory = (typeof PAYMENT_CATEGORIES)[number];
 export type RestaurantTenderType = PaymentCategory;
 export type TaxPriceMode = 'EXCLUSIVE' | 'INCLUSIVE';
 
+export interface TaxProfile {
+  id: string;
+  effectiveFrom: Date;
+  effectiveTo?: Date | null;
+  status: 'DRAFT' | 'PUBLISHED' | 'SUPERSEDED';
+  approvalReference?: string | null;
+  approvedAt?: Date | null;
+}
+
 export interface TaxRule {
   id: string;
+  profileVersionId: string;
   paymentCategory: string;
   priceMode: TaxPriceMode;
   rate: DecimalInput;
@@ -61,6 +71,7 @@ export type ServiceCharge =
 
 export interface TaxQuoteInput {
   lines: TaxLineInput[];
+  profiles: TaxProfile[];
   rules: TaxRule[];
   at: Date;
   proposedTenderType: RestaurantTenderType;
@@ -91,6 +102,22 @@ export class TaxPaymentCategoryError extends TaxConfigurationError {
   readonly code = 'TAX_PAYMENT_CATEGORY_UNSUPPORTED';
 }
 
+export function resolveTaxProfile(profiles: TaxProfile[], at: Date): TaxProfile {
+  const matching = profiles.filter(
+    (profile) => profile.effectiveFrom <= at && (!profile.effectiveTo || at < profile.effectiveTo)
+  );
+  if (matching.length !== 1) {
+    throw new TaxConfigurationError(
+      matching.length === 0 ? 'No effective tax profile' : 'Conflicting tax profiles'
+    );
+  }
+  const profile = matching[0];
+  if (profile.status !== 'PUBLISHED' || !profile.approvalReference || !profile.approvedAt) {
+    throw new TaxConfigurationError(`Tax profile ${profile.id} is not approved and current`);
+  }
+  return profile;
+}
+
 function money(value: DecimalInput) {
   return new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 }
@@ -111,9 +138,15 @@ export function mapTenderTypeToPaymentCategory(tenderType: unknown): PaymentCate
   throw new TaxPaymentCategoryError(`Unsupported tender type: ${String(tenderType)}`);
 }
 
-export function resolveTaxRule(rules: TaxRule[], category: PaymentCategory, at: Date): TaxRule {
+export function resolveTaxRule(
+  rules: TaxRule[],
+  profileVersionId: string,
+  category: PaymentCategory,
+  at: Date
+): TaxRule {
   const matching = rules.filter(
     (rule) =>
+      rule.profileVersionId === profileVersionId &&
       rule.paymentCategory === category &&
       rule.effectiveFrom <= at &&
       (!rule.effectiveTo || at < rule.effectiveTo)
@@ -154,10 +187,11 @@ function lineConsideration(line: TaxLineInput) {
 function calculateBucket(
   consideration: DecimalInput,
   category: PaymentCategory,
+  profileVersionId: string,
   rules: TaxRule[],
   at: Date
 ): TaxBucketResult {
-  const rule = resolveTaxRule(rules, category, at);
+  const rule = resolveTaxRule(rules, profileVersionId, category, at);
   const rate = new Decimal(rule.rate);
   if (rate.isNegative() || rate.greaterThan(1))
     throw new TaxConfigurationError(`Invalid rate for ${rule.id}`);
@@ -176,14 +210,16 @@ function calculateBucket(
 
 export function calculateTax(
   lines: TaxLineInput[],
+  profiles: TaxProfile[],
   rules: TaxRule[],
   at: Date,
   tenderType: RestaurantTenderType
 ): { lines: TaxLineResult[]; net: Prisma.Decimal; tax: Prisma.Decimal; gross: Prisma.Decimal } {
   const category = mapTenderTypeToPaymentCategory(tenderType);
+  const profile = resolveTaxProfile(profiles, at);
   const results = lines.map((line) => {
     const consideration = lineConsideration(line);
-    const bucket = calculateBucket(consideration, category, rules, at);
+    const bucket = calculateBucket(consideration, category, profile.id, rules, at);
     return {
       id: line.id,
       consideration,
@@ -234,6 +270,7 @@ function zeroWeights(): Record<PaymentCategory, Prisma.Decimal> {
 
 export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
   const proposedCategory = mapTenderTypeToPaymentCategory(input.proposedTenderType);
+  const profile = resolveTaxProfile(input.profiles, input.at);
   const considerations = input.lines.map(lineConsideration);
   const merchandiseCents = Decimal.sum(...considerations.map(cents));
   const weights = zeroWeights();
@@ -259,7 +296,7 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
         )
       : [];
     const buckets = used.map((category, index) =>
-      calculateBucket(allocations[index], category, input.rules, input.at)
+      calculateBucket(allocations[index], category, profile.id, input.rules, input.at)
     );
     return {
       id: line.id,
@@ -275,6 +312,7 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
     ? calculateBucket(
         service.amount,
         mapTenderTypeToPaymentCategory(service.tenderType),
+        profile.id,
         input.rules,
         input.at
       )
