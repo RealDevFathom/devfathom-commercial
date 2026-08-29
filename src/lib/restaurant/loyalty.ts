@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { expireAccountLoyaltyPoints } from './loyalty-expiry';
-import { add, compare, multiply, roundMoney, sub, sum, ZERO } from './money';
+import { add, compare, money, multiply, roundMoney, sub, sum, ZERO } from './money';
 
 export type LoyaltyErrorReason =
   | 'NOT_FOUND'
