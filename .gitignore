@@ -70,3 +70,7 @@ scripts/.enh-internal-map.json
 
 # Playwright MCP scratch (screenshots saved to docs/ instead)
 .playwright-mcp/
+
+# Local agent/runtime state (not project source)
+.claude/
+.claude-flow/
