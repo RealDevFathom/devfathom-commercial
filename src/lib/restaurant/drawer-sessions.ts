@@ -144,9 +144,20 @@ export async function beginMoneyIdempotent(
   const canonicalPayloadHash = canonicalPayload ? requireCanonicalHash(canonicalPayload) : null;
   const existing = await tx.restaurantMoneyIdempotencyKey.findUnique({
     where: { deviceId_key: { deviceId: actor.deviceId, key: actor.idempotencyKey } },
-    select: { canonicalPayloadHash: true, resultRef: true, resultPayload: true, completedAt: true },
+    select: {
+      commandType: true,
+      canonicalPayloadHash: true,
+      resultRef: true,
+      resultPayload: true,
+      completedAt: true,
+    },
   });
   if (existing) {
+    if (existing.commandType !== commandType) {
+      throw new MoneyIdempotencyError(
+        'This idempotency key is already bound to a different canonical money payload.'
+      );
+    }
     if (
       canonicalPayloadHash !== null &&
       (existing.canonicalPayloadHash !== canonicalPayloadHash || existing.completedAt === null)

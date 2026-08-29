@@ -9,6 +9,7 @@ import { finalizeBillSettlement, type SettlementTenderTaxAllocation } from './bi
 import {
   appendMovement,
   beginMoneyIdempotent,
+  MoneyIdempotencyError,
   recordMoneyResult,
   runMoneyTransaction,
   type MoneyActor,
@@ -242,9 +243,14 @@ export async function applyTenderInTransaction(
     where: {
       deviceId_key: { deviceId: input.actor.deviceId, key: input.actor.idempotencyKey },
     },
-    select: { canonicalPayloadHash: true, resultPayload: true, resultRef: true },
+    select: { commandType: true, canonicalPayloadHash: true, resultPayload: true, resultRef: true },
   });
   if (legacy?.canonicalPayloadHash === null && legacy.resultPayload === null) {
+    if (legacy.commandType !== commandType) {
+      throw new MoneyIdempotencyError(
+        'This idempotency key is already bound to a different canonical money payload.'
+      );
+    }
     return replayTenderResult(tx, legacy.resultRef);
   }
   const idem = await beginMoneyIdempotent(tx, input.actor, commandType, {

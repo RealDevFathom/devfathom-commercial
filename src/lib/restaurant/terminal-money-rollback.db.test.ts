@@ -790,6 +790,32 @@ describeIfDatabase('WHA-331 canonical frozen money idempotency', () => {
     expect(await tenantCounts()).toEqual(before);
   });
 
+  it('rejects a payload-less legacy key owned by a different money command', async () => {
+    const key = uniqueKey('legacy-cross-command');
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantMoneyIdempotencyKey.create({
+        data: {
+          deviceId: ctx.deviceId,
+          key,
+          commandType: 'cash.day_close',
+          resultRef: 'legacy_close_ref',
+        },
+      })
+    );
+    const before = await tenantCounts();
+
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        beginMoneyIdempotent(tx, actor(key), 'tender.card', canonical('{"amount":"12.50"}'))
+      )
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
+    expect(await tenantCounts()).toEqual(before);
+    expect(await idempotencyKeyRow(key)).toMatchObject({
+      commandType: 'cash.day_close',
+      resultRef: 'legacy_close_ref',
+    });
+  });
+
   it('allows exactly one finalization and preserves the winner payload', async () => {
     const key = uniqueKey('canonical-finalize');
     const request = canonical('{"amount":"7.00"}');

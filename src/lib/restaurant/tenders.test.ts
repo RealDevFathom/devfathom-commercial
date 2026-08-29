@@ -794,6 +794,47 @@ describeIfDatabase('idempotency (real DB)', () => {
     expect(replay.amount.toString()).toBe('12.5');
     expect(replay.remainingDue.toString()).toBe('0');
   });
+
+  it('rejects a cross-command legacy key before replay or live bill/configuration writes', async () => {
+    const { billId } = await openBill(1);
+    const firstRun = actor();
+    const first = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: firstRun,
+      now: AT,
+    });
+    const reuse = actor();
+    await read((tx) =>
+      tx.restaurantMoneyIdempotencyKey.create({
+        data: {
+          deviceId: reuse.deviceId,
+          key: reuse.idempotencyKey,
+          commandType: 'cash.day_close',
+          resultRef: first.tenderId,
+        },
+      })
+    );
+    const before = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count(),
+      idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+    }));
+
+    await expect(
+      deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId: `missing_${suffix}`,
+        tender: { type: 'CARD', amount: '12.50' },
+        actor: reuse,
+        now: new Date('2030-08-19T18:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
+    expect(
+      await read(async (tx) => ({
+        tenders: await tx.restaurantTender.count(),
+        idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+      }))
+    ).toEqual(before);
+  });
 });
 
 const d = (value: string): Prisma.Decimal => new Prisma.Decimal(value);
