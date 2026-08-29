@@ -230,9 +230,9 @@ describe('Restaurant staff credential UI', () => {
       </EntitlementsProvider>
     );
 
-    expect(screen.getByRole('heading', { level: 3, name: 'Loading staff…' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Loading staff…' })).toBeInTheDocument();
     expect(
-      screen.queryByRole('heading', { level: 3, name: '0 staff members' })
+      screen.queryByRole('heading', { level: 2, name: '0 staff members' })
     ).not.toBeInTheDocument();
   });
 });
@@ -358,5 +358,25 @@ describe('Restaurant staff role profiles', () => {
       expect(count).toHaveClass('text-text-strong');
     }
     expect(screen.getByText('Inherited from role')).toHaveClass('!text-text-strong');
+  });
+
+  it('keeps the open role dialog heading outline contiguous', () => {
+    openProfile();
+    const headings = [...document.querySelectorAll<HTMLHeadingElement>('h1, h2, h3, h4, h5, h6')]
+      .filter((heading) => !heading.hidden)
+      .map((heading) => ({ level: Number(heading.tagName.slice(1)), name: heading.textContent }));
+
+    expect(headings).toEqual([
+      { level: 1, name: 'Staff' },
+      { level: 2, name: '1 staff member' },
+      { level: 2, name: 'Shift Lead — role profile' },
+      { level: 3, name: 'Role profiles' },
+      { level: 3, name: 'Capabilities' },
+    ]);
+    expect(
+      headings.every(
+        (heading, index) => index === 0 || heading.level <= headings[index - 1]!.level + 1
+      )
+    ).toBe(true);
   });
 });

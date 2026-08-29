@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Button } from '@/components/ui/button';
+import { Eyebrow } from '@/components/ui/eyebrow';
 import {
   Dialog,
   DialogContent,
@@ -274,14 +275,15 @@ export function RestaurantStaffConsole() {
           </p>
         </SectionCard>
       ) : (
-        <SectionCard
-          eyebrow="Directory"
-          title={
-            staffQuery.isLoading
-              ? 'Loading staff…'
-              : `${filteredStaff.length} staff member${filteredStaff.length === 1 ? '' : 's'}`
-          }
-        >
+        <SectionCard>
+          <div className="mb-4 space-y-1">
+            <Eyebrow>Directory</Eyebrow>
+            <h2 className="font-display text-lg leading-snug font-semibold tracking-tight text-text-strong">
+              {staffQuery.isLoading
+                ? 'Loading staff…'
+                : `${filteredStaff.length} staff member${filteredStaff.length === 1 ? '' : 's'}`}
+            </h2>
+          </div>
           <div className="mb-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_14rem]">
             <label className="space-y-1.5">
               <span className={labelClass}>Search name or email</span>
