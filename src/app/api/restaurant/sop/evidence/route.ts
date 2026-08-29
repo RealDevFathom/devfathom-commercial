@@ -15,6 +15,32 @@ const EVIDENCE_TYPES = {
   'image/webp': 'webp',
 } as const;
 
+async function readEvidenceFile(value: FormDataEntryValue | null) {
+  const tag = Object.prototype.toString.call(value);
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    (tag !== '[object File]' && tag !== '[object Blob]') ||
+    !Number.isSafeInteger(value.size) ||
+    value.size <= 0 ||
+    value.size > MAX_ATTACHMENT_BYTES ||
+    typeof value.name !== 'string' ||
+    value.name.trim().length === 0 ||
+    typeof value.type !== 'string' ||
+    typeof value.arrayBuffer !== 'function'
+  ) {
+    throw new Error(`Choose a file between 1 byte and ${MAX_ATTACHMENT_BYTES} bytes.`);
+  }
+
+  const baseType = value.type.split(';')[0]!.trim().toLowerCase();
+  const extension = EVIDENCE_TYPES[baseType as keyof typeof EVIDENCE_TYPES];
+  if (!extension) throw new Error('Proof must be a JPEG, PNG, or WebP image.');
+
+  const bytes = Buffer.from(await value.arrayBuffer());
+  if (bytes.length !== value.size) throw new Error('Invalid file metadata.');
+  return { baseType, bytes, extension };
+}
+
 function destination(request: Request, form: FormData, notice: string, kind: 'success' | 'error') {
   const url = new URL('/restaurant/sop', publicRequestOrigin(request));
   for (const key of ['branchId', 'businessDate', 'occurrenceId'] as const) {
@@ -62,15 +88,10 @@ export async function POST(request: Request) {
     const occurrenceId = String(form.get('occurrenceId') ?? '').trim();
     const occurrenceStepId = String(form.get('occurrenceStepId') ?? '').trim();
     const uploaderStaffProfileId = String(form.get('uploaderStaffProfileId') ?? '').trim();
-    if (!(file instanceof File) || file.size <= 0 || file.size > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`Choose a file between 1 byte and ${MAX_ATTACHMENT_BYTES} bytes.`);
-    }
+    const { baseType, bytes, extension } = await readEvidenceFile(file);
     if (purpose !== 'photo' && purpose !== 'signature') {
       throw new Error('Choose whether this file is photo or signature proof.');
     }
-    const baseType = file.type.split(';')[0]!.trim().toLowerCase();
-    const extension = EVIDENCE_TYPES[baseType as keyof typeof EVIDENCE_TYPES];
-    if (!extension) throw new Error('Proof must be a JPEG, PNG, or WebP image.');
     if (!occurrenceId || !occurrenceStepId || !uploaderStaffProfileId) {
       throw new Error('Occurrence, checklist step, and uploader are required.');
     }
@@ -84,7 +105,6 @@ export async function POST(request: Request) {
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
 
-    const bytes = Buffer.from(await file.arrayBuffer());
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;
     await putUpload(organizationId, storedFilename, bytes, baseType);

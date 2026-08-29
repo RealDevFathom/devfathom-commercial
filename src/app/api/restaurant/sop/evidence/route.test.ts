@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 
 const mocks = vi.hoisted(() => ({
   attachEvidence: vi.fn(),
@@ -28,6 +30,7 @@ function request(overrides?: {
   forwardedHost?: string;
   fetchSite?: string;
   omitOrigin?: boolean;
+  file?: unknown;
 }) {
   const form = new FormData();
   form.set('branchId', 'branch-1');
@@ -37,6 +40,12 @@ function request(overrides?: {
   form.set('evidencePurpose', 'photo');
   form.set('uploaderStaffProfileId', 'staff-1');
   form.set('file', new File(['proof'], 'proof.jpg', { type: overrides?.type ?? 'image/jpeg' }));
+  if (overrides && 'file' in overrides) {
+    const get = form.get.bind(form);
+    vi.spyOn(form, 'get').mockImplementation((key) =>
+      key === 'file' ? (overrides.file as FormDataEntryValue) : get(key)
+    );
+  }
   const origin = overrides?.origin ?? 'https://devfathom.test';
   const headers = new Headers(overrides?.omitOrigin ? undefined : { origin });
   if (overrides?.forwardedHost) {
@@ -62,6 +71,10 @@ beforeEach(() => {
   mocks.deleteUpload.mockResolvedValue(undefined);
   mocks.putUpload.mockResolvedValue(undefined);
   mocks.attachEvidence.mockResolvedValue({ evidenceId: 'evidence-1' });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('POST SOP evidence', () => {
@@ -94,6 +107,54 @@ describe('POST SOP evidence', () => {
         uploaderStaffProfileId: 'staff-1',
       })
     );
+  });
+
+  it('accepts a genuine parsed multipart file from a different File realm', async () => {
+    const multipart = new FormData();
+    multipart.set('file', new File(['parsed proof'], 'proof.jpg', { type: 'image/jpeg' }));
+    const parsedFile = multipart.get('file');
+    vi.stubGlobal('File', class OtherRealmFile {});
+
+    const response = await POST(request({ file: parsedFile }));
+
+    expect(response.headers.get('location')).toContain('Proof+captured');
+    expect(mocks.putUpload).toHaveBeenCalledWith(
+      'org-1',
+      expect.stringMatching(/^sop-.+\.jpg$/),
+      Buffer.from('parsed proof'),
+      'image/jpeg'
+    );
+  });
+
+  it.each([
+    [
+      'a forged file-like object',
+      { size: 5, type: 'image/jpeg', arrayBuffer: async () => new ArrayBuffer(5) },
+    ],
+    [
+      'an object spoofing the File tag without a name',
+      {
+        [Symbol.toStringTag]: 'File',
+        size: 5,
+        type: 'image/jpeg',
+        arrayBuffer: async () => new ArrayBuffer(5),
+      },
+    ],
+    ['a forged object without binary methods', { size: 5, type: 'image/jpeg' }],
+    ['an empty file', new File([], 'empty.jpg', { type: 'image/jpeg' })],
+    [
+      'a file over 25 MB',
+      new File([new Uint8Array(MAX_ATTACHMENT_BYTES + 1)], 'large.jpg', { type: 'image/jpeg' }),
+    ],
+    ['an unsupported MIME type', new File(['proof'], 'proof.gif', { type: 'image/gif' })],
+    ['malformed MIME metadata', new File(['proof'], 'proof.jpg', { type: 'not a mime' })],
+  ])('rejects %s before storage', async (_label, file) => {
+    const response = await POST(request({ file }));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+    expect(mocks.attachEvidence).not.toHaveBeenCalled();
   });
 
   it('rejects cross-origin and unsupported uploads before storage', async () => {
