@@ -1,6 +1,7 @@
 import { PlatformCommandForm } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { ALL_VERTICALS, VERTICALS } from '@/lib/vertical-catalog';
 
 export default async function NewOrganizationPage({
   searchParams,
@@ -12,7 +13,7 @@ export default async function NewOrganizationPage({
     db.platformPackage.findMany({
       where: { active: true },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true, defaultSeats: true },
+      select: { id: true, name: true, defaultSeats: true, vertical: true },
     })
   );
 
@@ -36,6 +37,18 @@ export default async function NewOrganizationPage({
               label: 'Opportunity',
               type: 'hidden',
               defaultValue: query.opportunityId,
+            },
+            {
+              name: 'vertical',
+              label: 'Organization type',
+              type: 'select',
+              required: true,
+              defaultValue: 'AGENCY',
+              help: 'Choose the operating model first; package choices update automatically.',
+              options: ALL_VERTICALS.map((vertical) => ({
+                label: VERTICALS[vertical].label,
+                value: vertical,
+              })),
             },
             { name: 'displayName', label: 'Display name', required: true },
             { name: 'legalName', label: 'Legal name', required: true },
@@ -62,9 +75,11 @@ export default async function NewOrganizationPage({
               label: 'Commercial package',
               type: 'select',
               required: true,
+              filterBy: 'vertical',
               options: packages.map((item) => ({
                 label: `${item.name} · ${item.defaultSeats} default seats`,
                 value: item.id,
+                filterValue: item.vertical,
               })),
             },
             {
