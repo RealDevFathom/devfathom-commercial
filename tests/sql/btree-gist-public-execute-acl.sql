@@ -79,7 +79,7 @@ BEGIN
 END
 $proof$;
 
-CREATE ROLE wha766_restricted NOLOGIN NOSUPERUSER NOBYPASSRLS;
+CREATE ROLE wha766_restricted LOGIN NOSUPERUSER NOBYPASSRLS;
 
 CREATE SCHEMA wha766_proof;
 CREATE TABLE wha766_proof.gist_behavior (
@@ -102,7 +102,7 @@ BEGIN
     FROM pg_catalog.pg_roles
    WHERE rolname = 'wha766_restricted';
 
-  IF role_row.rolsuper OR role_row.rolbypassrls THEN
+  IF NOT role_row.rolcanlogin OR role_row.rolsuper OR role_row.rolbypassrls THEN
     RAISE EXCEPTION 'restricted proof role can bypass authorization';
   END IF;
 
