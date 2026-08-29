@@ -238,6 +238,15 @@ export async function applyTenderInTransaction(
                 : undefined,
           },
   });
+  const legacy = await tx.restaurantMoneyIdempotencyKey.findUnique({
+    where: {
+      deviceId_key: { deviceId: input.actor.deviceId, key: input.actor.idempotencyKey },
+    },
+    select: { canonicalPayloadHash: true, resultPayload: true, resultRef: true },
+  });
+  if (legacy?.canonicalPayloadHash === null && legacy.resultPayload === null) {
+    return replayTenderResult(tx, legacy.resultRef);
+  }
   const idem = await beginMoneyIdempotent(tx, input.actor, commandType, {
     bytes: canonicalBytes,
     hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),

@@ -67,6 +67,8 @@ const ids = {
   publication: `pub_${suffix}`,
   taxSource: `tax_source_${suffix}`,
   taxProfile: `tax_profile_${suffix}`,
+  taxedProfile: `tax_profile_taxed_${suffix}`,
+  taxedSource: `tax_source_taxed_${suffix}`,
 };
 const AT = new Date('2026-08-19T18:00:00.000Z');
 
@@ -545,6 +547,164 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     expect(bill?.status).toBe('SETTLED');
     expect(bill?.receiptNumber).toBeGreaterThan(0);
   });
+
+  it('reconciles non-zero mixed partial/final tax cents by original tender and category', async () => {
+    await read(async (tx) => {
+      await tx.restaurantTaxOfficialSource.create({
+        data: {
+          id: ids.taxedSource,
+          authorityCode: 'SYNTHETIC_TAXED_TEST_ONLY',
+          documentTitle: 'Synthetic taxed tender fixture',
+          sourceUrl: 'https://example.invalid/synthetic-taxed',
+          contentHash: `synthetic-taxed-${suffix}`,
+          retrievedAt: new Date('2026-07-01T00:00:00.000Z'),
+          expiresAt: new Date('2027-07-01T00:00:00.000Z'),
+        },
+      });
+      await tx.restaurantTaxProfileVersion.create({
+        data: {
+          id: ids.taxedProfile,
+          branchId: ids.branch,
+          versionNumber: 2,
+          status: 'PUBLISHED',
+          effectiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+          effectiveTo: new Date('2026-08-01T00:00:00.000Z'),
+          approvalReference: 'SYNTHETIC_TAXED_APPROVAL',
+          approvedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: new Date('2026-07-01T00:00:00.000Z'),
+          rules: {
+            create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+              officialSourceId: ids.taxedSource,
+              ruleCode: `SYNTHETIC_TAXED_${paymentCategory}`,
+              paymentCategory,
+              priceMode: 'EXCLUSIVE',
+              rate: '0.100000',
+              status: 'PUBLISHED',
+              effectiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+              effectiveTo: new Date('2026-08-01T00:00:00.000Z'),
+              approvalReference: 'SYNTHETIC_TAXED_APPROVAL',
+              approvedAt: new Date('2026-07-01T00:00:00.000Z'),
+              publishedAt: new Date('2026-07-01T00:00:00.000Z'),
+            })),
+          },
+        },
+      });
+    });
+
+    const { billId } = await openBill(1);
+    const db = deps.createTenantDb(orgId);
+    const at = new Date('2026-07-15T18:00:00.000Z');
+    const partial = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CARD', amount: '5.00' },
+      actor: actor(),
+      now: at,
+    });
+    const final = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'OTHER', amount: '8.75' },
+      actor: actor(),
+      now: at,
+    });
+    expect(partial).toMatchObject({ settled: false });
+    expect(final).toMatchObject({ settled: true });
+
+    const evidence = await read(async (tx) => ({
+      snapshot: await tx.restaurantTaxTransactionSnapshot.findFirstOrThrow({
+        where: { billId },
+        select: { id: true, taxTotal: true },
+      }),
+      bucket: await tx.restaurantTaxRateBucketSnapshot.findFirstOrThrow({
+        where: { snapshot: { billId } },
+        select: { id: true },
+      }),
+      allocations: await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { billId },
+        orderBy: { paymentCategory: 'asc' },
+        select: { originalTenderId: true, paymentCategory: true, cents: true },
+      }),
+    }));
+    expect(evidence.snapshot.taxTotal.toString()).toBe('1.25');
+    expect(evidence.allocations).toEqual([
+      { originalTenderId: partial.tenderId, paymentCategory: 'CARD', cents: BigInt(50) },
+      { originalTenderId: final.tenderId, paymentCategory: 'OTHER', cents: BigInt(75) },
+    ]);
+
+    const wrongBill = await openBill(1);
+    const wrongBillTender = await read((tx) =>
+      tx.restaurantTender.create({
+        data: {
+          billId: wrongBill.billId,
+          type: 'CARD',
+          amount: '1.00',
+          businessDate: AT,
+          staffProfileId: ids.operator,
+          deviceId,
+        },
+        select: { id: true },
+      })
+    );
+    const base = {
+      snapshotId: evidence.snapshot.id,
+      rateBucketSnapshotId: evidence.bucket.id,
+      originalTenderId: wrongBillTender.id,
+      paymentCategory: 'CARD' as const,
+      cents: BigInt(0),
+    };
+    await expect(
+      read((tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.create({
+          data: { ...base, id: `wrong_bill_app_${suffix}`, billId: wrongBill.billId },
+        })
+      )
+    ).rejects.toThrow();
+    await expect(
+      read((tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.create({
+          data: {
+            ...base,
+            id: `cross_tenant_app_${suffix}`,
+            organizationId: `org_foreign_${suffix}`,
+            billId,
+          },
+        })
+      )
+    ).rejects.toThrow();
+    await expect(
+      read(
+        (tx) =>
+          tx.$executeRaw`INSERT INTO restaurant_tax_tender_allocation_snapshots
+          (id, "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+           "originalTenderId", "paymentCategory", cents)
+          VALUES (${`wrong_bill_db_${suffix}`}, ${orgId}, ${evidence.snapshot.id},
+            ${wrongBill.billId}, ${evidence.bucket.id}, ${wrongBillTender.id}, 'CARD', 0)`
+      )
+    ).rejects.toThrow();
+    await expect(
+      read(
+        (tx) =>
+          tx.$executeRaw`INSERT INTO restaurant_tax_tender_allocation_snapshots
+          (id, "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+           "originalTenderId", "paymentCategory", cents)
+          VALUES (${`cross_tenant_db_${suffix}`}, ${`org_foreign_${suffix}`},
+            ${evidence.snapshot.id}, ${billId}, ${evidence.bucket.id},
+            ${partial.tenderId}, 'CARD', 0)`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('fails closed before writing a new tender when no tax profile is configured', async () => {
+    const { billId } = await openBill(1);
+    await expect(
+      deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: { type: 'CARD', amount: '12.50' },
+        actor: actor(),
+        now: new Date('2025-01-01T00:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ reason: 'MISSING' });
+    expect(await read((tx) => tx.restaurantTender.count({ where: { billId } }))).toBe(0);
+  });
 });
 
 describeIfDatabase('idempotency (real DB)', () => {
@@ -594,6 +754,45 @@ describeIfDatabase('idempotency (real DB)', () => {
       })
     ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
     expect(await read((tx) => tx.restaurantTender.count({ where: { billId } }))).toBe(1);
+  });
+
+  it('uses legacy replay fallback without a live profile or tax-source lookup', async () => {
+    const { billId } = await openBill(1);
+    const firstRun = actor();
+    const first = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: firstRun,
+      now: AT,
+    });
+    const reuse = actor();
+    await read((tx) =>
+      tx.restaurantMoneyIdempotencyKey.create({
+        data: {
+          deviceId: reuse.deviceId,
+          key: reuse.idempotencyKey,
+          commandType: 'tender.card',
+          resultRef: first.tenderId,
+        },
+      })
+    );
+
+    const replay = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: reuse,
+      now: new Date('2030-08-19T18:00:00.000Z'),
+    });
+    expect(replay).toMatchObject({
+      tenderId: first.tenderId,
+      billId,
+      type: 'CARD',
+      settled: true,
+      receiptNumber: first.receiptNumber,
+      replayed: true,
+    });
+    expect(replay.amount.toString()).toBe('12.5');
+    expect(replay.remainingDue.toString()).toBe('0');
   });
 });
 
