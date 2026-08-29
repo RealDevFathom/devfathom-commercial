@@ -2436,6 +2436,10 @@ model RestaurantTaxProfileVersion {
   approvalReference String?
   approvedAt        DateTime?
   publishedAt       DateTime?
+  presetId           String?
+  activationIdempotencyKey String?
+  activationPayloadHash String?
+  eligibilityEvidence Json?
   createdAt         DateTime                   @default(now())
   updatedAt         DateTime                   @updatedAt
 
@@ -2444,6 +2448,8 @@ model RestaurantTaxProfileVersion {
   transactionSnapshots RestaurantTaxTransactionSnapshot[]
 
   @@unique([branchId, versionNumber])
+  @@unique([organizationId, activationIdempotencyKey], map: "restaurant_tax_profiles_org_activation_key")
+  @@unique([organizationId, branchId, effectiveFrom], map: "restaurant_tax_profiles_org_branch_effective_key")
   @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId, status, effectiveFrom])

@@ -45,35 +45,27 @@ describe('restaurant tax configuration UI', () => {
     render(<RestaurantTaxConsole />);
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     fireEvent.change(screen.getByLabelText('Jurisdiction and profile'), {
-      target: { value: 'PK-BA-RESTAURANT-BRA-POS' },
+      target: { value: 'PK-ICT-RESTAURANT' },
     });
     fireEvent.change(screen.getByLabelText('Effective date'), { target: { value: '2026-07-01' } });
     fireEvent.change(screen.getByLabelText('Accountant approval reference'), {
       target: { value: 'Memo 42' },
     });
     for (const label of [
-      /BRA accepted this branch/i,
-      /All invoices and receipts/i,
-      /No input adjustment/i,
-      /not in a hotel/i,
-      /neither a franchiser nor franchisee/i,
+      /no input tax credit or adjustment/i,
+      /no refund/i,
       /I confirm an accountant reviewed/i,
     ])
       fireEvent.click(screen.getByLabelText(label));
     fireEvent.click(screen.getByRole('button', { name: 'Activate tax profile' }));
     expect(mocks.mutate).toHaveBeenCalledWith({
       branchId: 'branch_1',
-      profileId: 'PK-BA-RESTAURANT-BRA-POS',
+      profileId: 'PK-ICT-RESTAURANT',
       effectiveFrom: '2026-07-01T00:00:00.000Z',
       approvalReference: 'Memo 42',
       accountantConfirmation: true,
-      eligibilityConfirmations: [
-        'braLinkedPos',
-        'allElectronic',
-        'noInputAdjustment',
-        'notExcludedPremises',
-        'notFranchise',
-      ],
+      eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      idempotencyKey: expect.any(String),
     });
   });
 });

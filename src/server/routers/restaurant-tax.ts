@@ -17,7 +17,19 @@ const activationSchema = z.object({
   accountantConfirmation: z.boolean(),
   approvalReference: z.string().trim().min(1).max(240),
   eligibilityConfirmations: z.array(z.string().min(1)).default([]),
+  idempotencyKey: z.string().trim().min(8).max(128),
 });
+
+function canonicalActivationPayload(input: z.infer<typeof activationSchema>) {
+  return {
+    branchId: input.branchId,
+    profileId: input.profileId,
+    effectiveFrom: new Date(input.effectiveFrom).toISOString(),
+    accountantConfirmation: input.accountantConfirmation,
+    approvalReference: input.approvalReference.trim(),
+    eligibilityConfirmations: [...new Set(input.eligibilityConfirmations)].sort(),
+  };
+}
 
 export const restaurantTaxRouter = router({
   configuration: adminProcedure.query(async ({ ctx }) => {
@@ -66,6 +78,18 @@ export const restaurantTaxRouter = router({
         message: `Missing eligibility confirmation: ${missing[0].label}`,
       });
     }
+    const allowedConfirmations = new Set<string>(
+      preset.eligibilityControls.map((control) => control.id)
+    );
+    const unknownConfirmation = input.eligibilityConfirmations.find(
+      (confirmation) => !allowedConfirmations.has(confirmation)
+    );
+    if (unknownConfirmation) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Eligibility evidence does not match the selected profile.',
+      });
+    }
     const effectiveFrom = new Date(input.effectiveFrom);
     if (preset.effectiveFrom && effectiveFrom < new Date(`${preset.effectiveFrom}T00:00:00.000Z`)) {
       throw new TRPCError({
@@ -73,76 +97,115 @@ export const restaurantTaxRouter = router({
         message: `This profile is unavailable before ${preset.effectiveFrom}.`,
       });
     }
-    const branch = await ctx.db.restaurantBranch.findUnique({
-      where: { id: input.branchId },
-      select: { id: true },
-    });
-    if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
-
-    const existing = await ctx.db.restaurantTaxProfileVersion.findFirst({
-      where: {
-        branchId: input.branchId,
-        status: 'PUBLISHED',
-        effectiveFrom: { lte: effectiveFrom },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: effectiveFrom } }],
-      },
-      select: { id: true },
-    });
-    if (existing)
+    if (!preset.sourceContentHash) {
       throw new TRPCError({
-        code: 'CONFLICT',
-        message: 'An active profile already covers this effective date.',
+        code: 'PRECONDITION_FAILED',
+        message: 'The official source content has not been pinned and reviewed.',
       });
+    }
+    const canonicalPayload = canonicalActivationPayload(input);
+    const payloadHash = createHash('sha256').update(JSON.stringify(canonicalPayload)).digest('hex');
+    const created = await ctx.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${ctx.entitlements.organizationId}:${input.branchId}`}, 0))`;
 
-    const sourceFingerprint = createHash('sha256')
-      .update(`WHA-526\n${preset.sourceUrl}`)
-      .digest('hex');
-    const source = await ctx.db.restaurantTaxOfficialSource.upsert({
-      where: {
-        organizationId_contentHash: {
-          organizationId: ctx.entitlements.organizationId,
-          contentHash: sourceFingerprint,
+      const replay = await tx.restaurantTaxProfileVersion.findUnique({
+        where: {
+          organizationId_activationIdempotencyKey: {
+            organizationId: ctx.entitlements.organizationId,
+            activationIdempotencyKey: input.idempotencyKey,
+          },
         },
-      },
-      update: {},
-      create: {
-        authorityCode: preset.authorityCode,
-        documentTitle: preset.sourceTitle,
-        sourceUrl: preset.sourceUrl,
-        contentHash: sourceFingerprint,
-        retrievedAt: new Date('2026-08-29T00:00:00.000Z'),
-      },
-    });
-    const latest = await ctx.db.restaurantTaxProfileVersion.findFirst({
-      where: { branchId: input.branchId },
-      orderBy: { versionNumber: 'desc' },
-      select: { versionNumber: true },
-    });
-    const now = new Date();
-    const approvalReference = `WHA-526 · ${preset.id} · ${input.approvalReference}`;
-    const created = await ctx.db.restaurantTaxProfileVersion.create({
-      data: {
-        branchId: input.branchId,
-        versionNumber: (latest?.versionNumber ?? 0) + 1,
-        status: 'PUBLISHED',
-        effectiveFrom,
-        approvalReference,
-        approvedAt: now,
-        publishedAt: now,
-        rules: {
-          create: preset.rules.map((rule) => ({
-            ...rule,
-            officialSourceId: source.id,
-            priceMode: 'EXCLUSIVE' as const,
-            status: 'PUBLISHED' as const,
-            effectiveFrom,
-            approvalReference,
-            approvedAt: now,
-            publishedAt: now,
-          })),
+        include: { rules: true },
+      });
+      if (replay) {
+        if (replay.activationPayloadHash !== payloadHash) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This idempotency key was already used for a different activation.',
+          });
+        }
+        return replay;
+      }
+
+      const branch = await tx.restaurantBranch.findUnique({
+        where: { id: input.branchId },
+        select: { id: true },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+
+      const existing = await tx.restaurantTaxProfileVersion.findFirst({
+        where: {
+          branchId: input.branchId,
+          status: 'PUBLISHED',
+          effectiveFrom: { lte: effectiveFrom },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: effectiveFrom } }],
         },
-      },
-      include: { rules: true },
+        select: { id: true },
+      });
+      if (existing)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'An active profile already covers this effective date.',
+        });
+
+      const source = await tx.restaurantTaxOfficialSource.upsert({
+        where: {
+          organizationId_contentHash: {
+            organizationId: ctx.entitlements.organizationId,
+            contentHash: preset.sourceContentHash,
+          },
+        },
+        update: {},
+        create: {
+          authorityCode: preset.authorityCode,
+          documentTitle: preset.sourceTitle,
+          sourceUrl: preset.sourceUrl,
+          contentHash: preset.sourceContentHash,
+          retrievedAt: new Date('2026-08-29T00:00:00.000Z'),
+        },
+      });
+      const latest = await tx.restaurantTaxProfileVersion.findFirst({
+        where: { branchId: input.branchId },
+        orderBy: { versionNumber: 'desc' },
+        select: { versionNumber: true },
+      });
+      const now = new Date();
+      const approvalReference = `${preset.id} · ${canonicalPayload.approvalReference}`;
+      return tx.restaurantTaxProfileVersion.create({
+        data: {
+          branchId: input.branchId,
+          versionNumber: (latest?.versionNumber ?? 0) + 1,
+          status: 'PUBLISHED',
+          effectiveFrom,
+          approvalReference,
+          approvedAt: now,
+          publishedAt: now,
+          presetId: preset.id,
+          activationIdempotencyKey: input.idempotencyKey,
+          activationPayloadHash: payloadHash,
+          eligibilityEvidence: {
+            accountantReviewed: true,
+            approvalReference: canonicalPayload.approvalReference,
+            confirmations: preset.eligibilityControls.map((control) => ({
+              id: control.id,
+              label: control.label,
+            })),
+          },
+          rules: {
+            create: preset.rules.map((rule) => ({
+              ...rule,
+              officialSourceId: source.id,
+              priceMode: 'EXCLUSIVE' as const,
+              status: 'PUBLISHED' as const,
+              effectiveFrom,
+              approvalReference,
+              approvedAt: now,
+              publishedAt: now,
+            })),
+          },
+        },
+        include: { rules: true },
+      });
     });
     annotateAudit(ctx, {
       targetType: 'RestaurantTaxProfileVersion',

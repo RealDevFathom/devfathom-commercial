@@ -33,28 +33,28 @@ describe('authoritative Pakistan restaurant tax profile catalog', () => {
     });
     expect(rates('PK-ICT-RESTAURANT')).toEqual({ CASH: '0.15', CARD: '0.05', OTHER: '0.15' });
     expect(rates('PK-ICT-CATERER')).toEqual({ CASH: '0.15', CARD: '0.15', OTHER: '0.15' });
+    expect(findPakistanTaxProfile('PK-SD-RESTAURANT')?.eligibilityControls).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'sindhNoInputTaxCreditOrAdjustment' })])
+    );
+    expect(findPakistanTaxProfile('PK-KP-RESTAURANT-ORDINARY')?.eligibilityControls).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'kpNoInputTaxCreditOrAdjustment' })])
+    );
+    expect(findPakistanTaxProfile('PK-ICT-RESTAURANT')?.eligibilityControls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'ictNoInputTaxCreditOrAdjustment' }),
+        expect.objectContaining({ id: 'ictNoRefund' }),
+      ])
+    );
   });
 
-  it('makes every BRA reduced-rate predicate explicit and excludes stale mechanics', () => {
-    expect(rates('PK-BA-RESTAURANT-STANDARD')).toEqual({
-      CASH: '0.08',
-      CARD: '0.08',
-      OTHER: '0.08',
-    });
+  it('disables Balochistan until an official instrument is pinned', () => {
     const reduced = findPakistanTaxProfile('PK-BA-RESTAURANT-BRA-POS');
-    expect(reduced?.effectiveFrom).toBe('2026-07-01');
-    expect(rates('PK-BA-RESTAURANT-BRA-POS')).toEqual({
-      CASH: '0.04',
-      CARD: '0.04',
-      OTHER: '0.04',
+    expect(reduced).toMatchObject({ enabled: false, rules: [], sourceTitle: 'iBRA portal' });
+    expect(findPakistanTaxProfile('PK-BA-RESTAURANT-STANDARD')).toMatchObject({
+      enabled: false,
+      rules: [],
+      sourceTitle: 'Balochistan Revenue Authority frequently asked questions',
     });
-    expect(reduced?.eligibilityControls.map((control) => control.id)).toEqual([
-      'braLinkedPos',
-      'allElectronic',
-      'noInputAdjustment',
-      'notExcludedPremises',
-      'notFranchise',
-    ]);
-    expect(JSON.stringify(PAKISTAN_TAX_PROFILE_CATALOG)).not.toMatch(/15,?000|utility.bill/i);
+    expect(JSON.stringify(PAKISTAN_TAX_PROFILE_CATALOG)).not.toMatch(/Finance Act 2026|WHA-526/i);
   });
 });

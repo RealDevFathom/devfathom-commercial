@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ export function RestaurantTaxConsole() {
   const utils = trpc.useUtils();
   const configuration = trpc.restaurantTax.configuration.useQuery();
   const [selectedId, setSelectedId] = useState('');
+  const idempotencyKey = useRef(crypto.randomUUID());
   const selected = useMemo(
     () => configuration.data?.profiles.find((profile) => profile.id === selectedId),
     [configuration.data, selectedId]
@@ -28,6 +29,7 @@ export function RestaurantTaxConsole() {
   const activation = trpc.restaurantTax.activate.useMutation({
     onSuccess: () => {
       toast.success('Tax profile activated.');
+      idempotencyKey.current = crypto.randomUUID();
       void utils.restaurantTax.configuration.invalidate();
     },
     onError: (error) => toast.error(error.message),
@@ -46,6 +48,7 @@ export function RestaurantTaxConsole() {
       eligibilityConfirmations: selected.eligibilityControls
         .filter((control) => data.get(control.id) === 'on')
         .map((control) => control.id),
+      idempotencyKey: idempotencyKey.current,
     });
   };
 
@@ -165,6 +168,9 @@ export function RestaurantTaxConsole() {
                         </li>
                       ))}
                     </ul>
+                  ) : null}
+                  {'tenderNotice' in selected ? (
+                    <p className="mt-3 text-sm font-medium text-warning">{selected.tenderNotice}</p>
                   ) : null}
                   {selected.eligibilityControls.map((control) => (
                     <label
