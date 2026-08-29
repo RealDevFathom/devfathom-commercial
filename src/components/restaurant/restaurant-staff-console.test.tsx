@@ -53,6 +53,13 @@ vi.mock('@/lib/trpc', () => ({
     }),
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
       listCredentials: { useQuery: () => mocks.credentials },
       // SOP-1: the job-roles dialog is mounted (closed) by the console, so its
       // hooks must resolve even though these cases never open it.
@@ -107,6 +114,22 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
     },
+    restaurantDevices: {
+      list: {
+        useQuery: () => ({
+          data: [
+            {
+              id: 'device_1',
+              name: 'Front Register',
+              branch: { id: 'branch_1', name: 'Downtown' },
+              status: 'ACTIVE',
+            },
+          ],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
   },
 }));
 
@@ -150,10 +173,12 @@ describe('Restaurant staff credential UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
     const type = screen.getByLabelText('Credential type');
-    const deviceId = screen.getByLabelText('Device ID (optional)');
+    const deviceId = screen.getByLabelText('Device restriction');
     const secret = screen.getByLabelText('New operator secret');
     fireEvent.change(type, { target: { value: 'BADGE' } });
     fireEvent.change(deviceId, { target: { value: 'device_1' } });
+    expect(screen.getByText('Front Register — Downtown')).toBeVisible();
+    expect(screen.queryByText('device_1')).not.toBeInTheDocument();
     fireEvent.change(secret, { target: { value: 'badge-482913' } });
     fireEvent.click(screen.getByRole('button', { name: 'Issue credential' }));
 

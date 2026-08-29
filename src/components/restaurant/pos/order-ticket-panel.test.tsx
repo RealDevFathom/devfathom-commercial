@@ -26,6 +26,11 @@ const order: OrderDetail = {
   totals: { subtotal: '24.00', tax: '0.00', serviceCharge: '0.00' },
 };
 
+const operators = [
+  { id: 'staff-1', displayName: 'Sam Cashier', role: 'Cashier' },
+  { id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' },
+];
+
 function handlers() {
   return {
     onHold: vi.fn(),
@@ -45,7 +50,13 @@ describe('OrderTicketPanel', () => {
   it('routes hold, fire, and whole-order send actions', () => {
     const actions = handlers();
     render(
-      <OrderTicketPanel order={order} actingOperatorId="staff-1" pending={false} {...actions} />
+      <OrderTicketPanel
+        order={order}
+        actingOperatorId="staff-1"
+        operators={operators}
+        pending={false}
+        {...actions}
+      />
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
@@ -60,7 +71,13 @@ describe('OrderTicketPanel', () => {
   it('submits post-prep void approval, disposition, and reason', async () => {
     const actions = handlers();
     render(
-      <OrderTicketPanel order={order} actingOperatorId="staff-1" pending={false} {...actions} />
+      <OrderTicketPanel
+        order={order}
+        actingOperatorId="staff-1"
+        operators={operators}
+        pending={false}
+        {...actions}
+      />
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Void Steak' }));
@@ -68,7 +85,7 @@ describe('OrderTicketPanel', () => {
     fireEvent.change(within(dialog).getByLabelText('Void reason'), {
       target: { value: 'Guest rejected doneness' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Approving manager profile ID'), {
+    fireEvent.change(within(dialog).getByLabelText('Approving manager'), {
       target: { value: 'manager-1' },
     });
     fireEvent.change(within(dialog).getByLabelText('Manager PIN'), {
@@ -94,7 +111,13 @@ describe('OrderTicketPanel', () => {
     const actions = handlers();
     actions.onVoid.mockResolvedValue(false);
     const { rerender } = render(
-      <OrderTicketPanel order={order} actingOperatorId="staff-1" pending={false} {...actions} />
+      <OrderTicketPanel
+        order={order}
+        actingOperatorId="staff-1"
+        operators={operators}
+        pending={false}
+        {...actions}
+      />
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Void Steak' }));
@@ -102,7 +125,7 @@ describe('OrderTicketPanel', () => {
     fireEvent.change(within(dialog).getByLabelText('Void reason'), {
       target: { value: 'Guest rejected doneness' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Approving manager profile ID'), {
+    fireEvent.change(within(dialog).getByLabelText('Approving manager'), {
       target: { value: 'manager-1' },
     });
     fireEvent.change(within(dialog).getByLabelText('Manager PIN'), {
@@ -113,27 +136,31 @@ describe('OrderTicketPanel', () => {
     await screen.findByText('Void was not completed. Review the error and try again.');
     dialog = screen.getByRole('dialog', { name: 'Void Steak' });
     expect(within(dialog).getByLabelText('Void reason')).toHaveValue('Guest rejected doneness');
-    expect(within(dialog).getByLabelText('Approving manager profile ID')).toHaveValue('manager-1');
+    expect(within(dialog).getByLabelText('Approving manager')).toHaveValue('manager-1');
     expect(within(dialog).getByLabelText('Manager PIN')).toHaveValue('5678');
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     rerender(
-      <OrderTicketPanel order={order} actingOperatorId="staff-1" pending={false} {...actions} />
+      <OrderTicketPanel
+        order={order}
+        actingOperatorId="staff-1"
+        operators={operators}
+        pending={false}
+        {...actions}
+      />
     );
     fireEvent.click(screen.getByRole('button', { name: 'Void Steak' }));
     dialog = screen.getByRole('dialog', { name: 'Void Steak' });
     fireEvent.change(within(dialog).getByLabelText('Void reason'), {
       target: { value: 'Approval required' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Approving manager profile ID'), {
-      target: { value: 'staff-1' },
-    });
+    expect(within(dialog).getByLabelText('Approving manager')).not.toHaveTextContent('Sam Cashier');
     fireEvent.change(within(dialog).getByLabelText('Manager PIN'), {
       target: { value: '1234' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm void' }));
 
-    expect(screen.getByText('The acting operator cannot approve their own void.')).toBeVisible();
+    expect(within(dialog).getByLabelText('Approving manager')).toHaveValue('');
     expect(actions.onVoid).toHaveBeenCalledTimes(1);
   });
 

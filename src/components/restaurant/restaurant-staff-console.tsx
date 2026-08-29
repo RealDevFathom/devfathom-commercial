@@ -30,6 +30,8 @@ import {
 import { StaffJobRolesDialog } from '@/components/restaurant/staff-job-roles-dialog';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from './restaurant-branch-select';
+import { RestaurantDeviceSelect } from './restaurant-device-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type StaffProfile = RouterOutputs['restaurantStaff']['list'][number];
@@ -69,6 +71,12 @@ export function RestaurantStaffConsole() {
     restaurantModule?.enabled ?? entitlements.enabledModules.includes('restaurant-core');
   const utils = trpc.useUtils();
   const staffQuery = trpc.restaurantStaff.list.useQuery(undefined, { enabled: restaurantEnabled });
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: restaurantEnabled,
+  });
+  const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, {
+    enabled: restaurantEnabled,
+  });
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
@@ -153,13 +161,7 @@ export function RestaurantStaffConsole() {
     onError: mutationFailure,
   });
 
-  const branches = useMemo(() => {
-    const values = new Map<string, string>();
-    for (const staff of staffQuery.data ?? []) {
-      if (staff.primaryBranch) values.set(staff.primaryBranch.id, staff.primaryBranch.name);
-    }
-    return [...values.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [staffQuery.data]);
+  const branches = branchesQuery.data ?? [];
 
   const filteredStaff = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -312,21 +314,16 @@ export function RestaurantStaffConsole() {
               <label htmlFor="staff-branch-filter" className={labelClass}>
                 Branch
               </label>
-              <Input
+              <RestaurantBranchSelect
                 id="staff-branch-filter"
+                branches={branches}
+                loading={branchesQuery.isLoading}
+                error={Boolean(branchesQuery.error)}
                 value={branchFilter}
-                onChange={(event) => setBranchFilter(event.target.value)}
-                placeholder="Branch name or ID"
-                list="staff-branch-filters"
-                className="h-11"
+                onChange={setBranchFilter}
+                allowEmpty
+                emptyLabel="All branches"
               />
-              <datalist id="staff-branch-filters">
-                {branches.map(([id, name]) => (
-                  <option key={id} value={id}>
-                    {name}
-                  </option>
-                ))}
-              </datalist>
             </div>
           </div>
 
@@ -492,22 +489,18 @@ export function RestaurantStaffConsole() {
               </label>
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>
-                  Primary branch ID
+                  Primary branch
                 </label>
-                <Input
+                <RestaurantBranchSelect
                   id="staff-primary-branch"
                   name="primaryBranchId"
                   defaultValue={editingStaff?.primaryBranchId ?? ''}
-                  list="staff-form-branches"
-                  className="h-11"
+                  branches={branches}
+                  loading={branchesQuery.isLoading}
+                  error={Boolean(branchesQuery.error)}
+                  allowEmpty
+                  emptyLabel="No primary branch"
                 />
-                <datalist id="staff-form-branches">
-                  {branches.map(([id, name]) => (
-                    <option key={id} value={id}>
-                      {name}
-                    </option>
-                  ))}
-                </datalist>
               </div>
               <label className="space-y-1.5">
                 <span className={labelClass}>Status</span>
@@ -578,8 +571,15 @@ export function RestaurantStaffConsole() {
               </select>
             </label>
             <label className="space-y-1.5">
-              <span className={labelClass}>Device ID (optional)</span>
-              <Input name="deviceId" className="h-11" autoComplete="off" />
+              <span className={labelClass}>Device restriction (optional)</span>
+              <RestaurantDeviceSelect
+                devices={devicesQuery.data ?? []}
+                branchId={selectedStaff?.primaryBranch?.id}
+                loading={devicesQuery.isLoading}
+                error={Boolean(devicesQuery.error)}
+                allowEmpty
+                label="Device restriction"
+              />
             </label>
             <label className="space-y-1.5 sm:col-span-2">
               <span className={labelClass}>New operator secret</span>
@@ -648,12 +648,11 @@ export function RestaurantStaffConsole() {
                             }
                           />
                         </div>
-                        <p className="font-mono text-[0.6875rem] text-text-faint">
-                          {credential.id}
-                        </p>
                         <p className="text-xs text-text-muted">
                           Failed attempts: {credential.failedAttempts}
-                          {credential.deviceId ? ` · Device ${credential.deviceId}` : ''}
+                          {credential.deviceId
+                            ? ` · ${devicesQuery.data?.find((device) => device.id === credential.deviceId)?.name ?? 'Device name unavailable'}`
+                            : ''}
                         </p>
                       </div>
                       {!credential.revokedAt ? (

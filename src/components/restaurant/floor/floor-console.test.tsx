@@ -18,6 +18,22 @@ const mocks = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    restaurantStaff: {
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+      listDirectory: {
+        useQuery: () => ({
+          data: [{ id: 'staff_1', displayName: 'Shift Lead', role: 'Server' }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
     useUtils: () => ({
       restaurantFloor: {
         listFloors: { invalidate: mocks.invalidate },
@@ -110,7 +126,7 @@ describe('FloorConsole', () => {
 
     renderConsole();
     expect(mocks.floorCalls.at(-1)?.enabled).toBe(false);
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     expect(mocks.floorCalls.at(-1)).toEqual({
       input: { branchId: 'branch_1', includeInactive: false },
       enabled: true,
@@ -129,7 +145,7 @@ describe('FloorConsole', () => {
 
   it('creates a floor with the exact router payload', () => {
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add floor' }));
     const dialog = screen.getByRole('dialog', { name: 'Add floor' });
     fireEvent.change(within(dialog).getByLabelText('Floor name'), {

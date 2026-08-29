@@ -12,10 +12,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
+import { RestaurantBranchSelect } from './restaurant-branch-select';
 
 /**
  * SOP-1 / WHA-224 — the job-role multi-select for one staff profile at one branch.
@@ -58,6 +58,7 @@ export function StaffJobRolesDialog({
 }: StaffJobRolesDialogProps) {
   const utils = trpc.useUtils();
   const [branchId, setBranchId] = useState(defaultBranchId ?? '');
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, { enabled: open });
   /**
    * `null` means PRISTINE — the operator has not touched the checkboxes, so the
    * server's answer is the truth and a background refetch should show through.
@@ -136,18 +137,18 @@ export function StaffJobRolesDialog({
         <div className="space-y-4">
           <label className="space-y-1.5 block">
             <span className="text-sm font-medium text-text-strong">Branch</span>
-            <Input
+            <RestaurantBranchSelect
+              branches={branchesQuery.data ?? []}
+              loading={branchesQuery.isLoading}
+              error={Boolean(branchesQuery.error)}
               value={branchId}
-              onChange={(event) => {
-                setBranchId(event.target.value);
+              onChange={(value) => {
+                setBranchId(value);
                 // The draft was for the previous branch; discard it rather than
                 // carrying a stale selection across branches.
                 setDraft(null);
               }}
-              placeholder="Branch ID"
-              className="h-11 font-mono"
               disabled={pending}
-              aria-describedby="job-roles-branch-help"
             />
             <span id="job-roles-branch-help" className="block text-xs text-text-faint">
               Roles are held per branch. Saving changes this branch only.
@@ -156,7 +157,7 @@ export function StaffJobRolesDialog({
 
           {!branchChosen ? (
             <p className="rounded-md border border-dashed border-border-subtle px-3 py-6 text-center text-sm text-text-muted">
-              Enter a branch to view and edit roles.
+              Select a branch to view and edit roles.
             </p>
           ) : loading ? (
             <div className="space-y-2" aria-busy="true">
