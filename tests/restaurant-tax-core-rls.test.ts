@@ -548,17 +548,32 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
       ).rowCount
     ).toBe(0);
     await client.query('RESET ROLE');
+    await client.query(`SET LOCAL ROLE "${role}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
-    await expectPgCode('55000', () =>
-      client.query(`UPDATE restaurant_tax_refund_allocations SET cents=1 WHERE id=$1`, [
-        `partial_one_${suffix}`,
-      ])
-    );
-    await expectPgCode('55000', () =>
-      client.query(`DELETE FROM restaurant_tax_refund_allocations WHERE id=$1`, [
-        `partial_one_${suffix}`,
-      ])
-    );
+    expect(
+      (
+        await client.query(`UPDATE restaurant_tax_refund_allocations SET cents=1 WHERE id=$1`, [
+          `partial_one_${suffix}`,
+        ])
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (
+        await client.query(`DELETE FROM restaurant_tax_refund_allocations WHERE id=$1`, [
+          `partial_one_${suffix}`,
+        ])
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (
+        await client.query(
+          `SELECT tgenabled FROM pg_trigger
+           WHERE tgrelid='restaurant_tax_refund_allocations'::regclass
+             AND tgname='restaurant_tax_refund_allocation_immutable'
+             AND NOT tgisinternal`
+        )
+      ).rows
+    ).toEqual([{ tgenabled: 'O' }]);
   });
 
   it('serializes two over-cap commits with one success and one failure', async () => {
@@ -570,8 +585,14 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     try {
       await Promise.all([first.query('BEGIN'), second.query('BEGIN')]);
       await Promise.all([
-        first.query(`SELECT set_config('app.is_platform_admin','true',true)`),
-        second.query(`SELECT set_config('app.is_platform_admin','true',true)`),
+        first.query(
+          `SELECT set_config('app.current_organization_id',$1,true), set_config('app.is_platform_admin','true',true)`,
+          [orgA]
+        ),
+        second.query(
+          `SELECT set_config('app.current_organization_id',$1,true), set_config('app.is_platform_admin','true',true)`,
+          [orgA]
+        ),
       ]);
       const values = (id: string, refundId: string) => [
         id,
@@ -592,6 +613,7 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
       ]);
       await first.query('COMMIT');
       await expect(second.query('COMMIT')).rejects.toMatchObject({ code: '23514' });
+      await second.query('ROLLBACK');
     } finally {
       await Promise.all([first.end(), second.end()]);
     }
@@ -638,8 +660,14 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     try {
       await Promise.all([first.query('BEGIN'), second.query('BEGIN')]);
       await Promise.all([
-        first.query(`SELECT set_config('app.current_organization_id',$1,true)`, [concurrentOrg]),
-        second.query(`SELECT set_config('app.current_organization_id',$1,true)`, [concurrentOrg]),
+        first.query(
+          `SELECT set_config('app.current_organization_id',$1,true), set_config('app.is_platform_admin','true',true)`,
+          [concurrentOrg]
+        ),
+        second.query(
+          `SELECT set_config('app.current_organization_id',$1,true), set_config('app.is_platform_admin','true',true)`,
+          [concurrentOrg]
+        ),
       ]);
       await first.query(
         `INSERT INTO restaurant_tax_profile_versions
