@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
 import { toast } from 'sonner';
@@ -28,6 +28,7 @@ import {
   Webhook,
   ChevronDown,
   History,
+  Printer,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
@@ -130,6 +131,9 @@ export function SettingsContent() {
       {/* Outbound webhooks (admin only, IMP-REST-03) */}
       {isAdmin && <WebhooksSection />}
 
+      {/* Process-local print bridge simulator (WHA-228). */}
+      {isAdmin && <PrintRoutingSection />}
+
       {/* Account info */}
       <Card className="border-border/60">
         <CardHeader className="pb-3">
@@ -168,6 +172,223 @@ export function SettingsContent() {
       {/* Leave the company */}
       <ResignationSection />
     </div>
+  );
+}
+
+type PrintingBranch = {
+  id: string;
+  name: string;
+  kitchenStations: Array<{ id: string; name: string }>;
+  config: {
+    branchId: string;
+    routes: Array<{
+      documentType: 'KITCHEN_TICKET' | 'BAR_TICKET' | 'RECEIPT';
+      stationId: string | null;
+      printerId: string;
+      enabled: boolean;
+    }>;
+  };
+};
+
+export function PrintRoutingSection() {
+  const [branches, setBranches] = useState<PrintingBranch[] | null>(null);
+  const [branchId, setBranchId] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    try {
+      const response = await fetch('/api/restaurant/print-bridge');
+      const body = (await response.json()) as { branches?: PrintingBranch[]; error?: string };
+      if (!response.ok) throw new Error(body.error || 'Print routing could not be loaded.');
+      const next = body.branches ?? [];
+      setBranches(next);
+      setBranchId((current) => current || next[0]?.id || '');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Print routing could not be loaded.');
+      setBranches([]);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/restaurant/print-bridge')
+      .then(async (response) => {
+        const body = (await response.json()) as { branches?: PrintingBranch[]; error?: string };
+        if (!response.ok) throw new Error(body.error || 'Print routing could not be loaded.');
+        return body.branches ?? [];
+      })
+      .then((next) => {
+        if (!active) return;
+        setBranches(next);
+        setBranchId(next[0]?.id || '');
+      })
+      .catch((cause: unknown) => {
+        if (!active) return;
+        setError(cause instanceof Error ? cause.message : 'Print routing could not be loaded.');
+        setBranches([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const selected = branches?.find((branch) => branch.id === branchId);
+  const routeFor = (type: PrintingBranch['config']['routes'][number]['documentType']) =>
+    selected?.config.routes.find((route) => route.documentType === type) ?? {
+      documentType: type,
+      stationId: null,
+      printerId: '',
+      enabled: false,
+    };
+  const updateRoute = (
+    type: PrintingBranch['config']['routes'][number]['documentType'],
+    patch: Partial<PrintingBranch['config']['routes'][number]>
+  ) => {
+    setBranches(
+      (current) =>
+        current?.map((branch) => {
+          if (branch.id !== branchId) return branch;
+          const routes = branch.config.routes.filter((route) => route.documentType !== type);
+          return {
+            ...branch,
+            config: { ...branch.config, routes: [...routes, { ...routeFor(type), ...patch }] },
+          };
+        }) ?? null
+    );
+  };
+  const save = async () => {
+    if (!selected) return;
+    setSaving(true);
+    setError('');
+    try {
+      const response = await fetch('/api/restaurant/print-bridge', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...selected.config,
+          routes: selected.config.routes.filter((route) => route.printerId.trim()),
+        }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error || 'Print routing could not be saved.');
+      toast.success('Simulation routing saved for this process.');
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Print routing could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-[15px] font-semibold text-foreground">
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-warning/10">
+            <Printer className="h-3.5 w-3.5 text-warning" />
+          </span>
+          Print bridge simulation
+        </CardTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Configure vendor-neutral ESC/POS routes for testing. Settings are process-local and do not
+          connect to physical printers.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error && (
+          <p
+            role="alert"
+            className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {error}
+          </p>
+        )}
+        {branches === null ? (
+          <p aria-live="polite" className="text-sm text-muted-foreground">
+            Loading print routes…
+          </p>
+        ) : branches.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No active restaurant branches are available.
+          </p>
+        ) : (
+          <>
+            <label className="block text-xs font-medium text-foreground">
+              Branch
+              <select
+                value={branchId}
+                onChange={(event) => setBranchId(event.target.value)}
+                className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {(['KITCHEN_TICKET', 'BAR_TICKET', 'RECEIPT'] as const).map((type) => {
+              const route = routeFor(type);
+              const label =
+                type === 'KITCHEN_TICKET'
+                  ? 'Kitchen tickets'
+                  : type === 'BAR_TICKET'
+                    ? 'Bar tickets'
+                    : 'Receipts';
+              return (
+                <fieldset key={type} className="rounded-2xl border border-border/60 p-4">
+                  <legend className="px-1 text-sm font-semibold text-foreground">{label}</legend>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+                    <label className="text-xs font-medium text-foreground">
+                      Station
+                      <select
+                        aria-label={`${label} station`}
+                        value={route.stationId ?? ''}
+                        onChange={(event) =>
+                          updateRoute(type, { stationId: event.target.value || null })
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <option value="">Any station</option>
+                        {selected?.kitchenStations.map((station) => (
+                          <option key={station.id} value={station.id}>
+                            {station.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs font-medium text-foreground">
+                      Printer ID
+                      <Input
+                        aria-label={`${label} printer ID`}
+                        value={route.printerId}
+                        onChange={(event) => updateRoute(type, { printerId: event.target.value })}
+                        placeholder="sim-printer-1"
+                        className="mt-1 min-h-11"
+                      />
+                    </label>
+                    <label className="flex min-h-11 items-center gap-2 text-xs font-medium text-foreground">
+                      <Switch
+                        checked={route.enabled}
+                        onCheckedChange={(enabled) => updateRoute(type, { enabled })}
+                        aria-label={`Enable ${label.toLowerCase()}`}
+                      />{' '}
+                      Enabled
+                    </label>
+                  </div>
+                </fieldset>
+              );
+            })}
+            <div className="flex justify-end">
+              <Button onClick={() => void save()} disabled={saving || !selected}>
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save simulation routes
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
