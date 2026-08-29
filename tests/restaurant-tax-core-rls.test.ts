@@ -136,6 +136,66 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
         [orgA]
       )
     );
+    await expectPgCode('55000', () =>
+      client.query(
+        `UPDATE restaurant_tax_rule_versions SET "discountTreatment"='AFTER_TAX' WHERE "organizationId"=$1`,
+        [orgA]
+      )
+    );
+  });
+
+  it('pins closed tax treatment and legacy-compatible promotion evidence defaults', async () => {
+    await client.query('RESET ROLE');
+    const rule = await client.query(
+      `SELECT "discountTreatment" FROM restaurant_tax_rule_versions WHERE id=$1`,
+      [`rule_a_${suffix}`]
+    );
+    expect(rule.rows[0]).toEqual({ discountTreatment: 'BEFORE_TAX' });
+    await expectPgCode('22P02', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_rule_versions
+         (id,"organizationId","profileVersionId","officialSourceId","ruleCode","paymentCategory","priceMode","discountTreatment",rate,"effectiveFrom","updatedAt")
+         VALUES ($1,$2,$3,$4,'INVALID','X','EXCLUSIVE','DURING_TAX',0.1,'2030-01-01',now())`,
+        [`invalid_treatment_${suffix}`, orgA, `profile_a_${suffix}`, `source_a_${suffix}`]
+      )
+    );
+    const snapshot = await client.query(
+      `SELECT "promotionEvaluationId", "promotionEvaluationHash"
+       FROM restaurant_tax_transaction_snapshots WHERE id=$1`,
+      [`snapshot_a_${suffix}`]
+    );
+    expect(snapshot.rows[0]).toEqual({
+      promotionEvaluationId: null,
+      promotionEvaluationHash: null,
+    });
+    await expectPgCode('55000', () =>
+      client.query(
+        `UPDATE restaurant_tax_transaction_snapshots SET "promotionEvaluationHash"='changed' WHERE id=$1`,
+        [`snapshot_a_${suffix}`]
+      )
+    );
+    await client.query(
+      `INSERT INTO restaurant_tax_rate_bucket_snapshots
+       (id,"organizationId","snapshotId","ruleVersionId","paymentCategory","priceMode",rate,"taxableAmount","taxAmount","grossAmount")
+       VALUES ($1,$2,$3,$4,'SYNTHETIC_CARD','EXCLUSIVE',0.1,90,9,99)`,
+      [`legacy_bucket_${suffix}`, orgA, `snapshot_a_${suffix}`, `rule_a_${suffix}`]
+    );
+    const bucket = await client.query(
+      `SELECT "preDiscountGrossAmount", "beforeTaxDiscountAmount", "afterTaxDiscountAmount"
+       FROM restaurant_tax_rate_bucket_snapshots WHERE id=$1`,
+      [`legacy_bucket_${suffix}`]
+    );
+    expect(bucket.rows[0]).toEqual({
+      preDiscountGrossAmount: '0.00',
+      beforeTaxDiscountAmount: '0.00',
+      afterTaxDiscountAmount: '0.00',
+    });
+    await expectPgCode('55000', () =>
+      client.query(
+        `UPDATE restaurant_tax_rate_bucket_snapshots SET "beforeTaxDiscountAmount"=10 WHERE id=$1`,
+        [`legacy_bucket_${suffix}`]
+      )
+    );
   });
 
   it('has forced RLS on every tax table', async () => {
