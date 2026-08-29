@@ -76,6 +76,22 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
   });
 
+  it('rejects the listed Sindh preset until its official evidence is pinned again', async () => {
+    await expect(
+      caller().activate({
+        ...base,
+        profileId: 'PK-SD-RESTAURANT-LISTED',
+        eligibilityConfirmations: ['srbListedBranch'],
+      })
+    ).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message:
+        'Unavailable until current official SRB listed-branch evidence is pinned and reverified.',
+    });
+    expect(db.restaurantTaxOfficialSource.upsert).not.toHaveBeenCalled();
+    expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
+  });
+
   it('rejects a reduced profile unless every statutory control is confirmed', async () => {
     await expect(
       caller().activate({

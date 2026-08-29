@@ -43,19 +43,17 @@ export const PAKISTAN_TAX_PROFILE_CATALOG = [
     jurisdiction: 'Sindh',
     name: 'Sindh restaurant — SRB-approved listed branch',
     effectiveFrom: '2024-07-01',
-    enabled: true,
+    enabled: false,
+    disabledReason:
+      'Unavailable until current official SRB listed-branch evidence is pinned and reverified.',
     authorityCode: 'SRB',
     sourceTitle: 'SRB approved restaurant branch list',
     sourceUrl: 'https://www.srb.gos.pk/srb/restaurant-list/',
-    sourceContentHash: '122743bcebb31515db1b934bf0c282a96b22906ab61e880574e41319db902d6f',
+    sourceContentHash: null,
     eligibilityControls: [
       { id: 'srbListedBranch', label: 'This exact branch has current SRB approval/list evidence.' },
     ],
-    rules: [
-      { paymentCategory: 'CASH', rate: '0.15', ruleCode: 'SD_LISTED_CASH' },
-      { paymentCategory: 'CARD', rate: '0.15', ruleCode: 'SD_LISTED_DIGITAL' },
-      { paymentCategory: 'OTHER', rate: '0.15', ruleCode: 'SD_LISTED_OTHER' },
-    ],
+    rules: [],
   },
   {
     id: 'PK-KP-RESTAURANT-ORDINARY',

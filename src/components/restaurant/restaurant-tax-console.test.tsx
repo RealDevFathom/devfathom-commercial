@@ -32,12 +32,17 @@ import { RestaurantTaxConsole } from './restaurant-tax-console';
 describe('restaurant tax configuration UI', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('shows an unconfigured fail-closed state and disables Punjab', () => {
+  it('shows an unconfigured fail-closed state and disables unverified presets', () => {
     render(<RestaurantTaxConsole />);
     expect(screen.getByText('No tax profile configured.')).toBeInTheDocument();
     expect(screen.getByText(/checkout remains fail-closed/i)).toBeInTheDocument();
     const punjab = screen.getByRole('option', { name: /Punjab restaurant \(unavailable\)/i });
     expect(punjab).toBeDisabled();
+    expect(
+      screen.getByRole('option', {
+        name: /Sindh restaurant — SRB-approved listed branch \(unavailable\)/i,
+      })
+    ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Activate tax profile' })).toBeDisabled();
   });
 

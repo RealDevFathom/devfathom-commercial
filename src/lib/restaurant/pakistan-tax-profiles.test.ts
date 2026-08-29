@@ -18,9 +18,8 @@ describe('authoritative Pakistan restaurant tax profile catalog', () => {
     });
   });
 
-  it('represents the D02 Sindh, KP, and ICT rates without flattening entity classes', () => {
+  it('represents the verified Sindh, KP, and ICT rates without flattening entity classes', () => {
     expect(rates('PK-SD-RESTAURANT')).toEqual({ CASH: '0.15', CARD: '0.08', OTHER: '0.15' });
-    expect(rates('PK-SD-RESTAURANT-LISTED')).toEqual({ CASH: '0.15', CARD: '0.15', OTHER: '0.15' });
     expect(rates('PK-KP-RESTAURANT-ORDINARY')).toEqual({
       CASH: '0.10',
       CARD: '0.06',
@@ -45,6 +44,17 @@ describe('authoritative Pakistan restaurant tax profile catalog', () => {
         expect.objectContaining({ id: 'ictNoRefund' }),
       ])
     );
+  });
+
+  it('disables the listed Sindh preset until its official branch evidence is pinned again', () => {
+    expect(findPakistanTaxProfile('PK-SD-RESTAURANT-LISTED')).toMatchObject({
+      enabled: false,
+      disabledReason:
+        'Unavailable until current official SRB listed-branch evidence is pinned and reverified.',
+      sourceContentHash: null,
+      rules: [],
+    });
+    expect(JSON.stringify(PAKISTAN_TAX_PROFILE_CATALOG)).not.toContain('122743bc');
   });
 
   it('disables Balochistan until an official instrument is pinned', () => {
