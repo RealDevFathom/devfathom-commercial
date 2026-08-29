@@ -15,6 +15,7 @@ const publicPaths = [
   '/meet/',
   '/api/auth',
   '/brand',
+  '/wallet',
 ];
 
 export function proxy(request: Request) {
