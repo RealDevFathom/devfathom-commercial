@@ -131,7 +131,7 @@ export async function POST(request: Request) {
     await putUpload(organizationId, storedFilename, bytes, baseType);
 
     stage = 'attach';
-    await attachEvidence(ctx.db, {
+    const evidence = await attachEvidence(ctx.db, {
       occurrenceId,
       occurrenceStepId,
       contentHashHex: hash,
@@ -140,6 +140,10 @@ export async function POST(request: Request) {
       storageRef: `/api/files/${storedFilename}`,
       uploaderStaffProfileId,
     });
+    if (!evidence.created) {
+      await deleteUpload(organizationId, storedFilename);
+      storedFilename = null;
+    }
     return NextResponse.redirect(destination(request, form, 'Proof captured.', 'success'), 303);
   } catch (error) {
     if (storedFilename && organizationId) {

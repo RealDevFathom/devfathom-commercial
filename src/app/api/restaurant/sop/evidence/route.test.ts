@@ -70,7 +70,7 @@ beforeEach(() => {
   });
   mocks.deleteUpload.mockResolvedValue(undefined);
   mocks.putUpload.mockResolvedValue(undefined);
-  mocks.attachEvidence.mockResolvedValue({ evidenceId: 'evidence-1' });
+  mocks.attachEvidence.mockResolvedValue({ evidenceId: 'evidence-1', created: true });
 });
 
 afterEach(() => {
@@ -143,6 +143,33 @@ describe('POST SOP evidence', () => {
       Buffer.from('parsed proof'),
       'image/jpeg'
     );
+  });
+
+  it('returns success and removes only a redundant retry-owned blob', async () => {
+    mocks.attachEvidence.mockResolvedValueOnce({ evidenceId: 'evidence-1', created: false });
+
+    const response = await POST(request());
+
+    expect(response.headers.get('location')).toContain('Proof+captured');
+    const storedName = mocks.putUpload.mock.calls[0]![1];
+    expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+    expect(mocks.deleteUpload).toHaveBeenCalledWith('org-1', storedName);
+  });
+
+  it('cleans only the losing staged blob across two concurrent identical requests', async () => {
+    mocks.attachEvidence
+      .mockResolvedValueOnce({ evidenceId: 'evidence-1', created: true })
+      .mockResolvedValueOnce({ evidenceId: 'evidence-1', created: false });
+
+    const responses = await Promise.all([POST(request()), POST(request())]);
+
+    expect(
+      responses.every((response) => response.headers.get('location')?.includes('Proof+captured'))
+    ).toBe(true);
+    const storedNames = mocks.putUpload.mock.calls.map((call) => call[1]);
+    expect(new Set(storedNames).size).toBe(2);
+    expect(mocks.deleteUpload).toHaveBeenCalledTimes(1);
+    expect(storedNames).toContain(mocks.deleteUpload.mock.calls[0]![1]);
   });
 
   it.each([

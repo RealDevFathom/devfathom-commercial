@@ -5776,6 +5776,7 @@ model RestaurantSopEvidence {
   occurrenceStep RestaurantSopOccurrenceStep? @relation(fields: [occurrenceStepId], references: [id], onDelete: SetNull)
   uploader       RestaurantStaffProfile?      @relation(fields: [uploaderStaffProfileId], references: [id], onDelete: SetNull)
 
+  @@unique([organizationId, occurrenceId, occurrenceStepId, uploaderStaffProfileId, contentHash, mimeType], map: "restaurant_sop_evidence_retry_identity_key")
   @@index([organizationId])
   @@index([occurrenceId])
   @@index([occurrenceStepId])

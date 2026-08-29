@@ -3,9 +3,10 @@
  * Covers: SCHEDULED→IN_PROGRESS, step completion (idempotent), evidence with sha256,
  * IN_PROGRESS→SUBMITTED/LATE transition based on window, and state-guard errors.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Client } from 'pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -24,6 +25,7 @@ function model(): Delegate {
       createdAt: new Date(),
       ...data,
     })),
+    createMany: vi.fn().mockResolvedValue({ count: 1 }),
     update: vi
       .fn()
       .mockImplementation(
@@ -258,7 +260,7 @@ describe('attachEvidence', () => {
 
   it('computes sha256 from contentBytes and creates evidence', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
-    db.restaurantSopEvidence.create.mockResolvedValue({
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
       id: 'ev_1',
       contentHash: expectedHash,
       createdAt: NOW,
@@ -273,7 +275,8 @@ describe('attachEvidence', () => {
     });
 
     expect(result.contentHash).toBe(expectedHash);
-    expect(db.restaurantSopEvidence.create).toHaveBeenCalledWith(
+    expect(result.created).toBe(true);
+    expect(db.restaurantSopEvidence.createMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ contentHash: expectedHash }),
       })
@@ -282,7 +285,7 @@ describe('attachEvidence', () => {
 
   it('accepts a pre-computed contentHashHex', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
-    db.restaurantSopEvidence.create.mockResolvedValue({
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
       id: 'ev_1',
       contentHash: expectedHash,
       createdAt: NOW,
@@ -296,6 +299,33 @@ describe('attachEvidence', () => {
     });
 
     expect(result.contentHash).toBe(expectedHash);
+  });
+
+  it('returns the frozen winner when an identical nullable-attribution retry loses', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+    db.restaurantSopEvidence.createMany.mockResolvedValue({ count: 0 });
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
+      id: 'ev_original',
+      contentHash: expectedHash,
+      createdAt: NOW,
+    });
+
+    const result = await attachEvidence(db as unknown as ScopedDb, {
+      occurrenceId: OCC_ID,
+      occurrenceStepId: null,
+      uploaderStaffProfileId: null,
+      contentHashHex: expectedHash,
+      mimeType: 'image/jpeg; evidence=photo',
+      sizeBytes: 100,
+      storageRef: '/api/files/retry.jpg',
+    });
+
+    expect(result).toEqual({
+      evidenceId: 'ev_original',
+      contentHash: expectedHash,
+      createdAt: NOW,
+      created: false,
+    });
   });
 
   it('throws INVALID when neither contentBytes nor contentHashHex is provided', async () => {
@@ -330,6 +360,171 @@ describe('attachEvidence', () => {
         sizeBytes: 0,
       })
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  });
+});
+
+const TEST_DATABASE_URL = process.env.WHA434_TEST_RUNTIME_DATABASE_URL;
+const OWNER_DATABASE_URL = process.env.WHA434_TEST_OWNER_DATABASE_URL;
+if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
+process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+const describeIfDatabase = TEST_DATABASE_URL && OWNER_DATABASE_URL ? describe : describe.skip;
+const dbSuffix = randomBytes(6).toString('hex');
+const dbIds = {
+  organization: `org_wha434_${dbSuffix}`,
+  branch: `branch_wha434_${dbSuffix}`,
+  staff: `staff_wha434_${dbSuffix}`,
+  template: `template_wha434_${dbSuffix}`,
+  version: `version_wha434_${dbSuffix}`,
+  templateStep: `template_step_wha434_${dbSuffix}`,
+  assignment: `assignment_wha434_${dbSuffix}`,
+  occurrence: `occurrence_wha434_${dbSuffix}`,
+  occurrenceStep: `occurrence_step_wha434_${dbSuffix}`,
+};
+let tenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
+
+describeIfDatabase('attachEvidence PostgreSQL retry identity', () => {
+  beforeAll(async () => {
+    expect(OWNER_DATABASE_URL).not.toBe(TEST_DATABASE_URL);
+    const owner = new Client({ connectionString: OWNER_DATABASE_URL });
+    await owner.connect();
+    try {
+      await owner.query(
+        `INSERT INTO "organizations"
+          ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
+         VALUES ($1, $2, 'WHA-434 Test Co', 'WHA-434 Test', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [dbIds.organization, `wha434-${dbSuffix}`]
+      );
+    } finally {
+      await owner.end();
+    }
+
+    ({ createTenantDb: tenantDb } = await import('@/lib/tenancy/scoped-db'));
+    const scoped = tenantDb(dbIds.organization);
+    await scoped.$transaction(async (tx) => {
+      await tx.restaurantBranch.create({
+        data: { id: dbIds.branch, name: 'Retry Lab', timezone: 'UTC', businessDayCutoff: '00:00' },
+      });
+      await tx.restaurantStaffProfile.create({
+        data: { id: dbIds.staff, displayName: 'Retry Operator', primaryBranchId: dbIds.branch },
+      });
+      await tx.restaurantSopTemplate.create({
+        data: { id: dbIds.template, name: 'Retry SOP' },
+      });
+      await tx.restaurantSopTemplateVersion.create({
+        data: {
+          id: dbIds.version,
+          templateId: dbIds.template,
+          versionNumber: 1,
+          status: 'PUBLISHED',
+        },
+      });
+      await tx.restaurantSopTemplateStep.create({
+        data: {
+          id: dbIds.templateStep,
+          templateVersionId: dbIds.version,
+          stepOrder: 1,
+          title: 'Capture proof',
+        },
+      });
+      await tx.restaurantSopAssignment.create({
+        data: {
+          id: dbIds.assignment,
+          branchId: dbIds.branch,
+          templateId: dbIds.template,
+          daysOfWeek: [],
+          startDate: new Date('2026-08-29T00:00:00.000Z'),
+          assigneeTargetType: 'PERSON',
+          assigneeStaffProfileId: dbIds.staff,
+        },
+      });
+      await tx.restaurantSopOccurrence.create({
+        data: {
+          id: dbIds.occurrence,
+          assignmentId: dbIds.assignment,
+          templateVersionId: dbIds.version,
+          branchId: dbIds.branch,
+          businessDate: new Date('2026-08-29T00:00:00.000Z'),
+          status: 'IN_PROGRESS',
+          dueAt: new Date('2026-08-29T12:00:00.000Z'),
+          windowEndsAt: new Date('2026-08-30T12:00:00.000Z'),
+          assignedStaffProfileId: dbIds.staff,
+        },
+      });
+      await tx.restaurantSopOccurrenceStep.create({
+        data: {
+          id: dbIds.occurrenceStep,
+          occurrenceId: dbIds.occurrence,
+          templateStepId: dbIds.templateStep,
+        },
+      });
+    });
+  });
+
+  afterAll(async () => {
+    if (!OWNER_DATABASE_URL) return;
+    const owner = new Client({ connectionString: OWNER_DATABASE_URL });
+    await owner.connect();
+    try {
+      await owner.query(`DELETE FROM "organizations" WHERE "id" = $1`, [dbIds.organization]);
+    } finally {
+      await owner.end();
+    }
+  });
+
+  it('runs as LOGIN=true SUPERUSER=false BYPASSRLS=false', async () => {
+    const rows = await tenantDb(dbIds.organization).$queryRawUnsafe<
+      { rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }[]
+    >(`SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`);
+    expect(rows[0]).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+  });
+
+  it('collapses sequential and concurrent retries while preserving distinct facts', async () => {
+    const input = {
+      occurrenceId: dbIds.occurrence,
+      occurrenceStepId: dbIds.occurrenceStep,
+      contentHashHex: createHash('sha256').update('same proof').digest('hex'),
+      mimeType: 'image/jpeg; evidence=photo',
+      sizeBytes: 10,
+      uploaderStaffProfileId: dbIds.staff,
+    };
+    const first = await attachEvidence(tenantDb(dbIds.organization), {
+      ...input,
+      storageRef: '/api/files/original.jpg',
+    });
+    const sequential = await attachEvidence(tenantDb(dbIds.organization), {
+      ...input,
+      storageRef: '/api/files/sequential-retry.jpg',
+    });
+    const concurrent = await Promise.all([
+      attachEvidence(tenantDb(dbIds.organization), {
+        ...input,
+        contentHashHex: createHash('sha256').update('concurrent proof').digest('hex'),
+        storageRef: '/api/files/concurrent-a.jpg',
+      }),
+      attachEvidence(tenantDb(dbIds.organization), {
+        ...input,
+        contentHashHex: createHash('sha256').update('concurrent proof').digest('hex'),
+        storageRef: '/api/files/concurrent-b.jpg',
+      }),
+    ]);
+    const distinctPurpose = await attachEvidence(tenantDb(dbIds.organization), {
+      ...input,
+      mimeType: 'image/jpeg; evidence=signature',
+      storageRef: '/api/files/signature.jpg',
+    });
+
+    expect(first.created).toBe(true);
+    expect(sequential).toMatchObject({ evidenceId: first.evidenceId, created: false });
+    expect(concurrent.filter((row) => row.created)).toHaveLength(1);
+    expect(new Set(concurrent.map((row) => row.evidenceId)).size).toBe(1);
+    expect(distinctPurpose.created).toBe(true);
+    const rows = await tenantDb(dbIds.organization).restaurantSopEvidence.findMany({
+      where: { occurrenceId: dbIds.occurrence },
+      select: { storageRef: true },
+    });
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.storageRef)).toContain('/api/files/original.jpg');
+    expect(rows.map((row) => row.storageRef)).not.toContain('/api/files/sequential-retry.jpg');
   });
 });
 
