@@ -32,5 +32,5 @@ Tax calculation contracts and effective interval input validation are in `src/li
 
 ## Gaps
 
-- A maintained Pakistan profile (federal/provincial sources, restaurant/service rules, payment-method distinctions, effective dates, approval references, and PKR presentation): **NOT IMPLEMENTED**. `PKR` exists in the currency enum in `prisma/schema.prisma`, but no seeded Pakistan tax profile was found.
+- A maintained Pakistan profile (federal/provincial sources, restaurant/service rules, payment-method distinctions, effective dates, approval references, and PKR presentation): **NOT IMPLEMENTED**. `PKR` exists in the currency enum in `prisma/schema.prisma`, but no seeded Pakistan tax profile was found. See the [Pakistan restaurant tax source pack](pakistan-restaurant-tax-source-pack.md) for official-source research, unresolved questions, and the unapproved implementation mapping.
 - Tax filing, invoice/fiscal-device certification, authority e-invoicing, and automated legal-rate updates: **NOT IMPLEMENTED**.
