@@ -41,8 +41,9 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_tax_official_sources, restaurant_tax_profile_versions,
        restaurant_tax_rule_versions, restaurant_tax_transaction_snapshots, restaurant_tax_rate_bucket_snapshots,
-       restaurant_tax_tender_allocation_snapshots TO "${role}"`
+       restaurant_tax_tender_allocation_snapshots, restaurant_tax_refund_allocations TO "${role}"`
     );
+    await client.query(`GRANT SELECT, UPDATE, DELETE ON restaurant_refunds TO "${role}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client.query(
       `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "deploymentMode", "createdAt", "updatedAt")
@@ -98,6 +99,136 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
           `original-${tenant.key}`,
           `profile_${tenant.key}_${suffix}`,
         ]
+      );
+    }
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [orgA]);
+    await client.query(
+      `INSERT INTO restaurant_staff_profiles (id,"organizationId","displayName","updatedAt")
+       VALUES ($1,$3,'Actor',now()),($2,$3,'Manager',now())`,
+      [`actor_${suffix}`, `manager_${suffix}`, orgA]
+    );
+    await client.query(
+      `INSERT INTO restaurant_registered_devices (id,"organizationId","branchId",name,"deviceSecretHash","updatedAt")
+       VALUES ($1,$2,$3,'Tax fixture',$4,now())`,
+      [`device_${suffix}`, orgA, `branch_a_${suffix}`, `device_hash_${suffix}`]
+    );
+    await client.query(
+      `INSERT INTO restaurant_co_authorizations
+       (id,"organizationId","actingStaffProfileId","approvingStaffProfileId",capability,reason,"deviceId")
+       VALUES ($1,$2,$3,$4,'REFUND','fixture',$5)`,
+      [`coauth_${suffix}`, orgA, `actor_${suffix}`, `manager_${suffix}`, `device_${suffix}`]
+    );
+    await client.query(
+      `INSERT INTO restaurant_orders
+       (id,"organizationId","branchId","orderNumber","businessDate",channel,"staffProfileId","deviceId","updatedAt")
+       VALUES ($1,$2,$3,9001,current_date,'DINE_IN',$4,$5,now()),
+              ($6,$2,$3,9002,current_date,'DINE_IN',$4,$5,now())`,
+      [
+        `order_partial_${suffix}`,
+        orgA,
+        `branch_a_${suffix}`,
+        `actor_${suffix}`,
+        `device_${suffix}`,
+        `order_full_${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO restaurant_bills
+       (id,"organizationId","orderId","branchId","businessDate",subtotal,"taxTotal","grandTotal","openerStaffProfileId","deviceId","updatedAt")
+       VALUES ($1,$3,$4,$5,current_date,100,10,110,$6,$7,now()),
+              ($2,$3,$8,$5,current_date,50,5,55,$6,$7,now())`,
+      [
+        `bill_partial_${suffix}`,
+        `bill_full_${suffix}`,
+        orgA,
+        `order_partial_${suffix}`,
+        `branch_a_${suffix}`,
+        `actor_${suffix}`,
+        `device_${suffix}`,
+        `order_full_${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO restaurant_tenders
+       (id,"organizationId","billId",type,amount,"businessDate","staffProfileId","deviceId")
+       VALUES ($1,$4,$5,'CARD',60,current_date,$6,$7),
+              ($2,$4,$5,'CARD',50,current_date,$6,$7),
+              ($3,$4,$8,'CARD',55,current_date,$6,$7)`,
+      [
+        `tender_one_${suffix}`,
+        `tender_two_${suffix}`,
+        `tender_full_${suffix}`,
+        orgA,
+        `bill_partial_${suffix}`,
+        `actor_${suffix}`,
+        `device_${suffix}`,
+        `bill_full_${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO restaurant_tax_transaction_snapshots
+       (id,"organizationId","branchId","billId","transactionReference","profileVersionId",currency,subtotal,"taxTotal","grandTotal","settledAt")
+       VALUES ($1,$3,$4,$5,$1,$6,'XXX',100,10,110,now()),
+              ($2,$3,$4,$7,$2,$6,'XXX',50,5,55,now())`,
+      [
+        `allocation_snapshot_${suffix}`,
+        `full_snapshot_${suffix}`,
+        orgA,
+        `branch_a_${suffix}`,
+        `bill_partial_${suffix}`,
+        `profile_a_${suffix}`,
+        `bill_full_${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO restaurant_tax_rate_bucket_snapshots
+       (id,"organizationId","snapshotId","ruleVersionId","paymentCategory","priceMode",rate,"taxableAmount","taxAmount","grossAmount")
+       VALUES ($1,$3,$4,$6,'CARD','EXCLUSIVE',0.1,100,10,110),
+              ($2,$3,$5,$6,'CARD','EXCLUSIVE',0.1,50,5,55)`,
+      [
+        `allocation_bucket_${suffix}`,
+        `full_bucket_${suffix}`,
+        orgA,
+        `allocation_snapshot_${suffix}`,
+        `full_snapshot_${suffix}`,
+        `rule_a_${suffix}`,
+      ]
+    );
+    await client.query(
+      `INSERT INTO restaurant_tax_tender_allocation_snapshots
+       (id,"organizationId","snapshotId","billId","rateBucketSnapshotId","originalTenderId","paymentCategory",cents)
+       VALUES ($1,$4,$5,$6,$7,$8,'CARD',60),
+              ($2,$4,$5,$6,$7,$9,'CARD',50),
+              ($3,$4,$10,$11,$12,$13,'CARD',55)`,
+      [
+        `original_one_${suffix}`,
+        `original_two_${suffix}`,
+        `original_full_${suffix}`,
+        orgA,
+        `allocation_snapshot_${suffix}`,
+        `bill_partial_${suffix}`,
+        `allocation_bucket_${suffix}`,
+        `tender_one_${suffix}`,
+        `tender_two_${suffix}`,
+        `full_snapshot_${suffix}`,
+        `bill_full_${suffix}`,
+        `full_bucket_${suffix}`,
+        `tender_full_${suffix}`,
+      ]
+    );
+    for (const [id, tenderId, billId] of [
+      [`refund_one_${suffix}`, `tender_one_${suffix}`, `bill_partial_${suffix}`],
+      [`refund_two_${suffix}`, `tender_one_${suffix}`, `bill_partial_${suffix}`],
+      [`refund_over_${suffix}`, `tender_one_${suffix}`, `bill_partial_${suffix}`],
+      [`refund_race_a_${suffix}`, `tender_two_${suffix}`, `bill_partial_${suffix}`],
+      [`refund_race_b_${suffix}`, `tender_two_${suffix}`, `bill_partial_${suffix}`],
+      [`refund_full_${suffix}`, `tender_full_${suffix}`, `bill_full_${suffix}`],
+    ]) {
+      await client.query(
+        `INSERT INTO restaurant_refunds
+         (id,"organizationId","originalTenderId","billId",amount,kind,"businessDate",reason,"coAuthorizationId","staffProfileId","deviceId")
+         VALUES ($1,$2,$3,$4,1,'REFUND',current_date,'fixture',$5,$6,$7)`,
+        [id, orgA, tenderId, billId, `coauth_${suffix}`, `actor_${suffix}`, `device_${suffix}`]
       );
     }
   });
@@ -204,7 +335,7 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     const result = await client.query(
       `SELECT count(*)::int AS count FROM pg_class WHERE relkind='r' AND relname LIKE 'restaurant_tax_%' AND relrowsecurity AND relforcerowsecurity`
     );
-    expect(result.rows[0].count).toBe(6);
+    expect(result.rows[0].count).toBe(7);
     expect(
       (
         await client.query(
@@ -213,6 +344,34 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
         )
       ).rows
     ).toEqual([]);
+  });
+
+  it('pins the normalized refund-allocation constraints and append-only policies', async () => {
+    await client.query('RESET ROLE');
+    const constraints = await client.query<{ conname: string }>(
+      `SELECT conname FROM pg_constraint
+       WHERE conrelid='restaurant_tax_refund_allocations'::regclass ORDER BY conname`
+    );
+    expect(constraints.rows.map(({ conname }) => conname)).toEqual(
+      expect.arrayContaining([
+        'restaurant_tax_refund_allocation_positive_cents_ck',
+        'restaurant_tax_refund_allocation_refund_fkey',
+        'restaurant_tax_refund_allocation_original_fkey',
+        'restaurant_tax_refund_allocation_cap',
+      ])
+    );
+    const policies = await client.query<{ cmd: string }>(
+      `SELECT cmd FROM pg_policies WHERE tablename='restaurant_tax_refund_allocations' ORDER BY cmd`
+    );
+    expect(policies.rows.map(({ cmd }) => cmd)).toEqual(['INSERT', 'SELECT']);
+    await expectPgCode('23514', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_refund_allocations
+         (id,"organizationId","billId","refundId","originalTenderId","paymentCategory","originalSnapshotId","originalRateBucketSnapshotId","originalTenderAllocationId",cents)
+         VALUES ($1,$2,'missing','missing','missing','CARD','missing','missing','missing',0)`,
+        [`nonpositive_refund_allocation_${suffix}`, orgA]
+      )
+    );
   });
 
   it('rejects cross-tenant tender-allocation evidence under the restricted role', async () => {
@@ -263,6 +422,181 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
       )
     );
   });
+
+  it('binds same-category tenders, supports partial sums, rejects wrong facts and replay', async () => {
+    await client.query('RESET ROLE');
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    const insertAllocation = (id: string, refundId: string, cents: number, overrides = '') =>
+      client.query(
+        `INSERT INTO restaurant_tax_refund_allocations
+         (id,"organizationId","billId","refundId","originalTenderId","paymentCategory","originalSnapshotId","originalRateBucketSnapshotId","originalTenderAllocationId",cents)
+         VALUES ($1,$2,$3,$4,$5,'CARD',$6,$7,$8,$9) ${overrides}`,
+        [
+          id,
+          orgA,
+          `bill_partial_${suffix}`,
+          refundId,
+          `tender_one_${suffix}`,
+          `allocation_snapshot_${suffix}`,
+          `allocation_bucket_${suffix}`,
+          `original_one_${suffix}`,
+          cents,
+        ]
+      );
+    await insertAllocation(`partial_one_${suffix}`, `refund_one_${suffix}`, 20);
+    await insertAllocation(`partial_two_${suffix}`, `refund_two_${suffix}`, 40);
+    await client.query('SET CONSTRAINTS ALL IMMEDIATE');
+    expect(
+      (
+        await client.query(
+          `SELECT sum(cents)::text AS total FROM restaurant_tax_refund_allocations
+           WHERE "originalTenderAllocationId"=$1`,
+          [`original_one_${suffix}`]
+        )
+      ).rows[0]
+    ).toEqual({ total: '60' });
+    await expectPgCode('23505', () =>
+      insertAllocation(`replay_${suffix}`, `refund_one_${suffix}`, 1)
+    );
+    await expectPgCode('23503', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_refund_allocations
+         (id,"organizationId","billId","refundId","originalTenderId","paymentCategory","originalSnapshotId","originalRateBucketSnapshotId","originalTenderAllocationId",cents)
+         VALUES ($1,$2,$3,$4,$5,'CARD',$6,$7,$8,1)`,
+        [
+          `wrong_tender_${suffix}`,
+          orgA,
+          `bill_partial_${suffix}`,
+          `refund_race_a_${suffix}`,
+          `tender_two_${suffix}`,
+          `allocation_snapshot_${suffix}`,
+          `allocation_bucket_${suffix}`,
+          `original_one_${suffix}`,
+        ]
+      )
+    );
+    await expectPgCode('23514', () =>
+      insertAllocation(`over_cap_${suffix}`, `refund_over_${suffix}`, 1)
+    );
+  });
+
+  it('links one exact full reversal once and leaves cumulative partial completion unlinked', async () => {
+    await client.query('RESET ROLE');
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    await client.query(
+      `INSERT INTO restaurant_tax_refund_allocations
+       (id,"organizationId","billId","refundId","originalTenderId","paymentCategory","originalSnapshotId","originalRateBucketSnapshotId","originalTenderAllocationId",cents)
+       VALUES ($1,$2,$3,$4,$5,'CARD',$6,$7,$8,55)`,
+      [
+        `full_allocation_${suffix}`,
+        orgA,
+        `bill_full_${suffix}`,
+        `refund_full_${suffix}`,
+        `tender_full_${suffix}`,
+        `full_snapshot_${suffix}`,
+        `full_bucket_${suffix}`,
+        `original_full_${suffix}`,
+      ]
+    );
+    await client.query('SET CONSTRAINTS ALL IMMEDIATE');
+    await client.query(
+      `INSERT INTO restaurant_tax_transaction_snapshots
+       (id,"organizationId","branchId","billId","transactionReference","profileVersionId",currency,subtotal,"taxTotal","grandTotal","settledAt","reversesSnapshotId","reversalReason")
+       VALUES ($1,$2,$3,$4,$1,$5,'XXX',-50,-5,-55,now(),$6,'full refund')`,
+      [
+        `full_reversal_${suffix}`,
+        orgA,
+        `branch_a_${suffix}`,
+        `bill_full_${suffix}`,
+        `profile_a_${suffix}`,
+        `full_snapshot_${suffix}`,
+      ]
+    );
+    await client.query(`UPDATE restaurant_refunds SET "fullReversalSnapshotId"=$1 WHERE id=$2`, [
+      `full_reversal_${suffix}`,
+      `refund_full_${suffix}`,
+    ]);
+    await expectPgCode('55000', () =>
+      client.query(`UPDATE restaurant_refunds SET "fullReversalSnapshotId"=NULL WHERE id=$1`, [
+        `refund_full_${suffix}`,
+      ])
+    );
+    expect(
+      (
+        await client.query(`SELECT "fullReversalSnapshotId" FROM restaurant_refunds WHERE id=$1`, [
+          `refund_two_${suffix}`,
+        ])
+      ).rows[0]
+    ).toEqual({ fullReversalSnapshotId: null });
+  });
+
+  it('denies refund-allocation mutation to runtime and platform paths', async () => {
+    await client.query(`SET LOCAL ROLE "${role}"`);
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [orgA]);
+    expect(
+      (
+        await client.query(`UPDATE restaurant_tax_refund_allocations SET cents=1 WHERE id=$1`, [
+          `partial_one_${suffix}`,
+        ])
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (
+        await client.query(`DELETE FROM restaurant_tax_refund_allocations WHERE id=$1`, [
+          `partial_one_${suffix}`,
+        ])
+      ).rowCount
+    ).toBe(0);
+    await client.query('RESET ROLE');
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    await expectPgCode('55000', () =>
+      client.query(`UPDATE restaurant_tax_refund_allocations SET cents=1 WHERE id=$1`, [
+        `partial_one_${suffix}`,
+      ])
+    );
+    await expectPgCode('55000', () =>
+      client.query(`DELETE FROM restaurant_tax_refund_allocations WHERE id=$1`, [
+        `partial_one_${suffix}`,
+      ])
+    );
+  });
+
+  it('serializes two over-cap commits with one success and one failure', async () => {
+    await client.query('RESET ROLE');
+    await client.query('COMMIT');
+    const first = new pg.Client({ connectionString: url });
+    const second = new pg.Client({ connectionString: url });
+    await Promise.all([first.connect(), second.connect()]);
+    try {
+      await Promise.all([first.query('BEGIN'), second.query('BEGIN')]);
+      await Promise.all([
+        first.query(`SELECT set_config('app.is_platform_admin','true',true)`),
+        second.query(`SELECT set_config('app.is_platform_admin','true',true)`),
+      ]);
+      const values = (id: string, refundId: string) => [
+        id,
+        orgA,
+        `bill_partial_${suffix}`,
+        refundId,
+        `tender_two_${suffix}`,
+        `allocation_snapshot_${suffix}`,
+        `allocation_bucket_${suffix}`,
+        `original_two_${suffix}`,
+      ];
+      const sql = `INSERT INTO restaurant_tax_refund_allocations
+        (id,"organizationId","billId","refundId","originalTenderId","paymentCategory","originalSnapshotId","originalRateBucketSnapshotId","originalTenderAllocationId",cents)
+        VALUES ($1,$2,$3,$4,$5,'CARD',$6,$7,$8,30)`;
+      await Promise.all([
+        first.query(sql, values(`race_a_${suffix}`, `refund_race_a_${suffix}`)),
+        second.query(sql, values(`race_b_${suffix}`, `refund_race_b_${suffix}`)),
+      ]);
+      await first.query('COMMIT');
+      await expect(second.query('COMMIT')).rejects.toMatchObject({ code: '23514' });
+    } finally {
+      await Promise.all([first.end(), second.end()]);
+    }
+    await client.query('BEGIN');
+  }, 15_000);
 
   it('accepts one exact full reversal and rejects positive, over-value, duplicate, and cross-tenant reversals', async () => {
     await client.query(`SET LOCAL ROLE "${role}"`);
