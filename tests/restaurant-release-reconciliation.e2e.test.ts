@@ -70,9 +70,9 @@ beforeAll(async () => {
   await scope(writer, '', true);
   await writer.query(
     `INSERT INTO "organizations"
-      ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
-     VALUES ($1, $2, 'WHA-435 A', 'WHA-435 A', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-            ($3, $4, 'WHA-435 B', 'WHA-435 B', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "vertical", "createdAt", "updatedAt")
+     VALUES ($1, $2, 'WHA-435 A', 'WHA-435 A', 'ACTIVE', 'SHARED', 'RESTAURANT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+            ($3, $4, 'WHA-435 B', 'WHA-435 B', 'ACTIVE', 'SHARED', 'AGENCY', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     [ids.orgA, `wha435-a-${suffix}`, ids.orgB, `wha435-b-${suffix}`]
   );
   await writer.query(
@@ -295,6 +295,85 @@ describe('WHA-435 append-only restaurant order events', () => {
       insight: `insight_${suffix}`,
     };
 
+    async function snapshotFlow() {
+      await observer.query('BEGIN');
+      await scope(observer, ids.orgA);
+      try {
+        const result = await observer.query(
+          `SELECT
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', l.id, 'billId', l."billId", 'orderItemId', l."orderItemId", 'quantity', l.quantity,
+                'unitPrice', l."unitPrice", 'lineSubtotal', l."lineSubtotal", 'taxAmount', l."taxAmount",
+                'lineTotal', l."lineTotal") ORDER BY l.id), '[]'::jsonb)) FROM restaurant_bill_lines l
+                WHERE l.id = $2) AS "billLines",
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', t.id, 'billId', t."billId", 'type', t.type, 'amount', t.amount,
+                'cashReceived', t."cashReceived", 'changeGiven', t."changeGiven",
+                'drawerSessionId', t."drawerSessionId", 'staffProfileId', t."staffProfileId",
+                'deviceId', t."deviceId") ORDER BY t.id), '[]'::jsonb)) FROM restaurant_tenders t
+                WHERE t.id = $3) AS tenders,
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', s.id, 'ingredientId', s."ingredientId", 'canonicalUnitId', s."canonicalUnitId")
+                ORDER BY s.id), '[]'::jsonb)) FROM restaurant_stock_items s WHERE s.id = $4) AS "stockItems",
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', m.id, 'stockItemId', m."stockItemId", 'locationId', m."locationId", 'reason', m.reason,
+                'quantity', m.quantity, 'orderId', m."orderId", 'staffProfileId', m."staffProfileId",
+                'deviceId', m."deviceId") ORDER BY m.id), '[]'::jsonb)) FROM restaurant_stock_movements m
+                WHERE m.id = $5) AS "stockMovements",
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', l.id, 'accountId', l."accountId", 'programVersionId', l."programVersionId",
+                'kind', l.kind, 'points', l.points, 'billId', l."billId", 'idempotencyKey', l."idempotencyKey")
+                ORDER BY l.id), '[]'::jsonb)) FROM restaurant_loyalty_points_entries l WHERE l.id = $6) AS loyalty,
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', i.id, 'branchId', i."branchId", 'sourceDailyCloseId', i."sourceDailyCloseId",
+                'orderCount', i."orderCount", 'grossSales', i."grossSales", 'netSales', i."netSales",
+                'loyaltyLiability', i."loyaltyLiability") ORDER BY i.id), '[]'::jsonb))
+                FROM restaurant_insight_daily_rollups i WHERE i.id = $7) AS insights,
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', d.id, 'drawerSessionId', d."drawerSessionId", 'kind', d.kind, 'amount', d.amount,
+                'tenderId', d."tenderId", 'staffProfileId', d."staffProfileId", 'deviceId', d."deviceId")
+                ORDER BY d.id), '[]'::jsonb)) FROM restaurant_drawer_movements d WHERE d.id = $8) AS drawer,
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', c.id, 'branchId', c."branchId", 'grossSales', c."grossSales", 'netSales', c."netSales",
+                'taxTotal', c."taxTotal", 'discountTotal', c."discountTotal", 'cashExpected', c."cashExpected",
+                'cashCounted', c."cashCounted", 'cutByStaffProfileId', c."cutByStaffProfileId",
+                'deviceId', c."deviceId") ORDER BY c.id), '[]'::jsonb)) FROM restaurant_daily_closes c
+                WHERE c.id = $9) AS "dailyCloses",
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', c.id, 'dailyCloseId', c."dailyCloseId", 'tenderType', c."tenderType",
+                'amount', c.amount, 'count', c.count) ORDER BY c.id), '[]'::jsonb))
+                FROM restaurant_daily_close_tender_totals c WHERE c.id = $10) AS "closeTenders",
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', e.id, 'sequence', e.sequence, 'eventType', e."eventType",
+                'actorStaffProfileId', e."actorStaffProfileId", 'actorDeviceId', e."actorDeviceId",
+                'branchId', e.payload->>'branchId') ORDER BY e.sequence), '[]'::jsonb))
+                FROM restaurant_order_events e WHERE e."orderId" = $1) AS events,
+             (SELECT jsonb_build_object('count', count(*)::int, 'rows', coalesce(jsonb_agg(jsonb_build_object(
+                'id', x.id, 'eventType', x."eventType", 'aggregateType', x."aggregateType",
+                'aggregateId', x."aggregateId", 'sequence', (x.payload->>'sequence')::int)
+                ORDER BY (x.payload->>'sequence')::int), '[]'::jsonb)) FROM restaurant_event_outbox x
+                WHERE x."aggregateId" = $1) AS outbox`,
+          [
+            ids.flowOrder,
+            flow.billLine,
+            flow.tender,
+            flow.stockItem,
+            flow.stockMovement,
+            flow.loyalty,
+            flow.insight,
+            flow.drawerMovement,
+            flow.close,
+            flow.closeTender,
+          ]
+        );
+        await observer.query('COMMIT');
+        return result.rows[0];
+      } catch (error) {
+        await observer.query('ROLLBACK');
+        throw error;
+      }
+    }
+
     async function runFlow(commandType: string) {
       await writer.query('BEGIN');
       await scope(writer, ids.orgA);
@@ -504,9 +583,17 @@ describe('WHA-435 append-only restaurant order events', () => {
       }
     }
 
+    const before = await snapshotFlow();
+    expect(Object.values(before).every((ledger) => (ledger as { count: number }).count === 0)).toBe(
+      true
+    );
+
     await expect(runFlow('release.reconcile')).resolves.toEqual({ replayed: false });
+    const inserted = await snapshotFlow();
     await expect(runFlow('release.reconcile')).resolves.toEqual({ replayed: true });
+    expect(await snapshotFlow()).toEqual(inserted);
     await expect(runFlow('release.conflict')).rejects.toThrow('IDEMPOTENCY_KEY_CONFLICT');
+    expect(await snapshotFlow()).toEqual(inserted);
 
     await writer.query('BEGIN');
     await scope(writer, ids.orgA);
@@ -523,6 +610,157 @@ describe('WHA-435 append-only restaurant order events', () => {
       [`forced_flow_outbox_rollback_${suffix}`, ids.orgA, ids.flowOrder]
     );
     await writer.query('ROLLBACK');
+
+    expect(await snapshotFlow()).toEqual(inserted);
+
+    expect(inserted).toEqual({
+      billLines: {
+        count: 1,
+        rows: [
+          {
+            id: flow.billLine,
+            billId: flow.bill,
+            orderItemId: flow.item,
+            quantity: 1,
+            unitPrice: 10,
+            lineSubtotal: 10,
+            taxAmount: 0.9,
+            lineTotal: 10.9,
+          },
+        ],
+      },
+      tenders: {
+        count: 1,
+        rows: [
+          {
+            id: flow.tender,
+            billId: flow.bill,
+            type: 'CASH',
+            amount: 9.9,
+            cashReceived: 10,
+            changeGiven: 0.1,
+            drawerSessionId: flow.drawer,
+            staffProfileId: ids.staffA,
+            deviceId: ids.deviceA,
+          },
+        ],
+      },
+      stockItems: {
+        count: 1,
+        rows: [{ id: flow.stockItem, ingredientId: flow.ingredient, canonicalUnitId: flow.unit }],
+      },
+      stockMovements: {
+        count: 1,
+        rows: [
+          {
+            id: flow.stockMovement,
+            stockItemId: flow.stockItem,
+            locationId: flow.location,
+            reason: 'RECIPE_CONSUMPTION',
+            quantity: -1,
+            orderId: ids.flowOrder,
+            staffProfileId: ids.staffA,
+            deviceId: ids.deviceA,
+          },
+        ],
+      },
+      loyalty: {
+        count: 1,
+        rows: [
+          {
+            id: flow.loyalty,
+            accountId: flow.account,
+            programVersionId: flow.program,
+            kind: 'EARN',
+            points: 9,
+            billId: flow.bill,
+            idempotencyKey: `earn_${suffix}`,
+          },
+        ],
+      },
+      insights: {
+        count: 1,
+        rows: [
+          {
+            id: flow.insight,
+            branchId: ids.branchA,
+            sourceDailyCloseId: flow.close,
+            orderCount: 1,
+            grossSales: 10,
+            netSales: 9,
+            loyaltyLiability: 0.09,
+          },
+        ],
+      },
+      drawer: {
+        count: 1,
+        rows: [
+          {
+            id: flow.drawerMovement,
+            drawerSessionId: flow.drawer,
+            kind: 'CASH_SALE',
+            amount: 9.9,
+            tenderId: flow.tender,
+            staffProfileId: ids.staffA,
+            deviceId: ids.deviceA,
+          },
+        ],
+      },
+      dailyCloses: {
+        count: 1,
+        rows: [
+          {
+            id: flow.close,
+            branchId: ids.branchA,
+            grossSales: 10,
+            netSales: 9,
+            taxTotal: 0.9,
+            discountTotal: 1,
+            cashExpected: 29.9,
+            cashCounted: 29.9,
+            cutByStaffProfileId: ids.staffA,
+            deviceId: ids.deviceA,
+          },
+        ],
+      },
+      closeTenders: {
+        count: 1,
+        rows: [
+          {
+            id: flow.closeTender,
+            dailyCloseId: flow.close,
+            tenderType: 'CASH',
+            amount: 9.9,
+            count: 1,
+          },
+        ],
+      },
+      events: {
+        count: 4,
+        rows: ['order.opened', 'item.added', 'order.payment_pending', 'order.closed'].map(
+          (eventType, index) => ({
+            id: `flow_event_${index + 1}_${suffix}`,
+            sequence: index + 1,
+            eventType,
+            actorStaffProfileId: ids.staffA,
+            actorDeviceId: ids.deviceA,
+            branchId: ids.branchA,
+          })
+        ),
+      },
+      outbox: {
+        count: 4,
+        rows: ['order.opened', 'item.added', 'order.payment_pending', 'order.closed'].map(
+          (eventType, index) => ({
+            id: `flow_outbox_${index + 1}_${suffix}`,
+            eventType,
+            aggregateType: 'restaurant.order',
+            aggregateId: ids.flowOrder,
+            sequence: index + 1,
+          })
+        ),
+      },
+    });
 
     await observer.query('BEGIN');
     await scope(observer, ids.orgA);
@@ -544,7 +782,7 @@ describe('WHA-435 append-only restaurant order events', () => {
       [ids.flowOrder, ids.deviceA, flow.tender, flow.close, flow.key]
     );
     expect(reconciled.rows).toEqual([
-      expect.objectContaining({
+      {
         status: 'CLOSED',
         branchId: ids.branchA,
         customerId: flow.customer,
@@ -561,8 +799,14 @@ describe('WHA-435 append-only restaurant order events', () => {
         drawer: 1,
         insight: 1,
         keys: 1,
-      }),
+      },
     ]);
+    expect(
+      Number(reconciled.rows[0].subtotal) +
+        Number(reconciled.rows[0].taxTotal) -
+        Number(reconciled.rows[0].discountTotal)
+    ).toBe(Number(reconciled.rows[0].grandTotal));
+    expect(Number(reconciled.rows[0].tendered)).toBe(Number(reconciled.rows[0].grandTotal));
     expect(
       (
         await observer.query(
@@ -576,8 +820,26 @@ describe('WHA-435 append-only restaurant order events', () => {
     await observer.query('BEGIN');
     await scope(observer, ids.orgB);
     expect(
+      (await observer.query(`SELECT id, vertical FROM organizations WHERE id = $1`, [ids.orgB]))
+        .rows
+    ).toEqual([{ id: ids.orgB, vertical: 'AGENCY' }]);
+    expect(
       (await observer.query(`SELECT id FROM restaurant_orders WHERE id = $1`, [ids.flowOrder]))
         .rowCount
+    ).toBe(0);
+    expect(
+      (
+        await observer.query(`SELECT id FROM restaurant_order_events WHERE "orderId" = $1`, [
+          ids.flowOrder,
+        ])
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (
+        await observer.query(`SELECT id FROM restaurant_event_outbox WHERE "aggregateId" = $1`, [
+          ids.flowOrder,
+        ])
+      ).rowCount
     ).toBe(0);
     await observer.query('COMMIT');
   });
