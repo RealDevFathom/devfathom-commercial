@@ -16,7 +16,7 @@ const EVIDENCE_TYPES = {
 } as const;
 
 function destination(request: Request, form: FormData, notice: string, kind: 'success' | 'error') {
-  const url = new URL('/restaurant/sop', request.url);
+  const url = new URL('/restaurant/sop', publicRequestOrigin(request));
   for (const key of ['branchId', 'businessDate', 'occurrenceId'] as const) {
     const value = String(form.get(key) ?? '').trim();
     if (value && !value.includes('/') && value.length <= 100) {

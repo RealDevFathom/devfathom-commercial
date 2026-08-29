@@ -76,7 +76,9 @@ describe('POST SOP evidence', () => {
     );
 
     expect(response.status).toBe(303);
-    expect(response.headers.get('location')).toContain('notice=Proof+captured.');
+    expect(response.headers.get('location')).toMatch(
+      /^https:\/\/wha346\.devfathom\.test\/restaurant\/sop\?.*notice=Proof\+captured\./
+    );
     expect(mocks.putUpload).toHaveBeenCalledWith(
       'org-1',
       expect.stringMatching(/^sop-.+\.jpg$/),
