@@ -3,7 +3,7 @@ import { Prisma } from '@/generated/prisma/client';
 const Decimal = Prisma.Decimal;
 const ZERO = new Decimal(0);
 const HUNDRED = new Decimal(100);
-type DecimalInput = Prisma.Decimal | string | number;
+type DecimalInput = Prisma.Decimal | string;
 
 export const PAYMENT_CATEGORIES = ['CASH', 'CARD', 'OTHER'] as const;
 export type PaymentCategory = (typeof PAYMENT_CATEGORIES)[number];
@@ -98,6 +98,17 @@ export interface TaxQuoteResult {
 }
 
 export class TaxConfigurationError extends Error {}
+export class TaxProfileResolutionError extends TaxConfigurationError {
+  readonly code: 'TAX_PROFILE_UNAVAILABLE' | 'TAX_RULE_CONFLICT';
+
+  constructor(
+    readonly reason: 'MISSING' | 'EXPIRED' | 'AMBIGUOUS',
+    message: string
+  ) {
+    super(message);
+    this.code = reason === 'AMBIGUOUS' ? 'TAX_RULE_CONFLICT' : 'TAX_PROFILE_UNAVAILABLE';
+  }
+}
 export class TaxPaymentCategoryError extends TaxConfigurationError {
   readonly code = 'TAX_PAYMENT_CATEGORY_UNSUPPORTED';
 }
@@ -106,9 +117,13 @@ export function resolveTaxProfile(profiles: TaxProfile[], at: Date): TaxProfile 
   const matching = profiles.filter(
     (profile) => profile.effectiveFrom <= at && (!profile.effectiveTo || at < profile.effectiveTo)
   );
-  if (matching.length !== 1) {
-    throw new TaxConfigurationError(
-      matching.length === 0 ? 'No effective tax profile' : 'Conflicting tax profiles'
+  if (matching.length > 1)
+    throw new TaxProfileResolutionError('AMBIGUOUS', 'Ambiguous effective tax profiles');
+  if (matching.length === 0) {
+    const expired = profiles.some((profile) => profile.effectiveTo && profile.effectiveTo <= at);
+    throw new TaxProfileResolutionError(
+      expired ? 'EXPIRED' : 'MISSING',
+      expired ? 'Effective tax profile expired' : 'Effective tax profile missing'
     );
   }
   const profile = matching[0];
@@ -118,12 +133,19 @@ export function resolveTaxProfile(profiles: TaxProfile[], at: Date): TaxProfile 
   return profile;
 }
 
-function money(value: DecimalInput) {
-  return new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+function decimal(value: DecimalInput, label: string) {
+  if (typeof value === 'number') throw new RangeError(`${label} must use exact decimal input`);
+  const result = new Decimal(value);
+  if (!result.isFinite()) throw new RangeError(`${label} must be finite`);
+  return result;
 }
 
-function cents(value: DecimalInput) {
-  const rounded = money(value);
+function money(value: DecimalInput, label = 'Money') {
+  return decimal(value, label).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+}
+
+function cents(value: DecimalInput, label = 'Money') {
+  const rounded = money(value, label);
   if (rounded.isNegative()) throw new RangeError('Money cannot be negative');
   return rounded.times(HUNDRED);
 }
@@ -175,11 +197,20 @@ function lineConsideration(line: TaxLineInput) {
     throw new RangeError(`Invalid quantity for ${line.id}`);
   if (Object.prototype.hasOwnProperty.call(line, 'paymentCategory'))
     throw new TaxPaymentCategoryError('Raw paymentCategory input is forbidden');
-  const value = new Decimal(line.unitPrice)
-    .plus(line.modifierTotal ?? ZERO)
+  const unitPrice = decimal(line.unitPrice, `Unit price for ${line.id}`);
+  const modifierTotal = decimal(line.modifierTotal ?? ZERO, `Modifier total for ${line.id}`);
+  const comp = decimal(line.comp ?? ZERO, `Comp for ${line.id}`);
+  const beforeTaxDiscount = decimal(
+    line.beforeTaxDiscount ?? ZERO,
+    `Before-tax discount for ${line.id}`
+  );
+  if (unitPrice.isNegative() || comp.isNegative() || beforeTaxDiscount.isNegative())
+    throw new RangeError(`Negative charge or reduction for ${line.id}`);
+  const value = unitPrice
+    .plus(modifierTotal)
     .times(line.quantity)
-    .minus(line.comp ?? ZERO)
-    .minus(line.beforeTaxDiscount ?? ZERO);
+    .minus(comp)
+    .minus(beforeTaxDiscount);
   if (value.isNegative()) throw new RangeError(`Reductions exceed charge for ${line.id}`);
   return money(value);
 }
@@ -192,7 +223,7 @@ function calculateBucket(
   at: Date
 ): TaxBucketResult {
   const rule = resolveTaxRule(rules, profileVersionId, category, at);
-  const rate = new Decimal(rule.rate);
+  const rate = decimal(rule.rate, `Rate for ${rule.id}`);
   if (rate.isNegative() || rate.greaterThan(1))
     throw new TaxConfigurationError(`Invalid rate for ${rule.id}`);
   const amount = money(consideration);
@@ -241,11 +272,12 @@ export function calculateTax(
 }
 
 export function splitMoney(total: DecimalInput, shares: DecimalInput[]): Prisma.Decimal[] {
-  if (shares.length === 0 || shares.some((share) => !new Decimal(share).isPositive()))
+  const exactShares = shares.map((share) => decimal(share, 'Share'));
+  if (exactShares.length === 0 || exactShares.some((share) => !share.isPositive()))
     throw new RangeError('Shares must be positive');
   const totalCents = cents(total);
-  const denominator = Decimal.sum(...shares.map((share) => new Decimal(share)));
-  const raw = shares.map((share, index) => ({
+  const denominator = Decimal.sum(...exactShares);
+  const raw = exactShares.map((share, index) => ({
     index,
     value: totalCents.times(share).div(denominator),
   }));
@@ -272,13 +304,13 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
   const proposedCategory = mapTenderTypeToPaymentCategory(input.proposedTenderType);
   const profile = resolveTaxProfile(input.profiles, input.at);
   const considerations = input.lines.map(lineConsideration);
-  const merchandiseCents = Decimal.sum(...considerations.map(cents));
+  const merchandiseCents = Decimal.sum(...considerations.map((value) => cents(value)));
   const weights = zeroWeights();
   let unallocated = merchandiseCents;
   let acceptedPrincipal = new Decimal(0);
   for (const tender of input.priorTenders ?? []) {
     const category = mapTenderTypeToPaymentCategory(tender.tenderType);
-    const principalCents = cents(tender.principal);
+    const principalCents = cents(tender.principal, 'Prior tender principal');
     acceptedPrincipal = acceptedPrincipal.plus(principalCents.div(HUNDRED));
     const weight = Decimal.min(principalCents, unallocated);
     weights[category] = weights[category].plus(weight);
@@ -317,17 +349,24 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
         input.at
       )
     : null;
-  const serviceChargePayable = serviceCharge?.gross ?? money(service?.amount ?? ZERO);
+  const serviceChargePayable =
+    serviceCharge?.gross ?? money(service?.amount ?? ZERO, 'Service charge');
+  if (serviceChargePayable.isNegative()) throw new RangeError('Service charge cannot be negative');
   const net = Decimal.sum(...lines.map((line) => line.net), serviceCharge?.net ?? ZERO);
   const tax = Decimal.sum(...lines.map((line) => line.tax), serviceCharge?.tax ?? ZERO);
   const merchandisePayable = Decimal.sum(...lines.map((line) => line.gross));
-  const afterTaxDiscount = money(input.afterTaxDiscount ?? ZERO);
-  const roundingAdjustment = money(input.roundingAdjustment ?? ZERO);
+  const afterTaxDiscount = money(input.afterTaxDiscount ?? ZERO, 'After-tax discount');
+  if (afterTaxDiscount.isNegative()) throw new RangeError('After-tax discount cannot be negative');
+  if (afterTaxDiscount.greaterThan(merchandisePayable))
+    throw new RangeError('After-tax discount exceeds merchandise payable');
+  const roundingAdjustment = money(input.roundingAdjustment ?? ZERO, 'Rounding adjustment');
   const grandTotal = merchandisePayable
     .minus(afterTaxDiscount)
     .plus(serviceChargePayable)
     .plus(roundingAdjustment);
   if (grandTotal.isNegative()) throw new RangeError('Discounts exceed payable');
+  if (acceptedPrincipal.greaterThan(grandTotal))
+    throw new RangeError('Accepted principal exceeds payable');
   return {
     proposedCategory,
     weights: {

@@ -9,6 +9,7 @@ import {
   splitMoney,
   TaxConfigurationError,
   TaxPaymentCategoryError,
+  TaxProfileResolutionError,
   type PaymentCategory,
   type TaxProfile,
   type TaxRule,
@@ -108,7 +109,7 @@ describe('tax calculator G2 cent arithmetic', () => {
   });
 
   it('tax_split_allocates_each_line_by_largest_remainder_category_order', () => {
-    const split = splitMoney('10.01', [1, 1, 1]);
+    const split = splitMoney('10.01', ['1', '1', '1']);
     expect(split.map((value) => value.toFixed(2))).toEqual(['3.34', '3.34', '3.33']);
     expect(Prisma.Decimal.sum(...split).toFixed(2)).toBe('10.01');
     const quote = quoteTaxSettlement({
@@ -141,6 +142,32 @@ describe('tax calculator G2 cent arithmetic', () => {
         .reduce((sum, bucket) => sum.plus(bucket.consideration), new Prisma.Decimal(0))
         .toFixed(2)
     ).toBe('3.00');
+  });
+
+  it('tax_repeated_ties_preserve_every_line_and_aggregate_cent', () => {
+    const quote = quoteTaxSettlement({
+      lines: ['a', 'b', 'c'].map((id) => ({ id, unitPrice: '0.01', quantity: 1 })),
+      profiles,
+      rules,
+      at,
+      priorTenders: [
+        { tenderType: 'CASH', principal: '0.01' },
+        { tenderType: 'CARD', principal: '0.01' },
+      ],
+      proposedTenderType: 'OTHER',
+    });
+    expect(
+      quote.lines.map((quotedLine) =>
+        Prisma.Decimal.sum(...quotedLine.buckets.map((bucket) => bucket.consideration)).toFixed(2)
+      )
+    ).toEqual(['0.01', '0.01', '0.01']);
+    expect(
+      Prisma.Decimal.sum(
+        ...quote.lines.flatMap((quotedLine) =>
+          quotedLine.buckets.map((bucket) => bucket.consideration)
+        )
+      ).toFixed(2)
+    ).toBe('0.03');
   });
 
   it('tax_mixed_inclusive_exclusive_extracts_or_adds_once', () => {
@@ -202,6 +229,61 @@ describe('tax calculator G2 cent arithmetic', () => {
       quote.grandTotal.toFixed(2),
     ]).toEqual(['3.50', '5.00', '0.01', '41.51']);
   });
+
+  it('tax_payable_caps_accept_exact_boundaries_and_reject_overages', () => {
+    const exactDiscount = quoteTaxSettlement({
+      lines: [{ id: 'meal', unitPrice: '10', quantity: 1 }],
+      profiles,
+      rules: [rule('CARD', '0')],
+      at,
+      proposedTenderType: 'CARD',
+      afterTaxDiscount: '10',
+    });
+    expect(exactDiscount.grandTotal.toFixed(2)).toBe('0.00');
+    expect(() =>
+      quoteTaxSettlement({
+        lines: [{ id: 'meal', unitPrice: '10', quantity: 1 }],
+        profiles,
+        rules: [rule('CARD', '0')],
+        at,
+        proposedTenderType: 'CARD',
+        afterTaxDiscount: '10.01',
+        serviceCharge: { amount: '1', taxable: false },
+      })
+    ).toThrow('After-tax discount exceeds merchandise payable');
+    expect(() =>
+      quoteTaxSettlement({
+        lines: [{ id: 'meal', unitPrice: '10', quantity: 1 }],
+        profiles,
+        rules: [rule('CARD', '0')],
+        at,
+        proposedTenderType: 'CARD',
+        priorTenders: [{ tenderType: 'CARD', principal: '10.01' }],
+      })
+    ).toThrow('Accepted principal exceeds payable');
+  });
+
+  it('tax_rejects_binary_number_money_inputs', () => {
+    expect(() => splitMoney(0.1 as never, ['1'])).toThrow('must use exact decimal input');
+    expect(() =>
+      quoteTaxSettlement({
+        lines: [{ id: 'meal', unitPrice: 0.1 as never, quantity: 1 }],
+        profiles,
+        rules,
+        at,
+        proposedTenderType: 'CARD',
+      })
+    ).toThrow('must use exact decimal input');
+    expect(() =>
+      quoteTaxSettlement({
+        lines: [line],
+        profiles,
+        rules: [rule('CARD', 0.1 as never)],
+        at,
+        proposedTenderType: 'CARD',
+      })
+    ).toThrow('must use exact decimal input');
+  });
 });
 
 describe('effective rule resolution', () => {
@@ -239,9 +321,23 @@ describe('effective rule resolution', () => {
 
 describe('effective profile resolution', () => {
   it.each([
-    ['missing', []],
-    ['expired', [profile({ effectiveTo: at })]],
-    ['ambiguous', [profile(), profile({ id: 'second-profile' })]],
+    ['missing', [], 'MISSING', 'TAX_PROFILE_UNAVAILABLE'],
+    ['expired', [profile({ effectiveTo: at })], 'EXPIRED', 'TAX_PROFILE_UNAVAILABLE'],
+    ['ambiguous', [profile(), profile({ id: 'second-profile' })], 'AMBIGUOUS', 'TAX_RULE_CONFLICT'],
+  ] as const)(
+    'fails closed with distinct %s profile evidence',
+    (_name, candidateProfiles, reason, code) => {
+      try {
+        resolveTaxProfile([...candidateProfiles], at);
+        throw new Error('Expected profile resolution failure');
+      } catch (error) {
+        expect(error).toBeInstanceOf(TaxProfileResolutionError);
+        expect(error).toMatchObject({ reason, code });
+      }
+    }
+  );
+
+  it.each([
     ['draft', [profile({ status: 'DRAFT' })]],
     ['missing approval', [profile({ approvedAt: null })]],
   ] as const)('fails closed for %s profile', (_name, candidateProfiles) => {
