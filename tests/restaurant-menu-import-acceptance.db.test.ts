@@ -99,9 +99,13 @@ let dbB: import('@/lib/tenancy/scoped-db').ScopedDb;
 function memoryStore() {
   const objects = new Map<string, Buffer>();
   const deletions: string[] = [];
+  const boundaryFailures = new Map<string, number>();
   return {
     objects,
     deletions,
+    failOnce(boundary: string) {
+      boundaryFailures.set(boundary, (boundaryFailures.get(boundary) ?? 0) + 1);
+    },
     runtime: {
       resolveAdapter: () => deps.fixtures.createFixtureMenuExtractionAdapter(),
       putSource: async (org: string, name: string, content: Buffer) => {
@@ -115,6 +119,13 @@ function memoryStore() {
       deleteSource: async (org: string, name: string) => {
         deletions.push(`${org}/${name}`);
         objects.delete(`${org}/${name}`);
+      },
+      afterBoundary: async (boundary: string) => {
+        const remaining = boundaryFailures.get(boundary) ?? 0;
+        if (remaining > 0) {
+          boundaryFailures.set(boundary, remaining - 1);
+          throw new Error(`injected failure after ${boundary}`);
+        }
       },
     } satisfies import('@/lib/restaurant/menu-import').MenuImportRuntime,
   };
@@ -265,11 +276,13 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
 
   // ── Tenancy floor ──────────────────────────────────────────────────────────
 
-  it('runs as a role that is neither SUPERUSER nor BYPASSRLS', async () => {
-    const role = await sql.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
-      'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
-    );
-    expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+  it('runs as a LOGIN role that is neither SUPERUSER nor BYPASSRLS', async () => {
+    const role = await sql.query<{
+      rolcanlogin: boolean;
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+    }>('SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
+    expect(role.rows[0]).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
   });
 
   it('forces row level security on every menu-import table', async () => {
@@ -717,6 +730,94 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
     expect(second.importId).toBe(first.importId);
   });
 
+  it.each(['row-created', 'upload-stored', 'enqueue', 'metadata-recorded'])(
+    'resumes creation after an injected %s failure',
+    async (boundary) => {
+      const content = deps.fixtures.withFixtureMarker(PNG, 'default');
+      const idempotencyKey = `resume-${boundary}-${suffix}`;
+      store.failOnce(boundary);
+
+      await expect(
+        deps.menuImport.createMenuImport(
+          dbA,
+          orgA,
+          {
+            fileName: 'resume.png',
+            content,
+            createdById: userA,
+            adapter: 'FIXTURE',
+            idempotencyKey,
+          },
+          { runtime: store.runtime }
+        )
+      ).rejects.toThrow(`injected failure after ${boundary}`);
+
+      const resumed = await deps.menuImport.createMenuImport(
+        dbA,
+        orgA,
+        {
+          fileName: 'resume.png',
+          content,
+          createdById: userA,
+          adapter: 'FIXTURE',
+          idempotencyKey,
+        },
+        { runtime: store.runtime }
+      );
+      const record = await dbA.restaurantMenuImport.findUniqueOrThrow({
+        where: { id: resumed.importId },
+      });
+      expect(resumed.deduplicated).toBe(true);
+      expect(record.storageObjectName).toBeTruthy();
+      expect(record.extractionJobId).toBeTruthy();
+      expect(await dbA.restaurantMenuImport.count({ where: { idempotencyKey } })).toBe(1);
+      expect(
+        await dbA.restaurantJob.count({
+          where: {
+            idempotencyKey: `${deps.menuImport.MENU_IMPORT_EXTRACT_JOB}:${resumed.importId}`,
+          },
+        })
+      ).toBe(1);
+      expect(store.objects.has(`${orgA}/${record.storageObjectName}`)).toBe(true);
+    }
+  );
+
+  it('converges concurrent same-key retries and keeps the key tenant-scoped', async () => {
+    const content = deps.fixtures.withFixtureMarker(PNG, 'default');
+    const idempotencyKey = `concurrent-${suffix}`;
+    const input = {
+      fileName: 'concurrent.png',
+      content,
+      adapter: 'FIXTURE' as const,
+      idempotencyKey,
+    };
+    const [left, right] = await Promise.all([
+      deps.menuImport.createMenuImport(
+        dbA,
+        orgA,
+        { ...input, createdById: userA },
+        { runtime: store.runtime }
+      ),
+      deps.menuImport.createMenuImport(
+        dbA,
+        orgA,
+        { ...input, createdById: userA },
+        { runtime: store.runtime }
+      ),
+    ]);
+    expect(left.importId).toBe(right.importId);
+    expect(await dbA.restaurantMenuImport.count({ where: { idempotencyKey } })).toBe(1);
+
+    const tenantB = await deps.menuImport.createMenuImport(
+      dbB,
+      orgB,
+      { ...input, createdById: userB },
+      { runtime: store.runtime }
+    );
+    expect(tenantB.importId).not.toBe(left.importId);
+    expect(await dbB.restaurantMenuImport.count({ where: { idempotencyKey } })).toBe(1);
+  });
+
   it('refuses to silently re-import a file that was already committed', async () => {
     const content = deps.fixtures.withFixtureMarker(PNG, 'blurred');
     const created = await deps.menuImport.createMenuImport(
@@ -795,6 +896,36 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
     expect(after.storageObjectName).toBeNull();
     expect(after.sourceDeletedAt).not.toBeNull();
   });
+
+  it.each(['committed-before-delete', 'source-deleted'])(
+    'replays committed source cleanup after an injected %s failure',
+    async (boundary) => {
+      const importId = await seedAwaitingReview('default', { label: `cleanup-${boundary}` });
+      await decideAll(importId, 'ACCEPTED');
+      store.failOnce(boundary);
+
+      await expect(
+        deps.menuImport.commitMenuImport(
+          dbA,
+          { importId, committedById: userA },
+          { runtime: store.runtime }
+        )
+      ).rejects.toThrow(`injected failure after ${boundary}`);
+      expect(
+        (await dbA.restaurantMenuImport.findUniqueOrThrow({ where: { id: importId } })).status
+      ).toBe('COMMITTED');
+
+      const replay = await deps.menuImport.commitMenuImport(
+        dbA,
+        { importId, committedById: userA },
+        { runtime: store.runtime }
+      );
+      const cleaned = await dbA.restaurantMenuImport.findUniqueOrThrow({ where: { id: importId } });
+      expect(replay.alreadyCommitted).toBe(true);
+      expect(cleaned.storageObjectName).toBeNull();
+      expect(cleaned.sourceDeletedAt).not.toBeNull();
+    }
+  );
 
   it('deletes the uploaded file on discard but keeps the review record', async () => {
     const importId = await seedAwaitingReview('default', { label: 'cleanupdiscard' });

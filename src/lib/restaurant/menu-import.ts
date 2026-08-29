@@ -98,6 +98,17 @@ export type MenuImportRuntime = {
   ) => Promise<void>;
   readSource: (organizationId: string, objectName: string) => Promise<Buffer>;
   deleteSource: (organizationId: string, objectName: string) => Promise<void>;
+  /** Test-only failure seam at durable ingestion and cleanup boundaries. */
+  afterBoundary?: (
+    boundary:
+      | 'row-created'
+      | 'upload-stored'
+      | 'enqueue'
+      | 'metadata-recorded'
+      | 'committed-before-delete'
+      | 'source-deleted',
+    importId: string
+  ) => Promise<void>;
 };
 
 export const defaultMenuImportRuntime: MenuImportRuntime = {
@@ -180,71 +191,133 @@ export async function createMenuImport(
   });
   const idempotencyKey = input.idempotencyKey?.trim() || upload.checksum;
 
-  const existing = await db.restaurantMenuImport.findFirst({
+  let existing = await db.restaurantMenuImport.findFirst({
     where: { idempotencyKey },
-    select: { id: true, status: true, pageCount: true },
+    select: {
+      id: true,
+      status: true,
+      pageCount: true,
+      checksum: true,
+      mimeType: true,
+      storageObjectName: true,
+      extractionJobId: true,
+    },
   });
   if (existing) {
-    if ((OPEN_STATUSES as readonly string[]).includes(existing.status)) {
-      return {
-        importId: existing.id,
-        status: existing.status,
-        deduplicated: true,
-        pageCount: existing.pageCount,
-      };
+    if (existing.checksum !== upload.checksum) {
+      throw new MenuImportError(
+        'This idempotency key already belongs to a different upload.',
+        'INVALID'
+      );
     }
-    // A finished import is evidence, not a draft to resume. Re-importing the
-    // same menu is legitimate but must be asked for explicitly, so nobody
-    // duplicates a catalog by re-dragging yesterday's file into the uploader.
-    throw new MenuImportError(
-      `This file was already imported (${existing.status.toLowerCase()}). Supply an idempotency key to import it again.`,
-      'ALREADY_IMPORTED'
-    );
+    if (!(OPEN_STATUSES as readonly string[]).includes(existing.status)) {
+      // A finished import is evidence, not a draft to resume. Re-importing the
+      // same menu is legitimate but must be asked for explicitly, so nobody
+      // duplicates a catalog by re-dragging yesterday's file into the uploader.
+      throw new MenuImportError(
+        `This file was already imported (${existing.status.toLowerCase()}). Supply an idempotency key to import it again.`,
+        'ALREADY_IMPORTED'
+      );
+    }
   }
 
   const adapter = input.adapter ?? configuredAdapterName();
+  let deduplicated = Boolean(existing);
 
-  const created = await db.restaurantMenuImport.create({
-    data: {
-      status: 'PENDING_EXTRACTION',
-      adapter,
-      fileName: fileName.slice(0, 255),
-      mimeType: upload.mimeType,
-      byteSize: upload.byteSize,
-      pageCount: upload.pageCount,
-      checksum: upload.checksum,
-      defaultCurrency: input.defaultCurrency?.trim().toUpperCase() || null,
-      idempotencyKey,
-      createdById: input.createdById,
-    },
-    select: { id: true, status: true, pageCount: true },
-  });
+  if (!existing) {
+    try {
+      existing = await db.restaurantMenuImport.create({
+        data: {
+          status: 'PENDING_EXTRACTION',
+          adapter,
+          fileName: fileName.slice(0, 255),
+          mimeType: upload.mimeType,
+          byteSize: upload.byteSize,
+          pageCount: upload.pageCount,
+          checksum: upload.checksum,
+          defaultCurrency: input.defaultCurrency?.trim().toUpperCase() || null,
+          idempotencyKey,
+          createdById: input.createdById,
+        },
+        select: {
+          id: true,
+          status: true,
+          pageCount: true,
+          checksum: true,
+          mimeType: true,
+          storageObjectName: true,
+          extractionJobId: true,
+        },
+      });
+      await runtime.afterBoundary?.('row-created', existing.id);
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+        throw error;
+      }
+      existing = await db.restaurantMenuImport.findFirst({
+        where: { idempotencyKey },
+        select: {
+          id: true,
+          status: true,
+          pageCount: true,
+          checksum: true,
+          mimeType: true,
+          storageObjectName: true,
+          extractionJobId: true,
+        },
+      });
+      if (!existing || existing.checksum !== upload.checksum) {
+        throw new MenuImportError(
+          'This idempotency key already belongs to a different upload.',
+          'INVALID'
+        );
+      }
+      deduplicated = true;
+    }
+  }
 
-  const objectName = menuImportObjectName(created.id, upload.mimeType);
-  await runtime.putSource(organizationId, objectName, upload.content, upload.mimeType);
+  const objectName = menuImportObjectName(existing.id, existing.mimeType as MenuUploadMimeType);
+  if (!existing.storageObjectName) {
+    await runtime.putSource(organizationId, objectName, upload.content, upload.mimeType);
+    await runtime.afterBoundary?.('upload-stored', existing.id);
+    await db.restaurantMenuImport.update({
+      where: { id: existing.id },
+      data: { storageObjectName: objectName },
+    });
+  }
 
-  const { job } = await enqueue(
-    db,
-    {
+  if (!existing.extractionJobId) {
+    const enqueueInput = {
       type: MENU_IMPORT_EXTRACT_JOB,
-      payload: { importId: created.id },
-      // Scoped to the import, so a redelivered enqueue never queues a second
-      // extraction for the same upload.
-      idempotencyKey: `${MENU_IMPORT_EXTRACT_JOB}:${created.id}`,
-    },
-    now
-  );
-
-  await db.restaurantMenuImport.update({
-    where: { id: created.id },
-    data: { storageObjectName: objectName, extractionJobId: job.id },
-  });
+      payload: { importId: existing.id },
+      idempotencyKey: `${MENU_IMPORT_EXTRACT_JOB}:${existing.id}`,
+    } as const;
+    let job;
+    try {
+      ({ job } = await enqueue(db, enqueueInput, now));
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !('reason' in error) ||
+        error.reason !== 'DUPLICATE_ENQUEUE'
+      ) {
+        throw error;
+      }
+      ({ job } = await enqueue(db, enqueueInput, now));
+    }
+    await runtime.afterBoundary?.('enqueue', existing.id);
+    await db.restaurantMenuImport.update({
+      where: { id: existing.id },
+      data: { extractionJobId: job.id },
+    });
+    await runtime.afterBoundary?.('metadata-recorded', existing.id);
+  }
 
   return {
-    importId: created.id,
-    status: created.status,
-    deduplicated: false,
-    pageCount: created.pageCount,
+    importId: existing.id,
+    status: existing.status,
+    deduplicated,
+    pageCount: existing.pageCount,
   };
 }
 
@@ -1063,7 +1136,8 @@ export async function commitMenuImport(
   // commits — an object store is not transactional, and losing the file while
   // the database rolls back would strand a review with nothing to look at.
   const { storageObjectName, organizationId, ...payload } = result;
-  if (!result.alreadyCommitted && storageObjectName) {
+  if (storageObjectName) {
+    await runtime.afterBoundary?.('committed-before-delete', input.importId);
     await forgetSource(db, organizationId, input.importId, storageObjectName, runtime, now);
   }
 
@@ -1080,6 +1154,7 @@ async function forgetSource(
   now: Date
 ): Promise<void> {
   await runtime.deleteSource(organizationId, objectName);
+  await runtime.afterBoundary?.('source-deleted', importId);
   await db.restaurantMenuImport.update({
     where: { id: importId },
     data: { storageObjectName: null, sourceDeletedAt: now },
@@ -1113,6 +1188,16 @@ export async function discardMenuImport(
     throw new MenuImportError('A committed import cannot be discarded.', 'INVALID_STATE');
   }
   if (record.status === 'DISCARDED') {
+    if (record.storageObjectName) {
+      await forgetSource(
+        db,
+        record.organizationId,
+        importId,
+        record.storageObjectName,
+        runtime,
+        now
+      );
+    }
     return { importId, alreadyDiscarded: true };
   }
 
