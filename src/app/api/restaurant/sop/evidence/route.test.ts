@@ -1,0 +1,98 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  attachEvidence: vi.fn(),
+  can: vi.fn(),
+  createTRPCContext: vi.fn(),
+  deleteUpload: vi.fn(),
+  putUpload: vi.fn(),
+}));
+
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: () => ({ id: 'user-1' }),
+}));
+vi.mock('@/lib/restaurant/sop-execution', () => ({ attachEvidence: mocks.attachEvidence }));
+vi.mock('@/lib/storage', () => ({
+  deleteUpload: mocks.deleteUpload,
+  putUpload: mocks.putUpload,
+}));
+vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
+
+import { POST } from './route';
+
+function request(overrides?: { type?: string; origin?: string }) {
+  const form = new FormData();
+  form.set('branchId', 'branch-1');
+  form.set('businessDate', '2026-08-29');
+  form.set('occurrenceId', 'occurrence-1');
+  form.set('occurrenceStepId', 'step-1');
+  form.set('evidencePurpose', 'photo');
+  form.set('uploaderStaffProfileId', 'staff-1');
+  form.set('file', new File(['proof'], 'proof.jpg', { type: overrides?.type ?? 'image/jpeg' }));
+  const origin = overrides?.origin ?? 'https://devfathom.test';
+  return {
+    formData: async () => form,
+    headers: new Headers({ origin }),
+    url: 'https://devfathom.test/api/restaurant/sop/evidence',
+  } as Request;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.can.mockResolvedValue(true);
+  mocks.createTRPCContext.mockResolvedValue({
+    db: {},
+    organization: { id: 'org-1' },
+    session: { user: { id: 'user-1' } },
+  });
+  mocks.deleteUpload.mockResolvedValue(undefined);
+  mocks.putUpload.mockResolvedValue(undefined);
+  mocks.attachEvidence.mockResolvedValue({ evidenceId: 'evidence-1' });
+});
+
+describe('POST SOP evidence', () => {
+  it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
+    const response = await POST(request());
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toContain('notice=Proof+captured.');
+    expect(mocks.putUpload).toHaveBeenCalledWith(
+      'org-1',
+      expect.stringMatching(/^sop-.+\.jpg$/),
+      expect.any(Buffer),
+      'image/jpeg'
+    );
+    expect(mocks.attachEvidence).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        occurrenceId: 'occurrence-1',
+        occurrenceStepId: 'step-1',
+        mimeType: 'image/jpeg; evidence=photo',
+        uploaderStaffProfileId: 'staff-1',
+      })
+    );
+  });
+
+  it('rejects cross-origin and unsupported uploads before storage', async () => {
+    expect((await POST(request({ origin: 'https://attacker.test' }))).status).toBe(403);
+    const response = await POST(request({ type: 'image/gif' }));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+  });
+
+  it('preserves authorization and redacts internal failures', async () => {
+    mocks.can.mockResolvedValue(false);
+    let response = await POST(request());
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+
+    mocks.can.mockResolvedValue(true);
+    mocks.attachEvidence.mockRejectedValue(new Error('sensitive database detail'));
+    response = await POST(request());
+    expect(response.headers.get('location')).not.toContain('sensitive');
+    expect(mocks.deleteUpload).toHaveBeenCalledWith('org-1', expect.stringMatching(/^sop-/));
+  });
+});

@@ -185,9 +185,15 @@ export async function completeStep(
       return { occurrenceStepId: step.id, completed: true, completedAt: step.completedAt! };
     }
     const evidence = step.evidence ?? [];
-    const hasPhoto = evidence.some((row) => row.mimeType.startsWith('image/'));
+    const hasPhoto = evidence.some(
+      (row) =>
+        row.mimeType.includes('evidence=photo') ||
+        (row.mimeType.startsWith('image/') && !row.mimeType.includes('evidence=signature'))
+    );
     const hasSignature = evidence.some(
-      (row) => row.mimeType === 'application/vnd.devfathom.signature+json'
+      (row) =>
+        row.mimeType.includes('evidence=signature') ||
+        row.mimeType === 'application/vnd.devfathom.signature+json'
     );
     if (step.templateStep?.requiresPhoto && !hasPhoto) {
       throw new SopExecutionError(

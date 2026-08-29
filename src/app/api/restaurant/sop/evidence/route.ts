@@ -88,11 +88,13 @@ export async function POST(request: Request) {
       uploaderStaffProfileId,
     });
     return NextResponse.redirect(destination(request, form, 'Proof captured.', 'success'), 303);
-  } catch (error) {
+  } catch {
     if (storedFilename && organizationId) {
       await deleteUpload(organizationId, storedFilename).catch(() => undefined);
     }
-    const message = error instanceof Error ? error.message : 'Proof capture failed.';
-    return NextResponse.redirect(destination(request, form, message, 'error'), 303);
+    return NextResponse.redirect(
+      destination(request, form, 'Proof capture failed. Check the file and try again.', 'error'),
+      303
+    );
   }
 }

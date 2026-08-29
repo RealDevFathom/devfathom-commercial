@@ -17,6 +17,8 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantSopExecutionRouter } from '@/server/routers/restaurant-sop-execution';
 import { createTRPCContext } from '@/server/trpc';
 
+import { EvidenceCapture } from './evidence-capture';
+
 /**
  * Resolve the tenant actor first, then hand the resolved session and
  * organization to the context factory.
@@ -386,9 +388,6 @@ export function SopBoardView(props: SopBoardViewProps) {
   const waiveAllowed = selected ? ['SUBMITTED', 'LATE', 'MISSED'].includes(selected.status) : false;
   const startAllowed = selected ? ['SCHEDULED', 'REJECTED'].includes(selected.status) : false;
   const submitAllowed = selected?.status === 'IN_PROGRESS';
-  const evidenceAllowed = selected
-    ? ['IN_PROGRESS', 'SUBMITTED', 'LATE'].includes(selected.status)
-    : false;
   const escalationKinds = new Set(selected?.escalationEvents.map((event) => event.kind) ?? []);
   const acknowledgeAllowed =
     escalationKinds.has('FIRED') &&
@@ -663,133 +662,114 @@ export function SopBoardView(props: SopBoardViewProps) {
                   </span>
                 </div>
                 <ol className="mt-3 divide-y divide-border-subtle">
-                  {selected.steps.map((step) => (
-                    <li className="py-4 first:pt-0 last:pb-0" key={step.templateStepId}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-mono text-xs text-text-muted">Step {step.order}</p>
-                          <p className="mt-1 font-medium break-words text-text-strong">
-                            {step.title}
-                          </p>
-                        </div>
-                        <StatusPill
-                          status={step.completed ? 'COMPLETED' : 'PENDING'}
-                          label={step.completed ? 'Complete' : 'Pending'}
-                          tone={step.completed ? 'success' : 'neutral'}
-                        />
-                      </div>
-                      {step.instructions ? (
-                        <p className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-text-muted">
-                          {step.instructions}
-                        </p>
-                      ) : null}
-                      <p className="mt-2 text-xs text-text-muted">
-                        Requirements:{' '}
-                        {step.requirements.length
-                          ? step.requirements.join(', ')
-                          : 'No evidence required'}
-                      </p>
-                      {step.note ? (
-                        <p className="mt-2 rounded-[var(--radius-xs)] bg-surface-sunken p-3 text-sm whitespace-pre-wrap text-text-body">
-                          Note: {step.note}
-                        </p>
-                      ) : null}
-                      {step.completed ? (
-                        <p className="mt-2 text-xs text-text-muted">
-                          Completed by {staffName(staff, step.completedByStaffProfileId)} ·{' '}
-                          {formatBranchDateTime(step.completedAt, selectedBranch.timezone)}
-                        </p>
-                      ) : selected.status === 'IN_PROGRESS' ? (
-                        <form action={action} className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <CommandScope
-                            branchId={selectedBranch.id}
-                            businessDate={businessDate}
-                            intent="completeStep"
-                            occurrenceId={selected.id}
+                  {selected.steps.map((step) => {
+                    const stepEvidence = selected.evidence.filter(
+                      (evidence) => evidence.occurrenceStepId === step.occurrenceStepId
+                    );
+                    const hasPhoto = stepEvidence.some((evidence) =>
+                      evidence.mimeType.includes('evidence=photo')
+                    );
+                    const hasSignature = stepEvidence.some(
+                      (evidence) =>
+                        evidence.mimeType.includes('evidence=signature') ||
+                        evidence.mimeType === 'application/vnd.devfathom.signature+json'
+                    );
+                    const needsPhoto = step.requirements.includes('photo') && !hasPhoto;
+                    const needsSignature = step.requirements.includes('signature') && !hasSignature;
+                    return (
+                      <li className="py-4 first:pt-0 last:pb-0" key={step.templateStepId}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-mono text-xs text-text-muted">Step {step.order}</p>
+                            <p className="mt-1 font-medium break-words text-text-strong">
+                              {step.title}
+                            </p>
+                          </div>
+                          <StatusPill
+                            status={step.completed ? 'COMPLETED' : 'PENDING'}
+                            label={step.completed ? 'Complete' : 'Pending'}
+                            tone={step.completed ? 'success' : 'neutral'}
                           />
-                          <input type="hidden" name="templateStepId" value={step.templateStepId} />
-                          <StaffSelect label="Completing staff" staff={staff} />
-                          <label className="text-sm text-text-body">
-                            Completion note
-                            <Input className="mt-1 min-h-11" maxLength={2000} name="note" />
-                          </label>
-                          <Button
-                            className="min-h-11 sm:col-span-2"
-                            disabled={!action}
-                            type="submit"
-                          >
-                            Complete step
-                          </Button>
-                        </form>
-                      ) : null}
-                    </li>
-                  ))}
+                        </div>
+                        {step.instructions ? (
+                          <p className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-text-muted">
+                            {step.instructions}
+                          </p>
+                        ) : null}
+                        <p className="mt-2 text-xs text-text-muted">
+                          Requirements:{' '}
+                          {step.requirements.length
+                            ? step.requirements.join(', ')
+                            : 'No evidence required'}
+                        </p>
+                        {step.note ? (
+                          <p className="mt-2 rounded-[var(--radius-xs)] bg-surface-sunken p-3 text-sm whitespace-pre-wrap text-text-body">
+                            Note: {step.note}
+                          </p>
+                        ) : null}
+                        {step.completed ? (
+                          <p className="mt-2 text-xs text-text-muted">
+                            Completed by {staffName(staff, step.completedByStaffProfileId)} ·{' '}
+                            {formatBranchDateTime(step.completedAt, selectedBranch.timezone)}
+                          </p>
+                        ) : selected.status === 'IN_PROGRESS' ? (
+                          <>
+                            {step.occurrenceStepId && (needsPhoto || needsSignature) ? (
+                              <div className="mt-3" aria-label={`Required proof for ${step.title}`}>
+                                {needsPhoto ? (
+                                  <EvidenceCapture
+                                    branchId={selectedBranch.id}
+                                    businessDate={businessDate}
+                                    occurrenceId={selected.id}
+                                    occurrenceStepId={step.occurrenceStepId}
+                                    purpose="photo"
+                                    staff={staff}
+                                  />
+                                ) : null}
+                                {needsSignature ? (
+                                  <EvidenceCapture
+                                    branchId={selectedBranch.id}
+                                    businessDate={businessDate}
+                                    occurrenceId={selected.id}
+                                    occurrenceStepId={step.occurrenceStepId}
+                                    purpose="signature"
+                                    staff={staff}
+                                  />
+                                ) : null}
+                              </div>
+                            ) : null}
+                            <form action={action} className="mt-3 grid gap-3 sm:grid-cols-2">
+                              <CommandScope
+                                branchId={selectedBranch.id}
+                                businessDate={businessDate}
+                                intent="completeStep"
+                                occurrenceId={selected.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="templateStepId"
+                                value={step.templateStepId}
+                              />
+                              <StaffSelect label="Completing staff" staff={staff} />
+                              <label className="text-sm text-text-body">
+                                Completion note
+                                <Input className="mt-1 min-h-11" maxLength={2000} name="note" />
+                              </label>
+                              <Button
+                                className="min-h-11 sm:col-span-2"
+                                disabled={!action || needsPhoto || needsSignature}
+                                type="submit"
+                              >
+                                Complete step
+                              </Button>
+                            </form>
+                          </>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ol>
               </section>
-
-              {evidenceAllowed ? (
-                <section className="mt-6 border-t border-border-subtle pt-5">
-                  <h3 className="font-semibold text-text-strong">Attach evidence metadata</h3>
-                  <p className="mt-1 text-sm text-text-muted">
-                    Record existing storage metadata. File bytes are not uploaded from this form.
-                  </p>
-                  <form action={action} className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <CommandScope
-                      branchId={selectedBranch.id}
-                      businessDate={businessDate}
-                      intent="attachEvidence"
-                      occurrenceId={selected.id}
-                    />
-                    <label className="text-sm text-text-body sm:col-span-2">
-                      Content hash · lowercase SHA-256
-                      <Input
-                        className="mt-1 min-h-11 font-mono"
-                        maxLength={64}
-                        minLength={64}
-                        name="contentHashHex"
-                        pattern="[0-9a-f]{64}"
-                        required
-                      />
-                    </label>
-                    <label className="text-sm text-text-body">
-                      MIME type
-                      <Input className="mt-1 min-h-11" maxLength={255} name="mimeType" required />
-                    </label>
-                    <label className="text-sm text-text-body">
-                      Size in bytes
-                      <Input
-                        className="mt-1 min-h-11"
-                        min="0"
-                        name="sizeBytes"
-                        required
-                        step="1"
-                        type="number"
-                      />
-                    </label>
-                    <label className="text-sm text-text-body">
-                      Checklist step
-                      <select className={selectClass} name="occurrenceStepId">
-                        <option value="">Whole occurrence</option>
-                        {selected.steps.map((step) =>
-                          step.occurrenceStepId ? (
-                            <option key={step.occurrenceStepId} value={step.occurrenceStepId}>
-                              {step.order}. {step.title}
-                            </option>
-                          ) : null
-                        )}
-                      </select>
-                    </label>
-                    <StaffSelect label="Uploader" name="uploaderStaffProfileId" staff={staff} />
-                    <label className="text-sm text-text-body sm:col-span-2">
-                      Storage reference
-                      <Input className="mt-1 min-h-11" maxLength={2000} name="storageRef" />
-                    </label>
-                    <Button className="min-h-11 sm:col-span-2" disabled={!action} type="submit">
-                      Attach evidence metadata
-                    </Button>
-                  </form>
-                </section>
-              ) : null}
 
               {!canVerify || reviewAllowed || waiveAllowed ? (
                 <section className="mt-6 border-t border-border-subtle pt-5">
