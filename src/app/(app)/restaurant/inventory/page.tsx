@@ -1,6 +1,9 @@
 import Link from 'next/link';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 
-import { buttonVariants } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -22,6 +25,21 @@ import { createTRPCContext } from '@/server/trpc';
 const route = '/restaurant/inventory';
 const description =
   'Stock on hand, movement ledger, physical counts, transfers, and low-stock alerts.';
+const inputClass =
+  'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
+const nonNegativeDecimal = /^(?:0|\d+(?:\.\d+)?|\.\d+)$/;
+const field = (form: FormData, name: string) => String(form.get(name) ?? '').trim();
+const optionalField = (form: FormData, name: string) => field(form, name) || undefined;
+
+function message(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function destination(notice: string, kind: 'success' | 'error', selected?: string) {
+  const params = new URLSearchParams({ notice, kind });
+  if (selected) params.set('selected', selected);
+  return `${route}?${params}`;
+}
 
 function formatDate(value: Date | string | null | undefined) {
   if (!value) return '—';
@@ -69,7 +87,12 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
   );
 }
 
-export default async function InventoryPage() {
+export default async function InventoryPage({
+  searchParams = Promise.resolve({}),
+}: {
+  searchParams?: Promise<{ notice?: string; kind?: string; selected?: string }>;
+} = {}) {
+  const query = await searchParams;
   const ctx = await tenantContext();
   // Tenancy did not resolve. Entitlements are unknowable here, so show the
   // permission surface rather than let a missing workspace reach the user as an
@@ -82,10 +105,10 @@ export default async function InventoryPage() {
   if (!user) return <AccessState moduleEnabled={moduleEnabled} />;
 
   const subject = subjectFromSession(user);
-  const readable = await can(subject, 'inventory:read', undefined, {
-    db: ctx.db,
-    source: 'TRPC',
-  });
+  const [readable, countable] = await Promise.all([
+    can(subject, 'inventory:read', undefined, { db: ctx.db, source: 'TRPC' }),
+    can(subject, 'inventory:count', undefined, { db: ctx.db, source: 'TRPC' }),
+  ]);
 
   if (!moduleEnabled || !readable) return <AccessState moduleEnabled={moduleEnabled} />;
 
@@ -110,7 +133,42 @@ export default async function InventoryPage() {
           select: { id: true, ingredient: { select: { name: true } } },
         }),
       ]);
-    loaded = { onHand, lowStock, movements, counts, transfers, locations, stockItems };
+    const selectedSummary =
+      counts.items.find((count) => count.id === query.selected) ?? counts.items[0] ?? null;
+    const selectedCount = selectedSummary
+      ? await ctx.db.restaurantStockCount.findFirst({
+          where: { id: selectedSummary.id },
+          select: {
+            id: true,
+            locationId: true,
+            status: true,
+            reference: true,
+            countedAt: true,
+            submittedAt: true,
+            postedAt: true,
+            lines: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                stockItemId: true,
+                countedQuantity: true,
+                snapshotQuantity: true,
+                varianceQuantity: true,
+              },
+            },
+          },
+        })
+      : null;
+    loaded = {
+      onHand,
+      lowStock,
+      movements,
+      counts,
+      transfers,
+      locations,
+      stockItems,
+      selectedCount,
+    };
   } catch {
     return (
       <main className="space-y-6">
@@ -128,10 +186,101 @@ export default async function InventoryPage() {
     );
   }
 
+  async function createCount(form: FormData) {
+    'use server';
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      const locationId = field(form, 'locationId');
+      const location = await actionCtx.db.restaurantStockLocation.findFirst({
+        where: { id: locationId, isActive: true },
+        select: { id: true },
+      });
+      if (!location) throw new Error('Select a current stock location.');
+      const count = await restaurantInventoryRouter.createCaller(actionCtx).createStockCount({
+        locationId: location.id,
+        reference: optionalField(form, 'reference'),
+      });
+      revalidatePath(route);
+      next = destination('Physical count created.', 'success', count.id);
+    } catch (error) {
+      next = destination(message(error, 'Could not create the physical count.'), 'error');
+    }
+    redirect(next);
+  }
+
+  async function addCountLine(form: FormData) {
+    'use server';
+    const stockCountId = field(form, 'stockCountId');
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      const stockItemId = field(form, 'stockItemId');
+      const countedQuantity = field(form, 'countedQuantity');
+      if (!stockItemId) throw new Error('Select a stock item.');
+      if (!nonNegativeDecimal.test(countedQuantity)) {
+        throw new Error('Enter a non-negative decimal counted quantity.');
+      }
+      const stockItem = await actionCtx.db.restaurantStockItem.findFirst({
+        where: { id: stockItemId, isActive: true },
+        select: { id: true },
+      });
+      if (!stockItem) throw new Error('Select a current stock item.');
+      await restaurantInventoryRouter.createCaller(actionCtx).addStockCountLine({
+        stockCountId,
+        stockItemId: stockItem.id,
+        countedQuantity,
+      });
+      revalidatePath(route);
+      next = destination('Count line added.', 'success', stockCountId);
+    } catch (error) {
+      next = destination(message(error, 'Could not add the count line.'), 'error', stockCountId);
+    }
+    redirect(next);
+  }
+
+  async function submitCount(form: FormData) {
+    'use server';
+    const stockCountId = field(form, 'stockCountId');
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      await restaurantInventoryRouter.createCaller(actionCtx).submitStockCount({ stockCountId });
+      revalidatePath(route);
+      next = destination('Count submitted and quantities frozen.', 'success', stockCountId);
+    } catch (error) {
+      next = destination(message(error, 'Could not submit the count.'), 'error', stockCountId);
+    }
+    redirect(next);
+  }
+
+  async function postCount(form: FormData) {
+    'use server';
+    const stockCountId = field(form, 'stockCountId');
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      await restaurantInventoryRouter.createCaller(actionCtx).postStockCount({ stockCountId });
+      revalidatePath(route);
+      next = destination('Reconciliation posted to inventory.', 'success', stockCountId);
+    } catch (error) {
+      next = destination(
+        message(error, 'Could not post the reconciliation.'),
+        'error',
+        stockCountId
+      );
+    }
+    redirect(next);
+  }
+
   const locationNames = new Map(loaded.locations.map((l) => [l.id, l.name] as const));
   const stockItemNames = new Map(loaded.stockItems.map((i) => [i.id, i.ingredient.name] as const));
-  const itemName = (id: string) => stockItemNames.get(id) ?? id;
-  const locationName = (id: string) => locationNames.get(id) ?? id;
+  const itemName = (id: string) => stockItemNames.get(id) ?? 'Unknown stock item';
+  const locationName = (id: string) => locationNames.get(id) ?? 'Unknown location';
 
   const negativePositions = loaded.onHand.filter((row) => row.isNegative).length;
   const triggeredAlerts = loaded.lowStock.filter((flag) => flag.isTriggered).length;
@@ -142,6 +291,19 @@ export default async function InventoryPage() {
   return (
     <main className="space-y-6">
       <PageHeader eyebrow="Restaurant operations" heading="Inventory" description={description} />
+
+      {query.notice && (
+        <div
+          className={`rounded-[var(--radius-sm)] border p-3 text-sm ${
+            query.kind === 'error'
+              ? 'border-destructive bg-destructive-background text-destructive-foreground'
+              : 'border-success bg-success-background text-success-foreground'
+          }`}
+          role={query.kind === 'error' ? 'alert' : 'status'}
+        >
+          {query.notice}
+        </div>
+      )}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Inventory summary">
         <Stat label="Tracked positions" value={loaded.onHand.length} />
@@ -288,7 +450,58 @@ export default async function InventoryPage() {
         </div>
       </SectionCard>
 
-      <div className="grid gap-6 xl:grid-cols-2">
+      <SectionCard>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-text-strong">Start a physical count</h2>
+            <p className="mt-1 text-sm text-text-muted">
+              Choose a named stock location, then record each item you physically count.
+            </p>
+          </div>
+          <StatusPill
+            status={countable ? 'Count access' : 'Read only'}
+            tone={countable ? 'success' : 'neutral'}
+          />
+        </div>
+        <form
+          action={createCount}
+          className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+        >
+          <label className="text-sm text-text-body">
+            Location
+            <select name="locationId" required disabled={!countable} className={inputClass}>
+              <option value="">Select location</option>
+              {loaded.locations.map((location) => (
+                <option value={location.id} key={location.id}>
+                  {location.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-text-body">
+            Reference (optional)
+            <Input name="reference" disabled={!countable} className="mt-1 min-h-11" />
+          </label>
+          <Button
+            type="submit"
+            disabled={!countable || !loaded.locations.length}
+            className="min-h-11 self-end"
+          >
+            Create count
+          </Button>
+        </form>
+        {!countable && (
+          <p className="mt-3 text-sm text-text-muted">
+            You can review inventory and existing counts, but inventory count permission is required
+            to create, submit, or post a count.
+          </p>
+        )}
+        {countable && !loaded.locations.length && (
+          <p className="mt-3 text-sm text-text-muted">No active stock locations are available.</p>
+        )}
+      </SectionCard>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
         <SectionCard>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-text-strong">Physical counts</h2>
@@ -300,38 +513,203 @@ export default async function InventoryPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Reference</TableHead>
+                  <TableHead>Count</TableHead>
                   <TableHead>Location</TableHead>
-                  <TableHead className="text-right">Lines</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Review</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loaded.counts.items.length ? (
                   loaded.counts.items.map((count) => (
-                    <TableRow key={count.id}>
-                      <TableCell className="font-mono text-xs">
-                        {count.reference || count.id}
+                    <TableRow
+                      data-state={count.id === loaded.selectedCount?.id ? 'selected' : undefined}
+                      key={count.id}
+                    >
+                      <TableCell>
+                        <p className="font-medium text-text-strong">
+                          {count.reference || 'Unreferenced count'}
+                        </p>
+                        <p className="font-mono text-xs text-text-muted">
+                          {count._count.lines} line{count._count.lines === 1 ? '' : 's'}
+                        </p>
                       </TableCell>
                       <TableCell>{locationName(count.locationId)}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {count._count.lines}
-                      </TableCell>
                       <TableCell>
                         <StatusPill status={count.status} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Link
+                          aria-current={count.id === loaded.selectedCount?.id ? 'true' : undefined}
+                          className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+                          href={`${route}?selected=${count.id}`}
+                        >
+                          {count.id === loaded.selectedCount?.id ? 'Selected' : 'Review'}
+                        </Link>
                       </TableCell>
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
                     <TableCell colSpan={4} className="py-10 text-center text-text-muted">
-                      No physical counts recorded yet.
+                      No physical counts yet. Create one above to begin.
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </div>
+        </SectionCard>
+
+        <SectionCard>
+          {loaded.selectedCount ? (
+            <>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="font-mono text-xs uppercase tracking-wider text-text-muted">
+                    Selected count
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-text-strong">
+                    {loaded.selectedCount.reference || 'Unreferenced count'}
+                  </h2>
+                  <p className="mt-1 text-sm text-text-muted">
+                    {locationName(loaded.selectedCount.locationId)} · created{' '}
+                    {formatDate(loaded.selectedCount.countedAt)}
+                  </p>
+                </div>
+                <StatusPill status={loaded.selectedCount.status} />
+              </div>
+
+              {loaded.selectedCount.status === 'DRAFT' && (
+                <>
+                  <form action={addCountLine} className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <input type="hidden" name="stockCountId" value={loaded.selectedCount.id} />
+                    <label className="text-sm text-text-body">
+                      Stock item
+                      <select
+                        name="stockItemId"
+                        required
+                        disabled={!countable}
+                        className={inputClass}
+                      >
+                        <option value="">Select stock item</option>
+                        {loaded.stockItems.map((item) => (
+                          <option value={item.id} key={item.id}>
+                            {item.ingredient.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-sm text-text-body">
+                      Counted quantity
+                      <Input
+                        name="countedQuantity"
+                        inputMode="decimal"
+                        pattern="(?:0|\d+(?:\.\d+)?|\.\d+)"
+                        required
+                        disabled={!countable}
+                        aria-describedby="counted-quantity-help"
+                        className="mt-1 min-h-11"
+                      />
+                    </label>
+                    <p id="counted-quantity-help" className="text-xs text-text-muted sm:col-span-2">
+                      Use zero or a positive decimal value.
+                    </p>
+                    <Button
+                      type="submit"
+                      disabled={!countable || !loaded.stockItems.length}
+                      className="min-h-11 sm:col-span-2"
+                    >
+                      Add count line
+                    </Button>
+                  </form>
+                  <form action={submitCount} className="mt-3 border-t border-border-subtle pt-4">
+                    <input type="hidden" name="stockCountId" value={loaded.selectedCount.id} />
+                    <Button
+                      type="submit"
+                      disabled={!countable || !loaded.selectedCount.lines.length}
+                      variant="secondary"
+                      className="min-h-11"
+                    >
+                      Submit and freeze count
+                    </Button>
+                    {!loaded.selectedCount.lines.length && (
+                      <p className="mt-2 text-xs text-text-muted">
+                        Add at least one count line before submitting.
+                      </p>
+                    )}
+                  </form>
+                </>
+              )}
+
+              <div className="mt-5 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Item</TableHead>
+                      <TableHead className="text-right">Expected</TableHead>
+                      <TableHead className="text-right">Counted</TableHead>
+                      <TableHead className="text-right">Variance</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {loaded.selectedCount.lines.length ? (
+                      loaded.selectedCount.lines.map((line) => (
+                        <TableRow key={line.id}>
+                          <TableCell>{itemName(line.stockItemId)}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {loaded.selectedCount!.status === 'DRAFT'
+                              ? 'Pending freeze'
+                              : String(line.snapshotQuantity)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {String(line.countedQuantity)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {loaded.selectedCount!.status === 'DRAFT'
+                              ? 'Pending freeze'
+                              : String(line.varianceQuantity)}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={4} className="py-8 text-center text-text-muted">
+                          No items counted yet.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {loaded.selectedCount.status === 'SUBMITTED' && (
+                <form action={postCount} className="mt-4 border-t border-border-subtle pt-4">
+                  <input type="hidden" name="stockCountId" value={loaded.selectedCount.id} />
+                  <Button type="submit" disabled={!countable} className="min-h-11">
+                    Post reconciliation
+                  </Button>
+                  <p className="mt-2 text-xs text-text-muted">
+                    Posting writes each non-zero variance to the inventory ledger and cannot be
+                    edited afterward.
+                  </p>
+                </form>
+              )}
+              {loaded.selectedCount.status === 'POSTED' && (
+                <p className="mt-4 text-sm text-text-muted">
+                  Reconciliation posted {formatDate(loaded.selectedCount.postedAt)}. This count is
+                  read-only.
+                </p>
+              )}
+            </>
+          ) : (
+            <div className="py-10 text-center">
+              <h2 className="text-lg font-semibold text-text-strong">No count selected</h2>
+              <p className="mt-2 text-sm text-text-muted">
+                Create a physical count to begin the workflow.
+              </p>
+            </div>
+          )}
         </SectionCard>
 
         <SectionCard>
