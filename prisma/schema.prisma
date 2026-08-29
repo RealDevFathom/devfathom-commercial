@@ -2384,6 +2384,8 @@ model RestaurantBranch {
   terminalReconciliations     RestaurantTerminalReconciliation[]
   walletEnrollmentLinks       WalletEnrollmentLink[]
   walletEnrollmentAttempts    WalletEnrollmentAttempt[]
+  printRoutes                 RestaurantPrintRoute[]
+  printJobs                   RestaurantPrintJob[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -3849,10 +3851,72 @@ model RestaurantKitchenStation {
   routingRules RestaurantStationRoutingRule[]
   tickets      RestaurantKitchenTicket[]
   devices      RestaurantRegisteredDevice[]
+  printRoutes  RestaurantPrintRoute[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId])
   @@map("restaurant_kitchen_stations")
+}
+
+enum RestaurantPrintDocumentType {
+  KITCHEN_TICKET
+  BAR_TICKET
+  RECEIPT
+}
+
+enum RestaurantPrintJobStatus {
+  PENDING
+  OFFLINE
+  NO_PRINTER
+  PRINTED
+}
+
+/// Durable, vendor-neutral branch/station/document routing. Printer identifiers
+/// are opaque adapter inputs; no hardware vendor contract is persisted here.
+model RestaurantPrintRoute {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  stationId      String?
+  documentType   RestaurantPrintDocumentType
+  printerId      String
+  enabled        Boolean                     @default(true)
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  branch  RestaurantBranch          @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+  station RestaurantKitchenStation? @relation(fields: [organizationId, stationId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, branchId, stationId, documentType])
+  @@index([organizationId, branchId])
+  @@map("restaurant_print_routes")
+}
+
+/// Append-only print intent and retry state. The unique tenant/branch key is the
+/// durable replay boundary; attempts update only delivery state, never payload.
+model RestaurantPrintJob {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  stationId      String?
+  idempotencyKey String
+  documentType   RestaurantPrintDocumentType
+  document       Json
+  status         RestaurantPrintJobStatus    @default(PENDING)
+  printerId      String?
+  byteCount      Int?
+  attemptCount   Int                         @default(0)
+  lastAttemptAt  DateTime?
+  printedAt      DateTime?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, idempotencyKey])
+  @@index([organizationId, status, createdAt])
+  @@map("restaurant_print_jobs")
 }
 
 /// M4: a routing rule targeting a station. Exactly one of `productId` or
