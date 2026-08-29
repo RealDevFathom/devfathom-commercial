@@ -138,7 +138,7 @@ export function StaffJobRolesDialog({
         ) : (
           <div className="space-y-6">
             <div className="rounded-md border border-border-subtle bg-surface-muted px-4 py-3">
-              <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-faint">
+              <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-strong">
                 Branch
               </span>
               <p className="mt-1 text-sm font-medium text-text-strong">
@@ -214,9 +214,17 @@ export function StaffJobRolesDialog({
                 </label>
               </div>
               <div className="flex flex-wrap gap-2" aria-label="Capability provenance legend">
-                <StatusPill status="Inherited from role" tone="neutral" />
+                <StatusPill
+                  status="Inherited from role"
+                  tone="neutral"
+                  className="!text-text-strong"
+                />
                 <StatusPill status="Direct exception" tone="success" />
-                <StatusPill status="Denied for person" tone="warning" />
+                <StatusPill
+                  status="Denied for person"
+                  tone="warning"
+                  className="!text-text-strong"
+                />
               </div>
               {visible.length === 0 ? (
                 <p className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">
@@ -254,9 +262,10 @@ export function StaffJobRolesDialog({
                                   : 'Denied'
                             }
                             tone={tones[state]}
+                            className={state === 'direct' ? undefined : '!text-text-strong'}
                           />
                         ) : (
-                          <span className="text-xs text-text-faint">Not granted</span>
+                          <span className="text-xs text-text-strong">Not granted</span>
                         )}
                         <div
                           className="flex gap-1"
