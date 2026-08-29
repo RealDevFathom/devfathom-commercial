@@ -146,6 +146,23 @@ export function buildActor(
   return { staffProfileId, deviceId, idempotencyKey };
 }
 
+/**
+ * Object-level authorization for terminal order mutations. Organization RLS remains
+ * the outer boundary; this pins an untrusted order id to the authenticated device's
+ * branch before any command, co-authorization, or other side effect can run.
+ */
+export async function requireOrderInDeviceBranch(
+  db: ScopedDb,
+  orderId: string,
+  branchId: string
+): Promise<void> {
+  const order = await db.restaurantOrder.findFirst({
+    where: { id: orderId, branchId },
+    select: { id: true },
+  });
+  if (!order) throw new OrderCommandError('The order does not exist.', 'ORDER_NOT_FOUND');
+}
+
 function json(body: unknown, status: number): NextResponse {
   return NextResponse.json(body, { status });
 }
@@ -241,6 +258,16 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
       if (!parsedJson.ok) return parsedJson.response;
       const parsed = schema.safeParse(parsedJson.data);
       if (!parsed.success) return invalidBody(parsed.error.issues);
+
+      const data = parsed.data as unknown;
+      if (
+        typeof data === 'object' &&
+        data !== null &&
+        'orderId' in data &&
+        typeof data.orderId === 'string'
+      ) {
+        await requireOrderInDeviceBranch(ctx.db, data.orderId, ctx.device.branchId);
+      }
 
       const actor = buildActor(operator.staffProfileId, ctx.device.id, key);
       const result = await run({ ctx, data: parsed.data, actor });
