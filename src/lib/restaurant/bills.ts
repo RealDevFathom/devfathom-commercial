@@ -976,24 +976,25 @@ export async function settleBill(tx: ScopedDb, input: SettleBillInput): Promise<
   return { billId: bill.id, receiptNumber, alreadySettled: false };
 }
 
+export type SettlementBucketEvidence = {
+  ruleVersionId: string;
+  paymentCategory: string;
+  priceMode: 'EXCLUSIVE' | 'INCLUSIVE';
+  rate: Prisma.Decimal;
+  taxableAmount: Prisma.Decimal;
+  taxAmount: Prisma.Decimal;
+  grossAmount: Prisma.Decimal;
+  preDiscountGrossAmount: Prisma.Decimal;
+  beforeTaxDiscountAmount: Prisma.Decimal;
+  afterTaxDiscountAmount: Prisma.Decimal;
+};
+
 export type SettlementLineEvidence = {
   billLineId: string;
   taxAmount: Prisma.Decimal;
   serviceChargeAmount: Prisma.Decimal;
   lineTotal: Prisma.Decimal;
-  buckets: readonly {
-    ruleVersionId: string;
-    paymentCategory: string;
-    priceMode: 'EXCLUSIVE' | 'INCLUSIVE';
-    rate: Prisma.Decimal;
-    taxableAmount: Prisma.Decimal;
-    taxAmount: Prisma.Decimal;
-    grossAmount: Prisma.Decimal;
-    preDiscountGrossAmount: Prisma.Decimal;
-    beforeTaxDiscountAmount: Prisma.Decimal;
-    afterTaxDiscountAmount: Prisma.Decimal;
-    unitOrdinal?: number | null;
-  }[];
+  buckets: readonly (SettlementBucketEvidence & { unitOrdinal: number })[];
 };
 
 export type FinalizeBillSettlementInput = SettleBillInput & {
@@ -1011,6 +1012,8 @@ export type FinalizeBillSettlementInput = SettleBillInput & {
   promotionEvaluationId?: string | null;
   promotionEvaluationHash?: string | null;
   lines: readonly SettlementLineEvidence[];
+  /** Taxable service charge evidence is frozen separately from merchandise. */
+  serviceChargeBuckets: readonly SettlementBucketEvidence[];
 };
 
 export type FinalizeBillSettlementResult = SettleBillResult & {
@@ -1054,15 +1057,53 @@ export async function finalizeBillSettlement(
     );
   }
   const lineTotal = sum(input.lines.map((line) => line.lineTotal));
+  const lineTaxTotal = sum(input.lines.map((line) => line.taxAmount));
+  const lineServiceTotal = sum(input.lines.map((line) => line.serviceChargeAmount));
+  const merchandiseBucketTax = sum(
+    input.lines.flatMap((line) => line.buckets.map((bucket) => bucket.taxAmount))
+  );
+  const serviceBucketTax = sum(input.serviceChargeBuckets.map((bucket) => bucket.taxAmount));
+  const serviceBucketBasis = sum(
+    input.serviceChargeBuckets.map((bucket) =>
+      bucket.priceMode === 'INCLUSIVE' ? bucket.grossAmount : bucket.taxableAmount
+    )
+  );
   const componentTotal = add(
     sub(add(add(input.subtotal, input.taxTotal), input.serviceChargeTotal), bill.compTotal),
     sub(input.roundingAdjustment, input.discountTotal)
   );
   if (
     !equals(lineTotal, sub(input.grandTotal, input.roundingAdjustment)) ||
+    !equals(lineTaxTotal, input.taxTotal) ||
+    !equals(lineServiceTotal, input.serviceChargeTotal) ||
+    !equals(add(merchandiseBucketTax, serviceBucketTax), input.taxTotal) ||
+    !equals(serviceBucketBasis, input.serviceChargeTotal) ||
     !equals(componentTotal, input.grandTotal)
   ) {
     throw new BillCommandError('Settlement totals do not reconcile.', 'INVALID_SPLIT');
+  }
+  for (const line of input.lines) {
+    if (
+      line.buckets.some((bucket) => !Number.isInteger(bucket.unitOrdinal) || bucket.unitOrdinal < 0)
+    ) {
+      throw new BillCommandError(
+        'Every merchandise bucket requires a non-negative unit ordinal.',
+        'INVALID_SPLIT'
+      );
+    }
+    const merchandisePayable = sum(
+      line.buckets.map((bucket) => sub(bucket.grossAmount, bucket.afterTaxDiscountAmount))
+    );
+    const merchandiseTax = sum(line.buckets.map((bucket) => bucket.taxAmount));
+    const allocatedServiceTax = sub(line.taxAmount, merchandiseTax);
+    if (
+      !equals(
+        add(add(merchandisePayable, line.serviceChargeAmount), allocatedServiceTax),
+        line.lineTotal
+      )
+    ) {
+      throw new BillCommandError('Settlement line buckets do not reconcile.', 'INVALID_SPLIT');
+    }
   }
 
   const evidencePayload = {
@@ -1116,9 +1157,25 @@ export async function finalizeBillSettlement(
            ${bucket.taxableAmount}, ${bucket.taxAmount}, ${bucket.grossAmount},
            ${bucket.preDiscountGrossAmount}, ${bucket.beforeTaxDiscountAmount},
            ${bucket.afterTaxDiscountAmount}, 1, 'MERCHANDISE', ${line.billLineId},
-           ${bucket.unitOrdinal ?? null})
+           ${bucket.unitOrdinal})
       `;
     }
+  }
+  for (const bucket of input.serviceChargeBuckets) {
+    await tx.$executeRaw`
+      INSERT INTO "restaurant_tax_rate_bucket_snapshots"
+        ("id", "organizationId", "snapshotId", "ruleVersionId", "paymentCategory",
+         "priceMode", "rate", "taxableAmount", "taxAmount", "grossAmount",
+         "preDiscountGrossAmount", "beforeTaxDiscountAmount", "afterTaxDiscountAmount",
+         "evidenceVersion", "allocationKind", "billLineId", "unitOrdinal")
+      VALUES
+        (gen_random_uuid()::text, ${input.organizationId}, ${snapshotId},
+         ${bucket.ruleVersionId}, ${bucket.paymentCategory},
+         ${bucket.priceMode}::"RestaurantTaxPriceMode", ${bucket.rate},
+         ${bucket.taxableAmount}, ${bucket.taxAmount}, ${bucket.grossAmount},
+         ${bucket.preDiscountGrossAmount}, ${bucket.beforeTaxDiscountAmount},
+         ${bucket.afterTaxDiscountAmount}, 1, 'SERVICE_CHARGE', NULL, NULL)
+    `;
   }
   await tx.restaurantBill.update({
     where: { id: bill.id },
