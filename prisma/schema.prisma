@@ -2484,6 +2484,7 @@ model RestaurantTaxTransactionSnapshot {
   id                      String   @id @default(cuid())
   organizationId          String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                String
+  billId                  String?
   transactionReference    String
   profileVersionId        String
   currency                String
@@ -2502,6 +2503,7 @@ model RestaurantTaxTransactionSnapshot {
   createdAt               DateTime @default(now())
 
   branch            RestaurantBranch                        @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  bill              RestaurantBill?                         @relation(fields: [organizationId, billId], references: [organizationId, id], onDelete: Restrict)
   profile           RestaurantTaxProfileVersion             @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
   reversedSnapshot  RestaurantTaxTransactionSnapshot?       @relation("TaxSnapshotReversal", fields: [organizationId, reversesSnapshotId], references: [organizationId, id], onDelete: Restrict)
   reversals         RestaurantTaxTransactionSnapshot[]      @relation("TaxSnapshotReversal")
@@ -2510,6 +2512,7 @@ model RestaurantTaxTransactionSnapshot {
 
   @@unique([organizationId, transactionReference])
   @@unique([organizationId, id])
+  @@unique([organizationId, id, billId])
   @@index([organizationId])
   @@index([reversesSnapshotId])
   @@map("restaurant_tax_transaction_snapshots")
@@ -2552,15 +2555,16 @@ model RestaurantTaxTenderAllocationSnapshot {
   id                   String               @id @default(cuid())
   organizationId       String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   snapshotId           String
+  billId               String
   rateBucketSnapshotId String
   originalTenderId     String
   paymentCategory      RestaurantTenderType
   cents                BigInt
   createdAt            DateTime             @default(now())
 
-  snapshot       RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId], references: [organizationId, id], onDelete: Restrict, map: "restaurant_tax_tender_allocation_snapshot_fkey")
+  snapshot       RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId, billId], references: [organizationId, id, billId], onDelete: Restrict, map: "restaurant_tax_tender_allocation_snapshot_bill_fkey")
   rateBucket     RestaurantTaxRateBucketSnapshot  @relation(fields: [organizationId, snapshotId, rateBucketSnapshotId], references: [organizationId, snapshotId, id], onDelete: Restrict, map: "restaurant_tax_tender_allocation_bucket_fkey")
-  originalTender RestaurantTender                 @relation(fields: [organizationId, originalTenderId, paymentCategory], references: [organizationId, id, type], onDelete: Restrict, map: "restaurant_tax_tender_allocation_tender_category_fkey")
+  originalTender RestaurantTender                 @relation(fields: [organizationId, billId, originalTenderId, paymentCategory], references: [organizationId, billId, id, type], onDelete: Restrict, map: "restaurant_tax_tender_allocation_tender_bill_category_fkey")
 
   @@unique([snapshotId, rateBucketSnapshotId, originalTenderId])
   @@index([organizationId])
@@ -4414,6 +4418,7 @@ model RestaurantBill {
   refunds                 RestaurantRefund[]
   loyaltyPointsEntries    LoyaltyPointsEntry[]
   terminalReconciliations RestaurantTerminalReconciliation[]
+  taxTransactionSnapshots RestaurantTaxTransactionSnapshot[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -4551,6 +4556,7 @@ model RestaurantTender {
 
   @@unique([organizationId, id])
   @@unique([organizationId, id, type])
+  @@unique([organizationId, billId, id, type])
   @@index([organizationId])
   @@index([billId])
   @@index([businessDate])

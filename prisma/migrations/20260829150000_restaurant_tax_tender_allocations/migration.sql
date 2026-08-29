@@ -7,11 +7,23 @@ CREATE UNIQUE INDEX "restaurant_tax_buckets_org_snapshot_id_key"
 CREATE UNIQUE INDEX "restaurant_tenders_org_id_type_key"
   ON "restaurant_tenders"("organizationId", "id", "type");
 
+ALTER TABLE "restaurant_tax_transaction_snapshots" ADD COLUMN "billId" TEXT;
+ALTER TABLE "restaurant_tax_transaction_snapshots"
+  ADD CONSTRAINT "restaurant_tax_snapshot_bill_fkey"
+  FOREIGN KEY ("organizationId", "billId")
+  REFERENCES "restaurant_bills"("organizationId", "id") ON DELETE RESTRICT;
+CREATE UNIQUE INDEX "restaurant_tax_snapshots_org_id_bill_key"
+  ON "restaurant_tax_transaction_snapshots"("organizationId", "id", "billId");
+
+CREATE UNIQUE INDEX "restaurant_tenders_org_bill_id_type_key"
+  ON "restaurant_tenders"("organizationId", "billId", "id", "type");
+
 CREATE TABLE "restaurant_tax_tender_allocation_snapshots" (
   "id" TEXT PRIMARY KEY,
   "organizationId" TEXT NOT NULL
     DEFAULT current_setting('app.current_organization_id', true),
   "snapshotId" TEXT NOT NULL,
+  "billId" TEXT NOT NULL,
   "rateBucketSnapshotId" TEXT NOT NULL,
   "originalTenderId" TEXT NOT NULL,
   "paymentCategory" "RestaurantTenderType" NOT NULL,
@@ -19,17 +31,17 @@ CREATE TABLE "restaurant_tax_tender_allocation_snapshots" (
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "restaurant_tax_tender_allocation_nonnegative_cents_ck"
     CHECK ("cents" >= 0),
-  CONSTRAINT "restaurant_tax_tender_allocation_snapshot_fkey"
-    FOREIGN KEY ("organizationId", "snapshotId")
-    REFERENCES "restaurant_tax_transaction_snapshots"("organizationId", "id")
+  CONSTRAINT "restaurant_tax_tender_allocation_snapshot_bill_fkey"
+    FOREIGN KEY ("organizationId", "snapshotId", "billId")
+    REFERENCES "restaurant_tax_transaction_snapshots"("organizationId", "id", "billId")
     ON DELETE RESTRICT,
   CONSTRAINT "restaurant_tax_tender_allocation_bucket_fkey"
     FOREIGN KEY ("organizationId", "snapshotId", "rateBucketSnapshotId")
     REFERENCES "restaurant_tax_rate_bucket_snapshots"("organizationId", "snapshotId", "id")
     ON DELETE RESTRICT,
-  CONSTRAINT "restaurant_tax_tender_allocation_tender_category_fkey"
-    FOREIGN KEY ("organizationId", "originalTenderId", "paymentCategory")
-    REFERENCES "restaurant_tenders"("organizationId", "id", "type")
+  CONSTRAINT "restaurant_tax_tender_allocation_tender_bill_category_fkey"
+    FOREIGN KEY ("organizationId", "billId", "originalTenderId", "paymentCategory")
+    REFERENCES "restaurant_tenders"("organizationId", "billId", "id", "type")
     ON DELETE RESTRICT
 );
 

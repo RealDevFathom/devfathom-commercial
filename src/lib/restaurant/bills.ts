@@ -1245,6 +1245,29 @@ export async function finalizeBillSettlement(
   ];
   if (input.tenderTaxAllocations !== undefined) {
     validateTenderTaxAllocations(input.tenderTaxAllocations, frozenBuckets, input.taxTotal);
+    const tenderFacts = new Map(
+      (
+        await tx.restaurantTender.findMany({
+          where: {
+            id: { in: [...new Set(input.tenderTaxAllocations.map((row) => row.originalTenderId))] },
+          },
+          select: { id: true, billId: true, type: true },
+        })
+      ).map((tender) => [tender.id, tender] as const)
+    );
+    if (
+      input.tenderTaxAllocations.some((allocation) => {
+        const tender = tenderFacts.get(allocation.originalTenderId);
+        return (
+          !tender || tender.billId !== input.billId || tender.type !== allocation.paymentCategory
+        );
+      })
+    ) {
+      throw new BillCommandError(
+        'Tender tax allocation must reference a tender on the bill being settled.',
+        'INVALID_SPLIT'
+      );
+    }
   }
 
   const evidencePayload = {
@@ -1260,12 +1283,12 @@ export async function finalizeBillSettlement(
   };
   const snapshots = await tx.$queryRaw<{ id: string }[]>`
     INSERT INTO "restaurant_tax_transaction_snapshots"
-      ("id", "organizationId", "branchId", "transactionReference", "profileVersionId",
+      ("id", "organizationId", "branchId", "billId", "transactionReference", "profileVersionId",
        "currency", "subtotal", "discountTotal", "serviceChargeTotal", "taxTotal",
        "grandTotal", "settledAt", "promotionEvaluationId", "promotionEvaluationHash",
        "evidenceVersion", "evidencePayload")
     VALUES
-      (gen_random_uuid()::text, ${input.organizationId}, ${bill.branchId},
+      (gen_random_uuid()::text, ${input.organizationId}, ${bill.branchId}, ${input.billId},
        ${input.transactionReference}, ${input.profileVersionId}, ${input.currency},
        ${input.subtotal}, ${input.discountTotal}, ${input.serviceChargeTotal}, ${input.taxTotal},
        ${input.grandTotal}, ${input.at}, ${input.promotionEvaluationId ?? null},
@@ -1335,6 +1358,7 @@ export async function finalizeBillSettlement(
           id: randomUUID(),
           organizationId: input.organizationId,
           snapshotId,
+          billId: input.billId,
           rateBucketSnapshotId,
           originalTenderId: allocation.originalTenderId,
           paymentCategory: allocation.paymentCategory,

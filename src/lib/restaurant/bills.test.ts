@@ -871,6 +871,66 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(rolledBack.reservation.state).toBe('RESERVED');
     expect(rolledBack.loyaltyEntries).toBe(0);
 
+    const wrongBill = await makeBill('wrong_bill');
+    const foreignBill = await makeBill('foreign_bill');
+    const wrongBillTender = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantTender.create({
+        data: {
+          billId: foreignBill.billId,
+          type: 'CARD',
+          amount: D('14.30'),
+          businessDate: new Date('2026-08-29T00:00:00.000Z'),
+          staffProfileId: ids.operator,
+          deviceId,
+        },
+        select: { id: true },
+      })
+    );
+    const wrongBillInput: FinalizeBillSettlementInput = settlementInput(
+      wrongBill.billId,
+      wrongBill.billLineId,
+      wrongBill.evaluationId,
+      'wrong_bill'
+    );
+    wrongBillInput.tenderTaxAllocations = [
+      {
+        originalTenderId: wrongBillTender.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'MERCHANDISE',
+          billLineId: wrongBill.billLineId,
+          unitOrdinal: 0,
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 120,
+      },
+      {
+        originalTenderId: wrongBillTender.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'SERVICE_CHARGE',
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 10,
+      },
+    ];
+    await expect(
+      deps.withTenantDb(orgId, (tx) => deps.bills.finalizeBillSettlement(tx, wrongBillInput))
+    ).rejects.toThrow('tender on the bill being settled');
+    const rejectedWrites = await read(async (tx) => ({
+      snapshots: await tx.restaurantTaxTransactionSnapshot.count({
+        where: { transactionReference: `tax_settlement_wrong_bill_${suffix}` },
+      }),
+      allocations: await tx.restaurantTaxTenderAllocationSnapshot.count({
+        where: { billId: wrongBill.billId },
+      }),
+      bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: wrongBill.billId } }),
+    }));
+    expect(rejectedWrites).toMatchObject({ snapshots: 0, allocations: 0 });
+    expect(rejectedWrites.bill).toMatchObject({ status: 'OPEN', taxTotal: D('0') });
+
     const committed = await makeBill('commit');
     const [tenderA, tenderB] = await deps.withTenantDb(orgId, (tx) =>
       Promise.all([
@@ -1006,6 +1066,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(frozen.line.serviceChargeAmount.toString()).toBe('1');
     expect(frozen.line.lineTotal.toString()).toBe('14.3');
     expect(frozen.snapshot.evidenceVersion).toBe(1);
+    expect(frozen.snapshot.billId).toBe(committed.billId);
     expect(frozen.buckets).toHaveLength(2);
     expect(frozen.buckets.map((bucket) => bucket.allocationKind)).toEqual([
       'MERCHANDISE',
@@ -1034,6 +1095,13 @@ describeIfDatabase('bills command layer (real DB)', () => {
         })
       )
     ).rejects.toMatchObject({ code: 'P2039' });
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.delete({
+          where: { id: frozen.tenderAllocations[0]!.id },
+        })
+      )
+    ).rejects.toMatchObject({ code: 'P2039' });
     const firstAllocation = frozen.tenderAllocations[0]!;
     await expect(
       deps.withTenantDb(
@@ -1041,10 +1109,10 @@ describeIfDatabase('bills command layer (real DB)', () => {
         (tx) =>
           tx.$executeRaw`
           INSERT INTO "restaurant_tax_tender_allocation_snapshots"
-            ("id", "organizationId", "snapshotId", "rateBucketSnapshotId",
+            ("id", "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
              "originalTenderId", "paymentCategory", "cents")
           VALUES
-            (gen_random_uuid()::text, ${orgId}, ${result.snapshotId},
+            (gen_random_uuid()::text, ${orgId}, ${result.snapshotId}, ${committed.billId},
              ${firstAllocation.rateBucketSnapshotId}, ${firstAllocation.originalTenderId},
              ${firstAllocation.paymentCategory}::"RestaurantTenderType", ${firstAllocation.cents})
         `
@@ -1056,12 +1124,27 @@ describeIfDatabase('bills command layer (real DB)', () => {
         (tx) =>
           tx.$executeRaw`
           INSERT INTO "restaurant_tax_tender_allocation_snapshots"
-            ("id", "organizationId", "snapshotId", "rateBucketSnapshotId",
+            ("id", "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
              "originalTenderId", "paymentCategory", "cents")
           VALUES
-            (gen_random_uuid()::text, ${orgId}, 'different-snapshot',
+            (gen_random_uuid()::text, ${orgId}, 'different-snapshot', ${committed.billId},
              ${firstAllocation.rateBucketSnapshotId}, ${firstAllocation.originalTenderId},
              ${firstAllocation.paymentCategory}::"RestaurantTenderType", ${firstAllocation.cents})
+        `
+      )
+    ).rejects.toMatchObject({ code: 'P2010' });
+    await expect(
+      deps.withTenantDb(
+        orgId,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "restaurant_tax_tender_allocation_snapshots"
+            ("id", "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+             "originalTenderId", "paymentCategory", "cents")
+          VALUES
+            (gen_random_uuid()::text, ${orgId}, ${result.snapshotId}, ${committed.billId},
+             ${firstAllocation.rateBucketSnapshotId}, ${wrongBillTender.id},
+             'CARD'::"RestaurantTenderType", 1)
         `
       )
     ).rejects.toMatchObject({ code: 'P2010' });
