@@ -82,6 +82,25 @@ export function processTerminalEvent(db: ScopedDb, input: ProcessInput) {
 }
 
 async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInput) {
+  // Serialize one provider event before checking for its reconciliation. The
+  // unique reconciliation/idempotency indexes remain the final integrity
+  // boundary; this transaction-scoped lock turns their concurrent loser into
+  // the same deterministic replay returned by a later sequential delivery.
+  // Include the RLS tenant in the key so identical provider ids in two
+  // organizations do not block one another.
+  await db.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(
+        jsonb_build_array(
+          current_setting('app.current_organization_id'),
+          ${input.source}::text,
+          ${input.externalEventId}::text
+        )::text,
+        0
+      )
+    )::text
+  `;
+
   const replay = await db.restaurantTerminalReconciliation.findFirst({
     where: { source: input.source, externalEventId: input.externalEventId },
   });
