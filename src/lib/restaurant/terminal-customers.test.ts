@@ -18,7 +18,9 @@ import {
   customerErrorResponse,
   customerSearchQuery,
   maskCustomerIdentifier,
+  resolveWalletScan,
   searchConnectedCustomers,
+  walletScanQuery,
 } from './terminal-customers';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
@@ -36,6 +38,11 @@ function model(): Delegate {
 function makeDb() {
   const db = {
     restaurantCustomer: model(),
+    customerIdentifier: model(),
+    loyaltyPointsEntry: {
+      ...model(),
+      aggregate: vi.fn().mockResolvedValue({ _sum: { points: null } }),
+    },
     restaurantOrder: model(),
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
@@ -80,6 +87,18 @@ describe('strict input schemas', () => {
         .success
     ).toBe(false);
     expect(customerAttachBody.safeParse({ orderId: '', customerId: 'c1' }).success).toBe(false);
+  });
+
+  it('accepts only the DFW1 wallet barcode envelope', () => {
+    const alias = `wla_${'0'.repeat(26)}`;
+    expect(walletScanQuery.safeParse({ code: `DFW1:${alias}` }).success).toBe(true);
+    expect(walletScanQuery.safeParse({ code: alias }).success).toBe(false);
+    expect(walletScanQuery.safeParse({ code: `https://wallet.example/${alias}` }).success).toBe(
+      false
+    );
+    expect(
+      walletScanQuery.safeParse({ code: `DFW1:${alias}`, organizationId: 'org2' }).success
+    ).toBe(false);
   });
 });
 
@@ -126,6 +145,15 @@ describe('searchConnectedCustomers', () => {
     expect(JSON.stringify(match)).not.toContain('+923001234567');
   });
 
+  it('does not search or return wallet aliases through the PII-confirmation search flow', async () => {
+    db.restaurantCustomer.findMany.mockResolvedValue([row]);
+    await searchConnectedCustomers(scoped(), { query: 'ali' });
+
+    const args = db.restaurantCustomer.findMany.mock.calls[0][0];
+    expect(args.where.OR[3].identifiers.some.kind).toEqual({ in: ['EMAIL', 'PHONE'] });
+    expect(args.select.identifiers.where.kind).toEqual({ in: ['EMAIL', 'PHONE'] });
+  });
+
   it('never selects the back-office PII columns a terminal has no business holding', async () => {
     db.restaurantCustomer.findMany.mockResolvedValue([]);
     await searchConnectedCustomers(scoped(), { query: 'ali' });
@@ -149,6 +177,49 @@ describe('searchConnectedCustomers', () => {
   it('refuses to run a too-short query even when the schema is bypassed', async () => {
     expect(await searchConnectedCustomers(scoped(), { query: 'a' })).toEqual([]);
     expect(db.restaurantCustomer.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveWalletScan (zero-PII)', () => {
+  it('returns exactly the ids and live loyalty facts needed for attach/redeem', async () => {
+    db.customerIdentifier.findFirst.mockResolvedValue({
+      customerId: 'c1',
+      customer: { loyaltyAccount: { id: 'la1', active: true } },
+    });
+    db.loyaltyPointsEntry.aggregate.mockResolvedValue({ _sum: { points: 240 } });
+
+    const result = await resolveWalletScan(scoped(), `wla_${'0'.repeat(26)}`);
+    expect(result).toEqual({
+      customerId: 'c1',
+      loyalty: { accountId: 'la1', accountActive: true, balance: 240 },
+    });
+    expect(Object.keys(result ?? {})).toEqual(['customerId', 'loyalty']);
+    expect(Object.keys(result?.loyalty ?? {})).toEqual(['accountId', 'accountActive', 'balance']);
+    expect(JSON.stringify(result)).not.toMatch(/displayName|email|phone|organizationId|branchId/);
+  });
+
+  it('fails closed for unknown, revoked, anonymized, and foreign aliases', async () => {
+    db.customerIdentifier.findFirst.mockResolvedValue(null);
+
+    await expect(resolveWalletScan(scoped(), `wla_${'1'.repeat(26)}`)).resolves.toBeNull();
+    const where = db.customerIdentifier.findFirst.mock.calls[0][0].where;
+    expect(where).toEqual({
+      kind: 'WALLET',
+      normalizedValue: `wla_${'1'.repeat(26)}`,
+      customer: { anonymizedAt: null, walletPasses: { some: { status: 'ACTIVE' } } },
+    });
+    expect(db.loyaltyPointsEntry.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('returns a null account and zero balance without widening the response', async () => {
+    db.customerIdentifier.findFirst.mockResolvedValue({
+      customerId: 'c1',
+      customer: { loyaltyAccount: null },
+    });
+    await expect(resolveWalletScan(scoped(), `wla_${'2'.repeat(26)}`)).resolves.toEqual({
+      customerId: 'c1',
+      loyalty: { accountId: null, accountActive: false, balance: 0 },
+    });
   });
 });
 

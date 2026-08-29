@@ -116,6 +116,7 @@ export const FORBIDDEN_PERSIST_KEY_STEMS: readonly string[] = [
   'authorization',
   'customer',
   'loyalty',
+  'wallet',
   'cardholder',
   'cardnumber',
   'creditcard',
