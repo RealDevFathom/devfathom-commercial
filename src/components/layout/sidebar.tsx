@@ -36,6 +36,7 @@ import {
   Bell,
   Camera,
   CalendarClock,
+  Tags,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -181,6 +182,13 @@ export const navigation: NavItem[] = [
     href: '/restaurant/menus',
     icon: UtensilsCrossed,
     group: 'Restaurant',
+  },
+  {
+    label: 'Offers',
+    href: '/restaurant/promotions',
+    icon: Tags,
+    group: 'Restaurant',
+    module: 'restaurant-menu',
   },
   {
     label: 'Notifications',
