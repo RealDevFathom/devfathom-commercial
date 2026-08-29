@@ -34,7 +34,7 @@ export const actorFixture: Record<ActorKey, Actor> = {
     password: value('RESTAURANT_ACTOR_AGENCY_PASSWORD'),
     loginPath: '/login',
     host: 'app.localhost',
-    workspace: /agency/i,
+    workspace: /DevFathom/i,
   },
   restaurantAdmin: {
     email: value('RESTAURANT_ACTOR_ADMIN_EMAIL'),
@@ -110,9 +110,11 @@ export async function signInAs(page: Page, key: ActorKey) {
     const chooser = page.getByText('Choose a workspace', { exact: true });
     if (await chooser.isVisible({ timeout: 30_000 }).catch(() => false)) {
       await page.getByRole('button', { name: actor.workspace }).click();
+      if (key === 'agency') await expect(chooser).toBeHidden();
     }
   }
   await page.waitForURL((url) => url.pathname !== actor.loginPath, { timeout: 60_000 });
+  if (key === 'agency') expect(new URL(page.url()).pathname).not.toBe('/login');
   return new URL(page.url()).origin;
 }
 
