@@ -47,8 +47,8 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
   for (const viewport of viewports) {
     test(`${viewport.name}: SuperAdmin can inspect Restaurant creation`, async ({ page }) => {
       await page.setViewportSize(viewport);
-      await signInAs(page, 'superAdmin');
-      await page.goto('/platform/organizations/new?vertical=RESTAURANT');
+      const actorOrigin = await signInAs(page, 'superAdmin');
+      await page.goto(`${actorOrigin}/platform/organizations/new?vertical=RESTAURANT`);
       await accessiblePage(page, /organization/i);
       await expect(page.getByText(/restaurant/i).first()).toBeVisible();
       await page.screenshot({
@@ -59,10 +59,11 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
 
     test(`${viewport.name}: Agency remains usable and Restaurant is denied`, async ({ page }) => {
       await page.setViewportSize(viewport);
-      await signInAs(page, 'agency');
-      await page.goto('/dashboard');
-      await accessiblePage(page, /dashboard|workspace/i);
-      await page.goto('/restaurant/catalog');
+      const actorOrigin = await signInAs(page, 'agency');
+      await page.goto(`${actorOrigin}/dashboard`);
+      await expect(page).toHaveURL(`${actorOrigin}/dashboard`);
+      await accessiblePage(page, /^Good (?:morning|afternoon|evening), .+\.$/);
+      await page.goto(`${actorOrigin}/restaurant/catalog`);
       await expect(page).not.toHaveURL(/\/restaurant\/catalog$/);
       await page.screenshot({
         path: path.join(OUTPUT, `agency-denied-${viewport.name}.png`),
