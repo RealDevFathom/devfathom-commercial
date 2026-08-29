@@ -704,11 +704,16 @@ export function SopBoardView(props: SopBoardViewProps) {
 
               {evidenceAllowed ? (
                 <section className="mt-6 border-t border-border-subtle pt-5">
-                  <h3 className="font-semibold text-text-strong">Attach evidence metadata</h3>
+                  <h3 className="font-semibold text-text-strong">Capture proof</h3>
                   <p className="mt-1 text-sm text-text-muted">
-                    Record existing storage metadata. File bytes are not uploaded from this form.
+                    Upload photo or signature proof before completing a required checklist step.
                   </p>
-                  <form action={action} className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <form
+                    action="/api/restaurant/sop/evidence"
+                    className="mt-3 grid gap-3 sm:grid-cols-2"
+                    encType="multipart/form-data"
+                    method="post"
+                  >
                     <CommandScope
                       branchId={selectedBranch.id}
                       businessDate={businessDate}
@@ -716,35 +721,26 @@ export function SopBoardView(props: SopBoardViewProps) {
                       occurrenceId={selected.id}
                     />
                     <label className="text-sm text-text-body sm:col-span-2">
-                      Content hash · lowercase SHA-256
+                      Proof image
                       <Input
-                        className="mt-1 min-h-11 font-mono"
-                        maxLength={64}
-                        minLength={64}
-                        name="contentHashHex"
-                        pattern="[0-9a-f]{64}"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="mt-1 min-h-11 py-2"
+                        name="file"
                         required
+                        type="file"
                       />
                     </label>
                     <label className="text-sm text-text-body">
-                      MIME type
-                      <Input className="mt-1 min-h-11" maxLength={255} name="mimeType" required />
-                    </label>
-                    <label className="text-sm text-text-body">
-                      Size in bytes
-                      <Input
-                        className="mt-1 min-h-11"
-                        min="0"
-                        name="sizeBytes"
-                        required
-                        step="1"
-                        type="number"
-                      />
+                      Proof type
+                      <select className={selectClass} name="evidencePurpose" required>
+                        <option value="photo">Photo</option>
+                        <option value="signature">Signature</option>
+                      </select>
                     </label>
                     <label className="text-sm text-text-body">
                       Checklist step
-                      <select className={selectClass} name="occurrenceStepId">
-                        <option value="">Whole occurrence</option>
+                      <select className={selectClass} name="occurrenceStepId" required>
+                        <option value="">Select a step</option>
                         {selected.steps.map((step) =>
                           step.occurrenceStepId ? (
                             <option key={step.occurrenceStepId} value={step.occurrenceStepId}>
@@ -754,13 +750,14 @@ export function SopBoardView(props: SopBoardViewProps) {
                         )}
                       </select>
                     </label>
-                    <StaffSelect label="Uploader" name="uploaderStaffProfileId" staff={staff} />
-                    <label className="text-sm text-text-body sm:col-span-2">
-                      Storage reference
-                      <Input className="mt-1 min-h-11" maxLength={2000} name="storageRef" />
-                    </label>
-                    <Button className="min-h-11 sm:col-span-2" disabled={!action} type="submit">
-                      Attach evidence metadata
+                    <StaffSelect
+                      label="Uploader"
+                      name="uploaderStaffProfileId"
+                      required
+                      staff={staff}
+                    />
+                    <Button className="min-h-11 sm:col-span-2" type="submit">
+                      Upload proof
                     </Button>
                   </form>
                 </section>
@@ -1036,18 +1033,6 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             actorStaffProfileId,
           });
           success = 'Checklist step completed.';
-          break;
-        case 'attachEvidence':
-          await caller.attachEvidence({
-            occurrenceId,
-            occurrenceStepId: optionalField(form, 'occurrenceStepId'),
-            contentHashHex: field(form, 'contentHashHex'),
-            mimeType: field(form, 'mimeType'),
-            sizeBytes: Number(field(form, 'sizeBytes')),
-            storageRef: optionalField(form, 'storageRef'),
-            uploaderStaffProfileId: optionalField(form, 'uploaderStaffProfileId'),
-          });
-          success = 'Evidence metadata attached.';
           break;
         case 'submit':
           await caller.submit({ occurrenceId, actorStaffProfileId });

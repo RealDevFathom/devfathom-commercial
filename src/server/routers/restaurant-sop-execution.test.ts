@@ -199,10 +199,16 @@ describe('getOccurrence', () => {
 
 describe('start', () => {
   it('starts a SCHEDULED occurrence and annotates the audit', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SCHEDULED' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'SCHEDULED',
+      assignedStaffProfileId: 'staff_a',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+    });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, startedAt: new Date() });
 
-    const result = await caller().start({ occurrenceId: OCC_ID });
+    const result = await caller().start({ occurrenceId: OCC_ID, actorStaffProfileId: 'staff_a' });
     expect(result.status).toBe('IN_PROGRESS');
     expect(mocks.annotateAudit).toHaveBeenCalled();
   });
@@ -232,10 +238,17 @@ describe('submit', () => {
       id: OCC_ID,
       status: 'IN_PROGRESS',
       windowEndsAt: new Date(Date.now() + 3_600_000),
+      assignedStaffProfileId: 'staff_a',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      steps: [],
     });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: new Date() });
 
-    const result = await caller().submit({ occurrenceId: OCC_ID });
+    const result = await caller().submit({
+      occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_a',
+    });
     expect(result.status).toBe('SUBMITTED');
   });
 });
