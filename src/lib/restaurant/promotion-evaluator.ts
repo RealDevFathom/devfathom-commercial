@@ -26,7 +26,6 @@
  * not 14.50) only works if the second candidate's minimum still sees 100.00.
  */
 
-import { Prisma } from '@/generated/prisma/client';
 import {
   PROMOTION_ENGINE_VERSION,
   PROMOTION_MONEY_VERSION,
@@ -45,6 +44,7 @@ import {
 } from '@/lib/restaurant/promotion-contracts';
 import { resolvePromotionSchedule } from '@/lib/restaurant/promotion-schedule';
 import {
+  Decimal,
   ZERO,
   add,
   allocate,
@@ -53,11 +53,11 @@ import {
   roundMoney,
   sub,
   sum,
-} from '@/lib/restaurant/money';
+} from '@/lib/restaurant/money-arithmetic';
 
 /** A unit plus the charge still available to discount. Mutated as applications
  * are accepted, which is why the evaluator owns it and never hands it out. */
-type WorkingUnit = PromotionUnit & { remainingCharge: Prisma.Decimal };
+type WorkingUnit = PromotionUnit & { remainingCharge: Decimal };
 
 export type PromotionEvaluationInput = {
   context: PromotionEvaluationContext;
@@ -234,7 +234,7 @@ function eligibleUnitsFor(rule: PromotionRule, units: readonly WorkingUnit[]): W
  * selection-order units would silently make the tie-break depend on price.
  */
 function allocateBenefit(
-  benefit: Prisma.Decimal,
+  benefit: Decimal,
   selected: readonly WorkingUnit[]
 ): PromotionUnitAllocation[] {
   const ordered = [...selected].sort(compareUnitKeys);
@@ -266,7 +266,7 @@ function allocateBenefit(
 type BenefitDraft = {
   selected: WorkingUnit[];
   consumed: WorkingUnit[];
-  unrounded: Prisma.Decimal;
+  unrounded: Decimal;
   repeatable: boolean;
 };
 
@@ -281,7 +281,7 @@ function draftBenefit(rule: PromotionRule, eligible: readonly WorkingUnit[]): Be
     case 'PERCENT_OFF': {
       const basis = sum(eligible.map((unit) => unit.remainingCharge));
       if (!basis.greaterThan(0)) return null;
-      const rate = new Prisma.Decimal(rule.benefitBasisPoints ?? 0).dividedBy(10_000);
+      const rate = new Decimal(rule.benefitBasisPoints ?? 0).dividedBy(10_000);
       return {
         selected: [...eligible],
         consumed: [],
@@ -342,7 +342,7 @@ function draftBenefit(rule: PromotionRule, eligible: readonly WorkingUnit[]): Be
         if (!total.greaterThan(0)) return null;
         return { selected: getUnits, consumed: setUnits, unrounded: total, repeatable: true };
       }
-      const rate = new Prisma.Decimal(basisPoints).dividedBy(10_000);
+      const rate = new Decimal(basisPoints).dividedBy(10_000);
       const total = sum(getUnits.map((unit) => multiply(unit.remainingCharge, rate)));
       if (!total.greaterThan(0)) return null;
       return { selected: getUnits, consumed: setUnits, unrounded: total, repeatable: true };
