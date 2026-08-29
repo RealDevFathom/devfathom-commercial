@@ -195,6 +195,19 @@ describe('physical count workflow', () => {
       countedQuantity: '12.5',
     });
   });
+  it('redirects a created count without invalidating the redirecting route', async () => {
+    const { page } = await pageWithCount('DRAFT');
+    const create = new FormData();
+    create.set('locationId', 'loc-1');
+    create.set('reference', 'Saturday close');
+
+    await formAction(page, 'Create count')(create);
+
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+    expect(mocks.redirect).toHaveBeenCalledWith(
+      '/restaurant/inventory?notice=Physical+count+created.&kind=success&selected=count-new'
+    );
+  });
   it('renders both distinct lines in a fresh tree after consecutive add-line submissions', async () => {
     const detail = countDetail('DRAFT');
     detail.lines = [];

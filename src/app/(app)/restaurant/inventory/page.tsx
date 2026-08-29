@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -203,7 +202,6 @@ export default async function InventoryPage({
         locationId: location.id,
         reference: optionalField(form, 'reference'),
       });
-      revalidatePath(route);
       next = destination('Physical count created.', 'success', count.id);
     } catch (error) {
       next = destination(message(error, 'Could not create the physical count.'), 'error');
@@ -234,7 +232,6 @@ export default async function InventoryPage({
         stockItemId: stockItem.id,
         countedQuantity,
       });
-      revalidatePath(route);
       next = destination('Count line added.', 'success', stockCountId, true);
     } catch (error) {
       next = destination(message(error, 'Could not add the count line.'), 'error', stockCountId);
@@ -250,7 +247,6 @@ export default async function InventoryPage({
       const actionCtx = await tenantContext();
       if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
       await restaurantInventoryRouter.createCaller(actionCtx).submitStockCount({ stockCountId });
-      revalidatePath(route);
       next = destination('Count submitted and quantities frozen.', 'success', stockCountId);
     } catch (error) {
       next = destination(message(error, 'Could not submit the count.'), 'error', stockCountId);
@@ -266,7 +262,6 @@ export default async function InventoryPage({
       const actionCtx = await tenantContext();
       if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
       await restaurantInventoryRouter.createCaller(actionCtx).postStockCount({ stockCountId });
-      revalidatePath(route);
       next = destination('Reconciliation posted to inventory.', 'success', stockCountId);
     } catch (error) {
       next = destination(
