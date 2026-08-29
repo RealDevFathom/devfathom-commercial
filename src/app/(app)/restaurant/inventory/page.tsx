@@ -91,7 +91,7 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
 export default async function InventoryPage({
   searchParams = Promise.resolve({}),
 }: {
-  searchParams?: Promise<{ notice?: string; kind?: string; selected?: string }>;
+  searchParams?: Promise<{ notice?: string; kind?: string; selected?: string; fresh?: string }>;
 } = {}) {
   const query = await searchParams;
   const ctx = await tenantContext();
@@ -502,7 +502,10 @@ export default async function InventoryPage({
         )}
       </SectionCard>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+      <div
+        key={query.fresh ?? loaded.selectedCount?.id ?? 'count-detail'}
+        className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]"
+      >
         <SectionCard>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-text-strong">Physical counts</h2>

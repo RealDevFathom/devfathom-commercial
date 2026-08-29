@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,7 +32,10 @@ const actor = {
   support: null,
 };
 const locations = [{ id: 'loc-1', name: 'Main Kitchen' }];
-const stockItems = [{ id: 'item-1', ingredient: { name: 'Basmati Rice' } }];
+const stockItems = [
+  { id: 'item-1', ingredient: { name: 'Chicken (boneless)' } },
+  { id: 'item-2', ingredient: { name: 'Basmati Rice (Super Kernel)' } },
+];
 type Status = 'DRAFT' | 'SUBMITTED' | 'POSTED';
 
 function countSummary(status: Status = 'DRAFT') {
@@ -73,7 +76,11 @@ function contextStub(detail: ReturnType<typeof countDetail> | null = null) {
       },
       restaurantStockItem: {
         findMany: vi.fn().mockResolvedValue(stockItems),
-        findFirst: vi.fn().mockResolvedValue(stockItems[0]),
+        findFirst: vi
+          .fn()
+          .mockImplementation(({ where }: { where: { id: string } }) =>
+            Promise.resolve(stockItems.find((item) => item.id === where.id) ?? null)
+          ),
       },
       restaurantStockCount: { findFirst: vi.fn().mockResolvedValue(detail) },
     },
@@ -164,7 +171,7 @@ describe('physical count workflow', () => {
     const { page } = await pageWithCount('DRAFT');
     render(page);
     expect(screen.getByRole('option', { name: 'Main Kitchen' })).toBeDefined();
-    expect(screen.getByRole('option', { name: 'Basmati Rice' })).toBeDefined();
+    expect(screen.getByRole('option', { name: 'Basmati Rice (Super Kernel)' })).toBeDefined();
     expect(screen.queryByRole('textbox', { name: /location|stock item|count id/i })).toBeNull();
   });
   it('sends exact create and add-line payloads', async () => {
@@ -188,42 +195,68 @@ describe('physical count workflow', () => {
       countedQuantity: '12.5',
     });
   });
-  it('awaits consecutive add-line writes and redirects each success to a fresh safe URL', async () => {
-    const { page, caller } = await pageWithCount('DRAFT');
-    const pending: Array<() => void> = [];
-    caller.addStockCountLine.mockImplementation(
-      () =>
-        new Promise<{ id: string }>((resolve) => pending.push(() => resolve({ id: 'line-secret' })))
-    );
+  it('renders both distinct lines in a fresh tree after consecutive add-line submissions', async () => {
+    const detail = countDetail('DRAFT');
+    detail.lines = [];
+    const caller = callerStub('DRAFT');
+    caller.addStockCountLine.mockImplementation(async ({ stockItemId, countedQuantity }) => {
+      detail.lines.push({
+        id: `line-${detail.lines.length + 1}`,
+        stockItemId,
+        countedQuantity,
+        snapshotQuantity: '0',
+        varianceQuantity: '0',
+      });
+      return { id: `line-${detail.lines.length}` };
+    });
+    mocks.createCaller.mockReturnValue(caller);
+    mocks.createTRPCContext.mockResolvedValue(contextStub(detail));
+
+    const page = await InventoryPage();
     const addLine = formAction(page, 'Add count line');
-    const line = new FormData();
-    line.set('stockCountId', 'count-1');
-    line.set('stockItemId', 'item-1');
-    line.set('countedQuantity', '12.5');
+    const view = render(page);
+    let previousDetail = screen
+      .getByRole('heading', { name: 'Saturday close' })
+      .closest('[data-slot="section-card"]');
 
-    const first = addLine(line);
-    await vi.waitFor(() => expect(pending).toHaveLength(1));
-    expect(mocks.redirect).not.toHaveBeenCalled();
-    pending.shift()?.();
-    await first;
-    const second = addLine(line);
-    await vi.waitFor(() => expect(pending).toHaveLength(1));
-    expect(mocks.redirect).toHaveBeenCalledTimes(1);
-    pending.shift()?.();
-    await second;
+    for (const [stockItemId, countedQuantity] of [
+      ['item-1', '25.125'],
+      ['item-2', '30.75'],
+    ] as const) {
+      const line = new FormData();
+      line.set('stockCountId', 'count-1');
+      line.set('stockItemId', stockItemId);
+      line.set('countedQuantity', countedQuantity);
+      await addLine(line);
 
-    const targets = mocks.redirect.mock.calls.map(([target]) => String(target));
-    expect(targets).toHaveLength(2);
-    expect(targets[0]).not.toBe(targets[1]);
-    for (const target of targets) {
+      const target = String(mocks.redirect.mock.lastCall?.[0]);
       const destination = new URL(target, 'https://devfathom.test');
       expect(destination.pathname).toBe('/restaurant/inventory');
       expect(destination.searchParams.get('selected')).toBe('count-1');
       expect(destination.searchParams.get('fresh')).toBeTruthy();
-      for (const rawId of ['line-secret', 'item-1', 'loc-1', 'org-1', 'user-1']) {
+      for (const rawId of ['line-1', 'line-2', 'item-1', 'item-2', 'loc-1', 'org-1', 'user-1']) {
         expect(target).not.toContain(rawId);
       }
+
+      view.rerender(
+        await InventoryPage({
+          searchParams: Promise.resolve(Object.fromEntries(destination.searchParams)),
+        })
+      );
+      const freshDetail = screen
+        .getByRole('heading', { name: 'Saturday close' })
+        .closest('[data-slot="section-card"]');
+      expect(freshDetail).not.toBe(previousDetail);
+      previousDetail = freshDetail;
     }
+
+    if (!previousDetail) throw new Error('Fresh count detail did not render.');
+    expect(within(previousDetail).getByRole('cell', { name: 'Chicken (boneless)' })).toBeDefined();
+    expect(within(previousDetail).getByRole('cell', { name: '25.125' })).toBeDefined();
+    expect(
+      within(previousDetail).getByRole('cell', { name: 'Basmati Rice (Super Kernel)' })
+    ).toBeDefined();
+    expect(within(previousDetail).getByRole('cell', { name: '30.75' })).toBeDefined();
   });
   it('redirects an add-line write failure to visible error feedback without claiming freshness', async () => {
     const { page, caller } = await pageWithCount('DRAFT');
