@@ -16,7 +16,10 @@ vi.mock('@/lib/abac', () => ({
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
-vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
+vi.mock('next/navigation', () => ({
+  redirect: vi.fn(),
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
 vi.mock('@/server/routers/restaurant-sop-execution', () => ({
   restaurantSopExecutionRouter: { createCaller: mocks.createCaller },
 }));
@@ -82,5 +85,22 @@ describe('SopPage tenancy resolution', () => {
 
     expect(screen.getByText('Permission denied')).toBeDefined();
     expect(mocks.createTRPCContext).not.toHaveBeenCalled();
+  });
+});
+
+describe('SopPage load failure', () => {
+  it('renders a safe recovery state without exposing the server failure', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    const ctx = contextStub();
+    ctx.db.restaurantBranch.findMany.mockRejectedValue(
+      new Error('503 database host: private.internal')
+    );
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+
+    render(await SopPage({ searchParams }));
+
+    expect(screen.getByText('SOP board could not load')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry SOP board' })).toBeInTheDocument();
+    expect(screen.queryByText(/private\.internal/)).not.toBeInTheDocument();
   });
 });

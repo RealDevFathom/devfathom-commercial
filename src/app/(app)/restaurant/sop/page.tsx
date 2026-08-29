@@ -3,7 +3,7 @@ import { revalidatePath } from 'next/cache';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -16,6 +16,8 @@ import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantSopExecutionRouter } from '@/server/routers/restaurant-sop-execution';
 import { createTRPCContext } from '@/server/trpc';
+
+import { SopLoadRecovery } from './sop-load-recovery';
 
 /**
  * Resolve the tenant actor first, then hand the resolved session and
@@ -347,7 +349,7 @@ export function SopBoardView(props: SopBoardViewProps) {
       },
       error: {
         title: 'SOP board could not load',
-        body: 'No SOP data was changed. Refresh the page to try again.',
+        body: 'No SOP data was changed. Retry the board request when you are ready.',
       },
     }[props.state];
 
@@ -357,14 +359,7 @@ export function SopBoardView(props: SopBoardViewProps) {
         <SectionCard>
           <h2 className="text-lg font-semibold text-text-strong">{copy.title}</h2>
           <p className="mt-2 text-sm text-text-muted">{copy.body}</p>
-          {props.state === 'error' ? (
-            <Link
-              className={`${buttonVariants({ variant: 'secondary' })} mt-4 min-h-11`}
-              href={route}
-            >
-              Retry
-            </Link>
-          ) : null}
+          {props.state === 'error' ? <SopLoadRecovery /> : null}
         </SectionCard>
       </main>
     );
