@@ -33,6 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
 
@@ -153,6 +154,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
             status: 'ACTIVE',
           },
         });
+        await seedDepartments(db, [organizationId], ['ENGINEERING']);
       }
     });
 

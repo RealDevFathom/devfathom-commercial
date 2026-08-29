@@ -18,6 +18,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -102,8 +103,8 @@ beforeAll(async () => {
     routes: { establish: establishR, unlock: unlockR },
   };
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha229-${suffix}`,
@@ -111,8 +112,18 @@ beforeAll(async () => {
         displayName: 'Roster Test',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    await seedDepartments(tx, [orgId], ['LEADERSHIP']);
+    // WHA-192 gates the terminal transport on `restaurant-pos`: without the
+    // entitlement rows every establish/unlock answers 403 before the handler.
+    const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
+      name: 'POS',
+      category: 'Operations',
+    });
+    await tx.organizationModule.create({
+      data: { organizationId: orgId, moduleId: posModule.id },
+    });
+  });
 
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({

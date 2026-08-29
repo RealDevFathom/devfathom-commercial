@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { TRPCContext } from '@/server/trpc';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
@@ -15,7 +16,7 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(async () => ({
-    enabledModules: ['restaurant-pos', 'restaurant-sop'],
+    enabledModules: ['restaurant-pos', 'restaurant-sop', 'restaurant-integrations'],
   })),
 }));
 vi.mock('@/server/audit', () => ({
@@ -156,6 +157,10 @@ async function seedOccurrence(
         branchId: ids.branch,
         businessDate: new Date('2026-08-20T00:00:00.000Z'),
         status,
+        // SOP-1 gates execution on occurrence ownership. Real generation
+        // materializes this from the PERSON-target assignment above; this
+        // fixture writes the occurrence directly, so it must do the same.
+        assignedStaffProfileId: ids.operator,
         dueAt: new Date(windowEndsAt.getTime() - 60 * 60_000),
         windowEndsAt,
         steps: {
@@ -228,8 +233,8 @@ beforeAll(async () => {
     throw new Error('WHA-88 requires an unprivileged NOBYPASSRLS TEST_DATABASE_URL role.');
   }
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha88-${suffix}`,
@@ -237,8 +242,9 @@ beforeAll(async () => {
         displayName: 'WHA-88 Acceptance',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    await seedDepartments(tx, [orgId], ['QUALITY']);
+  });
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'New York Branch', timezone: 'America/New_York' },
@@ -274,11 +280,18 @@ beforeAll(async () => {
   const context = {
     db: scopedDb.createTenantDb(orgId),
     entitlements: {
-      enabledModules: ['restaurant-pos', 'restaurant-sop'],
+      // WHA-264 gates SOP depth on the module set AND limit values. This battery
+      // exercises co-authorized waivers and escalation chains, so the fixture
+      // org is entitled to the depths those paths require.
+      enabledModules: ['restaurant-pos', 'restaurant-sop', 'restaurant-integrations'],
       activeSeats: 1,
       seatLimit: 50,
       modules: [],
-      limits: { 'sop.templates.max': 100 },
+      limits: {
+        'sop.templates.max': 100,
+        'sop.evidenceRetentionDays': 1_095,
+        'integrations.connections.max': 5,
+      },
     },
     session: {
       expires: 'later',
@@ -749,6 +762,10 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         contentHashHex: '3'.repeat(64),
         mimeType: 'image/jpeg',
         sizeBytes: 1,
+        // The owning operator, so SOP-1's ownership guard passes and the
+        // assertion lands on what it is about: a VERIFIED occurrence is closed
+        // to further evidence.
+        uploaderStaffProfileId: ids.operator,
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
 

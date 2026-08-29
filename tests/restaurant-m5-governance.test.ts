@@ -336,7 +336,8 @@ const M5_ENUMS = [
   ['RestaurantBillStatus', ['OPEN', 'SETTLED', 'VOID']],
   ['RestaurantBillSplitKind', ['NONE', 'BY_ITEM', 'BY_SEAT', 'FRACTIONAL']],
   ['RestaurantTenderType', ['CASH', 'CARD', 'OTHER']],
-  ['RestaurantPaymentProvider', ['MOCK']],
+  // WHA-238 added the TERMINAL provider for card payments taken on a terminal.
+  ['RestaurantPaymentProvider', ['MOCK', 'TERMINAL']],
   ['RestaurantPaymentCapability', ['SALE', 'AUTH', 'CAPTURE', 'ADJUST', 'VOID', 'REFUND']],
   [
     'RestaurantPaymentStatus',

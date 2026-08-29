@@ -121,6 +121,12 @@ const M7_COLUMNS = {
     'resolvedAt',
     'createdAt',
     'updatedAt',
+    // SOP-1 (WHA-224/284): an occurrence is owned either by the person it was
+    // assigned to, or by whoever claimed it out of its job-role pool.
+    'assignedStaffProfileId',
+    'claimedAt',
+    'claimedByStaffProfileId',
+    'poolJobRoleId',
   ],
   restaurant_sop_occurrence_steps: [
     'id',

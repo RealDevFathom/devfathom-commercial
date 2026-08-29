@@ -28,6 +28,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 // The router reaches `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: the context here
@@ -171,6 +172,7 @@ describeIfDatabase('meeting list bounds, against PostgreSQL', () => {
             status: 'ACTIVE',
           },
         });
+        await seedDepartments(db, [organizationId], ['ENGINEERING']);
       }
     });
 

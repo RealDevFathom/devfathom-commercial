@@ -28,6 +28,7 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 // REST audit writes are fire-and-forget: `recordRestAudit` starts a detached
 // transaction that would outlive the assertion it belongs to and race teardown.
@@ -147,6 +148,7 @@ describeIfDatabase('GET /api/v1/meetings bounds, against PostgreSQL', () => {
           status: 'ACTIVE',
         },
       });
+      await seedDepartments(db, [ORGANIZATION_A], ['ENGINEERING']);
 
       // The route is gated on the `api` and `meetings` modules. Catalog rows
       // are control-plane-only and may already exist in a migrated database,

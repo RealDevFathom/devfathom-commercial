@@ -35,7 +35,6 @@ import {
   ShieldCheck,
   Bell,
   Camera,
-
   CalendarClock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -46,7 +45,7 @@ import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
 import type { TenantBrand } from '@/lib/tenant-brand';
-import { moduleForPath } from '@/lib/module-catalog';
+import { moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 
 type NavGroup = 'Workspace' | 'Restaurant' | 'Firm';
@@ -249,6 +248,15 @@ export function visibleNavigation(
   return navigation
     .filter((item) => {
       const moduleKey = item.module ?? moduleForPath(item.href, entitlements.vertical);
+      // WHA-8: a module belonging to the other vertical never appears, even if a
+      // mis-provisioned organization has it enabled. Items that resolve to no
+      // module at all (the shared Firm entries) are never vertical-gated.
+      if (
+        moduleKey &&
+        entitlements.vertical &&
+        verticalForModuleKey(moduleKey) !== entitlements.vertical
+      )
+        return false;
       if (moduleKey && !entitlements.enabledModules.includes(moduleKey)) return false;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;

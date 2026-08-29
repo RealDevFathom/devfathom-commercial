@@ -62,6 +62,7 @@ describe('module catalog routing', () => {
     );
     expect(Object.fromEntries(restaurantEntries)).toEqual({
       restaurantStaff: 'restaurant-core',
+      restaurantShifts: 'restaurant-core',
       restaurantDevices: 'restaurant-core',
       restaurantCatalog: 'restaurant-menu',
       restaurantMenuImport: 'restaurant-menu',

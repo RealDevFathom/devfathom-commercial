@@ -9,7 +9,10 @@ vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => ({ vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] }),
 }));
 vi.mock('@/lib/assistant-store', () => ({ useAssistant: () => false }));
-vi.mock('@/lib/tenant-brand', () => ({ tenantBrandTokens: () => ({}) }));
+vi.mock('@/lib/tenant-brand', () => ({
+  tenantBrandTokens: () => ({}),
+  isTenantIdentityMismatch: () => false,
+}));
 vi.mock('@/components/motion/page-transition', () => ({
   PageTransition: ({ children }: { children: unknown }) => children,
 }));

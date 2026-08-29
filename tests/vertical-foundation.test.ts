@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   orgFindUnique: vi.fn(),
   orgUpdate: vi.fn(),
   roleCreate: vi.fn(),
+  departmentCreateMany: vi.fn(),
   userFindFirst: vi.fn(),
   userCreate: vi.fn(),
   branchCreate: vi.fn(),
@@ -65,6 +66,9 @@ const platformDb = {
     update: mocks.orgUpdate,
   },
   organizationRole: { create: mocks.roleCreate },
+  // WHA-278: bootstrapOrganization seeds the tenant department catalog
+  // before the administrator, because User.department is a composite FK.
+  organizationDepartment: { createMany: mocks.departmentCreateMany },
   user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },
@@ -569,6 +573,10 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // module's database battery names a vertical: it has to CREATE a restaurant
     // organization to prove the composite foreign key admits what it writes.
     /src\/lib\/department-provisioning\.db\.test\.ts$/,
+    // WHA-8 — the platform command form is vertical-AGNOSTIC (zero references in
+    // the component itself); only its test names a vertical, as fixture data for
+    // the generic filtered-select it renders.
+    /src\/components\/platform\/platform-command-form\.[a-z]+\.test\.tsx$/,
     // Generated Prisma client — read-only, not authored here
     /src\/generated\//,
   ];

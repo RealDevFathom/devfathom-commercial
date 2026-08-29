@@ -40,6 +40,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -286,10 +287,10 @@ beforeAll(async () => {
         status: 'ACTIVE',
       },
     });
-    const posModule = await tx.platformModule.upsert({
-      where: { key: 'restaurant-pos' },
-      update: {},
-      create: { key: 'restaurant-pos', name: 'POS', category: 'Operations' },
+    await seedDepartments(tx, [orgId], ['LEADERSHIP']);
+    const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
+      name: 'POS',
+      category: 'Operations',
     });
     await tx.organizationModule.create({
       data: { organizationId: orgId, moduleId: posModule.id },

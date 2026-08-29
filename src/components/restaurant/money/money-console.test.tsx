@@ -234,6 +234,10 @@ function hook<T>(
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    // WHA-238's terminal-provider form invalidates its own query on success.
+    useUtils: () => ({
+      restaurantPayments: { getTerminalConfig: { invalidate: vi.fn() } },
+    }),
     restaurantBills: {
       listBills: {
         useQuery: (input: unknown, options: { enabled: boolean }) =>
@@ -260,6 +264,22 @@ vi.mock('@/lib/trpc', () => ({
       getPayment: {
         useQuery: (input: unknown, options: { enabled: boolean }) =>
           hook(mocks.payment, mocks.calls.payment, input, options),
+      },
+      // WHA-238 terminal payments. The terminal tab is not exercised by these
+      // read-model assertions, so an empty provider config is enough to render.
+      getTerminalConfig: {
+        useQuery: () => ({ data: null, error: null, isLoading: false, refetch: vi.fn() }),
+      },
+      listTerminalReconciliations: {
+        useQuery: () => ({
+          data: [],
+          error: null,
+          isLoading: false,
+          refetch: vi.fn(),
+        }),
+      },
+      saveTerminalConfig: {
+        useMutation: () => ({ mutate: vi.fn(), isPending: false, error: null }),
       },
     },
     restaurantCash: {

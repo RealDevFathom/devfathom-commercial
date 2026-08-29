@@ -15,6 +15,8 @@ describe('CatalogPage', () => {
   it('shows each package vertical', async () => {
     const database = {
       platformModule: { findMany: vi.fn().mockResolvedValue([]) },
+      // WHA-257 added the camera brand presets panel to this page.
+      platformCameraBrandPreset: { findMany: vi.fn().mockResolvedValue([]) },
       platformPackage: {
         findMany: vi.fn().mockResolvedValue([
           {
