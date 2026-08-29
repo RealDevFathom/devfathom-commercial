@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -86,7 +86,7 @@ vi.mock('@/lib/trpc', () => ({
 }));
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
-import { ApiTokensSection, WebhooksSection } from './settings-content';
+import { ApiTokensSection, PrintRoutingSection, WebhooksSection } from './settings-content';
 
 function entitlementView(
   api: boolean,
@@ -265,5 +265,50 @@ describe('Settings entitlement presentation', () => {
       'API tokens could not be loaded. Please try again.'
     );
     expect(screen.queryByText(/PrismaClientKnownRequestError/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Print routing simulation settings', () => {
+  it('renders the explicit simulation label and empty state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ mode: 'SIMULATION_ONLY', branches: [] })))
+    );
+    render(<PrintRoutingSection />);
+    expect(screen.getByText('Loading print routes…')).toBeInTheDocument();
+    expect(
+      await screen.findByText('No active restaurant branches are available.')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/do not connect to physical printers/i)).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it('exposes labelled branch, station, printer, enable, and save controls', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              mode: 'SIMULATION_ONLY',
+              branches: [
+                {
+                  id: 'branch-1',
+                  name: 'Main branch',
+                  kitchenStations: [{ id: 'station-1', name: 'Kitchen' }],
+                  config: { branchId: 'branch-1', routes: [] },
+                },
+              ],
+            })
+          )
+      )
+    );
+    render(<PrintRoutingSection />);
+    await waitFor(() => expect(screen.getByLabelText('Branch')).toHaveValue('branch-1'));
+    expect(screen.getByLabelText('Kitchen tickets station')).toBeInTheDocument();
+    expect(screen.getByLabelText('Bar tickets printer ID')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Enable receipts' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save simulation routes' })).toBeEnabled();
+    vi.unstubAllGlobals();
   });
 });
