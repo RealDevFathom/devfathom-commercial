@@ -26,6 +26,10 @@ const ids = {
   orgB: `org_shift_b_${suffix}`,
   rowA: `shift_a_${suffix}`,
   rowB: `shift_b_${suffix}`,
+  breakA: `break_a_${suffix}`,
+  breakB: `break_b_${suffix}`,
+  swapA: `swap_a_${suffix}`,
+  swapB: `swap_b_${suffix}`,
 };
 
 const START = '2026-08-20T09:00:00Z';
@@ -113,6 +117,17 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
     await insertPrerequisites(ids.orgB, ids.rowB, 'B');
     await insertShift(ids.rowA, ids.orgA, ids.rowA, ids.rowA);
     await insertShift(ids.rowB, ids.orgB, ids.rowB, ids.rowB);
+    await client!.query(
+      `INSERT INTO "restaurant_shift_breaks" ("id", "organizationId", "shiftId", "updatedAt")
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP), ($4, $5, $6, CURRENT_TIMESTAMP)`,
+      [ids.breakA, ids.orgA, ids.rowA, ids.breakB, ids.orgB, ids.rowB]
+    );
+    await client!.query(
+      `INSERT INTO "restaurant_shift_swap_requests" (
+         "id", "organizationId", "shiftId", "requestedByStaffProfileId", "updatedAt"
+       ) VALUES ($1, $2, $3, $3, CURRENT_TIMESTAMP), ($4, $5, $6, $6, CURRENT_TIMESTAMP)`,
+      [ids.swapA, ids.orgA, ids.rowA, ids.swapB, ids.orgB, ids.rowB]
+    );
 
     await client!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client!.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ids.orgA]);
@@ -131,6 +146,64 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
         WHERE relname = 'restaurant_shifts' AND relkind = 'r'`
     );
     expect(rls.rows).toEqual([{ enabled: true, forced: true }]);
+  });
+
+  it('enables and FORCES RLS on break and swap tables', async () => {
+    const rls = await client!.query<{ relname: string; enabled: boolean; forced: boolean }>(
+      `SELECT relname, relrowsecurity AS enabled, relforcerowsecurity AS forced
+         FROM pg_catalog.pg_class
+        WHERE relname IN ('restaurant_shift_breaks', 'restaurant_shift_swap_requests')
+        ORDER BY relname`
+    );
+    expect(rls.rows).toEqual([
+      { relname: 'restaurant_shift_breaks', enabled: true, forced: true },
+      { relname: 'restaurant_shift_swap_requests', enabled: true, forced: true },
+    ]);
+  });
+
+  it('hides cross-tenant break and swap rows and refuses their mutation', async () => {
+    const breaks = await client!.query<{ id: string }>(
+      `SELECT "id" FROM "restaurant_shift_breaks" WHERE "id" IN ($1, $2)`,
+      [ids.breakA, ids.breakB]
+    );
+    const swaps = await client!.query<{ id: string }>(
+      `SELECT "id" FROM "restaurant_shift_swap_requests" WHERE "id" IN ($1, $2)`,
+      [ids.swapA, ids.swapB]
+    );
+    expect(breaks.rows).toEqual([{ id: ids.breakA }]);
+    expect(swaps.rows).toEqual([{ id: ids.swapA }]);
+    expect(
+      (
+        await client!.query(
+          `UPDATE "restaurant_shift_breaks" SET "endedAt" = now() WHERE "id" = $1`,
+          [ids.breakB]
+        )
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (
+        await client!.query(`DELETE FROM "restaurant_shift_swap_requests" WHERE "id" = $1`, [
+          ids.swapB,
+        ])
+      ).rowCount
+    ).toBe(0);
+  });
+
+  it('refuses cross-tenant shift parents even under platform scope', async () => {
+    await client!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    try {
+      await expectDatabaseError('23503', async () => {
+        await client!.query(
+          `INSERT INTO "restaurant_shift_breaks" ("id", "organizationId", "shiftId", "updatedAt")
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+          [`wrong_parent_${suffix}`, ids.orgA, ids.rowB]
+        );
+        await client!.query('SET CONSTRAINTS ALL IMMEDIATE');
+      });
+    } finally {
+      await client!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
+      await client!.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ids.orgA]);
+    }
   });
 
   it('hides tenant B rows and refuses to update or delete them', async () => {

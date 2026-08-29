@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   ShiftError,
   cancelShift,
@@ -48,6 +49,31 @@ function mapShiftError(err: unknown): never {
 }
 
 const shiftProcedure = capabilityProcedure('staff:manage');
+
+async function requireShiftAtBranch(db: ScopedDb, id: string, branchId: string) {
+  const shift = await db.restaurantShift.findFirst({
+    where: { id, branchId },
+    select: {
+      id: true,
+      branchId: true,
+      staffProfileId: true,
+      startAt: true,
+      endAt: true,
+      status: true,
+      clockedInAt: true,
+      clockedOutAt: true,
+    },
+  });
+  if (!shift)
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Shift not found in this branch.' });
+  if (shift.status === 'CANCELLED') {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'A cancelled shift cannot record attendance.',
+    });
+  }
+  return shift;
+}
 
 export const restaurantShiftsRouter = router({
   list: shiftProcedure
@@ -146,5 +172,159 @@ export const restaurantShiftsRouter = router({
       } catch (err) {
         mapShiftError(err);
       }
+    }),
+
+  clockIn: shiftProcedure
+    .input(z.object({ id: z.string().min(1), branchId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const shift = await requireShiftAtBranch(ctx.db, input.id, input.branchId);
+      if (shift.clockedInAt)
+        throw new TRPCError({ code: 'CONFLICT', message: 'Shift is already clocked in.' });
+      const now = new Date();
+      return ctx.db.restaurantShift.update({
+        where: { id: shift.id },
+        data: { clockedInAt: now, lateArrivalAt: now > shift.startAt ? now : null },
+      });
+    }),
+
+  startBreak: shiftProcedure
+    .input(z.object({ id: z.string().min(1), branchId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const shift = await requireShiftAtBranch(ctx.db, input.id, input.branchId);
+      if (!shift.clockedInAt || shift.clockedOutAt) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'Breaks require an active clock-in.' });
+      }
+      const open = await ctx.db.restaurantShiftBreak.findFirst({
+        where: { shiftId: shift.id, endedAt: null },
+        select: { id: true },
+      });
+      if (open) throw new TRPCError({ code: 'CONFLICT', message: 'A break is already active.' });
+      return ctx.db.restaurantShiftBreak.create({
+        data: { shiftId: shift.id, startedAt: new Date() },
+      });
+    }),
+
+  endBreak: shiftProcedure
+    .input(z.object({ id: z.string().min(1), branchId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const shift = await requireShiftAtBranch(ctx.db, input.id, input.branchId);
+      const open = await ctx.db.restaurantShiftBreak.findFirst({
+        where: { shiftId: shift.id, endedAt: null },
+        orderBy: { startedAt: 'desc' },
+        select: { id: true },
+      });
+      if (!open) throw new TRPCError({ code: 'CONFLICT', message: 'No active break exists.' });
+      return ctx.db.restaurantShiftBreak.update({
+        where: { id: open.id },
+        data: { endedAt: new Date() },
+      });
+    }),
+
+  clockOut: shiftProcedure
+    .input(z.object({ id: z.string().min(1), branchId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const shift = await requireShiftAtBranch(ctx.db, input.id, input.branchId);
+      if (!shift.clockedInAt || shift.clockedOutAt) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Shift does not have an active clock-in.',
+        });
+      }
+      const openBreak = await ctx.db.restaurantShiftBreak.findFirst({
+        where: { shiftId: shift.id, endedAt: null },
+        select: { id: true },
+      });
+      if (openBreak)
+        throw new TRPCError({ code: 'CONFLICT', message: 'End the active break first.' });
+      return ctx.db.restaurantShift.update({
+        where: { id: shift.id },
+        data: { clockedOutAt: new Date() },
+      });
+    }),
+
+  requestSwap: shiftProcedure
+    .input(
+      z
+        .object({
+          id: z.string().min(1),
+          branchId: z.string().min(1),
+          requestedByStaffProfileId: z.string().min(1),
+          replacementStaffProfileId: z.string().min(1).optional(),
+          note: z.string().max(500).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const shift = await requireShiftAtBranch(ctx.db, input.id, input.branchId);
+      if (shift.staffProfileId !== input.requestedByStaffProfileId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the rostered operator may request this swap.',
+        });
+      }
+      if (input.replacementStaffProfileId) {
+        const replacement = await ctx.db.restaurantStaffProfile.findFirst({
+          where: {
+            id: input.replacementStaffProfileId,
+            primaryBranchId: input.branchId,
+            status: 'ACTIVE',
+          },
+          select: { id: true },
+        });
+        if (!replacement)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Replacement is not active in this branch.',
+          });
+      }
+      return ctx.db.restaurantShiftSwapRequest.create({
+        data: {
+          shiftId: shift.id,
+          requestedByStaffProfileId: input.requestedByStaffProfileId,
+          replacementStaffProfileId: input.replacementStaffProfileId,
+          note: input.note?.trim() || null,
+        },
+      });
+    }),
+
+  reviewSwap: shiftProcedure
+    .input(
+      z
+        .object({
+          requestId: z.string().min(1),
+          branchId: z.string().min(1),
+          decision: z.enum(['APPROVED', 'REJECTED']),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const request = await ctx.db.restaurantShiftSwapRequest.findFirst({
+        where: { id: input.requestId, status: 'REQUESTED', shift: { branchId: input.branchId } },
+        include: { shift: true },
+      });
+      if (!request)
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Pending swap not found in this branch.',
+        });
+      if (input.decision === 'APPROVED' && !request.replacementStaffProfileId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'An approved swap requires a replacement.',
+        });
+      }
+      const now = new Date();
+      return ctx.db.$transaction(async (tx) => {
+        if (input.decision === 'APPROVED') {
+          await tx.restaurantShift.update({
+            where: { id: request.shiftId },
+            data: { staffProfileId: request.replacementStaffProfileId! },
+          });
+        }
+        return tx.restaurantShiftSwapRequest.update({
+          where: { id: request.id },
+          data: { status: input.decision, reviewedAt: now },
+        });
+      });
     }),
 });
