@@ -444,6 +444,7 @@ export function RestaurantStaffConsole() {
           staffProfileId={jobRolesStaff.id}
           staffDisplayName={jobRolesStaff.displayName}
           defaultBranchId={jobRolesStaff.primaryBranchId}
+          defaultBranchName={jobRolesStaff.primaryBranch?.name}
         />
       ) : null}
 
