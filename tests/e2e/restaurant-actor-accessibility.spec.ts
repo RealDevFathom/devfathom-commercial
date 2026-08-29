@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -20,9 +20,57 @@ const viewports = [
   { name: 'desktop', width: 1440, height: 900 },
   { name: 'tablet', width: 768, height: 1024 },
 ] as const;
+const themes = ['light', 'dark'] as const;
+
+type BrowserErrors = {
+  console: string[];
+  page: string[];
+  request: string[];
+};
+
+const browserErrors = new WeakMap<Page, BrowserErrors>();
+
+function collectUnexpectedErrors(page: Page) {
+  const errors: BrowserErrors = { console: [], page: [], request: [] };
+  browserErrors.set(page, errors);
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.console.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.page.push(error.message));
+  page.on('requestfailed', (request) => {
+    errors.request.push(
+      `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`
+    );
+  });
+  page.on('response', (response) => {
+    if (response.status() < 400 || response.headers()['x-wha-expected-error'] === 'true') return;
+    errors.request.push(`${response.status()} ${response.request().method()} ${response.url()}`);
+  });
+}
+
+async function useTheme(page: Page, theme: (typeof themes)[number]) {
+  await page.emulateMedia({ colorScheme: theme });
+  await page.addInitScript((value) => window.localStorage.setItem('theme', value), theme);
+}
+
+async function expectExactHeadingHierarchy(page: Page, h1: RegExp) {
+  const headings = page.getByRole('heading');
+  const count = await headings.count();
+  expect(count).toBeGreaterThan(1);
+  await expect(headings.nth(0)).toHaveJSProperty('tagName', 'H1');
+  await expect(headings.nth(0)).toHaveText(h1);
+  await expect(headings.nth(1)).toHaveJSProperty('tagName', 'H2');
+  const levels = await headings.evaluateAll((items) =>
+    items.map((item) => Number(item.tagName.slice(1)))
+  );
+  expect(levels[0]).toBe(1);
+  expect(levels.slice(1).every((level, index) => level > 1 && level <= levels[index] + 1)).toBe(
+    true
+  );
+}
 
 async function accessiblePage(page: Page, heading: RegExp) {
-  await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
+  await expectExactHeadingHierarchy(page, heading);
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await page.keyboard.press('Tab');
   await expect(page.locator(':focus')).toBeVisible();
@@ -44,84 +92,125 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
     await assertDisposableDatabaseRoles();
   });
 
+  test.beforeEach(async ({ page }) => collectUnexpectedErrors(page));
+
+  test.afterEach(async ({ page }, testInfo: TestInfo) => {
+    const errors = browserErrors.get(page);
+    expect(errors?.console ?? [], `${testInfo.title}: unexpected console errors`).toEqual([]);
+    expect(errors?.page ?? [], `${testInfo.title}: unexpected page errors`).toEqual([]);
+    expect(errors?.request ?? [], `${testInfo.title}: unexpected request errors`).toEqual([]);
+  });
+
   for (const viewport of viewports) {
-    test(`${viewport.name}: SuperAdmin can inspect Restaurant creation`, async ({ page }) => {
-      await page.setViewportSize(viewport);
-      const actorOrigin = await signInAs(page, 'superAdmin');
-      await page.goto(`${actorOrigin}/platform/organizations/new?vertical=RESTAURANT`);
-      await accessiblePage(page, /organization/i);
-      await expect(page.getByText(/restaurant/i).first()).toBeVisible();
-      await page.screenshot({
-        path: path.join(OUTPUT, `super-admin-${viewport.name}.png`),
-        fullPage: true,
-      });
-    });
-
-    test(`${viewport.name}: Agency remains usable and Restaurant is denied`, async ({ page }) => {
-      await page.setViewportSize(viewport);
-      const actorOrigin = await signInAs(page, 'agency');
-      await page.goto(`${actorOrigin}/dashboard`);
-      await expect(page).toHaveURL(`${actorOrigin}/dashboard`);
-      await accessiblePage(page, /^Good (?:morning|afternoon|evening), .+\.$/);
-      await page.goto(`${actorOrigin}/restaurant/catalog`);
-      await expect(page).not.toHaveURL(/\/restaurant\/catalog$/);
-      await page.screenshot({
-        path: path.join(OUTPUT, `agency-denied-${viewport.name}.png`),
-        fullPage: true,
-      });
-    });
-
-    for (const [actor, label] of [
-      ['restaurantAdmin', 'admin'],
-      ['restaurantOperator', 'operator'],
-    ] as const satisfies readonly (readonly [ActorKey, string])[]) {
-      test(`${viewport.name}: Restaurant ${label} uses its named workspace`, async ({ page }) => {
+    for (const theme of themes) {
+      test(`${viewport.name} ${theme}: SuperAdmin can inspect Restaurant creation`, async ({
+        page,
+      }) => {
         await page.setViewportSize(viewport);
-        await signInAs(page, actor);
-        await page.goto('/dashboard');
-        await accessiblePage(page, /restaurant|dashboard|workspace/i);
+        await useTheme(page, theme);
+        const actorOrigin = await signInAs(page, 'superAdmin');
+        await page.goto(`${actorOrigin}/platform/organizations/new?vertical=RESTAURANT`);
+        await accessiblePage(page, /^Onboard an organization$/);
         await expect(page.getByText(/restaurant/i).first()).toBeVisible();
         await page.screenshot({
-          path: path.join(OUTPUT, `${label}-${viewport.name}.png`),
+          path: path.join(OUTPUT, `super-admin-${viewport.name}-${theme}.png`),
           fullPage: true,
         });
       });
+
+      test(`${viewport.name} ${theme}: Agency remains usable and Restaurant is denied`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(viewport);
+        await useTheme(page, theme);
+        const actorOrigin = await signInAs(page, 'agency');
+        await page.goto(`${actorOrigin}/dashboard`);
+        await expect(page).toHaveURL(`${actorOrigin}/dashboard`);
+        await accessiblePage(page, /^Good (?:morning|afternoon|evening), .+\.$/);
+        await page.goto(`${actorOrigin}/restaurant/catalog`);
+        await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+          'This module is not enabled'
+        );
+        await expect(
+          page.getByText(/current package, contract, or module override/i)
+        ).toBeVisible();
+        await expect(page.locator('body')).not.toContainText(/org_[a-z0-9_-]+|other organization/i);
+        await page.screenshot({
+          path: path.join(OUTPUT, `agency-denied-${viewport.name}-${theme}.png`),
+          fullPage: true,
+        });
+      });
+
+      for (const [actor, label] of [
+        ['restaurantAdmin', 'admin'],
+        ['restaurantOperator', 'operator'],
+      ] as const satisfies readonly (readonly [ActorKey, string])[]) {
+        test(`${viewport.name} ${theme}: Restaurant ${label} uses its named workspace`, async ({
+          page,
+        }) => {
+          await page.setViewportSize(viewport);
+          await useTheme(page, theme);
+          const actorOrigin = await signInAs(page, actor);
+          await page.goto(`${actorOrigin}/dashboard`);
+          await accessiblePage(page, /^Service dashboard$/);
+          await expect(page.getByText(/restaurant/i).first()).toBeVisible();
+          await page.screenshot({
+            path: path.join(OUTPUT, `${label}-${viewport.name}-${theme}.png`),
+            fullPage: true,
+          });
+        });
+      }
     }
   }
 
   test('Restaurant A session cannot select Restaurant B by a raw database id', async ({ page }) => {
-    await signInAs(page, 'restaurantAdmin');
-    await page.goto('/dashboard?organizationId=org_restaurant_b_forbidden');
+    const actorOrigin = await signInAs(page, 'restaurantAdmin');
+    await page.goto(
+      `${actorOrigin}/dashboard?tab=activity&organizationId=org_restaurant_b_forbidden&view=compact`
+    );
     await expect(page).not.toHaveURL(/organizationId=org_restaurant_b_forbidden/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get('tab')).toBe('activity');
+    expect(url.searchParams.get('view')).toBe('compact');
     await assertNoRawDatabaseIds(page);
   });
 
   test('loading, error, retry and recovery remain named and keyboard operable', async ({
     page,
   }) => {
-    await signInAs(page, 'restaurantAdmin');
+    const actorOrigin = await signInAs(page, 'restaurantAdmin');
     let failed = true;
+    let mutationRequests = 0;
     await page.route('**/api/trpc/**', async (route) => {
-      if (failed) await route.fulfill({ status: 503, contentType: 'application/json', body: '{}' });
+      if (route.request().method() !== 'GET') mutationRequests += 1;
+      if (failed)
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          headers: { 'x-wha-expected-error': 'true' },
+          body: '{}',
+        });
       else await route.continue();
     });
-    await page.goto('/restaurant/sop/admin');
-    await expect(page.locator('[aria-busy="true"]')).toBeVisible();
+    await page.goto(`${actorOrigin}/restaurant/sop/admin`);
+    await expect(page.getByRole('alert')).toContainText(/could not load|no data was changed/i);
     const retry = page.getByRole('button', { name: 'Retry' });
     await expect(retry).toBeVisible();
     await retry.focus();
     await expect(retry).toBeFocused();
     failed = false;
-    await retry.click();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('status')).toContainText(/loading sop workspace/i);
     await expect(page.locator('[aria-busy="true"]')).toBeHidden();
+    await expect(page.getByRole('heading', { level: 1, name: 'SOP administration' })).toBeVisible();
+    await expect(page.locator(':focus')).toBeVisible();
+    expect(mutationRequests).toBe(0);
   });
 
   test('reduced motion exposes content immediately', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await signInAs(page, 'restaurantAdmin');
-    await page.goto('/dashboard');
+    const actorOrigin = await signInAs(page, 'restaurantAdmin');
+    await page.goto(`${actorOrigin}/dashboard`);
     await expect(page.getByRole('main')).toBeVisible();
   });
-
-  test('RTL is NOT-RUN because the accepted manifest names no launch language', () => {});
 });

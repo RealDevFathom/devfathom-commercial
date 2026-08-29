@@ -8,6 +8,7 @@ type Actor = {
   password: string;
   loginPath: '/login' | '/platform/login';
   host?: 'admin.localhost' | 'app.localhost';
+  workspace?: RegExp;
 };
 
 const value = (name: string) => process.env[name] ?? '';
@@ -15,7 +16,7 @@ const value = (name: string) => process.env[name] ?? '';
 function actorBaseUrl(host?: Actor['host']) {
   const url = new URL(
     process.env.PLAYWRIGHT_BASE_URL ??
-      `http://127.0.0.1:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
+      `http://localhost:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
   );
   if (host) url.hostname = host;
   return url;
@@ -33,16 +34,21 @@ export const actorFixture: Record<ActorKey, Actor> = {
     password: value('RESTAURANT_ACTOR_AGENCY_PASSWORD'),
     loginPath: '/login',
     host: 'app.localhost',
+    workspace: /agency/i,
   },
   restaurantAdmin: {
     email: value('RESTAURANT_ACTOR_ADMIN_EMAIL'),
     password: value('RESTAURANT_ACTOR_ADMIN_PASSWORD'),
     loginPath: '/login',
+    host: 'app.localhost',
+    workspace: /restaurant/i,
   },
   restaurantOperator: {
     email: value('RESTAURANT_ACTOR_OPERATOR_EMAIL'),
     password: value('RESTAURANT_ACTOR_OPERATOR_PASSWORD'),
     loginPath: '/login',
+    host: 'app.localhost',
+    workspace: /restaurant/i,
   },
 };
 
@@ -82,7 +88,30 @@ export async function signInAs(page: Page, key: ActorKey) {
   await page.goto(new URL(actor.loginPath, actorBaseUrl(actor.host)).href);
   await page.getByLabel(/email/i).fill(actor.email);
   await page.locator('input[name="password"]').fill(actor.password);
-  await page.getByRole('button', { name: /sign in/i }).click();
+  if (actor.loginPath === '/platform/login') {
+    await page.getByRole('button', { name: 'Continue to control desk' }).click();
+  } else {
+    const password = page.locator('input[name="password"]');
+    await expect(password).toHaveAttribute('type', 'password');
+    await expect
+      .poll(
+        async () => {
+          await page.getByRole('button', { name: 'Show password' }).click();
+          return password.getAttribute('type');
+        },
+        { timeout: 60_000, intervals: [250, 500, 1000] }
+      )
+      .toBe('text');
+    await page.getByRole('button', { name: 'Hide password' }).click();
+    await page.getByRole('button', { name: 'Sign in' }).click();
+  }
+
+  if (actor.workspace) {
+    const chooser = page.getByText('Choose a workspace', { exact: true });
+    if (await chooser.isVisible({ timeout: 30_000 }).catch(() => false)) {
+      await page.getByRole('button', { name: actor.workspace }).click();
+    }
+  }
   await page.waitForURL((url) => url.pathname !== actor.loginPath, { timeout: 60_000 });
   return new URL(page.url()).origin;
 }
