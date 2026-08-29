@@ -35,9 +35,10 @@ function message(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-function destination(notice: string, kind: 'success' | 'error', selected?: string) {
+function destination(notice: string, kind: 'success' | 'error', selected?: string, fresh = false) {
   const params = new URLSearchParams({ notice, kind });
   if (selected) params.set('selected', selected);
+  if (fresh) params.set('fresh', crypto.randomUUID());
   return `${route}?${params}`;
 }
 
@@ -234,7 +235,7 @@ export default async function InventoryPage({
         countedQuantity,
       });
       revalidatePath(route);
-      next = destination('Count line added.', 'success', stockCountId);
+      next = destination('Count line added.', 'success', stockCountId, true);
     } catch (error) {
       next = destination(message(error, 'Could not add the count line.'), 'error', stockCountId);
     }
