@@ -19,6 +19,15 @@ Entries are grouped by the milestone that recorded them; within a milestone
 they appear in the order they were decided. Text is unchanged from the
 originating lane — this final pass only regroups and separates entries.
 
+### Wallet passes — L1 foundation
+
+**Deferred SMS OTP (wallet enrollment)** · Wallet enrollment v1 accepts EMAIL
+verification only; PHONE/SMS enrollment is excluded even though the shared
+customer identifier enum retains PHONE for existing customer workflows. · This
+is conservative because the platform has no SMS provider and an unbounded SMS
+path would introduce both spam and direct-message-cost risk. · Revisited when an
+SMS provider lands for any module with approved abuse controls and cost limits.
+
 ### M1 — vertical foundation
 
 **D09 (franchise/legal isolation)** · Restaurant branches live strictly inside
