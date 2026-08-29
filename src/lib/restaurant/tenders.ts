@@ -1,9 +1,11 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { settleBill } from './bills';
+import { finalizeBillSettlement, type SettlementTenderTaxAllocation } from './bills';
 import {
   appendMovement,
   beginMoneyIdempotent,
@@ -13,6 +15,12 @@ import {
 } from './drawer-sessions';
 import { add, compare, equals, isNegative, isZero, money, sub, sum, ZERO } from './money';
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
+import {
+  quoteTaxSettlement,
+  splitMoney,
+  type PaymentCategory,
+  type TaxQuoteResult,
+} from './tax-calculator';
 
 /**
  * M5-L4 / C5 / §11.2 — apply a tender to a bill (`payments:collect`).
@@ -58,6 +66,7 @@ export type TenderErrorReason =
   | 'INSUFFICIENT_CASH'
   | 'DRAWER_NOT_OPEN'
   | 'CARD_DECLINED'
+  | 'TAX_SETTLEMENT_REPRICE_REQUIRED'
   | 'INVALID';
 
 export class TenderError extends Error {
@@ -133,10 +142,34 @@ export type ApplyTenderResult = {
 
 type BillForTender = {
   id: string;
+  organizationId: string;
+  orderId: string;
   status: string;
   grandTotal: Prisma.Decimal;
+  subtotal: Prisma.Decimal;
+  compTotal: Prisma.Decimal;
+  discountTotal: Prisma.Decimal;
+  serviceChargeTotal: Prisma.Decimal;
+  roundingAdjustment: Prisma.Decimal;
   branchId: string;
   businessDate: Date;
+};
+
+type TenderRow = { id: string; type: TenderType; amount: Prisma.Decimal; createdAt: Date };
+
+type SettlementContext = {
+  profileId: string;
+  currency: string;
+  rules: Map<string, { priceMode: 'EXCLUSIVE' | 'INCLUSIVE'; rate: Prisma.Decimal }>;
+  quote: TaxQuoteResult;
+  lines: Array<{
+    billLineId: string;
+    unitOrdinal: number;
+    comp: Prisma.Decimal;
+    beforeTaxDiscount: Prisma.Decimal;
+  }>;
+  promotionEvaluationId: string | null;
+  promotionEvaluationHash: string | null;
 };
 
 /** The persisted shape of one applied tender, before coverage/settlement. */
@@ -185,8 +218,34 @@ export async function applyTenderInTransaction(
 ): Promise<ApplyTenderResult> {
   const at = input.now ?? new Date();
   const commandType = `tender.${input.tender.type.toLowerCase()}`;
-  const idem = await beginMoneyIdempotent(tx, input.actor, commandType);
-  if (idem.replay) return replayTenderResult(tx, idem.resultRef);
+  const canonicalBytes = JSON.stringify({
+    version: 1,
+    billId: input.billId,
+    tender:
+      input.tender.type === 'CASH'
+        ? {
+            type: input.tender.type,
+            amount: money(input.tender.amount).toFixed(2),
+            cashReceived: money(input.tender.cashReceived).toFixed(2),
+          }
+        : {
+            type: input.tender.type,
+            amount: money(input.tender.amount).toFixed(2),
+            tipAmount: money(input.tender.tipAmount ?? ZERO).toFixed(2),
+            terminalConfirmation:
+              input.tender.type === 'CARD'
+                ? (input.tender.terminalConfirmation ?? null)
+                : undefined,
+          },
+  });
+  const idem = await beginMoneyIdempotent(tx, input.actor, commandType, {
+    bytes: canonicalBytes,
+    hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),
+  });
+  if (idem.replay) {
+    if (idem.resultPayload) return decodeFrozenResult(idem.resultPayload);
+    return replayTenderResult(tx, idem.resultRef);
+  }
 
   // Serialize concurrent tenders on this bill so a receipt is allocated exactly
   // once (C4/C10): the row lock blocks a second final tender until the first
@@ -195,7 +254,20 @@ export async function applyTenderInTransaction(
 
   const bill = await tx.restaurantBill.findUnique({
     where: { id: input.billId },
-    select: { id: true, status: true, grandTotal: true, branchId: true, businessDate: true },
+    select: {
+      id: true,
+      organizationId: true,
+      orderId: true,
+      status: true,
+      grandTotal: true,
+      subtotal: true,
+      compTotal: true,
+      discountTotal: true,
+      serviceChargeTotal: true,
+      roundingAdjustment: true,
+      branchId: true,
+      businessDate: true,
+    },
   });
   if (!bill) {
     throw new TenderError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -206,12 +278,13 @@ export async function applyTenderInTransaction(
 
   const amount = money(input.tender.amount);
 
-  const existing = await tx.restaurantTender.findMany({
+  const existing = (await tx.restaurantTender.findMany({
     where: { billId: bill.id },
-    select: { amount: true },
-  });
-  const alreadyTendered = sum(existing.map((t) => t.amount));
-  const outstanding = sub(bill.grandTotal, alreadyTendered);
+    select: { id: true, type: true, amount: true, createdAt: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  })) as TenderRow[];
+  const settlement = await loadSettlementContext(tx, bill, existing, input.tender.type, at);
+  const outstanding = settlement.quote.remainingDue;
   // Validate the amount AGAINST the outstanding balance so a zero amount is
   // accepted only as the settlement of an already-fully-covered bill (e.g. a
   // fully comped, zero grand-total bill). The applied amount may never exceed
@@ -223,24 +296,27 @@ export async function applyTenderInTransaction(
   }
   if (verdict === 'OVER_TENDER') {
     throw new TenderError(
-      'The tender amount exceeds the bill balance; the only over-payment is cash change.',
+      'The tender amount exceeds the current server quote; the only over-payment is cash change.',
       'OVER_TENDER'
     );
   }
 
+  const isFinal = equals(amount, outstanding);
   const persisted = await persistTender(tx, bill, input, amount);
 
-  const nowTendered = add(alreadyTendered, amount);
-  const remainingDue = sub(bill.grandTotal, nowTendered);
+  const remainingDue = sub(outstanding, amount);
   let settled = false;
   let receiptNumber: number | null = null;
-  if (equals(nowTendered, bill.grandTotal)) {
-    const result = await settleBill(tx, {
-      billId: bill.id,
-      staffProfileId: input.actor.staffProfileId,
-      deviceId: input.actor.deviceId,
+  if (isFinal) {
+    const result = await finalizeTaxSettlement(
+      tx,
+      bill,
+      input,
       at,
-    });
+      existing,
+      persisted.tenderId,
+      settlement
+    );
     settled = true;
     receiptNumber = result.receiptNumber;
   }
@@ -265,8 +341,7 @@ export async function applyTenderInTransaction(
     });
   }
 
-  await recordMoneyResult(tx, input.actor, persisted.tenderId);
-  return {
+  const result: ApplyTenderResult = {
     tenderId: persisted.tenderId,
     billId: bill.id,
     type: input.tender.type,
@@ -277,8 +352,394 @@ export async function applyTenderInTransaction(
     drawerSessionId: persisted.drawerSessionId,
     settled,
     receiptNumber,
-    remainingDue,
+    remainingDue: isFinal ? ZERO : remainingDue,
     replayed: false,
+  };
+  await recordMoneyResult(tx, input.actor, persisted.tenderId, encodeFrozenResult(result), at);
+  return result;
+}
+
+async function loadSettlementContext(
+  tx: ScopedDb,
+  bill: BillForTender,
+  priorTenders: TenderRow[],
+  proposedTenderType: TenderType,
+  at: Date
+): Promise<SettlementContext> {
+  const profiles = await tx.restaurantTaxProfileVersion.findMany({
+    where: { branchId: bill.branchId },
+    select: {
+      id: true,
+      effectiveFrom: true,
+      effectiveTo: true,
+      status: true,
+      approvalReference: true,
+      approvedAt: true,
+      rules: {
+        select: {
+          id: true,
+          profileVersionId: true,
+          paymentCategory: true,
+          priceMode: true,
+          rate: true,
+          effectiveFrom: true,
+          effectiveTo: true,
+          status: true,
+          approvalReference: true,
+          approvedAt: true,
+          officialSource: { select: { expiresAt: true } },
+        },
+      },
+    },
+  });
+  const organization = await tx.organization.findUnique({
+    where: { id: bill.organizationId },
+    select: { currency: true },
+  });
+  if (!organization) throw new TenderError('The bill organization is unavailable.', 'INVALID');
+  const billLines = await tx.restaurantBillLine.findMany({
+    where: { billId: bill.id },
+    orderBy: { id: 'asc' },
+    select: {
+      id: true,
+      orderItemId: true,
+      quantity: true,
+      unitPrice: true,
+      compAmount: true,
+      orderItem: { select: { modifiers: { select: { priceDelta: true } } } },
+    },
+  });
+  const applications = await tx.restaurantPromotionBillApplicationSnapshot.findMany({
+    where: { billId: bill.id, reversesBillApplicationId: null },
+    orderBy: [{ applicationOrdinal: 'asc' }, { id: 'asc' }],
+    select: {
+      evaluationId: true,
+      taxTreatment: true,
+      computedAmount: true,
+      evaluation: { select: { outputHash: true, currency: true } },
+      application: {
+        select: {
+          allocations: { select: { orderItemId: true, unitOrdinal: true, allocatedAmount: true } },
+        },
+      },
+    },
+  });
+  const evaluationIds = [...new Set(applications.map((row) => row.evaluationId))];
+  if (evaluationIds.length > 1) {
+    throw new TenderError('Conflicting promotion evidence cannot be settled.', 'INVALID');
+  }
+  const discounts = new Map<string, Prisma.Decimal>();
+  let afterTaxDiscount = ZERO;
+  for (const row of applications) {
+    if (row.taxTreatment === 'AFTER_TAX') {
+      afterTaxDiscount = add(afterTaxDiscount, row.computedAmount);
+      continue;
+    }
+    for (const allocation of row.application.allocations) {
+      const key = `${allocation.orderItemId}:${allocation.unitOrdinal}`;
+      discounts.set(key, add(discounts.get(key) ?? ZERO, allocation.allocatedAmount));
+    }
+  }
+
+  const lines: SettlementContext['lines'] = [];
+  const quoteLines = billLines.flatMap((line) => {
+    const modifiers = sum(line.orderItem.modifiers.map((modifier) => modifier.priceDelta));
+    const comps =
+      line.quantity > 0
+        ? splitMoney(
+            line.compAmount,
+            Array.from({ length: line.quantity }, () => '1')
+          )
+        : [];
+    return Array.from({ length: line.quantity }, (_, unitOrdinal) => {
+      const beforeTaxDiscount = discounts.get(`${line.orderItemId}:${unitOrdinal}`) ?? ZERO;
+      const comp = comps[unitOrdinal] ?? ZERO;
+      lines.push({ billLineId: line.id, unitOrdinal, comp, beforeTaxDiscount });
+      return {
+        id: `${line.id}:${unitOrdinal}`,
+        unitPrice: line.unitPrice,
+        quantity: 1,
+        modifierTotal: modifiers,
+        comp,
+        beforeTaxDiscount,
+      };
+    });
+  });
+  const quote = quoteTaxSettlement({
+    lines: quoteLines,
+    profiles: profiles.map((profile) => ({
+      id: profile.id,
+      effectiveFrom: profile.effectiveFrom,
+      effectiveTo: profile.effectiveTo,
+      status: profile.status,
+      approvalReference: profile.approvalReference,
+      approvedAt: profile.approvedAt,
+    })),
+    rules: profiles.flatMap((profile) =>
+      profile.rules.map((rule) => ({
+        ...rule,
+        sourceExpiresAt: rule.officialSource.expiresAt,
+      }))
+    ),
+    at,
+    proposedTenderType,
+    priorTenders: priorTenders.map((tender) => ({
+      tenderType: tender.type,
+      principal: tender.amount,
+    })),
+    afterTaxDiscount,
+    serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
+    roundingAdjustment: bill.roundingAdjustment,
+  });
+  const profile = profiles.find(
+    (candidate) =>
+      candidate.effectiveFrom <= at && (!candidate.effectiveTo || at < candidate.effectiveTo)
+  );
+  if (!profile) throw new TenderError('No effective tax profile is available.', 'INVALID');
+  return {
+    profileId: profile.id,
+    currency: organization.currency,
+    rules: new Map(
+      profiles.flatMap((candidate) =>
+        candidate.rules.map(
+          (rule) => [rule.id, { priceMode: rule.priceMode, rate: rule.rate }] as const
+        )
+      )
+    ),
+    quote,
+    lines,
+    promotionEvaluationId: evaluationIds[0] ?? null,
+    promotionEvaluationHash: applications[0]?.evaluation.outputHash ?? null,
+  };
+}
+
+async function finalizeTaxSettlement(
+  tx: ScopedDb,
+  bill: BillForTender,
+  input: ApplyTenderInput,
+  at: Date,
+  priorTenders: TenderRow[],
+  finalTenderId: string,
+  settlement: SettlementContext
+) {
+  const quoteLines = settlement.quote.lines;
+  const lineIds = [...new Set(settlement.lines.map((line) => line.billLineId))];
+  const afterTaxByLine = allocateAcross(
+    settlement.quote.afterTaxDiscount,
+    lineIds.map((id) =>
+      sum(
+        quoteLines
+          .filter((_, index) => settlement.lines[index]!.billLineId === id)
+          .map((line) => line.gross)
+      )
+    )
+  );
+  const serviceByLine = allocateAcross(
+    settlement.quote.serviceChargePayable,
+    lineIds.map((id) =>
+      sum(
+        quoteLines
+          .filter((_, index) => settlement.lines[index]!.billLineId === id)
+          .map((line) => line.gross)
+      )
+    )
+  );
+  const lines = lineIds.map((billLineId, lineIndex) => {
+    const units = quoteLines
+      .map((line, index) => ({ line, identity: settlement.lines[index]! }))
+      .filter((unit) => unit.identity.billLineId === billLineId);
+    const merchandiseTax = sum(units.map((unit) => unit.line.tax));
+    const merchandiseGross = sum(units.map((unit) => unit.line.gross));
+    return {
+      billLineId,
+      taxAmount: merchandiseTax,
+      serviceChargeAmount: serviceByLine[lineIndex] ?? ZERO,
+      lineTotal: sub(
+        add(merchandiseGross, serviceByLine[lineIndex] ?? ZERO),
+        afterTaxByLine[lineIndex] ?? ZERO
+      ),
+      buckets: units.flatMap((unit) =>
+        unit.line.buckets.map((bucket) => ({
+          unitOrdinal: unit.identity.unitOrdinal,
+          ruleVersionId: bucket.ruleId,
+          paymentCategory: bucket.category,
+          priceMode: requireRule(settlement, bucket.ruleId).priceMode,
+          rate: requireRule(settlement, bucket.ruleId).rate,
+          taxableAmount: bucket.net,
+          taxAmount: bucket.tax,
+          grossAmount: bucket.gross,
+          preDiscountGrossAmount: add(
+            add(bucket.consideration, unit.identity.comp),
+            unit.identity.beforeTaxDiscount
+          ),
+          beforeTaxDiscountAmount: unit.identity.beforeTaxDiscount,
+          afterTaxDiscountAmount: ZERO,
+        }))
+      ),
+    };
+  });
+  const tenderTaxAllocations = allocateTenderTax(
+    [
+      ...priorTenders,
+      {
+        id: finalTenderId,
+        type: input.tender.type,
+        amount: money(input.tender.amount),
+        createdAt: at,
+      },
+    ],
+    settlement,
+    lines
+  );
+  return finalizeBillSettlement(tx, {
+    billId: bill.id,
+    organizationId: bill.organizationId,
+    staffProfileId: input.actor.staffProfileId,
+    deviceId: input.actor.deviceId,
+    at,
+    transactionReference: `bill:${bill.id}:settlement:v1`,
+    profileVersionId: settlement.profileId,
+    currency: settlement.currency,
+    subtotal: bill.subtotal,
+    discountTotal: add(
+      sum(settlement.lines.map((line) => line.beforeTaxDiscount)),
+      settlement.quote.afterTaxDiscount
+    ),
+    serviceChargeTotal: settlement.quote.serviceChargePayable,
+    taxTotal: settlement.quote.tax,
+    roundingAdjustment: settlement.quote.roundingAdjustment,
+    grandTotal: settlement.quote.grandTotal,
+    eligibleNetMerchandise: settlement.quote.net,
+    promotionEvaluationId: settlement.promotionEvaluationId,
+    promotionEvaluationHash: settlement.promotionEvaluationHash,
+    lines,
+    serviceChargeBuckets: [],
+    tenderTaxAllocations,
+  });
+}
+
+function allocateAcross(total: Prisma.Decimal, weights: Prisma.Decimal[]): Prisma.Decimal[] {
+  if (isZero(total)) return weights.map(() => ZERO);
+  const positive = weights
+    .map((weight, index) => ({ weight, index }))
+    .filter(({ weight }) => compare(weight, ZERO) > 0);
+  if (positive.length === 0)
+    throw new TenderError('Settlement allocation has no positive basis.', 'INVALID');
+  const values = splitMoney(
+    total,
+    positive.map(({ weight }) => weight)
+  );
+  return weights.map(
+    (_, index) => values[positive.findIndex((entry) => entry.index === index)] ?? ZERO
+  );
+}
+
+/** Deterministically assign one frozen bucket's exact cents to its original
+ * tenders. Exported as a pure acceptance seam for refund-reconciliation tests. */
+export function allocateTenderTaxCents(
+  taxAmount: Prisma.Decimal,
+  owners: readonly { tenderId: string; principal: Prisma.Decimal }[]
+): Array<{ originalTenderId: string; cents: number }> {
+  if (owners.length === 0) {
+    throw new TenderError('A frozen tax bucket requires an original tender.', 'INVALID');
+  }
+  const shares = allocateAcross(
+    taxAmount,
+    owners.map((owner) => owner.principal)
+  );
+  return owners.map((owner, index) => ({
+    originalTenderId: owner.tenderId,
+    cents: shares[index]!.mul(100).toNumber(),
+  }));
+}
+
+function requireRule(
+  settlement: SettlementContext,
+  ruleId: string
+): { priceMode: 'EXCLUSIVE' | 'INCLUSIVE'; rate: Prisma.Decimal } {
+  const rule = settlement.rules.get(ruleId);
+  if (!rule) throw new TenderError('The selected tax rule is unavailable.', 'INVALID');
+  return rule;
+}
+
+function allocateTenderTax(
+  tenders: TenderRow[],
+  settlement: SettlementContext,
+  lines: Array<{
+    billLineId: string;
+    buckets: Array<{
+      unitOrdinal: number;
+      ruleVersionId: string;
+      paymentCategory: string;
+      taxAmount: Prisma.Decimal;
+    }>;
+  }>
+): SettlementTenderTaxAllocation[] {
+  const remainingByCategory = new Map<
+    PaymentCategory,
+    Array<{ id: string; weight: Prisma.Decimal }>
+  >();
+  let merchandiseRemaining = sum(settlement.quote.lines.map((line) => line.consideration));
+  for (const tender of tenders) {
+    const weight = Prisma.Decimal.min(tender.amount, merchandiseRemaining);
+    merchandiseRemaining = sub(merchandiseRemaining, weight);
+    if (compare(weight, ZERO) <= 0) continue;
+    const rows = remainingByCategory.get(tender.type) ?? [];
+    rows.push({ id: tender.id, weight });
+    remainingByCategory.set(tender.type, rows);
+  }
+  return lines.flatMap((line) =>
+    line.buckets.flatMap((bucket) => {
+      const category = bucket.paymentCategory as PaymentCategory;
+      const owners = remainingByCategory.get(category) ?? [];
+      const shares = allocateTenderTaxCents(
+        bucket.taxAmount,
+        owners.map((owner) => ({ tenderId: owner.id, principal: owner.weight }))
+      );
+      return shares.map((share) => ({
+        originalTenderId: share.originalTenderId,
+        paymentCategory: category,
+        bucket: {
+          allocationKind: 'MERCHANDISE' as const,
+          billLineId: line.billLineId,
+          unitOrdinal: bucket.unitOrdinal,
+          ruleVersionId: bucket.ruleVersionId,
+          paymentCategory: category,
+        },
+        cents: share.cents,
+      }));
+    })
+  );
+}
+
+function encodeFrozenResult(result: ApplyTenderResult): Prisma.InputJsonValue {
+  return {
+    ...result,
+    amount: result.amount.toFixed(2),
+    tipAmount: result.tipAmount.toFixed(2),
+    changeGiven: result.changeGiven?.toFixed(2) ?? null,
+    remainingDue: result.remainingDue.toFixed(2),
+  };
+}
+
+function decodeFrozenResult(payload: Prisma.JsonValue): ApplyTenderResult {
+  if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
+    throw new TenderError('The frozen tender replay payload is invalid.', 'INVALID');
+  }
+  const value = payload as Record<string, Prisma.JsonValue>;
+  return {
+    tenderId: String(value.tenderId),
+    billId: String(value.billId),
+    type: String(value.type) as TenderType,
+    amount: money(String(value.amount)),
+    tipAmount: money(String(value.tipAmount)),
+    changeGiven: value.changeGiven === null ? null : money(String(value.changeGiven)),
+    paymentId: value.paymentId === null ? null : String(value.paymentId),
+    drawerSessionId: value.drawerSessionId === null ? null : String(value.drawerSessionId),
+    settled: value.settled === true,
+    receiptNumber: value.receiptNumber === null ? null : Number(value.receiptNumber),
+    remainingDue: money(String(value.remainingDue)),
+    replayed: true,
   };
 }
 

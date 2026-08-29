@@ -17,13 +17,38 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { classifyTenderAmount } from './tenders';
+import { allocateTenderTaxCents, classifyTenderAmount } from './tenders';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+
+describe('bill-bound tender tax allocation', () => {
+  it('reconciles a frozen bucket exactly across multiple original tenders', () => {
+    const rows = allocateTenderTaxCents(new Prisma.Decimal('1.01'), [
+      { tenderId: 'tender-a', principal: new Prisma.Decimal('1.00') },
+      { tenderId: 'tender-b', principal: new Prisma.Decimal('1.00') },
+      { tenderId: 'tender-c', principal: new Prisma.Decimal('1.00') },
+    ]);
+
+    expect(rows).toEqual([
+      { originalTenderId: 'tender-a', cents: 34 },
+      { originalTenderId: 'tender-b', cents: 34 },
+      { originalTenderId: 'tender-c', cents: 33 },
+    ]);
+    expect(rows.reduce((total, row) => total + row.cents, 0)).toBe(101);
+  });
+
+  it('retains zero-cent facts so every frozen bucket remains bill/tender-bound', () => {
+    expect(
+      allocateTenderTaxCents(new Prisma.Decimal('0.00'), [
+        { tenderId: 'tender-a', principal: new Prisma.Decimal('4.00') },
+      ])
+    ).toEqual([{ originalTenderId: 'tender-a', cents: 0 }]);
+  });
+});
 
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha58t_${suffix}`;
@@ -40,6 +65,8 @@ const ids = {
   priceList: `pl_${suffix}`,
   priceVersion: `plv_${suffix}`,
   publication: `pub_${suffix}`,
+  taxSource: `tax_source_${suffix}`,
+  taxProfile: `tax_profile_${suffix}`,
 };
 const AT = new Date('2026-08-19T18:00:00.000Z');
 
@@ -141,6 +168,16 @@ beforeAll(async () => {
     tenders,
   };
 
+  const runtimeRole = await deps.withPlatformDb(
+    (tx) =>
+      tx.$queryRaw<Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>>`
+      SELECT rolcanlogin, rolsuper, rolbypassrls
+      FROM pg_roles
+      WHERE rolname = current_user
+    `
+  );
+  expect(runtimeRole).toEqual([{ rolcanlogin: true, rolsuper: false, rolbypassrls: false }]);
+
   await deps.withPlatformDb((tx) =>
     tx.organization.create({
       data: {
@@ -156,6 +193,43 @@ beforeAll(async () => {
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Main', timezone: 'UTC', businessDayCutoff: '00:00' },
+    });
+    await tx.restaurantTaxOfficialSource.create({
+      data: {
+        id: ids.taxSource,
+        authorityCode: 'SYNTHETIC_TEST_ONLY',
+        documentTitle: 'Synthetic zero-rate tender fixture',
+        sourceUrl: 'https://example.invalid/synthetic-tax',
+        contentHash: `synthetic-${suffix}`,
+        retrievedAt: new Date('2026-08-01T00:00:00.000Z'),
+        expiresAt: new Date('2027-08-01T00:00:00.000Z'),
+      },
+    });
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        id: ids.taxProfile,
+        branchId: ids.branch,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+        approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+        publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+        rules: {
+          create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+            officialSourceId: ids.taxSource,
+            ruleCode: `SYNTHETIC_${paymentCategory}`,
+            paymentCategory,
+            priceMode: 'EXCLUSIVE',
+            rate: '0.000000',
+            status: 'PUBLISHED',
+            effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+            approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+            approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+            publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          })),
+        },
+      },
     });
     await tx.restaurantStaffProfile.create({
       data: { id: ids.operator, displayName: 'Operator', status: 'ACTIVE' },
@@ -394,6 +468,9 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     });
     expect(partial.settled).toBe(false);
     expect(partial.remainingDue.toString()).toBe('15');
+    expect(
+      await read((tx) => tx.restaurantTaxTransactionSnapshot.count({ where: { billId } }))
+    ).toBe(0);
 
     const final = await deps.tenders.applyTender(db, {
       billId,
@@ -410,6 +487,26 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
       tx.restaurantTender.aggregate({ where: { billId }, _sum: { amount: true } })
     );
     expect(agg._sum.amount?.toString()).toBe(grandTotal); // 25
+
+    const frozen = await read(async (tx) => ({
+      snapshots: await tx.restaurantTaxTransactionSnapshot.count({ where: { billId } }),
+      allocations: await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { billId },
+        select: { originalTenderId: true, paymentCategory: true, cents: true },
+      }),
+    }));
+    expect(frozen.snapshots).toBe(1);
+    expect(new Set(frozen.allocations.map((row) => row.originalTenderId))).toEqual(
+      new Set([partial.tenderId, final.tenderId])
+    );
+    expect(
+      frozen.allocations.every((row) =>
+        row.originalTenderId === partial.tenderId
+          ? row.paymentCategory === 'CARD'
+          : row.paymentCategory === 'CASH'
+      )
+    ).toBe(true);
+    expect(frozen.allocations.reduce((total, row) => total + row.cents, BigInt(0))).toBe(BigInt(0));
   });
 
   it('settles exactly once under concurrent final tenders (receipt allocated once)', async () => {
@@ -465,7 +562,9 @@ describeIfDatabase('idempotency (real DB)', () => {
       billId,
       tender: { type: 'CARD', amount: '12.50' },
       actor: reuse,
-      now: AT,
+      // The source fixture has expired by then. Replay must return frozen payload
+      // before any current profile/source lookup.
+      now: new Date('2030-08-19T18:00:00.000Z'),
     });
     expect(replay.replayed).toBe(true);
     expect(replay.tenderId).toBe(first.tenderId);
@@ -473,6 +572,28 @@ describeIfDatabase('idempotency (real DB)', () => {
 
     const tenderCount = await read((tx) => tx.restaurantTender.count({ where: { billId } }));
     expect(tenderCount).toBe(1);
+  });
+
+  it('fails closed when the same key is reused with a conflicting payload', async () => {
+    const { billId } = await openBill(1);
+    const db = deps.createTenantDb(orgId);
+    const reuse = actor();
+    await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CARD', amount: '5.00' },
+      actor: reuse,
+      now: AT,
+    });
+
+    await expect(
+      deps.tenders.applyTender(db, {
+        billId,
+        tender: { type: 'CARD', amount: '4.00' },
+        actor: reuse,
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
+    expect(await read((tx) => tx.restaurantTender.count({ where: { billId } }))).toBe(1);
   });
 });
 
