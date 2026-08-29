@@ -2501,11 +2501,12 @@ model RestaurantTaxTransactionSnapshot {
   evidencePayload         Json?
   createdAt               DateTime @default(now())
 
-  branch           RestaurantBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  profile          RestaurantTaxProfileVersion        @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
-  reversedSnapshot RestaurantTaxTransactionSnapshot?  @relation("TaxSnapshotReversal", fields: [organizationId, reversesSnapshotId], references: [organizationId, id], onDelete: Restrict)
-  reversals        RestaurantTaxTransactionSnapshot[] @relation("TaxSnapshotReversal")
-  buckets          RestaurantTaxRateBucketSnapshot[]
+  branch            RestaurantBranch                        @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  profile           RestaurantTaxProfileVersion             @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
+  reversedSnapshot  RestaurantTaxTransactionSnapshot?       @relation("TaxSnapshotReversal", fields: [organizationId, reversesSnapshotId], references: [organizationId, id], onDelete: Restrict)
+  reversals         RestaurantTaxTransactionSnapshot[]      @relation("TaxSnapshotReversal")
+  buckets           RestaurantTaxRateBucketSnapshot[]
+  tenderAllocations RestaurantTaxTenderAllocationSnapshot[]
 
   @@unique([organizationId, transactionReference])
   @@unique([organizationId, id])
@@ -2534,12 +2535,38 @@ model RestaurantTaxRateBucketSnapshot {
   unitOrdinal             Int?
   createdAt               DateTime               @default(now())
 
-  snapshot RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId], references: [organizationId, id], onDelete: Restrict)
-  rule     RestaurantTaxRuleVersion         @relation(fields: [organizationId, ruleVersionId], references: [organizationId, id], onDelete: Restrict)
+  snapshot          RestaurantTaxTransactionSnapshot        @relation(fields: [organizationId, snapshotId], references: [organizationId, id], onDelete: Restrict)
+  rule              RestaurantTaxRuleVersion                @relation(fields: [organizationId, ruleVersionId], references: [organizationId, id], onDelete: Restrict)
+  tenderAllocations RestaurantTaxTenderAllocationSnapshot[]
 
   // Legacy-v0 and per-unit-v1 uniqueness are partial migration-managed indexes.
+  @@unique([organizationId, snapshotId, id])
   @@index([organizationId])
   @@map("restaurant_tax_rate_bucket_snapshots")
+}
+
+/// Immutable v1 evidence assigning each frozen tax-rate bucket's cents to the
+/// original tender that funded them. Bucket allocationKind/billLineId/unitOrdinal
+/// retain the authoritative merchandise-unit versus service-charge semantics.
+model RestaurantTaxTenderAllocationSnapshot {
+  id                   String               @id @default(cuid())
+  organizationId       String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  snapshotId           String
+  rateBucketSnapshotId String
+  originalTenderId     String
+  paymentCategory      RestaurantTenderType
+  cents                BigInt
+  createdAt            DateTime             @default(now())
+
+  snapshot       RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId], references: [organizationId, id], onDelete: Restrict, map: "restaurant_tax_tender_allocation_snapshot_fkey")
+  rateBucket     RestaurantTaxRateBucketSnapshot  @relation(fields: [organizationId, snapshotId, rateBucketSnapshotId], references: [organizationId, snapshotId, id], onDelete: Restrict, map: "restaurant_tax_tender_allocation_bucket_fkey")
+  originalTender RestaurantTender                 @relation(fields: [organizationId, originalTenderId, paymentCategory], references: [organizationId, id, type], onDelete: Restrict, map: "restaurant_tax_tender_allocation_tender_category_fkey")
+
+  @@unique([snapshotId, rateBucketSnapshotId, originalTenderId])
+  @@index([organizationId])
+  @@index([originalTenderId])
+  @@index([snapshotId])
+  @@map("restaurant_tax_tender_allocation_snapshots")
 }
 
 model RestaurantTerminalProviderConfig {
@@ -4512,16 +4539,18 @@ model RestaurantTender {
   deviceId        String
   createdAt       DateTime             @default(now())
 
-  bill                    RestaurantBill                     @relation(fields: [billId], references: [id], onDelete: Cascade)
-  drawerSession           RestaurantDrawerSession?           @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
-  payment                 RestaurantPayment?                 @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  staff                   RestaurantStaffProfile             @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
-  device                  RestaurantRegisteredDevice         @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  bill                    RestaurantBill                          @relation(fields: [billId], references: [id], onDelete: Cascade)
+  drawerSession           RestaurantDrawerSession?                @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment                 RestaurantPayment?                      @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff                   RestaurantStaffProfile                  @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device                  RestaurantRegisteredDevice              @relation(fields: [deviceId], references: [id], onDelete: Restrict)
   refunds                 RestaurantRefund[]
   drawerMovements         RestaurantDrawerMovement[]
   terminalReconciliations RestaurantTerminalReconciliation[]
+  taxAllocations          RestaurantTaxTenderAllocationSnapshot[]
 
   @@unique([organizationId, id])
+  @@unique([organizationId, id, type])
   @@index([organizationId])
   @@index([billId])
   @@index([businessDate])

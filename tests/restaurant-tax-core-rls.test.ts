@@ -40,7 +40,8 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     await client.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_tax_official_sources, restaurant_tax_profile_versions,
-       restaurant_tax_rule_versions, restaurant_tax_transaction_snapshots, restaurant_tax_rate_bucket_snapshots TO "${role}"`
+       restaurant_tax_rule_versions, restaurant_tax_transaction_snapshots, restaurant_tax_rate_bucket_snapshots,
+       restaurant_tax_tender_allocation_snapshots TO "${role}"`
     );
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client.query(
@@ -203,7 +204,28 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     const result = await client.query(
       `SELECT count(*)::int AS count FROM pg_class WHERE relkind='r' AND relname LIKE 'restaurant_tax_%' AND relrowsecurity AND relforcerowsecurity`
     );
-    expect(result.rows[0].count).toBe(5);
+    expect(result.rows[0].count).toBe(6);
+    expect(
+      (
+        await client.query(
+          'SELECT id FROM restaurant_tax_tender_allocation_snapshots WHERE "snapshotId"=$1',
+          [`snapshot_a_${suffix}`]
+        )
+      ).rows
+    ).toEqual([]);
+  });
+
+  it('rejects cross-tenant tender-allocation evidence under the restricted role', async () => {
+    await client.query(`SET LOCAL ROLE "${role}"`);
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [orgA]);
+    await expectPgCode('42501', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_tender_allocation_snapshots
+         (id,"organizationId","snapshotId","rateBucketSnapshotId","originalTenderId","paymentCategory",cents)
+         VALUES ($1,$2,'missing','missing','missing','CARD',1)`,
+        [`cross_allocation_${suffix}`, orgB]
+      )
+    );
   });
 
   it('rejects every crafted cross-tenant tax relation under the restricted role', async () => {

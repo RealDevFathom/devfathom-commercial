@@ -18,11 +18,82 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { deriveOrderTotal, planBills } from './bills';
+import { deriveOrderTotal, planBills, validateTenderTaxAllocations } from './bills';
+import type { FinalizeBillSettlementInput } from './bills';
 
 // ── Pure fixtures ────────────────────────────────────────────────────────────
 
 const D = (v: string | number) => new Prisma.Decimal(v);
+
+describe('tender tax allocation validation', () => {
+  const merchandise = {
+    id: 'bucket-unit',
+    allocationKind: 'MERCHANDISE' as const,
+    billLineId: 'line-1',
+    unitOrdinal: 0,
+    ruleVersionId: 'rule-card',
+    paymentCategory: 'CARD' as const,
+    taxAmount: D('1.20'),
+  };
+  const service = {
+    id: 'bucket-service',
+    allocationKind: 'SERVICE_CHARGE' as const,
+    ruleVersionId: 'rule-card',
+    paymentCategory: 'CARD' as const,
+    taxAmount: D('0.10'),
+  };
+  const allocations = [
+    {
+      originalTenderId: 'tender-a',
+      paymentCategory: 'CARD' as const,
+      bucket: merchandise,
+      cents: 70,
+    },
+    {
+      originalTenderId: 'tender-b',
+      paymentCategory: 'CARD' as const,
+      bucket: merchandise,
+      cents: 50,
+    },
+    {
+      originalTenderId: 'tender-a',
+      paymentCategory: 'CARD' as const,
+      bucket: service,
+      cents: 5,
+    },
+    {
+      originalTenderId: 'tender-b',
+      paymentCategory: 'CARD' as const,
+      bucket: service,
+      cents: 5,
+    },
+  ];
+
+  it('accepts two same-category tenders split across unit and service buckets', () => {
+    expect(() =>
+      validateTenderTaxAllocations(allocations, [merchandise, service], D('1.30'))
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['negative cents', [{ ...allocations[0]!, cents: -1 }, ...allocations.slice(1)]],
+    ['missing bucket allocation', allocations.slice(0, 2)],
+    ['duplicate fact', [...allocations, allocations[0]!]],
+    [
+      'mismatched category',
+      [{ ...allocations[0]!, paymentCategory: 'CASH' as const }, ...allocations.slice(1)],
+    ],
+    [
+      'missing bucket identity',
+      [{ ...allocations[0]!, bucket: { ...merchandise, unitOrdinal: 9 } }, ...allocations.slice(1)],
+    ],
+    ['bucket mismatch', [{ ...allocations[0]!, cents: 69 }, ...allocations.slice(1)]],
+  ])('rejects %s', (_label, invalid) => {
+    expect(() => validateTenderTaxAllocations(invalid, [merchandise, service], D('1.30'))).toThrow(
+      'Tender tax allocation'
+    );
+  });
+});
 
 /** Build a minimal LoadedBillOrder-shaped literal for the pure planners. */
 function order(
@@ -801,11 +872,86 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(rolledBack.loyaltyEntries).toBe(0);
 
     const committed = await makeBill('commit');
+    const [tenderA, tenderB] = await deps.withTenantDb(orgId, (tx) =>
+      Promise.all([
+        tx.restaurantTender.create({
+          data: {
+            billId: committed.billId,
+            type: 'CARD',
+            amount: D('8.00'),
+            businessDate: new Date('2026-08-29T00:00:00.000Z'),
+            staffProfileId: ids.operator,
+            deviceId,
+          },
+          select: { id: true },
+        }),
+        tx.restaurantTender.create({
+          data: {
+            billId: committed.billId,
+            type: 'CARD',
+            amount: D('6.30'),
+            businessDate: new Date('2026-08-29T00:00:00.000Z'),
+            staffProfileId: ids.operator,
+            deviceId,
+          },
+          select: { id: true },
+        }),
+      ])
+    );
+    const committedInput: FinalizeBillSettlementInput = settlementInput(
+      committed.billId,
+      committed.billLineId,
+      committed.evaluationId,
+      'commit'
+    );
+    committedInput.tenderTaxAllocations = [
+      {
+        originalTenderId: tenderA.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'MERCHANDISE',
+          billLineId: committed.billLineId,
+          unitOrdinal: 0,
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 70,
+      },
+      {
+        originalTenderId: tenderB.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'MERCHANDISE',
+          billLineId: committed.billLineId,
+          unitOrdinal: 0,
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 50,
+      },
+      {
+        originalTenderId: tenderA.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'SERVICE_CHARGE',
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 5,
+      },
+      {
+        originalTenderId: tenderB.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'SERVICE_CHARGE',
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 5,
+      },
+    ];
     const result = await deps.withTenantDb(orgId, (tx) =>
-      deps.bills.finalizeBillSettlement(
-        tx,
-        settlementInput(committed.billId, committed.billLineId, committed.evaluationId, 'commit')
-      )
+      deps.bills.finalizeBillSettlement(tx, committedInput)
     );
     expect(result).toMatchObject({
       alreadySettled: false,
@@ -830,6 +976,11 @@ describeIfDatabase('bills command layer (real DB)', () => {
       buckets: await tx.restaurantTaxRateBucketSnapshot.findMany({
         where: { snapshotId: result.snapshotId },
         orderBy: { allocationKind: 'asc' },
+      }),
+      tenderAllocations: await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { snapshotId: result.snapshotId },
+        orderBy: [{ rateBucketSnapshotId: 'asc' }, { originalTenderId: 'asc' }],
+        include: { rateBucket: true },
       }),
       reservation: await tx.restaurantPromotionCapReservation.findUniqueOrThrow({
         where: { id: `promo_reservation_commit_${suffix}` },
@@ -865,6 +1016,55 @@ describeIfDatabase('bills command layer (real DB)', () => {
       unitOrdinal: 0,
     });
     expect(frozen.buckets[1]).toMatchObject({ billLineId: null, unitOrdinal: null });
+    expect(frozen.tenderAllocations).toHaveLength(4);
+    expect(frozen.tenderAllocations.reduce((total, row) => total + row.cents, BigInt(0))).toBe(
+      BigInt(130)
+    );
+    expect(new Set(frozen.tenderAllocations.map((row) => row.originalTenderId))).toEqual(
+      new Set([tenderA.id, tenderB.id])
+    );
+    expect(new Set(frozen.tenderAllocations.map((row) => row.rateBucket.allocationKind))).toEqual(
+      new Set(['MERCHANDISE', 'SERVICE_CHARGE'])
+    );
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.update({
+          where: { id: frozen.tenderAllocations[0]!.id },
+          data: { cents: BigInt(1) },
+        })
+      )
+    ).rejects.toMatchObject({ code: 'P2039' });
+    const firstAllocation = frozen.tenderAllocations[0]!;
+    await expect(
+      deps.withTenantDb(
+        orgId,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "restaurant_tax_tender_allocation_snapshots"
+            ("id", "organizationId", "snapshotId", "rateBucketSnapshotId",
+             "originalTenderId", "paymentCategory", "cents")
+          VALUES
+            (gen_random_uuid()::text, ${orgId}, ${result.snapshotId},
+             ${firstAllocation.rateBucketSnapshotId}, ${firstAllocation.originalTenderId},
+             ${firstAllocation.paymentCategory}::"RestaurantTenderType", ${firstAllocation.cents})
+        `
+      )
+    ).rejects.toMatchObject({ code: 'P2010' });
+    await expect(
+      deps.withTenantDb(
+        orgId,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "restaurant_tax_tender_allocation_snapshots"
+            ("id", "organizationId", "snapshotId", "rateBucketSnapshotId",
+             "originalTenderId", "paymentCategory", "cents")
+          VALUES
+            (gen_random_uuid()::text, ${orgId}, 'different-snapshot',
+             ${firstAllocation.rateBucketSnapshotId}, ${firstAllocation.originalTenderId},
+             ${firstAllocation.paymentCategory}::"RestaurantTenderType", ${firstAllocation.cents})
+        `
+      )
+    ).rejects.toMatchObject({ code: 'P2010' });
     expect(frozen.reservation.state).toBe('CONSUMED');
     expect(frozen.counter.consumedCount).toBe(1);
     expect(frozen.counter.consumedAmount.toString()).toBe('0.5');
