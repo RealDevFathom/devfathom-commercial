@@ -132,6 +132,15 @@ function hook<T>(
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    restaurantStaff: {
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
     restaurantInsights: {
       listFinancialReports: {
         useQuery: (input: unknown, options: { enabled: boolean }) =>
@@ -196,7 +205,7 @@ function renderConsole(enabled = true) {
 }
 
 function setBranch(value = 'branch_1') {
-  fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value } });
+  fireEvent.change(screen.getByLabelText('Branch'), { target: { value } });
 }
 
 describe('InsightsConsole', () => {
