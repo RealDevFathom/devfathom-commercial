@@ -217,7 +217,7 @@ describe('physical count workflow', () => {
     const view = render(page);
     let previousDetail = screen
       .getByRole('heading', { name: 'Saturday close' })
-      .closest('[data-slot="section-card"]');
+      .closest<HTMLElement>('[data-slot="section-card"]');
 
     for (const [stockItemId, countedQuantity] of [
       ['item-1', '25.125'],
@@ -245,7 +245,7 @@ describe('physical count workflow', () => {
       );
       const freshDetail = screen
         .getByRole('heading', { name: 'Saturday close' })
-        .closest('[data-slot="section-card"]');
+        .closest<HTMLElement>('[data-slot="section-card"]');
       expect(freshDetail).not.toBe(previousDetail);
       previousDetail = freshDetail;
     }
