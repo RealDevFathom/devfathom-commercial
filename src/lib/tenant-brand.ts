@@ -1,5 +1,4 @@
 export type TenantBrand = {
-
   /**
    * The organization this brand describes. WHA-276: "workspace" means
    * organization, so the chrome must be able to prove which tenant it is
@@ -22,6 +21,7 @@ export function assertWorkspaceIdentity(
   if (sessionOrganizationId !== displayedOrganizationId) {
     throw new Error('Workspace identity does not match the authenticated organization.');
   }
+}
 
 /**
  * WHA-276 — the workspace-identity invariant.

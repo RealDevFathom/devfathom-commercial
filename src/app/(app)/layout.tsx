@@ -70,9 +70,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       entitlements={entitlements}
       realtimeEnabled={Boolean(process.env.ABLY_API_KEY)}
     >
-      <AppShell brand={brand} sessionOrganizationId={actor.session.user.organizationId}>
-        {children}
-      </AppShell>
+      <AppShell brand={brand}>{children}</AppShell>
     </TenantSessionBoundary>
   );
 }

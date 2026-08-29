@@ -38,6 +38,7 @@ function renderView(overrides: Partial<SopAdminViewProps> = {}) {
     templateLimit: 10,
     templates: [],
     assignments: [],
+    jobRoles: [],
     selectedTemplateId: '',
     selectedVersionId: '',
     version: null,

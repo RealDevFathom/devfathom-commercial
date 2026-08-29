@@ -14,12 +14,7 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
-import {
-  assertWorkspaceIdentity,
-  isTenantIdentityMismatch,
-  tenantBrandTokens,
-  type TenantBrand,
-} from '@/lib/tenant-brand';
+import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { toast } from 'sonner';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
@@ -117,13 +112,13 @@ export function isPathModuleEnabled(
 export function AppShell({
   children,
   brand,
-  sessionOrganizationId,
 }: {
   children: React.ReactNode;
   brand: TenantBrand;
-  sessionOrganizationId: string;
 }) {
-  assertWorkspaceIdentity(sessionOrganizationId, brand.organizationId);
+  // The server-side invariant lives in the `/(app)` layout, which fails closed
+  // before this renders. Here the live session is the moving part, so the check
+  // below (after every hook) degrades to a notice rather than throwing.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
   const { data: session } = useSession();

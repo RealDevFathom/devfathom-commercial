@@ -45,6 +45,7 @@ describe('AppShell module guard', () => {
         TestAppShell,
         {
           brand: {
+            organizationId: 'org_test',
             displayName: 'Test restaurant',
             logoUrl: null,
             markUrl: null,
