@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
-import { router, capabilityProcedure } from '../trpc';
+import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
   SopExecutionError,
@@ -17,6 +17,15 @@ import {
   waiveOccurrence,
 } from '@/lib/restaurant/sop-verification';
 import { acknowledgeEscalation } from '@/lib/restaurant/sop-escalation';
+import {
+  evaluateSopDepth,
+  sopDepthDenialMessage,
+  type EntitlementSnapshot,
+  type SopDepthCapability,
+} from '@/lib/module-catalog';
+import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
+import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { can, subjectFromSession } from '@/lib/abac';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -28,19 +37,47 @@ import { acknowledgeEscalation } from '@/lib/restaurant/sop-escalation';
  * Both gate on the `restaurant-sop` module (via module-catalog). Tenant scoping
  * is the RLS-forced `organizationId` on every row. All input schemas are `.strict()`
  * — an unknown key is REJECTED.
+ *
+ * WHA-264 — the module gate above answers "does this organization have SOP at
+ * all"; it cannot answer "how deep". Every restaurant package includes
+ * `restaurant-sop`, so the DEPTH of each command (bare execution vs. proof,
+ * verification, waiver, escalation) is resolved against the module/limit catalog
+ * by `assertSopDepth` at the top of each resolver. Authorization (`sop:complete`
+ * / `sop:verify`) and entitlement are independent gates and both must pass:
+ * a capable manager in an under-entitled organization is still refused, and an
+ * entitled organization still needs the capability.
  */
 
 const completeProcedure = capabilityProcedure('sop:complete');
 const verifyProcedure = capabilityProcedure('sop:verify');
+const reportProcedure = capabilityProcedure('reports:operational');
+
+/**
+ * Fail closed on an SOP depth the caller's organization is not entitled to.
+ * Reads only `ctx.entitlements`, which `resolveOrganizationEntitlements` builds
+ * for the caller's own organization — the depth decision can never be made from
+ * another tenant's licensing.
+ */
+function assertSopDepth(entitlements: EntitlementSnapshot, capability: SopDepthCapability): void {
+  const result = evaluateSopDepth(entitlements, capability);
+  if (!result.allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: sopDepthDenialMessage(capability, result),
+    });
+  }
+}
 
 function mapExecutionError(err: unknown): never {
   if (err instanceof SopExecutionError) {
     const code =
       err.reason === 'NOT_FOUND'
         ? 'NOT_FOUND'
-        : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
-          ? 'CONFLICT'
-          : 'BAD_REQUEST';
+        : err.reason === 'NOT_OWNER'
+          ? 'FORBIDDEN'
+          : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
   }
   if (err instanceof SopVerificationError) {
@@ -62,6 +99,48 @@ function mapExecutionError(err: unknown): never {
 const OCCURRENCE_ID = z.string().min(1);
 const OPTIONAL_ACTOR = z.string().min(1).nullable().optional();
 const OPTIONAL_REASON = z.string().max(2_000).nullable().optional();
+const REPORT_DATE = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    try {
+      businessDateToUtcDate(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Invalid calendar date.');
+const DEPARTMENT = z.enum([
+  'LEADERSHIP',
+  'ENGINEERING',
+  'PRODUCT',
+  'QUALITY',
+  'MARKETING',
+  'DESIGN',
+]);
+
+async function requireReportBranch(ctx: TRPCContext, branchId: string) {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const [staff, assignment] = await Promise.all([
+    ctx.db.restaurantStaffProfile.findFirst({
+      where: { userId: user.id, status: 'ACTIVE', primaryBranchId: branchId },
+      select: { id: true },
+    }),
+    ctx.db.restaurantBranchAssignment.findFirst({
+      where: { userId: user.id, branchId },
+      select: { id: true },
+    }),
+  ]);
+  if (staff || assignment) return;
+  const allowed = await can(subjectFromSession(user), 'restaurant:configure', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+  });
+  if (!allowed) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not authorized for this branch.' });
+  }
+}
 
 // ── Read: branch board ────────────────────────────────────────────────────────
 
@@ -92,9 +171,99 @@ const BoardFilterSchema = z
   .strict();
 
 export const restaurantSopExecutionRouter = router({
+  reportBranches: reportProcedure.query(async ({ ctx }) => {
+    const user = ctx.session!.user;
+    const canConfigure = await can(subjectFromSession(user), 'restaurant:configure', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    });
+
+    return ctx.db.restaurantBranch.findMany({
+      where: {
+        active: true,
+        ...(canConfigure
+          ? {}
+          : {
+              OR: [
+                { staffProfiles: { some: { userId: user.id, status: 'ACTIVE' } } },
+                { assignments: { some: { userId: user.id } } },
+              ],
+            }),
+      },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      select: { id: true, name: true },
+    });
+  }),
+
+  report: reportProcedure
+    .input(
+      z
+        .object({
+          branchId: z.string().min(1),
+          from: REPORT_DATE,
+          to: REPORT_DATE,
+          department: DEPARTMENT.optional(),
+        })
+        .strict()
+        .refine((input) => input.from <= input.to, {
+          message: 'From date must be on or before to date.',
+          path: ['from'],
+        })
+    )
+    .query(async ({ ctx, input }) => {
+      await requireReportBranch(ctx, input.branchId);
+      const departmentScope = input.department
+        ? {
+            OR: [
+              { assignedStaff: { user: { department: input.department } } },
+              { claimedBy: { user: { department: input.department } } },
+              { steps: { some: { completedBy: { user: { department: input.department } } } } },
+            ],
+          }
+        : {};
+      const rows = await ctx.db.restaurantSopOccurrence.findMany({
+        where: {
+          branchId: input.branchId,
+          businessDate: {
+            gte: businessDateToUtcDate(input.from),
+            lte: businessDateToUtcDate(input.to),
+          },
+          ...departmentScope,
+        },
+        orderBy: [{ businessDate: 'asc' }, { dueAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          status: true,
+          dueAt: true,
+          windowEndsAt: true,
+          submittedAt: true,
+          resolvedAt: true,
+          assignedStaff: {
+            select: { id: true, displayName: true, user: { select: { department: true } } },
+          },
+          claimedBy: {
+            select: { id: true, displayName: true, user: { select: { department: true } } },
+          },
+          steps: {
+            select: {
+              completed: true,
+              completedBy: {
+                select: { id: true, displayName: true, user: { select: { department: true } } },
+              },
+            },
+          },
+          evidence: { select: { id: true } },
+          verifications: { select: { action: true } },
+          escalationEvents: { select: { kind: true } },
+        },
+      });
+      return summarizeSopReport(rows);
+    }),
+
   // ── Board: list occurrences ───────────────────────────────────────────────
 
   listOccurrences: completeProcedure.input(BoardFilterSchema).query(async ({ ctx, input }) => {
+    assertSopDepth(ctx.entitlements, 'sop.execution');
     const where: Record<string, unknown> = { branchId: input.branchId };
 
     if (input.businessDate) {
@@ -154,6 +323,7 @@ export const restaurantSopExecutionRouter = router({
   getOccurrence: completeProcedure
     .input(z.object({ id: OCCURRENCE_ID }).strict())
     .query(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.execution');
       const occ = await ctx.db.restaurantSopOccurrence.findUnique({
         where: { id: input.id },
         select: {
@@ -254,6 +424,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
         const result = await startOccurrence(ctx.db, input);
         annotateAudit(ctx, {
@@ -279,6 +450,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
         return await completeStep(ctx.db, input);
       } catch (err) {
@@ -302,6 +474,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.evidence');
       try {
         const result = await attachEvidence(ctx.db, {
           occurrenceId: input.occurrenceId,
@@ -333,6 +506,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
         const result = await submitOccurrence(ctx.db, input);
         annotateAudit(ctx, {
@@ -359,6 +533,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.verification');
       try {
         const result = await verifyOccurrence(ctx.db, input);
         annotateAudit(ctx, {
@@ -383,6 +558,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.verification');
       try {
         const result = await rejectOccurrence(ctx.db, input);
         annotateAudit(ctx, {
@@ -408,6 +584,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
         const result = await waiveOccurrence(ctx.db, input);
         annotateAudit(ctx, {
@@ -433,6 +610,7 @@ export const restaurantSopExecutionRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.escalation');
       try {
         return await acknowledgeEscalation(ctx.db, input);
       } catch (err) {

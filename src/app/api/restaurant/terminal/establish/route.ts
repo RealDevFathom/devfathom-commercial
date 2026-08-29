@@ -13,6 +13,10 @@ import { establishSession, terminalSessionState } from '@/lib/restaurant/termina
  */
 export const POST = withDeviceAuth(async (ctx) => {
   const now = new Date();
+  const branch = await ctx.db.restaurantBranch.findUniqueOrThrow({
+    where: { id: ctx.device.branchId },
+    select: { name: true },
+  });
   const { session, token } = await establishSession(ctx.db, ctx.device.id, now);
   return NextResponse.json(
     {
@@ -22,7 +26,7 @@ export const POST = withDeviceAuth(async (ctx) => {
         state: terminalSessionState(session),
         establishedAt: session.establishedAt.toISOString(),
       },
-      device: { id: ctx.device.id, branchId: ctx.device.branchId },
+      device: { id: ctx.device.id, branchName: branch.name },
     },
     { status: 201 }
   );

@@ -25,6 +25,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 /** Assert a serialised money value by Decimal VALUE, tolerant of trailing-zero format
  * (`.toString()` trims computed Decimals: '10' ≡ '10.00'). Never a float comparison. */
@@ -266,10 +267,10 @@ beforeAll(async () => {
         status: 'ACTIVE',
       },
     });
-    const posModule = await tx.platformModule.upsert({
-      where: { key: 'restaurant-pos' },
-      update: {},
-      create: { key: 'restaurant-pos', name: 'POS', category: 'Operations' },
+    await seedDepartments(tx, [orgA], ['LEADERSHIP']);
+    const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
+      name: 'POS',
+      category: 'Operations',
     });
     await tx.organizationModule.create({
       data: { organizationId: orgA, moduleId: posModule.id },

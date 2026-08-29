@@ -4,6 +4,7 @@ import pg from 'pg';
 import { hash } from 'bcryptjs';
 import 'dotenv/config';
 
+import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
 import { PLATFORM_MODULES } from './production-bootstrap.js';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -1503,7 +1504,7 @@ async function main() {
         },
       });
 
-      await tx.organization.upsert({
+      const organization = await tx.organization.upsert({
         where: { id: 'org_devfathom' },
         update: { packageId: suite.id },
         create: {
@@ -1518,6 +1519,18 @@ async function main() {
           gracePeriodDays: 14,
           activatedAt: new Date(),
         },
+      });
+
+      // WHA-290: `User.department` is a composite foreign key onto
+      // `organization_departments`, so the demo team seeded below cannot exist
+      // until this organization's catalog does. Taken from the vertical catalog
+      // rather than restated here, exactly as bootstrapOrganization does.
+      await tx.organizationDepartment.createMany({
+        data: defaultDepartmentRowsForVertical(organization.vertical).map((department) => ({
+          organizationId: organization.id,
+          ...department,
+        })),
+        skipDuplicates: true,
       });
 
       for (const [key, name, category, routePrefix] of PLATFORM_MODULES) {

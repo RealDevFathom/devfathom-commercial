@@ -2,16 +2,25 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALL_VERTICALS,
+  AGENCY_DEPARTMENTS,
+  RESTAURANT_DEPARTMENTS,
   RESTAURANT_CAPABILITIES,
   RESTAURANT_CAPABILITY_NAMESPACES,
   RESTAURANT_LIMIT_KEYS,
   RESTAURANT_MODULES,
   RESTAURANT_PACKAGES,
+  RESTAURANT_JOB_ROLE_TEMPLATES,
   RESTAURANT_ROLE_TEMPLATES,
+  SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
   VERTICALS,
+  adminDepartmentKeyForVertical,
   assertPackageCompatibleWithVertical,
+  defaultDepartmentRowsForVertical,
+  departmentsForVertical,
+  memberDepartmentKeyForVertical,
   isPackageCompatibleWithVertical,
   isRestaurantModuleKey,
+  jobRoleTemplatesForVertical,
   limitKeysForVertical,
   mandatoryModulesForVertical,
   modulesForVertical,
@@ -26,6 +35,51 @@ describe('vertical definitions (§2)', () => {
     expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT']);
     expect(VERTICALS.AGENCY.label).toBe('Agency');
     expect(VERTICALS.RESTAURANT.label).toBe('Restaurant');
+  });
+});
+
+describe('vertical department defaults', () => {
+  it('keeps agency defaults on the agency vertical', () => {
+    expect(departmentsForVertical('AGENCY')).toEqual(AGENCY_DEPARTMENTS);
+    expect(AGENCY_DEPARTMENTS.map((department) => department.key)).toContain('ENGINEERING');
+  });
+
+  it('uses restaurant defaults without agency leakage', () => {
+    expect(departmentsForVertical('RESTAURANT')).toEqual(RESTAURANT_DEPARTMENTS);
+    expect(RESTAURANT_DEPARTMENTS).toEqual([
+      { key: 'KITCHEN', name: 'Kitchen' },
+      { key: 'FRONT_OF_HOUSE', name: 'Front of House' },
+    ]);
+    expect(RESTAURANT_DEPARTMENTS.map((department) => department.key)).not.toContain('ENGINEERING');
+  });
+
+  // WHA-290 — the identity paths derive a department instead of taking one, so
+  // both declared defaults must be keys the vertical's own catalog contains.
+  it('declares provisioning defaults that exist in each vertical catalog', () => {
+    for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+      const keys = departmentsForVertical(vertical).map((department) => department.key);
+      expect(keys).toContain(adminDepartmentKeyForVertical(vertical));
+      expect(keys).toContain(memberDepartmentKeyForVertical(vertical));
+    }
+  });
+
+  it('keeps the pre-WHA-278 agency pair and gives a restaurant a floor department', () => {
+    expect(adminDepartmentKeyForVertical('AGENCY')).toBe('LEADERSHIP');
+    expect(memberDepartmentKeyForVertical('AGENCY')).toBe('ENGINEERING');
+    expect(adminDepartmentKeyForVertical('RESTAURANT')).toBe('FRONT_OF_HOUSE');
+    expect(memberDepartmentKeyForVertical('RESTAURANT')).toBe('FRONT_OF_HOUSE');
+  });
+
+  it('numbers default rows in catalog order for every vertical', () => {
+    for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+      expect(defaultDepartmentRowsForVertical(vertical)).toEqual(
+        departmentsForVertical(vertical).map((department, index) => ({
+          key: department.key,
+          name: department.name,
+          sortOrder: index,
+        }))
+      );
+    }
   });
 });
 
@@ -128,6 +182,39 @@ describe('role templates and capabilities (§8)', () => {
     expect(new Set(RESTAURANT_CAPABILITIES).size).toBe(RESTAURANT_CAPABILITIES.length);
     expect(new Set(RESTAURANT_CAPABILITY_NAMESPACES).size).toBe(
       RESTAURANT_CAPABILITY_NAMESPACES.length
+    );
+  });
+});
+
+describe('B1/WHA-285 job-role profiles (§8 cont.)', () => {
+  it('supplies the ten floor job-role templates', () => {
+    expect(RESTAURANT_JOB_ROLE_TEMPLATES).toHaveLength(10);
+  });
+
+  it('jobRoleTemplatesForVertical is restaurant-only', () => {
+    expect(jobRoleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_JOB_ROLE_TEMPLATES);
+    expect(jobRoleTemplatesForVertical('AGENCY')).toEqual([]);
+  });
+
+  it('draws every job-role capability from the catalog, and never uses `*`', () => {
+    // The ORGANIZATION-role owner template may use `*`; a job role may not, because
+    // a per-person DENY has to be able to subtract a named capability from it.
+    for (const role of RESTAURANT_JOB_ROLE_TEMPLATES) {
+      for (const capability of role.capabilities) {
+        expect(capability).not.toBe('*');
+        expect(RESTAURANT_CAPABILITIES).toContain(capability);
+        expect(RESTAURANT_CAPABILITY_NAMESPACES).toContain(capability.split(':')[0]);
+      }
+    }
+  });
+
+  it('keeps the two §8 template lists separate objects', () => {
+    // Job roles key a staff profile; organization roles key an app user. Shared
+    // keys are the same job on different subjects, never the same record.
+    expect(RESTAURANT_JOB_ROLE_TEMPLATES).not.toBe(RESTAURANT_ROLE_TEMPLATES);
+    expect(RESTAURANT_ROLE_TEMPLATES.some((role) => role.key === 'shift-supervisor')).toBe(false);
+    expect(RESTAURANT_JOB_ROLE_TEMPLATES.some((role) => role.key === 'general-manager')).toBe(
+      false
     );
   });
 });
@@ -291,6 +378,13 @@ describe('commercial packages (§13)', () => {
     expect(enterprise.moduleKeys).toHaveLength(RESTAURANT_MODULES.length);
     for (const key of essentials.moduleKeys) expect(operations.moduleKeys).toContain(key);
     for (const key of operations.moduleKeys) expect(enterprise.moduleKeys).toContain(key);
+  });
+
+  it('uses one high anti-abuse SOP template guardrail across every package', () => {
+    expect(SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL).toBe(1000);
+    for (const pkg of RESTAURANT_PACKAGES) {
+      expect(pkg.defaultLimits['sop.templates.max']).toBe(SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL);
+    }
   });
 
   it('every default limit uses a defined §7 limit key', () => {

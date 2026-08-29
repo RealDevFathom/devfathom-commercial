@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
+import { describeShiftDenial } from '@/lib/restaurant/shifts';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 import { bindOperator } from '@/lib/restaurant/terminal-session';
 
@@ -63,6 +64,19 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       return NextResponse.json(
         { error: 'Credential is temporarily locked after repeated failures.' },
         { status: 423, headers: { 'Retry-After': String(Math.ceil(auth.retryAfterMs / 1000)) } }
+      );
+    }
+    if (auth.reason === 'NO_ACTIVE_SHIFT') {
+      // 403, not 401: the incoming operator's credential is valid, they are just
+      // not rostered. The outgoing operator keeps the terminal — a refused
+      // handover must never leave the session bound to nobody.
+      return NextResponse.json(
+        {
+          error: describeShiftDenial(auth.shiftReason),
+          reason: auth.shiftReason,
+          nextShiftStartsAt: auth.nextShiftStartsAt?.toISOString() ?? null,
+        },
+        { status: 403 }
       );
     }
     return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });

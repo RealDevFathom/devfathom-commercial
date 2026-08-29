@@ -5,6 +5,7 @@ import { TenantSessionBoundary } from '@/components/tenant-session-boundary';
 import { resolveTenantActor, resolveTenantSessionDenial } from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { assertWorkspaceIdentity } from '@/lib/tenant-brand';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // SEC-03 / AUTH-02: a single server-side auth guard for every /(app) page. The
@@ -30,6 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       db.organization.findUnique({
         where: { id: actor.organization.id },
         select: {
+          id: true,
           displayName: true,
           brand: {
             select: {
@@ -46,6 +48,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     return {
       entitlements: entitlementSnapshot,
       brand: {
+        // WHA-276: the chrome is only allowed to display an identity it can
+        // attribute to a tenant, so the brand carries the organization it was
+        // resolved for. `resolveTenantActor` has already proven this equals the
+        // session's organizationId (host and session must agree, and the shared
+        // host resolves by the session's own id).
+        organizationId: actor.organization.id,
         displayName: organization?.displayName ?? actor.organization.displayName,
         logoUrl: organization?.brand?.logoUrl ?? null,
         markUrl: organization?.brand?.markUrl ?? null,
@@ -55,6 +63,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       },
     };
   });
+  assertWorkspaceIdentity(actor.session.user.organizationId, brand.organizationId);
   return (
     <TenantSessionBoundary
       session={actor.session}

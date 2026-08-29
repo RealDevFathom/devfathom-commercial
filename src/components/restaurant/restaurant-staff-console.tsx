@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { StaffJobRolesDialog } from '@/components/restaurant/staff-job-roles-dialog';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 
@@ -75,6 +76,8 @@ export function RestaurantStaffConsole() {
   const [staffFormOpen, setStaffFormOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
+  // SOP-1: the job-role multi-select target (separate from the credentials dialog).
+  const [jobRolesStaff, setJobRolesStaff] = useState<StaffProfile | null>(null);
   const [credentialError, setCredentialError] = useState('');
   const [revokeCredential, setRevokeCredential] = useState<Pick<Credential, 'id' | 'type'> | null>(
     null
@@ -408,6 +411,9 @@ export function RestaurantStaffConsole() {
                         <Button variant="outline" size="sm" onClick={() => openEdit(staff)}>
                           Edit
                         </Button>
+                        <Button variant="outline" size="sm" onClick={() => setJobRolesStaff(staff)}>
+                          Job roles
+                        </Button>
                         <Button
                           variant="secondary"
                           size="sm"
@@ -427,6 +433,19 @@ export function RestaurantStaffConsole() {
           )}
         </SectionCard>
       )}
+
+      {/* Mounted only while open, so closing resets its draft state with no effect. */}
+      {jobRolesStaff ? (
+        <StaffJobRolesDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setJobRolesStaff(null);
+          }}
+          staffProfileId={jobRolesStaff.id}
+          staffDisplayName={jobRolesStaff.displayName}
+          defaultBranchId={jobRolesStaff.primaryBranchId}
+        />
+      ) : null}
 
       <Dialog
         open={staffFormOpen}

@@ -3,6 +3,7 @@ import 'server-only';
 import { createHash, randomBytes } from 'node:crypto';
 import type { CacheProvider } from '@node-saml/node-saml';
 import type { OrganizationIdentityConnection } from '@/generated/prisma/client';
+import { resolveProvisionedDepartmentKey } from '@/lib/department-provisioning';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
@@ -142,6 +143,11 @@ export async function provisionIdentityUser(
       throw new Error('An account with this email already exists in this organization.');
     }
     const role = roleFromClaims(connection, claims);
+    // WHA-290: departments are tenant-configured rows, not a fixed enum — a
+    // hardcoded 'LEADERSHIP'/'ENGINEERING' pair would raise the composite
+    // foreign key for every restaurant tenant. Derive the key from this
+    // organization's own active catalog instead.
+    const department = await resolveProvisionedDepartmentKey(db, connection.organizationId, role);
     return db.user.create({
       data: {
         organizationId: connection.organizationId,
@@ -149,7 +155,7 @@ export async function provisionIdentityUser(
         email,
         password: null,
         role,
-        department: role === 'ADMIN' ? 'LEADERSHIP' : 'ENGINEERING',
+        department,
         title: role === 'ADMIN' ? 'Organization administrator' : 'Team member',
         status: 'ACTIVE',
         lastActiveAt: new Date(),

@@ -51,6 +51,69 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
 
 export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT'];
 
+export type DepartmentDefinition = {
+  key: string;
+  name: string;
+};
+
+export const AGENCY_DEPARTMENTS: readonly DepartmentDefinition[] = [
+  { key: 'LEADERSHIP', name: 'Leadership' },
+  { key: 'ENGINEERING', name: 'Engineering' },
+  { key: 'PRODUCT', name: 'Product' },
+  { key: 'QUALITY', name: 'Quality' },
+  { key: 'MARKETING', name: 'Marketing' },
+  { key: 'DESIGN', name: 'Design' },
+];
+
+export const RESTAURANT_DEPARTMENTS: readonly DepartmentDefinition[] = [
+  { key: 'KITCHEN', name: 'Kitchen' },
+  { key: 'FRONT_OF_HOUSE', name: 'Front of House' },
+];
+
+export function departmentsForVertical(
+  vertical: OrganizationVertical
+): readonly DepartmentDefinition[] {
+  return vertical === RESTAURANT ? RESTAURANT_DEPARTMENTS : AGENCY_DEPARTMENTS;
+}
+
+/**
+ * The rows a newly provisioned organization starts with. `User.department` is a
+ * composite foreign key onto `organization_departments`, so an organization with
+ * an empty catalog cannot hold a single user: provisioning must seed these
+ * before it creates the administrator.
+ */
+export function defaultDepartmentRowsForVertical(
+  vertical: OrganizationVertical
+): { key: string; name: string; sortOrder: number }[] {
+  return departmentsForVertical(vertical).map((department, index) => ({
+    key: department.key,
+    name: department.name,
+    sortOrder: index,
+  }));
+}
+
+/**
+ * The department a newly provisioned organization administrator is filed under.
+ * Declared per vertical rather than inferred from catalog ordering: an agency
+ * administrator leads, while a restaurant administrator belongs front of house
+ * rather than in the kitchen. Always a key present in `departmentsForVertical`.
+ */
+export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'LEADERSHIP';
+}
+
+/**
+ * The department a non-administrator provisioned from an identity provider
+ * (SSO just-in-time, SCIM) is filed under when the directory asserts no
+ * department of its own. The sibling of `adminDepartmentKeyForVertical`: an
+ * agency's directory user defaults to Engineering, as the pre-WHA-278 hardcoded
+ * pair asserted, while a restaurant's belongs front of house rather than in the
+ * kitchen. Always a key present in `departmentsForVertical`.
+ */
+export function memberDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'ENGINEERING';
+}
+
 // ---------------------------------------------------------------------------
 // §6 — Commercial restaurant module map (ten modules)
 // ---------------------------------------------------------------------------
@@ -190,7 +253,8 @@ export const RESTAURANT_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
   { key: 'inventory.stockLocations.max', countedUnit: 'Active branch stock locations' },
   {
     key: 'sop.templates.max',
-    countedUnit: 'Active SOP template families, not immutable historical versions',
+    countedUnit:
+      'Active SOP template families, not immutable historical versions; a high anti-abuse guardrail, not package-tier pricing',
   },
   {
     key: 'sop.evidenceRetentionDays',
@@ -479,6 +543,180 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// §8 (cont.) — JOB-ROLE profiles: the vertical-supplied floor templates
+// ---------------------------------------------------------------------------
+//
+// TWO ROLE SURFACES, ONE PERMISSION MODEL PER SUBJECT — and they are not the
+// same subject, which is why both lists live here without colliding.
+//
+//   `RESTAURANT_ROLE_TEMPLATES` above seeds `OrganizationRole` — the BACK-OFFICE
+//   web role of an app `User`. A user has exactly ONE (`User.organizationRoleId`
+//   is singular).
+//
+//   `RESTAURANT_JOB_ROLE_TEMPLATES` below seeds `RestaurantJobRole` — the FLOOR
+//   DUTY of a `RestaurantStaffProfile`, who need not have a web login at all and
+//   holds MANY, per branch.
+//
+// The keys `cashier`, `server` and `kitchen` deliberately appear in both lists:
+// they name the same real-world job on two different subjects, stored in two
+// different tables, and neither resolution path ever reads the other's rows. No
+// third permission model is introduced by this file.
+//
+// WHY NO `['*']` HERE. The organization-role `owner` template uses the `'*'`
+// wildcard; the job-role side must not, and `owner` below is enumerated instead.
+// Job-role resolution is plain set membership, and a per-person DENY has to be
+// able to subtract a NAMED capability from what a role granted. A wildcard is
+// not subtractable — denying `payments:refund` against `'*'` would be a silent
+// no-op. Enumerating keeps every grant deniable.
+//
+// Capabilities are drawn only from {@link RESTAURANT_CAPABILITIES}; a template
+// naming a capability outside that list is a governance failure, not a feature.
+
+export type JobRoleTemplate = {
+  key: string;
+  name: string;
+  description: string;
+  /** Capabilities the role grants by default. Enumerated — never `['*']`. */
+  capabilities: readonly string[];
+};
+
+/** Capabilities every floor role carries: read the menu and complete an SOP. */
+const FLOOR_BASELINE: readonly string[] = ['menu:read', 'sop:complete'];
+
+/** Order-taking at a register or on the floor. */
+const TAKES_ORDERS: readonly string[] = ['pos:operate', 'orders:read', 'orders:take'];
+
+/** Handles the drawer: opens it, takes money, closes it. Deliberately excludes
+ * `orders:discount` and `payments:refund` — those are supervisor powers, and a
+ * cashier who legitimately needs one gets a DIRECT grant, per person. */
+const RUNS_A_REGISTER: readonly string[] = [
+  ...TAKES_ORDERS,
+  'payments:collect',
+  'cash:open',
+  'cash:close',
+];
+
+/** Everything a shift supervisor may do on the floor. */
+const SUPERVISES_A_SHIFT: readonly string[] = [
+  ...RUNS_A_REGISTER,
+  'cash:adjust',
+  'orders:void',
+  'orders:discount',
+  'payments:refund',
+  'coauth:approve',
+  'kitchen:operate',
+  'inventory:read',
+  'inventory:count',
+  'customers:read',
+  'loyalty:redeem',
+  'reports:operational',
+  'sop:verify',
+];
+
+/** Everything a branch manager may do: supervise, plus run the branch. */
+const MANAGES_A_BRANCH: readonly string[] = [
+  ...SUPERVISES_A_SHIFT,
+  'branches:read',
+  'orders:complimentary',
+  'inventory:adjust',
+  'inventory:waste',
+  'purchasing:create',
+  'purchasing:approve',
+  'menu:publish',
+  'menu:price',
+  'staff:manage',
+  'devices:manage',
+  'terminal:operate',
+  'sop:manage',
+];
+
+export const RESTAURANT_JOB_ROLE_TEMPLATES: readonly JobRoleTemplate[] = [
+  {
+    key: 'barista',
+    name: 'Barista',
+    description: 'Prepares beverages at the bar station and works its ticket rail.',
+    capabilities: [...FLOOR_BASELINE, ...TAKES_ORDERS, 'kitchen:operate'],
+  },
+  {
+    key: 'cashier',
+    name: 'Cashier',
+    description: 'Operates the register and handles guest checkout.',
+    capabilities: [...FLOOR_BASELINE, ...RUNS_A_REGISTER],
+  },
+  {
+    key: 'server',
+    name: 'Server',
+    description: 'Takes orders at the table and looks after the guest through the meal.',
+    capabilities: [...FLOOR_BASELINE, ...TAKES_ORDERS, 'customers:read'],
+  },
+  {
+    key: 'kitchen',
+    name: 'Kitchen / Line Cook',
+    description: 'Works the kitchen line and prep stations against the KDS.',
+    capabilities: [
+      ...FLOOR_BASELINE,
+      'orders:read',
+      'kitchen:operate',
+      'inventory:read',
+      'inventory:waste',
+    ],
+  },
+  {
+    key: 'host',
+    name: 'Host',
+    description: 'Greets and seats guests, and manages the waitlist. Handles no money.',
+    capabilities: [...FLOOR_BASELINE, 'orders:read', 'customers:read'],
+  },
+  {
+    key: 'shift-supervisor',
+    name: 'Shift Supervisor',
+    description: 'Runs the floor for one shift: approves voids, discounts and refunds.',
+    capabilities: [...FLOOR_BASELINE, ...SUPERVISES_A_SHIFT],
+  },
+  {
+    key: 'manager',
+    name: 'Manager',
+    description: 'Runs the branch: staffing, purchasing, menu publication and compliance.',
+    capabilities: [...FLOOR_BASELINE, ...MANAGES_A_BRANCH],
+  },
+  {
+    key: 'owner',
+    name: 'Owner',
+    description: 'Owns the business: configuration, money, devices and pay rates.',
+    capabilities: [
+      ...FLOOR_BASELINE,
+      ...MANAGES_A_BRANCH,
+      'restaurant:configure',
+      'branches:manage',
+      'devices:revoke',
+      'menu:write',
+      'menu:import',
+      'reports:financial',
+      'workforce:rates',
+    ],
+  },
+  {
+    key: 'accountant',
+    name: 'Accountant',
+    description: 'Reconciles takings and approves purchasing. Never operates the floor.',
+    capabilities: [
+      'orders:read',
+      'payments:refund',
+      'cash:adjust',
+      'purchasing:approve',
+      'reports:operational',
+      'reports:financial',
+    ],
+  },
+  {
+    key: 'delivery-rider',
+    name: 'Delivery Rider',
+    description: 'Carries orders to the guest and may collect payment on delivery.',
+    capabilities: [...FLOOR_BASELINE, 'orders:read', 'payments:collect', 'customers:read'],
+  },
+];
+
+// ---------------------------------------------------------------------------
 // §13 — Preliminary commercial packages (three keys)
 // ---------------------------------------------------------------------------
 
@@ -512,6 +750,9 @@ const OPERATIONS_MODULES: readonly string[] = [
 
 const ENTERPRISE_MODULES: readonly string[] = RESTAURANT_MODULES.map((module) => module.key);
 
+/** Operational safety ceiling shared by every package; SOP template count is not tier-priced. */
+export const SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL = 1000;
+
 export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
   {
     key: 'restaurant-essentials',
@@ -527,7 +768,7 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
       'pos.concurrentRegisters.max': 2,
       'restaurant.operators.max': 10,
       'inventory.stockLocations.max': 1,
-      'sop.templates.max': 25,
+      'sop.templates.max': SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
       'sop.evidenceRetentionDays': 90,
     },
   },
@@ -545,7 +786,7 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
       'pos.concurrentRegisters.max': 10,
       'restaurant.operators.max': 100,
       'inventory.stockLocations.max': 10,
-      'sop.templates.max': 100,
+      'sop.templates.max': SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
       'sop.evidenceRetentionDays': 365,
       'loyalty.activeCustomers.max': 25000,
       'integrations.connections.max': 10,
@@ -568,7 +809,7 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
       'pos.concurrentRegisters.max': 250,
       'restaurant.operators.max': 2500,
       'inventory.stockLocations.max': 250,
-      'sop.templates.max': 1000,
+      'sop.templates.max': SOP_TEMPLATE_ANTI_ABUSE_GUARDRAIL,
       'sop.evidenceRetentionDays': 1095,
       'loyalty.activeCustomers.max': 1000000,
       'integrations.connections.max': 100,
@@ -615,6 +856,17 @@ export function packageByKey(key: string): PackageDefinition | undefined {
 
 export function roleTemplatesForVertical(vertical: OrganizationVertical): readonly RoleTemplate[] {
   return vertical === 'RESTAURANT' ? RESTAURANT_ROLE_TEMPLATES : [];
+}
+
+/**
+ * The floor job-role profiles a vertical supplies. These seed
+ * `RestaurantJobRole` rows per organization; see {@link roleTemplatesForVertical}
+ * for the separate back-office `OrganizationRole` templates.
+ */
+export function jobRoleTemplatesForVertical(
+  vertical: OrganizationVertical
+): readonly JobRoleTemplate[] {
+  return vertical === 'RESTAURANT' ? RESTAURANT_JOB_ROLE_TEMPLATES : [];
 }
 
 export function limitKeysForVertical(

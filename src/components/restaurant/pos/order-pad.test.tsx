@@ -75,10 +75,15 @@ function transport({
         {
           sessionToken: 'session-token',
           session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-19T00:00:00Z' },
-          device: { id: 'device-1', branchId: 'branch-1' },
+          device: { id: 'device-1', branchName: 'Clifton Flagship' },
         },
         201
       );
+    }
+    if (path.endsWith('/terminal/operators')) {
+      return json({
+        operators: [{ staffProfileId: 'staff-1', displayName: 'Amina Rahman', role: 'Shift lead' }],
+      });
     }
     if (path.endsWith('/terminal/unlock')) {
       return json({
@@ -165,7 +170,10 @@ async function unlock(fetch: ReturnType<typeof transport>) {
   });
   fireEvent.click(screen.getByRole('button', { name: 'Establish session' }));
   await screen.findByRole('heading', { name: 'Terminal locked' });
-  fireEvent.change(screen.getByLabelText('Operator profile ID'), {
+  expect(screen.getByText('Device session active for Clifton Flagship.')).toBeVisible();
+  expect(screen.queryByText(/branch-1/)).not.toBeInTheDocument();
+  await screen.findByRole('option', { name: 'Amina Rahman — Shift lead' });
+  fireEvent.change(screen.getByLabelText('Operator'), {
     target: { value: 'staff-1' },
   });
   fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
@@ -180,6 +188,48 @@ afterEach(() => {
 });
 
 describe('OrderPad transport', () => {
+  it('composes item taps locally without a round trip', async () => {
+    const fetch = transport();
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '00000000-0000-4000-8000-000000000099'
+    );
+    await unlock(fetch);
+    const callsBeforeTap = fetch.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+
+    expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
+    expect(screen.getByText('1 × Coffee')).toBeVisible();
+    expect(screen.getByText('Coffee added locally. No request was sent.')).toBeVisible();
+  });
+
+  it('keeps internal profile IDs out of the UI and sends the selected hidden ID', async () => {
+    const fetch = transport();
+    await unlock(fetch);
+
+    expect(screen.getByText('Amina Rahman · Shift lead')).toBeVisible();
+    expect(screen.getByText('Server: Amina Rahman')).toBeVisible();
+    expect(screen.queryByText('staff-1')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/profile id/i)).not.toBeInTheDocument();
+
+    const unlockCall = fetch.mock.calls.find(([input]) =>
+      String(input).endsWith('/terminal/unlock')
+    );
+    expect(JSON.parse(String(unlockCall?.[1]?.body))).toEqual({
+      staffProfileId: 'staff-1',
+      type: 'PIN',
+      secret: '1234',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await waitFor(() =>
+      expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/orders/open'))).toBe(true)
+    );
+    const openCall = fetch.mock.calls.find(([input]) => String(input).endsWith('/orders/open'));
+    expect(JSON.parse(String(openCall?.[1]?.body))).not.toHaveProperty('serverStaffProfileId');
+  });
+
   it('reuses an uncertain retry key, creates a fresh later key, and pins the active menu', async () => {
     const fetch = transport({ failedOpenAttempts: 1 });
     vi.spyOn(globalThis.crypto, 'randomUUID')

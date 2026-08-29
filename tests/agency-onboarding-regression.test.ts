@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   orgFindUnique: vi.fn(),
   orgUpdate: vi.fn(),
   roleCreate: vi.fn(),
+  departmentCreateMany: vi.fn(),
   userFindFirst: vi.fn(),
   userCreate: vi.fn(),
   branchCreate: vi.fn(),
@@ -53,6 +54,9 @@ const platformDb = {
     update: mocks.orgUpdate,
   },
   organizationRole: { create: mocks.roleCreate },
+  // WHA-278: bootstrapOrganization seeds the tenant department catalog
+  // before the administrator, because User.department is a composite FK.
+  organizationDepartment: { createMany: mocks.departmentCreateMany },
   user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },

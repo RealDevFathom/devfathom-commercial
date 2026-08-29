@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
   create: vi.fn(),
   recordScimEvent: vi.fn(),
+  // WHA-290: the route resolves the department from the tenant's own catalog
+  // instead of hardcoding an agency-era key.
+  organizationFindUnique: vi.fn(async () => ({ vertical: 'AGENCY' })),
+  departmentFindMany: vi.fn(async () => [{ key: 'LEADERSHIP' }, { key: 'ENGINEERING' }]),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -26,7 +30,11 @@ vi.mock('@/lib/scim', async () => {
       run({
         organizationId: 'org_devfathom',
         tokenId: 'tok_1',
-        db: { user: { findFirst: mocks.findFirst, create: mocks.create } },
+        db: {
+          user: { findFirst: mocks.findFirst, create: mocks.create },
+          organization: { findUnique: mocks.organizationFindUnique },
+          organizationDepartment: { findMany: mocks.departmentFindMany },
+        },
       }),
   };
 });
@@ -42,7 +50,13 @@ function scimRequest(userName: string) {
 }
 
 describe('SCIM Users POST', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // `clearAllMocks` clears calls, not implementations — restore the catalog
+    // fakes so each case starts from the same tenant.
+    mocks.organizationFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
+    mocks.departmentFindMany.mockResolvedValue([{ key: 'LEADERSHIP' }, { key: 'ENGINEERING' }]);
+  });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
     'returns 409 uniqueness when %j already exists as alex@company.com',
@@ -84,5 +98,43 @@ describe('SCIM Users POST', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+  });
+
+  // WHA-290 — `department` is a composite foreign key onto the tenant's own
+  // catalog, so SCIM cannot assert an agency-era key into every tenant.
+  it('files the new user under a department the tenant actually has', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.departmentFindMany.mockResolvedValue([{ key: 'OPERATIONS' }, { key: 'DESIGN' }]);
+    mocks.create.mockResolvedValue({
+      id: 'user_3',
+      name: 'Alex Carter',
+      email: 'new.person@company.com',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const response = await POST(scimRequest('New.Person@Company.COM'));
+
+    expect(response.status).toBe(201);
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ department: 'OPERATIONS' }),
+      })
+    );
+  });
+
+  it('answers 409 instead of a 500 when the tenant deactivated every department', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.departmentFindMany.mockResolvedValue([]);
+
+    const response = await POST(scimRequest('New.Person@Company.COM'));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      detail: expect.stringContaining('no active department'),
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 });

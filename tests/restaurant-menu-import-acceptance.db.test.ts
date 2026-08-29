@@ -37,6 +37,7 @@ import { randomBytes } from 'node:crypto';
 
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL =
   process.env.MENU_IMPORT_TEST_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -242,6 +243,7 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
       [orgA, dbA, userA],
       [orgB, dbB, userB],
     ] as const) {
+      await seedDepartments(db, [org], ['LEADERSHIP']);
       await db.user.create({
         data: {
           id: user,

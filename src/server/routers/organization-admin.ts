@@ -22,6 +22,12 @@ const hostname = z
   .toLowerCase()
   .max(253)
   .regex(/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/);
+const departmentKey = z
+  .string()
+  .trim()
+  .min(2)
+  .max(80)
+  .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
 
 function inputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -34,6 +40,71 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  departments: adminProcedure.query(async ({ ctx }) => {
+    const id = organizationId(ctx);
+    return ctx.db.organizationDepartment.findMany({
+      where: { organizationId: id },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  }),
+
+  upsertDepartment: adminProcedure
+    .input(
+      z.object({
+        id: z.string().optional(),
+        key: departmentKey,
+        name: z.string().trim().min(2).max(100),
+        active: z.boolean().default(true),
+        sortOrder: z.number().int().min(0).max(10_000).default(0),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const tenantId = organizationId(ctx);
+      const { id, ...values } = input;
+      const existing = id
+        ? await ctx.db.organizationDepartment.findFirst({ where: { id, organizationId: tenantId } })
+        : null;
+      if (id && !existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
+      if (existing && existing.key !== values.key) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Department keys cannot be changed.' });
+      }
+      const saved = existing
+        ? await ctx.db.organizationDepartment.update({ where: { id: existing.id }, data: values })
+        : await ctx.db.organizationDepartment.create({ data: { organizationId: tenantId, ...values } });
+      annotateAudit(ctx, {
+        targetType: 'OrganizationDepartment',
+        targetId: saved.id,
+        targetLabel: saved.name,
+        description: `${existing ? 'Updated' : 'Created'} organization department`,
+      });
+      return saved;
+    }),
+
+  removeDepartment: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const tenantId = organizationId(ctx);
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { id: input.id, organizationId: tenantId },
+        include: { _count: { select: { users: true } } },
+      });
+      if (!department) throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
+      if (department._count.users > 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Reassign ${department._count.users} member(s) before removing this department.`,
+        });
+      }
+      await ctx.db.organizationDepartment.delete({ where: { id: department.id } });
+      annotateAudit(ctx, {
+        targetType: 'OrganizationDepartment',
+        targetId: department.id,
+        targetLabel: department.name,
+        description: 'Removed organization department',
+      });
+      return { success: true };
+    }),
+
   overview: adminProcedure.query(async ({ ctx }) => {
     const id = organizationId(ctx);
     const organization = await ctx.db.organization.findUnique({
@@ -314,14 +385,7 @@ export const organizationAdminRouter = router({
         status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED']),
         organizationRoleId: z.string().nullable(),
         title: z.string().trim().min(1).max(150),
-        department: z.enum([
-          'LEADERSHIP',
-          'ENGINEERING',
-          'PRODUCT',
-          'QUALITY',
-          'MARKETING',
-          'DESIGN',
-        ]),
+        department: departmentKey,
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -331,6 +395,11 @@ export const organizationAdminRouter = router({
         select: { id: true, status: true, role: true, email: true },
       });
       if (!before) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { organizationId: id, key: input.department, active: true },
+        select: { id: true },
+      });
+      if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
       const activating =
         !['ACTIVE', 'ON_LEAVE', 'INVITED'].includes(before.status) &&
         ['ACTIVE', 'ON_LEAVE', 'INVITED'].includes(input.status);

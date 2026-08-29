@@ -19,6 +19,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
+import { ensurePlatformModule } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -40,6 +41,7 @@ const STAFF = {
 };
 
 type RouteModule = { POST: (request: Request) => Promise<Response> };
+type GetRouteModule = { GET: (request: Request) => Promise<Response> };
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -55,6 +57,7 @@ type Deps = {
     lock: RouteModule;
     coAuthorize: RouteModule;
     heartbeat: RouteModule;
+    operators: GetRouteModule;
   };
 };
 
@@ -107,6 +110,7 @@ beforeAll(async () => {
     lockR,
     coAuthR,
     heartbeatR,
+    operatorsR,
   ] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
@@ -119,6 +123,7 @@ beforeAll(async () => {
     import('@/app/api/restaurant/terminal/lock/route'),
     import('@/app/api/restaurant/terminal/co-authorize/route'),
     import('@/app/api/restaurant/terminal/heartbeat/route'),
+    import('@/app/api/restaurant/terminal/operators/route'),
   ]);
 
   deps = {
@@ -135,27 +140,39 @@ beforeAll(async () => {
       lock: lockR,
       coAuthorize: coAuthR,
       heartbeat: heartbeatR,
+      operators: operatorsR,
     },
   };
 
   // A minimal, ACTIVE organization so the transport's org-status gate passes.
   await deps.withPlatformDb(async (tx) => {
-    await tx.organization.create({
-      data: {
-        id: orgId,
-        slug: `wha22-term-${suffix}`,
-        legalName: 'Terminal Test Co',
-        displayName: 'Terminal Test',
-        status: 'ACTIVE',
-      },
+    await tx.organization.createMany({
+      data: [
+        {
+          id: orgId,
+          slug: `wha22-term-${suffix}`,
+          legalName: 'Terminal Test Co',
+          displayName: 'Terminal Test',
+          status: 'ACTIVE',
+        },
+        {
+          id: otherOrgId,
+          slug: `wha149-other-${suffix}`,
+          legalName: 'Other Tenant Co',
+          displayName: 'Other Tenant',
+          status: 'ACTIVE',
+        },
+      ],
     });
-    const posModule = await tx.platformModule.upsert({
-      where: { key: 'restaurant-pos' },
-      update: {},
-      create: { key: 'restaurant-pos', name: 'POS', category: 'Operations' },
+    const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
+      name: 'POS',
+      category: 'Operations',
     });
-    await tx.organizationModule.create({
-      data: { organizationId: orgId, moduleId: posModule.id },
+    await tx.organizationModule.createMany({
+      data: [
+        { organizationId: orgId, moduleId: posModule.id },
+        { organizationId: otherOrgId, moduleId: posModule.id },
+      ],
     });
   });
 
@@ -232,6 +249,39 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('terminal transport end-to-end (real DB)', () => {
+  it('returns the authenticated device branch name without exposing its ID', async () => {
+    const { secret } = await enroll('branch-name');
+    const response = await call(deps.routes.establish, { secret });
+
+    expect(response.status).toBe(201);
+    expect(response.json.device).toEqual(expect.objectContaining({ branchName: 'Main' }));
+    expect(response.json.device).not.toHaveProperty('branchId');
+  });
+
+  it('returns only active, credentialed operators from the device branch', async () => {
+    const { secret } = await enroll('directory');
+    const { token } = await establish(secret);
+    const request = new Request('https://tenant.test/api/restaurant/terminal/operators', {
+      headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
+    });
+
+    const response = await deps.routes.operators.GET(request);
+    const body = (await response.json()) as {
+      operators: { staffProfileId: string; displayName: string; role: string }[];
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.operators.map((operator) => operator.staffProfileId).sort()).toEqual(
+      Object.values(STAFF)
+        .map((staff) => staff.id)
+        .sort()
+    );
+    expect(body.operators.every((operator) => Object.keys(operator).length === 3)).toBe(true);
+    expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
+    expect(JSON.stringify(body)).not.toContain('Inactive Operator');
+    expect(JSON.stringify(body)).not.toContain('Foreign Operator');
+  });
+
   it('establishes, unlocks, switches operator, and locks (C6 state machine)', async () => {
     const { secret } = await enroll('lifecycle');
     const { token } = await establish(secret);

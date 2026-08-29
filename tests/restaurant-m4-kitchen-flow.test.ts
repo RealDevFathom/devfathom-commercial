@@ -2,6 +2,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
+import { ensurePlatformModule } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -198,8 +199,10 @@ beforeAll(async () => {
     routes: { open, addItem, fire, queue, ack, bump, recall, establish, unlock },
   };
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  // ACTIVE and entitled to `restaurant-pos`: the terminal transport answers 403
+  // before the handler when the module is disabled (WHA-192).
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: ids.org,
         slug: `wha49-kds-${suffix}`,
@@ -207,8 +210,21 @@ beforeAll(async () => {
         displayName: 'WHA-49 Kitchen',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
+      name: 'POS and Fulfilment',
+      category: 'Operations',
+    });
+    await tx.organizationModule.create({
+      data: {
+        organizationId: ids.org,
+        moduleId: posModule.id,
+        // Backdated: suites that travel to a past business date must stay
+        // entitled — the override only applies once `startsAt` has passed.
+        startsAt: new Date(0),
+      },
+    });
+  });
   await deps.withTenantDb(ids.org, async (tx) => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Kitchen', timezone: 'UTC', businessDayCutoff: '00:00' },

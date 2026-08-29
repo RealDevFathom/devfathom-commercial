@@ -41,6 +41,9 @@ describe('strict input schemas (C7)', () => {
     expect(openOrderBody.safeParse({ channel: 'DINE_IN', tableIds: ['t1'] }).success).toBe(true);
     const bad = openOrderBody.safeParse({ channel: 'DINE_IN', branchId: 'b1' });
     expect(bad.success).toBe(false); // branchId is transport-derived, never body
+    expect(
+      openOrderBody.safeParse({ channel: 'DINE_IN', serverStaffProfileId: 'staff-other' }).success
+    ).toBe(false); // server defaults to the authenticated operator; reassignment is unsupported
   });
 
   it('requires a channel on open and a valid enum value', () => {

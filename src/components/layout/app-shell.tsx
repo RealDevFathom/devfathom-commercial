@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
@@ -14,7 +14,7 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
-import { tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
+import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { toast } from 'sonner';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
@@ -58,6 +58,49 @@ function EndSupportAccessButton() {
   );
 }
 
+/**
+ * WHA-276 — shown instead of the application when the signed-in organization is
+ * no longer the organization this shell was rendered for.
+ *
+ * Deliberately renders none of the tenant chrome: no brand name, no logo, no
+ * brand palette, and no `children`. Displaying organization A's identity while
+ * every request underneath resolves organization B is the exact failure this
+ * lane exists to make impossible, so the safe state is to show nothing tenant-
+ * specific at all. Reloading re-runs the `/(app)` layout against the current
+ * cookie, which resolves the correct organization and self-heals.
+ */
+function WorkspaceIdentityMismatch() {
+  return (
+    <div className="studio-viewport flex h-dvh items-center justify-center overflow-y-auto p-4">
+      <section
+        data-slot="workspace-identity-mismatch"
+        className="mx-auto max-w-2xl border border-border-default bg-surface-card p-8"
+      >
+        <ShieldAlert className="h-8 w-8 text-accent-brand" />
+        <p className="mt-6 font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">
+          Workspace control
+        </p>
+        <h1 className="mt-2 font-display text-3xl font-semibold text-text-strong">
+          You are signed in to a different workspace
+        </h1>
+        <p className="mt-3 max-w-xl text-sm leading-6 text-text-muted">
+          This tab was opened for another organization, and your session has since moved. To keep
+          workspace identity honest, DevFathom will not show one organization&rsquo;s name or
+          branding over another organization&rsquo;s data. Reload to continue in the workspace you
+          are currently signed in to.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-6 inline-flex h-10 items-center bg-abyss-900 px-4 text-xs font-semibold text-paper-white"
+        >
+          Reload this workspace
+        </button>
+      </section>
+    </div>
+  );
+}
+
 export function isPathModuleEnabled(
   pathname: string,
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
@@ -66,7 +109,16 @@ export function isPathModuleEnabled(
   return !moduleKey || entitlements.enabledModules.includes(moduleKey);
 }
 
-export function AppShell({ children, brand }: { children: React.ReactNode; brand: TenantBrand }) {
+export function AppShell({
+  children,
+  brand,
+}: {
+  children: React.ReactNode;
+  brand: TenantBrand;
+}) {
+  // The server-side invariant lives in the `/(app)` layout, which fails closed
+  // before this renders. Here the live session is the moving part, so the check
+  // below (after every hook) degrades to a notice rather than throwing.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
   const { data: session } = useSession();
@@ -81,16 +133,40 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
   if (assistantOpen && !assistantMounted) setAssistantMounted(true);
   const brandStyle = tenantBrandTokens(brand) as CSSProperties;
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false);
+    };
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [mobileMenuOpen]);
+
+  // WHA-276: enforce the invariant that displayed workspace identity can never
+  // diverge from session.user.organizationId. Every hook above has already run,
+  // so this early return is safe under the Rules of Hooks.
+  if (isTenantIdentityMismatch(brand, session?.user?.organizationId)) {
+    return <WorkspaceIdentityMismatch />;
+  }
+
   return (
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
       {/* Mobile overlay */}
       {mobileMenuOpen && (
         <>
           <div
+            aria-hidden="true"
             className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile navigation"
+            className="fixed inset-y-0 left-0 z-50 lg:hidden"
+          >
             <Sidebar
               brand={brand}
               onNavigate={() => setMobileMenuOpen(false)}

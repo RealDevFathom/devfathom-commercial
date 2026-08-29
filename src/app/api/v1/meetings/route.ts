@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
+import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
+import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 
 export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -65,9 +67,18 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
       ...rest,
       startTime: new Date(startTime),
       endTime: new Date(endTime),
+      // WHA-235: the legacy `recurrence` value and its RRULE are written
+      // together here for the same reason they are in `meetings.create` — this
+      // route calls Prisma directly rather than going through the router, so a
+      // series created over REST would otherwise be invisible to the
+      // materialiser and to every occurrence-backed read.
+      recurrenceRule: legacyRecurrenceToRule(rest.recurrence ?? null),
       createdById: ctx.userId,
       attendees: { create: allAttendees.map((userId) => ({ userId })) },
     },
   });
+
+  await materializeMeetingOccurrences(ctx.db, meeting.id);
+
   return NextResponse.json({ data: meeting }, { status: 201 });
 });

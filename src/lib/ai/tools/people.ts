@@ -29,14 +29,13 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Display-ready short date, e.g. "Jun 30".
 const shortDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-const DEPARTMENTS = [
-  'LEADERSHIP',
-  'ENGINEERING',
-  'PRODUCT',
-  'QUALITY',
-  'MARKETING',
-  'DESIGN',
-] as const;
+// WHA-278: departments are tenant-configured rows, not a fixed enum — a
+// restaurant tenant has KITCHEN/FRONT_OF_HOUSE and no LEADERSHIP at all. The
+// tool schema therefore takes a free-form key and every write validates it
+// against the caller's own active catalog, exactly as team.inviteMember does.
+const departmentKey = z
+  .string()
+  .describe('Department key from this workspace, e.g. "ENGINEERING" or "KITCHEN"');
 
 export function buildPeopleTools(h: AssistantHelpers): ToolSet {
   const { ctx } = h;
@@ -48,7 +47,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
     description:
       'List CURRENTLY ACTIVE employees / staff / people / team members (name, title, department, status, skills). Use for "who works here", "the team", headcount. NOTE: this excludes deactivated / laid-off (former) people — to look up or act on a SPECIFIC person who might be inactive, use getTeamMember or the action tool directly (they include former members), not this.',
     inputSchema: z.object({
-      department: z.enum(DEPARTMENTS).nullish().describe('Optional department filter'),
+      department: z.string().nullish().describe('Optional department filter'),
       query: z.string().nullish().describe('Optional name/role search (fuzzy, typo-tolerant)'),
     }),
     execute: async ({ department, query }) => {
@@ -749,7 +748,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         // `format` keywords (400s the whole request). Validated in execute.
         email: z.string().describe('Their work email — the invite is sent here'),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).nullish().describe('Default EMPLOYEE'),
-        department: z.enum(DEPARTMENTS),
+        department: departmentKey,
         title: z.string().min(1).describe('Their job title, e.g. "Senior Engineer"'),
         phone: z.string().nullish(),
         bio: z.string().nullish(),
@@ -766,6 +765,16 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           return { error: `"${email}" doesn't look like a valid email address.` };
         }
         const finalRole = role ?? 'EMPLOYEE';
+
+        // Departments are tenant-configured: reject a key this workspace does
+        // not have rather than letting the composite foreign key raise.
+        const departmentRow = await h.db.organizationDepartment.findFirst({
+          where: { key: department, active: true },
+          select: { id: true },
+        });
+        if (!departmentRow) {
+          return { error: `"${department}" is not an active department in this workspace.` };
+        }
 
         const existing = await h.db.user.findFirst({
           where: { email: lowerEmail },
@@ -863,7 +872,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       inputSchema: z.object({
         name: z.string().describe('The member to update, e.g. "Aisha Khan"'),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).nullish(),
-        department: z.enum(DEPARTMENTS).nullish(),
+        department: departmentKey.nullish(),
         title: z.string().min(1).nullish(),
         phone: z.string().nullish(),
         bio: z.string().nullish(),
@@ -893,7 +902,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         });
         if (!before) return { error: 'That team member was not found.' };
 
-        const data: Prisma.UserUpdateInput = {};
+        const data: Prisma.UserUncheckedUpdateInput = {};
         const changes: Record<string, { before: unknown; after: unknown }> = {};
         if (role != null && role !== before.role) {
           // Changing a role is privilege escalation/de-escalation: never demote
@@ -910,6 +919,14 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           changes.role = { before: before.role, after: role };
         }
         if (department != null && department !== before.department) {
+          // Same tenant-configured check as the invite path.
+          const departmentRow = await h.db.organizationDepartment.findFirst({
+            where: { key: department, active: true },
+            select: { id: true },
+          });
+          if (!departmentRow) {
+            return { error: `"${department}" is not an active department in this workspace.` };
+          }
           data.department = department;
           changes.department = { before: before.department, after: department };
         }

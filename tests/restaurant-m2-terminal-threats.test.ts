@@ -41,7 +41,12 @@ const db = {
       copy(find(h.store.organizations, where)),
   },
   user: { findFirst: vi.fn(async () => null) },
-  restaurantBranch: { findUnique: vi.fn(async () => ({ id: 'branch_m2' })) },
+  restaurantBranch: {
+    findUnique: vi.fn(async () => ({ id: 'branch_m2' })),
+    // WHA-149: /terminal/establish returns the branch NAME so the POS never
+    // renders a raw branch id.
+    findUniqueOrThrow: vi.fn(async () => ({ id: 'branch_m2', name: 'M2 Branch' })),
+  },
   restaurantRegisteredDevice: {
     create: async ({ data }: { data: Row }) => {
       const row = {

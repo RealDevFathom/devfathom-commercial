@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -216,8 +217,10 @@ beforeAll(async () => {
     terminal: { establish, unlock: unlockRoute },
   };
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  // ACTIVE and entitled to `restaurant-pos`: the terminal transport answers 403
+  // before the handler when the module is disabled (WHA-192).
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha62-accept-${suffix}`,
@@ -225,8 +228,22 @@ beforeAll(async () => {
         displayName: 'WHA-62 Acceptance',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    await seedDepartments(tx, [orgId], ['LEADERSHIP']);
+    const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
+      name: 'POS and Fulfilment',
+      category: 'Operations',
+    });
+    await tx.organizationModule.create({
+      data: {
+        organizationId: orgId,
+        moduleId: posModule.id,
+        // Backdated: suites that travel to a past business date must stay
+        // entitled — the override only applies once `startsAt` has passed.
+        startsAt: new Date(0),
+      },
+    });
+  });
   await deps.withTenantDb(orgId, async (tx) => {
     for (const [branchId, name] of [
       [ids.splitBranch, 'Split'],

@@ -115,6 +115,9 @@ const M7_TABLES = [
   'restaurant_notification_deliveries',
 ] as const;
 
+// SOP-1 (WHA-224): restaurant job roles, staff role membership/audit records,
+// and capability grants. Exact list keeps the WHA-51 complete allowlist pin
+// aligned with the tables shipped by the SOP job-role assignment migration.
 // M8 customer identity/consent, loyalty ledger, insight projections and
 // restricted labour-cost seam. Exact list keeps generic restaurant governance
 // fail-closed when a table is added without an explicit review.
@@ -154,6 +157,61 @@ const MENU_IMPORT_TABLES = [
   'restaurant_menu_import_pages',
   'restaurant_menu_import_lines',
 ] as const;
+
+// B-wave job roles: B0/SOP-1 (WHA-224, integrated by WHA-284) shipped the job-role
+// record, its capabilities, the staff↔role holding, the per-person capability
+// overrides and the append-only membership trail; B1 (WHA-285) added the
+// append-only trail for those overrides. Listed here under the same WHA-51
+// complete allowlist contract as every set above — the first five were shipped
+// without a listing, which is why this pin was already red before B1.
+const JOB_ROLE_TABLES = [
+  'restaurant_job_roles',
+  'restaurant_job_role_capabilities',
+  'restaurant_staff_job_roles',
+  'restaurant_staff_capability_grants',
+  'restaurant_staff_job_role_audits',
+  'restaurant_staff_capability_audits',
+] as const;
+
+// Completion wave (WHA-229): branch-scoped staff shift scheduling. One table,
+// listed here under the same WHA-51 "complete allowlist" contract as every
+// milestone above — a new restaurant table without a listing, or a listed table
+// that was never shipped, fails the pin below.
+// WHA-257 cameras: gateway, device, credential and stream-grant records for the
+// branch camera console. Listed under the same WHA-51 complete allowlist
+// contract as every set above.
+const CAMERA_TABLES = [
+  'restaurant_camera_gateways',
+  'restaurant_cameras',
+  'restaurant_camera_credentials',
+  'restaurant_camera_stream_grants',
+] as const;
+
+// WHA-238 terminal payments: the per-branch provider configuration and the
+// append-only reconciliation records its webhook inbox writes.
+const TERMINAL_PAYMENT_TABLES = [
+  'restaurant_terminal_provider_configs',
+  'restaurant_terminal_reconciliations',
+] as const;
+
+// WHA-288 promotions: the promotion record and its immutable versions, the rule
+// components, the deterministic evaluation/candidate/application snapshots, the
+// per-unit allocations, and the cap counters plus their reservations.
+const PROMOTION_TABLES = [
+  'restaurant_promotions',
+  'restaurant_promotion_versions',
+  'restaurant_promotion_rule_components',
+  'restaurant_promotion_evaluation_snapshots',
+  'restaurant_promotion_candidate_snapshots',
+  'restaurant_promotion_application_snapshots',
+  'restaurant_promotion_bill_application_snapshots',
+  'restaurant_promotion_unit_allocations',
+  'restaurant_promotion_cap_counters',
+  'restaurant_promotion_cap_reservations',
+  'restaurant_promotion_audit_events',
+] as const;
+
+const COMPLETION_WAVE_TABLES = ['restaurant_shifts'] as const;
 
 const M3_COLUMNS = {
   restaurant_brands: [
@@ -483,6 +541,12 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...M8_TABLES,
         ...TAX_CORE_TABLES,
         ...MENU_IMPORT_TABLES,
+        ...JOB_ROLE_TABLES,
+
+        ...CAMERA_TABLES,
+        ...TERMINAL_PAYMENT_TABLES,
+        ...PROMOTION_TABLES,
+        ...COMPLETION_WAVE_TABLES,
       ].sort()
     );
 

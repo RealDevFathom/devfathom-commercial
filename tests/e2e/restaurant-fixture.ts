@@ -1,7 +1,7 @@
 import { expect, type APIRequestContext } from '@playwright/test';
 
 export const restaurantE2eCredentials = {
-  organizationId: 'org_restaurant_e2e',
+  organizationId: 'org_chai_chowk',
   branchId: 'branch_restaurant_e2e',
   operator: { staffProfileId: 'staff_restaurant_e2e_operator', pin: '424242' },
   manager: { staffProfileId: 'staff_restaurant_e2e_manager', pin: '848484' },

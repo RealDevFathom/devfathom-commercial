@@ -11,7 +11,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { RESTAURANT_MODULES, RESTAURANT_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import {
+  AGENCY_DEPARTMENTS,
+  RESTAURANT_DEPARTMENTS,
+  RESTAURANT_MODULES,
+  RESTAURANT_ROLE_TEMPLATES,
+} from '@/lib/vertical-catalog';
 
 const mocks = vi.hoisted(() => ({
   pkgFindUnique: vi.fn(),
@@ -32,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   orgModuleCount: vi.fn(),
   platformModuleFindUnique: vi.fn(),
   platformModuleFindMany: vi.fn(),
+  departmentCreateMany: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -58,6 +64,7 @@ const platformDb = {
     update: mocks.orgUpdate,
   },
   organizationRole: { create: mocks.roleCreate },
+  organizationDepartment: { createMany: mocks.departmentCreateMany },
   user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },
@@ -128,6 +135,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.roleCreate.mockResolvedValue({ id: 'role_x' });
     mocks.branchCreate.mockResolvedValue({ id: 'branch_1' });
     mocks.assignmentCreate.mockResolvedValue({ id: 'assign_1' });
+    mocks.departmentCreateMany.mockResolvedValue({ count: 0 });
   });
 
   it('stamps an AGENCY organization by default and writes no restaurant rows', async () => {
@@ -187,6 +195,73 @@ describe('organization.create vertical + package compatibility', () => {
     for (const template of RESTAURANT_ROLE_TEMPLATES) {
       expect(createdRoleKeys).toContain(template.key);
     }
+  });
+
+  // WHA-278 — `User.department` is a composite FK onto organization_departments.
+  // A newly created organization therefore cannot hold its own administrator
+  // unless provisioning seeds the vertical's departments first.
+  it('seeds AGENCY departments from the catalog before creating the administrator', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_1',
+      active: true,
+      vertical: 'AGENCY',
+      moduleLinks: [],
+    });
+
+    await run('organization.create', createPayload());
+
+    expect(mocks.departmentCreateMany).toHaveBeenCalledTimes(1);
+    const seeded = (
+      mocks.departmentCreateMany.mock.calls[0]![0] as {
+        data: { organizationId: string; key: string; name: string; sortOrder: number }[];
+      }
+    ).data;
+    expect(seeded.map((row) => row.key)).toEqual(AGENCY_DEPARTMENTS.map((d) => d.key));
+    expect(seeded.every((row) => row.organizationId === 'org_new')).toBe(true);
+    // No restaurant leakage into an agency tenant.
+    for (const restaurantDepartment of RESTAURANT_DEPARTMENTS) {
+      expect(seeded.map((row) => row.key)).not.toContain(restaurantDepartment.key);
+    }
+    // The administrator is filed under a department that was actually seeded.
+    const adminDepartment = (
+      mocks.userCreate.mock.calls[0]![0] as { data: { department: string } }
+    ).data.department;
+    expect(adminDepartment).toBe('LEADERSHIP');
+    expect(seeded.map((row) => row.key)).toContain(adminDepartment);
+    // Ordering is the FK constraint: departments must exist before the user.
+    expect(mocks.departmentCreateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userCreate.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('seeds RESTAURANT departments only, and files the admin front of house', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_r',
+      active: true,
+      vertical: 'RESTAURANT',
+      moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
+    });
+
+    await run('organization.create', createPayload({ vertical: 'RESTAURANT', packageId: 'pkg_r' }));
+
+    const seeded = (
+      mocks.departmentCreateMany.mock.calls[0]![0] as {
+        data: { key: string; name: string }[];
+      }
+    ).data;
+    expect(seeded.map((row) => row.key)).toEqual(RESTAURANT_DEPARTMENTS.map((d) => d.key));
+    expect(seeded.map((row) => row.name)).toContain('Kitchen');
+    expect(seeded.map((row) => row.name)).toContain('Front of House');
+    // The agency enum must not leak into a restaurant tenant.
+    for (const agencyDepartment of AGENCY_DEPARTMENTS) {
+      expect(seeded.map((row) => row.key)).not.toContain(agencyDepartment.key);
+    }
+    // 'LEADERSHIP' does not exist for this vertical, so the admin cannot use it.
+    const adminDepartment = (
+      mocks.userCreate.mock.calls[0]![0] as { data: { department: string } }
+    ).data.department;
+    expect(adminDepartment).toBe('FRONT_OF_HOUSE');
+    expect(seeded.map((row) => row.key)).toContain(adminDepartment);
   });
 
   it('rejects a crafted RESTAURANT create carrying an AGENCY package', async () => {

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { bootstrapProduction, PLATFORM_MODULES } from '../prisma/production-bootstrap';
-import { RESTAURANT_MODULES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog';
+import {
+  AGENCY_DEPARTMENTS,
+  RESTAURANT_MODULES,
+  RESTAURANT_PACKAGES,
+} from '../src/lib/vertical-catalog';
 
 const INPUT = {
   organizationId: 'org_devfathom',
@@ -21,6 +25,7 @@ type TenantUser = {
   password: string | null;
   organizationRoleId: string;
   role: string;
+  department: string;
   status: string;
 };
 
@@ -39,12 +44,14 @@ function fakeTransaction() {
     organizationModules: Map<string, { status: string; expiresAt: string | null }>;
     permission: { effect: string } | null;
     deployment: { mode: string; status: string; provider: string; url?: string } | null;
+    departments: { organizationId: string; key: string; name: string }[];
   } = {
     tenantUser: null,
     platformUser: null,
     organizationModules: new Map(),
     permission: null,
     deployment: null,
+    departments: [],
   };
   const platformModule = {
     upsert: vi.fn(async (args: { where: { key: string } }) => ({
@@ -77,7 +84,23 @@ function fakeTransaction() {
   const allowed = {
     $executeRawUnsafe: vi.fn(async () => undefined),
     platformPackage,
-    organization: { upsert: vi.fn(async () => undefined) },
+    organization: {
+      upsert: vi.fn(async (args: { create: { id: string } }) => ({
+        id: args.create.id,
+        vertical: 'AGENCY' as const,
+      })),
+    },
+    // WHA-290: the bootstrap seeds the organization's department catalog before
+    // its administrator, because `User.department` is a composite foreign key
+    // onto `organization_departments`.
+    organizationDepartment: {
+      createMany: vi.fn(
+        async (args: { data: { organizationId: string; key: string; name: string }[] }) => {
+          for (const row of args.data) state.departments.push(row);
+          return { count: args.data.length };
+        }
+      ),
+    },
     platformModule,
     platformPackageModule: {
       upsert: vi.fn(
@@ -175,6 +198,17 @@ describe('production bootstrap', () => {
       role: 'ADMIN',
       status: 'ACTIVE',
     });
+    // WHA-290: the administrator's department must be a row this bootstrap
+    // actually seeded — the composite foreign key admits nothing else.
+    expect(state.departments.map((department) => department.key)).toEqual(
+      AGENCY_DEPARTMENTS.map((department) => department.key)
+    );
+    expect(
+      state.departments.every((department) => department.organizationId === INPUT.organizationId)
+    ).toBe(true);
+    expect(state.departments.map((department) => department.key)).toContain(
+      state.tenantUser!.department
+    );
     expect(state.platformUser).toMatchObject({
       email: 'platform-admin@devfathom.com',
       passwordHash: 'hash:initial-platform-password',

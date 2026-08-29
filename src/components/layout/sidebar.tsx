@@ -32,7 +32,10 @@ import {
   PackageSearch,
   ShoppingCart,
   ListChecks,
+  ShieldCheck,
   Bell,
+  Camera,
+  CalendarClock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -42,7 +45,7 @@ import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
 import type { TenantBrand } from '@/lib/tenant-brand';
-import { moduleForPath } from '@/lib/module-catalog';
+import { moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 
 type NavGroup = 'Workspace' | 'Restaurant' | 'Firm';
@@ -55,6 +58,7 @@ interface NavItem {
   adminOnly?: boolean;
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
+  module?: string;
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -123,10 +127,18 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   { label: 'SOP board', href: '/restaurant/sop', icon: ListChecks, group: 'Restaurant' },
+  { label: 'SOP reports', href: '/restaurant/sop/reports', icon: BarChart3, group: 'Restaurant' },
   {
     label: 'SOP admin',
     href: '/restaurant/sop/admin',
     icon: Settings,
+    group: 'Restaurant',
+    adminOnly: true,
+  },
+  {
+    label: 'SOP oversight',
+    href: '/restaurant/sop/oversight',
+    icon: ShieldCheck,
     group: 'Restaurant',
     adminOnly: true,
   },
@@ -137,11 +149,26 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   {
+    label: 'Roster',
+    href: '/restaurant/staff/roster',
+    icon: CalendarClock,
+    group: 'Firm',
+    module: 'restaurant-core',
+  },
+  {
     label: 'Restaurant devices',
     href: '/restaurant/devices',
     icon: Monitor,
     adminOnly: true,
     group: 'Restaurant',
+  },
+  {
+    label: 'Cameras',
+    href: '/restaurant/integrations/cameras',
+    icon: Camera,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-integrations',
   },
   {
     label: 'Catalog',
@@ -220,7 +247,16 @@ export function visibleNavigation(
   const isHr = role === 'HR';
   return navigation
     .filter((item) => {
-      const moduleKey = moduleForPath(item.href, entitlements.vertical);
+      const moduleKey = item.module ?? moduleForPath(item.href, entitlements.vertical);
+      // WHA-8: a module belonging to the other vertical never appears, even if a
+      // mis-provisioned organization has it enabled. Items that resolve to no
+      // module at all (the shared Firm entries) are never vertical-gated.
+      if (
+        moduleKey &&
+        entitlements.vertical &&
+        verticalForModuleKey(moduleKey) !== entitlements.vertical
+      )
+        return false;
       if (moduleKey && !entitlements.enabledModules.includes(moduleKey)) return false;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;

@@ -19,6 +19,15 @@ Entries are grouped by the milestone that recorded them; within a milestone
 they appear in the order they were decided. Text is unchanged from the
 originating lane — this final pass only regroups and separates entries.
 
+### Wallet passes — L1 foundation
+
+**Deferred SMS OTP (wallet enrollment)** · Wallet enrollment v1 accepts EMAIL
+verification only; PHONE/SMS enrollment is excluded even though the shared
+customer identifier enum retains PHONE for existing customer workflows. · This
+is conservative because the platform has no SMS provider and an unbounded SMS
+path would introduce both spam and direct-message-cost risk. · Revisited when an
+SMS provider lands for any module with approved abuse controls and cost limits.
+
 ### M1 — vertical foundation
 
 **D09 (franchise/legal isolation)** · Restaurant branches live strictly inside
@@ -1207,3 +1216,11 @@ independently re-verified. M5 rollup verification closed.
 - `customers:read`, `loyalty:redeem`, `reports:financial`, `workforce:rates`, and `restaurant:configure` use the
   existing org-role custom-decision path with empty static policies, so absent grants deny by default.
   `vertical-catalog.ts` already contains the module/capability keys and remains untouched.
+
+# Camera gateway assumptions (CAM-L1)
+
+- A gateway is one registered, branch-bound device; individual cameras are sources behind it.
+- V1 transport is HLS and storage is gateway-local. No cloud storage or second WebRTC stack is assumed.
+- Preset values are editable starting hints, not verified hardware facts; ONVIF Profile S discovery is authoritative.
+- Gateway health becomes stale after five one-minute heartbeat intervals. Audio and clip export default off.
+- The app reaches the gateway over an owner-provided private network path; no inbound port-forward is requested.

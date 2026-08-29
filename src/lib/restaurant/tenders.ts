@@ -83,6 +83,16 @@ export type CardTenderSpec = {
   type: 'CARD';
   amount: Prisma.Decimal | string;
   tipAmount?: Prisma.Decimal | string;
+  /** Trusted, server-created terminal confirmation. Never accepted by the public
+   * checkout route; webhook processing constructs it after auth + reconciliation. */
+  terminalConfirmation?: {
+    configId: string;
+    branchId: string;
+    externalEventId: string;
+    source: string;
+    externalReference: string;
+    providerRef: string;
+  };
 };
 
 /** A non-cash/non-card tender seam, with an optional tip. */
@@ -164,85 +174,112 @@ export async function applyTender(
   db: ScopedDb,
   input: ApplyTenderInput
 ): Promise<ApplyTenderResult> {
+  return runMoneyTransaction(db, (tx) => applyTenderInTransaction(tx, input));
+}
+
+/** Apply a tender using an existing tenant-scoped transaction. Integration seams
+ * use this to keep their reconciliation record atomic with the money mutation. */
+export async function applyTenderInTransaction(
+  tx: ScopedDb,
+  input: ApplyTenderInput
+): Promise<ApplyTenderResult> {
   const at = input.now ?? new Date();
   const commandType = `tender.${input.tender.type.toLowerCase()}`;
-  return runMoneyTransaction(db, async (tx) => {
-    const idem = await beginMoneyIdempotent(tx, input.actor, commandType);
-    if (idem.replay) return replayTenderResult(tx, idem.resultRef);
+  const idem = await beginMoneyIdempotent(tx, input.actor, commandType);
+  if (idem.replay) return replayTenderResult(tx, idem.resultRef);
 
-    // Serialize concurrent tenders on this bill so a receipt is allocated exactly
-    // once (C4/C10): the row lock blocks a second final tender until the first
-    // commits, after which the loser sees the SETTLED status below and is rejected.
-    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} FOR UPDATE`;
+  // Serialize concurrent tenders on this bill so a receipt is allocated exactly
+  // once (C4/C10): the row lock blocks a second final tender until the first
+  // commits, after which the loser sees the SETTLED status below and is rejected.
+  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} FOR UPDATE`;
 
-    const bill = await tx.restaurantBill.findUnique({
-      where: { id: input.billId },
-      select: { id: true, status: true, grandTotal: true, branchId: true, businessDate: true },
-    });
-    if (!bill) {
-      throw new TenderError('The bill does not exist.', 'BILL_NOT_FOUND');
-    }
-    if (bill.status !== 'OPEN') {
-      throw new TenderError('Only an OPEN bill can be tendered.', 'BILL_NOT_OPEN');
-    }
-
-    const amount = money(input.tender.amount);
-
-    const existing = await tx.restaurantTender.findMany({
-      where: { billId: bill.id },
-      select: { amount: true },
-    });
-    const alreadyTendered = sum(existing.map((t) => t.amount));
-    const outstanding = sub(bill.grandTotal, alreadyTendered);
-    // Validate the amount AGAINST the outstanding balance so a zero amount is
-    // accepted only as the settlement of an already-fully-covered bill (e.g. a
-    // fully comped, zero grand-total bill). The applied amount may never exceed
-    // what is due — the only over-payment is cash change (handled inside the cash
-    // path, not against the bill).
-    const verdict = classifyTenderAmount(amount, outstanding);
-    if (verdict === 'INVALID_AMOUNT') {
-      throw new TenderError('A tender amount must be positive.', 'INVALID_AMOUNT');
-    }
-    if (verdict === 'OVER_TENDER') {
-      throw new TenderError(
-        'The tender amount exceeds the bill balance; the only over-payment is cash change.',
-        'OVER_TENDER'
-      );
-    }
-
-    const persisted = await persistTender(tx, bill, input, amount);
-
-    const nowTendered = add(alreadyTendered, amount);
-    const remainingDue = sub(bill.grandTotal, nowTendered);
-    let settled = false;
-    let receiptNumber: number | null = null;
-    if (equals(nowTendered, bill.grandTotal)) {
-      const result = await settleBill(tx, {
-        billId: bill.id,
-        staffProfileId: input.actor.staffProfileId,
-        deviceId: input.actor.deviceId,
-        at,
-      });
-      settled = true;
-      receiptNumber = result.receiptNumber;
-    }
-
-    await recordMoneyResult(tx, input.actor, persisted.tenderId);
-    return {
-      tenderId: persisted.tenderId,
-      billId: bill.id,
-      type: input.tender.type,
-      amount,
-      tipAmount: persisted.tipAmount,
-      changeGiven: persisted.changeGiven,
-      paymentId: persisted.paymentId,
-      drawerSessionId: persisted.drawerSessionId,
-      settled,
-      receiptNumber,
-      remainingDue,
-      replayed: false,
-    };
+  const bill = await tx.restaurantBill.findUnique({
+    where: { id: input.billId },
+    select: { id: true, status: true, grandTotal: true, branchId: true, businessDate: true },
   });
+  if (!bill) {
+    throw new TenderError('The bill does not exist.', 'BILL_NOT_FOUND');
+  }
+  if (bill.status !== 'OPEN') {
+    throw new TenderError('Only an OPEN bill can be tendered.', 'BILL_NOT_OPEN');
+  }
+
+  const amount = money(input.tender.amount);
+
+  const existing = await tx.restaurantTender.findMany({
+    where: { billId: bill.id },
+    select: { amount: true },
+  });
+  const alreadyTendered = sum(existing.map((t) => t.amount));
+  const outstanding = sub(bill.grandTotal, alreadyTendered);
+  // Validate the amount AGAINST the outstanding balance so a zero amount is
+  // accepted only as the settlement of an already-fully-covered bill (e.g. a
+  // fully comped, zero grand-total bill). The applied amount may never exceed
+  // what is due — the only over-payment is cash change (handled inside the cash
+  // path, not against the bill).
+  const verdict = classifyTenderAmount(amount, outstanding);
+  if (verdict === 'INVALID_AMOUNT') {
+    throw new TenderError('A tender amount must be positive.', 'INVALID_AMOUNT');
+  }
+  if (verdict === 'OVER_TENDER') {
+    throw new TenderError(
+      'The tender amount exceeds the bill balance; the only over-payment is cash change.',
+      'OVER_TENDER'
+    );
+  }
+
+  const persisted = await persistTender(tx, bill, input, amount);
+
+  const nowTendered = add(alreadyTendered, amount);
+  const remainingDue = sub(bill.grandTotal, nowTendered);
+  let settled = false;
+  let receiptNumber: number | null = null;
+  if (equals(nowTendered, bill.grandTotal)) {
+    const result = await settleBill(tx, {
+      billId: bill.id,
+      staffProfileId: input.actor.staffProfileId,
+      deviceId: input.actor.deviceId,
+      at,
+    });
+    settled = true;
+    receiptNumber = result.receiptNumber;
+  }
+
+  if (input.tender.type === 'CARD' && input.tender.terminalConfirmation) {
+    const terminal = input.tender.terminalConfirmation;
+    await tx.restaurantTerminalReconciliation.create({
+      data: {
+        configId: terminal.configId,
+        branchId: terminal.branchId,
+        externalEventId: terminal.externalEventId,
+        source: terminal.source,
+        eventStatus: 'APPROVED',
+        externalReference: terminal.externalReference,
+        amount,
+        tipAmount: persisted.tipAmount,
+        billId: bill.id,
+        paymentId: persisted.paymentId,
+        tenderId: persisted.tenderId,
+        outcome: 'APPLIED',
+      },
+    });
+  }
+
+  await recordMoneyResult(tx, input.actor, persisted.tenderId);
+  return {
+    tenderId: persisted.tenderId,
+    billId: bill.id,
+    type: input.tender.type,
+    amount,
+    tipAmount: persisted.tipAmount,
+    changeGiven: persisted.changeGiven,
+    paymentId: persisted.paymentId,
+    drawerSessionId: persisted.drawerSessionId,
+    settled,
+    receiptNumber,
+    remainingDue,
+    replayed: false,
+  };
 }
 
 /** Dispatch to the per-type persistence path (all inside the caller's transaction). */
@@ -337,9 +374,25 @@ async function persistCardTender(
     throw new TenderError('A tip amount must not be negative.', 'INVALID_AMOUNT');
   }
 
-  const provider = getPaymentProvider('MOCK');
   const operationRef = `${bill.id}:${actor.deviceId}:${actor.idempotencyKey}`;
-  const outcome = provider.execute({ capability: 'SALE', amount, tipAmount, operationRef });
+  const outcome = tender.terminalConfirmation
+    ? {
+        approved: true,
+        status: 'CAPTURED' as const,
+        providerRef: tender.terminalConfirmation.providerRef,
+        declineCode: null,
+        event: {
+          capability: 'SALE' as const,
+          eventType: 'TERMINAL_APPROVED',
+          amount,
+          providerRef: tender.terminalConfirmation.providerRef,
+          payload: {
+            provider: 'TERMINAL',
+            externalEventId: tender.terminalConfirmation.externalEventId,
+          },
+        },
+      }
+    : getPaymentProvider('MOCK').execute({ capability: 'SALE', amount, tipAmount, operationRef });
   if (!outcome.approved) {
     // Abort the whole transaction: a decline leaves no tender/movement/payment/receipt.
     throw new TenderError(
@@ -351,7 +404,7 @@ async function persistCardTender(
   const payment = await tx.restaurantPayment.create({
     data: {
       billId: bill.id,
-      provider: 'MOCK',
+      provider: tender.terminalConfirmation ? 'TERMINAL' : 'MOCK',
       capability: 'SALE',
       status: outcome.status,
       amount,
