@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import { hashSync } from 'bcryptjs';
 
 import type { PrismaClient } from '../src/generated/prisma/client.js';
+import { adminDepartmentKeyForVertical } from '../src/lib/vertical-catalog.js';
 
 type Tx = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0];
 
@@ -481,7 +482,7 @@ const OWNER = {
  * organization — that is the only way to let these two reach the restaurant
  * workspace without changing the schema. The agency rows are a different
  * `organizationId` and are never touched by this seed; these rows exist solely
- * under `org_restaurant_e2e` and carry DEMO_PASSWORD, not the operator-supplied
+ * under `org_chai_chowk` and carry DEMO_PASSWORD, not the operator-supplied
  * SEED_PASSWORD that the agency rows use.
  */
 const GUEST_ADMINS: readonly { key: string; name: string; title: string; email: string }[] = [
@@ -764,7 +765,10 @@ const id = {
 // Base fixture ids this layer builds on. Kept in one place so the coupling is
 // visible rather than sprinkled through the writes below.
 const BASE = {
-  organizationId: 'org_restaurant_e2e',
+  // Must match RESTAURANT_E2E.organizationId in seed-restaurant-e2e.ts, which
+  // creates the organization this showcase layer decorates. (Not imported from
+  // there: that module imports this one.)
+  organizationId: 'org_chai_chowk',
   branchId: 'branch_restaurant_e2e',
   posDeviceId: 'device_restaurant_e2e_pos',
   kdsDeviceId: 'device_restaurant_e2e_kds',
@@ -781,6 +785,11 @@ const BASE = {
   publicationId: 'menu_publication_restaurant_e2e',
   loyaltyProgramId: 'loyalty_program_restaurant_e2e_v1',
 } as const;
+
+// WHA-278: `User.department` is a composite FK onto the tenant's department
+// catalog, and a RESTAURANT organization has no LEADERSHIP department — its
+// catalog is front of house and kitchen. Every demo user works the floor.
+const DEMO_ADMIN_DEPARTMENT = adminDepartmentKeyForVertical('RESTAURANT');
 
 const DEMO_ORG = {
   slug: 'chai-chowk',
@@ -1272,7 +1281,7 @@ async function seedPeople(tx: Tx): Promise<void> {
       email: OWNER.email,
       password: passwordHash,
       role: 'ADMIN',
-      department: 'LEADERSHIP',
+      department: DEMO_ADMIN_DEPARTMENT,
       title: OWNER.title,
       startDate: AT,
       createdAt: AT,
@@ -1294,8 +1303,14 @@ async function seedPeople(tx: Tx): Promise<void> {
   // Same shape as the owner above: ADMIN on the manager role, assigned to the
   // one branch so branch-scoped consoles resolve for them too.
   for (const guest of GUEST_ADMINS) {
-    await tx.user.upsert({
-      where: { id: id.user(guest.key) },
+    // Keyed on the tenant-unique email, not on this script's own id: the base
+    // Chai Chowk fixture already mirrors alex@company.com under an id of its
+    // own, so an id-keyed upsert would miss it and then collide on
+    // (organizationId, email).
+    const guestUser = await tx.user.upsert({
+      where: {
+        organizationId_email: { organizationId: BASE.organizationId, email: guest.email },
+      },
       update: { password: passwordHash, name: guest.name, title: guest.title, updatedAt: AT },
       create: {
         id: id.user(guest.key),
@@ -1304,7 +1319,7 @@ async function seedPeople(tx: Tx): Promise<void> {
         email: guest.email,
         password: passwordHash,
         role: 'ADMIN',
-        department: 'LEADERSHIP',
+        department: DEMO_ADMIN_DEPARTMENT,
         title: guest.title,
         startDate: AT,
         createdAt: AT,
@@ -1312,12 +1327,12 @@ async function seedPeople(tx: Tx): Promise<void> {
       },
     });
     await tx.restaurantBranchAssignment.upsert({
-      where: { branchId_userId: { branchId: BASE.branchId, userId: id.user(guest.key) } },
+      where: { branchId_userId: { branchId: BASE.branchId, userId: guestUser.id } },
       update: {},
       create: {
         id: id.assignment(guest.key),
         branchId: BASE.branchId,
-        userId: id.user(guest.key),
+        userId: guestUser.id,
         createdAt: AT,
         updatedAt: AT,
       },
@@ -1335,7 +1350,7 @@ async function seedPeople(tx: Tx): Promise<void> {
         email: member.email,
         password: passwordHash,
         role: 'EMPLOYEE',
-        department: 'LEADERSHIP',
+        department: DEMO_ADMIN_DEPARTMENT,
         title: member.title,
         startDate: AT,
         createdAt: AT,
