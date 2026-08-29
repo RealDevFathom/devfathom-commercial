@@ -39,18 +39,6 @@ export const ALL_ACTIONS = [
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
   'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
   'money:read', // restaurant M5-L1: back-office money reads (bills/tenders/refunds/drawers/close) — org-role driven
-  // restaurant M6-L2 inventory domain capabilities (org-role driven via customDecision path):
-  'inventory:read', // console reads: stock on hand, ledger, counts, transfers, batches, low-stock rules
-  'inventory:adjust', // post transfers, manual corrections, sale reversals
-  'inventory:waste', // post wastage, spoilage, staff-meal movements
-  'inventory:count', // create/submit/post physical counts
-  // Restaurant M6-L3 (COORDINATED): purchasing capabilities the M6 back-office
-  // surfaces enforce. Reads gate on `inventory:read`, declared once by L2 above;
-  // L3 owns `purchasing:create`/`purchasing:approve`. The supervisor deduped L3's
-  // coordinated `inventory:read` overlap at merge (same adjacency rule as `_app.ts`
-  // and the M4 `orders:read` coordination above).
-  'purchasing:create', // restaurant M6-L3: supplier/PO/receiving mutations — org-role driven
-  'purchasing:approve', // restaurant M6-L3: purchase-order approval transition — org-role driven
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -128,20 +116,4 @@ export const POLICIES: Record<Action, Policy[]> = {
   // default. Terminal money mutations gate on the existing pos/payments/cash
   // capabilities, not on this back-office read action (C11).
   'money:read': [],
-
-  // Restaurant M6-L2 inventory console capabilities. All four are org-role-driven
-  // — granted through an organization role/override carrying the capability (or
-  // `*`), evaluated by the DB `customDecision` path; no static agency-role policy.
-  'inventory:read': [],
-  'inventory:adjust': [],
-  'inventory:waste': [],
-  'inventory:count': [],
-  // Restaurant M6-L3: purchasing back-office capabilities. Granted through an
-  // organization role/override carrying the capability (or `*`, e.g. the restaurant
-  // Owner or Purchasing Officer templates), evaluated by the DB `customDecision`
-  // path in `can()`; no static agency-role policy, so a subject without an explicit
-  // grant is denied by default (COORDINATED with L2 — reads gate on `inventory:read`,
-  // declared once above; the supervisor deduped L3's `inventory:read` overlap).
-  'purchasing:create': [],
-  'purchasing:approve': [],
 };
