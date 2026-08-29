@@ -28,7 +28,7 @@
  */
 
 /** Bump when the persisted document shape changes; an older/newer record fails closed. */
-export const POS_STORE_SCHEMA_VERSION = 1;
+export const POS_STORE_SCHEMA_VERSION = 2;
 
 export const POS_STORE_DATABASE_NAME = 'devfathom-pos';
 export const POS_STORE_OBJECT_STORE = 'scope-state';
@@ -414,15 +414,22 @@ export function shouldRefreshCatalog(input: {
  * `pos-command-queue.ts`; keeping it generic means the queue depends on the store
  * and never the reverse.
  */
-export type PosPersistedState<Q = unknown> = {
+export type PosPersistedState<Q = unknown, P = unknown> = {
   schemaVersion: number;
   scope: PosScope;
   catalog: PosCatalogSnapshot | null;
+  promotionCache: P | null;
   queue: Q | null;
 };
 
-export function emptyPosState<Q>(scope: PosScope): PosPersistedState<Q> {
-  return { schemaVersion: POS_STORE_SCHEMA_VERSION, scope, catalog: null, queue: null };
+export function emptyPosState<Q, P = unknown>(scope: PosScope): PosPersistedState<Q, P> {
+  return {
+    schemaVersion: POS_STORE_SCHEMA_VERSION,
+    scope,
+    catalog: null,
+    promotionCache: null,
+    queue: null,
+  };
 }
 
 // ── The IndexedDB seam ───────────────────────────────────────────────────────
@@ -549,8 +556,8 @@ export function createMemoryDriver(seed?: Iterable<readonly [string, unknown]>):
 
 // ── Read / write / purge ─────────────────────────────────────────────────────
 
-export type PosStoreReadResult<Q> =
-  | { status: 'ok'; state: PosPersistedState<Q> }
+export type PosStoreReadResult<Q, P = unknown> =
+  | { status: 'ok'; state: PosPersistedState<Q, P> }
   | { status: 'empty' }
   | {
       status: 'unrecoverable';
@@ -565,10 +572,10 @@ export type PosStoreReadResult<Q> =
  * `unrecoverable` — the caller must NOT guess at it, it must offer recovery
  * (discard local state and re-sync) as criterion 2 requires.
  */
-export async function readPosState<Q>(
+export async function readPosState<Q, P = unknown>(
   driver: PosStorageDriver,
   scope: PosScope
-): Promise<PosStoreReadResult<Q>> {
+): Promise<PosStoreReadResult<Q, P>> {
   const key = posScopeKey(scope);
   let raw: unknown;
   try {
@@ -591,7 +598,7 @@ export async function readPosState<Q>(
       message: 'Local POS storage holds an unreadable record. Discard local state and re-sync.',
     };
   }
-  const record = raw as Partial<PosPersistedState<Q>>;
+  const record = raw as Partial<PosPersistedState<Q, P>>;
   const found = typeof record.schemaVersion === 'number' ? record.schemaVersion : null;
   if (found !== POS_STORE_SCHEMA_VERSION) {
     return {
@@ -620,6 +627,7 @@ export async function readPosState<Q>(
       schemaVersion: POS_STORE_SCHEMA_VERSION,
       scope: { ...scope },
       catalog: (record.catalog ?? null) as PosCatalogSnapshot | null,
+      promotionCache: (record.promotionCache ?? null) as P | null,
       queue: (record.queue ?? null) as Q | null,
     },
   };

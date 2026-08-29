@@ -35,6 +35,7 @@ import { classifyTerminalFailure } from '@/components/terminal/terminal-state';
 
 import type { PosCatalogSnapshot, PosOrderChannel } from './pos-client-store';
 import { findCatalogItem } from './pos-client-store';
+import type { SerializedPromotionInput } from './promotion-cache';
 
 /** The visible ceiling on submitted drafts held for one device (M9 §3.5). */
 export const MAX_QUEUED_DRAFTS = 50;
@@ -109,6 +110,14 @@ export type PosQueuedDraft = {
   clientOriginAt: string;
   /** The catalog version the operator composed against (stale detection). */
   catalogVersion: string;
+  promotion: {
+    evaluationIdempotencyKey: string;
+    revisionId: string;
+    revisionHash: string;
+    cacheEtag: string;
+    canonicalInput: SerializedPromotionInput;
+    computedSnapshot: Record<string, unknown>;
+  } | null;
   status: PosDraftStatus;
   /** The server order id captured from the acknowledged OPEN_ORDER. */
   serverOrderId: string | null;
@@ -147,6 +156,7 @@ export function countQueuedCommands(snapshot: PosQueueSnapshot): number {
 export type PosDraftInput = {
   deviceId: string;
   catalogVersion: string;
+  promotion?: PosQueuedDraft['promotion'];
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   open: PosOpenOrderBody;
@@ -230,6 +240,7 @@ export function enqueueDraft(
     sequence: snapshot.nextSequence,
     clientOriginAt: input.clientOriginAt,
     catalogVersion: input.catalogVersion,
+    promotion: input.promotion ?? null,
     status: 'QUEUED',
     serverOrderId: null,
     commands,

@@ -430,7 +430,10 @@ describe('versioned catalog cache (criterion 2)', () => {
   it('refuses to persist a foreign schema version', async () => {
     const driver = createMemoryDriver();
     await expect(
-      writePosState(driver, { ...emptyPosState(scope), schemaVersion: 2 })
+      writePosState(driver, {
+        ...emptyPosState(scope),
+        schemaVersion: POS_STORE_SCHEMA_VERSION + 1,
+      })
     ).rejects.toBeInstanceOf(PosStorageError);
   });
 });

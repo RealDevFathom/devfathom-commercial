@@ -145,6 +145,47 @@ describe('stable command keys (criterion 3)', () => {
     expect(() => assertPersistSafe(snapshot)).not.toThrow();
   });
 
+  it('promotion_queue_replay_pins_revision_input_and_snapshot_atomically', async () => {
+    const promotion = {
+      evaluationIdempotencyKey: 'evaluation-1',
+      revisionId: 'revision-7',
+      revisionHash: 'hash-7',
+      cacheEtag: 'etag-7',
+      canonicalInput: {
+        context: {
+          evaluatedAt: '2026-08-29T10:00:00.000Z',
+          branchId: 'branch-1',
+          channel: 'DINE_IN' as const,
+          currency: 'USD',
+          couponFingerprints: [],
+          authorityActorId: null,
+        },
+        lines: [
+          {
+            orderItemId: 'local-line-1',
+            productId: 'prod-1',
+            variantId: null,
+            categoryAncestry: ['category-1'],
+            quantity: 2,
+            unitPrice: '450',
+            modifierDeltas: [],
+            compAllocation: '0',
+          },
+        ],
+      },
+      computedSnapshot: { engineVersion: '1.0.0', discountTotal: '90' },
+    };
+    const snapshot = seeded([draftInput({ promotion })]);
+    const driver = createMemoryDriver();
+    await writePosState(driver, { ...emptyPosState<PosQueueSnapshot>(scope), queue: snapshot });
+    const read = await readPosState<PosQueueSnapshot>(driver, scope);
+
+    expect(read.status).toBe('ok');
+    if (read.status !== 'ok') return;
+    expect(read.state.queue?.drafts[0].promotion).toEqual(promotion);
+    expect(() => assertPersistSafe(read.state)).not.toThrow();
+  });
+
   it('retries reuse the key and only advance the attempt counter', () => {
     let snapshot = seeded([draftInput()]);
     const draft = snapshot.drafts[0];
