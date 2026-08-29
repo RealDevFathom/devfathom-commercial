@@ -1,5 +1,8 @@
 # POS & terminal PRD
 
+For the task-oriented administrator and operator workflow, see the
+[Restaurant administrator and operator guide](./restaurant-admin-operator-guide.md).
+
 ## Problem
 
 Restaurant operators need a branch-bound terminal that can take an order through settlement without losing work during connectivity failures. The implemented order lifecycle is open → add/hold/fire → prepare/serve → close, with exceptional void, cancel, remake, table-move and table-merge commands; the acceptance test is `opens, adds, fires, prepares, serves, closes, and keeps ledger/outbox after each step` in `tests/restaurant-m4-acceptance.test.ts`.

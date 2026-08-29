@@ -1,5 +1,8 @@
 # SOP PRD
 
+For the task-oriented administrator and operator workflow, see the
+[Restaurant administrator and operator guide](./restaurant-admin-operator-guide.md).
+
 ## Problem
 
 Restaurants need versioned operating-procedure templates, branch-timezone scheduling, staff proof, and independent manager verification. The end-to-end acceptance cases are in `tests/restaurant-m7-acceptance.test.ts`.
