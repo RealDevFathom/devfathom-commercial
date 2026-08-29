@@ -2481,23 +2481,25 @@ model RestaurantTaxRuleVersion {
 }
 
 model RestaurantTaxTransactionSnapshot {
-  id                   String   @id @default(cuid())
-  organizationId       String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId             String
-  transactionReference String
-  profileVersionId     String
-  currency             String
-  subtotal             Decimal  @db.Decimal(12, 2)
-  discountTotal        Decimal  @default(0) @db.Decimal(12, 2)
-  serviceChargeTotal   Decimal  @default(0) @db.Decimal(12, 2)
-  taxTotal             Decimal  @db.Decimal(12, 2)
-  grandTotal           Decimal  @db.Decimal(12, 2)
-  settledAt            DateTime
-  reversesSnapshotId   String?
-  reversalReason       String?
+  id                      String   @id @default(cuid())
+  organizationId          String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                String
+  transactionReference    String
+  profileVersionId        String
+  currency                String
+  subtotal                Decimal  @db.Decimal(12, 2)
+  discountTotal           Decimal  @default(0) @db.Decimal(12, 2)
+  serviceChargeTotal      Decimal  @default(0) @db.Decimal(12, 2)
+  taxTotal                Decimal  @db.Decimal(12, 2)
+  grandTotal              Decimal  @db.Decimal(12, 2)
+  settledAt               DateTime
+  reversesSnapshotId      String?
+  reversalReason          String?
   promotionEvaluationId   String?
   promotionEvaluationHash String?
-  createdAt            DateTime @default(now())
+  evidenceVersion         Int      @default(0)
+  evidencePayload         Json?
+  createdAt               DateTime @default(now())
 
   branch           RestaurantBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   profile          RestaurantTaxProfileVersion        @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
@@ -2513,25 +2515,29 @@ model RestaurantTaxTransactionSnapshot {
 }
 
 model RestaurantTaxRateBucketSnapshot {
-  id              String                 @id @default(cuid())
-  organizationId  String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  snapshotId      String
-  ruleVersionId   String
-  paymentCategory String
-  priceMode       RestaurantTaxPriceMode
-  rate            Decimal                @db.Decimal(9, 6)
-  taxableAmount   Decimal                @db.Decimal(12, 2)
-  taxAmount       Decimal                @db.Decimal(12, 2)
-  grossAmount     Decimal                @db.Decimal(12, 2)
-  preDiscountGrossAmount  Decimal        @default(0) @db.Decimal(12, 2)
-  beforeTaxDiscountAmount Decimal        @default(0) @db.Decimal(12, 2)
-  afterTaxDiscountAmount  Decimal        @default(0) @db.Decimal(12, 2)
-  createdAt       DateTime               @default(now())
+  id                      String                 @id @default(cuid())
+  organizationId          String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  snapshotId              String
+  ruleVersionId           String
+  paymentCategory         String
+  priceMode               RestaurantTaxPriceMode
+  rate                    Decimal                @db.Decimal(9, 6)
+  taxableAmount           Decimal                @db.Decimal(12, 2)
+  taxAmount               Decimal                @db.Decimal(12, 2)
+  grossAmount             Decimal                @db.Decimal(12, 2)
+  preDiscountGrossAmount  Decimal                @default(0) @db.Decimal(12, 2)
+  beforeTaxDiscountAmount Decimal                @default(0) @db.Decimal(12, 2)
+  afterTaxDiscountAmount  Decimal                @default(0) @db.Decimal(12, 2)
+  evidenceVersion         Int                    @default(0)
+  allocationKind          String?
+  billLineId              String?
+  unitOrdinal             Int?
+  createdAt               DateTime               @default(now())
 
   snapshot RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId], references: [organizationId, id], onDelete: Restrict)
   rule     RestaurantTaxRuleVersion         @relation(fields: [organizationId, ruleVersionId], references: [organizationId, id], onDelete: Restrict)
 
-  @@unique([snapshotId, ruleVersionId, paymentCategory])
+  // Legacy-v0 and per-unit-v1 uniqueness are partial migration-managed indexes.
   @@index([organizationId])
   @@map("restaurant_tax_rate_bucket_snapshots")
 }
@@ -4736,14 +4742,17 @@ model RestaurantReceiptNumberSequence {
 /// the commandType + resultRef; any replay of the same (deviceId, key) returns
 /// that original result and creates nothing. Unique (deviceId, key).
 model RestaurantMoneyIdempotencyKey {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  deviceId       String
-  key            String
-  commandType    String
-  resultRef      String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                   String    @id @default(cuid())
+  organizationId       String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  deviceId             String
+  key                  String
+  commandType          String
+  resultRef            String?
+  canonicalPayloadHash String?
+  resultPayload        Json?
+  completedAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   device RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
 
