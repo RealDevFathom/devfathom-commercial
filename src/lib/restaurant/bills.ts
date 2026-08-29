@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
-import { releaseLoyaltyRedemption } from './loyalty';
+import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
   allocate,
@@ -19,6 +19,7 @@ import {
   ZERO,
 } from './money';
 import { allocateReceiptNumber } from './receipt-numbers';
+import { consumeReservations } from './promotion-caps';
 
 /**
  * M5-L2 / C4 — the bill (check) command layer.
@@ -973,6 +974,183 @@ export async function settleBill(tx: ScopedDb, input: SettleBillInput): Promise<
     data: { status: 'SETTLED', settledAt: input.at, receiptNumber },
   });
   return { billId: bill.id, receiptNumber, alreadySettled: false };
+}
+
+export type SettlementLineEvidence = {
+  billLineId: string;
+  taxAmount: Prisma.Decimal;
+  serviceChargeAmount: Prisma.Decimal;
+  lineTotal: Prisma.Decimal;
+  buckets: readonly {
+    ruleVersionId: string;
+    paymentCategory: string;
+    priceMode: 'EXCLUSIVE' | 'INCLUSIVE';
+    rate: Prisma.Decimal;
+    taxableAmount: Prisma.Decimal;
+    taxAmount: Prisma.Decimal;
+    grossAmount: Prisma.Decimal;
+    preDiscountGrossAmount: Prisma.Decimal;
+    beforeTaxDiscountAmount: Prisma.Decimal;
+    afterTaxDiscountAmount: Prisma.Decimal;
+    unitOrdinal?: number | null;
+  }[];
+};
+
+export type FinalizeBillSettlementInput = SettleBillInput & {
+  organizationId: string;
+  transactionReference: string;
+  profileVersionId: string;
+  currency: string;
+  subtotal: Prisma.Decimal;
+  discountTotal: Prisma.Decimal;
+  serviceChargeTotal: Prisma.Decimal;
+  taxTotal: Prisma.Decimal;
+  roundingAdjustment: Prisma.Decimal;
+  grandTotal: Prisma.Decimal;
+  eligibleNetMerchandise: Prisma.Decimal;
+  promotionEvaluationId?: string | null;
+  promotionEvaluationHash?: string | null;
+  lines: readonly SettlementLineEvidence[];
+};
+
+export type FinalizeBillSettlementResult = SettleBillResult & {
+  snapshotId: string;
+  loyaltyEntryId: string | null;
+  consumedReservationCount: number;
+};
+
+/**
+ * Persist the bill-owned pieces of a final checkout in the caller's interactive
+ * transaction. No error is caught here: a failure at any write boundary escapes
+ * and makes the caller roll back every financial row in the transaction.
+ */
+export async function finalizeBillSettlement(
+  tx: ScopedDb,
+  input: FinalizeBillSettlementInput
+): Promise<FinalizeBillSettlementResult> {
+  const bill = await tx.restaurantBill.findUnique({
+    where: { id: input.billId },
+    select: {
+      id: true,
+      status: true,
+      branchId: true,
+      compTotal: true,
+      lines: { select: { id: true, compAmount: true } },
+    },
+  });
+  if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+  if (bill.status !== 'OPEN')
+    throw new BillCommandError('Only an OPEN bill can be settled.', 'BILL_NOT_OPEN');
+
+  const expectedLineIds = bill.lines.map((line) => line.id).sort();
+  const suppliedLineIds = input.lines.map((line) => line.billLineId).sort();
+  if (
+    expectedLineIds.length !== suppliedLineIds.length ||
+    expectedLineIds.some((id, index) => id !== suppliedLineIds[index])
+  ) {
+    throw new BillCommandError(
+      'Settlement evidence must cover every bill line exactly once.',
+      'INVALID_SPLIT'
+    );
+  }
+  const lineTotal = sum(input.lines.map((line) => line.lineTotal));
+  const componentTotal = add(
+    sub(add(add(input.subtotal, input.taxTotal), input.serviceChargeTotal), bill.compTotal),
+    sub(input.roundingAdjustment, input.discountTotal)
+  );
+  if (
+    !equals(lineTotal, sub(input.grandTotal, input.roundingAdjustment)) ||
+    !equals(componentTotal, input.grandTotal)
+  ) {
+    throw new BillCommandError('Settlement totals do not reconcile.', 'INVALID_SPLIT');
+  }
+
+  const evidencePayload = {
+    version: 1,
+    billId: input.billId,
+    compTotal: bill.compTotal.toFixed(2),
+    discountTotal: input.discountTotal.toFixed(2),
+    serviceChargeTotal: input.serviceChargeTotal.toFixed(2),
+    roundingAdjustment: input.roundingAdjustment.toFixed(2),
+    eligibleNetMerchandise: input.eligibleNetMerchandise.toFixed(2),
+    promotionEvaluationId: input.promotionEvaluationId ?? null,
+    promotionEvaluationHash: input.promotionEvaluationHash ?? null,
+  };
+  const snapshots = await tx.$queryRaw<{ id: string }[]>`
+    INSERT INTO "restaurant_tax_transaction_snapshots"
+      ("id", "organizationId", "branchId", "transactionReference", "profileVersionId",
+       "currency", "subtotal", "discountTotal", "serviceChargeTotal", "taxTotal",
+       "grandTotal", "settledAt", "promotionEvaluationId", "promotionEvaluationHash",
+       "evidenceVersion", "evidencePayload")
+    VALUES
+      (gen_random_uuid()::text, ${input.organizationId}, ${bill.branchId},
+       ${input.transactionReference}, ${input.profileVersionId}, ${input.currency},
+       ${input.subtotal}, ${input.discountTotal}, ${input.serviceChargeTotal}, ${input.taxTotal},
+       ${input.grandTotal}, ${input.at}, ${input.promotionEvaluationId ?? null},
+       ${input.promotionEvaluationHash ?? null}, 1, ${JSON.stringify(evidencePayload)}::jsonb)
+    RETURNING "id"
+  `;
+  const snapshotId = snapshots[0]?.id;
+  if (!snapshotId) throw new Error('Tax settlement snapshot was not created.');
+
+  for (const line of input.lines) {
+    await tx.restaurantBillLine.update({
+      where: { id: line.billLineId },
+      data: {
+        taxAmount: line.taxAmount,
+        serviceChargeAmount: line.serviceChargeAmount,
+        lineTotal: line.lineTotal,
+      },
+    });
+    for (const bucket of line.buckets) {
+      await tx.$executeRaw`
+        INSERT INTO "restaurant_tax_rate_bucket_snapshots"
+          ("id", "organizationId", "snapshotId", "ruleVersionId", "paymentCategory",
+           "priceMode", "rate", "taxableAmount", "taxAmount", "grossAmount",
+           "preDiscountGrossAmount", "beforeTaxDiscountAmount", "afterTaxDiscountAmount",
+           "evidenceVersion", "allocationKind", "billLineId", "unitOrdinal")
+        VALUES
+          (gen_random_uuid()::text, ${input.organizationId}, ${snapshotId},
+           ${bucket.ruleVersionId}, ${bucket.paymentCategory},
+           ${bucket.priceMode}::"RestaurantTaxPriceMode", ${bucket.rate},
+           ${bucket.taxableAmount}, ${bucket.taxAmount}, ${bucket.grossAmount},
+           ${bucket.preDiscountGrossAmount}, ${bucket.beforeTaxDiscountAmount},
+           ${bucket.afterTaxDiscountAmount}, 1, 'MERCHANDISE', ${line.billLineId},
+           ${bucket.unitOrdinal ?? null})
+      `;
+    }
+  }
+  await tx.restaurantBill.update({
+    where: { id: bill.id },
+    data: {
+      subtotal: input.subtotal,
+      taxTotal: input.taxTotal,
+      serviceChargeTotal: input.serviceChargeTotal,
+      discountTotal: input.discountTotal,
+      roundingAdjustment: input.roundingAdjustment,
+      grandTotal: input.grandTotal,
+    },
+  });
+
+  const consumedReservationCount = input.promotionEvaluationId
+    ? await consumeReservations(tx, {
+        organizationId: input.organizationId,
+        evaluationId: input.promotionEvaluationId,
+        settledAt: input.at,
+      })
+    : 0;
+  const settled = await settleBill(tx, input);
+  const loyalty = await accrueLoyaltyForSettledBill(tx, {
+    billId: bill.id,
+    eligibleNetMerchandise: input.eligibleNetMerchandise,
+    at: input.at,
+  });
+  return {
+    ...settled,
+    snapshotId,
+    loyaltyEntryId: loyalty?.id ?? null,
+    consumedReservationCount,
+  };
 }
 
 // ── Settlement predicate (settlement guard + getOrderSettlement read) ─────────
