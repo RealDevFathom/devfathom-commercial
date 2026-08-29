@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MODULE_CATALOG,
+  ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES,
   PROCEDURE_MODULES,
   ROUTE_MODULES,
   SOP_DEPTH_REQUIREMENTS,
@@ -34,6 +35,9 @@ describe('module catalog routing', () => {
     ['projects.list', 'projects'],
     ['trelloImport.preview', 'projects'],
     ['team.updateRole', 'hr'],
+    ['team.getNotifications', null],
+    ['team.markNotificationRead', null],
+    ['team.markAllNotificationsRead', null],
     ['finance.summary', 'finance'],
     ['apiTokens.create', 'api'],
     ['restaurantStaff.issueCredential', 'restaurant-core'],
@@ -67,6 +71,16 @@ describe('module catalog routing', () => {
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
+  });
+
+  it('keeps the notification exception exact while the rest of team remains HR-gated', () => {
+    expect(ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES).toEqual([
+      'team.getNotifications',
+      'team.markNotificationRead',
+      'team.markAllNotificationsRead',
+    ]);
+    expect(moduleForProcedure('team.getNotifications.future')).toBe('hr');
+    expect(moduleForProcedure('team.deleteNotification')).toBe('hr');
   });
 
   it('pins every restaurant procedure namespace to its licensed module', () => {

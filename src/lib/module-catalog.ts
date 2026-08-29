@@ -247,6 +247,17 @@ export const PROCEDURE_MODULES: Record<string, string> = {
 };
 
 /**
+ * Shared-shell notification access belongs to the authenticated tenant session,
+ * not to HR. Exact full-path allowlist; the rest of the `team` namespace still
+ * resolves to the HR module (WHA-305).
+ */
+export const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES = [
+  'team.getNotifications',
+  'team.markNotificationRead',
+  'team.markAllNotificationsRead',
+] as const;
+
+/**
  * Procedures that act only on the caller's own account: profile, password,
  * sessions and notification preferences, i.e. everything the Settings page
  * offers every signed-in member. The account is part of every workspace in
@@ -264,6 +275,7 @@ export const ACCOUNT_PROCEDURES: ReadonlySet<string> = new Set([
   'team.mySignIns',
   'team.getNotificationPrefs',
   'team.updateNotificationPrefs',
+  ...ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES,
 ]);
 
 export function moduleForProcedure(path: string): string | null {
