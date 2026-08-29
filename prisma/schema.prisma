@@ -7188,7 +7188,9 @@ model RestaurantPromotionAuditEvent {
   @@index([organizationId, action, occurredAt], map: "promo_audit_org_action_time_idx")
   @@index([organizationId, promotionVersionId], map: "promo_audit_org_version_idx")
   @@map("restaurant_promotion_audit_events")
+}
 
+// ===========================================================================
 // Completion wave — staff shifts and the shift-aware operator sign-in boundary.
 // Org-scoped under forced RLS (C1) and branch-scoped like every other operating
 // surface. This is scheduling ONLY: no timeclock, no attendance, no payroll and
