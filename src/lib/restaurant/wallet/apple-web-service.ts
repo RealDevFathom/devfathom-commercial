@@ -168,7 +168,10 @@ export async function sendUpdatedApplePass(
   const authenticated = await authenticate(request, input.passTypeIdentifier, input.serialNumber);
   if (!authenticated) return EMPTY_401();
   const modified = request.headers.get('if-modified-since');
-  if (modified && new Date(modified).getTime() >= authenticated.pass.updatedAt.getTime())
+  if (
+    modified &&
+    new Date(modified).getTime() >= Math.floor(authenticated.pass.updatedAt.getTime() / 1000) * 1000
+  )
     return new Response(null, { status: 304 });
   const [credentials, projection] = await Promise.all([
     loadAppleWalletCredentials({

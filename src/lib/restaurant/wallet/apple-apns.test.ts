@@ -29,14 +29,13 @@ describe('Apple APNs pass pushes', () => {
   });
 
   it('sends an empty data payload and classifies invalid registrations', async () => {
-    const transport = vi.fn(async () => new Response(null, { status: 410 }));
+    const transport = vi.fn(async () => ({ status: 410 }));
     await expect(
       sendApplePassPush({ credentials, pushToken: 'push-token', transport })
     ).rejects.toMatchObject({ invalidPushToken: true, retryable: false, status: 410 });
     expect(transport).toHaveBeenCalledWith(
-      'https://api.push.apple.com/3/device/push-token',
       expect.objectContaining({
-        method: 'POST',
+        path: '/3/device/push-token',
         body: '{}',
         headers: expect.objectContaining({ 'apns-topic': credentials.passTypeIdentifier }),
       })
