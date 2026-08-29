@@ -34,13 +34,15 @@
  * that role, so the tenant-scoped assertions cannot pass by bypassing row level security.
  * Every read filters by a per-run-unique id.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
+
+import { beginMoneyIdempotent, recordMoneyResult } from './drawer-sessions';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -738,5 +740,101 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       expect(res.status).toBe(200);
       expect(await customerExists(marker)).toBe(true);
     });
+  });
+});
+
+describeIfDatabase('WHA-331 canonical frozen money idempotency', () => {
+  const canonical = (bytes: string) => ({
+    bytes,
+    hash: createHash('sha256').update(bytes, 'utf8').digest('hex'),
+  });
+  const actor = (key: string) => ({
+    staffProfileId: ctx.operator,
+    deviceId: ctx.deviceId,
+    idempotencyKey: key,
+  });
+
+  it('returns the exact frozen result before any live bill or configuration lookup', async () => {
+    const key = uniqueKey('canonical-replay');
+    const request = canonical('{"amount":"12.34","billId":"gone"}');
+    const frozen = { status: 'SETTLED', total: '12.34', evidence: ['rule-deleted-later'] };
+
+    await deps.withTenantDb(orgId, async (tx) => {
+      expect(await beginMoneyIdempotent(tx, actor(key), 'tax.settle', request)).toEqual({
+        replay: false,
+      });
+      await recordMoneyResult(tx, actor(key), 'settlement_ref', frozen);
+    });
+
+    await deps.withTenantDb(orgId, async (tx) => {
+      const replay = await beginMoneyIdempotent(tx, actor(key), 'tax.settle', request);
+      expect(replay).toMatchObject({ replay: true, resultRef: 'settlement_ref' });
+      if (!replay.replay) throw new Error('expected replay');
+      expect(replay.resultPayload).toEqual(frozen);
+    });
+  });
+
+  it('rejects the same key with different canonical bytes and writes nothing', async () => {
+    const key = uniqueKey('canonical-conflict');
+    await deps.withTenantDb(orgId, async (tx) => {
+      await beginMoneyIdempotent(tx, actor(key), 'tax.settle', canonical('{"amount":"1.00"}'));
+      await recordMoneyResult(tx, actor(key), 'settlement_ref', { total: '1.00' });
+    });
+    const before = await tenantCounts();
+
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        beginMoneyIdempotent(tx, actor(key), 'tax.settle', canonical('{"amount":"2.00"}'))
+      )
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
+    expect(await tenantCounts()).toEqual(before);
+  });
+
+  it('allows exactly one finalization and preserves the winner payload', async () => {
+    const key = uniqueKey('canonical-finalize');
+    const request = canonical('{"amount":"7.00"}');
+    await deps.withTenantDb(orgId, (tx) =>
+      beginMoneyIdempotent(tx, actor(key), 'tax.settle', request)
+    );
+
+    const attempts = await Promise.allSettled([
+      deps.withTenantDb(orgId, (tx) =>
+        recordMoneyResult(tx, actor(key), 'winner-a', { winner: 'a' })
+      ),
+      deps.withTenantDb(orgId, (tx) =>
+        recordMoneyResult(tx, actor(key), 'winner-b', { winner: 'b' })
+      ),
+    ]);
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+
+    await deps.withTenantDb(orgId, async (tx) => {
+      const replay = await beginMoneyIdempotent(tx, actor(key), 'tax.settle', request);
+      if (!replay.replay) throw new Error('expected replay');
+      expect([
+        { resultRef: 'winner-a', resultPayload: { winner: 'a' } },
+        { resultRef: 'winner-b', resultPayload: { winner: 'b' } },
+      ]).toContainEqual({ resultRef: replay.resultRef, resultPayload: replay.resultPayload });
+    });
+  });
+
+  it('rolls back the key and financial write when finalization fails', async () => {
+    const key = uniqueKey('canonical-rollback');
+    const marker = `canonical_rollback_${suffix}`;
+    await expect(
+      deps.withTenantDb(orgId, async (tx) => {
+        await beginMoneyIdempotent(tx, actor(key), 'tax.settle', canonical('{"amount":"9.00"}'));
+        await tx.restaurantCustomer.create({ data: { id: marker, displayName: 'must roll back' } });
+        await recordMoneyResult(tx, actor(key), 'settlement_ref', { total: '9.00' });
+        throw new Error('injected after finalization');
+      })
+    ).rejects.toThrow('injected after finalization');
+
+    expect(await idempotencyKeyRow(key)).toBeNull();
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantCustomer.findUnique({ where: { id: marker }, select: { id: true } })
+      )
+    ).toBeNull();
   });
 });

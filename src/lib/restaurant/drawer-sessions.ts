@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -92,7 +94,38 @@ export function runMoneyTransaction<T>(
   return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
 }
 
-export type IdempotencyOutcome = { replay: false } | { replay: true; resultRef: string | null };
+export type CanonicalMoneyPayload = {
+  /** The exact canonical UTF-8 request bytes used to produce `hash`. */
+  bytes: string;
+  /** Lowercase SHA-256 of `bytes`. */
+  hash: string;
+};
+
+export type IdempotencyOutcome =
+  | { replay: false }
+  | {
+      replay: true;
+      resultRef: string | null;
+      /** Present for canonical (version 1) commands; omitted for legacy version-0 rows. */
+      resultPayload?: Prisma.JsonValue | null;
+    };
+
+export class MoneyIdempotencyError extends Error {
+  readonly reason = 'TAX_SETTLEMENT_CONFLICT' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'MoneyIdempotencyError';
+  }
+}
+
+function requireCanonicalHash(payload: CanonicalMoneyPayload): string {
+  const calculated = createHash('sha256').update(payload.bytes, 'utf8').digest('hex');
+  if (payload.hash !== calculated) {
+    throw new MoneyIdempotencyError('The canonical money payload hash does not match its bytes.');
+  }
+  return calculated;
+}
 
 /**
  * Begin an idempotent money command against `restaurant_money_idempotency_keys`.
@@ -105,15 +138,35 @@ export type IdempotencyOutcome = { replay: false } | { replay: true; resultRef: 
 export async function beginMoneyIdempotent(
   tx: ScopedDb,
   actor: MoneyActor,
-  commandType: string
+  commandType: string,
+  canonicalPayload?: CanonicalMoneyPayload
 ): Promise<IdempotencyOutcome> {
+  const canonicalPayloadHash = canonicalPayload ? requireCanonicalHash(canonicalPayload) : null;
   const existing = await tx.restaurantMoneyIdempotencyKey.findUnique({
     where: { deviceId_key: { deviceId: actor.deviceId, key: actor.idempotencyKey } },
-    select: { resultRef: true },
+    select: { canonicalPayloadHash: true, resultRef: true, resultPayload: true, completedAt: true },
   });
-  if (existing) return { replay: true, resultRef: existing.resultRef };
+  if (existing) {
+    if (
+      canonicalPayloadHash !== null &&
+      (existing.canonicalPayloadHash !== canonicalPayloadHash || existing.completedAt === null)
+    ) {
+      throw new MoneyIdempotencyError(
+        'This idempotency key is already bound to a different canonical money payload.'
+      );
+    }
+    if (existing.canonicalPayloadHash === null) {
+      return { replay: true, resultRef: existing.resultRef };
+    }
+    return { replay: true, resultRef: existing.resultRef, resultPayload: existing.resultPayload };
+  }
   await tx.restaurantMoneyIdempotencyKey.create({
-    data: { deviceId: actor.deviceId, key: actor.idempotencyKey, commandType },
+    data: {
+      deviceId: actor.deviceId,
+      key: actor.idempotencyKey,
+      commandType,
+      canonicalPayloadHash,
+    },
   });
   return { replay: false };
 }
@@ -122,12 +175,23 @@ export async function beginMoneyIdempotent(
 export async function recordMoneyResult(
   tx: ScopedDb,
   actor: MoneyActor,
-  resultRef: string
+  resultRef: string,
+  resultPayload?: Prisma.InputJsonValue,
+  completedAt: Date = new Date()
 ): Promise<void> {
-  await tx.restaurantMoneyIdempotencyKey.update({
-    where: { deviceId_key: { deviceId: actor.deviceId, key: actor.idempotencyKey } },
-    data: { resultRef },
+  const finalized = await tx.restaurantMoneyIdempotencyKey.updateMany({
+    where: {
+      deviceId: actor.deviceId,
+      key: actor.idempotencyKey,
+      resultRef: null,
+      resultPayload: { equals: Prisma.DbNull },
+      completedAt: null,
+    },
+    data: resultPayload === undefined ? { resultRef } : { resultRef, resultPayload, completedAt },
   });
+  if (finalized.count !== 1) {
+    throw new MoneyIdempotencyError('This money idempotency result has already been finalized.');
+  }
 }
 
 /** Validate + persist a co-authorization record and return its id (mirrors
