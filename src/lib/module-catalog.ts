@@ -119,7 +119,23 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   restaurantInsights: 'restaurant-insights',
 };
 
+/**
+ * Shared-shell notification access belongs to the authenticated tenant session,
+ * not to HR. Keep this an exact full-path allowlist: the rest of the `team`
+ * namespace must continue to resolve to the HR module.
+ */
+export const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES = [
+  'team.getNotifications',
+  'team.markNotificationRead',
+  'team.markAllNotificationsRead',
+] as const;
+
+const entitlementIndependentTeamNotificationProcedureSet = new Set<string>(
+  ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES
+);
+
 export function moduleForProcedure(path: string): string | null {
+  if (entitlementIndependentTeamNotificationProcedureSet.has(path)) return null;
   return PROCEDURE_MODULES[path.split('.')[0] ?? ''] ?? null;
 }
 
