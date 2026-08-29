@@ -2,8 +2,12 @@ import { Prisma } from '@/generated/prisma/client';
 
 const Decimal = Prisma.Decimal;
 const ZERO = new Decimal(0);
+const HUNDRED = new Decimal(100);
 type DecimalInput = Prisma.Decimal | string | number;
 
+export const PAYMENT_CATEGORIES = ['CASH', 'CARD', 'OTHER'] as const;
+export type PaymentCategory = (typeof PAYMENT_CATEGORIES)[number];
+export type RestaurantTenderType = PaymentCategory;
 export type TaxPriceMode = 'EXCLUSIVE' | 'INCLUSIVE';
 
 export interface TaxRule {
@@ -24,25 +28,90 @@ export interface TaxLineInput {
   unitPrice: DecimalInput;
   quantity: number;
   modifierTotal?: DecimalInput;
-  discount?: DecimalInput;
-  paymentCategory: string;
+  comp?: DecimalInput;
+  beforeTaxDiscount?: DecimalInput;
 }
 
-export interface TaxLineResult {
-  id: string;
+export interface TaxBucketResult {
+  category: PaymentCategory;
+  consideration: Prisma.Decimal;
   net: Prisma.Decimal;
   tax: Prisma.Decimal;
   gross: Prisma.Decimal;
   ruleId: string;
 }
 
+export interface TaxLineResult {
+  id: string;
+  consideration: Prisma.Decimal;
+  net: Prisma.Decimal;
+  tax: Prisma.Decimal;
+  gross: Prisma.Decimal;
+  buckets: TaxBucketResult[];
+}
+
+export interface PriorTender {
+  tenderType: RestaurantTenderType;
+  principal: DecimalInput;
+}
+
+export type ServiceCharge =
+  | { amount: DecimalInput; taxable: false }
+  | { amount: DecimalInput; taxable: true; tenderType: RestaurantTenderType };
+
+export interface TaxQuoteInput {
+  lines: TaxLineInput[];
+  rules: TaxRule[];
+  at: Date;
+  proposedTenderType: RestaurantTenderType;
+  priorTenders?: PriorTender[];
+  afterTaxDiscount?: DecimalInput;
+  serviceCharge?: ServiceCharge;
+  roundingAdjustment?: DecimalInput;
+}
+
+export interface TaxQuoteResult {
+  proposedCategory: PaymentCategory;
+  weights: Record<PaymentCategory, Prisma.Decimal>;
+  lines: TaxLineResult[];
+  serviceCharge: TaxBucketResult | null;
+  net: Prisma.Decimal;
+  tax: Prisma.Decimal;
+  merchandisePayable: Prisma.Decimal;
+  afterTaxDiscount: Prisma.Decimal;
+  serviceChargePayable: Prisma.Decimal;
+  roundingAdjustment: Prisma.Decimal;
+  grandTotal: Prisma.Decimal;
+  acceptedPrincipal: Prisma.Decimal;
+  remainingDue: Prisma.Decimal;
+}
+
 export class TaxConfigurationError extends Error {}
+export class TaxPaymentCategoryError extends TaxConfigurationError {
+  readonly code = 'TAX_PAYMENT_CATEGORY_UNSUPPORTED';
+}
 
 function money(value: DecimalInput) {
   return new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 }
 
-export function resolveTaxRule(rules: TaxRule[], category: string, at: Date): TaxRule {
+function cents(value: DecimalInput) {
+  const rounded = money(value);
+  if (rounded.isNegative()) throw new RangeError('Money cannot be negative');
+  return rounded.times(HUNDRED);
+}
+
+export function mapTenderTypeToPaymentCategory(tenderType: unknown): PaymentCategory {
+  if (
+    typeof tenderType === 'string' &&
+    PAYMENT_CATEGORIES.includes(tenderType as PaymentCategory)
+  ) {
+    return tenderType as PaymentCategory;
+  }
+  throw new TaxPaymentCategoryError(`Unsupported tender type: ${String(tenderType)}`);
+}
+
+export function resolveTaxRule(rules: TaxRule[], category: PaymentCategory, at: Date): TaxRule {
   const matching = rules.filter(
     (rule) =>
       rule.paymentCategory === category &&
@@ -68,28 +137,61 @@ export function resolveTaxRule(rules: TaxRule[], category: string, at: Date): Ta
   return rule;
 }
 
+function lineConsideration(line: TaxLineInput) {
+  if (!Number.isInteger(line.quantity) || line.quantity <= 0)
+    throw new RangeError(`Invalid quantity for ${line.id}`);
+  if (Object.prototype.hasOwnProperty.call(line, 'paymentCategory'))
+    throw new TaxPaymentCategoryError('Raw paymentCategory input is forbidden');
+  const value = new Decimal(line.unitPrice)
+    .plus(line.modifierTotal ?? ZERO)
+    .times(line.quantity)
+    .minus(line.comp ?? ZERO)
+    .minus(line.beforeTaxDiscount ?? ZERO);
+  if (value.isNegative()) throw new RangeError(`Reductions exceed charge for ${line.id}`);
+  return money(value);
+}
+
+function calculateBucket(
+  consideration: DecimalInput,
+  category: PaymentCategory,
+  rules: TaxRule[],
+  at: Date
+): TaxBucketResult {
+  const rule = resolveTaxRule(rules, category, at);
+  const rate = new Decimal(rule.rate);
+  if (rate.isNegative() || rate.greaterThan(1))
+    throw new TaxConfigurationError(`Invalid rate for ${rule.id}`);
+  const amount = money(consideration);
+  const net =
+    rule.priceMode === 'INCLUSIVE'
+      ? amount.div(Decimal.add(1, rate)).toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+      : amount;
+  const tax =
+    rule.priceMode === 'INCLUSIVE'
+      ? amount.minus(net)
+      : amount.times(rate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const gross = rule.priceMode === 'INCLUSIVE' ? amount : amount.plus(tax);
+  return { category, consideration: amount, net, tax, gross, ruleId: rule.id };
+}
+
 export function calculateTax(
   lines: TaxLineInput[],
   rules: TaxRule[],
-  at: Date
+  at: Date,
+  tenderType: RestaurantTenderType
 ): { lines: TaxLineResult[]; net: Prisma.Decimal; tax: Prisma.Decimal; gross: Prisma.Decimal } {
+  const category = mapTenderTypeToPaymentCategory(tenderType);
   const results = lines.map((line) => {
-    if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
-      throw new RangeError(`Invalid quantity for ${line.id}`);
-    }
-    const rule = resolveTaxRule(rules, line.paymentCategory, at);
-    const rate = new Decimal(rule.rate);
-    if (rate.isNegative() || rate.greaterThan(1))
-      throw new TaxConfigurationError(`Invalid rate for ${rule.id}`);
-    const charged = new Decimal(line.unitPrice)
-      .plus(line.modifierTotal ?? ZERO)
-      .times(line.quantity)
-      .minus(line.discount ?? ZERO);
-    if (charged.isNegative()) throw new RangeError(`Discount exceeds charge for ${line.id}`);
-    const net = money(rule.priceMode === 'INCLUSIVE' ? charged.div(Decimal.add(1, rate)) : charged);
-    const tax = money(rule.priceMode === 'INCLUSIVE' ? charged.minus(net) : net.times(rate));
-    const gross = money(net.plus(tax));
-    return { id: line.id, net, tax, gross, ruleId: rule.id };
+    const consideration = lineConsideration(line);
+    const bucket = calculateBucket(consideration, category, rules, at);
+    return {
+      id: line.id,
+      consideration,
+      net: bucket.net,
+      tax: bucket.tax,
+      gross: bucket.gross,
+      buckets: [bucket],
+    };
   });
   return results.reduce(
     (total, line) => ({
@@ -102,19 +204,109 @@ export function calculateTax(
   );
 }
 
-export function splitMoney(total: DecimalInput, shares: number[]): Prisma.Decimal[] {
-  if (shares.length === 0 || shares.some((share) => !Number.isInteger(share) || share <= 0)) {
-    throw new RangeError('Shares must be positive integers');
-  }
-  const cents = money(total).times(100).toNumber();
-  const denominator = shares.reduce((sum, share) => sum + share, 0);
-  const raw = shares.map((share, index) => ({ index, value: (cents * share) / denominator }));
-  const allocated = raw.map(({ value }) => Math.floor(value));
-  let remainder = cents - allocated.reduce((sum, value) => sum + value, 0);
+export function splitMoney(total: DecimalInput, shares: DecimalInput[]): Prisma.Decimal[] {
+  if (shares.length === 0 || shares.some((share) => !new Decimal(share).isPositive()))
+    throw new RangeError('Shares must be positive');
+  const totalCents = cents(total);
+  const denominator = Decimal.sum(...shares.map((share) => new Decimal(share)));
+  const raw = shares.map((share, index) => ({
+    index,
+    value: totalCents.times(share).div(denominator),
+  }));
+  const allocated = raw.map(({ value }) => value.floor());
+  const remainder = totalCents.minus(Decimal.sum(...allocated)).toNumber();
   raw
-    .sort((a, b) => (b.value % 1) - (a.value % 1) || a.index - b.index)
+    .sort(
+      (a, b) =>
+        b.value.minus(b.value.floor()).comparedTo(a.value.minus(a.value.floor())) ||
+        a.index - b.index
+    )
+    .slice(0, remainder)
     .forEach(({ index }) => {
-      if (remainder-- > 0) allocated[index] += 1;
+      allocated[index] = allocated[index].plus(1);
     });
-  return allocated.map((value) => new Decimal(value).div(100));
+  return allocated.map((value) => value.div(HUNDRED));
+}
+
+function zeroWeights(): Record<PaymentCategory, Prisma.Decimal> {
+  return { CASH: new Decimal(0), CARD: new Decimal(0), OTHER: new Decimal(0) };
+}
+
+export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
+  const proposedCategory = mapTenderTypeToPaymentCategory(input.proposedTenderType);
+  const considerations = input.lines.map(lineConsideration);
+  const merchandiseCents = Decimal.sum(...considerations.map(cents));
+  const weights = zeroWeights();
+  let unallocated = merchandiseCents;
+  let acceptedPrincipal = new Decimal(0);
+  for (const tender of input.priorTenders ?? []) {
+    const category = mapTenderTypeToPaymentCategory(tender.tenderType);
+    const principalCents = cents(tender.principal);
+    acceptedPrincipal = acceptedPrincipal.plus(principalCents.div(HUNDRED));
+    const weight = Decimal.min(principalCents, unallocated);
+    weights[category] = weights[category].plus(weight);
+    unallocated = unallocated.minus(weight);
+  }
+  weights[proposedCategory] = weights[proposedCategory].plus(unallocated);
+
+  const used = PAYMENT_CATEGORIES.filter((category) => weights[category].greaterThan(0));
+  const lines = input.lines.map((line, lineIndex) => {
+    const consideration = considerations[lineIndex];
+    const allocations = used.length
+      ? splitMoney(
+          consideration,
+          used.map((category) => weights[category])
+        )
+      : [];
+    const buckets = used.map((category, index) =>
+      calculateBucket(allocations[index], category, input.rules, input.at)
+    );
+    return {
+      id: line.id,
+      consideration,
+      net: Decimal.sum(...buckets.map((bucket) => bucket.net)),
+      tax: Decimal.sum(...buckets.map((bucket) => bucket.tax)),
+      gross: Decimal.sum(...buckets.map((bucket) => bucket.gross)),
+      buckets,
+    };
+  });
+  const service = input.serviceCharge;
+  const serviceCharge = service?.taxable
+    ? calculateBucket(
+        service.amount,
+        mapTenderTypeToPaymentCategory(service.tenderType),
+        input.rules,
+        input.at
+      )
+    : null;
+  const serviceChargePayable = serviceCharge?.gross ?? money(service?.amount ?? ZERO);
+  const net = Decimal.sum(...lines.map((line) => line.net), serviceCharge?.net ?? ZERO);
+  const tax = Decimal.sum(...lines.map((line) => line.tax), serviceCharge?.tax ?? ZERO);
+  const merchandisePayable = Decimal.sum(...lines.map((line) => line.gross));
+  const afterTaxDiscount = money(input.afterTaxDiscount ?? ZERO);
+  const roundingAdjustment = money(input.roundingAdjustment ?? ZERO);
+  const grandTotal = merchandisePayable
+    .minus(afterTaxDiscount)
+    .plus(serviceChargePayable)
+    .plus(roundingAdjustment);
+  if (grandTotal.isNegative()) throw new RangeError('Discounts exceed payable');
+  return {
+    proposedCategory,
+    weights: {
+      CASH: weights.CASH.div(HUNDRED),
+      CARD: weights.CARD.div(HUNDRED),
+      OTHER: weights.OTHER.div(HUNDRED),
+    },
+    lines,
+    serviceCharge,
+    net,
+    tax,
+    merchandisePayable,
+    afterTaxDiscount,
+    serviceChargePayable,
+    roundingAdjustment,
+    grandTotal,
+    acceptedPrincipal,
+    remainingDue: grandTotal.minus(acceptedPrincipal),
+  };
 }
