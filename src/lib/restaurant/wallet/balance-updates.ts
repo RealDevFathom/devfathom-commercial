@@ -165,6 +165,13 @@ export async function reconcileWalletUpdates(db: ScopedDb, now = new Date()): Pr
     LEFT JOIN "restaurant_loyalty_points_entries" e
       ON e."organizationId" = p."organizationId" AND e."accountId" = p."loyaltyAccountId"
     WHERE p."status" = 'ACTIVE'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "restaurant_wallet_pass_updates" terminal
+        WHERE terminal."passId" = p."id"
+          AND terminal."status" = 'FAILED'
+          AND terminal."attempts" >= ${WALLET_UPDATE_MAX_ATTEMPTS}
+      )
     GROUP BY p."organizationId", p."id", p."lastPushedBalance"
     HAVING p."lastPushedBalance" IS DISTINCT FROM COALESCE(SUM(e."points"), 0)::int
     ON CONFLICT ("passId") WHERE "status" = 'PENDING'
