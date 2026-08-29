@@ -41,7 +41,7 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_tax_official_sources, restaurant_tax_profile_versions,
        restaurant_tax_rule_versions, restaurant_tax_transaction_snapshots, restaurant_tax_rate_bucket_snapshots,
-       restaurant_tax_tender_allocation_snapshots TO "${role}"`
+       restaurant_tax_tender_allocation_snapshots, restaurant_tax_refund_allocations TO "${role}"`
     );
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client.query(
@@ -204,7 +204,7 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     const result = await client.query(
       `SELECT count(*)::int AS count FROM pg_class WHERE relkind='r' AND relname LIKE 'restaurant_tax_%' AND relrowsecurity AND relforcerowsecurity`
     );
-    expect(result.rows[0].count).toBe(6);
+    expect(result.rows[0].count).toBe(7);
     expect(
       (
         await client.query(
@@ -213,6 +213,34 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
         )
       ).rows
     ).toEqual([]);
+  });
+
+  it('pins the normalized refund-allocation constraints and append-only policies', async () => {
+    await client.query('RESET ROLE');
+    const constraints = await client.query<{ conname: string }>(
+      `SELECT conname FROM pg_constraint
+       WHERE conrelid='restaurant_tax_refund_allocations'::regclass ORDER BY conname`
+    );
+    expect(constraints.rows.map(({ conname }) => conname)).toEqual(
+      expect.arrayContaining([
+        'restaurant_tax_refund_allocation_positive_cents_ck',
+        'restaurant_tax_refund_allocation_refund_fkey',
+        'restaurant_tax_refund_allocation_original_fkey',
+        'restaurant_tax_refund_allocation_cap',
+      ])
+    );
+    const policies = await client.query<{ cmd: string }>(
+      `SELECT cmd FROM pg_policies WHERE tablename='restaurant_tax_refund_allocations' ORDER BY cmd`
+    );
+    expect(policies.rows.map(({ cmd }) => cmd)).toEqual(['INSERT', 'SELECT']);
+    await expectPgCode('23514', () =>
+      client.query(
+        `INSERT INTO restaurant_tax_refund_allocations
+         (id,"organizationId","billId","refundId","originalTenderId","paymentCategory","originalSnapshotId","originalRateBucketSnapshotId","originalTenderAllocationId",cents)
+         VALUES ($1,$2,'missing','missing','missing','CARD','missing','missing','missing',0)`,
+        [`nonpositive_refund_allocation_${suffix}`, orgA]
+      )
+    );
   });
 
   it('rejects cross-tenant tender-allocation evidence under the restricted role', async () => {

@@ -2502,13 +2502,14 @@ model RestaurantTaxTransactionSnapshot {
   evidencePayload         Json?
   createdAt               DateTime @default(now())
 
-  branch            RestaurantBranch                        @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  bill              RestaurantBill?                         @relation(fields: [organizationId, billId], references: [organizationId, id], onDelete: Restrict)
-  profile           RestaurantTaxProfileVersion             @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
-  reversedSnapshot  RestaurantTaxTransactionSnapshot?       @relation("TaxSnapshotReversal", fields: [organizationId, reversesSnapshotId], references: [organizationId, id], onDelete: Restrict)
-  reversals         RestaurantTaxTransactionSnapshot[]      @relation("TaxSnapshotReversal")
-  buckets           RestaurantTaxRateBucketSnapshot[]
-  tenderAllocations RestaurantTaxTenderAllocationSnapshot[]
+  branch             RestaurantBranch                        @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  bill               RestaurantBill?                         @relation(fields: [organizationId, billId], references: [organizationId, id], onDelete: Restrict)
+  profile            RestaurantTaxProfileVersion             @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
+  reversedSnapshot   RestaurantTaxTransactionSnapshot?       @relation("TaxSnapshotReversal", fields: [organizationId, reversesSnapshotId], references: [organizationId, id], onDelete: Restrict)
+  reversals          RestaurantTaxTransactionSnapshot[]      @relation("TaxSnapshotReversal")
+  fullReversalRefund RestaurantRefund?                       @relation("TaxRefundFullReversal")
+  buckets            RestaurantTaxRateBucketSnapshot[]
+  tenderAllocations  RestaurantTaxTenderAllocationSnapshot[]
 
   @@unique([organizationId, transactionReference])
   @@unique([organizationId, id])
@@ -2562,15 +2563,40 @@ model RestaurantTaxTenderAllocationSnapshot {
   cents                BigInt
   createdAt            DateTime             @default(now())
 
-  snapshot       RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId, billId], references: [organizationId, id, billId], onDelete: Restrict, map: "restaurant_tax_tender_allocation_snapshot_bill_fkey")
-  rateBucket     RestaurantTaxRateBucketSnapshot  @relation(fields: [organizationId, snapshotId, rateBucketSnapshotId], references: [organizationId, snapshotId, id], onDelete: Restrict, map: "restaurant_tax_tender_allocation_bucket_fkey")
-  originalTender RestaurantTender                 @relation(fields: [organizationId, billId, originalTenderId, paymentCategory], references: [organizationId, billId, id, type], onDelete: Restrict, map: "restaurant_tax_tender_allocation_tender_bill_category_fkey")
+  snapshot          RestaurantTaxTransactionSnapshot @relation(fields: [organizationId, snapshotId, billId], references: [organizationId, id, billId], onDelete: Restrict, map: "restaurant_tax_tender_allocation_snapshot_bill_fkey")
+  rateBucket        RestaurantTaxRateBucketSnapshot  @relation(fields: [organizationId, snapshotId, rateBucketSnapshotId], references: [organizationId, snapshotId, id], onDelete: Restrict, map: "restaurant_tax_tender_allocation_bucket_fkey")
+  originalTender    RestaurantTender                 @relation(fields: [organizationId, billId, originalTenderId, paymentCategory], references: [organizationId, billId, id, type], onDelete: Restrict, map: "restaurant_tax_tender_allocation_tender_bill_category_fkey")
+  refundAllocations RestaurantTaxRefundAllocation[]
 
   @@unique([snapshotId, rateBucketSnapshotId, originalTenderId])
+  @@unique([organizationId, billId, originalTenderId, paymentCategory, snapshotId, rateBucketSnapshotId, id])
   @@index([organizationId])
   @@index([originalTenderId])
   @@index([snapshotId])
   @@map("restaurant_tax_tender_allocation_snapshots")
+}
+
+/// Append-only refund cents bound to one exact frozen tender-allocation fact.
+model RestaurantTaxRefundAllocation {
+  id                           String               @id @default(cuid())
+  organizationId               String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  billId                       String
+  refundId                     String
+  originalTenderId             String
+  paymentCategory              RestaurantTenderType
+  originalSnapshotId           String
+  originalRateBucketSnapshotId String
+  originalTenderAllocationId   String
+  cents                        BigInt
+  createdAt                    DateTime             @default(now())
+
+  refund             RestaurantRefund                      @relation(fields: [organizationId, billId, originalTenderId, refundId], references: [organizationId, billId, originalTenderId, id], onDelete: Restrict, map: "restaurant_tax_refund_allocation_refund_fkey")
+  originalAllocation RestaurantTaxTenderAllocationSnapshot @relation(fields: [organizationId, billId, originalTenderId, paymentCategory, originalSnapshotId, originalRateBucketSnapshotId, originalTenderAllocationId], references: [organizationId, billId, originalTenderId, paymentCategory, snapshotId, rateBucketSnapshotId, id], onDelete: Restrict, map: "restaurant_tax_refund_allocation_original_fkey")
+
+  @@unique([refundId, originalTenderAllocationId])
+  @@index([organizationId])
+  @@index([originalTenderAllocationId])
+  @@map("restaurant_tax_refund_allocations")
 }
 
 model RestaurantTerminalProviderConfig {
@@ -4574,32 +4600,37 @@ model RestaurantTender {
 /// movement; card refunds carry a `paymentId`. No updatedAt; DB-enforced
 /// append-only.
 model RestaurantRefund {
-  id                String               @id @default(cuid())
-  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  originalTenderId  String
-  billId            String
-  amount            Decimal              @db.Decimal(12, 2)
-  tipRefundAmount   Decimal              @default(0) @db.Decimal(12, 2)
-  kind              RestaurantRefundKind
-  businessDate      DateTime             @db.Date
-  reason            String
-  coAuthorizationId String
-  drawerSessionId   String?
-  paymentId         String?
-  staffProfileId    String
-  deviceId          String
-  createdAt         DateTime             @default(now())
+  id                     String               @id @default(cuid())
+  organizationId         String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  originalTenderId       String
+  billId                 String
+  amount                 Decimal              @db.Decimal(12, 2)
+  tipRefundAmount        Decimal              @default(0) @db.Decimal(12, 2)
+  kind                   RestaurantRefundKind
+  businessDate           DateTime             @db.Date
+  reason                 String
+  coAuthorizationId      String
+  drawerSessionId        String?
+  paymentId              String?
+  staffProfileId         String
+  deviceId               String
+  fullReversalSnapshotId String?              @unique
+  createdAt              DateTime             @default(now())
 
-  originalTender       RestaurantTender           @relation(fields: [originalTenderId], references: [id], onDelete: Cascade)
-  bill                 RestaurantBill             @relation(fields: [billId], references: [id], onDelete: Cascade)
-  coAuthorization      RestaurantCoAuthorization  @relation(fields: [coAuthorizationId], references: [id], onDelete: Restrict)
-  drawerSession        RestaurantDrawerSession?   @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
-  payment              RestaurantPayment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  staff                RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
-  device               RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  originalTender       RestaurantTender                  @relation(fields: [originalTenderId], references: [id], onDelete: Cascade)
+  bill                 RestaurantBill                    @relation(fields: [billId], references: [id], onDelete: Cascade)
+  coAuthorization      RestaurantCoAuthorization         @relation(fields: [coAuthorizationId], references: [id], onDelete: Restrict)
+  drawerSession        RestaurantDrawerSession?          @relation(fields: [drawerSessionId], references: [id], onDelete: SetNull)
+  payment              RestaurantPayment?                @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  staff                RestaurantStaffProfile            @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
+  device               RestaurantRegisteredDevice        @relation(fields: [deviceId], references: [id], onDelete: Restrict)
   drawerMovements      RestaurantDrawerMovement[]
   loyaltyPointsEntries LoyaltyPointsEntry[]
+  taxAllocations       RestaurantTaxRefundAllocation[]
+  fullReversalSnapshot RestaurantTaxTransactionSnapshot? @relation("TaxRefundFullReversal", fields: [organizationId, billId, fullReversalSnapshotId], references: [organizationId, billId, id], onDelete: Restrict, map: "restaurant_refund_full_reversal_snapshot_fkey")
 
+  @@unique([organizationId, billId, originalTenderId, id])
+  @@unique([organizationId, billId, fullReversalSnapshotId])
   @@index([organizationId])
   @@index([originalTenderId])
   @@index([billId])
