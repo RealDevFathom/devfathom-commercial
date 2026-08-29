@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { PrintDocumentType, PrintJob } from './printing/contract';
 
 import { resolveStation, type StationMatchLevel, type StationRoutingRule } from './station-routing';
 
@@ -57,6 +58,38 @@ export type GenerateKitchenTicketsInput = {
   businessDate: Date;
   items: readonly FiredItem[];
 };
+
+/**
+ * Pure hand-off from the durable KOT fact to the vendor-neutral print boundary.
+ * Labels are supplied by the caller's already-authorized order read; this module
+ * deliberately does not perform I/O or send to hardware inside the owning transaction.
+ */
+export function kitchenTicketPrintJob(
+  ticket: GeneratedTicket,
+  input: {
+    branchId: string;
+    orderReference: string;
+    createdAt: string;
+    documentType?: Extract<PrintDocumentType, 'KITCHEN_TICKET' | 'BAR_TICKET'>;
+    labelsByOrderItemId: Readonly<Record<string, string>>;
+  }
+): PrintJob {
+  return {
+    branchId: input.branchId,
+    stationId: ticket.stationId,
+    idempotencyKey: `kitchen-ticket:${ticket.ticketId}:v1`,
+    document: {
+      type: input.documentType ?? 'KITCHEN_TICKET',
+      reference: input.orderReference,
+      title: input.documentType === 'BAR_TICKET' ? 'BAR' : 'KITCHEN',
+      createdAt: input.createdAt,
+      lines: ticket.items.map((item) => ({
+        quantity: item.quantity,
+        label: input.labelsByOrderItemId[item.orderItemId] ?? 'Unlabelled item',
+      })),
+    },
+  };
+}
 
 /**
  * Generate the kitchen tickets for a set of fired items inside the caller's
