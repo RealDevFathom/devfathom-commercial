@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   buildApplePassJson,
+  buildPkpass,
   hashAppleAuthenticationToken,
   mintAppleAuthenticationToken,
   signManifest,
@@ -112,6 +114,87 @@ describe('Apple storeCard contract', () => {
           signaturePath,
           '-content',
           manifestPath,
+          '-noverify',
+          '-out',
+          path.join(root, 'verified'),
+        ],
+        { stdio: 'ignore' }
+      )
+    ).not.toThrow();
+    rmSync(root, { recursive: true, force: true });
+  });
+  it('builds a signed pkpass archive whose manifest covers pass.json and assets', () => {
+    const root = path.join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.cwd(),
+      'apple-pkpass-test'
+    );
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    const key = path.join(root, 'key.pem');
+    const signer = path.join(root, 'signer.pem');
+    const wwdrKey = path.join(root, 'wwdr-key.pem');
+    const wwdr = path.join(root, 'wwdr.pem');
+    for (const [commonName, keyPath, certPath] of [
+      ['Pass Signer', key, signer],
+      ['WWDR', wwdrKey, wwdr],
+    ])
+      execFileSync(
+        'openssl',
+        [
+          'req',
+          '-x509',
+          '-newkey',
+          'rsa:2048',
+          '-nodes',
+          '-subj',
+          `/CN=${commonName}`,
+          '-keyout',
+          keyPath,
+          '-out',
+          certPath,
+          '-days',
+          '1',
+        ],
+        { stdio: 'ignore' }
+      );
+    const archive = buildPkpass(
+      buildApplePassJson(base),
+      {
+        passCertificatePem: readFileSync(signer, 'utf8'),
+        passPrivateKeyPem: readFileSync(key, 'utf8'),
+        wwdrCertificatePem: readFileSync(wwdr, 'utf8'),
+        passTypeIdentifier: base.credentials.passTypeIdentifier,
+        teamIdentifier: base.credentials.teamIdentifier,
+      },
+      { 'icon.png': Buffer.from('deterministic-icon') }
+    );
+    const archivePath = path.join(root, 'pass.pkpass');
+    const extracted = path.join(root, 'extracted');
+    writeFileSync(archivePath, archive);
+    execFileSync('unzip', ['-q', archivePath, '-d', extracted]);
+
+    const manifest = JSON.parse(readFileSync(path.join(extracted, 'manifest.json'), 'utf8'));
+    for (const name of ['pass.json', 'icon.png'])
+      expect(manifest[name]).toBe(
+        createHash('sha1')
+          .update(readFileSync(path.join(extracted, name)))
+          .digest('hex')
+      );
+    expect(JSON.parse(readFileSync(path.join(extracted, 'pass.json'), 'utf8'))).toEqual(
+      buildApplePassJson(base)
+    );
+    expect(() =>
+      execFileSync(
+        'openssl',
+        [
+          'smime',
+          '-verify',
+          '-inform',
+          'DER',
+          '-in',
+          path.join(extracted, 'signature'),
+          '-content',
+          path.join(extracted, 'manifest.json'),
           '-noverify',
           '-out',
           path.join(root, 'verified'),

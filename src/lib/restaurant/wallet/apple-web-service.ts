@@ -216,10 +216,7 @@ export async function sendUpdatedApplePass(
 }
 
 export async function acceptAppleLogs(request: Request) {
-  const limited = admitted(request);
-  if (limited) return limited;
-  // Apple log entries can echo pass payloads. Validate the envelope, then discard it.
-  const body = (await request.json().catch(() => null)) as { logs?: unknown } | null;
-  if (!body || !Array.isArray(body.logs)) return new Response(null, { status: 400 });
+  // Apple log entries can echo pass payloads. Never retain or reflect the body.
+  await request.arrayBuffer().catch(() => undefined);
   return EMPTY_200();
 }
