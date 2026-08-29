@@ -65,7 +65,16 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
     },
-    restaurantStaff: { list: { useQuery: () => mocks.staff } },
+    restaurantStaff: {
+      list: { useQuery: () => mocks.staff },
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
   },
 }));
 
@@ -99,7 +108,7 @@ function renderConsole(value: EntitlementView = entitlements) {
 }
 
 function chooseBranch() {
-  fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+  fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
 }
 
 const SHIFT = {

@@ -244,7 +244,7 @@ function formatBytes(value: number) {
 
 function staffName(staff: StaffOption[], id: string | null) {
   if (!id) return 'Web user / system';
-  return staff.find((person) => person.id === id)?.displayName ?? id;
+  return staff.find((person) => person.id === id)?.displayName ?? 'Staff name unavailable';
 }
 
 function commandError(error: unknown, fallback: string) {

@@ -22,6 +22,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '../restaurant-branch-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type BillPage = RouterOutputs['restaurantBills']['listBills'];
@@ -34,6 +35,7 @@ type DrawerPage = RouterOutputs['restaurantCash']['listDrawerSessions'];
 type DrawerDetail = RouterOutputs['restaurantCash']['getDrawerSession'];
 type ClosePage = RouterOutputs['restaurantCash']['listDailyCloses'];
 type CloseDetail = RouterOutputs['restaurantCash']['getDailyClose'];
+type StaffOption = RouterOutputs['restaurantStaff']['listDirectory'][number];
 type MoneyTab = 'bills' | 'payments' | 'drawers' | 'daily-close' | 'terminal';
 type UiError = { message: string; data?: { code?: string } | null };
 type ReadQuery<T> = {
@@ -222,10 +224,20 @@ function instant(value: Date | string | null | undefined) {
   return value ? instantFormat.format(new Date(value)) : '—';
 }
 
+function staffDisplayName(staff: StaffOption[], staffProfileId: string | null | undefined) {
+  if (!staffProfileId) return 'System';
+  return (
+    staff.find((person) => person.id === staffProfileId)?.displayName ?? 'Staff name unavailable'
+  );
+}
+
 export function MoneyConsole() {
   const entitlements = useEntitlements();
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: posEnabled,
+  });
   const [branchId, setBranchId] = useState('');
   const [businessDate, setBusinessDate] = useState('');
   const [tab, setTab] = useState<MoneyTab>('bills');
@@ -251,6 +263,10 @@ export function MoneyConsole() {
 
   const normalizedBranchId = branchId.trim();
   const branchEnabled = posEnabled && normalizedBranchId.length > 0;
+  const staffQuery = trpc.restaurantStaff.listDirectory.useQuery(
+    { branchId: normalizedBranchId },
+    { enabled: branchEnabled }
+  );
   const billsEnabled = branchEnabled && tab === 'bills';
   const paymentsEnabled = branchEnabled && tab === 'payments';
   const drawersEnabled = branchEnabled && tab === 'drawers';
@@ -370,13 +386,13 @@ export function MoneyConsole() {
 
       <SectionCard eyebrow="Money ledger" title="Filters">
         <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Branch ID" description="Required before any money read runs.">
-            <Input
-              aria-label="Branch ID"
+          <Field label="Branch" description="Required before any money read runs.">
+            <RestaurantBranchSelect
+              branches={branchesQuery.data ?? []}
+              loading={branchesQuery.isLoading}
+              error={Boolean(branchesQuery.error)}
               value={branchId}
-              onChange={(event) => updateBranch(event.target.value)}
-              placeholder="branch_…"
-              className="h-11"
+              onChange={updateBranch}
               disabled={!posEnabled}
             />
           </Field>
@@ -418,7 +434,7 @@ export function MoneyConsole() {
               <div className="space-y-3" role="status">
                 <StatusPill status="Reads disabled" tone="neutral" />
                 <p className="text-sm text-text-muted">
-                  Enter a branch ID to load the selected read-only ledger.
+                  Select a branch to load the selected read-only ledger.
                 </p>
               </div>
             </SectionCard>
@@ -647,6 +663,7 @@ export function MoneyConsole() {
               <DrawersLedger
                 query={drawersQuery}
                 detailQuery={drawerQuery}
+                staff={staffQuery.data ?? []}
                 selectedId={selectedDrawerId}
                 onSelect={setSelectedDrawerId}
                 pagination={{
@@ -673,6 +690,7 @@ export function MoneyConsole() {
               <DailyCloseLedger
                 query={closesQuery}
                 detailQuery={closeQuery}
+                staff={staffQuery.data ?? []}
                 selectedId={selectedCloseId}
                 onSelect={setSelectedCloseId}
               />
@@ -1227,12 +1245,14 @@ function PaymentDetailPanel({ payment }: { payment: PaymentDetail }) {
 function DrawersLedger({
   query,
   detailQuery,
+  staff,
   selectedId,
   onSelect,
   pagination,
 }: {
   query: ReadQuery<DrawerPage>;
   detailQuery: ReadQuery<DrawerDetail>;
+  staff: StaffOption[];
   selectedId: string;
   onSelect: (id: string) => void;
   pagination: CursorPagination;
@@ -1286,9 +1306,7 @@ function DrawersLedger({
                         </TableCell>
                         <TableCell>{session.businessDate}</TableCell>
                         <TableCell className="font-mono text-xs">{session.deviceId}</TableCell>
-                        <TableCell className="font-mono text-xs">
-                          {session.staffProfileId}
-                        </TableCell>
+                        <TableCell>{staffDisplayName(staff, session.staffProfileId)}</TableCell>
                         <TableCell numeric>{session.openingFloat}</TableCell>
                         <TableCell numeric>{session.expectedCash ?? '—'}</TableCell>
                         <TableCell numeric>{session.countedCash ?? '—'}</TableCell>
@@ -1327,7 +1345,7 @@ function DrawersLedger({
               subject="drawer detail"
             />
           ) : detailQuery.data ? (
-            <DrawerDetailPanel drawer={detailQuery.data} />
+            <DrawerDetailPanel drawer={detailQuery.data} staff={staff} />
           ) : null}
         </SectionCard>
       ) : null}
@@ -1335,7 +1353,7 @@ function DrawersLedger({
   );
 }
 
-function DrawerDetailPanel({ drawer }: { drawer: DrawerDetail }) {
+function DrawerDetailPanel({ drawer, staff }: { drawer: DrawerDetail; staff: StaffOption[] }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1371,7 +1389,9 @@ function DrawerDetailPanel({ drawer }: { drawer: DrawerDetail }) {
                   <TableCell className="font-mono text-xs">{movement.tenderId ?? '—'}</TableCell>
                   <TableCell className="font-mono text-xs">{movement.refundId ?? '—'}</TableCell>
                   <TableCell>
-                    <span className="block font-mono text-xs">{movement.staffProfileId}</span>
+                    <span className="block text-sm">
+                      {staffDisplayName(staff, movement.staffProfileId)}
+                    </span>
                     <span className="block font-mono text-[0.625rem] text-text-faint">
                       {movement.deviceId}
                     </span>
@@ -1392,11 +1412,13 @@ function DrawerDetailPanel({ drawer }: { drawer: DrawerDetail }) {
 function DailyCloseLedger({
   query,
   detailQuery,
+  staff,
   selectedId,
   onSelect,
 }: {
   query: ReadQuery<ClosePage>;
   detailQuery: ReadQuery<CloseDetail>;
+  staff: StaffOption[];
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
@@ -1498,7 +1520,7 @@ function DailyCloseLedger({
               subject="daily close detail"
             />
           ) : detailQuery.data ? (
-            <DailyCloseDetailPanel detail={detailQuery.data} />
+            <DailyCloseDetailPanel detail={detailQuery.data} staff={staff} />
           ) : null}
         </SectionCard>
       ) : null}
@@ -1506,7 +1528,7 @@ function DailyCloseLedger({
   );
 }
 
-function DailyCloseDetailPanel({ detail }: { detail: CloseDetail }) {
+function DailyCloseDetailPanel({ detail, staff }: { detail: CloseDetail; staff: StaffOption[] }) {
   const totals = detail.close.totals;
   return (
     <div className="space-y-6">
@@ -1594,8 +1616,8 @@ function DailyCloseDetailPanel({ detail }: { detail: CloseDetail }) {
                     </TableCell>
                     <TableCell>
                       <span className="block font-mono text-xs">{drawer.deviceId}</span>
-                      <span className="block font-mono text-[0.625rem] text-text-faint">
-                        {drawer.staffProfileId}
+                      <span className="block text-xs text-text-muted">
+                        {staffDisplayName(staff, drawer.staffProfileId)}
                       </span>
                     </TableCell>
                     <TableCell numeric>{drawer.openingFloat}</TableCell>

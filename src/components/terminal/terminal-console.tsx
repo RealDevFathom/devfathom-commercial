@@ -77,6 +77,9 @@ type HeartbeatResponse = {
   serverTime: string;
 };
 
+type OperatorOption = { staffProfileId: string; displayName: string; role: string };
+type OperatorsResponse = { operators: OperatorOption[] };
+
 type CoAuthorizationResponse = {
   coAuthorization: {
     id: string;
@@ -183,6 +186,10 @@ export function TerminalConsole() {
   const [operatorId, setOperatorId] = useState('');
   const [operatorPin, setOperatorPin] = useState('');
   const [operatorError, setOperatorError] = useState<string | null>(null);
+  const [operators, setOperators] = useState<OperatorOption[]>([]);
+  const [operatorsState, setOperatorsState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle'
+  );
   const [actionMode, setActionMode] = useState<'switch' | 'approval'>('switch');
   const [approvingId, setApprovingId] = useState('');
   const [approvingPin, setApprovingPin] = useState('');
@@ -193,6 +200,9 @@ export function TerminalConsole() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalEvidence | null>(null);
   const mutationVersion = useRef(0);
+  const activeOperator = operators.find(
+    (operator) => operator.staffProfileId === runtime?.activeStaffProfileId
+  );
 
   const clearCredentialInputs = () => {
     setOperatorId('');
@@ -211,6 +221,8 @@ export function TerminalConsole() {
       setRuntime(null);
       setSessionInvalid(false);
       setApproval(null);
+      setOperators([]);
+      setOperatorsState('idle');
     } else if (failure.reset === 'session') {
       setSessionInvalid(true);
     } else if (failure.kind === 'network') {
@@ -238,6 +250,8 @@ export function TerminalConsole() {
         health: 'HEALTHY',
         serverTime: data.session.establishedAt,
       });
+      setOperators([]);
+      setOperatorsState('loading');
       setSessionInvalid(false);
       setApproval(null);
       setNotice({
@@ -306,6 +320,36 @@ export function TerminalConsole() {
     const interval = window.setInterval(() => void refreshHeartbeat(false), 60_000);
     return () => window.clearInterval(interval);
   }, [refreshHeartbeat, runtime, sessionInvalid]);
+
+  const operatorDeviceId = runtime?.deviceId;
+  const operatorSessionToken = runtime?.sessionToken;
+  const operatorDeviceSecret = runtime?.deviceSecret;
+
+  useEffect(() => {
+    if (!operatorDeviceId || !operatorSessionToken || !operatorDeviceSecret || sessionInvalid)
+      return;
+    let cancelled = false;
+    terminalRequest<OperatorsResponse>('/api/restaurant/terminal/operators', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${operatorDeviceSecret}`,
+        'X-Terminal-Session': operatorSessionToken,
+      },
+    })
+      .then((data) => {
+        if (cancelled) return;
+        setOperators(data.operators);
+        setOperatorsState('ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setOperators([]);
+        setOperatorsState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [operatorDeviceId, operatorDeviceSecret, operatorSessionToken, sessionInvalid]);
 
   const submitEnrollment = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -475,15 +519,19 @@ export function TerminalConsole() {
   const status = terminalStatus(runtime, sessionInvalid, notice);
   const evidenceRows = approval
     ? [
-        ['Approval ID', approval.id],
-        ['Acting staff', approval.actingStaffProfileId],
-        ['Approving manager', approval.approvingStaffProfileId],
+        [
+          'Acting staff',
+          operators.find((operator) => operator.staffProfileId === approval.actingStaffProfileId)
+            ?.displayName ?? 'Staff name unavailable',
+        ],
+        [
+          'Approving manager',
+          operators.find((operator) => operator.staffProfileId === approval.approvingStaffProfileId)
+            ?.displayName ?? 'Manager name unavailable',
+        ],
         ['Capability / action', approval.capability],
         ['Target type', approval.targetType ?? 'None'],
-        ['Target ID', approval.targetId ?? 'None'],
         ['Reason', approval.reason],
-        ['Device', approval.deviceId],
-        ['Terminal session', approval.terminalSessionId],
         ['Server timestamp', approval.createdAt],
       ]
     : [];
@@ -634,11 +682,13 @@ export function TerminalConsole() {
 
                       <dl className="grid min-w-0 grid-cols-1 gap-x-6 gap-y-5 py-6 sm:grid-cols-2">
                         {[
-                          ['Device', runtime.deviceId],
-                          ['Branch', runtime.branchId],
-                          ['Session', runtime.sessionId],
                           ['Device health', runtime.health],
-                          ['Acting operator', runtime.activeStaffProfileId ?? 'None — locked'],
+                          [
+                            'Acting operator',
+                            activeOperator
+                              ? `${activeOperator.displayName} — ${activeOperator.role}`
+                              : 'None — locked',
+                          ],
                           ['Server timestamp', runtime.serverTime],
                         ].map(([label, value]) => (
                           <div key={label} className="min-w-0">
@@ -693,17 +743,40 @@ export function TerminalConsole() {
                           </div>
                           <form className="mt-6 space-y-5" onSubmit={submitOperator}>
                             <div className="space-y-2">
-                              <Label htmlFor="unlock-operator">Operator profile ID</Label>
-                              <Input
+                              <Label htmlFor="unlock-operator">Operator</Label>
+                              <select
                                 id="unlock-operator"
                                 value={operatorId}
                                 onChange={(event) => setOperatorId(event.target.value)}
-                                autoComplete="off"
-                                className="h-11 font-mono"
+                                className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                                 aria-invalid={operatorError ? true : undefined}
                                 aria-describedby={operatorError ? 'operator-error' : undefined}
-                                disabled={pending !== null || heartbeatPending || sessionInvalid}
-                              />
+                                disabled={
+                                  pending !== null ||
+                                  heartbeatPending ||
+                                  sessionInvalid ||
+                                  operatorsState !== 'ready' ||
+                                  operators.length === 0
+                                }
+                              >
+                                <option value="" disabled>
+                                  {operatorsState === 'loading'
+                                    ? 'Loading eligible operators…'
+                                    : operatorsState === 'error'
+                                      ? 'Operators unavailable — check connection'
+                                      : operators.length === 0
+                                        ? 'No eligible operators for this branch'
+                                        : 'Select an operator'}
+                                </option>
+                                {operators.map((operator) => (
+                                  <option
+                                    key={operator.staffProfileId}
+                                    value={operator.staffProfileId}
+                                  >
+                                    {operator.displayName} — {operator.role}
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                             <div className="space-y-2">
                               <Label htmlFor="unlock-pin">Operator PIN</Label>
@@ -789,19 +862,40 @@ export function TerminalConsole() {
                           {actionMode === 'switch' ? (
                             <form className="mt-6 space-y-5" onSubmit={submitOperator}>
                               <div className="space-y-2">
-                                <Label htmlFor="switch-operator">
-                                  Incoming operator profile ID
-                                </Label>
-                                <Input
+                                <Label htmlFor="switch-operator">Incoming operator</Label>
+                                <select
                                   id="switch-operator"
                                   value={operatorId}
                                   onChange={(event) => setOperatorId(event.target.value)}
-                                  autoComplete="off"
-                                  className="h-11 font-mono"
+                                  className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-invalid={operatorError ? true : undefined}
                                   aria-describedby={operatorError ? 'operator-error' : undefined}
-                                  disabled={pending !== null || heartbeatPending || sessionInvalid}
-                                />
+                                  disabled={
+                                    pending !== null ||
+                                    heartbeatPending ||
+                                    sessionInvalid ||
+                                    operatorsState !== 'ready' ||
+                                    operators.length === 0
+                                  }
+                                >
+                                  <option value="" disabled>
+                                    {operatorsState === 'loading'
+                                      ? 'Loading eligible operators…'
+                                      : operatorsState === 'error'
+                                        ? 'Operators unavailable — check connection'
+                                        : operators.length === 0
+                                          ? 'No eligible operators for this branch'
+                                          : 'Select an operator'}
+                                  </option>
+                                  {operators.map((operator) => (
+                                    <option
+                                      key={operator.staffProfileId}
+                                      value={operator.staffProfileId}
+                                    >
+                                      {operator.displayName} — {operator.role}
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
                               <div className="space-y-2">
                                 <Label htmlFor="switch-pin">Incoming operator PIN</Label>
@@ -848,29 +942,55 @@ export function TerminalConsole() {
                           ) : (
                             <form className="mt-6 space-y-5" onSubmit={submitApproval}>
                               <p className="rounded-md border border-border-subtle bg-surface-sunken p-3 text-sm leading-6 text-text-body">
-                                Acting staff stays{' '}
-                                <span className="font-mono text-xs font-semibold text-text-strong">
-                                  {runtime.activeStaffProfileId}
+                                Acting operator stays{' '}
+                                <span className="font-semibold text-text-strong">
+                                  {activeOperator
+                                    ? `${activeOperator.displayName} — ${activeOperator.role}`
+                                    : 'the current operator'}
                                 </span>
                                 . Manager identity is added to the approval evidence.
                               </p>
                               <div className="grid gap-5 sm:grid-cols-2">
                                 <div className="space-y-2">
-                                  <Label htmlFor="approving-manager">
-                                    Approving manager profile ID
-                                  </Label>
-                                  <Input
+                                  <Label htmlFor="approving-manager">Approving manager</Label>
+                                  <select
                                     id="approving-manager"
                                     value={approvingId}
                                     onChange={(event) => setApprovingId(event.target.value)}
-                                    autoComplete="off"
-                                    className="h-11 font-mono"
+                                    className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                                     aria-invalid={approvalError ? true : undefined}
                                     aria-describedby={approvalError ? 'approval-error' : undefined}
                                     disabled={
-                                      pending !== null || heartbeatPending || sessionInvalid
+                                      pending !== null ||
+                                      heartbeatPending ||
+                                      sessionInvalid ||
+                                      operatorsState !== 'ready' ||
+                                      operators.length === 0
                                     }
-                                  />
+                                  >
+                                    <option value="" disabled>
+                                      {operatorsState === 'loading'
+                                        ? 'Loading eligible managers…'
+                                        : operatorsState === 'error'
+                                          ? 'Managers unavailable — check connection'
+                                          : operators.length === 0
+                                            ? 'No eligible managers for this branch'
+                                            : 'Select a manager'}
+                                    </option>
+                                    {operators
+                                      .filter(
+                                        (operator) =>
+                                          operator.staffProfileId !== runtime.activeStaffProfileId
+                                      )
+                                      .map((operator) => (
+                                        <option
+                                          key={operator.staffProfileId}
+                                          value={operator.staffProfileId}
+                                        >
+                                          {operator.displayName} — {operator.role}
+                                        </option>
+                                      ))}
+                                  </select>
                                 </div>
                                 <div className="space-y-2">
                                   <Label htmlFor="approving-pin">Manager PIN</Label>

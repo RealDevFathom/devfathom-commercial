@@ -48,7 +48,17 @@ const mocks = vi.hoisted(() => ({
       cancelledAt: null,
       items: [],
       tables: [],
-      events: [],
+      events: [
+        {
+          id: 'event_1',
+          sequence: 1,
+          eventType: 'OPENED',
+          actorStaffProfileId: 'staff_opened',
+          actorDeviceId: 'device_opened',
+          payload: null,
+          createdAt: new Date('2026-08-19T10:00:00Z'),
+        },
+      ],
       kitchenTickets: [],
       totals: { subtotal: '18.50', tax: '0', serviceCharge: '0' },
     },
@@ -65,6 +75,26 @@ const mocks = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    restaurantStaff: {
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+      listDirectory: {
+        useQuery: () => ({
+          data: [
+            { id: 'staff_opened', displayName: 'Amina Khan', role: 'Server' },
+            { id: 'staff_1', displayName: 'Shift Lead', role: 'Server' },
+            { id: 'manager_1', displayName: 'Mina Manager', role: 'Manager' },
+          ],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
     useUtils: () => ({
       restaurantOrders: {
         listOrders: { invalidate: mocks.invalidate },
@@ -138,7 +168,7 @@ describe('OrdersConsole', () => {
 
     renderConsole();
     expect(mocks.listCalls.at(-1)?.enabled).toBe(false);
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     expect(mocks.listCalls.at(-1)).toEqual({
       input: { branchId: 'branch_1', limit: 25 },
       enabled: true,
@@ -146,6 +176,8 @@ describe('OrdersConsole', () => {
     expect(mocks.detailCalls.at(-1)?.enabled).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'View order 42' }));
+    expect(screen.getByText('Recorded by Amina Khan')).toBeVisible();
+    expect(screen.queryByText(/staff_opened/)).not.toBeInTheDocument();
     expect(mocks.detailCalls.at(-1)).toEqual({
       input: { orderId: 'order_1' },
       enabled: true,
@@ -157,12 +189,12 @@ describe('OrdersConsole', () => {
       '00000000-0000-4000-8000-000000000045'
     );
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     fireEvent.click(screen.getByRole('button', { name: 'View order 42' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Cancel order #42?' });
-    fireEvent.change(within(dialog).getByLabelText('Acting staff profile ID'), {
+    fireEvent.change(within(dialog).getByLabelText('Acting staff member'), {
       target: { value: 'staff_1' },
     });
     fireEvent.change(within(dialog).getByLabelText('Device ID'), {
@@ -174,7 +206,7 @@ describe('OrdersConsole', () => {
     fireEvent.change(within(dialog).getByLabelText('Wastage disposition'), {
       target: { value: 'WASTE' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Approving staff profile ID (optional)'), {
+    fireEvent.change(within(dialog).getByLabelText('Approving staff member (optional)'), {
       target: { value: 'manager_1' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm cancellation' }));

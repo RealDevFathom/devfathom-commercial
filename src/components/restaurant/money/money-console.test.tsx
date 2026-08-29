@@ -234,6 +234,22 @@ function hook<T>(
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    restaurantStaff: {
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+      listDirectory: {
+        useQuery: () => ({
+          data: [{ id: 'staff_1', displayName: 'Amina Khan', role: 'Cashier' }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
     // WHA-238's terminal-provider form invalidates its own query on success.
     useUtils: () => ({
       restaurantPayments: { getTerminalConfig: { invalidate: vi.fn() } },
@@ -335,7 +351,7 @@ function renderConsole(enabled = true) {
 }
 
 function setBranchAndDate() {
-  fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+  fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
   fireEvent.change(screen.getByLabelText('Business date'), {
     target: { value: '2026-08-19' },
   });
@@ -421,6 +437,8 @@ describe('MoneyConsole', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Drawers' }));
     expect(screen.getByText('drawer_1')).toBeInTheDocument();
+    expect(screen.getByText('Amina Khan')).toBeVisible();
+    expect(screen.queryByText('staff_1')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Daily close' }));
     expect(screen.getAllByText('close_1').length).toBeGreaterThan(0);
@@ -498,14 +516,14 @@ describe('MoneyConsole', () => {
   it('renders list loading and retryable generic-error states', () => {
     mocks.bills.isLoading = true;
     const loading = renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     expect(screen.getByRole('status', { name: 'Loading bills' })).toBeInTheDocument();
     loading.unmount();
 
     mocks.bills.isLoading = false;
     mocks.bills.error = { message: 'Read unavailable', data: { code: 'INTERNAL_SERVER_ERROR' } };
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     expect(screen.getByText('Could not load bills')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(mocks.bills.refetch).toHaveBeenCalledOnce();
@@ -517,7 +535,7 @@ describe('MoneyConsole', () => {
       data: { code: 'FORBIDDEN' },
     };
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch ID'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     expect(screen.getByText('Money access denied')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
