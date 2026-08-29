@@ -7,20 +7,32 @@ type Actor = {
   email: string;
   password: string;
   loginPath: '/login' | '/platform/login';
+  host?: 'admin.localhost' | 'app.localhost';
 };
 
 const value = (name: string) => process.env[name] ?? '';
+
+function actorBaseUrl(host?: Actor['host']) {
+  const url = new URL(
+    process.env.PLAYWRIGHT_BASE_URL ??
+      `http://127.0.0.1:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
+  );
+  if (host) url.hostname = host;
+  return url;
+}
 
 export const actorFixture: Record<ActorKey, Actor> = {
   superAdmin: {
     email: value('RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL'),
     password: value('RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD'),
     loginPath: '/platform/login',
+    host: 'admin.localhost',
   },
   agency: {
     email: value('RESTAURANT_ACTOR_AGENCY_EMAIL'),
     password: value('RESTAURANT_ACTOR_AGENCY_PASSWORD'),
     loginPath: '/login',
+    host: 'app.localhost',
   },
   restaurantAdmin: {
     email: value('RESTAURANT_ACTOR_ADMIN_EMAIL'),
@@ -67,11 +79,12 @@ export async function assertDisposableDatabaseRoles() {
 
 export async function signInAs(page: Page, key: ActorKey) {
   const actor = actorFixture[key];
-  await page.goto(actor.loginPath);
+  await page.goto(new URL(actor.loginPath, actorBaseUrl(actor.host)).href);
   await page.getByLabel(/email/i).fill(actor.email);
   await page.locator('input[name="password"]').fill(actor.password);
   await page.getByRole('button', { name: /sign in/i }).click();
   await page.waitForURL((url) => url.pathname !== actor.loginPath, { timeout: 60_000 });
+  return new URL(page.url()).origin;
 }
 
 export async function assertNoRawDatabaseIds(page: Page) {
