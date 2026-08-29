@@ -21,7 +21,14 @@ vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }))
 
 import { POST } from './route';
 
-function request(overrides?: { type?: string; origin?: string }) {
+function request(overrides?: {
+  type?: string;
+  origin?: string;
+  url?: string;
+  forwardedHost?: string;
+  fetchSite?: string;
+  omitOrigin?: boolean;
+}) {
   const form = new FormData();
   form.set('branchId', 'branch-1');
   form.set('businessDate', '2026-08-29');
@@ -31,10 +38,16 @@ function request(overrides?: { type?: string; origin?: string }) {
   form.set('uploaderStaffProfileId', 'staff-1');
   form.set('file', new File(['proof'], 'proof.jpg', { type: overrides?.type ?? 'image/jpeg' }));
   const origin = overrides?.origin ?? 'https://devfathom.test';
+  const headers = new Headers(overrides?.omitOrigin ? undefined : { origin });
+  if (overrides?.forwardedHost) {
+    headers.set('x-forwarded-host', overrides.forwardedHost);
+    headers.set('x-forwarded-proto', 'https');
+  }
+  if (overrides?.fetchSite) headers.set('sec-fetch-site', overrides.fetchSite);
   return {
     formData: async () => form,
-    headers: new Headers({ origin }),
-    url: 'https://devfathom.test/api/restaurant/sop/evidence',
+    headers,
+    url: overrides?.url ?? 'https://devfathom.test/api/restaurant/sop/evidence',
   } as Request;
 }
 
@@ -53,7 +66,14 @@ beforeEach(() => {
 
 describe('POST SOP evidence', () => {
   it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
-    const response = await POST(request());
+    const response = await POST(
+      request({
+        url: 'http://internal-runtime:3000/api/restaurant/sop/evidence',
+        forwardedHost: 'wha346.devfathom.test',
+        origin: 'https://wha346.devfathom.test',
+        fetchSite: 'same-origin',
+      })
+    );
 
     expect(response.status).toBe(303);
     expect(response.headers.get('location')).toContain('notice=Proof+captured.');
@@ -75,7 +95,19 @@ describe('POST SOP evidence', () => {
   });
 
   it('rejects cross-origin and unsupported uploads before storage', async () => {
+    expect((await POST(request({ omitOrigin: true }))).status).toBe(403);
     expect((await POST(request({ origin: 'https://attacker.test' }))).status).toBe(403);
+    expect(
+      (
+        await POST(
+          request({
+            origin: 'https://other-tenant.devfathom.test',
+            forwardedHost: 'wha346.devfathom.test',
+          })
+        )
+      ).status
+    ).toBe(403);
+    expect((await POST(request({ fetchSite: 'cross-site' }))).status).toBe(403);
     const response = await POST(request({ type: 'image/gif' }));
 
     expect(response.status).toBe(303);

@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { can, subjectFromSession } from '@/lib/abac';
+import { publicRequestOrigin } from '@/lib/http-origin';
 import { attachEvidence } from '@/lib/restaurant/sop-execution';
 import { deleteUpload, putUpload } from '@/lib/storage';
 import { createTRPCContext } from '@/server/trpc';
@@ -32,7 +33,17 @@ function destination(request: Request, form: FormData, notice: string, kind: 'su
 
 export async function POST(request: Request) {
   const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin) {
+  const fetchSite = request.headers.get('sec-fetch-site');
+  let sameOrigin = false;
+  try {
+    sameOrigin =
+      origin !== null &&
+      new URL(origin).origin.toLowerCase() === publicRequestOrigin(request) &&
+      (!fetchSite || fetchSite === 'same-origin' || fetchSite === 'none');
+  } catch {
+    sameOrigin = false;
+  }
+  if (!sameOrigin) {
     return new Response('Forbidden', { status: 403 });
   }
 
