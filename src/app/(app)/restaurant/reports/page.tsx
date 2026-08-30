@@ -208,12 +208,13 @@ export default async function RestaurantReportsPage({
       ? 'all'
       : (branches.find((item) => item.id === requestedBranch)?.id ?? branches[0]!.id);
   const rangeInput = { ...(branch === 'all' ? {} : { branchId: branch }), from, to };
+  const posEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
 
   const [overview, payments, inventory, purchasing, workforce, sop] = await Promise.all([
-    canOperational
+    canOperational && posEnabled
       ? settled(() => caller.overview(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canFinancial
+    canFinancial && posEnabled
       ? settled(() => caller.payments(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
     canOperational && hasModule(ctx.entitlements, 'restaurant-inventory')
@@ -303,7 +304,12 @@ export default async function RestaurantReportsPage({
         title="Overview"
         titleLevel={2}
       >
-        {!canOperational ? (
+        {!posEnabled ? (
+          <SectionNotice
+            kind="module"
+            detail="Restaurant POS is required for closed-day orders, covers and item mix."
+          />
+        ) : !canOperational ? (
           <SectionNotice
             kind="permission"
             detail="reports:operational is required for orders, covers and item mix."
@@ -413,7 +419,12 @@ export default async function RestaurantReportsPage({
         title="Payments & tax"
         titleLevel={2}
       >
-        {!canFinancial ? (
+        {!posEnabled ? (
+          <SectionNotice
+            kind="module"
+            detail="Restaurant POS is required for payment and tax totals."
+          />
+        ) : !canFinancial ? (
           <SectionNotice
             kind="permission"
             detail="reports:financial is required for money, payment and tax totals."

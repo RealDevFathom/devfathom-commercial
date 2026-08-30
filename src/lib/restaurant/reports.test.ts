@@ -4,8 +4,10 @@ vi.mock('server-only', () => ({}));
 import { Prisma } from '@/generated/prisma/client';
 import {
   csvCell,
+  exportRestaurantReportCsv,
   readInventoryReport,
   readOverviewReport,
+  readPaymentsReport,
   readPurchasingReport,
   readSopReport,
   readWorkforceReport,
@@ -77,7 +79,9 @@ describe('restaurant corrected-close backbone', () => {
       correctedDayCount: 1,
     });
     expect(db.restaurantDailyClose.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ supersededBy: { none: {} } }) })
+      expect.objectContaining({
+        where: expect.not.objectContaining({ supersededBy: expect.anything() }),
+      })
     );
   });
 
@@ -120,6 +124,85 @@ describe('restaurant corrected-close backbone', () => {
     expect(report.freshness).toMatchObject({ status: 'STALE', staleDayCount: 1 });
     expect(report.orderCount).toBe(0);
   });
+
+  it('selects one deterministic latest unsuperseded fork tip for overview and payments', async () => {
+    const date = new Date('2026-01-01T00:00:00Z');
+    const money = (value: number) => new Prisma.Decimal(value);
+    const close = (id: string, createdAt: string, netSales: number) => ({
+      id,
+      branchId: 'b1',
+      businessDate: date,
+      supersedesCloseId: 'original',
+      createdAt: new Date(createdAt),
+      branch: { name: 'One' },
+      tenderTotals: [
+        { tenderType: 'CARD', amount: money(netSales), tipAmount: money(0), count: 1 },
+      ],
+      grossSales: money(netSales),
+      netSales: money(netSales),
+      taxTotal: money(0),
+      serviceChargeTotal: money(0),
+      tipTotal: money(0),
+      compTotal: money(0),
+      discountTotal: money(0),
+      refundTotal: money(0),
+      voidTotal: money(0),
+      cashExpected: money(0),
+      cashCounted: money(0),
+      cashVariance: money(0),
+    });
+    const db = {
+      restaurantDailyClose: {
+        findMany: vi.fn(async () => [
+          close('fork-old', '2026-01-02T00:00:00Z', 10),
+          close('fork-new', '2026-01-03T00:00:00Z', 20),
+        ]),
+      },
+      insightDailyRollup: {
+        findMany: vi.fn(async () => [
+          {
+            id: 'old-rollup',
+            branchId: 'b1',
+            businessDate: date,
+            sourceDailyCloseId: 'fork-old',
+            orderCount: 99,
+            coverCount: 99,
+            computedAt: new Date(),
+          },
+          {
+            id: 'new-rollup',
+            branchId: 'b1',
+            businessDate: date,
+            sourceDailyCloseId: 'fork-new',
+            orderCount: 2,
+            coverCount: 3,
+            computedAt: new Date(),
+          },
+        ]),
+      },
+      $queryRaw: vi.fn(async () => []),
+    } as unknown as ScopedDb;
+    const range = { branchIds: ['b1'], from: '2026-01-01', to: '2026-01-01' };
+    const overview = await readOverviewReport(db, range);
+    const payments = await readPaymentsReport(db, range);
+    expect(overview).toMatchObject({
+      orderCount: 2,
+      coverCount: 3,
+      freshness: { closedDayCount: 1 },
+    });
+    expect(payments).toMatchObject({ netSales: '20', averageCheck: '10' });
+    expect(payments.tenders).toEqual([
+      expect.objectContaining({ tenderType: 'CARD', amount: '20', count: 1 }),
+    ]);
+    const overviewCsv = await exportRestaurantReportCsv(db, 'overview', range, {
+      includeLabourCosts: false,
+    });
+    const paymentsCsv = await exportRestaurantReportCsv(db, 'payments', range, {
+      includeLabourCosts: false,
+    });
+    expect(overviewCsv.content).toContain('\n2026-01-01,2026-01-01,CURRENT,2,3,1,1');
+    expect(paymentsCsv.content).toContain('\n2026-01-01,2026-01-01,20,20,10,0,0,0,0,0,0,0,0,0,0');
+  });
 });
 
 function queryText(query: unknown): string {
@@ -129,6 +212,33 @@ function queryText(query: unknown): string {
 const boundedRange = { branchIds: ['b1'], from: '2026-01-01', to: '2026-01-31' };
 
 describe('restaurant complete summaries with bounded details', () => {
+  it.each([
+    { count: 201, expected: 201, truncated: false },
+    { count: 5_001, expected: 5_000, truncated: true },
+  ])(
+    'exports inventory independently at $count rows while interactive stays capped',
+    async ({ count, expected, truncated }) => {
+      const exportRows = Array.from({ length: count }, (_, index) => ({
+        branchId: 'b1',
+        stockItemId: `stock-${index}`,
+        ingredientName: `Ingredient ${index}`,
+        locationId: 'location-1',
+        locationName: 'Main',
+        onHand: new Prisma.Decimal(1),
+        weightedAverageCost: new Prisma.Decimal(2),
+      }));
+      const db = { $queryRaw: vi.fn(async () => exportRows) } as unknown as ScopedDb;
+      const exported = await exportRestaurantReportCsv(db, 'inventory', boundedRange, {
+        includeLabourCosts: false,
+      });
+      expect(exported.content.split('\n')).toHaveLength(expected + 1);
+      expect(exported.truncated).toBe(truncated);
+      expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toContain(
+        'LIMIT'
+      );
+    }
+  );
+
   it('returns explicit empty, unlimited inventory detail state', async () => {
     const db = {
       $queryRaw: vi.fn(async () => []),

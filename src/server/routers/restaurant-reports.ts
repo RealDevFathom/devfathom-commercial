@@ -110,16 +110,14 @@ export const restaurantReportsRouter = router({
       throw new TRPCError({ code: 'FORBIDDEN' });
     return availableBranches(ctx);
   }),
-  overview: operational
-    .input(range)
-    .query(({ ctx, input }) =>
-      guarded(ctx, input, (resolved) => readOverviewReport(ctx.db, resolved))
-    ),
-  payments: financial
-    .input(range)
-    .query(({ ctx, input }) =>
-      guarded(ctx, input, (resolved) => readPaymentsReport(ctx.db, resolved))
-    ),
+  overview: operational.input(range).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-pos');
+    return guarded(ctx, input, (resolved) => readOverviewReport(ctx.db, resolved));
+  }),
+  payments: financial.input(range).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-pos');
+    return guarded(ctx, input, (resolved) => readPaymentsReport(ctx.db, resolved));
+  }),
   inventory: operational.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-inventory');
     return guarded(ctx, input, (resolved) => readInventoryReport(ctx.db, resolved));
@@ -160,6 +158,8 @@ export const restaurantReportsRouter = router({
       throw new TRPCError({ code: 'FORBIDDEN' });
     if (!needsFinancial && !(await allowed(ctx, 'reports:operational')))
       throw new TRPCError({ code: 'FORBIDDEN' });
+    if (input.section === 'overview' || input.section === 'payments')
+      requireModule(ctx, 'restaurant-pos');
     if (input.section === 'inventory') requireModule(ctx, 'restaurant-inventory');
     if (input.section === 'purchasing') requireModule(ctx, 'restaurant-purchasing');
     if (input.section === 'workforce') requireModule(ctx, 'restaurant-workforce');
