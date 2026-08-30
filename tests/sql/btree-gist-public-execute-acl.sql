@@ -9,7 +9,7 @@
 \endif
 
 \if :preinstall_vulnerable
-  CREATE EXTENSION btree_gist;
+  CREATE EXTENSION IF NOT EXISTS btree_gist;
 \endif
 
 CREATE FUNCTION public.wha766_unrelated_fixture(integer)
