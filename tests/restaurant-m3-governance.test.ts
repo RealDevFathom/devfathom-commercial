@@ -3,9 +3,15 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
-const client = TEST_DATABASE_URL ? new pg.Client({ connectionString: TEST_DATABASE_URL }) : null;
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
+if (!runtimeUrl || !ownerUrl) {
+  throw new Error(
+    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
+  );
+}
+if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
+const client = new pg.Client({ connectionString: runtimeUrl });
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 
 const BASE_RESTAURANT_TABLES = [
@@ -214,6 +220,18 @@ const PROMOTION_TABLES = [
 ] as const;
 
 const COMPLETION_WAVE_TABLES = ['restaurant_shifts'] as const;
+const FINAL_CORRECTION_TABLES = [
+  'restaurant_activation_acknowledgements',
+  'restaurant_notification_webhooks',
+  'restaurant_recipe_line_substitutes',
+  'restaurant_service_charge_policy_versions',
+  'restaurant_shift_breaks',
+  'restaurant_shift_swap_requests',
+  'restaurant_shift_swap_decisions',
+  'restaurant_shift_events',
+  'restaurant_time_adjustments',
+  'restaurant_workforce_commands',
+] as const;
 
 const M3_COLUMNS = {
   restaurant_brands: [
@@ -508,20 +526,20 @@ async function readM3Columns() {
   ) as Record<M3Table, string[]>;
 }
 
-describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
+describe('M3 schema governance (real PostgreSQL)', () => {
   beforeAll(async () => {
-    const parsed = new URL(TEST_DATABASE_URL!);
+    const parsed = new URL(runtimeUrl);
     if (
       !['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname) &&
       process.env.ALLOW_REMOTE_RLS_TEST !== 'true'
     ) {
       throw new Error('Refusing to run M3 governance probes against a non-local database.');
     }
-    await client!.connect();
+    await client.connect();
   }, 60_000);
 
   afterAll(async () => {
-    await client?.end();
+    await client.end();
   });
 
   it('pins the complete restaurant table and M3 column allowlists', async () => {
@@ -549,6 +567,7 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...TERMINAL_PAYMENT_TABLES,
         ...PROMOTION_TABLES,
         ...COMPLETION_WAVE_TABLES,
+        ...FINAL_CORRECTION_TABLES,
       ].sort()
     );
 
@@ -669,8 +688,8 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
     );
     expect(index.rows).toEqual([{ indisunique: true, predicate: '"isDefault"' }]);
 
-    const first = new pg.Client({ connectionString: TEST_DATABASE_URL });
-    const second = new pg.Client({ connectionString: TEST_DATABASE_URL });
+    const first = new pg.Client({ connectionString: runtimeUrl });
+    const second = new pg.Client({ connectionString: runtimeUrl });
     const organizationId = `org_m3_default_${suffix}`;
     let firstConnected = false;
     let secondConnected = false;

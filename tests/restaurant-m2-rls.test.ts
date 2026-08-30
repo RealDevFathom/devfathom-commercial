@@ -3,11 +3,16 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
-const client = TEST_DATABASE_URL ? new pg.Client({ connectionString: TEST_DATABASE_URL }) : null;
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
+if (!runtimeUrl || !ownerUrl) {
+  throw new Error(
+    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
+  );
+}
+if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
+const client = new pg.Client({ connectionString: runtimeUrl });
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
-const role = `devfathom_m2_${suffix}`;
 const ids = {
   orgA: `org_m2_a_${suffix}`,
   orgB: `org_m2_b_${suffix}`,
@@ -48,9 +53,9 @@ async function expectDatabaseError(code: string, sql: string, values: unknown[])
   }
 }
 
-describeIfDatabase('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
+describe('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
   beforeAll(async () => {
-    const parsed = new URL(TEST_DATABASE_URL!);
+    const parsed = new URL(runtimeUrl);
     if (
       !['localhost', '127.0.0.1', '::1'].includes(parsed.hostname) &&
       process.env.ALLOW_REMOTE_RLS_TEST !== 'true'
@@ -58,18 +63,8 @@ describeIfDatabase('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
       throw new Error('Refusing to run M2 RLS probes against a non-local database.');
     }
 
-    await client!.connect();
-    await client!.query('BEGIN');
-    await client!.query(`CREATE ROLE "${role}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
-    await client!.query(`GRANT "${role}" TO CURRENT_USER`);
-    await client!.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
-    await client!.query(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "${role}"`);
-    await client!.query(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON
-        "restaurant_staff_profiles", "restaurant_operator_credentials",
-        "restaurant_registered_devices", "restaurant_terminal_sessions",
-        "restaurant_co_authorizations" TO "${role}"`
-    );
+    await client.connect();
+    await client.query('BEGIN');
 
     await client!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     await client!.query(
@@ -182,15 +177,22 @@ describeIfDatabase('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
       ]
     );
 
-    await client!.query(`SET LOCAL ROLE "${role}"`);
     await client!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client!.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ids.orgA]);
   }, 60_000);
 
   afterAll(async () => {
-    if (!client) return;
     await client.query('ROLLBACK');
     await client.end();
+  });
+
+  it('uses a LOGIN NOSUPERUSER NOBYPASSRLS runtime role', async () => {
+    const roleFlags = await client.query<{
+      rolcanlogin: boolean;
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+    }>('SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
+    expect(roleFlags.rows[0]).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
   });
 
   it.each(tables)('%s hides tenant B from read, update, and delete', async (table, idA, idB) => {
