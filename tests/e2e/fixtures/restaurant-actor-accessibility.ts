@@ -89,7 +89,7 @@ export async function completeWorkspaceSelection(
   workspace: RegExp
 ) {
   const chooser = page.getByText('Choose a workspace', { exact: true });
-  const authAlert = page.getByRole('alert').first();
+  const authAlert = authenticationAlert(page);
   const outcome = await Promise.race([
     chooser.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'chooser' as const),
     page
@@ -110,6 +110,10 @@ export async function completeWorkspaceSelection(
   return { chooser, outcome };
 }
 
+export function authenticationAlert(page: Page) {
+  return page.locator('[role="alert"].text-destructive:not(#__next-route-announcer__)').first();
+}
+
 export function isAuthenticatedAppDestination(url: URL, loginPath: Actor['loginPath']) {
   return (
     url.pathname !== loginPath &&
@@ -122,7 +126,7 @@ export function isAuthenticatedAppDestination(url: URL, loginPath: Actor['loginP
 
 async function waitForAuthenticatedApp(page: Page, loginPath: Actor['loginPath']) {
   try {
-    const alert = page.getByRole('alert').first();
+    const alert = authenticationAlert(page);
     const outcome = await Promise.race([
       page
         .waitForURL((url) => isAuthenticatedAppDestination(url, loginPath), { timeout: 60_000 })
@@ -141,7 +145,7 @@ async function waitForAuthenticatedApp(page: Page, loginPath: Actor['loginPath']
     await page.waitForLoadState('domcontentloaded');
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Authentication failed')) throw error;
-    const alert = page.getByRole('alert').first();
+    const alert = authenticationAlert(page);
     if (await alert.isVisible().catch(() => false)) {
       const message = (await alert.textContent())?.trim();
       throw new Error(`Authentication failed${message ? `: ${message}` : '.'}`, { cause: error });
