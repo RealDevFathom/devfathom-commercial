@@ -1,8 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
-
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -15,39 +14,20 @@ import {
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusPill } from '@/components/ui/status-pill';
+import { RESTAURANT_CAPABILITIES } from '@/lib/vertical-catalog';
 import { trpc } from '@/lib/trpc';
-
-/**
- * SOP-1 / WHA-224 — the job-role multi-select for one staff profile at one branch.
- *
- * Kept as its own component rather than woven into the staff console so the SOP-1
- * surface stays self-contained and rebases cleanly onto the M9 union.
- *
- * BRANCH SCOPE IS EXPLICIT, NOT IMPLIED. Holdings are per branch, so the dialog
- * makes the operator choose one and shows only that branch's roles. Saving sends
- * the complete desired set for THAT branch — the server diffs it — so a save here
- * can never disturb the same person's roles elsewhere. The branch defaults to the
- * profile's primary branch when it has one, because that is the overwhelmingly
- * common case, but it stays editable.
- *
- * The save is immediately effective (nothing caches capabilities) and appended to
- * the DB-enforced append-only audit, which is shown beneath the picker so the
- * consequence of the edit is visible in the same place it is made.
- */
+import { RestaurantBranchSelect } from './restaurant-branch-select';
 
 export type StaffJobRolesDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   staffProfileId: string;
   staffDisplayName: string;
-  /** Pre-selects the branch; the operator can still change it. */
   defaultBranchId?: string | null;
+  defaultBranchName?: string | null;
 };
-
-const auditDateFormat = new Intl.DateTimeFormat(undefined, {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-});
+type Effect = 'ALLOW' | 'DENY';
+const tones = { inherited: 'neutral', direct: 'success', denied: 'warning' } as const;
 
 export function StaffJobRolesDialog({
   open,
@@ -58,6 +38,7 @@ export function StaffJobRolesDialog({
 }: StaffJobRolesDialogProps) {
   const utils = trpc.useUtils();
   const [branchId, setBranchId] = useState(defaultBranchId ?? '');
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, { enabled: open });
   /**
    * `null` means PRISTINE — the operator has not touched the checkboxes, so the
    * server's answer is the truth and a background refetch should show through.
@@ -69,179 +50,295 @@ export function StaffJobRolesDialog({
    * — the parent unmounts this component, so a fresh open starts pristine.
    */
   const [draft, setDraft] = useState<Set<string> | null>(null);
-
+  const [search, setSearch] = useState('');
+  const [saveError, setSaveError] = useState('');
   const rolesQuery = trpc.restaurantStaff.listJobRoles.useQuery(
     { activeOnly: true },
     { enabled: open }
   );
   const holdingsQuery = trpc.restaurantStaff.listStaffJobRoles.useQuery(
     { staffProfileId, branchId },
-    { enabled: open && branchId.length > 0 }
+    { enabled: open && !!branchId }
   );
-  const auditQuery = trpc.restaurantStaff.listStaffJobRoleAudit.useQuery(
-    { staffProfileId, branchId, take: 20 },
-    { enabled: open && branchId.length > 0 }
+  const accessQuery = trpc.restaurantStaff.resolveStaffCapabilities.useQuery(
+    { staffProfileId, branchId },
+    { enabled: open && !!branchId }
   );
-
-  const heldRoleIds = (holdingsQuery.data ?? []).map((holding) => holding.jobRole.id);
-  const selected = draft ?? new Set(heldRoleIds);
-  const dirty = draft !== null;
-
+  const held = (holdingsQuery.data ?? []).map((item) => item.jobRole.id);
+  const selected = draft ?? new Set(held);
+  const inherited = new Set(
+    (rolesQuery.data ?? [])
+      .filter((role) => selected.has(role.id))
+      .flatMap((role) => role.capabilities.map((item) => item.capability))
+  );
+  const direct = new Set(accessQuery.data?.allowed ?? []);
+  const denied = new Set(accessQuery.data?.denied ?? []);
+  const visible = useMemo(
+    () => RESTAURANT_CAPABILITIES.filter((item) => item.includes(search.trim().toLowerCase())),
+    [search]
+  );
+  const refresh = () =>
+    void utils.restaurantStaff.resolveStaffCapabilities.invalidate({ staffProfileId, branchId });
   const save = trpc.restaurantStaff.setStaffJobRoles.useMutation({
     onSuccess: (result) => {
-      // Back to pristine: the server is authoritative again.
       setDraft(null);
+      setSaveError('');
       void utils.restaurantStaff.listStaffJobRoles.invalidate({ staffProfileId, branchId });
-      void utils.restaurantStaff.listStaffJobRoleAudit.invalidate({ staffProfileId, branchId });
-      const changes = result.granted.length + result.revoked.length;
+      refresh();
       toast.success(
-        changes === 0
-          ? 'No job-role changes to apply.'
-          : `Job roles updated — ${result.granted.length} added, ${result.revoked.length} removed.`
+        `Access updated — ${result.granted.length} added, ${result.revoked.length} removed.`
       );
     },
+    onError: (error) => {
+      setSaveError(`${error.message} Your selections are still here; try saving again.`);
+      toast.error(error.message);
+    },
+  });
+  const setOverride = trpc.restaurantStaff.setStaffCapabilityOverride.useMutation({
+    onSuccess: refresh,
     onError: (error) => toast.error(error.message),
   });
-
-  const toggle = (jobRoleId: string) => {
+  const clearOverride = trpc.restaurantStaff.clearStaffCapabilityOverride.useMutation({
+    onSuccess: refresh,
+    onError: (error) => toast.error(error.message),
+  });
+  const pending = save.isPending || setOverride.isPending || clearOverride.isPending;
+  const loading = rolesQuery.isLoading || holdingsQuery.isLoading || accessQuery.isLoading;
+  const loadError = rolesQuery.error || holdingsQuery.error || accessQuery.error;
+  const toggleRole = (id: string) =>
     setDraft((current) => {
-      const next = new Set(current ?? heldRoleIds);
-      if (next.has(jobRoleId)) next.delete(jobRoleId);
-      else next.add(jobRoleId);
+      const next = new Set(current ?? held);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
-  };
-
-  const roles = rolesQuery.data ?? [];
-  const branchChosen = branchId.trim().length > 0;
-  const loading = rolesQuery.isLoading || (branchChosen && holdingsQuery.isLoading);
-  const pending = save.isPending;
+  const choose = (capability: string, effect: Effect | null) =>
+    effect
+      ? setOverride.mutate({ staffProfileId, branchId, capability, effect })
+      : clearOverride.mutate({ staffProfileId, branchId, capability });
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!pending) onOpenChange(next);
-      }}
-    >
-      <DialogContent className="max-w-xl">
+    <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+      <DialogContent
+        aria-modal="true"
+        overlayClassName="bg-surface-page supports-backdrop-filter:backdrop-blur-none"
+        className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-4xl"
+      >
         <DialogHeader>
-          <DialogTitle>{staffDisplayName} — job roles</DialogTitle>
+          <DialogTitle>{staffDisplayName} — role profile</DialogTitle>
           <DialogDescription>
-            A person can hold any number of roles. Their permissions and the SOP pools they can
-            claim from are the union of every role held here, plus any direct grants.
+            Roles combine for this person. Add a direct capability for an exception, or deny an
+            inherited capability without changing the role for anyone else.
           </DialogDescription>
         </DialogHeader>
-
-        <div className="space-y-4">
+        <div
+          data-testid="role-dialog-scroll-region"
+          className="min-h-0 space-y-4 overflow-y-auto px-0.5"
+        >
           <label className="space-y-1.5 block">
             <span className="text-sm font-medium text-text-strong">Branch</span>
-            <Input
+            <RestaurantBranchSelect
+              branches={branchesQuery.data ?? []}
+              loading={branchesQuery.isLoading}
+              error={Boolean(branchesQuery.error)}
               value={branchId}
-              onChange={(event) => {
-                setBranchId(event.target.value);
+              onChange={(value) => {
+                setBranchId(value);
                 // The draft was for the previous branch; discard it rather than
                 // carrying a stale selection across branches.
                 setDraft(null);
+                setSaveError('');
               }}
-              placeholder="Branch ID"
-              className="h-11 font-mono"
               disabled={pending}
-              aria-describedby="job-roles-branch-help"
             />
             <span id="job-roles-branch-help" className="block text-xs text-text-faint">
               Roles are held per branch. Saving changes this branch only.
             </span>
           </label>
 
-          {!branchChosen ? (
+          {!branchId ? (
             <p className="rounded-md border border-dashed border-border-subtle px-3 py-6 text-center text-sm text-text-muted">
-              Enter a branch to view and edit roles.
+              Select a branch to view and edit roles.
             </p>
-          ) : loading ? (
-            <div className="space-y-2" aria-busy="true">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-            </div>
-          ) : roles.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border-subtle px-3 py-6 text-center text-sm text-text-muted">
-              No active job roles exist yet. Create one before assigning it.
-            </p>
-          ) : (
-            <fieldset className="space-y-2" disabled={pending}>
-              <legend className="sr-only">Job roles held at this branch</legend>
-              {roles.map((role) => {
-                const checked = selected.has(role.id);
-                return (
-                  <label
-                    key={role.id}
-                    className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle px-3 py-2.5 transition-colors hover:bg-surface-muted focus-within:ring-2 focus-within:ring-ring"
-                  >
-                    <input
-                      type="checkbox"
-                      className="mt-1 size-4 accent-[var(--color-accent)]"
-                      checked={checked}
-                      onChange={() => toggle(role.id)}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium text-text-strong">{role.name}</span>
-                        <span className="font-mono text-xs text-text-faint">{role.key}</span>
-                        {role.isSystem ? <StatusPill status="BUILT-IN" tone="neutral" /> : null}
-                      </span>
-                      {role.description ? (
-                        <span className="mt-0.5 block text-xs text-text-muted">
-                          {role.description}
+        ) : loading ? (
+          <div role="status" aria-label="Loading role profile" className="space-y-3">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-40 w-full" />
+            <span className="sr-only">Loading roles and capabilities…</span>
+          </div>
+        ) : loadError ? (
+          <div role="alert" className="rounded-md bg-destructive/10 p-4 text-sm text-destructive">
+            Access details could not be loaded. Close this panel and try again; no changes were
+            made.
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <section aria-labelledby="profile-roles" className="space-y-3">
+              <div>
+                <h3 id="profile-roles" className="font-semibold text-text-strong">
+                  Role profiles
+                </h3>
+                <p className="text-sm text-text-muted">
+                  Select any number. Capability previews update before you save.
+                </p>
+              </div>
+              {(rolesQuery.data ?? []).length === 0 ? (
+                <p className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">
+                  No active role profiles exist. Create or activate a role, then return here.
+                </p>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(rolesQuery.data ?? []).map((role) => {
+                    const active = selected.has(role.id);
+                    return (
+                      <Button
+                        key={role.id}
+                        type="button"
+                        variant={active ? 'secondary' : 'outline'}
+                        aria-pressed={active}
+                        disabled={pending}
+                        onClick={() => toggleRole(role.id)}
+                        className="h-auto min-h-14 justify-start whitespace-normal px-3 py-2 text-left"
+                      >
+                        <span>
+                          <span className="block font-medium">{role.name}</span>
+                          <span className="block text-xs font-normal text-text-muted">
+                            {role.capabilities.length} inherited capabilities
+                          </span>
                         </span>
-                      ) : null}
-                      {role.capabilities.length ? (
-                        <span className="mt-1 block font-mono text-[11px] text-text-faint">
-                          {role.capabilities.map((entry) => entry.capability).join(' · ')}
-                        </span>
-                      ) : null}
-                    </span>
-                  </label>
-                );
-              })}
-            </fieldset>
-          )}
-
-          {branchChosen && (auditQuery.data?.length ?? 0) > 0 ? (
-            <section className="space-y-1.5">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-text-faint">
-                Recent role changes
-              </h3>
-              <ul className="space-y-1">
-                {(auditQuery.data ?? []).map((entry) => (
-                  <li key={entry.id} className="flex items-baseline gap-2 text-xs text-text-muted">
-                    <span
-                      className={
-                        entry.change === 'GRANTED' ? 'text-success-strong' : 'text-text-faint'
-                      }
-                    >
-                      {entry.change === 'GRANTED' ? 'Added' : 'Removed'}
-                    </span>
-                    <span className="font-mono">{entry.jobRoleKey}</span>
-                    <span className="ml-auto tabular-nums">
-                      {auditDateFormat.format(new Date(entry.createdAt))}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+              {saveError ? (
+                <p
+                  role="alert"
+                  className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+                >
+                  {saveError}
+                </p>
+              ) : null}
             </section>
-          ) : null}
+            <section aria-labelledby="profile-capabilities" className="space-y-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h3 id="profile-capabilities" className="font-semibold text-text-strong">
+                    Capabilities
+                  </h3>
+                  <p className="text-sm text-text-muted">
+                    Each row shows why access is available or withheld.
+                  </p>
+                </div>
+                <label className="w-full sm:w-64">
+                  <span className="sr-only">Search capabilities</span>
+                  <Input
+                    type="search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search capabilities"
+                    className="h-11"
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2" aria-label="Capability provenance legend">
+                <StatusPill
+                  status="Inherited from role"
+                  tone="neutral"
+                  className="!text-text-strong"
+                />
+                <StatusPill status="Direct exception" tone="success" />
+                <StatusPill
+                  status="Denied for person"
+                  tone="warning"
+                  className="!text-text-strong"
+                />
+              </div>
+              {visible.length === 0 ? (
+                <p className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">
+                  No capabilities match. Clear the search to see the full list; your selections are
+                  preserved.
+                </p>
+              ) : (
+                <div className="divide-y divide-border-subtle rounded-md border border-border-default">
+                  {visible.map((capability) => {
+                    const isDenied = denied.has(capability),
+                      isDirect = direct.has(capability),
+                      isInherited = inherited.has(capability);
+                    const state = isDenied
+                      ? 'denied'
+                      : isDirect
+                        ? 'direct'
+                        : isInherited
+                          ? 'inherited'
+                          : null;
+                    return (
+                      <div
+                        key={capability}
+                        className="flex min-h-14 flex-wrap items-center gap-3 px-3 py-2 hover:bg-surface-muted"
+                      >
+                        <span className="min-w-0 flex-1 font-mono text-xs text-text-strong">
+                          {capability}
+                        </span>
+                        {state ? (
+                          <StatusPill
+                            status={
+                              state === 'inherited'
+                                ? 'Inherited'
+                                : state === 'direct'
+                                  ? 'Direct'
+                                  : 'Denied'
+                            }
+                            tone={tones[state]}
+                            className={state === 'direct' ? undefined : '!text-text-strong'}
+                          />
+                        ) : (
+                          <span className="text-xs text-text-strong">Not granted</span>
+                        )}
+                        <div
+                          className="flex gap-1"
+                          role="group"
+                          aria-label={`Access for ${capability}`}
+                        >
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={isDirect ? 'secondary' : 'ghost'}
+                            aria-pressed={isDirect}
+                            disabled={pending}
+                            onClick={() => choose(capability, isDirect ? null : 'ALLOW')}
+                          >
+                            Direct
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={isDenied ? 'secondary' : 'ghost'}
+                            aria-pressed={isDenied}
+                            disabled={pending}
+                            onClick={() => choose(capability, isDenied ? null : 'DENY')}
+                          >
+                            Deny
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
         </div>
-
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
             Close
           </Button>
           <Button
             onClick={() => save.mutate({ staffProfileId, branchId, jobRoleIds: [...selected] })}
-            disabled={!branchChosen || pending || !dirty}
+            disabled={!branchId || pending || draft === null || !!loadError}
           >
-            {pending ? 'Saving…' : 'Save roles'}
+            {save.isPending ? 'Saving…' : 'Save role profiles'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -185,9 +185,15 @@ export async function completeStep(
       return { occurrenceStepId: step.id, completed: true, completedAt: step.completedAt! };
     }
     const evidence = step.evidence ?? [];
-    const hasPhoto = evidence.some((row) => row.mimeType.startsWith('image/'));
+    const hasPhoto = evidence.some(
+      (row) =>
+        row.mimeType.includes('evidence=photo') ||
+        (row.mimeType.startsWith('image/') && !row.mimeType.includes('evidence=signature'))
+    );
     const hasSignature = evidence.some(
-      (row) => row.mimeType === 'application/vnd.devfathom.signature+json'
+      (row) =>
+        row.mimeType.includes('evidence=signature') ||
+        row.mimeType === 'application/vnd.devfathom.signature+json'
     );
     if (step.templateStep?.requiresPhoto && !hasPhoto) {
       throw new SopExecutionError(
@@ -235,6 +241,7 @@ export type AttachEvidenceResult = {
   evidenceId: string;
   contentHash: string;
   createdAt: Date;
+  created: boolean;
 };
 
 /**
@@ -294,23 +301,34 @@ export async function attachEvidence(
         throw new SopExecutionError('Step not found on this occurrence.', 'STEP_NOT_FOUND');
       }
     }
-    const evidence = await tx.restaurantSopEvidence.create({
+    const identity = {
+      occurrenceId: input.occurrenceId,
+      occurrenceStepId: input.occurrenceStepId ?? null,
+      contentHash,
+      mimeType: input.mimeType,
+      uploaderStaffProfileId: input.uploaderStaffProfileId ?? null,
+    };
+    const inserted = await tx.restaurantSopEvidence.createMany({
       data: {
-        occurrenceId: input.occurrenceId,
-        occurrenceStepId: input.occurrenceStepId ?? null,
-        contentHash,
-        mimeType: input.mimeType,
+        ...identity,
         sizeBytes: input.sizeBytes,
         storageRef: input.storageRef ?? null,
-        uploaderStaffProfileId: input.uploaderStaffProfileId ?? null,
         capturedAt: now,
       },
+      skipDuplicates: true,
+    });
+    const evidence = await tx.restaurantSopEvidence.findFirst({
+      where: identity,
       select: { id: true, contentHash: true, createdAt: true },
     });
+    if (!evidence) {
+      throw new SopExecutionError('Evidence could not be attached.', 'INVALID');
+    }
     return {
       evidenceId: evidence.id,
       contentHash: evidence.contentHash,
       createdAt: evidence.createdAt,
+      created: inserted.count === 1,
     };
   });
 }

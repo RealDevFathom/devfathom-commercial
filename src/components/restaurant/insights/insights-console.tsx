@@ -22,6 +22,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '../restaurant-branch-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type FinancialRow = RouterOutputs['restaurantInsights']['listFinancialReports'][number];
@@ -171,6 +172,9 @@ export function InsightsConsole() {
   );
   const insightsEnabled =
     insightsModule?.enabled ?? entitlements.enabledModules.includes('restaurant-insights');
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: insightsEnabled,
+  });
 
   const [branchId, setBranchId] = useState('');
   const [from, setFrom] = useState('');
@@ -237,13 +241,13 @@ export function InsightsConsole() {
 
       <SectionCard eyebrow="Insight rollups" title="Filters">
         <div className="grid gap-4 md:grid-cols-3">
-          <Field label="Branch ID" description="Required before any report read runs.">
-            <Input
-              aria-label="Branch ID"
+          <Field label="Branch" description="Required before any report read runs.">
+            <RestaurantBranchSelect
+              branches={branchesQuery.data ?? []}
+              loading={branchesQuery.isLoading}
+              error={Boolean(branchesQuery.error)}
               value={branchId}
-              onChange={(event) => updateBranch(event.target.value)}
-              placeholder="branch_…"
-              className="h-11"
+              onChange={updateBranch}
               disabled={!insightsEnabled}
             />
           </Field>
@@ -293,8 +297,8 @@ export function InsightsConsole() {
               <div className="space-y-3" role="status">
                 <StatusPill status="Reads disabled" tone="neutral" />
                 <p className="text-sm text-text-muted">
-                  Enter a branch ID to load the selected read-only report. Branch scope fails
-                  closed: cross-branch access requires the configure capability.
+                  Select a branch to load the selected read-only report. Branch scope fails closed:
+                  cross-branch access requires the configure capability.
                 </p>
               </div>
             </SectionCard>

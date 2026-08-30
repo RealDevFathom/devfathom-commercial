@@ -137,20 +137,21 @@ async function establishUnlock(secret: string, staffProfileId = ctx.staffA): Pro
  * station (so a KDS can act on it). Rows are inserted directly — no menu needed. */
 async function seedOrder(
   itemStatus: string,
-  stationId?: string
+  stationId?: string,
+  branchId = ctx.branchA
 ): Promise<{ orderId: string; itemId: string }> {
   orderSeq += 1;
   const orderNumber = orderSeq;
   return deps.withTenantDb(orgA, async (tx) => {
     const order = await tx.restaurantOrder.create({
       data: {
-        branchId: ctx.branchA,
+        branchId,
         orderNumber,
         businessDate: BDATE,
         status: 'IN_PREPARATION',
         channel: 'DINE_IN',
         staffProfileId: ctx.staffA,
-        deviceId: ctx.posA.deviceId,
+        deviceId: branchId === ctx.branchReplay ? ctx.posReplay.deviceId : ctx.posA.deviceId,
       },
       select: { id: true },
     });
@@ -581,6 +582,69 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
     });
     expect(detail.status).toBe(200);
     expect(detail.json.id).toBe(seeded.orderId);
+  });
+
+  it('allows representative generic and longhand mutations within the device branch', async () => {
+    const token = await establishUnlock(ctx.posA.secret);
+    const generic = await seedOrder('PREPARED');
+    const served = await call(deps.routes.markServed, {
+      secret: ctx.posA.secret,
+      session: token,
+      key: `same-generic-${suffix}`,
+      body: { orderId: generic.orderId, itemId: generic.itemId },
+    });
+    expect(served.status).toBe(200);
+    expect(await itemStatus(generic.orderId, generic.itemId)).toBe('SERVED');
+
+    const longhand = await seedOrder('HELD');
+    const voided = await call(deps.routes.voidR, {
+      secret: ctx.posA.secret,
+      session: token,
+      key: `same-longhand-${suffix}`,
+      body: { orderId: longhand.orderId, itemId: longhand.itemId, reason: 'Guest changed mind' },
+    });
+    expect(voided.status).toBe(200);
+    expect(await itemStatus(longhand.orderId, longhand.itemId)).toBe('VOIDED');
+  });
+
+  it('denies every same-organization cross-branch mutation before any side effect', async () => {
+    const victim = await seedOrder('PREPARED', undefined, ctx.branchReplay);
+    const token = await establishUnlock(ctx.posA.secret);
+    const effects = () =>
+      deps.withTenantDb(orgA, async (tx) => ({
+        order: await tx.restaurantOrder.findUniqueOrThrow({
+          where: { id: victim.orderId },
+          select: { status: true, customerId: true },
+        }),
+        item: await tx.restaurantOrderItem.findUniqueOrThrow({
+          where: { id: victim.itemId },
+          select: { status: true },
+        }),
+        events: await tx.restaurantOrderEvent.count({ where: { orderId: victim.orderId } }),
+        outbox: await tx.restaurantEventOutbox.count({ where: { aggregateId: victim.orderId } }),
+        keys: await tx.restaurantOrderIdempotencyKey.count({
+          where: { deviceId: ctx.posA.deviceId, key: { startsWith: `cross-branch-` } },
+        }),
+        tenders: await tx.restaurantTender.count({ where: { bill: { orderId: victim.orderId } } }),
+        inventory: await tx.restaurantStockMovement.count({ where: { orderId: victim.orderId } }),
+        loyalty: await tx.loyaltyPointsEntry.count({
+          where: { bill: { orderId: victim.orderId } },
+        }),
+      }));
+    const before = await effects();
+
+    for (const probe of posRouteProbes(victim.orderId, victim.itemId)) {
+      const denied = await call(deps.routes[probe.key], {
+        secret: ctx.posA.secret,
+        session: token,
+        key: `cross-branch-${probe.name}-${suffix}`,
+        body: probe.body,
+      });
+      expect(denied.status, `${probe.name} should be 404 across branches`).toBe(404);
+      expect(denied.json).toEqual({ error: 'The order does not exist.' });
+    }
+
+    expect(await effects()).toEqual(before);
   });
 
   it('isolates another org: a cross-tenant order id is "not found" on every order route (C1)', async () => {

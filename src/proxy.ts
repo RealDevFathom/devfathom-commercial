@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 const TENANT_HOST_HEADER = 'x-devfathom-host';
 const REQUEST_ID_HEADER = 'x-devfathom-request-id';
+const INTERNAL_ORGANIZATION_QUERY = 'organizationId';
 
 const publicPaths = [
   '/login',
@@ -73,6 +74,18 @@ export function proxy(request: Request) {
     /\.[a-zA-Z0-9]+$/.test(pathname)
   ) {
     return next();
+  }
+
+  // Tenant identity comes exclusively from the host and authenticated session.
+  // A raw database id in a page URL is neither trusted input nor safe browser
+  // history, so canonicalize the URL before auth or rendering handles it.
+  if (
+    !isPlatformHost &&
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    url.searchParams.has(INTERNAL_ORGANIZATION_QUERY)
+  ) {
+    url.searchParams.delete(INTERNAL_ORGANIZATION_QUERY);
+    return NextResponse.redirect(url);
   }
 
   // An admin host never falls through into a tenant workspace. This keeps

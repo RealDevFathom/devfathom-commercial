@@ -14,6 +14,7 @@ import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
 type ItemDisplayStatus = 'HELD' | TicketDisplayStatus | 'SERVED' | 'VOIDED';
 type Runtime = { deviceSecret: string; operatorStaffProfileId: string };
+type OperatorOption = { staffProfileId: string; displayName: string; role: string };
 type QueueItem = {
   orderItemId: string;
   name: string;
@@ -118,6 +119,10 @@ export function KdsBoard() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [deviceSecret, setDeviceSecret] = useState('');
   const [operatorStaffProfileId, setOperatorStaffProfileId] = useState('');
+  const [operators, setOperators] = useState<OperatorOption[]>([]);
+  const [operatorsState, setOperatorsState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle'
+  );
   const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
@@ -236,6 +241,23 @@ export function KdsBoard() {
     setOperatorStaffProfileId('');
   }
 
+  async function loadOperators() {
+    const secret = deviceSecret.trim();
+    if (!secret || operatorsState === 'loading') return;
+    setOperatorsState('loading');
+    setOperatorStaffProfileId('');
+    try {
+      const data = await request<{ operators: OperatorOption[] }>('/api/restaurant/kds/operators', {
+        headers: { Authorization: `Bearer ${secret}` },
+      });
+      setOperators(data.operators);
+      setOperatorsState('ready');
+    } catch {
+      setOperators([]);
+      setOperatorsState('error');
+    }
+  }
+
   function keyFor(intent: string) {
     const existing = idempotencyKeys.current.get(intent);
     if (existing) return existing;
@@ -326,17 +348,43 @@ export function KdsBoard() {
                   onChange={(event) => setDeviceSecret(event.target.value)}
                   className="h-11"
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-2 h-11"
+                  disabled={!deviceSecret.trim() || operatorsState === 'loading'}
+                  onClick={() => void loadOperators()}
+                >
+                  {operatorsState === 'loading' ? 'Loading operators…' : 'Load branch operators'}
+                </Button>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="kds-operator-id">Acting operator profile ID</Label>
-                <Input
+                <Label htmlFor="kds-operator-id">Acting operator</Label>
+                <select
                   id="kds-operator-id"
                   required
-                  autoComplete="off"
                   value={operatorStaffProfileId}
                   onChange={(event) => setOperatorStaffProfileId(event.target.value)}
-                  className="h-11"
-                />
+                  disabled={operatorsState !== 'ready' || operators.length === 0}
+                  className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="" disabled>
+                    {operatorsState === 'idle'
+                      ? 'Authenticate the device first'
+                      : operatorsState === 'loading'
+                        ? 'Loading eligible operators…'
+                        : operatorsState === 'error'
+                          ? 'Operators unavailable — verify the device secret'
+                          : operators.length === 0
+                            ? 'No active operators for this branch'
+                            : 'Select an operator'}
+                  </option>
+                  {operators.map((operator) => (
+                    <option key={operator.staffProfileId} value={operator.staffProfileId}>
+                      {operator.displayName} — {operator.role}
+                    </option>
+                  ))}
+                </select>
               </div>
               <Button
                 type="submit"
@@ -365,7 +413,14 @@ export function KdsBoard() {
           }
           actions={
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <StatusPill status="active" label={`Operator ${runtime.operatorStaffProfileId}`} />
+              <StatusPill
+                status="active"
+                label={
+                  operators.find(
+                    (operator) => operator.staffProfileId === runtime.operatorStaffProfileId
+                  )?.displayName ?? 'Operator active'
+                }
+              />
               <Button
                 type="button"
                 variant="outline"

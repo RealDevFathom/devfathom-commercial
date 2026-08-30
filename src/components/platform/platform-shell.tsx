@@ -321,14 +321,14 @@ export function PlatformShell({
                   href={item.href}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-xs font-medium text-text-muted transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-xs font-medium text-text-body transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     active && 'text-primary-foreground hover:text-primary-foreground',
                     beginsGroup && 'ml-3'
                   )}
                 >
                   <span
                     className={cn(
-                      'font-mono text-[10px] tabular-nums text-text-faint',
+                      'font-mono text-[10px] tabular-nums text-text-body',
                       active && 'text-accent-brand'
                     )}
                   >

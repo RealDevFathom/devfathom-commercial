@@ -1,0 +1,126 @@
+import { expect, type Page } from '@playwright/test';
+import pg from 'pg';
+
+export type ActorKey = 'superAdmin' | 'agency' | 'restaurantAdmin' | 'restaurantOperator';
+
+type Actor = {
+  email: string;
+  password: string;
+  loginPath: '/login' | '/platform/login';
+  host?: 'admin.localhost' | 'app.localhost';
+  workspace?: RegExp;
+};
+
+const value = (name: string) => process.env[name] ?? '';
+
+function actorBaseUrl(host?: Actor['host']) {
+  const url = new URL(
+    process.env.PLAYWRIGHT_BASE_URL ??
+      `http://localhost:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
+  );
+  if (host) url.hostname = host;
+  return url;
+}
+
+export const actorFixture: Record<ActorKey, Actor> = {
+  superAdmin: {
+    email: value('RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL'),
+    password: value('RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD'),
+    loginPath: '/platform/login',
+    host: 'admin.localhost',
+  },
+  agency: {
+    email: value('RESTAURANT_ACTOR_AGENCY_EMAIL'),
+    password: value('RESTAURANT_ACTOR_AGENCY_PASSWORD'),
+    loginPath: '/login',
+    host: 'app.localhost',
+    workspace: /DevFathom/i,
+  },
+  restaurantAdmin: {
+    email: value('RESTAURANT_ACTOR_ADMIN_EMAIL'),
+    password: value('RESTAURANT_ACTOR_ADMIN_PASSWORD'),
+    loginPath: '/login',
+    host: 'app.localhost',
+    workspace: /restaurant/i,
+  },
+  restaurantOperator: {
+    email: value('RESTAURANT_ACTOR_OPERATOR_EMAIL'),
+    password: value('RESTAURANT_ACTOR_OPERATOR_PASSWORD'),
+    loginPath: '/login',
+    host: 'app.localhost',
+    workspace: /restaurant/i,
+  },
+};
+
+export const actorFixtureReady = Object.values(actorFixture).every(
+  ({ email, password }) => email.length > 0 && password.length > 0
+);
+
+/**
+ * The owner URL is used only to inspect the disposable fixture. The application
+ * and browser server must use RESTAURANT_ACTOR_RUNTIME_DATABASE_URL.
+ */
+export async function assertDisposableDatabaseRoles() {
+  const ownerUrl = value('RESTAURANT_ACTOR_OWNER_DATABASE_URL');
+  const runtimeUrl = value('RESTAURANT_ACTOR_RUNTIME_DATABASE_URL');
+  if (!ownerUrl || !runtimeUrl)
+    throw new Error('Disposable owner and runtime database URLs are required.');
+
+  const runtimeRole = decodeURIComponent(new URL(runtimeUrl).username);
+  const client = new pg.Client({ connectionString: ownerUrl });
+  await client.connect();
+  try {
+    const result = await client.query<{
+      rolcanlogin: boolean;
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+    }>('SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = $1', [
+      runtimeRole,
+    ]);
+    expect(result.rows).toEqual([{ rolcanlogin: true, rolsuper: false, rolbypassrls: false }]);
+  } finally {
+    await client.end();
+  }
+}
+
+export async function signInAs(page: Page, key: ActorKey) {
+  const actor = actorFixture[key];
+  await page.goto(new URL(actor.loginPath, actorBaseUrl(actor.host)).href);
+  await page.getByLabel(/email/i).fill(actor.email);
+  await page.locator('input[name="password"]').fill(actor.password);
+  if (actor.loginPath === '/platform/login') {
+    await page.getByRole('button', { name: 'Continue to control desk' }).click();
+  } else {
+    const password = page.locator('input[name="password"]');
+    await expect(password).toHaveAttribute('type', 'password');
+    await expect
+      .poll(
+        async () => {
+          await page.getByRole('button', { name: 'Show password' }).click();
+          return password.getAttribute('type');
+        },
+        { timeout: 60_000, intervals: [250, 500, 1000] }
+      )
+      .toBe('text');
+    await page.getByRole('button', { name: 'Hide password' }).click();
+    await page.getByRole('button', { name: 'Sign in' }).click();
+  }
+
+  if (actor.workspace) {
+    const chooser = page.getByText('Choose a workspace', { exact: true });
+    if (await chooser.isVisible({ timeout: 30_000 }).catch(() => false)) {
+      await page.getByRole('button', { name: actor.workspace }).click();
+      if (key === 'agency') await expect(chooser).toBeHidden();
+    }
+  }
+  await page.waitForURL((url) => url.pathname !== actor.loginPath, { timeout: 60_000 });
+  if (key === 'agency') expect(new URL(page.url()).pathname).not.toBe('/login');
+  return new URL(page.url()).origin;
+}
+
+export async function assertNoRawDatabaseIds(page: Page) {
+  await expect(page.locator('body')).not.toContainText(
+    /\b(?:org|user|branch|staff|device)_[a-z0-9_-]{6,}\b/i
+  );
+  expect(new URL(page.url()).search).not.toMatch(/(?:organization|branch|staff|device)Id=/i);
+}

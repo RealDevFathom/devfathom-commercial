@@ -71,6 +71,10 @@ function queue(
   };
 }
 
+function operatorDirectory() {
+  return { operators: [{ staffProfileId: 'staff-1', displayName: 'Amina Rahman', role: 'Cook' }] };
+}
+
 async function flush() {
   await act(async () => {
     for (let index = 0; index < 8; index += 1) await Promise.resolve();
@@ -81,7 +85,9 @@ async function connect(secret = 'device-secret') {
   fireEvent.change(screen.getByLabelText('Bearer device secret'), {
     target: { value: secret },
   });
-  fireEvent.change(screen.getByLabelText('Acting operator profile ID'), {
+  fireEvent.click(screen.getByRole('button', { name: 'Load branch operators' }));
+  await flush();
+  fireEvent.change(screen.getByLabelText('Acting operator'), {
     target: { value: 'staff-1' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Connect display' }));
@@ -103,7 +109,8 @@ describe('KdsBoard transport', () => {
       queue([ticket(2, 'Gap response', 'COOKING')], { cursor: 9, gap: true, hasMore: true }),
       queue([ticket(3, 'Fresh risotto', 'READY')], { cursor: 9 }),
     ];
-    const fetchImplementation: typeof globalThis.fetch = async () => json(payloads.shift());
+    const fetchImplementation: typeof globalThis.fetch = async (input) =>
+      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(payloads.shift());
     const fetch = vi.fn(fetchImplementation);
     vi.stubGlobal('fetch', fetch);
 
@@ -115,7 +122,9 @@ describe('KdsBoard transport', () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
 
-    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+    expect(
+      fetch.mock.calls.map(([input]) => String(input)).filter((path) => path.includes('/queue?'))
+    ).toEqual([
       '/api/restaurant/kds/queue?limit=50',
       '/api/restaurant/kds/queue?sinceCursor=7&limit=50',
       '/api/restaurant/kds/queue?limit=50',
@@ -132,7 +141,9 @@ describe('KdsBoard transport', () => {
       queue([ticket(2, 'Regressed ticket', 'COOKING')], { cursor: 6 }),
       queue([ticket(3, 'Replacement ticket', 'READY')], { cursor: 8 }),
     ];
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => json(payloads.shift()));
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) =>
+      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(payloads.shift())
+    );
     vi.stubGlobal('fetch', fetch);
 
     render(<KdsBoard />);
@@ -141,7 +152,9 @@ describe('KdsBoard transport', () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
 
-    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+    expect(
+      fetch.mock.calls.map(([input]) => String(input)).filter((path) => path.includes('/queue?'))
+    ).toEqual([
       '/api/restaurant/kds/queue?limit=50',
       '/api/restaurant/kds/queue?sinceCursor=7&limit=50',
       '/api/restaurant/kds/queue?limit=50',
@@ -152,25 +165,27 @@ describe('KdsBoard transport', () => {
 
   it('refreshes immediately on online and visible events', async () => {
     vi.useFakeTimers();
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => json(queue([])));
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) =>
+      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(queue([]))
+    );
     vi.stubGlobal('fetch', fetch);
 
     render(<KdsBoard />);
     await connect();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/queue?'))).toHaveLength(1);
 
     window.dispatchEvent(new Event('online'));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/queue?'))).toHaveLength(2);
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     document.dispatchEvent(new Event('visibilitychange'));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/queue?'))).toHaveLength(3);
   });
 
   it('backs off degraded polling to a bounded interval and shows last confirmed sync', async () => {
@@ -182,7 +197,8 @@ describe('KdsBoard transport', () => {
       new TypeError('still offline'),
       new TypeError('still offline'),
     ];
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (String(input).endsWith('/operators')) return json(operatorDirectory());
       const response = responses.shift();
       if (response instanceof Error) throw response;
       return response ?? json(queue([]));
@@ -199,7 +215,7 @@ describe('KdsBoard transport', () => {
       });
     }
 
-    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/queue?'))).toHaveLength(5);
     expect(screen.getByText('degraded')).toBeVisible();
     expect(
       screen.getByText(/Showing the last confirmed station state while recovery continues/)
@@ -213,6 +229,7 @@ describe('KdsBoard transport', () => {
     let bumpAttempts = 0;
     const fetchImplementation: typeof globalThis.fetch = async (input) => {
       const path = String(input);
+      if (path.endsWith('/operators')) return json(operatorDirectory());
       if (path.includes('/queue?')) return json(activeQueue);
       if (path.endsWith('/bump')) {
         bumpAttempts += 1;
@@ -271,7 +288,7 @@ describe('KdsBoard transport', () => {
     expect(screen.getByText('Item recalled.')).toBeVisible();
   });
 
-  it('disconnects on device denial without exposing the secret', async () => {
+  it('rejects a denied device before exposing operators or the secret', async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       'fetch',
@@ -283,7 +300,7 @@ describe('KdsBoard transport', () => {
 
     expect(screen.getByRole('heading', { name: 'Connect kitchen display' })).toBeVisible();
     expect(
-      screen.getByText('Device authorization failed. Reconnect with valid KDS credentials.')
+      screen.getByRole('option', { name: 'Operators unavailable — verify the device secret' })
     ).toBeVisible();
     expect(screen.queryByText('top-secret-value')).not.toBeInTheDocument();
   });
@@ -309,7 +326,8 @@ describe('KdsBoard transport', () => {
       itemStatus: 'HELD',
       displayStatus: 'HELD',
     });
-    const fetchImplementation: typeof globalThis.fetch = async () => json(queue([mixedTicket]));
+    const fetchImplementation: typeof globalThis.fetch = async (input) =>
+      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(queue([mixedTicket]));
     vi.stubGlobal('fetch', vi.fn(fetchImplementation));
 
     render(<KdsBoard />);
