@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import {
@@ -6,6 +7,12 @@ import {
   resolveNotificationMatrix,
 } from '@/lib/restaurant/notifications';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { encryptSecret } from '@/lib/secret-crypto';
+import {
+  assertSafeWebhookUrl,
+  NOTIFICATION_WEBHOOK_EVENT_TYPE,
+  NOTIFICATION_WEBHOOK_PAYLOAD_VERSION,
+} from '@/lib/restaurant/notification-webhook';
 import { capabilityProcedure, protectedProcedure, router } from '../trpc';
 
 const identifier = z.string().trim().min(1).max(200);
@@ -31,6 +38,7 @@ const inAppDelivery = {
 };
 
 const matrixProcedure = capabilityProcedure('staff:manage');
+const webhookProcedure = capabilityProcedure('staff:manage');
 
 export const restaurantNotificationsRouter = router({
   list: protectedProcedure
@@ -153,5 +161,118 @@ export const restaurantNotificationsRouter = router({
         });
       }
       return ctx.db.restaurantNotificationChannelSetting.create({ data: input });
+    }),
+
+  webhookStatus: webhookProcedure.input(z.object({}).strict()).query(async ({ ctx }) => {
+    const [config, deliveries] = await Promise.all([
+      ctx.db.restaurantNotificationWebhook.findFirst({
+        select: {
+          id: true,
+          endpointUrl: true,
+          enabled: true,
+          lastSuccessAt: true,
+          lastFailureAt: true,
+          lastFailure: true,
+          updatedAt: true,
+        },
+      }),
+      ctx.db.restaurantEventOutbox.findMany({
+        where: { eventType: NOTIFICATION_WEBHOOK_EVENT_TYPE },
+        select: {
+          id: true,
+          status: true,
+          attempts: true,
+          nextAttemptAt: true,
+          lastError: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      }),
+    ]);
+    return { config: config ? { ...config, signingSecretConfigured: true } : null, deliveries };
+  }),
+
+  configureWebhook: webhookProcedure
+    .input(
+      z
+        .object({
+          endpointUrl: z.string().trim().min(1).max(2048),
+          enabled: z.boolean(),
+          signingSecret: z.string().min(32).max(256).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const endpointUrl = (await assertSafeWebhookUrl(input.endpointUrl)).toString();
+      const existing = await ctx.db.restaurantNotificationWebhook.findFirst({
+        select: { id: true },
+      });
+      if (!existing && !input.signingSecret) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A signing secret is required when creating the webhook.',
+        });
+      }
+      const secret = input.signingSecret ? encryptSecret(input.signingSecret) : undefined;
+      const saved = existing
+        ? await ctx.db.restaurantNotificationWebhook.update({
+            where: { id: existing.id },
+            data: {
+              endpointUrl,
+              enabled: input.enabled,
+              ...(secret ? { encryptedSigningSecret: secret } : {}),
+            },
+            select: { id: true, endpointUrl: true, enabled: true, updatedAt: true },
+          })
+        : await ctx.db.restaurantNotificationWebhook.create({
+            data: { endpointUrl, enabled: input.enabled, encryptedSigningSecret: secret! },
+            select: { id: true, endpointUrl: true, enabled: true, updatedAt: true },
+          });
+      return { ...saved, signingSecretConfigured: true };
+    }),
+
+  testWebhook: webhookProcedure.input(z.object({}).strict()).mutation(async ({ ctx }) => {
+    const config = await ctx.db.restaurantNotificationWebhook.findFirst({
+      select: { enabled: true },
+    });
+    if (!config?.enabled)
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: 'Enable the webhook before sending a test.',
+      });
+    const notification = await ctx.db.restaurantNotification.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    if (!notification)
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: 'A notification is required before sending a test.',
+      });
+    const id = `rnow_test_${randomUUID()}`;
+    await ctx.db.restaurantEventOutbox.create({
+      data: {
+        id,
+        eventType: NOTIFICATION_WEBHOOK_EVENT_TYPE,
+        aggregateType: 'restaurant.notification',
+        aggregateId: notification.id,
+        payload: { notificationId: notification.id, version: NOTIFICATION_WEBHOOK_PAYLOAD_VERSION },
+        status: 'PENDING',
+      },
+    });
+    return { eventId: id };
+  }),
+
+  retryWebhook: webhookProcedure
+    .input(z.object({ eventId: identifier }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const result = await ctx.db.restaurantEventOutbox.updateMany({
+        where: { id: input.eventId, eventType: NOTIFICATION_WEBHOOK_EVENT_TYPE, status: 'DEAD' },
+        data: { status: 'PENDING', attempts: 0, nextAttemptAt: null, lastError: null },
+      });
+      if (!result.count)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Dead-letter webhook event not found.' });
+      return { eventId: input.eventId, status: 'PENDING' as const };
     }),
 });
