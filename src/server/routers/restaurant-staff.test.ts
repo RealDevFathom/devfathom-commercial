@@ -8,7 +8,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn(async () => true),
+  can: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
+  resolveStaffCapabilities: vi.fn(),
   annotateAudit: vi.fn(),
   // db delegate methods
   staffFindMany: vi.fn(),
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   staffUpdate: vi.fn(),
   branchFindMany: vi.fn(),
   branchFindUnique: vi.fn(),
+  deviceFindUnique: vi.fn(),
   userFindFirst: vi.fn(),
   credFindMany: vi.fn(),
   credFindFirst: vi.fn(),
@@ -44,6 +46,12 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/lib/restaurant/job-roles', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/restaurant/job-roles')>(
+    '@/lib/restaurant/job-roles'
+  )),
+  resolveStaffCapabilities: mocks.resolveStaffCapabilities,
+}));
 
 import { restaurantStaffRouter } from './restaurant-staff';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
@@ -58,6 +66,7 @@ const db = {
     update: mocks.staffUpdate,
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
+  restaurantRegisteredDevice: { findUnique: mocks.deviceFindUnique },
   user: { findFirst: mocks.userFindFirst },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
@@ -91,9 +100,11 @@ function caller() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
   mocks.staffFindFirst.mockResolvedValue(null);
   mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
+  mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_1' });
   mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -113,7 +124,14 @@ beforeEach(() => {
     createdAt: new Date('2026-08-18T12:00:00Z'),
     ...data,
   }));
-  mocks.credFindUnique.mockResolvedValue({ id: 'cred_1', type: 'PIN', revokedAt: null });
+  mocks.credFindUnique.mockResolvedValue({
+    id: 'cred_1',
+    staffProfileId: 'staff_1',
+    deviceId: 'device_1',
+    device: { branchId: 'branch_1' },
+    type: 'PIN',
+    revokedAt: null,
+  });
   mocks.credUpdate.mockImplementation(
     async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
       id: where.id,
@@ -232,6 +250,98 @@ describe('credential mutations suppress the plaintext secret (C4)', () => {
       expect.objectContaining({ data: expect.objectContaining({ revokedAt: expect.any(Date) }) })
     );
     expect(result.revokedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('credential device branch authorization', () => {
+  function branchManager(...authorizedBranchIds: string[]) {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+    mocks.staffFindFirst.mockResolvedValue({
+      id: 'manager',
+      jobRoles: authorizedBranchIds.map((branchId) => ({ branchId })),
+      directCapabilityGrants: [],
+    });
+    mocks.staffFindUnique.mockResolvedValue({
+      primaryBranchId: 'branch_1',
+      jobRoles: [],
+      directCapabilityGrants: [],
+    });
+  }
+
+  it('denies issue, rotate, and revoke against an unauthorized device branch', async () => {
+    branchManager('branch_1');
+    mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_2' });
+    mocks.credFindUnique.mockResolvedValue({
+      staffProfileId: 'staff_1',
+      deviceId: 'device_2',
+      device: { branchId: 'branch_2' },
+    });
+
+    await expect(
+      caller().issueCredential({
+        staffProfileId: 'staff_1',
+        type: 'PIN',
+        secret: '4821',
+        deviceId: 'device_2',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().rotateCredential({ credentialId: 'cred_1', secret: '99887' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().revokeCredential({ credentialId: 'cred_1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.deviceFindUnique.mockResolvedValue(null);
+    await expect(
+      caller().issueCredential({
+        staffProfileId: 'staff_1',
+        type: 'PIN',
+        secret: '4821',
+        deviceId: 'missing_or_foreign',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.credCreate).not.toHaveBeenCalled();
+    expect(mocks.credUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows device-bound credential mutations when profile and device branches are authorized', async () => {
+    branchManager('branch_1', 'branch_2');
+    mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_2' });
+    mocks.credFindUnique.mockResolvedValue({
+      id: 'cred_1',
+      staffProfileId: 'staff_1',
+      deviceId: 'device_2',
+      device: { branchId: 'branch_2' },
+      type: 'PIN',
+      revokedAt: null,
+    });
+
+    await expect(
+      caller().issueCredential({
+        staffProfileId: 'staff_1',
+        type: 'PIN',
+        secret: '4821',
+        deviceId: 'device_2',
+      })
+    ).resolves.toMatchObject({ id: 'cred_new' });
+    await expect(
+      caller().rotateCredential({ credentialId: 'cred_1', secret: '99887' })
+    ).resolves.toMatchObject({ id: 'cred_1' });
+    await expect(caller().revokeCredential({ credentialId: 'cred_1' })).resolves.toMatchObject({
+      id: 'cred_1',
+    });
+  });
+
+  it('denies organization-wide credentials to a branch manager but allows a configurator', async () => {
+    branchManager('branch_1');
+    await expect(
+      caller().issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      caller().issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
+    ).resolves.toMatchObject({ id: 'cred_new', deviceId: null });
   });
 });
 
