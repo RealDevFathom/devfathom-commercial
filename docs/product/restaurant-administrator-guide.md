@@ -145,7 +145,7 @@ require a distinct manager credential.
 - **Navigate:** `/pos` → order → close/collect → no split, item, seat, or fractional split → Cash,
   Card, or Other tender. Use offered void/refund actions; managers inspect Money
   (`/restaurant/money`).
-- **Required:** `payments:collect`; `payments:void` or `payments:refund`. Protected post-preparation
+- **Required:** `payments:collect`; `orders:void` or `payments:refund`. Protected post-preparation
   voids, comps, refunds, and corrections require a distinct authorized manager and reason.
 - **Expected result:** Exact bill allocations, tender entries, change/remaining due, and a
   display-only receipt with attributable history.
@@ -201,8 +201,8 @@ require a distinct manager credential.
 - **Expected result:** Published versions freeze, schedules pin a version, evidence is independently
   reviewed, and reports show window, denominator, and exclusions.
 - **Common failure/recovery:** Publish before scheduling. Archive an eligible template when quota is
-  exhausted; ask the platform operator to fix an unconfigured quota. No scored work is “No data,”
-  not 0%. Oversight actions asking for a typed **Occurrence ID** are **NOT OPERATOR READY** pending
+  exhausted; ask the platform operator to fix an unconfigured quota. When no work was scored, the
+  result is “No data,” not 0%. Oversight actions asking for a typed **Occurrence ID** are **NOT OPERATOR READY** pending
   product correction; stop and do not query the database.
 
 ### 14. Operational, financial, and multi-branch reporting
@@ -210,8 +210,9 @@ require a distinct manager credential.
 - **Navigate:** Insights (`/restaurant/insights`); SOP reports (`/restaurant/sop/reports`) with
   branch/date/department filters; Money (`/restaurant/money`) for financial oversight.
 - **Required:** `reports:operational` or `reports:financial`, plus branch access.
-- **Expected result:** Authorized users compare selected branches/periods without mixing tenants;
-  report filters/freshness remain visible.
+- **Expected result:** Authorized users inspect one required branch and one period at a time without
+  mixing tenants; report filters/freshness remain visible. Consolidated branch comparison is not
+  verified or built.
 - **Common failure/recovery:** Check branch/date/business-date cutoff, module, and permission.
   Reconcile against orders, tenders, drawer/stock movements, and SOP evidence. Empty/no-data is not
   zero activity. Any report action requiring a typed internal ID is **NOT OPERATOR READY** pending
