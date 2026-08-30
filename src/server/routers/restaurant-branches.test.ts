@@ -67,7 +67,10 @@ function makeDb() {
 
 let state = makeDb();
 
-function caller(limit = 5, organizationId = 'org_a') {
+function caller(
+  limits: Record<string, number> = { 'restaurant.locations.max': 5 },
+  organizationId = 'org_a'
+) {
   return restaurantBranchesRouter.createCaller({
     db: state.db,
     entitlements: {
@@ -75,7 +78,7 @@ function caller(limit = 5, organizationId = 'org_a') {
       activeSeats: 1,
       seatLimit: 5,
       modules: [],
-      limits: { 'restaurant.locations.max': limit },
+      limits,
     },
     session: {
       expires: 'later',
@@ -116,7 +119,7 @@ describe('restaurant branch administration', () => {
   });
 
   it('scopes every list to the session tenant and returns readable codes', async () => {
-    const result = await caller(5, 'org_a').list();
+    const result = await caller({ 'restaurant.locations.max': 5 }, 'org_a').list();
     expect(state.delegate.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org_a' } })
     );
@@ -126,12 +129,34 @@ describe('restaurant branch administration', () => {
 
   it('enforces restaurant.locations.max', async () => {
     state.delegate.count.mockResolvedValue(1);
-    await expect(caller(1).create(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller({ 'restaurant.locations.max': 1 }).create(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     expect(state.delegate.create).not.toHaveBeenCalled();
   });
 
   it('fails closed when the location entitlement is missing or invalid', async () => {
-    await expect(caller(0).list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    for (const limits of [
+      {},
+      { 'restaurant.locations.max': -1 },
+      { 'restaurant.locations.max': 1.5 },
+      { 'restaurant.locations.max': Number.POSITIVE_INFINITY },
+    ] as Record<string, number>[]) {
+      await expect(caller(limits).list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+  });
+
+  it('uses the bootstrapped alias and preserves explicit-zero precedence', async () => {
+    await expect(
+      caller({ 'restaurant-core.restaurant.locations.max': 2 }).list()
+    ).resolves.toMatchObject({ limit: 2 });
+    await expect(
+      caller({
+        'restaurant.locations.max': 0,
+        'restaurant-core.restaurant.locations.max': 2,
+      }).create(input)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(state.delegate.create).not.toHaveBeenCalled();
   });
 
   it('rejects duplicate human name or code', async () => {
@@ -187,7 +212,9 @@ describe('restaurant branch administration', () => {
   it('enforces the active-location limit on reactivation', async () => {
     state.delegate.findFirst.mockResolvedValue({ ...branch, active: false });
     state.delegate.count.mockResolvedValue(1);
-    await expect(caller(1).setActive({ id: branch.id, active: true })).rejects.toMatchObject({
+    await expect(
+      caller({ 'restaurant.locations.max': 1 }).setActive({ id: branch.id, active: true })
+    ).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
   });
@@ -197,7 +224,7 @@ describe('restaurant branch administration', () => {
       .mockResolvedValueOnce({ ...branch, active: false, isDefault: false })
       .mockResolvedValueOnce(null);
     state.delegate.count.mockResolvedValue(0);
-    await caller(1).setActive({ id: branch.id, active: true });
+    await caller({ 'restaurant.locations.max': 1 }).setActive({ id: branch.id, active: true });
     expect(state.delegate.update).toHaveBeenCalledWith({
       where: { id: branch.id },
       data: { active: true, isDefault: true },
