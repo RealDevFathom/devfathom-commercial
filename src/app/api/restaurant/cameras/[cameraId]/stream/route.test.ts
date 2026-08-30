@@ -18,4 +18,10 @@ describe('camera stream proxy threat controls', () => {
     expect(source).toContain('MAX_MANIFEST_BYTES');
     expect(source).toContain('MAX_SEGMENT_BYTES');
   });
+  test('fails closed before reading grants or gateway URLs when runtime support is unavailable', () => {
+    const availabilityCheck = source.indexOf('if (!cameraGatewayRuntime.available)');
+    expect(availabilityCheck).toBeGreaterThan(-1);
+    expect(availabilityCheck).toBeLessThan(source.indexOf('searchParams.get'));
+    expect(source).toContain("response('Camera gateway unavailable', 503)");
+  });
 });

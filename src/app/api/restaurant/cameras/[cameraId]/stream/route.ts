@@ -1,4 +1,5 @@
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { cameraGatewayRuntime } from '@/lib/restaurant/camera-gateway-runtime';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -30,6 +31,7 @@ export async function GET(request: Request, context: { params: Promise<{ cameraI
     resolveOrganizationEntitlements(organizationId, db)
   );
   if (!hasModule(entitlements, 'restaurant-integrations')) return response('Forbidden', 403);
+  if (!cameraGatewayRuntime.available) return response('Camera gateway unavailable', 503);
   const { cameraId } = await context.params;
   const requestUrl = new URL(request.url);
   const grantId = requestUrl.searchParams.get('grant');

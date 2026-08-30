@@ -17,6 +17,16 @@ describe('restaurant cameras router security contract', () => {
     expect(source).toContain('const key = process.env.CAMERA_CREDENTIAL_KEY;');
     expect(source).toContain("code: 'INTERNAL_SERVER_ERROR'");
     expect(source).toContain('Camera credential storage is not configured.');
-    expect(source).not.toContain("process.env.CAMERA_CREDENTIAL_KEY ?? randomBytes");
+    expect(source).not.toContain('process.env.CAMERA_CREDENTIAL_KEY ?? randomBytes');
+  });
+  test('does not return gateway URLs and gates simulated operations behind runtime availability', () => {
+    const serializedGateway = source.slice(
+      source.indexOf('return rows.map'),
+      source.indexOf('enrollGateway:')
+    );
+    expect(serializedGateway).not.toContain('baseUrl: row.baseUrl');
+    expect(source).toContain('cameraGatewayPublicState(cameraGatewayRuntime)');
+    expect(source).toContain('requireCameraGateway().listRecordings');
+    expect(source).toContain('requireCameraGateway().testConnection');
   });
 });
