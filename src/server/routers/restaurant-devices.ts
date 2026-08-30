@@ -6,9 +6,12 @@ import {
   buildCoAuthorizationRecord,
 } from '@/lib/restaurant/co-authorization';
 import { deviceHealth, enrollDevice, revokeDevice } from '@/lib/restaurant/devices';
+import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import { annotateAudit } from '../audit';
-import { adminProcedure, router } from '../trpc';
+import { capabilityProcedure, router } from '../trpc';
+
+const manageDevicesProcedure = capabilityProcedure('devices:manage');
 
 /**
  * M2-L3 / §5 / C7 — back-office device administration.
@@ -25,7 +28,7 @@ import { adminProcedure, router } from '../trpc';
  */
 export const restaurantDevicesRouter = router({
   /** List registered devices with derived operational health (no secret material). */
-  list: adminProcedure.query(async ({ ctx }) => {
+  list: manageDevicesProcedure.query(async ({ ctx }) => {
     const now = new Date();
     const devices = await ctx.db.restaurantRegisteredDevice.findMany({
       orderBy: { createdAt: 'desc' },
@@ -46,7 +49,7 @@ export const restaurantDevicesRouter = router({
   }),
 
   /** Enroll a device to a branch; returns the one-time enrollment secret. */
-  initiateEnrollment: adminProcedure
+  initiateEnrollment: manageDevicesProcedure
     .input(
       z.object({
         branchId: z.string().min(1),
@@ -110,7 +113,7 @@ export const restaurantDevicesRouter = router({
    * atomically writes the co-authorization evidence and flips the device to
    * REVOKED. `skipInput` keeps the approving secret out of the audit log (C4).
    */
-  revoke: adminProcedure
+  revoke: manageDevicesProcedure
     .input(
       z.object({
         deviceId: z.string().min(1),
@@ -191,6 +194,19 @@ export const restaurantDevicesRouter = router({
           });
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
+      }
+      if (
+        !(await staffHasCapability(
+          ctx.db,
+          input.approvingStaffProfileId,
+          device.branchId,
+          'devices:manage'
+        ))
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'The approving manager lacks device-management permission.',
+        });
       }
 
       // The whole tRPC request runs inside one tenant transaction (the fetch

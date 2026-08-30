@@ -179,6 +179,23 @@ describe('withDeviceAuth', () => {
     expect((await handler(req({ cookie }))).status).toBe(403);
   });
 
+  it('rejects requests that ambiguously carry both cookie and bearer credentials', async () => {
+    seedDevice();
+    const handler = withDeviceAuth(() => new Response('ok'));
+    const cookie = `${TERMINAL_DEVICE_COOKIE}=${encodeURIComponent(deviceSecret)}`;
+
+    const response = await handler(
+      req({
+        authorization: `Bearer ${deviceSecret}`,
+        cookie,
+        origin: 'https://tenant.test',
+      })
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Terminal browser is not enrolled.' });
+  });
+
   it('preserves bearer integrations without imposing browser Origin checks', async () => {
     seedDevice();
     const handler = withDeviceAuth(() => new Response('ok'));
