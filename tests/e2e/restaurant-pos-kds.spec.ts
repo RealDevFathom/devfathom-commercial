@@ -101,11 +101,13 @@ test.describe('restaurant POS and KDS core flow', () => {
     };
     await expect(page.getByText(/Order \d+ opened\./)).toBeVisible();
 
-    await page.getByRole('button', { name: /Test Burger/ }).click();
+    await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
     await page.getByLabel('Quantity').fill('2');
     await page.getByLabel('Seat').fill('1');
+    await page.getByLabel(new RegExp(fixture.modifier.name)).check();
     await page.getByRole('button', { name: 'Add to order' }).click();
-    await expect(page.getByText('2 × Test Burger')).toBeVisible();
+    await expect(page.getByText(`2 × ${fixture.menuItem.name}`)).toBeVisible();
+    await expect(page.getByText(fixture.modifier.name, { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Send whole order' }).click();
     await expect(page.getByText('Order sent to kitchen.')).toBeVisible();
 
@@ -120,11 +122,15 @@ test.describe('restaurant POS and KDS core flow', () => {
     await expect(kdsPage.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
     await expect(kdsPage.getByText(`Order #${orderNumber}`)).toBeVisible();
     await kdsPage
-      .getByRole('button', { name: new RegExp(`Start Test Burger for order ${orderNumber}`) })
+      .getByRole('button', {
+        name: new RegExp(`Start ${fixture.menuItem.name} for order ${orderNumber}`),
+      })
       .click();
     await expect(kdsPage.getByText('Item started.')).toBeVisible();
     await kdsPage
-      .getByRole('button', { name: new RegExp(`Mark ready Test Burger for order ${orderNumber}`) })
+      .getByRole('button', {
+        name: new RegExp(`Mark ready ${fixture.menuItem.name} for order ${orderNumber}`),
+      })
       .click();
     await expect(kdsPage.getByText('Item marked ready.')).toBeVisible();
 

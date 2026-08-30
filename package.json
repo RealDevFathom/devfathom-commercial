@@ -18,6 +18,7 @@
     "test:e2e": "playwright test",
     "test:e2e:platform-control-plane": "playwright test --config tests/e2e/platform-control-plane.config.ts",
     "test:e2e:agency": "tsx scripts/run-agency-e2e.ts",
+    "test:e2e:restaurant-integrated": "tsx scripts/run-restaurant-e2e.ts",
     "test:rls": "tsx scripts/verify-tenant-isolation.ts",
     "report:email-collisions": "tsx scripts/report-email-collisions.ts",
     "db:generate": "bunx prisma generate",

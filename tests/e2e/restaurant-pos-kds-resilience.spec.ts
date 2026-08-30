@@ -46,7 +46,9 @@ test.describe('restaurant browser resilience', () => {
     await pos.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
     await pos.getByLabel('Operator PIN').fill(fixture.operator.pin);
     await pos.getByRole('button', { name: 'Unlock terminal' }).click();
-    await expect(pos.getByRole('button', { name: /Test Burger/ })).toBeDisabled();
+    await expect(
+      pos.getByRole('button', { name: new RegExp(fixture.menuItem.name) })
+    ).toBeDisabled();
   });
 
   test('a dropped KDS mutation retries with the same idempotency key exactly once', async ({
@@ -65,7 +67,9 @@ test.describe('restaurant browser resilience', () => {
     });
     await connectKds(page);
     const action = page
-      .getByRole('button', { name: /^(Start|Mark ready|Recall) Test Burger/ })
+      .getByRole('button', {
+        name: new RegExp(`^(Start|Mark ready|Recall) ${fixture.menuItem.name}`),
+      })
       .first();
     test.skip((await action.count()) === 0, 'A fired E2E burger is required for replay coverage');
     await action.click();
