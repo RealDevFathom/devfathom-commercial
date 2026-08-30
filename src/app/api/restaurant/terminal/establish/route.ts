@@ -26,7 +26,13 @@ export const POST = withDeviceAuth(async (ctx) => {
         state: terminalSessionState(session),
         establishedAt: session.establishedAt.toISOString(),
       },
-      device: { id: ctx.device.id, branchName: branch.name },
+      device: {
+        id: ctx.device.id,
+        name: ctx.device.name,
+        kind: ctx.device.kind,
+        stationId: ctx.device.stationId,
+        branchName: branch.name,
+      },
     },
     { status: 201 }
   );

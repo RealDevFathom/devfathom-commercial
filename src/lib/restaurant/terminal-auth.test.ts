@@ -79,7 +79,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
 
 import { hashDeviceSecret } from './devices';
 import { hashTerminalSessionToken } from './terminal-session';
-import { withDeviceAuth, withTerminalAuth } from './terminal-auth';
+import { TERMINAL_DEVICE_COOKIE, withDeviceAuth, withTerminalAuth } from './terminal-auth';
 
 const ORG = 'org_rest';
 
@@ -167,6 +167,22 @@ describe('withDeviceAuth', () => {
     const res = await handler(req({ authorization: `Bearer ${deviceSecret}` }));
     expect(res.status).toBe(201);
     expect(h.store.devices[0].lastSeenAt).toBeInstanceOf(Date);
+  });
+
+  it('accepts the host-only browser cookie only for an exact state-changing origin', async () => {
+    seedDevice();
+    const handler = withDeviceAuth(() => new Response('ok'));
+    const cookie = `${TERMINAL_DEVICE_COOKIE}=${encodeURIComponent(deviceSecret)}`;
+
+    expect((await handler(req({ cookie, origin: 'https://tenant.test' }))).status).toBe(200);
+    expect((await handler(req({ cookie, origin: 'https://evil.test' }))).status).toBe(403);
+    expect((await handler(req({ cookie }))).status).toBe(403);
+  });
+
+  it('preserves bearer integrations without imposing browser Origin checks', async () => {
+    seedDevice();
+    const handler = withDeviceAuth(() => new Response('ok'));
+    expect((await handler(req({ authorization: `Bearer ${deviceSecret}` }))).status).toBe(200);
   });
 
   it('returns 429 when the flood control trips', async () => {

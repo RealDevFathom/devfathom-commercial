@@ -22,7 +22,7 @@ import {
   missingIdempotencyKey,
   orderErrorResponse,
 } from './terminal-orders';
-import { withDeviceAuth } from './terminal-auth';
+import { withTerminalAuth } from './terminal-auth';
 
 /**
  * M4-L4 — the KDS read-model projection + the fixed KDS action mapping.
@@ -378,7 +378,7 @@ export const kdsAdvanceBody = z
  * action can only ever be a legal item transition.
  */
 export function kdsAdvanceRoute(action: KdsAction) {
-  return withDeviceAuth(async (ctx, request) => {
+  return withTerminalAuth(async (ctx, request) => {
     const station = requireKdsStation(ctx.device);
     if (!station.ok) return station.response;
 
@@ -390,12 +390,17 @@ export function kdsAdvanceRoute(action: KdsAction) {
     const parsed = kdsAdvanceBody.safeParse(parsedJson.data);
     if (!parsed.success) return invalidBody(parsed.error.issues);
 
-    const operator = await ctx.db.restaurantStaffProfile.findUnique({
-      where: { id: parsed.data.operatorStaffProfileId },
-      select: { status: true },
-    });
-    if (!operator || operator.status !== 'ACTIVE') {
-      return NextResponse.json({ error: 'Unknown or inactive operator.' }, { status: 400 });
+    if (ctx.state !== 'UNLOCKED' || !ctx.session.activeStaffProfileId) {
+      return NextResponse.json(
+        { error: 'Unlock the display with an operator PIN.' },
+        { status: 401 }
+      );
+    }
+    if (parsed.data.operatorStaffProfileId !== ctx.session.activeStaffProfileId) {
+      return NextResponse.json(
+        { error: 'Acting operator does not match the session.' },
+        { status: 403 }
+      );
     }
 
     const line = await resolveStationOrderItem(ctx.db, parsed.data.orderItemId, station.stationId);
@@ -406,7 +411,7 @@ export function kdsAdvanceRoute(action: KdsAction) {
       );
     }
 
-    const actor = buildActor(parsed.data.operatorStaffProfileId, ctx.device.id, key);
+    const actor = buildActor(ctx.session.activeStaffProfileId, ctx.device.id, key);
     try {
       const result = await advanceItem(ctx.db, {
         orderId: line.orderId,
