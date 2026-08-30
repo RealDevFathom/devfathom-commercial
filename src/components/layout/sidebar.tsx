@@ -114,7 +114,12 @@ export const navigation: NavItem[] = [
   { label: 'Kitchen display', href: '/kds', icon: CookingPot, group: 'Restaurant' },
   { label: 'Floor', href: '/restaurant/floor', icon: LayoutGrid, group: 'Restaurant' },
   { label: 'Orders', href: '/restaurant/orders', icon: ReceiptText, group: 'Restaurant' },
-  { label: 'Money', href: '/restaurant/money', icon: DollarSign, group: 'Restaurant' },
+  {
+    label: 'Finance & reconciliation',
+    href: '/restaurant/money',
+    icon: DollarSign,
+    group: 'Restaurant',
+  },
   {
     label: 'Inventory',
     href: '/restaurant/inventory',
@@ -157,7 +162,7 @@ export const navigation: NavItem[] = [
     module: 'restaurant-core',
   },
   {
-    label: 'Tax configuration',
+    label: 'Tax',
     href: '/restaurant/tax',
     icon: Landmark,
     adminOnly: true,
@@ -203,7 +208,7 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   {
-    label: 'Restaurant Insights',
+    label: 'Advanced Insights',
     href: '/restaurant/insights',
     icon: BarChart3,
     group: 'Restaurant',

@@ -6,6 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { router, capabilityProcedure } from '../trpc';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { add, ZERO } from '@/lib/restaurant/money';
+import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 
 /**
  * M5-L4 — the back-office payments read surface: tenders, refunds and the payment
@@ -42,8 +43,9 @@ const configureProcedure = capabilityProcedure('restaurant:configure');
 export const restaurantPaymentsRouter = router({
   getTerminalConfig: configureProcedure
     .input(z.object({ branchId: ID }).strict())
-    .query(({ ctx, input }) =>
-      ctx.db.restaurantTerminalProviderConfig.findMany({
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      return ctx.db.restaurantTerminalProviderConfig.findMany({
         where: { branchId: input.branchId },
         orderBy: [{ source: 'asc' }, { externalTerminalId: 'asc' }],
         select: {
@@ -55,8 +57,8 @@ export const restaurantPaymentsRouter = router({
           mode: true,
           updatedAt: true,
         },
-      })
-    ),
+      });
+    }),
 
   saveTerminalConfig: configureProcedure
     .input(
@@ -75,6 +77,7 @@ export const restaurantPaymentsRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
       const organizationId = ctx.organization?.id ?? ctx.session?.user.organizationId;
       if (!organizationId) throw new TRPCError({ code: 'NOT_FOUND' });
       const [branch, device] = await Promise.all([
@@ -114,6 +117,7 @@ export const restaurantPaymentsRouter = router({
   listTerminalReconciliations: readProcedure
     .input(z.object({ branchId: ID, limit: z.number().int().min(1).max(100).optional() }).strict())
     .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
       const rows = await ctx.db.restaurantTerminalReconciliation.findMany({
         where: { branchId: input.branchId },
         orderBy: [{ processedAt: 'desc' }, { id: 'desc' }],
@@ -140,7 +144,10 @@ export const restaurantPaymentsRouter = router({
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => listTenders(ctx.db, input)),
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      return listTenders(ctx.db, input);
+    }),
 
   // ── Refunds ─────────────────────────────────────────────────────────────────
   listRefunds: readProcedure
@@ -156,17 +163,30 @@ export const restaurantPaymentsRouter = router({
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => listRefunds(ctx.db, input)),
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      return listRefunds(ctx.db, input);
+    }),
 
   // ── A single payment + its full event trail ──────────────────────────────────
   getPayment: readProcedure
     .input(z.object({ paymentId: ID }).strict())
-    .query(async ({ ctx, input }) => getPayment(ctx.db, input.paymentId)),
+    .query(async ({ ctx, input }) => {
+      const scope = await ctx.db.restaurantPayment.findUnique({
+        where: { id: input.paymentId },
+        select: { bill: { select: { branchId: true } } },
+      });
+      if (scope) await requireRestaurantBranchScope(ctx, scope.bill.branchId);
+      return getPayment(ctx.db, input.paymentId);
+    }),
 
   // ── Per-date tender-type summary (console) ────────────────────────────────────
   getTenderTypeTotals: readProcedure
     .input(z.object({ branchId: ID, businessDate: BUSINESS_DATE }).strict())
-    .query(async ({ ctx, input }) => getTenderTypeTotals(ctx.db, input)),
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      return getTenderTypeTotals(ctx.db, input);
+    }),
 });
 
 // ── Read-model implementations ────────────────────────────────────────────────

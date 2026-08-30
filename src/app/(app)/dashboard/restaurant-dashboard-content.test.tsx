@@ -37,4 +37,21 @@ describe('RestaurantDashboardContent', () => {
     );
     expect(screen.getByRole('heading', { level: 2, name: /ready for modules/i })).toBeVisible();
   });
+
+  it('lets Restaurant administrators discover finance and purchasing when entitled', () => {
+    render(
+      <RestaurantDashboardContent
+        enabledModules={['restaurant-core', 'restaurant-pos', 'restaurant-purchasing']}
+      />
+    );
+    expect(screen.getByRole('link', { name: /restaurant finance/i })).toHaveAttribute(
+      'href',
+      '/restaurant/money'
+    );
+    expect(screen.getByRole('link', { name: /purchasing/i })).toHaveAttribute(
+      'href',
+      '/restaurant/purchasing'
+    );
+    expect(screen.queryByRole('link', { name: /advanced insights/i })).not.toBeInTheDocument();
+  });
 });

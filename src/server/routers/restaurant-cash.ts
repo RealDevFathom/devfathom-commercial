@@ -7,6 +7,7 @@ import { router, capabilityProcedure } from '../trpc';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { foldExpectedCash, type FoldableMovement } from '@/lib/restaurant/drawer-sessions';
 import { resolveChainTip } from '@/lib/restaurant/daily-close';
+import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 
 /**
  * M5-L3 — the back-office cash read surface: drawer sessions + their movement
@@ -54,11 +55,21 @@ export const restaurantCashRouter = router({
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => listDrawerSessions(ctx.db, input)),
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      return listDrawerSessions(ctx.db, input);
+    }),
 
   getDrawerSession: readProcedure
     .input(z.object({ drawerSessionId: ID }).strict())
-    .query(async ({ ctx, input }) => getDrawerSession(ctx.db, input.drawerSessionId)),
+    .query(async ({ ctx, input }) => {
+      const scope = await ctx.db.restaurantDrawerSession.findUnique({
+        where: { id: input.drawerSessionId },
+        select: { branchId: true },
+      });
+      if (scope) await requireRestaurantBranchScope(ctx, scope.branchId);
+      return getDrawerSession(ctx.db, input.drawerSessionId);
+    }),
 
   // ── Daily closes ──────────────────────────────────────────────────────────────
   listDailyCloses: readProcedure
@@ -71,11 +82,21 @@ export const restaurantCashRouter = router({
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => listDailyCloses(ctx.db, input)),
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      return listDailyCloses(ctx.db, input);
+    }),
 
   getDailyClose: readProcedure
     .input(z.object({ dailyCloseId: ID }).strict())
-    .query(async ({ ctx, input }) => getDailyClose(ctx.db, input.dailyCloseId)),
+    .query(async ({ ctx, input }) => {
+      const scope = await ctx.db.restaurantDailyClose.findUnique({
+        where: { id: input.dailyCloseId },
+        select: { branchId: true },
+      });
+      if (scope) await requireRestaurantBranchScope(ctx, scope.branchId);
+      return getDailyClose(ctx.db, input.dailyCloseId);
+    }),
 });
 
 // ── Read-model implementations ────────────────────────────────────────────────
