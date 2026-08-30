@@ -2299,6 +2299,7 @@ model Organization {
   ssoStates                 OrganizationSsoState[]
   ssoTickets                TenantSsoTicket[]
   insightLoyaltyLiabilities InsightLoyaltyLiability[]
+  restaurantNotificationWebhook RestaurantNotificationWebhook?
 
   @@index([status])
   @@index([deploymentMode])
@@ -5585,6 +5586,7 @@ enum RestaurantSopEscalationEventKind {
 /// WHATSAPP are STUBBED adapters in M7 (recorded, never actually sent).
 enum RestaurantNotificationChannel {
   IN_APP
+  WEBHOOK
   EMAIL
   SMS
   PUSH
@@ -5596,6 +5598,7 @@ enum RestaurantNotificationChannel {
 /// channel whose adapter is a stub; FAILED records an attempt that errored.
 enum RestaurantNotificationDeliveryStatus {
   DELIVERED_IN_APP
+  DELIVERED_WEBHOOK
   STUBBED
   FAILED
 }
@@ -6252,6 +6255,26 @@ model RestaurantNotificationChannelSetting {
   @@index([organizationId])
   @@index([branchId])
   @@map("restaurant_notification_channel_settings")
+}
+
+/// One tenant-owned outbound SOP webhook. The signing secret is envelope
+/// encrypted by the application and is never selected by public read contracts.
+model RestaurantNotificationWebhook {
+  id                     String    @id @default(cuid())
+  organizationId         String    @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  endpointUrl            String
+  encryptedSigningSecret String
+  enabled                Boolean   @default(false)
+  lastSuccessAt          DateTime?
+  lastFailureAt          DateTime?
+  lastFailure            String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("restaurant_notification_webhooks")
 }
 
 /// M7/D21: APPEND-ONLY record of ONE delivery attempt of a notification on ONE

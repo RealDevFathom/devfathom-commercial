@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import '@/lib/restaurant/notification-webhook';
 import { runRestaurantJob } from '@/lib/restaurant/job-handlers';
 import {
   dispatchOutboxBatch,

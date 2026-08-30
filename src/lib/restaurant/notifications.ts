@@ -7,6 +7,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export const RESTAURANT_NOTIFICATION_CHANNELS = [
   'IN_APP',
+  'WEBHOOK',
   'EMAIL',
   'SMS',
   'PUSH',
@@ -119,18 +120,40 @@ export async function deliverNotificationRequest(
     }));
     const deliveries = recipients.flatMap((recipientStaffProfileId) => {
       const notificationId = deterministicId('rnot', request.requestId, recipientStaffProfileId);
-      return enabledChannels.map((channel) => ({
-        id: deterministicId('rndl', request.requestId, recipientStaffProfileId, channel),
-        notificationId,
-        channel,
-        status: channel === 'IN_APP' ? ('DELIVERED_IN_APP' as const) : ('STUBBED' as const),
-      }));
+      return enabledChannels
+        .filter((channel) => channel !== 'WEBHOOK')
+        .map((channel) => ({
+          id: deterministicId('rndl', request.requestId, recipientStaffProfileId, channel),
+          notificationId,
+          channel,
+          status: channel === 'IN_APP' ? ('DELIVERED_IN_APP' as const) : ('STUBBED' as const),
+        }));
     });
 
     await tx.restaurantNotification.createMany({ data: notifications, skipDuplicates: true });
     if (deliveries.length > 0) {
       await tx.restaurantNotificationDelivery.createMany({
         data: deliveries,
+        skipDuplicates: true,
+      });
+    }
+    if (enabledChannels.includes('WEBHOOK')) {
+      await tx.restaurantEventOutbox.createMany({
+        data: recipients.map((recipientStaffProfileId) => {
+          const notificationId = deterministicId(
+            'rnot',
+            request.requestId,
+            recipientStaffProfileId
+          );
+          return {
+            id: deterministicId('rnow', request.requestId, recipientStaffProfileId),
+            eventType: 'restaurant.notification.webhook.v1',
+            aggregateType: 'restaurant.notification',
+            aggregateId: notificationId,
+            payload: { notificationId, version: '1.0' },
+            status: 'PENDING' as const,
+          };
+        }),
         skipDuplicates: true,
       });
     }
