@@ -999,24 +999,23 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
-        await tx.loyaltyProgramVersion.upsert({
+        const existingLoyaltyProgram = await tx.loyaltyProgramVersion.findUnique({
           where: { id: IDS.loyaltyProgram },
-          update: {
-            versionNumber: 1,
-            effectiveFrom: FIXED_AT,
-            earnRate: '1.000000',
-            redemptionValue: '0.010000',
-          },
-          create: {
-            id: IDS.loyaltyProgram,
-            versionNumber: 1,
-            effectiveFrom: FIXED_AT,
-            earnRate: '1.000000',
-            redemptionValue: '0.010000',
-            createdAt: FIXED_AT,
-            updatedAt: FIXED_AT,
-          },
+          select: { id: true },
         });
+        if (!existingLoyaltyProgram) {
+          await tx.loyaltyProgramVersion.create({
+            data: {
+              id: IDS.loyaltyProgram,
+              versionNumber: 1,
+              effectiveFrom: FIXED_AT,
+              earnRate: '1.000000',
+              redemptionValue: '0.010000',
+              createdAt: FIXED_AT,
+              updatedAt: FIXED_AT,
+            },
+          });
+        }
         await tx.loyaltyAccount.upsert({
           where: { id: IDS.loyaltyAccount },
           update: {
