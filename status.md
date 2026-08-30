@@ -7,6 +7,17 @@ or green isolated test does not by itself prove that the composed product is rel
 
 ## Current checkpoint
 
+- Branch: `WHA-954-reconcile-restaurant-operator-documentation-and-live-status`.
+- Local base SHA: `629cd28634a736560ff9f86b25cdc7a9346d45bb`.
+- State at the start of WHA-954: local-only and clean. This documentation reconciliation remains
+  local-only; nothing from this branch has been pushed, merged, deployed to staging or any other
+  environment, or released.
+- Restaurant core implementation is present in the local base. Correction integration and the
+  fresh automated, restricted-database, and governed browser gates remain pending. This checkpoint
+  makes no completion, release-readiness, or production-availability claim.
+
+## Historical private-integration checkpoint (superseded as current)
+
 - Latest verified code SHA before this status-only update:
   `b3bb94e6d41ea4f6ea13e89b86f3686488487478`.
 - Private integration branch:
