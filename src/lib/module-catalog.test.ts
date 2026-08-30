@@ -40,6 +40,7 @@ describe('module catalog routing', () => {
     ['restaurantBills.listBills', 'restaurant-pos'],
     ['restaurantCash.listDrawerSessions', 'restaurant-pos'],
     ['restaurantPayments.listTenders', 'restaurant-pos'],
+    ['restaurantTax.configuration', 'restaurant-pos'],
     // WHA-138 Lane A: inventory/purchasing gate on their own catalog modules,
     // not on POS.
     ['restaurantInventory.listStockOnHand', 'restaurant-inventory'],
@@ -73,6 +74,7 @@ describe('module catalog routing', () => {
       restaurantBills: 'restaurant-pos',
       restaurantCash: 'restaurant-pos',
       restaurantPayments: 'restaurant-pos',
+      restaurantTax: 'restaurant-pos',
       restaurantInventory: 'restaurant-inventory',
       restaurantPurchasing: 'restaurant-purchasing',
       restaurantJobs: 'restaurant-sop',
@@ -126,6 +128,7 @@ describe('module catalog routing', () => {
     ['/restaurant/orders', 'restaurant-pos'],
     ['/restaurant/orders/ord_123', 'restaurant-pos'],
     ['/restaurant/money', 'restaurant-pos'],
+    ['/restaurant/tax', 'restaurant-pos'],
     ['/restaurant/inventory', 'restaurant-inventory'],
     ['/restaurant/purchasing', 'restaurant-purchasing'],
     ['/restaurant/sop', 'restaurant-sop'],

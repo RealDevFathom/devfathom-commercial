@@ -18,7 +18,13 @@ const db = {
   $executeRaw: vi.fn(),
   $transaction: vi.fn(),
   restaurantBranch: { findUnique: vi.fn() },
-  restaurantTaxProfileVersion: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
+  restaurantTaxProfileVersion: {
+    findUnique: vi.fn(),
+    findFirst: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+  },
+  restaurantTaxRuleVersion: { updateMany: vi.fn() },
   restaurantTaxOfficialSource: { upsert: vi.fn() },
 };
 
@@ -67,6 +73,15 @@ describe('restaurant tax activation router', () => {
     db.restaurantTaxProfileVersion.findFirst.mockResolvedValue(null);
     db.restaurantTaxOfficialSource.upsert.mockResolvedValue({ id: 'source_1' });
     db.restaurantTaxProfileVersion.create.mockResolvedValue({ id: 'profile_1', rules: [] });
+  });
+
+  it('previews inclusive and exclusive tax through the settlement calculator', async () => {
+    await expect(
+      caller().previewCustom({ amount: '100.00', rate: '0.10', priceMode: 'EXCLUSIVE' })
+    ).resolves.toEqual({ net: '100.00', tax: '10.00', gross: '110.00' });
+    await expect(
+      caller().previewCustom({ amount: '110.00', rate: '0.10', priceMode: 'INCLUSIVE' })
+    ).resolves.toEqual({ net: '100.00', tax: '10.00', gross: '110.00' });
   });
 
   it('rejects Punjab before any database write', async () => {
@@ -183,5 +198,71 @@ describe('restaurant tax activation router', () => {
         eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('publishes three canonical customer-supplied rules at branch-local midnight', async () => {
+    db.restaurantBranch.findUnique.mockResolvedValue({
+      id: 'branch_1',
+      timezone: 'Asia/Karachi',
+      active: true,
+    });
+    await caller().publishCustom({
+      branchId: 'branch_1',
+      profileName: 'Accountant profile',
+      jurisdictionCode: 'PK-SD',
+      effectiveFrom: '2030-07-01',
+      priceMode: 'INCLUSIVE',
+      rates: [
+        { paymentCategory: 'OTHER', rate: '0.160000' },
+        { paymentCategory: 'CASH', rate: '0.150000' },
+        { paymentCategory: 'CARD', rate: '0.050000' },
+      ],
+      approvalReference: 'Memo 84',
+      accountantConfirmation: true,
+      replaceOpenProfile: false,
+      idempotencyKey: 'custom-key-84',
+    });
+    expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          profileName: 'Accountant profile',
+          jurisdictionCode: 'PK-SD',
+          evidenceKind: 'CUSTOMER_SUPPLIED',
+          effectiveFrom: new Date('2030-06-30T19:00:00.000Z'),
+          rules: {
+            create: expect.arrayContaining([
+              expect.objectContaining({ paymentCategory: 'CASH', rate: '0.150000' }),
+              expect.objectContaining({ paymentCategory: 'CARD', rate: '0.050000' }),
+              expect.objectContaining({ paymentCategory: 'OTHER', rate: '0.160000' }),
+            ]),
+          },
+        }),
+      })
+    );
+  });
+
+  it('rejects missing, duplicate, unknown, and out-of-range custom categories before writes', async () => {
+    const request = {
+      branchId: 'branch_1',
+      profileName: 'Invalid profile',
+      jurisdictionCode: 'PK-SD' as const,
+      effectiveFrom: '2030-07-01',
+      priceMode: 'EXCLUSIVE' as const,
+      approvalReference: 'Memo 85',
+      accountantConfirmation: true as const,
+      replaceOpenProfile: false,
+      idempotencyKey: 'custom-key-85',
+    };
+    await expect(
+      caller().publishCustom({
+        ...request,
+        rates: [
+          { paymentCategory: 'CASH', rate: '0.15' },
+          { paymentCategory: 'CASH', rate: '0.15' },
+          { paymentCategory: 'WIRE', rate: '1.01' },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
   });
 });

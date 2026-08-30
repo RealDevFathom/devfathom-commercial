@@ -90,6 +90,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // trail — gate on the POS module (`restaurant-pos`), the licensed surface that
   // runs checkout and settlement.
   restaurantPayments: 'restaurant-pos',
+  restaurantTax: 'restaurant-pos',
   // WHA-138 Lane A: inventory operations — stock on hand, movement ledger,
   // physical counts, transfers, wastage and low-stock rules — gate on the
   // vertical catalog's own Inventory module (`restaurant-inventory`), not on
@@ -171,6 +172,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/restaurant/floor', 'restaurant-pos'],
   ['/restaurant/orders', 'restaurant-pos'],
   ['/restaurant/money', 'restaurant-pos'],
+  ['/restaurant/tax', 'restaurant-pos'],
   ['/restaurant/inventory', 'restaurant-inventory'],
   ['/restaurant/purchasing', 'restaurant-purchasing'],
   // `/restaurant/sop/admin` shares the SOP module; the extra admin/capability
