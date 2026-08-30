@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   createTRPCContext: vi.fn(),
   can: vi.fn(),
   createCaller: vi.fn(),
+  hasModule: vi.fn(),
 }));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
@@ -14,7 +15,7 @@ vi.mock('@/lib/abac', () => ({
   can: mocks.can,
   subjectFromSession: (user: { id: string }) => ({ id: user.id }),
 }));
-vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
+vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.hasModule }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('@/server/routers/restaurant-purchasing', () => ({
@@ -31,11 +32,11 @@ const actor = {
 
 const searchParams = Promise.resolve({});
 
-function contextStub() {
+function contextStub(enabledModules = ['restaurant-purchasing']) {
   return {
     session: actor.session,
     organization: actor.organization,
-    entitlements: { enabledModules: ['restaurant-pos'] },
+    entitlements: { enabledModules },
     db: {
       restaurantBranch: { findMany: vi.fn().mockResolvedValue([]) },
       restaurantStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
@@ -48,6 +49,10 @@ function contextStub() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.hasModule.mockImplementation(
+    (entitlements: { enabledModules: string[] }, module: string) =>
+      entitlements.enabledModules.includes(module)
+  );
   mocks.createCaller.mockReturnValue({
     listSuppliers: vi.fn().mockResolvedValue({ suppliers: [] }),
     listPurchaseOrders: vi.fn().mockResolvedValue({ orders: [] }),
@@ -55,7 +60,7 @@ beforeEach(() => {
 });
 
 describe('PurchasingPage tenancy resolution', () => {
-  it('renders with a resolvable tenant actor and does not throw', async () => {
+  it('renders when purchasing is enabled even with POS disabled', async () => {
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue(contextStub());
 
@@ -63,6 +68,20 @@ describe('PurchasingPage tenancy resolution', () => {
 
     expect(screen.getByRole('heading', { name: 'Purchasing' })).toBeDefined();
     expect(screen.queryByText('Purchasing could not load')).toBeNull();
+    expect(mocks.hasModule).toHaveBeenCalledWith(
+      { enabledModules: ['restaurant-purchasing'] },
+      'restaurant-purchasing'
+    );
+  });
+
+  it('denies access when purchasing is disabled', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub(['restaurant-pos']));
+
+    render(await PurchasingPage({ searchParams }));
+
+    expect(screen.getByRole('heading', { name: 'Module disabled' })).toBeDefined();
+    expect(mocks.createCaller).not.toHaveBeenCalled();
   });
 
   it('never asks the context factory to re-resolve tenancy', async () => {
@@ -85,7 +104,17 @@ describe('PurchasingPage tenancy resolution', () => {
 
     render(await PurchasingPage({ searchParams }));
 
-    expect(screen.getByRole('heading', { name: 'Permission denied' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Module disabled' })).toBeDefined();
     expect(mocks.createTRPCContext).not.toHaveBeenCalled();
+  });
+
+  it('renders the access state instead of throwing when the session is absent', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue({ ...contextStub(), session: null });
+
+    render(await PurchasingPage({ searchParams }));
+
+    expect(screen.getByRole('heading', { name: 'Permission denied' })).toBeDefined();
+    expect(mocks.createCaller).not.toHaveBeenCalled();
   });
 });
