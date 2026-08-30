@@ -2316,6 +2316,8 @@ model RestaurantBranch {
   id                  String   @id @default(cuid())
   organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   name                String
+  /// Stable operator-facing identifier. Database ids remain internal.
+  code                String   @default(dbgenerated("('BR-'::text || upper(substr(md5(((random())::text || clock_timestamp()::text)), 1, 8)))"))
   timezone            String   @default("UTC")
   // M4-L1/C5: the branch-local wall-clock time (24h "HH:MM") at which one
   // business day rolls into the next. Additive with a conservative "00:00"

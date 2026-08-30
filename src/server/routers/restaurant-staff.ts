@@ -118,7 +118,7 @@ export const restaurantStaffRouter = router({
     const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
     return ctx.db.restaurantBranch.findMany({
       where: { id: { in: authorization.branchIds } },
-      select: { id: true, name: true, active: true, isDefault: true },
+      select: { id: true, name: true, code: true, active: true, isDefault: true },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
     });
   }),

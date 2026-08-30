@@ -37,6 +37,7 @@ import {
   Camera,
   CalendarClock,
   Landmark,
+  MapPin,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -167,6 +168,14 @@ export const navigation: NavItem[] = [
     icon: Landmark,
     adminOnly: true,
     group: 'Restaurant',
+  },
+  {
+    label: 'Branches',
+    href: '/restaurant/settings/branches',
+    icon: MapPin,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-core',
   },
   {
     label: 'Restaurant devices',
