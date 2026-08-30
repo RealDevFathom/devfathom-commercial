@@ -1,76 +1,105 @@
 # DevFathom delivery status
 
-Last verified: 2026-08-30 (Asia/Karachi)
+Last verified: 2026-08-30 17:11 PKT (UTC+05:00)
 
-## Release candidate
+This is the concise release-evidence ledger. A Paperclip status, committed candidate,
+or green isolated test does not by itself prove that the composed product is released.
 
-- Latest verified code SHA (before this status-only update):
-  `83132fb4660a6ee0ab74da2ea6eced6ff2ef2b12`
-- State: local and unpushed; no shared branch, deployment, or production environment has moved.
-- Worktree: clean after the latest integrated verification.
+## Current checkpoint
 
-## Restaurant
+- Latest verified code SHA before this status-only update:
+  `b3bb94e6d41ea4f6ea13e89b86f3686488487478`.
+- Private integration branch:
+  `WHA-842-compose-the-actual-restaurant-candidate-union-on-a-private-integration-branch`.
+- State: local, clean, and unpushed. No shared branch, deployment, staging, or production
+  environment moved.
+- The host reboot preserved Git commits/worktrees and Paperclip records. It removed only
+  disposable `/tmp` database/runtime state and local preview processes; those are reproducible
+  and are not production data.
+- Restaurant is not release-ready yet. SuperAdmin and Agency final gates have not started.
 
-### Integrated and independently verified
+## Recovered wave integrated and independently reviewed
 
-- Restaurant workforce scheduling and timekeeping (`WHA-909`): approved candidate
-  `0bffbc72becf753293d3d2a798432a3ad350260a`, privately integrated as `f4c2de70`.
-  Focused tests passed 55/55; independent union verification passed 155/155; restricted
-  PostgreSQL RLS/concurrency/CAS tests passed 14/14 with zero skips.
-- Signed SOP notification webhooks (`WHA-910`): corrected candidate
-  `97efa2b083cd370bf3d126c358b3947ec6c60dc8`, privately integrated as `dbbc836e`.
-  Focused tests passed 30/30; concurrent retry proof produced one atomic successor.
-- Customizable Restaurant dashboard code (`WHA-915`): corrected candidate
-  `e51746de495db7d18e54e9e6b037dba3a7ef67f9`, privately integrated as `86001b20`.
-  Integrated dashboard tests passed 115/115; lint and 8 GiB TypeScript checks passed.
-- Governed Restaurant E2E harness static contract: 15/15 tests passed on the private union.
-- Restaurant Reports download and Inventory `PageProps` correction (`WHA-914`): approved
-  candidate `8ef4bbfe9c66f3760deb6414fe475a7f929ebd5c`, privately integrated as
-  `83132fb4`. Integrated focused tests passed 16/16; changed-file lint and diff checks passed.
-  The final composed production build and ordinary-browser CSV network proof remain open.
+| Lane                                         | Private integration commits        | Evidence and residual                                                                                                                                                                                                                                                           |
+| -------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reports correction (`WHA-914`)               | `83132fb4`                         | Focused 16/16 and composed build green. Final ordinary-browser CSV/download proof remains; task stays in review.                                                                                                                                                                |
+| Restaurant activation (`WHA-916`)            | `dab15030`, `5a2dc9ed`, `085a00a6` | Command/onboarding, restricted PostgreSQL, and production browser evidence accepted. No provider/device/printer side effects.                                                                                                                                                   |
+| Dashboard accessibility (`WHA-917`)          | `ef75fc4d`, `956da025`             | Composed 8 files/27 tests and lint green. Production axe/computed-style, keyboard, dark, reduced-motion, mobile error recovery, and Agency smoke remain browser-only.                                                                                                           |
+| Inventory/Purchasing attribution (`WHA-918`) | `33600bf9`, `4fc4e653`             | Server-derived actor identity and branch-bound stock locations accepted. Composed router tests 38/38; candidate restricted PostgreSQL matrix 106/106 with zero skips.                                                                                                           |
+| Delivery fail-closed (`WHA-919`)             | `9f22285e`, `5a0a31c5`             | New Delivery orders/publications rejected before business writes; historical Delivery remains readable. Composed 11 files/152 tests green. Browser presentation and Dine-in/Takeaway regression remain.                                                                         |
+| Device rotation (`WHA-920`)                  | `351fb0cf`, `541031af`, `b3bb94e6` | Server-derived actor, two-person authorization, CAS/replay protection, one-time reveal, and device-scoped approver directory accepted. Composed non-DB device/shared-helper tests green; candidate restricted PostgreSQL 15/15. Real permission-scoped browser journey remains. |
+| Camera production safety (`WHA-921`)         | `a59bd8d0`                         | Simulator is development/test-only; production fails closed without a real gateway. Composed 4 files/16 tests green. Vendor/hardware/browser streaming is an external gate.                                                                                                     |
+| Commercial-limit resolver (`WHA-922`)        | `a2fd72f0`                         | Canonical explicit/alias/zero/invalid resolution accepted; focused 56/56. This is resolver foundation only, not consuming enforcement.                                                                                                                                          |
 
-### Active release work
+## Composed checkpoint gate
 
-- `WHA-916`: correct and fully prove Restaurant-specific first-branch setup and durable
-  tax/payment/device/operator activation acknowledgements. Candidate `84c3518` is blocked by
-  nine command-suite regressions plus missing restricted-PostgreSQL and browser evidence.
-- `WHA-917`: fix the remaining Dashboard WCAG contrast failures and unnamed mobile dashboard
-  link without changing the accepted dashboard behaviour.
-- `WHA-918`: derive Inventory and Purchasing actor/profile/device attribution from the
-  authenticated server context instead of trusting mismatched or client-supplied identifiers.
-- `WHA-919`: fail closed the incomplete Delivery channel while D06 remains unresolved.
-- `WHA-920`: expose the existing device-secret rotation capability safely with one-time reveal,
-  old-secret invalidation, authorization, audit, and restricted-role proof.
-- `WHA-921`: prevent the simulated camera gateway from being presented as live in production;
-  show a professional unavailable state until a real gateway is configured.
+Executed from exact code SHA `b3bb94e6d41ea4f6ea13e89b86f3686488487478`:
 
-### Required before Restaurant can be called complete
+- Changed-file ESLint: zero errors; one test-only unused-argument warning.
+- Prisma schema validation: passed.
+- Prisma client regeneration: passed; generated output is ignored and the Git tree stayed clean.
+- TypeScript with 8 GiB heap: passed.
+- Standard production build: passed; Next.js 16.2.12 generated 134 routes/pages.
+- Aggregate changed-test run: 34 files, 382 passed, 24 database-gated skipped,
+  3 failed in the pre-recorded `tests/vertical-foundation.test.ts` baseline.
+- Git diff check: passed.
 
-1. Integrate independently approved corrections from `WHA-916` through `WHA-921`.
-2. Enforce configured Restaurant commercial ceilings and close the accepted ingredient-
-   substitution schema seam without colliding with the active identity/onboarding writers.
-3. Expand browser acceptance beyond route headings to operate the critical Inventory,
-   Purchasing, Workforce, SOP, Loyalty, Device, and Reports workflows.
-4. Pass one standard Node production build from the exact final private SHA.
-5. Pass the governed six-test Restaurant E2E once, with no retries, against a fresh
-   restricted-role PostgreSQL database; prove migration/RLS/extension non-vacuity and teardown.
-6. Record the exact final SHA and browser evidence here.
+The three open Vertical Foundation failures are not hidden:
 
-### Product decisions still owned by the product owner
+1. Two module/vertical rejection tests expect HTTP 400 but receive 500 because mocked failure-audit
+   persistence fails.
+2. The approved-consumer audit does not include seven existing Pakistan-tax files.
 
-- D03: production card processor/terminal provider. Current card flow must not be represented
-  as a live provider integration until one is selected and accepted.
-- D05: physical printer/drawer/KDS vendor integration. The product must not invent a vendor.
+These were observed before this recovered wave as the same 18-pass/3-fail baseline. They remain a
+release blocker until corrected and independently re-run.
 
-## SuperAdmin and Agency
+## Restaurant completion state
 
-- SuperAdmin final browser gate: pending until the Restaurant candidate is frozen; require
-  6/6 with zero skips on a fresh isolated database and an owned port.
-- Agency final browser gate: pending after SuperAdmin; static harness currently passes 29/29;
-  final acceptance requires 8/8 with zero skips on a fresh isolated database.
+| Surface                                | State                                   | Remaining release evidence/work                                                   |
+| -------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
+| Onboarding and activation              | Implemented and privately integrated    | Final composed browser smoke.                                                     |
+| Dashboard and analytics                | Implemented and privately integrated    | Browser accessibility/error/permission acceptance.                                |
+| Menu, catalog, modifiers, pricing, OCR | Broad implementation present            | Real-image OCR correction/duplicate/publish and menu-to-POS E2E.                  |
+| POS, orders, KDS, tables, checkout     | Broad implementation present            | Operated open-to-close, split/refund/void, table and kitchen lifecycle E2E.       |
+| Delivery                               | Safely unavailable for new operations   | Product decision D06 plus full schema/provider work if Delivery is enabled later. |
+| Pakistan/custom tax                    | Implemented                             | Inclusive/exclusive rounding, receipt/refund and branch browser proof.            |
+| Inventory and purchasing               | Corrected and privately integrated      | Fresh composed restricted-DB and operated receive/wastage/deduction/alert E2E.    |
+| Staff and workforce                    | Core scheduling/timekeeping implemented | Final role/branch browser regression.                                             |
+| Devices/operators                      | Rotation security integrated            | Real two-person browser rotation and old/new-secret acceptance.                   |
+| SOP/compliance                         | Broad implementation present            | Recurrence, evidence, manager verification, missed/escalation operated E2E.       |
+| Customers/loyalty                      | Broad implementation present            | Earn/redeem/refund E2E.                                                           |
+| Reports                                | Integrated                              | Ordinary-browser exports and access-denial proof.                                 |
+| Cameras                                | Honest fail-closed boundary integrated  | Real vendor selection and hardware/streaming acceptance.                          |
+| Multi-branch                           | Foundations present                     | Isolation, switching and organization-wide reporting E2E.                         |
 
-## Historical ledger
+## Remaining critical path after this safe pause
 
-The detailed earlier delivery record remains in
-[claude/devfathom-status.md](claude/devfathom-status.md). This file is the current release gate;
-historical task completion does not override the live evidence above.
+1. Correct the three Vertical Foundation baseline failures.
+2. Implement consuming commercial ceilings for devices/terminals, monthly orders,
+   concurrent registers, operators, and stock locations.
+3. Close the accepted ingredient-substitution schema/configuration seam.
+4. Run one fresh restricted-role PostgreSQL gate with migration/RLS/extension non-vacuity and
+   zero skips from the frozen composed SHA.
+5. Run the governed Restaurant browser E2E once: onboarding through menu/OCR, POS, KDS,
+   settlement, inventory/purchasing, SOP, loyalty, devices, dashboard, tax, and reports.
+6. Reconcile administrator/product documentation with the final operated UI.
+7. Only after Restaurant is frozen, run SuperAdmin/control-plane E2E, then Agency every-module E2E.
+8. Obtain Saad's explicit authorization before push, shared-ref merge, deploy, or production smoke.
+
+## External owner/provider decisions
+
+- D03: production card processor/terminal provider.
+- D05: physical printer, drawer, and KDS hardware/vendor integration.
+- D06: whether and how full Delivery is supported.
+- Production camera gateway/vendor and hardware/browser streaming.
+- Pakistan production tax/legal/accounting sign-off.
+
+## Operating constraints
+
+- Codex-only Paperclip execution unless Saad changes the instruction.
+- One writer per surface and one independent reviewer; no redundant verification loops.
+- Expensive composed gates run once at phase boundaries.
+- Browser behavior and restricted-role database evidence outrank optimistic task status.
+- Saad alone authorizes push, shared-ref merge, deploy, or live release.
+
+Historical detail remains in [claude/devfathom-status.md](claude/devfathom-status.md).
