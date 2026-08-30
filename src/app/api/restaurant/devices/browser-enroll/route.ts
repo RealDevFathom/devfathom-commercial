@@ -8,6 +8,7 @@ import { enrollDevice } from '@/lib/restaurant/devices';
 import { TERMINAL_DEVICE_COOKIE } from '@/lib/restaurant/terminal-auth';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { ipFromHeaders, recordAudit } from '@/server/audit';
 
 const inputSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -69,6 +70,35 @@ export async function POST(request: Request) {
   }
   if (!result) return reject('Branch or station was not found.', 404);
 
+  recordAudit({
+    organizationId: actor.organization.id,
+    actorType: 'USER',
+    actorId: actor.session.user.id,
+    actorName: actor.session.user.name,
+    actorEmail: actor.session.user.email,
+    actorRole: actor.session.user.role,
+    source: 'REST_API',
+    category: 'TERMINAL',
+    operation: 'CREATE',
+    action: 'restaurant.devices.browserEnroll',
+    description: `Enrolled browser as terminal device "${result.device.name}"`,
+    targetType: 'RestaurantRegisteredDevice',
+    targetId: result.device.id,
+    targetLabel: result.device.name,
+    metadata: {
+      deviceId: result.device.id,
+      branchId: result.device.branchId,
+      kind: result.device.kind,
+      stationId: result.device.stationId,
+    },
+    ip: ipFromHeaders(request.headers),
+    userAgent: request.headers.get('user-agent'),
+    httpMethod: 'POST',
+    path: '/api/restaurant/devices/browser-enroll',
+    statusCode: 303,
+    outcome: 'SUCCESS',
+  });
+
   const response = NextResponse.redirect(
     new URL(input.kind === 'KDS' ? '/kds' : '/pos', publicRequestOrigin(request)),
     { status: 303 }
@@ -81,7 +111,14 @@ export async function POST(request: Request) {
     maxAge: 60 * 60 * 24 * 180,
   });
   for (const name of ['authjs.session-token', '__Secure-authjs.session-token']) {
-    response.cookies.set(name, '', { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 0 });
+    response.cookies.set(name, '', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: name.startsWith('__Secure-'),
+      path: '/',
+      maxAge: 0,
+      expires: new Date(0),
+    });
   }
   return response;
 }
