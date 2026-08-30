@@ -25,6 +25,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
+import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 /** Assert a serialised money value by Decimal VALUE, tolerant of trailing-zero format
@@ -145,7 +146,8 @@ async function seedOrder(
   branchId: string,
   deviceId: string,
   businessDate: string,
-  prices: string[]
+  prices: string[],
+  channel: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' = 'DINE_IN'
 ): Promise<{ orderId: string; itemIds: string[] }> {
   orderSeq += 1;
   const orderNumber = orderSeq;
@@ -157,7 +159,7 @@ async function seedOrder(
         orderNumber,
         businessDate: bdate,
         status: 'SERVED',
-        channel: 'DINE_IN',
+        channel,
         staffProfileId: ctx.staffA,
         deviceId,
       },
@@ -281,6 +283,11 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchA, name: 'A' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchDay, name: 'Day' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchReplay, name: 'Replay' } });
+    await Promise.all([
+      ensureRestaurantTaxProfile(tx, orgA, ctx.branchA),
+      ensureRestaurantTaxProfile(tx, orgA, ctx.branchDay),
+      ensureRestaurantTaxProfile(tx, orgA, ctx.branchReplay),
+    ]);
     await tx.restaurantProduct.create({ data: { id: ctx.productA, name: 'Widget' } });
 
     // A role granting every capability (money routes + coauth:approve via `*`) and a role
@@ -397,7 +404,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
           tender: { type: 'CASH', amount: '10.00', cashReceived: '10.00' },
         },
       });
-      expect(tender.status).toBe(200);
+      expect(tender.status, JSON.stringify(tender.json)).toBe(200);
       expect(tender.json.settled).toBe(true);
       eqMoney(tender.json.changeGiven, '0.00');
       eqMoney(tender.json.remainingDue, '0.00');
@@ -425,6 +432,58 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       eqMoney((receipt.json.totals as Record<string, string>).grandTotal, '10.00');
       expect((receipt.json.tenders as unknown[]).length).toBe(1);
     });
+
+    it.each([
+      ['TAKEAWAY', 'CASH', '1.31'],
+      ['DELIVERY', 'CARD', '0.74'],
+    ] as const)(
+      'settles a %s order through the API with Pakistan inclusive odd-cent tax',
+      async (channel, tenderType, expectedTax) => {
+        const { orderId } = await seedOrder(
+          ctx.branchA,
+          ctx.posA.deviceId,
+          TODAY,
+          ['10.01'],
+          channel
+        );
+        const cut = await call(deps.routes.bill, {
+          secret: ctx.posA.secret,
+          session: token,
+          key: uniqueKey(`channel-${channel}-cut`),
+          body: { orderId, split: { kind: 'NONE' } },
+        });
+        const billId = (cut.json.billIds as string[])[0]!;
+        const tender = await call(deps.routes.tender, {
+          secret: ctx.posA.secret,
+          session: token,
+          key: uniqueKey(`channel-${channel}-tender`),
+          body: {
+            billId,
+            tender: {
+              type: tenderType,
+              amount: '10.01',
+              ...(tenderType === 'CASH' ? { cashReceived: '10.01' } : {}),
+            },
+          },
+        });
+        expect(tender.status, JSON.stringify(tender.json)).toBe(200);
+        expect(tender.json.settled).toBe(true);
+
+        const receipt = await call(deps.routes.receipt, {
+          method: 'GET',
+          secret: ctx.posA.secret,
+          session: token,
+          query: { billId },
+        });
+        expect(receipt.status).toBe(200);
+        const totals = receipt.json.totals as Record<string, string>;
+        eqMoney(totals.grandTotal, '10.01');
+        const snapshot = await deps.withTenantDb(orgA, (tx) =>
+          tx.restaurantTaxTransactionSnapshot.findFirstOrThrow({ where: { billId } })
+        );
+        eqMoney(snapshot.taxTotal, expectedTax);
+      }
+    );
 
     it('refunds a tender with manager co-authorization (payments:refund)', async () => {
       const res = await call(deps.routes.refund, {
@@ -514,15 +573,15 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
     });
 
     it('closes the drawer (cash:close)', async () => {
-      // Expected = float 100 + cash sale 10 − cash refund 10 + paid-in 20 = 120.
+      // Expected = float 100 + cash sales 20.01 − cash refund 10 + paid-in 20 = 130.01.
       const res = await call(deps.routes.drawerClose, {
         secret: ctx.posA.secret,
         session: token,
         key: uniqueKey('close'),
-        body: { drawerSessionId, countedCash: '120.00' },
+        body: { drawerSessionId, countedCash: '130.01' },
       });
       expect(res.status).toBe(200);
-      eqMoney(res.json.expectedCash, '120.00');
+      eqMoney(res.json.expectedCash, '130.01');
       eqMoney(res.json.variance, '0.00');
     });
   });
@@ -582,7 +641,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(readiness.allBillsResolved).toBe(true);
       expect(readiness.allDrawersClosed).toBe(true);
       expect(res.json.existingCloseId).toBeNull();
-      eqMoney((res.json.totals as Record<string, string>).grossSales, '10.00');
+      eqMoney((res.json.totals as Record<string, string>).grossSales, '8.70');
     });
 
     it('cuts the daily close (cash:close)', async () => {
