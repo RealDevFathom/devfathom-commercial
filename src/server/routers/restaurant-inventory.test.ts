@@ -34,6 +34,11 @@ const mocks = vi.hoisted(() => ({
   findStockLocation: vi.fn(),
   findStockCount: vi.fn(),
   findStockTransfer: vi.fn(),
+  findBranch: vi.fn(),
+  countStockLocations: vi.fn(),
+  createStockLocation: vi.fn(),
+  updateStockLocation: vi.fn(),
+  queryRaw: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -100,12 +105,23 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const db = {
   restaurantStaffProfile: { findMany: mocks.findStaffProfiles },
   restaurantBranchAssignment: { findMany: mocks.findBranchAssignments },
-  restaurantStockLocation: { findUnique: mocks.findStockLocation },
+  restaurantBranch: { findUnique: mocks.findBranch },
+  restaurantStockLocation: {
+    findUnique: mocks.findStockLocation,
+    count: mocks.countStockLocations,
+    create: mocks.createStockLocation,
+    update: mocks.updateStockLocation,
+  },
   restaurantStockCount: { findUnique: mocks.findStockCount },
   restaurantStockTransfer: { findUnique: mocks.findStockTransfer },
+  $queryRaw: mocks.queryRaw,
+  $transaction: vi.fn(async (run: (tx: unknown) => unknown) => run(db)),
 } as unknown as ScopedDb;
 
-function caller(canOverride?: boolean) {
+function caller(
+  canOverride?: boolean,
+  limits: Record<string, number> = { 'inventory.stockLocations.max': 2 }
+) {
   if (canOverride !== undefined) mocks.can.mockResolvedValue(canOverride);
   return restaurantInventoryRouter.createCaller({
     db,
@@ -114,6 +130,7 @@ function caller(canOverride?: boolean) {
       activeSeats: 1,
       seatLimit: 50,
       modules: [],
+      limits,
     },
     session: {
       expires: 'later',
@@ -139,9 +156,104 @@ beforeEach(() => {
     sourceLocation: { branchId: 'branch_1' },
     destinationLocation: { branchId: 'branch_1' },
   });
+  mocks.findBranch.mockResolvedValue({ id: 'branch_1', active: true });
+  mocks.findStockLocation.mockImplementation(async ({ where }) => ({
+    id: where.id,
+    branchId: where.id === 'loc_2' ? 'branch_2' : 'branch_1',
+    isActive: false,
+  }));
+  mocks.countStockLocations.mockResolvedValue(0);
+  mocks.createStockLocation.mockResolvedValue({ id: 'loc_new', isActive: true });
+  mocks.updateStockLocation.mockResolvedValue({ id: 'loc_1', isActive: true });
+  mocks.queryRaw.mockResolvedValue([]);
 });
 
 describe('restaurantInventoryRouter', () => {
+  describe('stock location commercial ceiling', () => {
+    it('creates below the active organization-wide ceiling under an advisory lock', async () => {
+      await expect(
+        caller().createStockLocation({ branchId: 'branch_1', name: 'Walk-in' })
+      ).resolves.toMatchObject({ id: 'loc_new', isActive: true });
+      expect(mocks.queryRaw).toHaveBeenCalledOnce();
+      expect(mocks.countStockLocations).toHaveBeenCalledWith({ where: { isActive: true } });
+      expect(mocks.createStockLocation).toHaveBeenCalledOnce();
+    });
+
+    it('denies create at the ceiling, including explicit zero, without a partial write', async () => {
+      mocks.countStockLocations.mockResolvedValue(2);
+      await expect(
+        caller().createStockLocation({ branchId: 'branch_1', name: 'Dry store' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.createStockLocation).not.toHaveBeenCalled();
+
+      mocks.countStockLocations.mockResolvedValue(0);
+      await expect(
+        caller(undefined, { 'inventory.stockLocations.max': 0 }).createStockLocation({
+          branchId: 'branch_1',
+          name: 'Disabled',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.createStockLocation).not.toHaveBeenCalled();
+    });
+
+    it.each<Record<string, number>>([
+      {},
+      { 'inventory.stockLocations.max': -1 },
+      { 'inventory.stockLocations.max': 1.5 },
+      { 'inventory.stockLocations.max': Number.NaN },
+    ])('fails closed for missing or invalid limit %#', async (limits) => {
+      await expect(
+        caller(undefined, limits).createStockLocation({ branchId: 'branch_1', name: 'Walk-in' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.queryRaw).not.toHaveBeenCalled();
+      expect(mocks.createStockLocation).not.toHaveBeenCalled();
+    });
+
+    it('checks the ceiling when reactivating but not for idempotent active or deactivation', async () => {
+      mocks.countStockLocations.mockResolvedValue(2);
+      await expect(
+        caller().setStockLocationActive({ id: 'loc_1', isActive: true })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.updateStockLocation).not.toHaveBeenCalled();
+
+      mocks.findStockLocation.mockResolvedValue({
+        id: 'loc_1',
+        branchId: 'branch_1',
+        isActive: true,
+      });
+      await caller().setStockLocationActive({ id: 'loc_1', isActive: false });
+      expect(mocks.updateStockLocation).toHaveBeenCalledWith({
+        where: { id: 'loc_1' },
+        data: { isActive: false },
+      });
+      await expect(
+        caller(undefined, {}).setStockLocationActive({ id: 'loc_1', isActive: false })
+      ).resolves.toMatchObject({ id: 'loc_1', isActive: true });
+    });
+
+    it('rejects a cross-tenant branch or location hidden by RLS before writing', async () => {
+      mocks.findBranch.mockResolvedValue(null);
+      await expect(
+        caller().createStockLocation({ branchId: 'other_tenant_branch', name: 'Walk-in' })
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      mocks.findStockLocation.mockResolvedValue(null);
+      await expect(
+        caller().setStockLocationActive({ id: 'other_tenant_location', isActive: true })
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(mocks.createStockLocation).not.toHaveBeenCalled();
+      expect(mocks.updateStockLocation).not.toHaveBeenCalled();
+    });
+
+    it('rolls back a failed create after the ceiling check', async () => {
+      mocks.createStockLocation.mockRejectedValue(new Error('write failed'));
+      await expect(
+        caller().createStockLocation({ branchId: 'branch_1', name: 'Walk-in' })
+      ).rejects.toThrow('write failed');
+      expect(mocks.countStockLocations).toHaveBeenCalledOnce();
+      expect(mocks.createStockLocation).toHaveBeenCalledOnce();
+    });
+  });
+
   // ── Capability gate ──────────────────────────────────────────────────────────
 
   it('rejects reads when ABAC denies inventory:read', async () => {

@@ -66,6 +66,8 @@ import {
   createRecipeLine,
   updateRecipeLine,
   deleteRecipeLine,
+  addRecipeLineSubstitute,
+  removeRecipeLineSubstitute,
 } from '@/lib/restaurant/recipes';
 import {
   VersionImmutabilityError,
@@ -992,6 +994,30 @@ export const restaurantCatalogRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         await deleteRecipeLine(ctx.db, input.id);
+      } catch (err) {
+        mapCatalogError(err);
+      }
+    }),
+
+  addRecipeLineSubstitute: writeProcedure
+    .input(
+      z
+        .object({ recipeLineId: z.string().min(1), substituteIngredientId: z.string().min(1) })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await addRecipeLineSubstitute(ctx.db, input);
+      } catch (err) {
+        mapCatalogError(err);
+      }
+    }),
+
+  removeRecipeLineSubstitute: writeProcedure
+    .input(z.object({ id: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        await removeRecipeLineSubstitute(ctx.db, input.id);
       } catch (err) {
         mapCatalogError(err);
       }

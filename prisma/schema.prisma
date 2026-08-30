@@ -3389,12 +3389,13 @@ model RestaurantIngredient {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  baseUnit    RestaurantUnit                 @relation(fields: [baseUnitId], references: [id], onDelete: Restrict)
-  allergens   RestaurantIngredientAllergen[]
-  recipeLines RestaurantRecipeLine[]
+  baseUnit              RestaurantUnit                   @relation(fields: [baseUnitId], references: [id], onDelete: Restrict)
+  allergens             RestaurantIngredientAllergen[]
+  recipeLines           RestaurantRecipeLine[]
+  recipeLineSubstitutes RestaurantRecipeLineSubstitute[]
   // M6-L1: the ingredient's stockable identity (one per ingredient). NO stock
   // columns land on the ingredient itself — inventory lives on RestaurantStockItem.
-  stockItem   RestaurantStockItem?
+  stockItem             RestaurantStockItem?
 
   @@index([organizationId])
   @@index([baseUnitId])
@@ -3471,16 +3472,36 @@ model RestaurantRecipeLine {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  recipeVersion RestaurantRecipeVersion @relation(fields: [recipeVersionId], references: [id], onDelete: Cascade)
-  ingredient    RestaurantIngredient?   @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
-  subRecipe     RestaurantRecipe?       @relation("RecipeLineSubRecipe", fields: [subRecipeId], references: [id], onDelete: Restrict)
-  unit          RestaurantUnit          @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  recipeVersion       RestaurantRecipeVersion          @relation(fields: [recipeVersionId], references: [id], onDelete: Cascade)
+  ingredient          RestaurantIngredient?            @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  subRecipe           RestaurantRecipe?                @relation("RecipeLineSubRecipe", fields: [subRecipeId], references: [id], onDelete: Restrict)
+  unit                RestaurantUnit                   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  approvedSubstitutes RestaurantRecipeLineSubstitute[]
 
   @@index([organizationId])
   @@index([recipeVersionId])
   @@index([ingredientId])
   @@index([subRecipeId])
   @@map("restaurant_recipe_lines")
+}
+
+/// Approved ingredient alternatives for an ingredient-backed recipe line. This
+/// is configuration only: fulfilment, costing, and allergen consequences remain
+/// server-owned by the later order-execution seam.
+model RestaurantRecipeLineSubstitute {
+  id                     String   @id @default(cuid())
+  organizationId         String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  recipeLineId           String
+  substituteIngredientId String
+  createdAt              DateTime @default(now())
+
+  recipeLine           RestaurantRecipeLine @relation(fields: [recipeLineId], references: [id], onDelete: Cascade)
+  substituteIngredient RestaurantIngredient @relation(fields: [substituteIngredientId], references: [id], onDelete: Restrict)
+
+  @@unique([recipeLineId, substituteIngredientId])
+  @@index([organizationId])
+  @@index([substituteIngredientId])
+  @@map("restaurant_recipe_line_substitutes")
 }
 
 /// M3/C4: a named price list. `isDefault` marks the organization's base list

@@ -27,6 +27,7 @@ import {
   listStockBatches,
 } from '@/lib/restaurant/inventory';
 import { StockLedgerError } from '@/lib/restaurant/inventory-ledger';
+import { INVENTORY_STOCK_LOCATIONS_LIMIT, resolveEntitlementLimit } from '@/lib/entitlement-limits';
 
 /**
  * M6-L2 — inventory operations console router.
@@ -69,6 +70,43 @@ const countProc = capabilityProcedure('inventory:count');
 const adjustProc = capabilityProcedure('inventory:adjust');
 const wasteProc = capabilityProcedure('inventory:waste');
 
+function stockLocationLimit(limits: Record<string, number>): number {
+  const resolution = resolveEntitlementLimit(limits, INVENTORY_STOCK_LOCATIONS_LIMIT);
+  if (resolution.status === 'missing') {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'The stock location entitlement is not configured correctly.',
+    });
+  }
+  return resolution.value;
+}
+
+async function lockStockLocationCeiling(
+  tx: { $queryRaw: (query: Prisma.Sql) => Promise<unknown> },
+  organizationId: string
+) {
+  await tx.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`inventory-stock-locations:${organizationId}`}, 0))`
+  );
+}
+
+function requireOrganizationId(ctx: TRPCContext): string {
+  const organizationId = ctx.session?.user?.organizationId;
+  if (!organizationId) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Workspace access is required.' });
+  }
+  return organizationId;
+}
+
+function assertBelowStockLocationLimit(activeCount: number, limit: number) {
+  if (activeCount >= limit) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: `Your plan supports ${limit} active stock location${limit === 1 ? '' : 's'}.`,
+    });
+  }
+}
+
 async function requireLocationBranch(ctx: TRPCContext, locationId: string): Promise<string> {
   const location = await ctx.db.restaurantStockLocation.findUnique({
     where: { id: locationId },
@@ -109,6 +147,79 @@ function mapInventoryError(err: unknown): never {
 }
 
 export const restaurantInventoryRouter = router({
+  createStockLocation: adjustProc
+    .input(
+      z
+        .object({
+          branchId: ID,
+          name: z.string().trim().min(1).max(120),
+          code: z.string().trim().min(1).max(40).nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = requireOrganizationId(ctx);
+      const limit = stockLocationLimit(ctx.entitlements.limits as Record<string, number>);
+      const branch = await ctx.db.restaurantBranch.findUnique({
+        where: { id: input.branchId },
+        select: { id: true, active: true },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      if (!branch.active) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'The branch is inactive.' });
+      }
+      await resolveRestaurantActor(ctx, [branch.id]);
+
+      return ctx.db.$transaction(async (tx) => {
+        await lockStockLocationCeiling(tx, organizationId);
+        const activeCount = await tx.restaurantStockLocation.count({ where: { isActive: true } });
+        assertBelowStockLocationLimit(activeCount, limit);
+        return tx.restaurantStockLocation.create({
+          data: {
+            branchId: branch.id,
+            name: input.name,
+            code: input.code ?? null,
+            isActive: true,
+          },
+        });
+      });
+    }),
+
+  setStockLocationActive: adjustProc
+    .input(z.object({ id: ID, isActive: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = requireOrganizationId(ctx);
+      const location = await ctx.db.restaurantStockLocation.findUnique({
+        where: { id: input.id },
+        select: { id: true, branchId: true, isActive: true },
+      });
+      if (!location) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock location not found.' });
+      }
+      await resolveRestaurantActor(ctx, [location.branchId]);
+
+      return ctx.db.$transaction(async (tx) => {
+        await lockStockLocationCeiling(tx, organizationId);
+        const current = await tx.restaurantStockLocation.findUnique({
+          where: { id: location.id },
+          select: { id: true, isActive: true },
+        });
+        if (!current) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock location not found.' });
+        }
+        if (input.isActive && !current.isActive) {
+          const limit = stockLocationLimit(ctx.entitlements.limits as Record<string, number>);
+          const activeCount = await tx.restaurantStockLocation.count({ where: { isActive: true } });
+          assertBelowStockLocationLimit(activeCount, limit);
+        }
+        if (current.isActive === input.isActive) return current;
+        return tx.restaurantStockLocation.update({
+          where: { id: current.id },
+          data: { isActive: input.isActive },
+        });
+      });
+    }),
+
   // ── Stock on hand ─────────────────────────────────────────────────────────────
 
   listStockOnHand: readProc

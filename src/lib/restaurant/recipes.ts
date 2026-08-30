@@ -514,6 +514,51 @@ export async function deleteRecipeLine(db: ScopedDb, id: string) {
   await db.restaurantRecipeLine.delete({ where: { id } });
 }
 
+export async function addRecipeLineSubstitute(
+  db: ScopedDb,
+  input: { recipeLineId: string; substituteIngredientId: string }
+) {
+  const line = await db.restaurantRecipeLine.findUnique({
+    where: { id: input.recipeLineId },
+    select: { id: true, recipeVersionId: true, ingredientId: true },
+  });
+  if (!line) throw new RecipeError('Recipe line not found.', 'NOT_FOUND');
+  const version = await requireRecipeVersion(db, line.recipeVersionId);
+  assertVersionMutable(version);
+  if (!line.ingredientId) {
+    throw new RecipeError('Only ingredient recipe lines can declare substitutes.', 'INVALID');
+  }
+  if (line.ingredientId === input.substituteIngredientId) {
+    throw new RecipeError('A recipe ingredient cannot substitute for itself.', 'INVALID');
+  }
+  await requireIngredient(db, input.substituteIngredientId);
+
+  const existing = await db.restaurantRecipeLineSubstitute.findUnique({
+    where: {
+      recipeLineId_substituteIngredientId: input,
+    },
+    select: { id: true },
+  });
+  if (existing) {
+    throw new RecipeError(
+      'This substitute is already approved for the recipe line.',
+      'ALREADY_ATTACHED'
+    );
+  }
+  return db.restaurantRecipeLineSubstitute.create({ data: input });
+}
+
+export async function removeRecipeLineSubstitute(db: ScopedDb, id: string) {
+  const substitute = await db.restaurantRecipeLineSubstitute.findUnique({
+    where: { id },
+    select: { id: true, recipeLine: { select: { recipeVersionId: true } } },
+  });
+  if (!substitute) throw new RecipeError('Recipe line substitute not found.', 'NOT_FOUND');
+  const version = await requireRecipeVersion(db, substitute.recipeLine.recipeVersionId);
+  assertVersionMutable(version);
+  await db.restaurantRecipeLineSubstitute.delete({ where: { id } });
+}
+
 /**
  * Detect recipe cycles by walking the sub-recipe reference graph. Starting from
  * the candidate `subRecipeId`, collect all reachable recipe ids across any
