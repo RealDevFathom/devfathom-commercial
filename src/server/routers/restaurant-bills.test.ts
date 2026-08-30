@@ -123,7 +123,13 @@ describe('read model (C12)', () => {
 
   it('gets a bill with lines, comps, tender + refund summaries and receipt number', async () => {
     mocks.billFindUnique.mockResolvedValue({
-      ...billRow('a', { compTotal: D('4.00'), grandTotal: D('22.00') }),
+      ...billRow('a', {
+        subtotal: D('23.00'),
+        taxTotal: D('1.00'),
+        serviceChargeTotal: D('2.00'),
+        compTotal: D('4.00'),
+        grandTotal: D('22.00'),
+      }),
       openerStaffProfileId: 'staff_1',
       deviceId: 'dev_1',
       voidReason: null,
@@ -186,6 +192,8 @@ describe('read model (C12)', () => {
           originalTenderId: 't1',
           amount: D('5.00'),
           tipRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0.75'),
+          taxRefundAmount: D('0.50'),
           kind: 'REFUND',
           reason: 'overcharge',
           businessDate: new Date('2026-08-20T00:00:00.000Z'),
@@ -201,7 +209,14 @@ describe('read model (C12)', () => {
     expect(bill!.lines[1].lineTotal).toBe('0');
     expect(bill!.lines[1].compReason).toBe('burnt');
     expect(bill!.tenderSummary).toEqual({ count: 2, amount: '22', tipAmount: '3' });
-    expect(bill!.refundSummary).toEqual({ count: 1, amount: '5', tipRefundAmount: '0' });
+    expect(bill!.refundSummary).toEqual({
+      count: 1,
+      amount: '5',
+      tipRefundAmount: '0',
+      serviceChargeRefundAmount: '0.75',
+      taxRefundAmount: '0.5',
+      netServiceChargeAmount: '1.25',
+    });
     expect(bill!.netCollected).toBe('17'); // 22 tendered − 5 refunded
     expect(bill!.receiptNumber).toBe(5);
     expect(bill!.tenders[1].changeGiven).toBe('3');
