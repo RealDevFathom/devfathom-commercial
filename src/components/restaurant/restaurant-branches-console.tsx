@@ -72,7 +72,8 @@ export function RestaurantBranchesConsole() {
   };
   const pending = create.isPending || update.isPending;
   const branches = query.data?.branches ?? [];
-  const atLimit = branches.length >= (query.data?.limit ?? 1);
+  const activeCount = branches.filter((branch) => branch.active).length;
+  const atLimit = activeCount >= (query.data?.limit ?? 1);
 
   return (
     <div>
@@ -96,7 +97,7 @@ export function RestaurantBranchesConsole() {
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.55fr)]">
           <SectionCard
             title="Locations"
-            eyebrow={`${branches.length} of ${query.data?.limit ?? '—'} configured`}
+            eyebrow={`${activeCount} of ${query.data?.limit ?? '—'} active`}
           >
             {query.isLoading ? (
               <p aria-live="polite" className="text-sm text-text-muted">
