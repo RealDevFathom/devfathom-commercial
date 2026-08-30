@@ -65,9 +65,9 @@ const ctx = {
   stationB: `stn_b_${suffix}`,
   posA: { deviceId: '', secret: '' },
   posReplay: { deviceId: '', secret: '' },
-  kdsA: { deviceId: '', secret: '' },
+  kdsA: { deviceId: '', secret: '', session: '' },
   posB: { deviceId: '', secret: '' },
-  kdsB: { deviceId: '', secret: '' },
+  kdsB: { deviceId: '', secret: '', session: '' },
 };
 
 let orderSeq = 0;
@@ -117,7 +117,10 @@ async function makeKds(orgId: string, branchId: string, stationId: string, name:
       data: { kind: 'KDS', stationId },
     })
   );
-  return device;
+  return {
+    ...device,
+    session: await establishUnlock(device.secret, orgId === orgA ? ctx.staffA : ctx.staffB),
+  };
 }
 
 async function establishUnlock(secret: string, staffProfileId = ctx.staffA): Promise<string> {
@@ -426,11 +429,16 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
     const device = await makeKds(orgA, ctx.branchA, ctx.station1A, 'revoke-kds');
     await deps.withTenantDb(orgA, (tx) => deps.revokeDevice(tx, device.deviceId, new Date()));
 
-    const q = await call(deps.routes.queue, { method: 'GET', secret: device.secret });
+    const q = await call(deps.routes.queue, {
+      method: 'GET',
+      secret: device.secret,
+      session: device.session,
+    });
     expect(q.status).toBe(403);
     for (const route of [deps.routes.ack, deps.routes.bump, deps.routes.recall]) {
       const res = await call(route, {
         secret: device.secret,
+        session: device.session,
         key: `rev-kds-${suffix}`,
         body: { orderItemId: 'x', operatorStaffProfileId: ctx.staffA },
       });
@@ -494,6 +502,7 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
     const fired = await seedOrder('FIRING', ctx.station1A);
     const bumped = await call(deps.routes.bump, {
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       key: `bump1-${suffix}`,
       body: { orderItemId: fired.itemId, operatorStaffProfileId: ctx.staffA },
     });
@@ -502,6 +511,7 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
 
     const bumpedAgain = await call(deps.routes.bump, {
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       key: `bump2-${suffix}`,
       body: { orderItemId: fired.itemId, operatorStaffProfileId: ctx.staffA },
     });
@@ -511,12 +521,14 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
     const queued = await seedOrder('QUEUED', ctx.station1A);
     const illegalBump = await call(deps.routes.bump, {
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       key: `bump3-${suffix}`,
       body: { orderItemId: queued.itemId, operatorStaffProfileId: ctx.staffA },
     });
     expect(illegalBump.status).toBe(409);
     const acked = await call(deps.routes.ack, {
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       key: `ack1-${suffix}`,
       body: { orderItemId: queued.itemId, operatorStaffProfileId: ctx.staffA },
     });
@@ -527,25 +539,28 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
     const other = await seedOrder('FIRING', ctx.station2A);
     const crossStation = await call(deps.routes.bump, {
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       key: `bump4-${suffix}`,
       body: { orderItemId: other.itemId, operatorStaffProfileId: ctx.staffA },
     });
     expect(crossStation.status).toBe(404);
   });
 
-  it('rejects a KDS action with a missing key or an unknown operator', async () => {
+  it('rejects a KDS action with a missing key or mismatched session operator', async () => {
     const seeded = await seedOrder('FIRING', ctx.station1A);
     const noKey = await call(deps.routes.bump, {
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       body: { orderItemId: seeded.itemId, operatorStaffProfileId: ctx.staffA },
     });
     expect(noKey.status).toBe(400);
     const badOperator = await call(deps.routes.bump, {
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       key: `badop-${suffix}`,
       body: { orderItemId: seeded.itemId, operatorStaffProfileId: 'ghost' },
     });
-    expect(badOperator.status).toBe(400);
+    expect(badOperator.status).toBe(403);
   });
 
   it('reads the station queue with the fixed display mapping (C10 for L5c)', async () => {
@@ -553,6 +568,7 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
     const res = await call(deps.routes.queue, {
       method: 'GET',
       secret: ctx.kdsA.secret,
+      session: ctx.kdsA.session,
       query: { businessDate: '2026-08-19' },
     });
     expect(res.status).toBe(200);
@@ -677,6 +693,7 @@ describeIfDatabase('M4-L4 terminal + KDS route transport (real DB)', () => {
     // A KDS in orgB cannot bump an orgA line either.
     const kdsCross = await call(deps.routes.bump, {
       secret: ctx.kdsB.secret,
+      session: ctx.kdsB.session,
       key: `xt-kds-${suffix}`,
       body: { orderItemId: victim.itemId, operatorStaffProfileId: ctx.staffB },
     });

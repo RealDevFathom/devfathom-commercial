@@ -39,7 +39,7 @@ type RouteModule = {
   POST?: (request: Request) => Promise<Response>;
 };
 
-type Device = { deviceId: string; secret: string };
+type Device = { deviceId: string; secret: string; session?: string };
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -109,7 +109,7 @@ async function makeKds(stationId: string, name: string): Promise<Device> {
       data: { kind: 'KDS', stationId },
     })
   );
-  return device;
+  return { ...device, session: await establishUnlock(device) };
 }
 
 async function establishUnlock(device: Device): Promise<string> {
@@ -137,6 +137,7 @@ function postPos(route: string, body: Record<string, unknown>, idempotencyKey = 
 function postKds(route: string, device: Device, orderItemId: string, idempotencyKey = key(route)) {
   return call(deps.routes[route]!, {
     secret: device.secret,
+    session: device.session,
     key: idempotencyKey,
     body: { orderItemId, operatorStaffProfileId: ids.operator },
   });
@@ -146,6 +147,7 @@ function readQueue(device: Device, businessDate: string, query: Record<string, s
   return call(deps.routes.queue!, {
     method: 'GET',
     secret: device.secret,
+    session: device.session,
     query: { businessDate, ...query },
   });
 }

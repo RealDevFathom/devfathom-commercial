@@ -45,7 +45,7 @@ type RouteModule = {
   POST?: (request: Request) => Promise<Response>;
 };
 
-type Device = { deviceId: string; secret: string };
+type Device = { deviceId: string; secret: string; session?: string };
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -120,7 +120,14 @@ async function makeKds(
       data: { kind: 'KDS', stationId },
     })
   );
-  return device;
+  return {
+    ...device,
+    session: await establishUnlock(
+      device,
+      orgId === ids.orgA ? ids.operatorA : ids.operatorB,
+      PIN
+    ),
+  };
 }
 
 async function establishUnlock(
@@ -158,6 +165,7 @@ async function postKds(
 ) {
   return call(deps.routes[route]!, {
     secret: device.secret,
+    session: device.session,
     key: idempotencyKey,
     body: { orderItemId, operatorStaffProfileId },
   });
@@ -856,6 +864,7 @@ describeIfDatabase('WHA-49 M4 restaurant acceptance (real DB/routes)', () => {
     const foreignQueue = await call(deps.routes.queue!, {
       method: 'GET',
       secret: kdsB.secret,
+      session: kdsB.session,
       query: { businessDate },
     });
     expect(foreignQueue.status).toBe(200);
