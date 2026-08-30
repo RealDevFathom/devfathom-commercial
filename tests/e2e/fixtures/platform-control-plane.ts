@@ -8,7 +8,7 @@ const adminUrl = process.env.PLAYWRIGHT_DATABASE_ADMIN_URL;
 export const platformFixture = {
   admin: {
     email: process.env.PLAYWRIGHT_PLATFORM_ADMIN_EMAIL ?? 'platform-admin@e2e.invalid',
-    password: process.env.PLAYWRIGHT_PLATFORM_ADMIN_PASSWORD ?? 'Local-only-admin-42!',
+    password: process.env.PLAYWRIGHT_PLATFORM_ADMIN_PASSWORD ?? '',
   },
   operator: {
     email: 'platform-operator@e2e.invalid',
@@ -22,7 +22,12 @@ export const platformFixture = {
 } as const;
 
 export function controlPlaneEnvironmentAvailable() {
-  return Boolean(runtimeUrl && adminUrl && process.env.PLAYWRIGHT_PLATFORM_ADMIN_EMAIL);
+  return Boolean(
+    runtimeUrl &&
+    adminUrl &&
+    process.env.PLAYWRIGHT_PLATFORM_ADMIN_EMAIL &&
+    process.env.PLAYWRIGHT_PLATFORM_ADMIN_PASSWORD
+  );
 }
 
 function databaseName(connectionString: string) {
