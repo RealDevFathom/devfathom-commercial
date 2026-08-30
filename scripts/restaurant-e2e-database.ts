@@ -5,6 +5,7 @@ const REQUIRED_INTEGRATED_ENV = [
   'RESTAURANT_ACTOR_ADMIN_EMAIL',
   'RESTAURANT_ACTOR_ADMIN_PASSWORD',
 ] as const;
+const INTEGRATED_CREDENTIALS = new Set<string>(REQUIRED_INTEGRATED_ENV);
 
 export function resolveRestaurantE2eDatabaseUrl(
   env: Record<string, string | undefined> = process.env
@@ -62,11 +63,13 @@ export function restaurantE2eEnvironment(
     DATABASE_URL: databaseUrl,
     TEST_DATABASE_URL: databaseUrl,
   };
-  delete result.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL;
-  delete result.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD;
-  delete result.RESTAURANT_ACTOR_AGENCY_EMAIL;
-  delete result.RESTAURANT_ACTOR_AGENCY_PASSWORD;
-  delete result.RESTAURANT_ACTOR_OPERATOR_EMAIL;
-  delete result.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
+  for (const name of Object.keys(result)) {
+    if (
+      /^RESTAURANT_ACTOR_.+_(?:EMAIL|PASSWORD)$/.test(name) &&
+      !INTEGRATED_CREDENTIALS.has(name)
+    ) {
+      delete result[name];
+    }
+  }
   return { ...result, RESTAURANT_INTEGRATED_E2E: '1' };
 }

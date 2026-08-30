@@ -5,7 +5,7 @@ import { hashSync } from 'bcryptjs';
 import 'dotenv/config';
 import pg from 'pg';
 
-import { PrismaClient } from '../src/generated/prisma/client.js';
+import { Prisma, PrismaClient } from '../src/generated/prisma/client.js';
 import {
   seedRestaurantDemoControlPlane,
   seedRestaurantDemoTenant,
@@ -200,18 +200,14 @@ async function main() {
           update: {
             name: 'DHA Café',
             timezone: 'Asia/Karachi',
-            status: 'ACTIVE',
-            lastSeenAt: null,
-            revokedAt: null,
+            active: true,
             isDefault: false,
           },
           create: {
             id: RESTAURANT_E2E.branchA2Id,
             name: 'DHA Café',
             timezone: 'Asia/Karachi',
-            status: 'ACTIVE',
-            lastSeenAt: null,
-            revokedAt: null,
+            active: true,
             isDefault: false,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
@@ -486,7 +482,9 @@ async function main() {
             kind: 'POS',
             stationId: null,
             deviceSecretHash: deviceSecretHash(RESTAURANT_E2E.posDeviceSecret),
-            active: true,
+            status: 'ACTIVE',
+            lastSeenAt: null,
+            revokedAt: null,
           },
           create: {
             id: RESTAURANT_E2E.posDeviceId,
@@ -506,7 +504,9 @@ async function main() {
             kind: 'KDS',
             stationId: IDS.grillStation,
             deviceSecretHash: deviceSecretHash(RESTAURANT_E2E.kdsDeviceSecret),
-            active: true,
+            status: 'ACTIVE',
+            lastSeenAt: null,
+            revokedAt: null,
           },
           create: {
             id: RESTAURANT_E2E.kdsDeviceId,
@@ -560,7 +560,7 @@ async function main() {
         });
         await tx.restaurantCategory.upsert({
           where: { id: IDS.category },
-          update: { name: 'Mains', sortOrder: 0, active: true },
+          update: { parentId: null, name: 'Mains', nameLocalized: Prisma.DbNull, sortOrder: 0 },
           create: { id: IDS.category, name: 'Mains', createdAt: FIXED_AT, updatedAt: FIXED_AT },
         });
         await tx.restaurantProduct.upsert({

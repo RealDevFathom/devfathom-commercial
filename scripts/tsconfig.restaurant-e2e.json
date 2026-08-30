@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["./restaurant-e2e-database.ts", "./run-restaurant-e2e.ts", "./seed-restaurant-e2e.ts"]
+}

@@ -11,11 +11,34 @@ describe('Restaurant E2E seed restoration guards', () => {
   });
 
   test.each([
+    'organization',
+    'organizationDepartment',
+    'restaurantBranch',
+    'restaurantFloor',
+    'restaurantTable',
+    'organizationRole',
+    'user',
+    'restaurantBranchAssignment',
     'restaurantStaffProfile',
     'restaurantOperatorCredential',
+    'restaurantKitchenStation',
     'restaurantRegisteredDevice',
+    'restaurantDrawerSession',
+    'restaurantBrand',
+    'restaurantCategory',
+    'restaurantProduct',
+    'restaurantModifierGroup',
+    'restaurantModifierOption',
+    'restaurantProductModifierGroup',
+    'restaurantUnit',
+    'restaurantIngredient',
+    'restaurantRecipe',
+    'restaurantRecipeVersion',
+    'restaurantRecipeLine',
+    'restaurantPriceList',
     'restaurantPriceListVersion',
     'restaurantPriceListEntry',
+    'restaurantMenu',
     'restaurantMenuSection',
     'restaurantMenuItem',
     'restaurantBranchMenuPublication',
@@ -25,11 +48,16 @@ describe('Restaurant E2E seed restoration guards', () => {
     'loyaltyProgramVersion',
     'loyaltyAccount',
     'loyaltyPointsEntry',
+    'restaurantSopTemplate',
+    'restaurantSopTemplateVersion',
+    'restaurantSopTemplateStep',
+    'restaurantSopAssignment',
+    'restaurantSopOccurrence',
   ])('restores mutable values when %s already exists', (model) => {
     const upsert = seed.match(
       new RegExp(`tx\\.${model}\\.upsert\\(\\{([\\s\\S]*?)\\n        \\}\\);`)
     );
-    expect(upsert?.[1], `${model} upsert`).toContain('update: {');
+    expect(upsert?.[1], `${model} upsert`).toMatch(/update: (?:\{|department)/);
     expect(upsert?.[1], `${model} update`).not.toMatch(/update:\s*\{\s*\}/);
   });
 
