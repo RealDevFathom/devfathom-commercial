@@ -76,6 +76,10 @@ export function RestaurantDevicesConsole() {
   const [enrollmentKind, setEnrollmentKind] = useState<'POS' | 'KDS'>('POS');
   const [enrollmentBranchId, setEnrollmentBranchId] = useState('');
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [deviceAction, setDeviceAction] = useState<'revoke' | 'rotate'>('revoke');
+  const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
+  const [oneTimeDeviceName, setOneTimeDeviceName] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [coAuthError, setCoAuthError] = useState('');
 
   const refreshDevices = () => void utils.restaurantDevices.list.invalidate();
@@ -89,6 +93,21 @@ export function RestaurantDevicesConsole() {
       setCoAuthError('');
       refreshDevices();
       toast.success('Device revoked.');
+    },
+    onError: (error) => {
+      setCoAuthError(error.message);
+      toast.error(error.message);
+    },
+  });
+  const rotateDevice = trpc.restaurantDevices.rotate.useMutation({
+    onSuccess: (result) => {
+      setSelectedDevice(null);
+      setCoAuthError('');
+      setOneTimeSecret(result.secret);
+      setOneTimeDeviceName(selectedDevice?.name ?? 'device');
+      setCopyStatus('idle');
+      refreshDevices();
+      toast.success('Device secret rotated. Copy it now; it will not be shown again.');
     },
     onError: (error) => {
       setCoAuthError(error.message);
@@ -121,17 +140,19 @@ export function RestaurantDevicesConsole() {
       return;
     }
 
-    revokeDevice.mutate(
-      {
-        deviceId: selectedDevice.id,
-        actingStaffProfileId,
-        approvingStaffProfileId,
-        approvingType,
-        approvingSecret,
-        reason,
-      },
-      { onSettled: () => revokeDevice.reset() }
-    );
+    const payload = {
+      deviceId: selectedDevice.id,
+      actingStaffProfileId,
+      approvingStaffProfileId,
+      approvingType,
+      approvingSecret,
+      reason,
+    };
+    if (deviceAction === 'rotate') {
+      rotateDevice.mutate(payload, { onSettled: () => rotateDevice.reset() });
+    } else {
+      revokeDevice.mutate(payload, { onSettled: () => revokeDevice.reset() });
+    }
   };
 
   return (
@@ -264,17 +285,32 @@ export function RestaurantDevicesConsole() {
                     </TableCell>
                     <TableCell className="text-right">
                       {device.status !== 'REVOKED' ? (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          disabled={staffQuery.isLoading || Boolean(staffQuery.error)}
-                          onClick={() => {
-                            setCoAuthError('');
-                            setSelectedDevice(device);
-                          }}
-                        >
-                          Revoke {device.name}
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={staffQuery.isLoading || Boolean(staffQuery.error)}
+                            onClick={() => {
+                              setDeviceAction('rotate');
+                              setCoAuthError('');
+                              setSelectedDevice(device);
+                            }}
+                          >
+                            Rotate secret
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={staffQuery.isLoading || Boolean(staffQuery.error)}
+                            onClick={() => {
+                              setDeviceAction('revoke');
+                              setCoAuthError('');
+                              setSelectedDevice(device);
+                            }}
+                          >
+                            Revoke {device.name}
+                          </Button>
+                        </div>
                       ) : (
                         <span className="text-xs text-text-faint">No actions</span>
                       )}
@@ -395,18 +431,23 @@ export function RestaurantDevicesConsole() {
       <Dialog
         open={selectedDevice != null}
         onOpenChange={(open) => {
-          if (!open && !revokeDevice.isPending) {
+          if (!open && !revokeDevice.isPending && !rotateDevice.isPending) {
             setSelectedDevice(null);
             setCoAuthError('');
             revokeDevice.reset();
+            rotateDevice.reset();
           }
         }}
       >
         <DialogContent showCloseButton={false} className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Revoke {selectedDevice?.name}?</DialogTitle>
+            <DialogTitle>
+              {deviceAction === 'rotate' ? 'Rotate' : 'Revoke'} {selectedDevice?.name}?
+            </DialogTitle>
             <DialogDescription>
-              Revocation is immediate and requires a distinct active staff approver.
+              {deviceAction === 'rotate'
+                ? 'The current secret stops working immediately. A distinct active staff approver is required.'
+                : 'Revocation is immediate and requires a distinct active staff approver.'}
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={submitRevocation}>
@@ -485,11 +526,12 @@ export function RestaurantDevicesConsole() {
                 type="button"
                 variant="outline"
                 className="min-h-11"
-                disabled={revokeDevice.isPending}
+                disabled={revokeDevice.isPending || rotateDevice.isPending}
                 onClick={() => {
                   setSelectedDevice(null);
                   setCoAuthError('');
                   revokeDevice.reset();
+                  rotateDevice.reset();
                 }}
               >
                 Cancel
@@ -498,12 +540,99 @@ export function RestaurantDevicesConsole() {
                 type="submit"
                 variant="destructive"
                 className="min-h-11"
-                disabled={revokeDevice.isPending || activeStaff.length < 2}
+                disabled={
+                  revokeDevice.isPending || rotateDevice.isPending || activeStaff.length < 2
+                }
               >
-                {revokeDevice.isPending ? 'Revoking…' : 'Confirm revocation'}
+                {rotateDevice.isPending
+                  ? 'Rotating…'
+                  : revokeDevice.isPending
+                    ? 'Revoking…'
+                    : deviceAction === 'rotate'
+                      ? 'Confirm rotation'
+                      : 'Confirm revocation'}
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={oneTimeSecret !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOneTimeSecret(null);
+            setOneTimeDeviceName(null);
+            setCopyStatus('idle');
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New secret for {oneTimeDeviceName ?? 'device'}</DialogTitle>
+            <DialogDescription>
+              Copy this secret now. For safety, it will be cleared when this dialog closes and
+              cannot be recovered from DevFathom.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label htmlFor="one-time-device-secret" className={labelClass}>
+              One-time device secret
+            </label>
+            <Input
+              id="one-time-device-secret"
+              readOnly
+              value={oneTimeSecret ?? ''}
+              className="h-11 font-mono"
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <Button
+              type="button"
+              className="min-h-11 w-full"
+              onClick={async () => {
+                if (!oneTimeSecret) return;
+                try {
+                  await navigator.clipboard.writeText(oneTimeSecret);
+                  setCopyStatus('copied');
+                  toast.success('Secret copied.');
+                } catch {
+                  setCopyStatus('error');
+                  toast.error(
+                    'Unable to copy automatically. Select the secret and copy it manually.'
+                  );
+                }
+              }}
+            >
+              {copyStatus === 'copied' ? 'Copied' : 'Copy secret'}
+            </Button>
+            <p
+              className={
+                copyStatus === 'error' ? 'text-sm text-destructive' : 'text-sm text-text-muted'
+              }
+              role={copyStatus === 'error' ? 'alert' : 'status'}
+              aria-live="polite"
+            >
+              {copyStatus === 'copied'
+                ? 'Secret copied to the clipboard.'
+                : copyStatus === 'error'
+                  ? 'Automatic copy failed. Select the secret above and copy it manually.'
+                  : 'This is the only time DevFathom will show this secret.'}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11"
+              onClick={() => {
+                setOneTimeSecret(null);
+                setOneTimeDeviceName(null);
+                setCopyStatus('idle');
+              }}
+            >
+              Done
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

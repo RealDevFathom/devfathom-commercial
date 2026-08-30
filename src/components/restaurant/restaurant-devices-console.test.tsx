@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -8,6 +8,10 @@ type EnrollmentOptions = {
     device: { id: string; name: string; branchId: string; status: string };
     enrollmentSecret: string;
   }) => void;
+};
+
+type RotationOptions = {
+  onSuccess?: (result: { secret: string }) => void;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -24,10 +28,13 @@ const mocks = vi.hoisted(() => ({
   deviceQueryEnabled: [] as boolean[],
   staffQueryEnabled: [] as boolean[],
   enrollmentOptions: undefined as EnrollmentOptions | undefined,
+  rotationOptions: undefined as RotationOptions | undefined,
   enrollmentMutate: vi.fn(),
   enrollmentReset: vi.fn(),
   revokeMutate: vi.fn(),
   revokeReset: vi.fn(),
+  rotateMutate: vi.fn(),
+  rotateReset: vi.fn(),
   invalidateDevices: vi.fn(),
 }));
 
@@ -60,6 +67,17 @@ vi.mock('@/lib/trpc', () => ({
           isPending: false,
           error: null,
         }),
+      },
+      rotate: {
+        useMutation: (options: RotationOptions) => {
+          mocks.rotationOptions = options;
+          return {
+            mutate: mocks.rotateMutate,
+            reset: mocks.rotateReset,
+            isPending: false,
+            error: null,
+          };
+        },
       },
     },
     restaurantStaff: {
@@ -128,6 +146,7 @@ describe('Restaurant device security UI', () => {
     mocks.staff.error = null;
     mocks.staff.isLoading = false;
     mocks.enrollmentOptions = undefined;
+    mocks.rotationOptions = undefined;
     mocks.enrollmentMutate.mockImplementation((_input, options?: EnrollmentOptions) => {
       const result = {
         device: { id: 'device_2', name: 'Expo terminal', branchId: 'branch_1', status: 'ACTIVE' },
@@ -135,6 +154,10 @@ describe('Restaurant device security UI', () => {
       };
       mocks.enrollmentOptions?.onSuccess?.(result);
       options?.onSuccess?.(result);
+    });
+    mocks.rotateMutate.mockImplementation((_input, options?: { onSettled?: () => void }) => {
+      mocks.rotationOptions?.onSuccess?.({ secret: 'rdk_rotated_once' });
+      options?.onSettled?.();
     });
   });
 
@@ -242,5 +265,51 @@ describe('Restaurant device security UI', () => {
 
     expect(screen.getByRole('heading', { level: 3, name: 'Loading devices…' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 3, name: '0 devices' })).not.toBeInTheDocument();
+  });
+
+  it('confirms a friendly device and exposes the rotated secret in an accessible one-time state', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    mocks.devices.data = [
+      {
+        id: 'device_1',
+        name: 'Kitchen display',
+        branch: { id: 'branch_1', name: 'Downtown' },
+        status: 'ACTIVE',
+        health: 'HEALTHY',
+        lastSeenAt: new Date('2026-08-18T08:00:00Z'),
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+      },
+    ];
+    mocks.staff.data = [
+      { id: 'staff_1', displayName: 'Acting Admin', status: 'ACTIVE' },
+      { id: 'staff_2', displayName: 'Shift Manager', status: 'ACTIVE' },
+    ];
+
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate secret' }));
+    expect(screen.getByRole('heading', { name: 'Rotate Kitchen display?' })).toBeInTheDocument();
+    expect(screen.getByText(/current secret stops working immediately/i)).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Acting staff'), { target: { value: 'staff_1' } });
+    fireEvent.change(screen.getByLabelText('Approving staff'), { target: { value: 'staff_2' } });
+    fireEvent.change(screen.getByLabelText('Approving PIN or badge secret'), {
+      target: { value: '482913' },
+    });
+    fireEvent.change(screen.getByLabelText('Reason'), {
+      target: { value: 'Scheduled rotation' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm rotation' }));
+
+    expect(screen.getByRole('heading', { name: 'New secret for Kitchen display' })).toBeVisible();
+    expect(screen.getByLabelText('One-time device secret')).toHaveValue('rdk_rotated_once');
+    expect(screen.getByRole('status')).toHaveTextContent(/only time DevFathom will show/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy secret' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('rdk_rotated_once'));
+    expect(screen.getByRole('status')).toHaveTextContent('Secret copied to the clipboard.');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.queryByDisplayValue('rdk_rotated_once')).not.toBeInTheDocument();
   });
 });

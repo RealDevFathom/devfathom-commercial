@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   DEVICE_SECRET_PREFIX,
@@ -8,6 +8,7 @@ import {
   hashDeviceSecret,
   isDeviceSecretFormat,
   isDeviceUsable,
+  rotateDeviceSecret,
 } from './devices';
 
 describe('device secret primitives', () => {
@@ -37,6 +38,80 @@ describe('device secret primitives', () => {
     expect(isDeviceSecretFormat('df_something')).toBe(false);
     expect(isDeviceSecretFormat(DEVICE_SECRET_PREFIX)).toBe(false); // prefix only, no body
     expect(isDeviceSecretFormat('')).toBe(false);
+  });
+});
+
+describe('rotateDeviceSecret', () => {
+  it('locks an active row, replaces only its hash, and returns the raw secret once', async () => {
+    const update = vi.fn(async () => ({ id: 'device-1', status: 'ACTIVE' }));
+    const db = {
+      $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
+        run({
+          $queryRaw: vi.fn(async () => [
+            {
+              id: 'device-1',
+              status: 'ACTIVE',
+              revokedAt: null,
+              deviceSecretHash: 'old-hash',
+            },
+          ]),
+          restaurantRegisteredDevice: { update },
+        }),
+    } as never;
+
+    const result = await rotateDeviceSecret(db, 'device-1', 'old-hash');
+
+    expect(result.secret).toMatch(/^rdk_/);
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'device-1' },
+      data: { deviceSecretHash: hashDeviceSecret(result.secret) },
+    });
+  });
+
+  it('fails closed for a revoked row without changing its hash', async () => {
+    const update = vi.fn();
+    const db = {
+      $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
+        run({
+          $queryRaw: vi.fn(async () => [
+            {
+              id: 'device-1',
+              status: 'REVOKED',
+              revokedAt: new Date(),
+              deviceSecretHash: 'old-hash',
+            },
+          ]),
+          restaurantRegisteredDevice: { update },
+        }),
+    } as never;
+
+    await expect(rotateDeviceSecret(db, 'device-1', 'old-hash')).rejects.toMatchObject({
+      reason: 'REVOKED',
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a replay after another request has replaced the observed hash', async () => {
+    const update = vi.fn();
+    const db = {
+      $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
+        run({
+          $queryRaw: vi.fn(async () => [
+            {
+              id: 'device-1',
+              status: 'ACTIVE',
+              revokedAt: null,
+              deviceSecretHash: 'new-hash',
+            },
+          ]),
+          restaurantRegisteredDevice: { update },
+        }),
+    } as never;
+
+    await expect(rotateDeviceSecret(db, 'device-1', 'old-hash')).rejects.toMatchObject({
+      reason: 'STALE_ROTATION',
+    });
+    expect(update).not.toHaveBeenCalled();
   });
 });
 

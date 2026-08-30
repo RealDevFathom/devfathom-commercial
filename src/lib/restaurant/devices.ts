@@ -5,6 +5,18 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { RestaurantRegisteredDevice } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+export type DeviceLifecycleErrorReason = 'NOT_FOUND' | 'REVOKED' | 'STALE_ROTATION';
+
+export class DeviceLifecycleError extends Error {
+  constructor(
+    message: string,
+    readonly reason: DeviceLifecycleErrorReason
+  ) {
+    super(message);
+    this.name = 'DeviceLifecycleError';
+  }
+}
+
 /**
  * M2-L3 / §5 / C5 — registered-device trust primitives.
  *
@@ -122,14 +134,45 @@ export async function enrollDevice(
  */
 export async function rotateDeviceSecret(
   db: ScopedDb,
-  deviceId: string
+  deviceId: string,
+  expectedSecretHash: string
 ): Promise<{ device: RestaurantRegisteredDevice; secret: string }> {
-  const { secret, secretHash } = generateDeviceSecret();
-  const device = await db.restaurantRegisteredDevice.update({
-    where: { id: deviceId },
-    data: { deviceSecretHash: secretHash },
+  return db.$transaction(async (tx) => {
+    // The lock and replacement must share one transaction. This makes two
+    // simultaneous rotations serialize: the second request observes the
+    // already-rotated row and cannot reveal a secret that is no longer valid.
+    const rows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        status: 'ACTIVE' | 'REVOKED';
+        revokedAt: Date | null;
+        deviceSecretHash: string;
+      }>
+    >`
+      SELECT id, status, "revokedAt", "deviceSecretHash"
+      FROM restaurant_registered_devices
+      WHERE id = ${deviceId}
+      FOR UPDATE
+    `;
+    const current = rows[0];
+    if (!current) throw new DeviceLifecycleError('Device not found.', 'NOT_FOUND');
+    if (current.status !== 'ACTIVE' || current.revokedAt !== null) {
+      throw new DeviceLifecycleError('A revoked device cannot be rotated.', 'REVOKED');
+    }
+    if (current.deviceSecretHash !== expectedSecretHash) {
+      throw new DeviceLifecycleError(
+        'This device secret was already rotated. Refresh and try again if another rotation is required.',
+        'STALE_ROTATION'
+      );
+    }
+
+    const { secret, secretHash } = generateDeviceSecret();
+    const device = await tx.restaurantRegisteredDevice.update({
+      where: { id: deviceId },
+      data: { deviceSecretHash: secretHash },
+    });
+    return { device, secret };
   });
-  return { device, secret };
 }
 
 /**
