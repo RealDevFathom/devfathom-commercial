@@ -24,7 +24,7 @@ describe('RestaurantDashboardContent', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Quick access' })).toBeVisible();
     expect(
       screen.getByText('Restaurant workspace').closest('[data-slot="page-header"]')
-    ).toHaveClass('[&_[data-slot=eyebrow]]:text-text-body');
+    ).toHaveClass('[&_[data-slot=eyebrow]]:text-text-body', '[&_p]:text-text-body');
     expect(screen.getByText('Management workspace')).toHaveClass('text-text-body');
   });
 

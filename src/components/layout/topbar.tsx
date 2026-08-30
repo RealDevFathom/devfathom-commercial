@@ -158,6 +158,7 @@ export function Topbar({
 
         <Link
           href="/dashboard"
+          aria-label="Open dashboard"
           className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {brand?.markUrl || brand?.logoUrl ? (
@@ -220,7 +221,7 @@ export function Topbar({
             <span className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block">
               Search workspace
             </span>
-            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-muted-foreground/70 xl:inline-flex">
+            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-muted-foreground xl:inline-flex">
               ⌘K
             </kbd>
           </button>

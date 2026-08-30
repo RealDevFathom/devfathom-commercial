@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { createElement, type ComponentType } from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
@@ -28,6 +30,16 @@ vi.mock('./sidebar', () => ({
 import { AppShell, isPathModuleEnabled } from './app-shell';
 
 describe('AppShell module guard', () => {
+  it('keeps the responsive dashboard brand link explicitly named', () => {
+    const topbar = readFileSync(
+      path.join(process.cwd(), 'src/components/layout/topbar.tsx'),
+      'utf8'
+    );
+    expect(topbar).toContain('href="/dashboard"');
+    expect(topbar).toContain('aria-label="Open dashboard"');
+    expect(topbar).toContain('text-muted-foreground xl:inline-flex');
+  });
+
   it('uses restaurant route ownership for direct routes', () => {
     const entitlements = {
       vertical: 'RESTAURANT' as const,

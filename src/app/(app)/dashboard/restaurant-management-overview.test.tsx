@@ -324,6 +324,11 @@ describe('RestaurantManagementOverview', () => {
       expect(alert).toHaveAccessibleName(/unavailable/i);
       expect(alert).toHaveTextContent(/could not be loaded/i);
       expect(alert).not.toBeEmptyDOMElement();
+      expect(alert.querySelector('[data-slot="status-pill"]')).toHaveClass(
+        'text-text-body',
+        '[&>span]:bg-warning'
+      );
+      expect(alert.querySelector('p')).toHaveClass('text-text-body');
     }
     const retries = screen.getAllByRole('button', { name: 'Retry' });
     expect(retries).toHaveLength(5);
