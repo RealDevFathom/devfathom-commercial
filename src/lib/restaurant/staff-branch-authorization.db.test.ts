@@ -169,7 +169,7 @@ describeIfDatabase('staff branch authorization (real PostgreSQL)', () => {
     }
   });
 
-  it('preserves one target with distinct holdings at two branches', async () => {
+  it('denies a global mutation of a target with an unauthorized branch holding', async () => {
     const db = deps.createTenantDb(ids.orgA);
     const authorization = await deps.authorization.resolveStaffBranchAuthorization(
       db,
@@ -177,6 +177,9 @@ describeIfDatabase('staff branch authorization (real PostgreSQL)', () => {
     );
     await expect(
       deps.authorization.assertAuthorizedStaffProfile(db, authorization, ids.target)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      deps.authorization.assertStaffProfileExists(db, ids.target)
     ).resolves.toBeUndefined();
     const holdings = await db.restaurantStaffJobRole.findMany({
       where: { staffProfileId: ids.target },

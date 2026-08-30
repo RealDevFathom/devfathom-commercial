@@ -11,6 +11,7 @@ vi.mock('@/lib/restaurant/job-roles', () => ({ resolveStaffCapabilities: mocks.r
 import {
   assertAuthorizedBranch,
   assertAuthorizedStaffProfile,
+  assertStaffProfileExists,
   resolveStaffBranchAuthorization,
 } from './staff-branch-authorization';
 
@@ -76,13 +77,30 @@ describe('staff branch authorization', () => {
     ).rejects.toMatchObject(expected);
   });
 
-  it('preserves a target with distinct holdings at two branches', async () => {
+  it('denies a global mutation when any target branch is unauthorized', async () => {
     const db = database();
     db.restaurantStaffProfile.findUnique.mockResolvedValueOnce({
       primaryBranchId: 'b',
       jobRoles: [{ branchId: 'a' }, { branchId: 'b' }],
       directCapabilityGrants: [],
     } as never);
+    const authorization = await resolveStaffBranchAuthorization(db as never, user);
+    await expect(
+      assertAuthorizedStaffProfile(db as never, authorization, 'target')
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(assertStaffProfileExists(db as never, 'target')).resolves.toBeUndefined();
+  });
+
+  it('allows a global mutation when every target branch is authorized', async () => {
+    const db = database();
+    db.restaurantStaffProfile.findUnique.mockResolvedValueOnce({
+      primaryBranchId: 'a',
+      jobRoles: [{ branchId: 'a' }, { branchId: 'b' }],
+      directCapabilityGrants: [],
+    } as never);
+    mocks.resolve.mockResolvedValue(new Set(['staff:manage']));
     const authorization = await resolveStaffBranchAuthorization(db as never, user);
     await expect(
       assertAuthorizedStaffProfile(db as never, authorization, 'target')

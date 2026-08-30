@@ -80,21 +80,24 @@ export function assertOrganizationWide(authorization: StaffBranchAuthorization):
   if (!authorization.organizationWide) denyStaffBranchAccess();
 }
 
-/** Authorize a global profile operation through one of its effective branch links. */
+/** Require an in-tenant profile without revealing whether a rejected id exists elsewhere. */
+export async function assertStaffProfileExists(
+  db: ScopedDb,
+  staffProfileId: string
+): Promise<void> {
+  const profile = await db.restaurantStaffProfile.findUnique({
+    where: { id: staffProfileId },
+    select: { id: true },
+  });
+  if (!profile) denyStaffBranchAccess();
+}
+
+/** Authorize a global profile operation across every branch it can affect. */
 export async function assertAuthorizedStaffProfile(
   db: ScopedDb,
   authorization: StaffBranchAuthorization,
   staffProfileId: string
 ): Promise<void> {
-  if (authorization.organizationWide) {
-    const profile = await db.restaurantStaffProfile.findUnique({
-      where: { id: staffProfileId },
-      select: { id: true },
-    });
-    if (!profile) denyStaffBranchAccess();
-    return;
-  }
-
   const profile = await db.restaurantStaffProfile.findUnique({
     where: { id: staffProfileId },
     select: {
@@ -103,12 +106,18 @@ export async function assertAuthorizedStaffProfile(
       directCapabilityGrants: { select: { branchId: true } },
     },
   });
+  if (!profile) denyStaffBranchAccess();
+  if (authorization.organizationWide) return;
+
   const linked = new Set([
-    ...(profile?.primaryBranchId ? [profile.primaryBranchId] : []),
-    ...(profile?.jobRoles.map((row) => row.branchId) ?? []),
-    ...(profile?.directCapabilityGrants.map((row) => row.branchId) ?? []),
+    ...(profile.primaryBranchId ? [profile.primaryBranchId] : []),
+    ...profile.jobRoles.map((row) => row.branchId),
+    ...profile.directCapabilityGrants.map((row) => row.branchId),
   ]);
-  if (![...linked].some((branchId) => authorization.branchIds.includes(branchId))) {
+  if (
+    linked.size === 0 ||
+    [...linked].some((branchId) => !authorization.branchIds.includes(branchId))
+  ) {
     denyStaffBranchAccess();
   }
 }
