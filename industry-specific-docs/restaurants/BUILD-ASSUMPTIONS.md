@@ -365,7 +365,9 @@ price list (in force at T) → organization default (base) price list (in force 
 variant falling back to its product's base (null-variant) entry inside a version; and an
 availability boolean = channel published AND override-available AND branch-timezone daypart open.
 Daypart rules (documented + tested in `menu-availability.ts`): an empty publication `channels`
-set = every channel; an empty `daysOfWeek` = every day; windows are half-open `[start, end)`; a
+set = every operational channel (`DINE_IN` and `TAKEAWAY`); `DELIVERY` is retained only for
+storage/read compatibility and always fails closed operationally; an empty `daysOfWeek` = every
+day; windows are half-open `[start, end)`; a
 cross-midnight window (`end <= start`) attributes its early-morning tail to the previous day; an
 exception overrides windows for its branch-local date (`isClosed` closed, else forced open);
 publication-level and item-level window layers are ANDed. A menu delete is refused while a

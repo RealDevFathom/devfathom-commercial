@@ -119,6 +119,7 @@ beforeEach(() => {
     status: 'DRAFT',
     branchId: 'branch_1',
     menuId: 'menu_1',
+    channels: ['DINE_IN'],
   });
   mocks.windowFindMany.mockResolvedValue([]);
   mocks.exceptionFindMany.mockResolvedValue([]);
@@ -286,6 +287,56 @@ describe('publication lifecycle (menu:publish)', () => {
     });
     await expect(caller().publishPublication({ id: 'pub_1' })).rejects.toMatchObject({
       code: 'CONFLICT',
+    });
+  });
+
+  it('rejects a legacy delivery draft before publication or audit mutation', async () => {
+    mocks.pubFindUnique.mockResolvedValue({
+      id: 'pub_legacy',
+      status: 'DRAFT',
+      branchId: 'b',
+      menuId: 'm',
+      channels: ['DELIVERY'],
+    });
+
+    await expect(caller().publishPublication({ id: 'pub_legacy' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message:
+        'Delivery is not configured. Set this publication to dine-in and/or takeaway before publishing.',
+    });
+    expect(mocks.pubUpdate).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('allows channel remediation and retirement for legacy records', async () => {
+    mocks.pubFindUnique.mockResolvedValue({
+      id: 'pub_legacy',
+      status: 'DRAFT',
+      branchId: 'b',
+      menuId: 'm',
+      channels: ['DELIVERY'],
+    });
+    await expect(
+      caller().setPublicationChannels({ id: 'pub_legacy', channels: ['TAKEAWAY'] })
+    ).resolves.toMatchObject({ channels: ['TAKEAWAY'] });
+
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.pubFindUnique.mockResolvedValue({
+      id: 'pub_legacy',
+      status: 'PUBLISHED',
+      branchId: 'b',
+      menuId: 'm',
+      channels: ['DELIVERY'],
+    });
+    mocks.pubUpdate.mockImplementation(
+      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
+        id: where.id,
+        ...data,
+      })
+    );
+    await expect(caller().retirePublication({ id: 'pub_legacy' })).resolves.toMatchObject({
+      status: 'RETIRED',
     });
   });
 

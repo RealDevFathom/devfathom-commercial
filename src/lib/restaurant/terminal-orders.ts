@@ -254,6 +254,16 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
   run: (args: { ctx: TerminalContext; data: z.infer<S>; actor: CommandActor }) => Promise<unknown>,
   successStatus = 200
 ) {
+  const parseBody = async (request: Request) => {
+    const parsedJson = await readJson(request);
+    if (!parsedJson.ok) return { ok: false as const, response: parsedJson.response };
+    const parsed = schema.safeParse(parsedJson.data);
+    if (!parsed.success) {
+      return { ok: false as const, response: invalidBody(parsed.error.issues) };
+    }
+    return { ok: true as const, data: parsed.data };
+  };
+
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
@@ -262,10 +272,8 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
       const key = idempotencyKeyFromRequest(request);
       if (!key) return missingIdempotencyKey();
 
-      const parsedJson = await readJson(request);
-      if (!parsedJson.ok) return parsedJson.response;
-      const parsed = schema.safeParse(parsedJson.data);
-      if (!parsed.success) return invalidBody(parsed.error.issues);
+      const parsed = await parseBody(request);
+      if (!parsed.ok) return parsed.response;
 
       const data = parsed.data as unknown;
       if (
@@ -281,7 +289,13 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
       const result = await run({ ctx, data: parsed.data, actor });
       return NextResponse.json(result as Record<string, unknown>, { status: successStatus });
     },
-    { mapError: orderErrorResponse }
+    {
+      mapError: orderErrorResponse,
+      preflight: async (request) => {
+        const parsed = await parseBody(request.clone());
+        return parsed.ok ? null : parsed.response;
+      },
+    }
   );
 }
 
