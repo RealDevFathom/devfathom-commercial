@@ -188,6 +188,16 @@ afterEach(() => {
 });
 
 describe('OrderPad transport', () => {
+  it('uses AA semantic text tokens on the initial POS screen', () => {
+    render(<OrderPad />);
+
+    expect(screen.getByText('not enrolled')).toHaveClass('!text-text-strong');
+    expect(
+      screen.getByText('Restaurant POS', { selector: '[data-slot="eyebrow"] span' })
+    ).toHaveClass('text-text-strong');
+    expect(screen.getByText(/Start a device-authenticated session/)).toHaveClass('text-text-body');
+  });
+
   it('composes item taps locally without a round trip', async () => {
     const fetch = transport();
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(

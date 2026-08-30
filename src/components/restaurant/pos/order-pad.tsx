@@ -547,9 +547,13 @@ export function OrderPad() {
       <PosShell status="not enrolled" tone="neutral" busy={busy}>
         <div className="mx-auto max-w-xl space-y-6">
           <PageHeader
-            eyebrow="Restaurant POS"
+            eyebrow={<span className="text-text-strong">Restaurant POS</span>}
             heading="Establish device"
-            description="Start a device-authenticated session. Secret stays only in memory."
+            description={
+              <span className="text-text-body">
+                Start a device-authenticated session. Secret stays only in memory.
+              </span>
+            }
           />
           {notice ? <Notice notice={notice} /> : null}
           <SectionCard title="Device enrollment">
@@ -986,7 +990,11 @@ function PosShell({
             <p className="truncate text-xs text-text-muted">Restaurant POS</p>
           </div>
           <div className="ml-auto shrink-0" aria-live="polite">
-            <StatusPill status={status} tone={tone} />
+            <StatusPill
+              status={status}
+              tone={tone}
+              className={tone === 'neutral' ? '!text-text-strong' : undefined}
+            />
           </div>
         </header>
         <main
