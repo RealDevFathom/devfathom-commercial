@@ -3,6 +3,12 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import {
+  assertTerminalSecretIsBrowserIsolated,
+  installSeededTerminalCookie,
+  restaurantE2eCredentials as fixture,
+} from './restaurant-fixture';
+
 const OUTPUT = path.join('test-results', 'visual-qa', 'm9');
 const VIEWPORTS = [
   { name: '375-portrait', width: 375, height: 812 },
@@ -112,6 +118,18 @@ async function mockPos(page: Page, failure?: { status: number; error: string }) 
         201
       );
     }
+    if (pathname.endsWith('/terminal/operators')) {
+      return json(route, {
+        operators: [
+          {
+            staffProfileId: 'operator-1',
+            displayName: 'Amina Khan',
+            role: 'Operator',
+            canApprove: false,
+          },
+        ],
+      });
+    }
     if (pathname.endsWith('/terminal/unlock')) {
       return json(route, {
         session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'operator-1' },
@@ -139,35 +157,57 @@ async function mockPos(page: Page, failure?: { status: number; error: string }) 
 }
 
 async function unlockPos(page: Page) {
+  await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await fillHydratedForm(page, [['Bearer device secret', 'pos-secret']], 'Establish session');
-  await fillHydratedForm(
-    page,
-    [
-      ['Operator profile ID', 'operator-1'],
-      ['Operator PIN', '4242'],
-    ],
-    'Unlock terminal'
-  );
+  await page.getByLabel('Operator').selectOption('operator-1');
+  await fillHydratedForm(page, [['Operator PIN', '4242']], 'Unlock terminal');
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
+  await assertTerminalSecretIsBrowserIsolated(page, fixture.pos.secret);
 }
 
 async function mockKds(page: Page, response: typeof queue | { error: string }, status = 200) {
-  await page.route('**/api/restaurant/kds/**', (route) => json(route, {}));
+  await page.route('**/api/restaurant/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/terminal/establish')) {
+      return json(
+        route,
+        {
+          sessionToken: 'kds-session-token',
+          session: { id: 'kds-session-1', state: 'LOCKED' },
+          device: { id: 'kds-device-1', name: 'Expo display', branchName: 'Gulberg Café' },
+        },
+        201
+      );
+    }
+    if (pathname.endsWith('/terminal/operators')) {
+      return json(route, {
+        operators: [
+          {
+            staffProfileId: 'operator-1',
+            displayName: 'Amina Khan',
+            role: 'Operator',
+            canApprove: false,
+          },
+        ],
+      });
+    }
+    if (pathname.endsWith('/terminal/unlock')) {
+      return json(route, {
+        session: { id: 'kds-session-1', state: 'UNLOCKED', activeStaffProfileId: 'operator-1' },
+      });
+    }
+    return json(route, {});
+  });
   await page.route('**/api/restaurant/kds/queue**', (route) => json(route, response, status));
 }
 
 async function connectKds(page: Page) {
+  await installSeededTerminalCookie(page.context(), fixture.kds);
   await page.goto('/kds');
-  await fillHydratedForm(
-    page,
-    [
-      ['Bearer device secret', 'kds-secret'],
-      ['Acting operator profile ID', 'operator-1'],
-    ],
-    'Connect display'
-  );
+  await page.getByLabel('Acting operator').selectOption('operator-1');
+  await fillHydratedForm(page, [['Operator PIN', '4242']], 'Verify PIN and unlock');
   await expect(page.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
+  await assertTerminalSecretIsBrowserIsolated(page, fixture.kds.secret);
 }
 
 async function fillHydratedForm(
@@ -245,19 +285,29 @@ function collectRuntimeErrors(page: Page) {
 test.beforeAll(async () => mkdir(OUTPUT, { recursive: true }));
 
 test('POS and KDS default, labels, disabled controls, focus, and axe WCAG 2.2 AA', async ({
-  page,
+  browser,
 }) => {
-  await page.goto('/pos');
-  await expect(page.getByRole('button', { name: 'Establish session' })).toBeDisabled();
-  await expect(page.getByLabel('Bearer device secret')).toBeVisible();
-  await page.keyboard.press('Tab');
-  await expect(page.locator(':focus')).toBeVisible();
-  await assertAxe(page);
+  const posContext = await browser.newContext();
+  await installSeededTerminalCookie(posContext, fixture.pos);
+  const pos = await posContext.newPage();
+  await mockPos(pos);
+  await pos.goto('/pos');
+  await expect(pos.getByRole('button', { name: 'Unlock terminal' })).toBeDisabled();
+  await expect(pos.getByLabel('Operator')).toBeVisible();
+  await pos.keyboard.press('Tab');
+  await expect(pos.locator(':focus')).toBeVisible();
+  await assertAxe(pos);
 
-  await page.goto('/kds');
-  await expect(page.getByRole('button', { name: 'Connect display' })).toBeDisabled();
-  await expect(page.getByLabel('Acting operator profile ID')).toBeVisible();
-  await assertAxe(page);
+  const kdsContext = await browser.newContext();
+  await installSeededTerminalCookie(kdsContext, fixture.kds);
+  const kds = await kdsContext.newPage();
+  await mockKds(kds, queue);
+  await kds.goto('/kds');
+  await expect(kds.getByRole('button', { name: 'Verify PIN and unlock' })).toBeDisabled();
+  await expect(kds.getByLabel('Acting operator')).toBeVisible();
+  await assertAxe(kds);
+  await posContext.close();
+  await kdsContext.close();
 });
 
 test('active POS covers empty, disabled, destructive dialog, keyboard, and live regions', async ({
@@ -282,13 +332,13 @@ test('active POS covers empty, disabled, destructive dialog, keyboard, and live 
 
 test('POS permission-denied and revoked states are announced', async ({ page }) => {
   await mockPos(page, { status: 403, error: 'Permission denied for this terminal.' });
+  await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await fillHydratedForm(page, [['Bearer device secret', 'denied-secret']], 'Establish session');
   await expect(page.getByRole('alert').filter({ hasText: 'Permission denied' })).toBeVisible();
 
   await page.unroute('**/api/restaurant/**');
   await mockPos(page, { status: 403, error: 'This device has been revoked.' });
-  await fillHydratedForm(page, [['Bearer device secret', 'revoked-secret']], 'Establish session');
+  await page.reload();
   await expect(page.getByRole('alert').filter({ hasText: 'Device revoked' })).toBeVisible();
 });
 

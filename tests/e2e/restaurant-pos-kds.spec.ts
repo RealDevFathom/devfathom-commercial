@@ -4,6 +4,8 @@ import {
   establishKdsFixture,
   establishPosFixture,
   e2eIdempotencyKey,
+  assertTerminalSecretIsBrowserIsolated,
+  installSeededTerminalCookie,
   restaurantE2eCredentials as fixture,
   type RestaurantTerminalFixture,
 } from './restaurant-fixture';
@@ -24,20 +26,21 @@ async function post(
 }
 
 async function unlockPos(page: Page) {
+  await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await page.getByLabel('Bearer device secret').fill(fixture.pos.secret);
-  await page.getByRole('button', { name: 'Establish session' }).click();
   await expect(page.getByRole('heading', { name: 'Terminal locked' })).toBeVisible();
-  await page.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await expect(page.getByText('E2E Menu loaded.')).toBeVisible();
+  await assertTerminalSecretIsBrowserIsolated(page, fixture.pos.secret);
 }
 
 test.describe('restaurant POS and KDS core flow', () => {
   test('shift, order, KOT, KDS, split tender, drawer and close ledgers reconcile', async ({
     page,
+    browser,
     request,
   }) => {
     test.slow();
@@ -114,12 +117,15 @@ test.describe('restaurant POS and KDS core flow', () => {
     const orderButton = page.getByRole('button', { name: /#\d+ · 2 items/ });
     const orderNumber = String(opened.orderNumber);
 
-    const kdsPage = await page.context().newPage();
+    const kdsContext = await browser.newContext();
+    await installSeededTerminalCookie(kdsContext, fixture.kds);
+    const kdsPage = await kdsContext.newPage();
     await kdsPage.goto('/kds');
-    await kdsPage.getByLabel('Bearer device secret').fill(fixture.kds.secret);
-    await kdsPage.getByLabel('Acting operator profile ID').fill(fixture.operator.staffProfileId);
-    await kdsPage.getByRole('button', { name: 'Connect display' }).click();
+    await kdsPage.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
+    await kdsPage.getByLabel('Operator PIN').fill(fixture.operator.pin);
+    await kdsPage.getByRole('button', { name: 'Verify PIN and unlock' }).click();
     await expect(kdsPage.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
+    await assertTerminalSecretIsBrowserIsolated(kdsPage, fixture.kds.secret);
     await expect(kdsPage.getByText(`Order #${orderNumber}`)).toBeVisible();
     await kdsPage
       .getByRole('button', {
@@ -133,6 +139,7 @@ test.describe('restaurant POS and KDS core flow', () => {
       })
       .click();
     await expect(kdsPage.getByText('Item marked ready.')).toBeVisible();
+    await kdsContext.close();
 
     await page.bringToFront();
     await orderButton.click();

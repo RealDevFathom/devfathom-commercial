@@ -235,6 +235,7 @@ async function main() {
           updatedAt: FIXED_AT,
         },
       });
+      await seedRestaurantDemoControlPlane(tx);
       // WHA-290: `User.department` is a composite foreign key onto
       // `organization_departments`, so this RESTAURANT organization's own
       // catalog (KITCHEN, FRONT_OF_HOUSE — it has no LEADERSHIP) must exist
@@ -1281,13 +1282,6 @@ async function main() {
     // Showcase layer (SEED DATA ONLY, WHA-223). Skipped unless asked for, so CI
     // keeps seeding exactly the minimal fixture the Playwright specs assert on.
     if (process.env.RESTAURANT_DEMO_SEED === '1') {
-      await prisma.$transaction(async (tx) => {
-        await tx.$executeRawUnsafe(
-          `SELECT set_config('app.current_organization_id', '', true), set_config('app.is_platform_admin', 'true', true)`
-        );
-        await seedRestaurantDemoControlPlane(tx);
-      });
-
       const counts = await prisma.$transaction(
         async (tx) => {
           await tx.$executeRawUnsafe(

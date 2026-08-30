@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext } from '@playwright/test';
+import { expect, type APIRequestContext, type BrowserContext } from '@playwright/test';
 
 export const restaurantE2eCredentials = {
   organizationId: 'org_chai_chowk',
@@ -20,6 +20,40 @@ export const restaurantE2eCredentials = {
 
 export function e2eIdempotencyKey(operation: string, discriminator: string | number) {
   return `restaurant-integrated-${operation}-${discriminator}`;
+}
+
+export async function installSeededTerminalCookie(
+  context: BrowserContext,
+  device: typeof restaurantE2eCredentials.pos | typeof restaurantE2eCredentials.kds,
+  baseUrl = process.env.PLAYWRIGHT_BASE_URL ??
+    `http://127.0.0.1:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
+) {
+  const origin = new URL(baseUrl);
+  await context.addCookies([
+    {
+      name: 'devfathom-terminal',
+      value: device.secret,
+      url: origin.origin,
+      httpOnly: true,
+      sameSite: 'Strict',
+      secure: origin.protocol === 'https:',
+    },
+  ]);
+}
+
+export async function assertTerminalSecretIsBrowserIsolated(
+  page: import('@playwright/test').Page,
+  secret: string
+) {
+  await expect(page.locator('body')).not.toContainText(secret);
+  const browserState = await page.evaluate(() => ({
+    dom: document.documentElement.outerHTML,
+    cookie: document.cookie,
+    storage: [...Object.entries(localStorage), ...Object.entries(sessionStorage)],
+  }));
+  expect(browserState.dom).not.toContain(secret);
+  expect(browserState.cookie).not.toContain(secret);
+  expect(JSON.stringify(browserState.storage)).not.toContain(secret);
 }
 
 export type RestaurantTerminalFixture = {
