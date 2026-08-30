@@ -618,6 +618,8 @@ export function serializeRefundResult(result: RefundTenderResult) {
     kind: result.kind,
     amount: money(result.amount),
     tipRefundAmount: money(result.tipRefundAmount),
+    serviceChargeRefundAmount: money(result.serviceChargeRefundAmount),
+    taxRefundAmount: money(result.taxRefundAmount),
     businessDate: result.businessDate.toISOString().slice(0, 10),
     paymentId: result.paymentId,
     drawerSessionId: result.drawerSessionId,

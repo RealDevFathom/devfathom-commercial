@@ -10,8 +10,39 @@ import {
 import { calculateTax } from '@/lib/restaurant/tax-calculator';
 import { zonedWallTimeToUtc } from '@/lib/restaurant/sop-recurrence';
 import { publishTaxProfile } from '@/lib/restaurant/tax-publication';
+import {
+  endServiceChargePolicy,
+  publishServiceChargePolicy,
+  ServiceChargePolicyError,
+} from '@/lib/restaurant/service-charge-policy';
+import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 import { annotateAudit } from '../audit';
-import { adminProcedure, router } from '../trpc';
+import { adminProcedure, capabilityProcedure, router } from '../trpc';
+
+const configureProcedure = capabilityProcedure('restaurant:configure');
+const serviceChargePublishSchema = z.object({
+  branchId: z.string().min(1),
+  rate: z.string().regex(/^(?:0\.\d{1,6}|1(?:\.0{1,6})?)$/),
+  effectiveFrom: z.iso.datetime(),
+  acknowledgementRef: z.string().trim().min(1).max(240),
+  acknowledged: z.literal(true),
+  replaceOpenPolicy: z.boolean().default(false),
+  idempotencyKey: z.string().trim().min(8).max(128),
+});
+const serviceChargeEndSchema = z.object({
+  branchId: z.string().min(1),
+  effectiveTo: z.iso.datetime(),
+});
+
+function serviceChargeError(error: unknown): never {
+  if (error instanceof ServiceChargePolicyError) {
+    throw new TRPCError({
+      code: error.reason === 'CONFLICT' ? 'CONFLICT' : error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.message,
+    });
+  }
+  throw error;
+}
 
 const activationSchema = z.object({
   branchId: z.string().min(1),
@@ -81,6 +112,34 @@ function canonicalActivationPayload(input: z.infer<typeof activationSchema>) {
 }
 
 export const restaurantTaxRouter = router({
+  publishServiceCharge: configureProcedure
+    .input(serviceChargePublishSchema)
+    .mutation(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      try {
+        return await publishServiceChargePolicy(ctx.db, {
+          ...input,
+          organizationId: ctx.entitlements.organizationId,
+          effectiveFrom: new Date(input.effectiveFrom),
+        });
+      } catch (error) {
+        serviceChargeError(error);
+      }
+    }),
+
+  endServiceCharge: configureProcedure.input(serviceChargeEndSchema).mutation(async ({ ctx, input }) => {
+    await requireRestaurantBranchScope(ctx, input.branchId);
+    try {
+      return await endServiceChargePolicy(ctx.db, {
+        organizationId: ctx.entitlements.organizationId,
+        branchId: input.branchId,
+        effectiveTo: new Date(input.effectiveTo),
+      });
+    } catch (error) {
+      serviceChargeError(error);
+    }
+  }),
+
   previewCustom: adminProcedure.input(previewSchema).query(({ input }) => {
     const at = new Date('2030-01-01T00:00:00.000Z');
     const result = calculateTax(

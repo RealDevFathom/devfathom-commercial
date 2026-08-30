@@ -182,6 +182,7 @@ type LoadedBillOrder = {
   branchId: string;
   status: string;
   businessDate: Date;
+  serviceChargePolicyVersion?: { id: string; rate: Prisma.Decimal } | null;
   items: LoadedBillItem[];
 };
 
@@ -215,6 +216,7 @@ async function loadBillOrder(tx: ScopedDb, orderId: string): Promise<LoadedBillO
       branchId: true,
       status: true,
       businessDate: true,
+      serviceChargePolicyVersion: { select: { id: true, rate: true } },
       items: {
         orderBy: [{ seatNumber: 'asc' }, { course: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
         select: {
@@ -254,6 +256,7 @@ type PlannedLine = {
   quantity: number;
   unitPrice: Prisma.Decimal;
   lineSubtotal: Prisma.Decimal;
+  serviceChargeAmount: Prisma.Decimal;
 };
 
 /** One planned bill: its snapshot totals and (for item-carrying splits) its lines.
@@ -264,6 +267,10 @@ type PlannedBill = {
   fractionNumerator: number | null;
   fractionDenominator: number | null;
   subtotal: Prisma.Decimal;
+  serviceChargePolicyVersionId: string | null;
+  serviceChargeRate: Prisma.Decimal | null;
+  serviceChargeBasis: Prisma.Decimal;
+  serviceChargeTotal: Prisma.Decimal;
   roundingAdjustment: Prisma.Decimal;
   grandTotal: Prisma.Decimal;
   lines: PlannedLine[];
@@ -276,6 +283,7 @@ function lineFor(item: LoadedBillItem): PlannedLine {
     quantity: item.quantity,
     unitPrice: item.unitPrice,
     lineSubtotal: itemLineSubtotal(item),
+    serviceChargeAmount: ZERO,
   };
 }
 
@@ -292,6 +300,10 @@ function itemBill(
     fractionNumerator: null,
     fractionDenominator: null,
     subtotal,
+    serviceChargePolicyVersionId: null,
+    serviceChargeRate: null,
+    serviceChargeBasis: ZERO,
+    serviceChargeTotal: ZERO,
     roundingAdjustment: ZERO,
     grandTotal: subtotal,
     lines,
@@ -310,7 +322,13 @@ export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill
     throw new BillCommandError('The order has no non-voided items to bill.', 'NO_ITEMS');
   }
 
-  switch (split.kind) {
+  if (split.kind === 'FRACTIONAL' && order.serviceChargePolicyVersion) {
+    throw new BillCommandError(
+      'FRACTIONAL splits are not supported when a service charge is pinned; use NONE, BY_ITEM, or BY_SEAT.',
+      'INVALID_SPLIT'
+    );
+  }
+  const planned = (() => { switch (split.kind) {
     case 'NONE':
       return [itemBill('NONE', items)];
 
@@ -330,7 +348,31 @@ export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill
         'INVALID_SPLIT'
       );
     }
-  }
+  } })();
+  const policy = order.serviceChargePolicyVersion;
+  if (!policy) return planned;
+  const totalBasis = sum(planned.map((bill) => bill.subtotal));
+  const totalCharge = roundMoney(multiply(totalBasis, policy.rate));
+  const billCharges = allocate(totalCharge, planned.map((bill) => bill.subtotal.mul(100).toNumber()));
+  return planned.map((bill, index) => {
+    const serviceChargeTotal = billCharges[index]!;
+    const lineCharges = allocate(
+      serviceChargeTotal,
+      bill.lines.map((line) => line.lineSubtotal.mul(100).toNumber())
+    );
+    return {
+      ...bill,
+      serviceChargePolicyVersionId: policy.id,
+      serviceChargeRate: policy.rate,
+      serviceChargeBasis: bill.subtotal,
+      serviceChargeTotal,
+      grandTotal: add(bill.grandTotal, serviceChargeTotal),
+      lines: bill.lines.map((line, lineIndex) => ({
+        ...line,
+        serviceChargeAmount: lineCharges[lineIndex]!,
+      })),
+    };
+  });
 }
 
 function planByItem(
@@ -443,6 +485,10 @@ function planFractional(
       fractionNumerator: weight,
       fractionDenominator: weightSum,
       subtotal: base,
+      serviceChargePolicyVersionId: null,
+      serviceChargeRate: null,
+      serviceChargeBasis: ZERO,
+      serviceChargeTotal: ZERO,
       roundingAdjustment: sub(grandTotal, base),
       grandTotal,
       lines: [],
@@ -616,7 +662,11 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
           fractionDenominator: bill.fractionDenominator,
           subtotal: bill.subtotal,
           taxTotal: ZERO,
-          serviceChargeTotal: ZERO,
+          serviceChargeTotal: bill.serviceChargeTotal,
+          serviceChargePolicyVersionId: bill.serviceChargePolicyVersionId,
+          serviceChargeRate: bill.serviceChargeRate,
+          serviceChargeBasis: bill.serviceChargeBasis,
+          serviceChargeTaxTreatment: bill.serviceChargePolicyVersionId ? 'NON_TAXABLE' : null,
           compTotal: ZERO,
           roundingAdjustment: bill.roundingAdjustment,
           grandTotal: bill.grandTotal,
@@ -630,9 +680,9 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
               unitPrice: line.unitPrice,
               lineSubtotal: line.lineSubtotal,
               taxAmount: ZERO,
-              serviceChargeAmount: ZERO,
+              serviceChargeAmount: line.serviceChargeAmount,
               compAmount: ZERO,
-              lineTotal: line.lineSubtotal,
+              lineTotal: add(line.lineSubtotal, line.serviceChargeAmount),
             })),
           },
         },
@@ -1155,6 +1205,11 @@ export async function finalizeBillSettlement(
       status: true,
       branchId: true,
       compTotal: true,
+      serviceChargeTotal: true,
+      serviceChargePolicyVersionId: true,
+      serviceChargeRate: true,
+      serviceChargeBasis: true,
+      serviceChargeTaxTreatment: true,
       lines: { select: { id: true, compAmount: true } },
     },
   });
@@ -1194,7 +1249,14 @@ export async function finalizeBillSettlement(
     !equals(lineTaxTotal, input.taxTotal) ||
     !equals(lineServiceTotal, input.serviceChargeTotal) ||
     !equals(add(merchandiseBucketTax, serviceBucketTax), input.taxTotal) ||
-    !equals(serviceBucketBasis, input.serviceChargeTotal) ||
+    !(input.serviceChargeBuckets.length === 0
+      ? equals(bill.serviceChargeTotal, input.serviceChargeTotal) &&
+        (input.serviceChargeTotal.isZero() ||
+          (bill.serviceChargePolicyVersionId !== null &&
+            bill.serviceChargeRate !== null &&
+            compare(bill.serviceChargeBasis, ZERO) > 0 &&
+            bill.serviceChargeTaxTreatment === 'NON_TAXABLE'))
+      : equals(serviceBucketBasis, input.serviceChargeTotal)) ||
     !equals(componentTotal, input.grandTotal)
   ) {
     throw new BillCommandError('Settlement totals do not reconcile.', 'INVALID_SPLIT');
@@ -1276,6 +1338,17 @@ export async function finalizeBillSettlement(
     compTotal: bill.compTotal.toFixed(2),
     discountTotal: input.discountTotal.toFixed(2),
     serviceChargeTotal: input.serviceChargeTotal.toFixed(2),
+    ...(bill.serviceChargePolicyVersionId
+      ? {
+          serviceCharge: {
+            policyVersionId: bill.serviceChargePolicyVersionId,
+            rate: bill.serviceChargeRate?.toString() ?? null,
+            basis: bill.serviceChargeBasis.toFixed(2),
+            amount: input.serviceChargeTotal.toFixed(2),
+            taxTreatment: bill.serviceChargeTaxTreatment,
+          },
+        }
+      : {}),
     roundingAdjustment: input.roundingAdjustment.toFixed(2),
     eligibleNetMerchandise: input.eligibleNetMerchandise.toFixed(2),
     promotionEvaluationId: input.promotionEvaluationId ?? null,
@@ -1442,7 +1515,12 @@ export async function evaluateOrderSettlement(
 ): Promise<OrderSettlement> {
   const order = await loadBillOrder(tx, orderId);
   const items = nonVoidedItems(order);
-  const derivedOrderTotal = deriveOrderTotal(items);
+  const derivedOrderTotal = add(
+    deriveOrderTotal(items),
+    order.serviceChargePolicyVersion
+      ? roundMoney(multiply(deriveOrderTotal(items), order.serviceChargePolicyVersion.rate))
+      : ZERO
+  );
 
   const allBills = await tx.restaurantBill.findMany({
     where: { orderId },
