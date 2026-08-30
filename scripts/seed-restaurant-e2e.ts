@@ -1049,31 +1049,67 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
-        await tx.loyaltyPointsEntry.upsert({
+        const existingLoyaltyEntry = await tx.loyaltyPointsEntry.findUnique({
           where: { id: IDS.loyaltyEntry },
-          update: {
-            accountId: IDS.loyaltyAccount,
-            programVersionId: IDS.loyaltyProgram,
-            kind: 'ADJUSTMENT',
-            points: 250,
-            actorId: RESTAURANT_E2E.managerId,
-            reason: 'Deterministic E2E opening balance',
-            occurredAt: FIXED_AT,
-            idempotencyKey: 'restaurant-e2e-opening-balance-v1',
-          },
-          create: {
-            id: IDS.loyaltyEntry,
-            accountId: IDS.loyaltyAccount,
-            programVersionId: IDS.loyaltyProgram,
-            kind: 'ADJUSTMENT',
-            points: 250,
-            actorId: RESTAURANT_E2E.managerId,
-            reason: 'Deterministic E2E opening balance',
-            occurredAt: FIXED_AT,
-            idempotencyKey: 'restaurant-e2e-opening-balance-v1',
-            createdAt: FIXED_AT,
+          select: {
+            organizationId: true,
+            accountId: true,
+            programVersionId: true,
+            kind: true,
+            points: true,
+            billId: true,
+            refundId: true,
+            reversesEntryId: true,
+            actorId: true,
+            reason: true,
+            expiresAt: true,
+            occurredAt: true,
+            idempotencyKey: true,
+            createdAt: true,
           },
         });
+        if (existingLoyaltyEntry) {
+          const matchesCanonicalFixture =
+            existingLoyaltyEntry.organizationId === RESTAURANT_E2E.organizationId &&
+            existingLoyaltyEntry.accountId === IDS.loyaltyAccount &&
+            existingLoyaltyEntry.programVersionId === IDS.loyaltyProgram &&
+            existingLoyaltyEntry.kind === 'ADJUSTMENT' &&
+            existingLoyaltyEntry.points === 250 &&
+            existingLoyaltyEntry.billId === null &&
+            existingLoyaltyEntry.refundId === null &&
+            existingLoyaltyEntry.reversesEntryId === null &&
+            existingLoyaltyEntry.actorId === RESTAURANT_E2E.managerId &&
+            existingLoyaltyEntry.reason === 'Deterministic E2E opening balance' &&
+            existingLoyaltyEntry.expiresAt === null &&
+            existingLoyaltyEntry.occurredAt.getTime() === FIXED_AT.getTime() &&
+            existingLoyaltyEntry.idempotencyKey === 'restaurant-e2e-opening-balance-v1' &&
+            existingLoyaltyEntry.createdAt.getTime() === FIXED_AT.getTime();
+          if (!matchesCanonicalFixture) {
+            throw new Error(
+              `Immutable loyalty points entry ${IDS.loyaltyEntry} does not match the canonical fixture.`
+            );
+          }
+        } else {
+          await tx.loyaltyPointsEntry.create({
+            data: {
+              id: IDS.loyaltyEntry,
+              organizationId: RESTAURANT_E2E.organizationId,
+              accountId: IDS.loyaltyAccount,
+              programVersionId: IDS.loyaltyProgram,
+              kind: 'ADJUSTMENT',
+              points: 250,
+              billId: null,
+              refundId: null,
+              reversesEntryId: null,
+              actorId: RESTAURANT_E2E.managerId,
+              reason: 'Deterministic E2E opening balance',
+              expiresAt: null,
+              occurredAt: FIXED_AT,
+              idempotencyKey: 'restaurant-e2e-opening-balance-v1',
+              createdAt: FIXED_AT,
+            },
+          });
+        }
         await tx.restaurantSopTemplate.upsert({
           where: { id: IDS.sopTemplate },
           update: {
