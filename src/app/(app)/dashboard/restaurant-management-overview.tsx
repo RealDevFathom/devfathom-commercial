@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, RotateCcw, Save } from 'lucide-react';
 
@@ -112,12 +112,16 @@ function ErrorState({
   subject: string;
 }) {
   return (
-    <div role={denied ? 'status' : 'alert'} className="space-y-3">
+    <div
+      role={denied ? 'status' : 'alert'}
+      aria-label={`${subject} ${denied ? 'restricted' : 'unavailable'}`}
+      className="space-y-3"
+    >
       <StatusPill status={denied ? 'Restricted' : 'Unavailable'} tone="warning" />
       <p className="text-sm text-text-muted">
         {denied
           ? `${subject} require the existing financial-report permission. No cached figures are shown.`
-          : `${subject} could not be loaded. Other dashboard tools remain available.`}
+          : `${subject} could not be loaded. No cached figures are shown. Other dashboard tools remain available.`}
       </p>
       {!denied ? (
         <Button type="button" variant="outline" onClick={retry}>
@@ -554,6 +558,7 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
   });
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<DashboardPreference>(cloneDefault);
+  const draftRef = useRef(draft);
   const [branchOverride, setBranchOverride] = useState<string | null>(null);
   const [rangeOverride, setRangeOverride] = useState<7 | 30 | null>(null);
   const activeBranches = (branchesQuery.data ?? []).filter((branch) => branch.active);
@@ -576,19 +581,22 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
   };
   const financialQuery = trpc.restaurantInsights.listFinancialReports.useQuery(rangeInput, {
     enabled: branchReady,
+    retry: false,
   });
   const financialRows = financialQuery.error ? [] : (financialQuery.data ?? []);
   const operationalQuery = trpc.restaurantInsights.listOperationalReports.useQuery(rangeInput, {
     enabled: branchReady,
+    retry: false,
   });
   const operationalRows = operationalQuery.error ? [] : (operationalQuery.data ?? []);
   const latestDate = operationalRows[0]?.businessDate ?? '';
   const detailQuery = trpc.restaurantInsights.readOperationalReport.useQuery(
     { branchId: selectedBranchId, businessDate: latestDate },
-    { enabled: branchReady && latestDate.length > 0 && !operationalQuery.error }
+    { enabled: branchReady && latestDate.length > 0 && !operationalQuery.error, retry: false }
   );
   const labourQuery = trpc.restaurantInsights.listLabourCosts.useQuery(rangeInput, {
     enabled: branchReady,
+    retry: false,
   });
   const labourRows = labourQuery.error ? [] : (labourQuery.data ?? []);
   const layout = editing ? draft : (preferencesQuery.data ?? CLIENT_DEFAULT);
@@ -602,17 +610,19 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
 
   const beginEditing = () => {
     const current = preferencesQuery.data ?? CLIENT_DEFAULT;
-    setDraft({
+    const next = {
       ...current,
       defaultBranchId: selectedBranchId || current.defaultBranchId,
       rangeDays,
       widgets: current.widgets.map((widget) => ({ ...widget })),
-    });
+    };
+    draftRef.current = next;
+    setDraft(next);
     setEditing(true);
   };
 
   const save = async () => {
-    const next = { ...draft, defaultBranchId: selectedBranchId || null, rangeDays };
+    const next = draftRef.current;
     const saved = await updatePreferences.mutateAsync(next);
     utils.restaurantDashboard.getPreferences.setData(undefined, saved);
     setEditing(false);
@@ -620,12 +630,10 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
 
   const restoreDefault = () => {
     const next = cloneDefault();
+    draftRef.current = next;
     setDraft(next);
     setRangeOverride(next.rangeDays);
-    const defaultBranch = (branchesQuery.data ?? []).find(
-      (branch) => branch.active && branch.isDefault
-    );
-    setBranchOverride(defaultBranch?.id ?? selectedBranchId);
+    setBranchOverride(null);
   };
 
   if (!insightsEnabled) {
@@ -698,7 +706,11 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
               value={selectedBranchId}
               onChange={(value) => {
                 setBranchOverride(value);
-                if (editing) setDraft((current) => ({ ...current, defaultBranchId: value }));
+                if (editing) {
+                  const next = { ...draftRef.current, defaultBranchId: value };
+                  draftRef.current = next;
+                  setDraft(next);
+                }
               }}
               ariaLabel={editing ? 'Saved default branch' : 'Branch'}
             />
@@ -712,7 +724,11 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
               onChange={(event) => {
                 const next = Number(event.target.value) as 7 | 30;
                 setRangeOverride(next);
-                if (editing) setDraft((current) => ({ ...current, rangeDays: next }));
+                if (editing) {
+                  const nextDraft = { ...draftRef.current, rangeDays: next };
+                  draftRef.current = nextDraft;
+                  setDraft(nextDraft);
+                }
               }}
             >
               <option value={7}>Last 7 dates</option>
@@ -733,7 +749,11 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
       {editing ? (
         <LayoutEditor
           widgets={draft.widgets}
-          onChange={(widgets) => setDraft((current) => ({ ...current, widgets }))}
+          onChange={(widgets) => {
+            const next = { ...draftRef.current, widgets };
+            draftRef.current = next;
+            setDraft(next);
+          }}
           labourDenied={isDenied(labourQuery.error)}
         />
       ) : null}
