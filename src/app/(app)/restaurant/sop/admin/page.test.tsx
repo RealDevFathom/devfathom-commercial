@@ -164,6 +164,20 @@ describe('SOP admin entitlement states', () => {
     });
   });
 
+  describe('disabled — the plan explicitly grants zero templates', () => {
+    it('presents a deliberate plan disable without the exhausted-quota remedy', () => {
+      renderView({ templateLimit: 0, templates: [template()] });
+
+      expect(pill('Plan allowance · 0 allowed')).toHaveAttribute('data-tone', 'neutral');
+      expect(pill('Disabled · 1 active · 0 allowed')).toHaveAttribute('data-tone', 'neutral');
+      expect(createFieldset()).toBeDisabled();
+      expect(limitNote()).toHaveAttribute('data-capacity', 'disabled');
+      expect(limitNote()).toHaveTextContent(/plan deliberately disables active SOP templates/i);
+      expect(limitNote()).not.toHaveTextContent(/archive an active template/i);
+      expect(screen.queryByText(/not configured/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe('unconfigured — the platform never set the limit', () => {
     it('never renders a missing limit as a zero allowance', () => {
       renderView({ templateLimit: undefined, templates: [] });
