@@ -121,7 +121,7 @@ function ErrorState({
       <p className="text-sm text-text-muted">
         {denied
           ? `${subject} require the existing financial-report permission. No cached figures are shown.`
-          : `${subject} could not be loaded. Other dashboard tools remain available.`}
+          : `${subject} could not be loaded. No cached figures are shown. Other dashboard tools remain available.`}
       </p>
       {!denied ? (
         <Button type="button" variant="outline" onClick={retry}>
@@ -581,19 +581,22 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
   };
   const financialQuery = trpc.restaurantInsights.listFinancialReports.useQuery(rangeInput, {
     enabled: branchReady,
+    retry: false,
   });
   const financialRows = financialQuery.error ? [] : (financialQuery.data ?? []);
   const operationalQuery = trpc.restaurantInsights.listOperationalReports.useQuery(rangeInput, {
     enabled: branchReady,
+    retry: false,
   });
   const operationalRows = operationalQuery.error ? [] : (operationalQuery.data ?? []);
   const latestDate = operationalRows[0]?.businessDate ?? '';
   const detailQuery = trpc.restaurantInsights.readOperationalReport.useQuery(
     { branchId: selectedBranchId, businessDate: latestDate },
-    { enabled: branchReady && latestDate.length > 0 && !operationalQuery.error }
+    { enabled: branchReady && latestDate.length > 0 && !operationalQuery.error, retry: false }
   );
   const labourQuery = trpc.restaurantInsights.listLabourCosts.useQuery(rangeInput, {
     enabled: branchReady,
+    retry: false,
   });
   const labourRows = labourQuery.error ? [] : (labourQuery.data ?? []);
   const layout = editing ? draft : (preferencesQuery.data ?? CLIENT_DEFAULT);
