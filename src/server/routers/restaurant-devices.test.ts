@@ -86,7 +86,7 @@ function adminCtx(db: unknown, userId = 'user_admin') {
           expiresAt: null,
         },
       ],
-      limits: {},
+      limits: { 'pos.registeredDevices.max': 100, 'pos.terminals.max': 100 },
     },
     session: {
       expires: 'later',

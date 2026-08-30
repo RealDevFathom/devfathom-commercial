@@ -8,12 +8,15 @@ import {
 import {
   DeviceLifecycleError,
   deviceHealth,
-  enrollDevice,
   revokeDevice,
   rotateDeviceSecret,
 } from '@/lib/restaurant/devices';
 import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import {
+  CommercialLimitError,
+  enrollDeviceWithinCommercialLimits,
+} from '@/lib/restaurant/commercial-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   assertActorEligibleForBranch,
@@ -156,12 +159,21 @@ export const restaurantDevicesRouter = router({
         if (!station) throw new TRPCError({ code: 'NOT_FOUND', message: 'Station not found.' });
       }
 
-      const { device, secret } = await enrollDevice(ctx.db, {
-        branchId: input.branchId,
-        name: input.name,
-        kind,
-        stationId: kind === 'KDS' ? input.stationId : null,
-      });
+      let enrollment;
+      try {
+        enrollment = await enrollDeviceWithinCommercialLimits(ctx.db, ctx.entitlements.limits, {
+          branchId: input.branchId,
+          name: input.name,
+          kind,
+          stationId: kind === 'KDS' ? input.stationId : null,
+        });
+      } catch (error) {
+        if (error instanceof CommercialLimitError) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        }
+        throw error;
+      }
+      const { device, secret } = enrollment;
 
       annotateAudit(ctx, {
         targetType: 'RestaurantRegisteredDevice',
