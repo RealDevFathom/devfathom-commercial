@@ -210,21 +210,68 @@ test('failure ledger records denial, validation, rollback, success, replay, and 
 });
 
 test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
+  const unexpectedErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !message.text().includes('status of 400'))
+      unexpectedErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => unexpectedErrors.push(error.message));
+  page.on('requestfailed', (request) => {
+    const failure = request.failure()?.errorText ?? 'request failed';
+    if (failure !== 'net::ERR_ABORTED') unexpectedErrors.push(failure);
+  });
   await loginPlatform(page);
   await page.goto('/platform/organizations/new');
   await page.getByRole('link', { name: /Continue as Restaurant/ }).click();
   await page.getByLabel('Display name').fill('E2E Restaurant');
   await page.getByLabel('Legal name').fill('E2E Restaurant Limited');
   await page.getByLabel('Workspace slug').fill(platformFixture.tenant.slug);
-  await page.getByLabel('Primary contact').fill('Restaurant Owner');
+  await page.locator('input[name="timezone"]').fill('Asia/Karachi');
+  await page.getByLabel('First branch name').fill('Gulberg Flagship');
+  await page.getByLabel('First branch address').fill('42 Main Boulevard, Lahore');
+  await page.locator('input[name="businessDayCutoff"]').fill('04:30');
+  await page.getByLabel('Primary contact', { exact: true }).fill('Restaurant Owner');
   await page.getByLabel('Primary contact email').fill(platformFixture.tenant.email);
   await page.getByLabel('Tenant administrator').fill('Restaurant Owner');
   await page.getByLabel('Administrator email').fill(platformFixture.tenant.email);
   await page.getByLabel('Temporary administrator password').fill(platformFixture.tenant.password);
   await page.getByRole('button', { name: 'Create onboarding record' }).click();
-  await expect(page).toHaveURL(/\/platform\/organizations\//);
+  await expect(page).toHaveURL(/\/platform\/organizations\/(?!new(?:[/?]|$))[^/?]+/);
+  await withAdminDatabase(async (db) => {
+    const ready = await db.query(
+      `UPDATE organization_deployments SET status='READY'
+        WHERE "organizationId"=(SELECT id FROM organizations WHERE slug=$1)
+          AND environment='production' RETURNING id`,
+      [platformFixture.tenant.slug]
+    );
+    expect(ready.rowCount).toBe(1);
+  });
   await page.getByLabel('Move to').selectOption('ACTIVE');
-  await page.getByLabel('Operator reason').fill('E2E activation gate');
+  await page.getByLabel('Operator reason').fill('E2E activation denied before setup');
+  await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
+  await expect(page.getByText('Activation preflight failed:', { exact: false })).toBeVisible();
+  await expect(page.getByText('ONBOARDING', { exact: true }).first()).toBeVisible();
+
+  for (const [kind, reference] of [
+    ['Tax', 'tax-policy-v1'],
+    ['Payment', 'payment-policy-v2'],
+    ['Device', 'device-policy-v3'],
+    ['Operator', 'operator-policy-v4'],
+  ] as const) {
+    const key = kind.toLowerCase();
+    await expect(page.getByText(`${kind} policy reference`, { exact: true })).toBeVisible();
+    await page.locator(`input[name="${key}PolicyReference"]`).fill(reference);
+    const acknowledgement = page.locator(`input[name="${key}Acknowledged"]`);
+    await acknowledgement.focus();
+    await expect(acknowledgement).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(acknowledgement).toBeChecked();
+  }
+  await page.getByRole('button', { name: 'Save Restaurant readiness' }).click();
+  await expect(page.locator('input[name="taxPolicyReference"]')).toHaveValue('tax-policy-v1');
+
+  await page.getByLabel('Move to').selectOption('ACTIVE');
+  await page.getByLabel('Operator reason').fill('E2E activation after Restaurant setup');
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   await expect(page.getByText('ACTIVE', { exact: true }).first()).toBeVisible();
 
@@ -237,13 +284,27 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
       departments: number;
       roles: number;
       modules: number;
+      branch_name: string;
+      address: string;
+      timezone: string;
+      cutoff: string;
+      acknowledgements: number;
+      acknowledgement_actors: number;
+      acknowledgement_timestamps: number;
     }>(
       `SELECT o.status, o.vertical,
         (SELECT count(*)::int FROM restaurant_branches b WHERE b."organizationId"=o.id AND b."isDefault" AND b.active) branches,
         (SELECT count(*)::int FROM restaurant_branch_assignments a WHERE a."organizationId"=o.id) assignments,
         (SELECT count(*)::int FROM organization_departments d WHERE d."organizationId"=o.id) departments,
         (SELECT count(*)::int FROM organization_roles r WHERE r."organizationId"=o.id) roles,
-        (SELECT count(*)::int FROM platform_package_modules pm WHERE pm."packageId"=o."packageId" AND pm.enabled) modules
+        (SELECT count(*)::int FROM platform_package_modules pm WHERE pm."packageId"=o."packageId" AND pm.enabled) modules,
+        (SELECT b.name FROM restaurant_branches b WHERE b."organizationId"=o.id AND b."isDefault" AND b.active) branch_name,
+        (SELECT b.address FROM restaurant_branches b WHERE b."organizationId"=o.id AND b."isDefault" AND b.active) address,
+        (SELECT b.timezone FROM restaurant_branches b WHERE b."organizationId"=o.id AND b."isDefault" AND b.active) timezone,
+        (SELECT b."businessDayCutoff" FROM restaurant_branches b WHERE b."organizationId"=o.id AND b."isDefault" AND b.active) cutoff,
+        (SELECT count(*)::int FROM restaurant_activation_acknowledgements a WHERE a."organizationId"=o.id) acknowledgements,
+        (SELECT count(DISTINCT a."acknowledgedById")::int FROM restaurant_activation_acknowledgements a WHERE a."organizationId"=o.id) acknowledgement_actors,
+        (SELECT count(*)::int FROM restaurant_activation_acknowledgements a WHERE a."organizationId"=o.id AND a."acknowledgedAt" IS NOT NULL) acknowledgement_timestamps
        FROM organizations o JOIN platform_packages p ON p.id=o."packageId"
        WHERE o.slug=$1 AND p.vertical='RESTAURANT'`,
       [platformFixture.tenant.slug]
@@ -254,11 +315,29 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
       vertical: 'RESTAURANT',
       branches: 1,
       assignments: 1,
+      branch_name: 'Gulberg Flagship',
+      address: '42 Main Boulevard, Lahore',
+      timezone: 'Asia/Karachi',
+      cutoff: '04:30',
+      acknowledgements: 4,
+      acknowledgement_actors: 1,
+      acknowledgement_timestamps: 4,
     });
     expect(proof.rows[0].departments).toBeGreaterThan(0);
     expect(proof.rows[0].roles).toBeGreaterThan(1);
     expect(proof.rows[0].modules).toBeGreaterThan(1);
   });
+  expect(unexpectedErrors).toEqual([]);
+});
+
+test('agency onboarding exposes no Restaurant setup fields', async ({ page }) => {
+  await loginPlatform(page);
+  await page.goto('/platform/organizations/new');
+  await page.getByRole('link', { name: /Continue as Agency/ }).click();
+  await expect(page.getByLabel('First branch name')).toHaveCount(0);
+  await expect(page.getByLabel('First branch address')).toHaveCount(0);
+  await expect(page.getByLabel('Business-day cutoff')).toHaveCount(0);
+  await expect(page.getByText('Restaurant readiness')).toHaveCount(0);
 });
 
 test('shared-host login succeeds and forged tenant selection is generic', async ({ browser }) => {

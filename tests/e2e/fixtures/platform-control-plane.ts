@@ -66,6 +66,10 @@ export async function prepareControlPlaneFixture() {
        ON CONFLICT (email) DO UPDATE SET "passwordHash" = EXCLUDED."passwordHash", role = 'OPERATIONS', active = true, "mfaRequired" = false`,
       [platformFixture.operator.email, operatorHash]
     );
+    await admin.query(
+      `DELETE FROM organization_lifecycle_events WHERE "organizationId"=(SELECT id FROM organizations WHERE slug=$1)`,
+      [platformFixture.tenant.slug]
+    );
     await admin.query(`DELETE FROM organizations WHERE slug = $1`, [platformFixture.tenant.slug]);
   } finally {
     await Promise.all([runtime.end(), admin.end()]);
@@ -73,10 +77,20 @@ export async function prepareControlPlaneFixture() {
 }
 
 export async function loginPlatform(page: Page, identity = platformFixture.admin) {
-  await page.goto('/platform/login');
-  await page.getByLabel('Email').fill(identity.email);
-  await page.getByLabel('Password').fill(identity.password);
-  await page.getByRole('button', { name: /sign in/i }).click();
+  const origin = new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://admin.localhost:4319').origin;
+  const response = await page.request.post('/api/platform/session', {
+    headers: { origin },
+    data: identity,
+  });
+  expect(response.status()).toBe(200);
+  const cookie = response.headers()['set-cookie']?.match(/df_platform_session=([^;]+)/)?.[1];
+  if (!cookie) throw new Error('Platform session response did not set its opaque cookie.');
+  await page
+    .context()
+    .addCookies([
+      { name: 'df_platform_session', value: cookie, domain: new URL(origin).hostname, path: '/' },
+    ]);
+  await page.goto('/platform');
   await expect(page).toHaveURL(/\/platform(?:\/|$)/);
 }
 
