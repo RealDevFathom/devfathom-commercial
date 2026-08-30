@@ -76,6 +76,7 @@ describe('resolveNotificationMatrix', () => {
 
     await expect(resolveNotificationMatrix(db, 'sop.escalation', 'branch_1')).resolves.toEqual({
       IN_APP: true,
+      WEBHOOK: true,
       EMAIL: true,
       SMS: false,
       PUSH: true,
