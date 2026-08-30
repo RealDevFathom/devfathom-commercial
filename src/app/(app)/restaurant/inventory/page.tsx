@@ -88,10 +88,10 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
 }
 
 export default async function InventoryPage({
-  searchParams = Promise.resolve({}),
+  searchParams,
 }: {
-  searchParams?: Promise<{ notice?: string; kind?: string; selected?: string; fresh?: string }>;
-} = {}) {
+  searchParams: Promise<{ notice?: string; kind?: string; selected?: string; fresh?: string }>;
+}) {
   const query = await searchParams;
   const ctx = await tenantContext();
   // Tenancy did not resolve. Entitlements are unknowable here, so show the
