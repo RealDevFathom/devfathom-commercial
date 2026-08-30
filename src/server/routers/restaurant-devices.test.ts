@@ -17,7 +17,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
 vi.mock('@/lib/abac', async () => {
@@ -162,6 +162,11 @@ beforeAll(async () => {
       },
     });
   });
+});
+
+afterAll(async () => {
+  if (!TEST_DATABASE_URL || !deps) return;
+  await deps.withPlatformDb((tx) => tx.organization.delete({ where: { id: orgId } }));
 });
 
 describeIfDatabase('restaurantDevices router (real DB)', () => {
