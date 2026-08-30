@@ -178,6 +178,8 @@ async function getBill(db: ScopedDb, billId: string) {
           originalTenderId: true,
           amount: true,
           tipRefundAmount: true,
+          serviceChargeRefundAmount: true,
+          taxRefundAmount: true,
           kind: true,
           reason: true,
           businessDate: true,
@@ -192,6 +194,10 @@ async function getBill(db: ScopedDb, billId: string) {
   const tipTotal = sum(bill.tenders.map((t) => t.tipAmount));
   const refundTotal = sum(bill.refunds.map((r) => r.amount));
   const refundTipTotal = sum(bill.refunds.map((r) => r.tipRefundAmount));
+  const refundedServiceChargeTotal = sum(
+    bill.refunds.map((r) => r.serviceChargeRefundAmount)
+  );
+  const refundedTaxTotal = sum(bill.refunds.map((r) => r.taxRefundAmount));
 
   return {
     ...serializeBillSummary(bill),
@@ -228,6 +234,8 @@ async function getBill(db: ScopedDb, billId: string) {
       originalTenderId: r.originalTenderId,
       amount: money(r.amount),
       tipRefundAmount: money(r.tipRefundAmount),
+      serviceChargeRefundAmount: money(r.serviceChargeRefundAmount),
+      taxRefundAmount: money(r.taxRefundAmount),
       kind: r.kind,
       reason: r.reason,
       businessDate: r.businessDate.toISOString().slice(0, 10),
@@ -242,6 +250,9 @@ async function getBill(db: ScopedDb, billId: string) {
       count: bill.refunds.length,
       amount: money(refundTotal),
       tipRefundAmount: money(refundTipTotal),
+      serviceChargeRefundAmount: money(refundedServiceChargeTotal),
+      taxRefundAmount: money(refundedTaxTotal),
+      netServiceChargeAmount: money(bill.serviceChargeTotal.minus(refundedServiceChargeTotal)),
     },
     /** Net collected on this bill = tenders − refunds (excluding tips). */
     netCollected: money(sub(tenderTotal, refundTotal)),

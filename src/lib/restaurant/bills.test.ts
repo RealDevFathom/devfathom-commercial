@@ -123,6 +123,13 @@ function order(
   };
 }
 
+function withServiceCharge<T extends ReturnType<typeof order>>(value: T, rate = '0.100000') {
+  return {
+    ...value,
+    serviceChargePolicyVersion: { id: 'service-policy-v1', rate: D(rate) },
+  };
+}
+
 describe('deriveOrderTotal (pure, C4)', () => {
   it('sums (unitPrice + Σ modifier deltas) × quantity over non-voided items', () => {
     const o = order([
@@ -135,6 +142,56 @@ describe('deriveOrderTotal (pure, C4)', () => {
 });
 
 describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
+  it('freezes DINE_IN policy evidence on exact pre-discount merchandise and modifier basis', () => {
+    const [bill] = planBills(
+      withServiceCharge(
+        order([
+          { id: 'a', unitPrice: '10.00', modifiers: ['1.00'] },
+          { id: 'b', unitPrice: '5.00', quantity: 2 },
+        ])
+      ),
+      { kind: 'NONE' }
+    );
+    expect({
+      policy: bill!.serviceChargePolicyVersionId,
+      basis: bill!.serviceChargeBasis.toFixed(2),
+      amount: bill!.serviceChargeTotal.toFixed(2),
+      total: bill!.grandTotal.toFixed(2),
+      lines: bill!.lines.map((line) => line.serviceChargeAmount.toFixed(2)),
+    }).toEqual({
+      policy: 'service-policy-v1',
+      basis: '21.00',
+      amount: '2.10',
+      total: '23.10',
+      lines: ['1.10', '1.00'],
+    });
+  });
+
+  it('allocates odd service-charge cents stably across BY_ITEM bills', () => {
+    const value = withServiceCharge(
+      order([
+        { id: 'a', unitPrice: '0.05' },
+        { id: 'b', unitPrice: '0.05' },
+        { id: 'c', unitPrice: '0.05' },
+      ])
+    );
+    const bills = planBills(value, { kind: 'BY_ITEM', groups: [['a'], ['b'], ['c']] });
+    expect(bills.map((bill) => bill.serviceChargeTotal.toFixed(2))).toEqual([
+      '0.01',
+      '0.01',
+      '0.00',
+    ]);
+  });
+
+  it('rejects FRACTIONAL atomically when a service-charge policy is pinned', () => {
+    expect(() =>
+      planBills(withServiceCharge(order([{ id: 'a', unitPrice: '10.00' }])), {
+        kind: 'FRACTIONAL',
+        weights: [1, 1],
+      })
+    ).toThrow(/not supported when a service charge is pinned/);
+  });
+
   it('NONE places every non-voided item on one bill; subtotal ≡ order total', () => {
     const o = order([
       { id: 'a', unitPrice: '10.00' },

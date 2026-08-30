@@ -13,7 +13,7 @@ import {
   type MoneyActor,
 } from './drawer-sessions';
 import { reverseLoyaltyForRefund } from './loyalty';
-import { compare, equals, isNegative, isZero, money, sub, ZERO } from './money';
+import { add, allocate, compare, equals, isNegative, isZero, money, roundMoney, sub, sum, ZERO } from './money';
 import {
   appendPaymentEvent,
   getPaymentProvider,
@@ -89,6 +89,8 @@ export type RefundTenderResult = {
   kind: RefundKind;
   amount: Prisma.Decimal;
   tipRefundAmount: Prisma.Decimal;
+  serviceChargeRefundAmount: Prisma.Decimal;
+  taxRefundAmount: Prisma.Decimal;
   /** Processing business date (UTC-midnight Date for the `@db.Date` column). */
   businessDate: Date;
   paymentId: string | null;
@@ -106,7 +108,11 @@ type LoadedTender = {
   billId: string;
   businessDate: Date;
   paymentId: string | null;
-  bill: { branchId: string };
+  bill: {
+    branchId: string;
+    serviceChargeTotal: Prisma.Decimal;
+    tenders: { id: string; amount: Prisma.Decimal }[];
+  };
 };
 
 function requireReason(reason: string | null | undefined): string {
@@ -168,6 +174,61 @@ export async function refundTender(
       );
     }
 
+    const serviceShares = allocate(
+      tender.bill.serviceChargeTotal,
+      tender.bill.tenders.map((row) => row.amount.mul(100).toNumber())
+    );
+    const tenderIndex = tender.bill.tenders.findIndex((row) => row.id === tender.id);
+    const tenderServiceTotal = serviceShares[tenderIndex] ?? ZERO;
+    const priorServiceRefund = money(
+      (await tx.restaurantRefund.aggregate({
+        where: { originalTenderId: tender.id },
+        _sum: { serviceChargeRefundAmount: true },
+      }))._sum.serviceChargeRefundAmount ?? ZERO
+    );
+    const cumulativePrincipal = add(refundedSoFar, amount);
+    const cumulativeService = equals(cumulativePrincipal, tender.amount)
+      ? tenderServiceTotal
+      : roundMoney(tenderServiceTotal.mul(cumulativePrincipal).div(tender.amount));
+    const serviceChargeRefundAmount = sub(cumulativeService, priorServiceRefund);
+
+    const frozenTaxAllocations = await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+      where: { originalTenderId: tender.id },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        cents: true,
+        snapshotId: true,
+        rateBucketSnapshotId: true,
+        paymentCategory: true,
+        refundAllocations: { select: { cents: true } },
+      },
+    });
+    const originalTaxCents = frozenTaxAllocations.map((allocation) =>
+      Number(allocation.cents)
+    );
+    const tenderTaxTotal = originalTaxCents.reduce((total, cents) => total + cents, 0);
+    const cumulativeTaxCents = equals(cumulativePrincipal, tender.amount)
+      ? tenderTaxTotal
+      : new Prisma.Decimal(tenderTaxTotal)
+          .mul(cumulativePrincipal)
+          .div(tender.amount)
+          .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP)
+          .toNumber();
+    const cumulativeTaxShares =
+      tenderTaxTotal === 0 ? [] : allocate(new Prisma.Decimal(cumulativeTaxCents).div(100), originalTaxCents);
+    const taxRefundRows = frozenTaxAllocations.map((allocation, index) => {
+      const already = sum(allocation.refundAllocations.map((row) => row.cents.toString()));
+      const cumulative = cumulativeTaxShares[index]?.mul(100) ?? ZERO;
+      return { allocation, cents: cumulative.minus(already).toNumber() };
+    });
+    if (taxRefundRows.some((row) => row.cents < 0)) {
+      throw new RefundError('Frozen tax refund evidence is inconsistent.', 'INVALID');
+    }
+    const taxRefundAmount = new Prisma.Decimal(
+      taxRefundRows.reduce((total, row) => total + row.cents, 0)
+    ).div(100);
+
     // Processing business date (C7): the register's CURRENT business date.
     const branch = await tx.restaurantBranch.findUnique({
       where: { id: tender.bill.branchId },
@@ -216,6 +277,8 @@ export async function refundTender(
         billId: tender.billId,
         amount,
         tipRefundAmount,
+        serviceChargeRefundAmount,
+        taxRefundAmount,
         kind,
         businessDate,
         reason,
@@ -229,6 +292,22 @@ export async function refundTender(
     });
 
     await reverseLoyaltyForRefund(tx, { refundId: refund.id, billId: tender.billId, at });
+
+    for (const row of taxRefundRows) {
+      if (row.cents === 0) continue;
+      await tx.restaurantTaxRefundAllocation.create({
+        data: {
+          billId: tender.billId,
+          refundId: refund.id,
+          originalTenderId: tender.id,
+          paymentCategory: row.allocation.paymentCategory,
+          originalSnapshotId: row.allocation.snapshotId,
+          originalRateBucketSnapshotId: row.allocation.rateBucketSnapshotId,
+          originalTenderAllocationId: row.allocation.id,
+          cents: BigInt(row.cents),
+        },
+      });
+    }
 
     if (drawerSessionId) {
       // Every cash refund writes exactly one CASH_REFUND drawer movement.
@@ -264,6 +343,8 @@ export async function refundTender(
       kind,
       amount,
       tipRefundAmount,
+      serviceChargeRefundAmount,
+      taxRefundAmount,
       businessDate,
       paymentId,
       drawerSessionId,
@@ -284,7 +365,16 @@ async function loadTender(tx: ScopedDb, tenderId: string): Promise<LoadedTender>
       billId: true,
       businessDate: true,
       paymentId: true,
-      bill: { select: { branchId: true } },
+      bill: {
+        select: {
+          branchId: true,
+          serviceChargeTotal: true,
+          tenders: {
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            select: { id: true, amount: true },
+          },
+        },
+      },
     },
   });
   if (!tender) {
@@ -379,6 +469,8 @@ async function replayRefundResult(
       kind: true,
       amount: true,
       tipRefundAmount: true,
+      serviceChargeRefundAmount: true,
+      taxRefundAmount: true,
       businessDate: true,
       paymentId: true,
       drawerSessionId: true,
@@ -395,6 +487,8 @@ async function replayRefundResult(
     kind: refund.kind as RefundKind,
     amount: refund.amount,
     tipRefundAmount: refund.tipRefundAmount,
+    serviceChargeRefundAmount: refund.serviceChargeRefundAmount,
+    taxRefundAmount: refund.taxRefundAmount,
     businessDate: refund.businessDate,
     paymentId: refund.paymentId,
     drawerSessionId: refund.drawerSessionId,

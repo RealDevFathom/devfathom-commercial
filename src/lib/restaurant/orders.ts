@@ -384,6 +384,19 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     );
     const orderNumber = await allocateOrderNumber(tx, { branchId: branch.id, businessDate });
 
+    const serviceChargePolicy =
+      input.channel === 'DINE_IN'
+        ? await tx.restaurantServiceChargePolicyVersion.findFirst({
+            where: {
+              branchId: branch.id,
+              effectiveFrom: { lte: at },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+            },
+            orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
+            select: { id: true },
+          })
+        : null;
+
     let priceListVersionId: string | null = null;
     if (input.publicationId) {
       const refs = await resolveOrderPricingRefs(tx, {
@@ -408,6 +421,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
         deviceId: input.actor.deviceId,
         publicationId: input.publicationId ?? null,
         priceListVersionId,
+        serviceChargePolicyVersionId: serviceChargePolicy?.id ?? null,
         openedAt: at,
       },
       select: { id: true },
@@ -428,6 +442,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
       sectionId: input.sectionId ?? null,
       serverStaffProfileId: input.serverStaffProfileId ?? null,
       publicationId: input.publicationId ?? null,
+      serviceChargePolicyVersionId: serviceChargePolicy?.id ?? null,
     });
     await recordIdempotentResult(tx, input.actor, order.id);
 

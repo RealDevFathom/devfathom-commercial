@@ -2374,6 +2374,7 @@ model RestaurantBranch {
   // Completion wave: the branch's rostered shifts (scheduling only).
   shifts                      RestaurantShift[]
   taxProfileVersions          RestaurantTaxProfileVersion[]
+  serviceChargePolicyVersions RestaurantServiceChargePolicyVersion[]
   taxTransactionSnapshots     RestaurantTaxTransactionSnapshot[]
   // SOP-1: job-role holdings and direct capability grants are branch-scoped.
   staffJobRoles               RestaurantStaffJobRole[]
@@ -3983,6 +3984,7 @@ model RestaurantOrder {
   deviceId             String
   publicationId        String?
   priceListVersionId   String?
+  serviceChargePolicyVersionId String?
   customerId           String?
   openedAt             DateTime?
   closedAt             DateTime?
@@ -3997,6 +3999,7 @@ model RestaurantOrder {
   openingDevice        RestaurantRegisteredDevice       @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
   publication          RestaurantBranchMenuPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
   priceListVersion     RestaurantPriceListVersion?      @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
+  serviceChargePolicyVersion RestaurantServiceChargePolicyVersion? @relation(fields: [organizationId, serviceChargePolicyVersionId], references: [organizationId, id], onDelete: Restrict)
   customer             RestaurantCustomer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
   items                RestaurantOrderItem[]
   orderTables          RestaurantOrderTable[]
@@ -4430,6 +4433,10 @@ model RestaurantBill {
   subtotal              Decimal                 @default(0) @db.Decimal(12, 2)
   taxTotal              Decimal                 @default(0) @db.Decimal(12, 2)
   serviceChargeTotal    Decimal                 @default(0) @db.Decimal(12, 2)
+  serviceChargePolicyVersionId String?
+  serviceChargeRate     Decimal?                @db.Decimal(9, 6)
+  serviceChargeBasis    Decimal                 @default(0) @db.Decimal(12, 2)
+  serviceChargeTaxTreatment String?              @db.VarChar(24)
   compTotal             Decimal                 @default(0) @db.Decimal(12, 2)
   discountTotal         Decimal                 @default(0) @db.Decimal(12, 2)
   roundingAdjustment    Decimal                 @default(0) @db.Decimal(12, 2)
@@ -4455,6 +4462,7 @@ model RestaurantBill {
   loyaltyPointsEntries    LoyaltyPointsEntry[]
   terminalReconciliations RestaurantTerminalReconciliation[]
   taxTransactionSnapshots RestaurantTaxTransactionSnapshot[]
+  serviceChargePolicyVersion RestaurantServiceChargePolicyVersion? @relation(fields: [organizationId, serviceChargePolicyVersionId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -4616,6 +4624,8 @@ model RestaurantRefund {
   billId                 String
   amount                 Decimal              @db.Decimal(12, 2)
   tipRefundAmount        Decimal              @default(0) @db.Decimal(12, 2)
+  serviceChargeRefundAmount Decimal            @default(0) @db.Decimal(12, 2)
+  taxRefundAmount        Decimal              @default(0) @db.Decimal(12, 2)
   kind                   RestaurantRefundKind
   businessDate           DateTime             @db.Date
   reason                 String
@@ -4648,6 +4658,33 @@ model RestaurantRefund {
   @@index([drawerSessionId])
   @@index([paymentId])
   @@map("restaurant_refunds")
+}
+
+/// Immutable, branch-scoped v1 DINE_IN service-charge configuration. Published
+/// intervals are migration-constrained not to overlap; tax treatment is frozen
+/// to NON_TAXABLE by the database.
+model RestaurantServiceChargePolicyVersion {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  rate                Decimal  @db.Decimal(9, 6)
+  effectiveFrom       DateTime
+  effectiveTo         DateTime?
+  acknowledgedAt      DateTime
+  acknowledgementRef  String
+  idempotencyKey      String
+  payloadHash         String
+  createdAt           DateTime @default(now())
+
+  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  orders RestaurantOrder[]
+  bills  RestaurantBill[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([branchId, effectiveFrom])
+  @@map("restaurant_service_charge_policy_versions")
 }
 
 /// M5/C8: a register(device) × operator × business-date drawer session. At most
