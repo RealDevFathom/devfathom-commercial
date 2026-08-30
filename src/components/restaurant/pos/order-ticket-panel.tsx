@@ -52,6 +52,7 @@ type OrderTicketPanelProps = {
   actingOperatorId: string;
   operators?: RestaurantStaffOption[];
   pending: boolean;
+  tables?: Array<{ id: string; label: string; occupied: boolean; activeOrderIds: string[] }>;
   onHold: (course: number) => void;
   onFire: (course: number) => void;
   onSend: () => void;
@@ -73,18 +74,12 @@ function tone(status: string): StatusTone {
   return 'neutral';
 }
 
-function ids(value: string) {
-  return value
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-}
-
 export function OrderTicketPanel({
   order,
   actingOperatorId,
   operators = [],
   pending,
+  tables = [],
   onHold,
   onFire,
   onSend,
@@ -105,7 +100,7 @@ export function OrderTicketPanel({
   const [remakeReasons, setRemakeReasons] = useState<Record<string, string>>({});
   const [fromTableId, setFromTableId] = useState('');
   const [toTableId, setToTableId] = useState('');
-  const [mergeIds, setMergeIds] = useState('');
+  const [mergeIds, setMergeIds] = useState<string[]>([]);
 
   const courses = useMemo(() => {
     const grouped = new Map<number, OrderItem[]>();
@@ -164,6 +159,13 @@ export function OrderTicketPanel({
   }
 
   const activeTables = order.tables.filter((table) => table.active).map((table) => table.tableId);
+  const tableLabel = (id: string) =>
+    tables.find((table) => table.id === id)?.label ?? 'Current table';
+  const availableDestinations = tables.filter(
+    (table) =>
+      !activeTables.includes(table.id) &&
+      (!table.occupied || table.activeOrderIds.includes(order.id))
+  );
 
   return (
     <>
@@ -175,7 +177,7 @@ export function OrderTicketPanel({
       >
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-4 text-sm text-text-muted">
           <span>{order.channel.replaceAll('_', ' ')}</span>
-          <span>{activeTables.length ? `Tables ${activeTables.join(', ')}` : 'No table'}</span>
+          <span>{activeTables.length ? activeTables.map(tableLabel).join(', ') : 'No table'}</span>
           <Button type="button" onClick={onSend} disabled={pending} className="h-11">
             Send whole order
           </Button>
@@ -303,24 +305,36 @@ export function OrderTicketPanel({
               <p className="text-sm font-semibold text-text-strong">Move table</p>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <Label htmlFor="move-from">From table ID</Label>
-                  <Input
+                  <Label htmlFor="move-from">Current table</Label>
+                  <select
                     id="move-from"
                     value={fromTableId}
                     onChange={(event) => setFromTableId(event.target.value)}
-                    placeholder={activeTables[0] ?? 'table-id'}
-                    className="mt-1.5 h-11"
-                  />
+                    className="mt-1.5 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
+                    <option value="">Choose table</option>
+                    {activeTables.map((id) => (
+                      <option key={id} value={id}>
+                        {tableLabel(id)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
-                  <Label htmlFor="move-to">To table ID</Label>
-                  <Input
+                  <Label htmlFor="move-to">Destination table</Label>
+                  <select
                     id="move-to"
                     value={toTableId}
                     onChange={(event) => setToTableId(event.target.value)}
-                    placeholder="table-id"
-                    className="mt-1.5 h-11"
-                  />
+                    className="mt-1.5 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
+                    <option value="">Choose available table</option>
+                    {availableDestinations.map((table) => (
+                      <option key={table.id} value={table.id}>
+                        {table.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <Button
@@ -335,19 +349,38 @@ export function OrderTicketPanel({
             </div>
             <div className="space-y-2 rounded-lg border border-border-subtle p-3">
               <p className="text-sm font-semibold text-text-strong">Merge tables</p>
-              <Label htmlFor="merge-tables">Additional table IDs</Label>
-              <Input
-                id="merge-tables"
-                value={mergeIds}
-                onChange={(event) => setMergeIds(event.target.value)}
-                placeholder="table-id-2, table-id-3"
-                className="h-11"
-              />
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-medium">Additional available tables</legend>
+                {availableDestinations.length === 0 ? (
+                  <p className="text-sm text-text-muted">No additional tables are available.</p>
+                ) : (
+                  availableDestinations.map((table) => (
+                    <label
+                      key={table.id}
+                      className="flex min-h-11 items-center gap-3 rounded-md border border-border-subtle px-3 py-2 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={mergeIds.includes(table.id)}
+                        disabled={pending}
+                        onChange={() =>
+                          setMergeIds((current) =>
+                            current.includes(table.id)
+                              ? current.filter((id) => id !== table.id)
+                              : [...current, table.id]
+                          )
+                        }
+                      />
+                      {table.label}
+                    </label>
+                  ))
+                )}
+              </fieldset>
               <Button
                 type="button"
                 variant="outline"
-                disabled={pending || ids(mergeIds).length === 0}
-                onClick={() => onMerge(ids(mergeIds))}
+                disabled={pending || mergeIds.length === 0}
+                onClick={() => onMerge(mergeIds)}
                 className="h-11 w-full"
               >
                 Merge tables

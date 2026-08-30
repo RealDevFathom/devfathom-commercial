@@ -38,6 +38,18 @@ function menu(publicationId: string, itemName: string) {
             product: { name: itemName },
             price: '4.00',
             available: true,
+            modifierGroups: [
+              {
+                id: 'group-1',
+                name: 'Milk',
+                minSelect: 0,
+                maxSelect: 1,
+                options: [
+                  { id: 'option-1', name: 'Oat milk', priceDelta: '0.50' },
+                  { id: 'option-2', name: 'Whole milk', priceDelta: '0.00' },
+                ],
+              },
+            ],
           },
         ],
       },
@@ -83,6 +95,21 @@ function transport({
     if (path.endsWith('/terminal/operators')) {
       return json({
         operators: [{ staffProfileId: 'staff-1', displayName: 'Amina Rahman', role: 'Shift lead' }],
+      });
+    }
+    if (path.endsWith('/terminal/layout')) {
+      return json({
+        floors: [
+          {
+            id: 'floor-1',
+            name: 'Main room',
+            tables: [
+              { id: 'table-1', code: 'T1', capacity: 4, occupied: false, activeOrderIds: [] },
+              { id: 'table-2', code: 'T2', capacity: 2, occupied: false, activeOrderIds: [] },
+            ],
+          },
+        ],
+        sections: [{ id: 'server-section-1', name: 'Window section' }],
       });
     }
     if (path.endsWith('/terminal/unlock')) {
@@ -207,6 +234,7 @@ describe('OrderPad transport', () => {
     const callsBeforeTap = fetch.mock.calls.length;
 
     fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Oat milk/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
 
     expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
@@ -291,7 +319,7 @@ describe('OrderPad transport', () => {
     const fetch = transport();
     await unlock(fetch);
 
-    fireEvent.change(screen.getByLabelText('Table IDs'), { target: { value: 'table-stale' } });
+    fireEvent.click(screen.getByLabelText(/T1/));
     fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'TAKEAWAY' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Open order' }));

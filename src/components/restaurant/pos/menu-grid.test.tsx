@@ -18,6 +18,18 @@ const menu: EffectiveMenu = {
           product: { name: 'Sirloin' },
           price: '24.00',
           available: true,
+          modifierGroups: [
+            {
+              id: 'group-1',
+              name: 'Sauce',
+              minSelect: 1,
+              maxSelect: 2,
+              options: [
+                { id: 'option-1', name: 'Peppercorn', priceDelta: '0.00' },
+                { id: 'option-2', name: 'Mushroom', priceDelta: '1.50' },
+              ],
+            },
+          ],
         },
       ],
     },
@@ -33,9 +45,8 @@ describe('MenuGrid', () => {
     fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '3' } });
     fireEvent.change(screen.getByLabelText('Course'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Seat'), { target: { value: '4' } });
-    fireEvent.change(screen.getByLabelText('Modifier option IDs'), {
-      target: { value: 'option-1, option-2' },
-    });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Peppercorn' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Mushroom/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
 
     expect(onAdd).toHaveBeenCalledWith({
@@ -45,6 +56,17 @@ describe('MenuGrid', () => {
       seatNumber: 4,
       modifierOptionIds: ['option-1', 'option-2'],
     });
+  });
+
+  it('enforces required modifier selections by business label', () => {
+    const onAdd = vi.fn();
+    render(<MenuGrid menu={menu} pending={false} onAdd={onAdd} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Steak/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Sauce requires 1–2 selections.');
+    expect(onAdd).not.toHaveBeenCalled();
   });
 
   it('falls back to product name and disables unpriced items', () => {

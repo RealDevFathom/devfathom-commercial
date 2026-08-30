@@ -904,6 +904,13 @@ export type EffectiveMenuItem = {
     descriptionLocalized: Prisma.JsonValue | null;
   };
   variant: { id: string; name: string; nameLocalized: Prisma.JsonValue | null } | null;
+  modifierGroups: Array<{
+    id: string;
+    name: string;
+    minSelect: number;
+    maxSelect: number | null;
+    options: Array<{ id: string; name: string; priceDelta: string }>;
+  }>;
   /** Winning price (item override > publication list > base list), as a C4 string. */
   price: string | null;
   priceSource: 'OVERRIDE' | 'PUBLICATION_LIST' | 'BASE_LIST' | 'NONE';
@@ -957,6 +964,23 @@ async function buildEffectiveMenu(
                       status: true,
                       nameLocalized: true,
                       descriptionLocalized: true,
+                      modifierGroups: {
+                        orderBy: { sortOrder: 'asc' },
+                        select: {
+                          modifierGroup: {
+                            select: {
+                              id: true,
+                              name: true,
+                              minSelect: true,
+                              maxSelect: true,
+                              options: {
+                                orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+                                select: { id: true, name: true, priceDelta: true },
+                              },
+                            },
+                          },
+                        },
+                      },
                     },
                   },
                   variant: { select: { id: true, name: true, nameLocalized: true } },
@@ -1049,6 +1073,7 @@ async function buildEffectiveMenu(
           itemWindows,
           exceptions,
         });
+      const { modifierGroups, ...product } = item.product;
 
       return {
         id: item.id,
@@ -1057,7 +1082,14 @@ async function buildEffectiveMenu(
         displayName: item.displayName,
         nameLocalized: item.nameLocalized,
         sortOrder: item.sortOrder,
-        product: item.product,
+        product,
+        modifierGroups: (modifierGroups ?? []).map(({ modifierGroup }) => ({
+          ...modifierGroup,
+          options: modifierGroup.options.map((option) => ({
+            ...option,
+            priceDelta: option.priceDelta.toString(),
+          })),
+        })),
         variant: item.variant,
         price,
         priceSource,
