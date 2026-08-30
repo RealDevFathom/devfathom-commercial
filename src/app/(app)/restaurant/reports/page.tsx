@@ -9,7 +9,11 @@ import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
-import type { RestaurantReportSection } from '@/lib/restaurant/reports';
+import {
+  MAX_EXPORT_ROWS,
+  MAX_INTERACTIVE_ROWS,
+  type RestaurantReportSection,
+} from '@/lib/restaurant/reports';
 import { hasModule } from '@/lib/entitlements';
 import { restaurantReportsRouter } from '@/server/routers/restaurant-reports';
 import { createTRPCContext } from '@/server/trpc';
@@ -97,6 +101,18 @@ function SectionNotice({
     >
       <p className="font-medium text-text-strong">{title}</p>
       <p className="mt-1 text-sm text-text-muted">{detail}</p>
+    </div>
+  );
+}
+
+function DetailLimitNotice({ detail }: { detail: string }) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-sm border border-border-default bg-surface-sunken px-4 py-3 text-sm text-text-muted"
+      role="status"
+    >
+      <StatusPill status="Detail limited" tone="warning" />
+      <span>{detail}</span>
     </div>
   );
 }
@@ -473,13 +489,20 @@ export default async function RestaurantReportsPage({
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
               <Stat label="Valuation" value={displayNumber(inventory.data.valuation)} />
               <Stat label="Negative stock" value={inventory.data.negativeStockCount} />
-              <Stat label="Low stock" value={inventory.data.lowStock.length} />
+              <Stat label="Low stock" value={inventory.data.lowStockCount} />
               <Stat
                 label="Wastage movements"
                 value={inventory.data.wastage.movementCount}
                 sub={`${inventory.data.wastage.quantity} units`}
               />
             </div>
+            {inventory.data.truncated ? (
+              <div className="mt-5">
+                <DetailLimitNotice
+                  detail={`Each inventory detail list shows the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} rows in deterministic order; the totals above use the complete filtered ledger.`}
+                />
+              </div>
+            ) : null}
             {inventory.data.onHand.length ? (
               <div className="mt-6">
                 <TableFrame label="Inventory on hand">
@@ -518,6 +541,43 @@ export default async function RestaurantReportsPage({
                 detail="No stock movements have established an on-hand balance."
               />
             )}
+            <div className="mt-6 border-t border-border-subtle pt-5">
+              <h3 className="mb-3 font-semibold text-text-strong">Stock movements</h3>
+              {inventory.data.movements.length ? (
+                <TableFrame label="Filtered stock movements">
+                  <table className="w-full min-w-[44rem] text-left text-sm">
+                    <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                      <tr>
+                        <th className="p-3">Occurred</th>
+                        <th className="p-3">Reason</th>
+                        <th className="p-3 text-right">Quantity</th>
+                        <th className="p-3 text-right">Unit cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inventory.data.movements.map((movement) => (
+                        <tr className="border-t border-border-subtle" key={movement.id}>
+                          <td className="p-3 font-mono text-xs text-text-muted">
+                            {movement.occurredAt.replace('T', ' ').slice(0, 16)} UTC
+                          </td>
+                          <td className="p-3 text-text-strong">{movement.reason}</td>
+                          <td className="p-3 text-right tabular-nums">
+                            {displayNumber(movement.quantity)}
+                          </td>
+                          <td className="p-3 text-right tabular-nums text-text-muted">
+                            {movement.unitCost === null ? '—' : displayNumber(movement.unitCost)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableFrame>
+              ) : (
+                <p className="text-sm text-text-muted">
+                  No stock movements match the selected date range.
+                </p>
+              )}
+            </div>
           </>
         ) : null}
       </SectionCard>
@@ -542,16 +602,85 @@ export default async function RestaurantReportsPage({
         ) : purchasing.failed ? (
           <SectionNotice kind="error" detail="Purchasing read models could not be loaded." />
         ) : purchasing.data ? (
-          <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
-            <Stat label="Purchase orders" value={purchasing.data.purchaseOrderCount} />
-            <Stat label="PO value" value={displayNumber(purchasing.data.purchaseOrderValue)} />
-            <Stat label="Receipts" value={purchasing.data.receiptCount} />
-            <Stat
-              label="Supplier spend"
-              value={displayNumber(purchasing.data.receivedSupplierSpend)}
-            />
-            <Stat label="Discrepancies" value={purchasing.data.discrepancyCount} />
-          </div>
+          <>
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
+              <Stat label="Purchase orders" value={purchasing.data.purchaseOrderCount} />
+              <Stat label="PO value" value={displayNumber(purchasing.data.purchaseOrderValue)} />
+              <Stat label="Receipts" value={purchasing.data.receiptCount} />
+              <Stat
+                label="Supplier spend"
+                value={displayNumber(purchasing.data.receivedSupplierSpend)}
+              />
+              <Stat label="Discrepancies" value={purchasing.data.discrepancyCount} />
+            </div>
+            <div className="mt-6 grid gap-6 xl:grid-cols-2">
+              <div>
+                <h3 className="mb-3 font-semibold text-text-strong">Purchase order status</h3>
+                {Object.keys(purchasing.data.statusCounts).length ? (
+                  <TableFrame label="Purchase order status counts">
+                    <table className="w-full min-w-[22rem] text-left text-sm">
+                      <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                        <tr>
+                          <th className="p-3">Status</th>
+                          <th className="p-3 text-right">Orders</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(purchasing.data.statusCounts).map(([status, count]) => (
+                          <tr className="border-t border-border-subtle" key={status}>
+                            <td className="p-3 text-text-strong">{status.replaceAll('_', ' ')}</td>
+                            <td className="p-3 text-right tabular-nums">{count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                ) : (
+                  <p className="text-sm text-text-muted">No purchase orders match this range.</p>
+                )}
+              </div>
+              <div>
+                <h3 className="mb-3 font-semibold text-text-strong">Receiving discrepancies</h3>
+                {purchasing.data.truncated ? (
+                  <div className="mb-3">
+                    <DetailLimitNotice
+                      detail={`Showing the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} discrepancies; the count above uses every matching receipt.`}
+                    />
+                  </div>
+                ) : null}
+                {purchasing.data.discrepancies.length ? (
+                  <TableFrame label="Receiving discrepancies">
+                    <table className="w-full min-w-[32rem] text-left text-sm">
+                      <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                        <tr>
+                          <th className="p-3">Received</th>
+                          <th className="p-3">Supplier</th>
+                          <th className="p-3">Kind</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {purchasing.data.discrepancies.map((item) => (
+                          <tr className="border-t border-border-subtle" key={item.id}>
+                            <td className="p-3 font-mono text-xs text-text-muted">
+                              {item.receivedAt.slice(0, 10)}
+                            </td>
+                            <td className="p-3 text-text-strong">{item.supplierName}</td>
+                            <td className="p-3 text-text-muted">
+                              {item.kind.replaceAll('_', ' ')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                ) : (
+                  <p className="text-sm text-text-muted">
+                    No receiving discrepancies match this range.
+                  </p>
+                )}
+              </div>
+            </div>
+          </>
         ) : null}
       </SectionCard>
 
@@ -626,14 +755,23 @@ export default async function RestaurantReportsPage({
         ) : sop.failed ? (
           <SectionNotice kind="error" detail="SOP performance summary could not be loaded." />
         ) : sop.data && sop.data.total > 0 ? (
-          <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
-            <Stat label="Occurrences" value={sop.data.total} />
-            <Stat label="On time" value={sop.data.onTime} />
-            <Stat label="With proof" value={sop.data.withProof} />
-            <Stat label="Verified" value={sop.data.verified} />
-            <Stat label="Escalated" value={sop.data.escalated} />
-            <Stat label="Performance" value={`${sop.data.performanceScore}%`} />
-          </div>
+          <>
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+              <Stat label="Occurrences" value={sop.data.total} />
+              <Stat label="On time" value={sop.data.onTime} />
+              <Stat label="With proof" value={sop.data.withProof} />
+              <Stat label="Verified" value={sop.data.verified} />
+              <Stat label="Escalated" value={sop.data.escalated} />
+              <Stat label="Performance" value={`${sop.data.performanceScore}%`} />
+            </div>
+            {sop.data.truncated ? (
+              <div className="mt-5">
+                <DetailLimitNotice
+                  detail={`SOP staff attribution export is limited to ${MAX_EXPORT_ROWS.toLocaleString()} rows; the summary above uses every matching occurrence.`}
+                />
+              </div>
+            ) : null}
+          </>
         ) : (
           <SectionNotice
             kind="empty"
