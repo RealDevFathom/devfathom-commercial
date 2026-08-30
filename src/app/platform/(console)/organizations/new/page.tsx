@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { PlatformCommandForm } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 import {
   ALL_VERTICALS,
   VERTICALS,
@@ -33,6 +34,7 @@ export default async function NewOrganizationPage({
 }: {
   searchParams: Promise<{ opportunityId?: string; vertical?: string }>;
 }) {
+  await requirePlatformRead('/platform/organizations');
   const query = await searchParams;
   const vertical = chosenVertical(query.vertical);
 

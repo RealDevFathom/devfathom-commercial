@@ -4,65 +4,15 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { m } from 'motion/react';
-import {
-  Activity,
-  Boxes,
-  Building2,
-  CircleDollarSign,
-  ContactRound,
-  FileClock,
-  LogOut,
-  Menu,
-  Moon,
-  Network,
-  ScrollText,
-  Settings2,
-  Sun,
-  UsersRound,
-  X,
-} from 'lucide-react';
+import { LogOut, Menu, Moon, Sun, X } from 'lucide-react';
 import type { PlatformIdentity } from '@/lib/platform/auth';
+import { platformNavigationFor, type PlatformNavGroup } from '@/lib/platform/read-policy';
 import { cn } from '@/lib/utils';
 import { FathomMark } from '@/components/brand/logo';
 import { PageTransition } from '@/components/motion/page-transition';
 import { useTheme } from '@/components/theme-provider';
 
-type NavGroup = 'Operations' | 'Revenue' | 'Governance';
-
-const nav = [
-  { label: 'Control room', href: '/platform', icon: Activity, group: 'Operations' },
-  {
-    label: 'Organizations',
-    href: '/platform/organizations',
-    icon: Building2,
-    group: 'Operations',
-  },
-  { label: 'Deployments', href: '/platform/deployments', icon: Network, group: 'Operations' },
-  { label: 'Jobs', href: '/platform/jobs', icon: FileClock, group: 'Operations' },
-  { label: 'Sales CRM', href: '/platform/crm', icon: ContactRound, group: 'Revenue' },
-  {
-    label: 'Commercial',
-    href: '/platform/commercial',
-    icon: CircleDollarSign,
-    group: 'Revenue',
-  },
-  { label: 'Modules & plans', href: '/platform/catalog', icon: Boxes, group: 'Revenue' },
-  { label: 'Operators', href: '/platform/operators', icon: UsersRound, group: 'Governance' },
-  { label: 'Audit ledger', href: '/platform/audit', icon: ScrollText, group: 'Governance' },
-  {
-    label: 'Platform settings',
-    href: '/platform/settings',
-    icon: Settings2,
-    group: 'Governance',
-  },
-] satisfies Array<{
-  label: string;
-  href: string;
-  icon: React.ComponentType<{ className?: string }>;
-  group: NavGroup;
-}>;
-
-const groupOrder: NavGroup[] = ['Operations', 'Revenue', 'Governance'];
+const groupOrder: PlatformNavGroup[] = ['Operations', 'Revenue', 'Governance'];
 
 function isActivePath(pathname: string, href: string) {
   return href === '/platform'
@@ -81,11 +31,13 @@ function initials(name: string) {
 
 function PlatformDrawer({
   identity,
+  nav,
   pathname,
   onNavigate,
   onSignOut,
 }: {
   identity: PlatformIdentity;
+  nav: ReturnType<typeof platformNavigationFor>;
   pathname: string;
   onNavigate: () => void;
   onSignOut: () => void;
@@ -195,6 +147,7 @@ export function PlatformShell({
   const pathname = usePathname();
   const router = useRouter();
   const { theme, setTheme } = useTheme();
+  const nav = platformNavigationFor(identity.role);
   const currentPage = nav.find((item) => isActivePath(pathname, item.href)) ?? nav[0];
 
   async function signOut() {
@@ -226,6 +179,7 @@ export function PlatformShell({
           <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
             <PlatformDrawer
               identity={identity}
+              nav={nav}
               pathname={pathname}
               onNavigate={() => setMobileMenuOpen(false)}
               onSignOut={() => void signOut()}
@@ -266,7 +220,7 @@ export function PlatformShell({
               Platform nominal
             </span>
             <span className="mt-0.5 block max-w-44 truncate text-[11px] text-muted-foreground">
-              {currentPage.label}
+              {currentPage?.label ?? 'Access restricted'}
             </span>
           </div>
 

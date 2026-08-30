@@ -5,8 +5,10 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 
 export default async function JobsPage() {
+  await requirePlatformRead('/platform/jobs');
   const data = await withPlatformDb(async (db) => {
     const [jobs, organizations] = await Promise.all([
       db.platformJob.findMany({

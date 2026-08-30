@@ -5,9 +5,11 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 import { VERTICALS } from '@/lib/vertical-catalog';
 
 export default async function CatalogPage() {
+  await requirePlatformRead('/platform/catalog');
   const data = await withPlatformDb(async (db) => {
     const [modules, packages, cameraPresets] = await Promise.all([
       db.platformModule.findMany({

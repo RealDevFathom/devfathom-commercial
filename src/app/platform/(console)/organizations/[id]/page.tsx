@@ -8,6 +8,7 @@ import { SupportAccessForm } from '@/components/platform/support-access-form';
 import { verticalForModuleKey } from '@/lib/module-catalog';
 import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 import {
   ALL_VERTICALS,
   VERTICALS,
@@ -31,6 +32,7 @@ export default async function OrganizationDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePlatformRead('/platform/organizations');
   const { id } = await params;
   const now = new Date();
   const data = await withPlatformDb(async (db) => {
