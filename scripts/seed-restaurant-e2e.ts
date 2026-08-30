@@ -75,6 +75,82 @@ const IDS = {
   sopOccurrence: 'sop_occurrence_restaurant_e2e_opening',
 } as const;
 
+export const RESTAURANT_E2E_OWNED_FIXTURES = [
+  ['organizations', [RESTAURANT_E2E.organizationId]],
+  [
+    'organization_departments',
+    ['department_restaurant_e2e_kitchen', 'department_restaurant_e2e_front_of_house'],
+  ],
+  ['organization_roles', [IDS.operatorRole, IDS.managerRole]],
+  [
+    'organization_role_permissions',
+    [
+      'permission_restaurant_e2e_operator_0',
+      'permission_restaurant_e2e_operator_1',
+      'permission_restaurant_e2e_operator_2',
+      'permission_restaurant_e2e_operator_3',
+      'permission_restaurant_e2e_manager_all',
+    ],
+  ],
+  ['users', [IDS.alexUser, IDS.operatorUser, IDS.managerUser]],
+  [
+    'restaurant_branch_assignments',
+    [
+      `assignment_${IDS.alexUser}`,
+      `assignment_${IDS.operatorUser}`,
+      `assignment_${IDS.managerUser}`,
+    ],
+  ],
+  [
+    'restaurant_staff_profiles',
+    [IDS.alexStaff, RESTAURANT_E2E.operatorId, RESTAURANT_E2E.managerId],
+  ],
+  [
+    'restaurant_operator_credentials',
+    ['credential_chai_chowk_alex', IDS.operatorCredential, IDS.managerCredential],
+  ],
+  ['restaurant_branches', [RESTAURANT_E2E.branchId, RESTAURANT_E2E.branchA2Id]],
+  ['restaurant_floors', [IDS.floor]],
+  ['restaurant_tables', [IDS.table]],
+  ['restaurant_kitchen_stations', [IDS.grillStation, IDS.expoStation]],
+  ['restaurant_registered_devices', [RESTAURANT_E2E.posDeviceId, RESTAURANT_E2E.kdsDeviceId]],
+  ['restaurant_drawer_sessions', [IDS.drawer]],
+  ['restaurant_brands', [IDS.brand]],
+  ['restaurant_categories', [IDS.category]],
+  ['restaurant_products', [IDS.product]],
+  ['restaurant_modifier_groups', [IDS.modifierGroup]],
+  ['restaurant_modifier_options', [IDS.modifierOption]],
+  ['restaurant_product_modifier_groups', [IDS.productModifier]],
+  ['restaurant_units', [IDS.unit]],
+  ['restaurant_ingredients', [IDS.ingredient]],
+  ['restaurant_recipes', [IDS.recipe]],
+  ['restaurant_recipe_versions', [IDS.recipeVersion]],
+  ['restaurant_recipe_lines', [IDS.recipeLine]],
+  ['restaurant_price_lists', [IDS.priceList]],
+  ['restaurant_price_list_versions', [IDS.priceVersion]],
+  ['restaurant_price_list_entries', [IDS.priceEntry]],
+  ['restaurant_menus', [IDS.menu]],
+  ['restaurant_menu_sections', [IDS.menuSection]],
+  ['restaurant_menu_items', [IDS.menuItem]],
+  ['restaurant_branch_menu_publications', [IDS.publication]],
+  ['restaurant_menu_availability_windows', [IDS.availability]],
+  ['restaurant_station_routing_rules', [IDS.routingRule]],
+  ['restaurant_customers', [IDS.customer]],
+  ['restaurant_loyalty_program_versions', [IDS.loyaltyProgram]],
+  ['restaurant_loyalty_accounts', [IDS.loyaltyAccount]],
+  ['restaurant_loyalty_points_entries', [IDS.loyaltyEntry]],
+  ['restaurant_sop_templates', [IDS.sopTemplate]],
+  ['restaurant_sop_template_versions', [IDS.sopVersion]],
+  ['restaurant_sop_template_steps', [IDS.sopStep]],
+  ['restaurant_sop_assignments', [IDS.sopAssignment]],
+  ['restaurant_sop_occurrences', [IDS.sopOccurrence]],
+] as const;
+
+export const RESTAURANT_E2E_OWNED_ROW_COUNT = RESTAURANT_E2E_OWNED_FIXTURES.reduce(
+  (count, [, ids]) => count + ids.length,
+  0
+);
+
 const FIXED_AT = new Date('2026-08-27T00:00:00.000Z');
 const BUSINESS_DATE = new Date('2026-08-27T00:00:00.000Z');
 const PIN_BCRYPT_SALT = '$2b$12$abcdefghijklmnopqrstuu';
@@ -130,8 +206,21 @@ async function main() {
           displayName: 'Chai Chowk Café',
           vertical: 'RESTAURANT',
           status: 'ACTIVE',
+          deploymentMode: 'SHARED',
+          packageId: null,
           timezone: 'Asia/Karachi',
+          locale: 'en',
           currency: 'PKR',
+          seatLimit: 1,
+          gracePeriodDays: 0,
+          activatedAt: null,
+          suspendedAt: null,
+          terminatedAt: null,
+          purgeScheduledAt: null,
+          dataResidency: null,
+          primaryContactName: null,
+          primaryContactEmail: null,
+          notes: null,
         },
         create: {
           id: RESTAURANT_E2E.organizationId,
@@ -183,6 +272,9 @@ async function main() {
           update: {
             name: 'Gulberg Café',
             timezone: 'Asia/Karachi',
+            businessDayCutoff: '00:00',
+            shiftSignInEnforced: false,
+            address: null,
             active: true,
             isDefault: true,
           },
@@ -200,6 +292,9 @@ async function main() {
           update: {
             name: 'DHA Café',
             timezone: 'Asia/Karachi',
+            businessDayCutoff: '00:00',
+            shiftSignInEnforced: false,
+            address: null,
             active: true,
             isDefault: false,
           },
@@ -350,6 +445,18 @@ async function main() {
               title: user.title,
               status: 'ACTIVE',
               startDate: FIXED_AT,
+              role: 'EMPLOYEE',
+              avatar: null,
+              phone: null,
+              bio: null,
+              skills: [],
+              lastActiveAt: null,
+              tokenVersion: 0,
+              passwordChangedAt: null,
+              preferences: Prisma.DbNull,
+              notificationPrefs: Prisma.DbNull,
+              twoFactorSecret: null,
+              twoFactorEnabledAt: null,
             },
             create: {
               id: user.id,
@@ -549,7 +656,12 @@ async function main() {
 
         await tx.restaurantBrand.upsert({
           where: { id: IDS.brand },
-          update: { name: 'Chai Chowk', isDefault: true },
+          update: {
+            name: 'Chai Chowk',
+            nameLocalized: Prisma.DbNull,
+            status: 'ACTIVE',
+            isDefault: true,
+          },
           create: {
             id: IDS.brand,
             name: 'Chai Chowk',
@@ -565,7 +677,16 @@ async function main() {
         });
         await tx.restaurantProduct.upsert({
           where: { id: IDS.product },
-          update: { categoryId: IDS.category, name: 'Chicken Tikka Bun' },
+          update: {
+            categoryId: IDS.category,
+            type: 'ITEM',
+            status: 'ACTIVE',
+            name: 'Chicken Tikka Bun',
+            nameLocalized: Prisma.DbNull,
+            description: null,
+            descriptionLocalized: Prisma.DbNull,
+            sortOrder: 0,
+          },
           create: {
             id: IDS.product,
             categoryId: IDS.category,
@@ -576,7 +697,7 @@ async function main() {
         });
         await tx.restaurantModifierGroup.upsert({
           where: { id: IDS.modifierGroup },
-          update: { name: 'Heat', minSelect: 1, maxSelect: 1 },
+          update: { name: 'Heat', nameLocalized: Prisma.DbNull, minSelect: 1, maxSelect: 1 },
           create: {
             id: IDS.modifierGroup,
             name: 'Heat',
@@ -591,6 +712,7 @@ async function main() {
           update: {
             modifierGroupId: IDS.modifierGroup,
             name: 'Spicy',
+            nameLocalized: Prisma.DbNull,
             priceDelta: '1.50',
             sortOrder: 0,
           },
@@ -627,7 +749,12 @@ async function main() {
         });
         await tx.restaurantIngredient.upsert({
           where: { id: IDS.ingredient },
-          update: { name: 'Tikka bun', baseUnitId: IDS.unit, referenceCost: '3.0000' },
+          update: {
+            name: 'Tikka bun',
+            nameLocalized: Prisma.DbNull,
+            baseUnitId: IDS.unit,
+            referenceCost: '3.0000',
+          },
           create: {
             id: IDS.ingredient,
             name: 'Tikka bun',
@@ -730,6 +857,7 @@ async function main() {
           update: {
             priceListVersionId: IDS.priceVersion,
             productId: IDS.product,
+            variantId: null,
             price: '12.50',
           },
           create: {
@@ -743,7 +871,12 @@ async function main() {
         });
         await tx.restaurantMenu.upsert({
           where: { id: IDS.menu },
-          update: { brandId: IDS.brand, name: 'Chai Chowk Menu' },
+          update: {
+            brandId: IDS.brand,
+            name: 'Chai Chowk Menu',
+            nameLocalized: Prisma.DbNull,
+            description: null,
+          },
           create: {
             id: IDS.menu,
             brandId: IDS.brand,
@@ -754,7 +887,12 @@ async function main() {
         });
         await tx.restaurantMenuSection.upsert({
           where: { id: IDS.menuSection },
-          update: { menuId: IDS.menu, name: 'Mains', sortOrder: 0 },
+          update: {
+            menuId: IDS.menu,
+            name: 'Mains',
+            nameLocalized: Prisma.DbNull,
+            sortOrder: 0,
+          },
           create: {
             id: IDS.menuSection,
             menuId: IDS.menu,
@@ -765,7 +903,14 @@ async function main() {
         });
         await tx.restaurantMenuItem.upsert({
           where: { id: IDS.menuItem },
-          update: { sectionId: IDS.menuSection, productId: IDS.product, sortOrder: 1 },
+          update: {
+            sectionId: IDS.menuSection,
+            productId: IDS.product,
+            variantId: null,
+            displayName: null,
+            nameLocalized: Prisma.DbNull,
+            sortOrder: 1,
+          },
           create: {
             id: IDS.menuItem,
             sectionId: IDS.menuSection,
@@ -784,6 +929,7 @@ async function main() {
             status: 'PUBLISHED',
             channels: ['DINE_IN', 'TAKEAWAY'],
             publishedAt: FIXED_AT,
+            retiredAt: null,
           },
           create: {
             id: IDS.publication,
@@ -801,6 +947,7 @@ async function main() {
           where: { id: IDS.availability },
           update: {
             publicationId: IDS.publication,
+            menuItemId: null,
             label: 'Always available',
             daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
             startMinutes: 0,
@@ -819,7 +966,12 @@ async function main() {
         });
         await tx.restaurantStationRoutingRule.upsert({
           where: { id: IDS.routingRule },
-          update: { stationId: IDS.grillStation, productId: IDS.product, priority: 100 },
+          update: {
+            stationId: IDS.grillStation,
+            productId: IDS.product,
+            categoryId: null,
+            priority: 100,
+          },
           create: {
             id: IDS.routingRule,
             stationId: IDS.grillStation,
@@ -1039,56 +1191,18 @@ async function main() {
           select: { organizationId: true },
           orderBy: { organizationId: 'asc' },
         }),
-        tx.$queryRaw<
-          Array<{
-            roles: bigint;
-            staff: bigint;
-            products: bigint;
-            fixtureRows: bigint;
-            leakedRows: bigint;
-          }>
-        >`
-          SELECT
-            (SELECT count(*) FROM organization_roles WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS roles,
-            (SELECT count(*) FROM restaurant_staff_profiles WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS staff,
-            (SELECT count(*) FROM restaurant_products WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS products,
-            (SELECT count(*) FROM (
-              SELECT "organizationId" FROM restaurant_branches WHERE id IN (${RESTAURANT_E2E.branchId}, ${RESTAURANT_E2E.branchA2Id})
-              UNION ALL SELECT "organizationId" FROM restaurant_floors WHERE id = ${IDS.floor}
-              UNION ALL SELECT "organizationId" FROM restaurant_tables WHERE id = ${IDS.table}
-              UNION ALL SELECT "organizationId" FROM restaurant_modifier_groups WHERE id = ${IDS.modifierGroup}
-              UNION ALL SELECT "organizationId" FROM restaurant_modifier_options WHERE id = ${IDS.modifierOption}
-              UNION ALL SELECT "organizationId" FROM restaurant_product_modifier_groups WHERE id = ${IDS.productModifier}
-              UNION ALL SELECT "organizationId" FROM restaurant_ingredients WHERE id = ${IDS.ingredient}
-              UNION ALL SELECT "organizationId" FROM restaurant_recipes WHERE id = ${IDS.recipe}
-              UNION ALL SELECT "organizationId" FROM restaurant_recipe_versions WHERE id = ${IDS.recipeVersion}
-              UNION ALL SELECT "organizationId" FROM restaurant_recipe_lines WHERE id = ${IDS.recipeLine}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_templates WHERE id = ${IDS.sopTemplate}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_versions WHERE id = ${IDS.sopVersion}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_steps WHERE id = ${IDS.sopStep}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_assignments WHERE id = ${IDS.sopAssignment}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_occurrences WHERE id = ${IDS.sopOccurrence}
-            ) fixture_rows) AS "fixtureRows",
-            (SELECT count(*) FROM (
-              SELECT "organizationId" FROM restaurant_branches WHERE id IN (${RESTAURANT_E2E.branchId}, ${RESTAURANT_E2E.branchA2Id})
-              UNION ALL SELECT "organizationId" FROM restaurant_floors WHERE id = ${IDS.floor}
-              UNION ALL SELECT "organizationId" FROM restaurant_tables WHERE id = ${IDS.table}
-              UNION ALL SELECT "organizationId" FROM restaurant_modifier_groups WHERE id = ${IDS.modifierGroup}
-              UNION ALL SELECT "organizationId" FROM restaurant_modifier_options WHERE id = ${IDS.modifierOption}
-              UNION ALL SELECT "organizationId" FROM restaurant_product_modifier_groups WHERE id = ${IDS.productModifier}
-              UNION ALL SELECT "organizationId" FROM restaurant_ingredients WHERE id = ${IDS.ingredient}
-              UNION ALL SELECT "organizationId" FROM restaurant_recipes WHERE id = ${IDS.recipe}
-              UNION ALL SELECT "organizationId" FROM restaurant_recipe_versions WHERE id = ${IDS.recipeVersion}
-              UNION ALL SELECT "organizationId" FROM restaurant_recipe_lines WHERE id = ${IDS.recipeLine}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_templates WHERE id = ${IDS.sopTemplate}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_versions WHERE id = ${IDS.sopVersion}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_steps WHERE id = ${IDS.sopStep}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_assignments WHERE id = ${IDS.sopAssignment}
-              UNION ALL SELECT "organizationId" FROM restaurant_sop_occurrences WHERE id = ${IDS.sopOccurrence}
-            ) fixture_rows WHERE "organizationId" <> ${RESTAURANT_E2E.organizationId}) AS "leakedRows"
-        `,
+        Promise.all(
+          RESTAURANT_E2E_OWNED_FIXTURES.map(async ([table, ids]) => {
+            const rows = await tx.$queryRaw<Array<{ id: string; organizationId: string }>>(
+              Prisma.sql`SELECT id, ${
+                table === 'organizations' ? Prisma.sql`id` : Prisma.sql`"organizationId"`
+              } AS "organizationId" FROM ${Prisma.raw(table)} WHERE id IN (${Prisma.join([...ids])})`
+            );
+            return { table, expected: ids.length, rows };
+          })
+        ),
       ]);
-      return { alexMemberships, ownedRows: ownedRows[0] };
+      return { alexMemberships, ownedRows };
     });
 
     const alexOrganizations = new Set(
@@ -1098,18 +1212,18 @@ async function main() {
       String(RESTAURANT_E2E.organizationId) === DEVFATHOM_ORGANIZATION_ID ||
       !alexOrganizations.has(DEVFATHOM_ORGANIZATION_ID) ||
       !alexOrganizations.has(RESTAURANT_E2E.organizationId) ||
-      !verification.ownedRows ||
-      Number(verification.ownedRows.roles) < 2 ||
-      Number(verification.ownedRows.staff) < 3 ||
-      Number(verification.ownedRows.products) < 1 ||
-      Number(verification.ownedRows.fixtureRows) !== 16 ||
-      Number(verification.ownedRows.leakedRows) !== 0
+      verification.ownedRows.some(
+        ({ expected, rows }) =>
+          rows.length !== expected ||
+          new Set(rows.map(({ id }) => id)).size !== expected ||
+          rows.some(({ organizationId }) => organizationId !== RESTAURANT_E2E.organizationId)
+      )
     ) {
       throw new Error('Chai Chowk tenant-separation verification failed.');
     }
 
     console.log(
-      `Seeded and verified Chai Chowk (${RESTAURANT_E2E.organizationId}): Alex belongs to ${[...alexOrganizations].join(', ')}; roles=${verification.ownedRows.roles}, staff=${verification.ownedRows.staff}, products=${verification.ownedRows.products}, owned fixture rows=${verification.ownedRows.fixtureRows}, leaked fixture rows=${verification.ownedRows.leakedRows}.`
+      `Seeded and verified Chai Chowk (${RESTAURANT_E2E.organizationId}): Alex belongs to ${[...alexOrganizations].join(', ')}; exact owned fixture rows=${RESTAURANT_E2E_OWNED_ROW_COUNT}; leaked fixture rows=0.`
     );
 
     // Showcase layer (SEED DATA ONLY, WHA-223). Skipped unless asked for, so CI

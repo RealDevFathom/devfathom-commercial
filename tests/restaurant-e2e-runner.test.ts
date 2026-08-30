@@ -8,11 +8,22 @@ import config from '../playwright.restaurant-integrated.config';
 
 const target = 'postgresql://runner:secret@127.0.0.1:55432/devfathom_restaurant_e2e';
 const credentials = {
+  RESTAURANT_INTEGRATED_E2E: '1',
   RESTAURANT_ACTOR_ADMIN_EMAIL: 'admin@restaurant-e2e.test',
   RESTAURANT_ACTOR_ADMIN_PASSWORD: 'test-only',
 };
 
 describe('Restaurant integrated E2E safety', () => {
+  test.each([undefined, '', '0', 'true'])('rejects integrated opt-in %s', (value) => {
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        RESTAURANT_INTEGRATED_E2E: value,
+      })
+    ).toThrow('RESTAURANT_INTEGRATED_E2E=1 is required');
+  });
+
   test('uses one canonical disposable target for seed, runtime, and Playwright', () => {
     const env = restaurantE2eEnvironment({ RESTAURANT_E2E_DATABASE_URL: target, ...credentials });
     expect(env.DATABASE_URL).toBe(new URL(target).href);
@@ -48,12 +59,16 @@ describe('Restaurant integrated E2E safety', () => {
         ...credentials,
       })
     ).toThrow('PLAYWRIGHT_BASE_URL is forbidden');
-    expect(() => restaurantE2eEnvironment({ RESTAURANT_E2E_DATABASE_URL: target })).toThrow(
-      'RESTAURANT_ACTOR_ADMIN_EMAIL is required'
-    );
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_INTEGRATED_E2E: '1',
+        RESTAURANT_E2E_DATABASE_URL: target,
+      })
+    ).toThrow('RESTAURANT_ACTOR_ADMIN_EMAIL is required');
     expect(() =>
       restaurantE2eEnvironment({
         RESTAURANT_E2E_DATABASE_URL: target,
+        RESTAURANT_INTEGRATED_E2E: '1',
         RESTAURANT_ACTOR_ADMIN_EMAIL: credentials.RESTAURANT_ACTOR_ADMIN_EMAIL,
       })
     ).toThrow('RESTAURANT_ACTOR_ADMIN_PASSWORD is required');

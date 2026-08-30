@@ -51,6 +51,9 @@ export function resolveRestaurantE2eDatabaseUrl(
 export function restaurantE2eEnvironment(
   env: Record<string, string | undefined> = process.env
 ): Record<string, string | undefined> {
+  if (env.RESTAURANT_INTEGRATED_E2E !== '1') {
+    throw new Error('RESTAURANT_INTEGRATED_E2E=1 is required.');
+  }
   if (env.PLAYWRIGHT_BASE_URL) {
     throw new Error('PLAYWRIGHT_BASE_URL is forbidden for the integrated Restaurant E2E lane.');
   }
@@ -71,5 +74,5 @@ export function restaurantE2eEnvironment(
       delete result[name];
     }
   }
-  return { ...result, RESTAURANT_INTEGRATED_E2E: '1' };
+  return result;
 }
