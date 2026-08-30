@@ -337,7 +337,7 @@ export function RestaurantRosterConsole() {
     if (editing) {
       updateShift.mutate({
         id: editing.id,
-        expectedUpdatedAt: editing.updatedAt,
+        expectedVersion: editing.version,
         startAt,
         endAt,
         role,
@@ -359,7 +359,7 @@ export function RestaurantRosterConsole() {
     event.preventDefault();
     if (!cancelling) return;
     const reason = formText(new FormData(event.currentTarget), 'reason') || null;
-    cancelShift.mutate({ id: cancelling.id, expectedUpdatedAt: cancelling.updatedAt, reason });
+    cancelShift.mutate({ id: cancelling.id, expectedVersion: cancelling.version, reason });
   };
 
   const submitCorrection = (event: FormEvent<HTMLFormElement>) => {

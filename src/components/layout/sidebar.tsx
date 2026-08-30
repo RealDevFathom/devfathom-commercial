@@ -159,7 +159,7 @@ export const navigation: NavItem[] = [
     href: '/restaurant/staff/roster',
     icon: CalendarClock,
     group: 'Restaurant',
-    module: 'restaurant-workforce',
+    module: 'restaurant-core',
   },
   {
     label: 'Tax',

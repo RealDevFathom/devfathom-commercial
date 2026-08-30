@@ -56,7 +56,9 @@ const BUSINESS_DATE = z
 function mapShiftError(err: unknown): never {
   if (err instanceof ShiftError) {
     const code =
-      err.reason === 'OVERLAP' || err.reason === 'ALREADY_CANCELLED'
+      err.reason === 'OVERLAP' ||
+      err.reason === 'VERSION_CONFLICT' ||
+      err.reason === 'ALREADY_CANCELLED'
         ? 'CONFLICT'
         : err.reason === 'SHIFT_NOT_FOUND' ||
             err.reason === 'BRANCH_NOT_FOUND' ||
@@ -65,7 +67,26 @@ function mapShiftError(err: unknown): never {
           : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
   }
+  if (hasSqlState(err, '23P01')) {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'This operator already has an overlapping shift on the roster.',
+    });
+  }
   throw err;
+}
+
+function hasSqlState(error: unknown, sqlState: string, seen = new Set<unknown>()): boolean {
+  if (!error || (typeof error !== 'object' && typeof error !== 'string') || seen.has(error)) {
+    return false;
+  }
+  if (typeof error === 'string') return error.includes(sqlState);
+  seen.add(error);
+  const record = error as Record<string, unknown>;
+  if (record.code === sqlState || record.sqlState === sqlState) return true;
+  return ['cause', 'originalError', 'driverError', 'meta', 'database_error'].some((key) =>
+    hasSqlState(record[key], sqlState, seen)
+  );
 }
 
 function mapWorkforceError(err: unknown): never {
@@ -129,10 +150,10 @@ async function branchForShift(ctx: TRPCContext, shiftId: string) {
   return shift.branchId;
 }
 
-async function lockManagerShift(tx: Prisma.TransactionClient, shiftId: string) {
-  const rows = await tx.$queryRaw<Array<{ staffProfileId: string; updatedAt: Date }>>(
-    Prisma.sql`SELECT "staffProfileId", "updatedAt" FROM "restaurant_shifts"
-      WHERE "id" = ${shiftId} FOR UPDATE`
+async function managerShift(tx: Prisma.TransactionClient, organizationId: string, shiftId: string) {
+  const rows = await tx.$queryRaw<Array<{ staffProfileId: string; version: number }>>(
+    Prisma.sql`SELECT "staffProfileId", "version" FROM "restaurant_shifts"
+      WHERE "id" = ${shiftId} AND "organizationId" = ${organizationId}`
   );
   if (!rows[0]) throw new TRPCError({ code: 'NOT_FOUND', message: 'Shift not found.' });
   return rows[0];
@@ -142,15 +163,6 @@ async function lockStaffRoster(tx: Prisma.TransactionClient, staffProfileId: str
   await tx.$queryRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`restaurant-roster:${staffProfileId}`}, 0))`
   );
-}
-
-function assertCurrentVersion(actual: Date, expected: Date) {
-  if (actual.getTime() !== expected.getTime()) {
-    throw new TRPCError({
-      code: 'CONFLICT',
-      message: 'This shift changed since it was loaded. Refresh the roster and try again.',
-    });
-  }
 }
 
 export const restaurantShiftsRouter = router({
@@ -223,7 +235,7 @@ export const restaurantShiftsRouter = router({
     .input(
       z.object({
         id: z.string().min(1),
-        expectedUpdatedAt: z.coerce.date(),
+        expectedVersion: z.number().int().positive(),
         startAt: z.coerce.date().optional(),
         endAt: z.coerce.date().optional(),
         role: z.string().max(120).nullable().optional(),
@@ -231,14 +243,16 @@ export const restaurantShiftsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, expectedUpdatedAt, ...patch } = input;
+      const { id, expectedVersion, ...patch } = input;
       try {
         await managerAuthorization(ctx, await branchForShift(ctx, id));
         const shift = await ctx.db.$transaction(async (tx) => {
-          const locked = await lockManagerShift(tx, id);
-          assertCurrentVersion(locked.updatedAt, expectedUpdatedAt);
-          await lockStaffRoster(tx, locked.staffProfileId);
-          const updated = await updateShift(tx as unknown as ScopedDb, id, patch);
+          const current = await managerShift(tx, ctx.entitlements.organizationId, id);
+          await lockStaffRoster(tx, current.staffProfileId);
+          const updated = await updateShift(tx as unknown as ScopedDb, id, patch, {
+            organizationId: ctx.entitlements.organizationId,
+            expectedVersion,
+          });
           await tx.restaurantShiftEvent.create({
             data: {
               shiftId: updated.id,
@@ -267,7 +281,7 @@ export const restaurantShiftsRouter = router({
     .input(
       z.object({
         id: z.string().min(1),
-        expectedUpdatedAt: z.coerce.date(),
+        expectedVersion: z.number().int().positive(),
         reason: z.string().max(500).nullable().optional(),
       })
     )
@@ -275,12 +289,19 @@ export const restaurantShiftsRouter = router({
       try {
         await managerAuthorization(ctx, await branchForShift(ctx, input.id));
         const shift = await ctx.db.$transaction(async (tx) => {
-          const locked = await lockManagerShift(tx, input.id);
-          assertCurrentVersion(locked.updatedAt, input.expectedUpdatedAt);
-          const cancelled = await cancelShift(tx as unknown as ScopedDb, input.id, {
-            now: new Date(),
-            reason: input.reason,
-          });
+          await managerShift(tx, ctx.entitlements.organizationId, input.id);
+          const cancelled = await cancelShift(
+            tx as unknown as ScopedDb,
+            input.id,
+            {
+              now: new Date(),
+              reason: input.reason,
+            },
+            {
+              organizationId: ctx.entitlements.organizationId,
+              expectedVersion: input.expectedVersion,
+            }
+          );
           await tx.restaurantShiftEvent.create({
             data: {
               shiftId: cancelled.id,

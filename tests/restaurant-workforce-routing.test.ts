@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { moduleForPath, moduleForProcedure } from '../src/lib/module-catalog';
 
 const router = readFileSync('src/server/routers/restaurant-shifts.ts', 'utf8');
+const scheduling = readFileSync('src/lib/restaurant/shifts.ts', 'utf8');
 
 function procedureSource(name: string, nextName?: string) {
   const start = router.indexOf(`  ${name}:`);
@@ -30,16 +31,19 @@ describe('restaurant workforce router boundary', () => {
     expect(procedureSource(name, nextName)).toContain('requireWorkforce(ctx)');
   });
 
-  it('assigns the full shift namespace and roster route to Workforce', () => {
-    expect(moduleForProcedure('restaurantShifts.list')).toBe('restaurant-workforce');
-    expect(moduleForProcedure('restaurantShifts.create')).toBe('restaurant-workforce');
-    expect(moduleForPath('/restaurant/staff/roster')).toBe('restaurant-workforce');
+  it('keeps scheduling namespace and roster route in Restaurant Core', () => {
+    expect(moduleForProcedure('restaurantShifts.list')).toBe('restaurant-core');
+    expect(moduleForProcedure('restaurantShifts.create')).toBe('restaurant-core');
+    expect(moduleForPath('/restaurant/staff/roster')).toBe('restaurant-core');
     expect(moduleForPath('/restaurant/staff')).toBe('restaurant-core');
   });
 
   it('serializes overlap decisions and rejects stale manager writes', () => {
     expect(router).toContain('pg_advisory_xact_lock');
-    expect(router).toContain('expectedUpdatedAt: z.coerce.date()');
-    expect(router).toContain('assertCurrentVersion');
+    expect(router).toContain('expectedVersion: z.number().int().positive()');
+    expect(scheduling).toContain('version: { increment: 1 }');
+    expect(router).toContain("hasSqlState(err, '23P01')");
+    expect(scheduling).toContain('organizationId: cas.organizationId');
+    expect(router).toContain('expectedVersion');
   });
 });
