@@ -106,6 +106,91 @@ SELECT count(*) = :public_execute_before_failed_preparation AS failed_preparatio
 
 DROP ROLE wha911_nonowner;
 
+\if :preinstall_vulnerable
+\else
+  CREATE ROLE wha911_creator_only LOGIN NOSUPERUSER NOBYPASSRLS;
+  SELECT format(
+    'GRANT CREATE ON DATABASE %I TO wha911_creator_only',
+    current_database()
+  ) \gexec
+
+  DO $proof$
+  DECLARE
+    role_row pg_catalog.pg_roles%ROWTYPE;
+  BEGIN
+    SELECT * INTO STRICT role_row
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'wha911_creator_only';
+
+    IF role_row.rolsuper OR role_row.rolbypassrls THEN
+      RAISE EXCEPTION 'CREATE-only preparation role can bypass authorization';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM pg_catalog.pg_auth_members WHERE member = role_row.oid
+    ) THEN
+      RAISE EXCEPTION 'CREATE-only preparation role unexpectedly has memberships';
+    END IF;
+    IF pg_catalog.pg_has_role('wha911_creator_only', 'postgres', 'SET') THEN
+      RAISE EXCEPTION 'CREATE-only preparation role can unexpectedly SET postgres';
+    END IF;
+    IF NOT pg_catalog.has_database_privilege(
+      'wha911_creator_only', current_database(), 'CREATE'
+    ) THEN
+      RAISE EXCEPTION 'CREATE-only preparation role lacks database CREATE privilege';
+    END IF;
+  END
+  $proof$;
+
+  SET SESSION AUTHORIZATION wha911_creator_only;
+  \set ON_ERROR_STOP off
+  \ir ../../prisma/prepare-extensions.sql
+  \set creator_only_sqlstate :SQLSTATE
+  \set ON_ERROR_STOP on
+  RESET SESSION AUTHORIZATION;
+
+  SELECT :'creator_only_sqlstate' = 'P0001' AS creator_only_failed_closed,
+         NOT EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_extension
+            WHERE extname = 'btree_gist'
+         ) AS creator_only_extension_rolled_back,
+         EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_proc AS procedure
+             CROSS JOIN LATERAL pg_catalog.aclexplode(
+               coalesce(
+                 procedure.proacl,
+                 pg_catalog.acldefault('f', procedure.proowner)
+               )
+             ) AS acl
+            WHERE procedure.oid = 'public.wha766_unrelated_fixture(integer)'::regprocedure
+              AND acl.grantee = 0
+              AND acl.privilege_type = 'EXECUTE'
+         ) AS creator_only_preserved_unrelated_acl
+  \gset
+  \if :creator_only_failed_closed
+  \else
+    \echo 'expected CREATE-only preparation to fail with SQLSTATE P0001, got' :creator_only_sqlstate
+    \quit 1
+  \endif
+  \if :creator_only_extension_rolled_back
+  \else
+    \echo 'CREATE-only preparation left btree_gist installed after owner preflight failure'
+    \quit 1
+  \endif
+  \if :creator_only_preserved_unrelated_acl
+  \else
+    \echo 'CREATE-only preparation changed unrelated PUBLIC EXECUTE ACL'
+    \quit 1
+  \endif
+
+  SELECT format(
+    'REVOKE CREATE ON DATABASE %I FROM wha911_creator_only',
+    current_database()
+  ) \gexec
+  DROP ROLE wha911_creator_only;
+\endif
+
 CREATE ROLE wha911_preparer LOGIN NOSUPERUSER NOBYPASSRLS;
 GRANT postgres TO wha911_preparer WITH INHERIT FALSE, SET TRUE;
 
