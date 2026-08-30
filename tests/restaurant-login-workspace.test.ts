@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import { describe, expect, test } from 'vitest';
 
 import {
+  authenticationAlert,
   completeWorkspaceSelection,
   isAuthenticatedAppDestination,
 } from './e2e/fixtures/restaurant-actor-accessibility';
@@ -32,16 +33,12 @@ describe('Restaurant actor workspace selection', () => {
     const page = {
       getByText: () => ({ waitFor: () => chooserVisible.promise }),
       waitForURL: () => new Promise<void>(() => undefined),
-      getByRole: (role: string, options?: { name: RegExp }) =>
-        role === 'alert'
-          ? {
-              first: () => ({ waitFor: () => new Promise<void>(() => undefined) }),
-            }
-          : {
-              click: async () => {
-                selected = options?.name;
-              },
-            },
+      locator: () => ({ first: () => ({ waitFor: () => new Promise<void>(() => undefined) }) }),
+      getByRole: (_role: string, options?: { name: RegExp }) => ({
+        click: async () => {
+          selected = options?.name;
+        },
+      }),
     } as unknown as Page;
 
     const result = completeWorkspaceSelection(page, '/login', /Chai Chowk Café|chai-chowk/i);
@@ -58,17 +55,68 @@ describe('Restaurant actor workspace selection', () => {
       waitForURL: async (predicate: (url: URL) => boolean) => {
         expect(predicate(new URL('http://app.localhost/dashboard'))).toBe(true);
       },
-      getByRole: (role: string) =>
-        role === 'alert'
-          ? {
-              first: () => ({ waitFor: () => new Promise<void>(() => undefined) }),
-            }
-          : { click: async () => (clicked = true) },
+      locator: () => ({ first: () => ({ waitFor: () => new Promise<void>(() => undefined) }) }),
+      getByRole: () => ({ click: async () => (clicked = true) }),
     } as unknown as Page;
 
     await expect(
       completeWorkspaceSelection(page, '/login', /Chai Chowk Café|chai-chowk/i)
     ).resolves.toMatchObject({ outcome: 'navigation' });
     expect(clicked).toBe(false);
+  });
+
+  test('ignores a visible Next route announcer when authenticated navigation succeeds', async () => {
+    document.body.innerHTML = '<div id="__next-route-announcer__" role="alert">Dashboard</div>';
+    let selectedElement: Element | null = null;
+    const page = {
+      getByText: () => ({ waitFor: () => new Promise<void>(() => undefined) }),
+      waitForURL: async (predicate: (url: URL) => boolean) => {
+        if (predicate(new URL('http://app.localhost/dashboard'))) return;
+        return new Promise<void>(() => undefined);
+      },
+      locator: (selector: string) => ({
+        first: () => ({
+          waitFor: () => {
+            selectedElement = document.querySelector(selector);
+            return new Promise<void>(() => undefined);
+          },
+        }),
+      }),
+    } as unknown as Page;
+
+    await expect(
+      completeWorkspaceSelection(page, '/login', /Chai Chowk Café|chai-chowk/i)
+    ).resolves.toMatchObject({ outcome: 'navigation' });
+    expect(document.querySelector('#__next-route-announcer__')).not.toBeNull();
+    expect(selectedElement).toBeNull();
+  });
+
+  test('skips the first route announcer and surfaces a later real auth alert', async () => {
+    document.body.innerHTML = `
+      <div id="__next-route-announcer__" role="alert">Login</div>
+      <div role="alert" class="text-destructive">Invalid email or password.</div>
+    `;
+    const alertVisible = deferred();
+    const page = {
+      getByText: () => ({ waitFor: () => new Promise<void>(() => undefined) }),
+      waitForURL: () => new Promise<void>(() => undefined),
+      locator: (selector: string) => ({
+        first: () => {
+          const element = document.querySelector(selector);
+          return {
+            waitFor: () => alertVisible.promise,
+            isVisible: async () => element !== null,
+            textContent: async () => element?.textContent ?? null,
+          };
+        },
+      }),
+      url: () => 'http://app.localhost/login',
+    } as unknown as Page;
+
+    const result = completeWorkspaceSelection(page, '/login', /Chai Chowk Café|chai-chowk/i);
+    alertVisible.resolve();
+
+    await expect(result).rejects.toThrow('Authentication failed: Invalid email or password.');
+    expect(authenticationAlert(page)).toBeDefined();
   });
 });
