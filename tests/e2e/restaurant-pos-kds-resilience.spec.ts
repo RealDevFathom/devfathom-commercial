@@ -22,9 +22,17 @@ async function createAndFireOrder(page: import('@playwright/test').Page) {
   await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
-  await page.getByRole('checkbox').first().check();
+  await page.getByLabel('Channel').selectOption('TAKEAWAY');
+  const openedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/orders/open') &&
+      response.request().method() === 'POST'
+  );
   await page.getByRole('button', { name: 'Open order' }).click();
-  await expect(page.getByText(/Order \d+ opened\./)).toBeVisible();
+  const opened = (await (await openedResponse).json()) as { orderNumber: number };
+  await expect(
+    page.getByText(`Order ${opened.orderNumber} active.`, { exact: true })
+  ).toBeVisible();
   await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
   await page.getByLabel(new RegExp(fixture.modifier.name)).check();
   await page.getByRole('button', { name: 'Add to order' }).click();

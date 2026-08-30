@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import {
   resolveRestaurantE2eDatabaseUrl,
@@ -12,6 +14,18 @@ const credentials = {
   RESTAURANT_ACTOR_ADMIN_EMAIL: 'admin@restaurant-e2e.test',
   RESTAURANT_ACTOR_ADMIN_PASSWORD: 'test-only',
 };
+const integratedSpec = readFileSync(
+  resolve(process.cwd(), 'tests/e2e/restaurant-integrated.spec.ts'),
+  'utf8'
+);
+const resilienceSpec = readFileSync(
+  resolve(process.cwd(), 'tests/e2e/restaurant-pos-kds-resilience.spec.ts'),
+  'utf8'
+);
+const coreSpec = readFileSync(
+  resolve(process.cwd(), 'tests/e2e/restaurant-pos-kds.spec.ts'),
+  'utf8'
+);
 
 describe('Restaurant integrated E2E safety', () => {
   test.each([undefined, '', '0', 'true'])('rejects integrated opt-in %s', (value) => {
@@ -91,6 +105,7 @@ describe('Restaurant integrated E2E safety', () => {
 
   test('has one desktop project, one worker, and no parallel fan-out', () => {
     expect(config.fullyParallel).toBe(false);
+    expect(config.retries).toBe(0);
     expect(config.workers).toBe(1);
     expect(config.projects).toHaveLength(1);
     expect(config.projects?.[0]?.name).toBe('restaurant-integrated-serial');
@@ -98,5 +113,24 @@ describe('Restaurant integrated E2E safety', () => {
       reuseExistingServer: false,
       env: { AUTH_TRUST_HOST: 'true' },
     });
+  });
+
+  test('reuses one login and isolates resilience orders from the core table flow', () => {
+    expect(integratedSpec.match(/signInAs\(page, 'restaurantAdmin'\)/g)).toHaveLength(1);
+
+    const createAndFireOrder = resilienceSpec.match(
+      /async function createAndFireOrder[\s\S]*?\n}\n\ntest\.describe/
+    )?.[0];
+    expect(createAndFireOrder).toContain("selectOption('TAKEAWAY')");
+    expect(createAndFireOrder).toContain("endsWith('/api/restaurant/orders/open')");
+    expect(createAndFireOrder).toContain('Order ${opened.orderNumber} active.');
+    expect(createAndFireOrder).not.toContain("getByRole('checkbox')");
+  });
+
+  test('synchronizes the core flow on fixture-backed menu and active-order state', () => {
+    expect(coreSpec).toContain('new RegExp(fixture.menuItem.name)');
+    expect(coreSpec).toContain('Order ${opened.orderNumber} active.');
+    expect(coreSpec).not.toContain('E2E Menu loaded.');
+    expect(coreSpec).not.toMatch(/Order \\d\+ opened/);
   });
 });

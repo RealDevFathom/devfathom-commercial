@@ -33,7 +33,7 @@ async function unlockPos(page: Page) {
   await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
-  await expect(page.getByText('E2E Menu loaded.')).toBeVisible();
+  await expect(page.getByRole('button', { name: new RegExp(fixture.menuItem.name) })).toBeVisible();
   await assertTerminalSecretIsBrowserIsolated(page, fixture.pos.secret);
 }
 
@@ -103,7 +103,9 @@ test.describe('restaurant POS and KDS core flow', () => {
       orderId: string;
       orderNumber: number;
     };
-    await expect(page.getByText(/Order \d+ opened\./)).toBeVisible();
+    await expect(
+      page.getByText(`Order ${opened.orderNumber} active.`, { exact: true })
+    ).toBeVisible();
 
     await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
     await page.getByLabel('Quantity').fill('2');
