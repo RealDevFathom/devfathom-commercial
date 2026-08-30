@@ -1,6 +1,12 @@
 'use client';
 
-type BranchOption = { id: string; name: string; active: boolean; isDefault: boolean };
+type BranchOption = {
+  id: string;
+  name: string;
+  code?: string;
+  active: boolean;
+  isDefault: boolean;
+};
 
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
@@ -66,6 +72,7 @@ export function RestaurantBranchSelect({
       {available.map((branch) => (
         <option key={branch.id} value={branch.id}>
           {branch.name}
+          {branch.code ? ` · ${branch.code}` : ''}
           {branch.isDefault ? ' (default)' : ''}
         </option>
       ))}
