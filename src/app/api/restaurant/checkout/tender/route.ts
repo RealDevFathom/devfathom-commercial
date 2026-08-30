@@ -20,6 +20,12 @@ export const POST = moneyMutationRoute({
   capability: 'payments:collect',
   run: async ({ ctx, data, actor, now }) =>
     serializeTenderResult(
-      await applyTender(ctx.db, { billId: data.billId, tender: data.tender, actor, now })
+      await applyTender(ctx.db, {
+        billId: data.billId,
+        tender: data.tender,
+        actor,
+        branchId: ctx.device.branchId,
+        now,
+      })
     ),
 });

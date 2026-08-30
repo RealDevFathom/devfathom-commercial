@@ -19,6 +19,7 @@ import {
 } from './daily-close';
 import {
   DrawerSessionError,
+  MoneyIdempotencyError,
   type CloseDrawerSessionResult,
   type OpenDrawerSessionResult,
 } from './drawer-sessions';
@@ -301,6 +302,9 @@ const json = (body: unknown, status: number): NextResponse => NextResponse.json(
  * generic 500.
  */
 export function moneyErrorResponse(err: unknown): NextResponse | null {
+  if (err instanceof MoneyIdempotencyError) {
+    return json({ error: err.message }, 409);
+  }
   if (err instanceof BillCommandError) {
     const notFound =
       err.reason === 'ORDER_NOT_FOUND' ||

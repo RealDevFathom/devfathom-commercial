@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
 import { withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 
 /** Minimum branch-scoped directory used by a locked POS to choose an operator. */
@@ -29,11 +30,15 @@ export const GET = withTerminalAuth(async (ctx) => {
     },
   });
 
+  const now = new Date();
   return NextResponse.json({
-    operators: operators.map((operator) => ({
-      staffProfileId: operator.id,
-      displayName: operator.displayName,
-      role: operator.user?.organizationRole?.name ?? operator.user?.title ?? 'Staff',
-    })),
+    operators: await Promise.all(
+      operators.map(async (operator) => ({
+        staffProfileId: operator.id,
+        displayName: operator.displayName,
+        role: operator.user?.organizationRole?.name ?? operator.user?.title ?? 'Staff',
+        canApprove: await operatorHasCapability(ctx.db, operator.id, 'coauth:approve', now),
+      }))
+    ),
   });
 });
