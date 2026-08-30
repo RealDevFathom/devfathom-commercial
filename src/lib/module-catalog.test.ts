@@ -77,6 +77,7 @@ describe('module catalog routing', () => {
       restaurantTax: 'restaurant-pos',
       restaurantInventory: 'restaurant-inventory',
       restaurantPurchasing: 'restaurant-purchasing',
+      restaurantReports: 'restaurant-core',
       restaurantJobs: 'restaurant-sop',
       restaurantSop: 'restaurant-sop',
       restaurantSopExecution: 'restaurant-sop',
