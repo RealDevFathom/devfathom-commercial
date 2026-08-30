@@ -221,7 +221,12 @@ beforeAll(async () => {
       data: { id: approvingStaffId, displayName: 'Shift Manager', status: 'ACTIVE' },
     });
     await tx.restaurantStaffProfile.create({
-      data: { id: unprivilegedStaffId, displayName: 'Unprivileged Manager', status: 'ACTIVE' },
+      data: {
+        id: unprivilegedStaffId,
+        displayName: 'Unprivileged Manager',
+        status: 'ACTIVE',
+        primaryBranchId: branchId,
+      },
     });
     await tx.restaurantStaffProfile.create({
       data: {
@@ -373,6 +378,33 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(row!.health).toBe('NEVER_SEEN');
     // The list shape must never carry secret material.
     expect(row as Record<string, unknown>).not.toHaveProperty('deviceSecretHash');
+  });
+
+  it('lists only distinct eligible approvers using devices:manage branch scope', async () => {
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] === 'devices:manage');
+    const api = caller();
+    const enrolled = await api.initiateEnrollment({ branchId, name: 'POS-approvers' });
+
+    const directory = await api.listApprovers({ deviceId: enrolled.device.id });
+
+    expect(directory).toEqual({
+      actingStaff: { id: actingStaffId, displayName: 'Acting Admin' },
+      approvers: [{ id: approvingStaffId, displayName: 'Shift Manager' }],
+    });
+    expect(JSON.stringify(directory)).not.toContain(unprivilegedStaffId);
+    expect(JSON.stringify(directory)).not.toContain(inactiveStaffId);
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'devices:manage',
+      undefined,
+      expect.anything()
+    );
+    expect(mocks.can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'staff:manage',
+      undefined,
+      expect.anything()
+    );
   });
 
   it('rejects a self-approval (approver must differ from actor) before any compare', async () => {

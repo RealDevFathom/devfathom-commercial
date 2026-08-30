@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
@@ -67,7 +67,6 @@ export function RestaurantDevicesConsole() {
     enabled: restaurantEnabled,
     refetchInterval: 60_000,
   });
-  const staffQuery = trpc.restaurantStaff.list.useQuery(undefined, { enabled: restaurantEnabled });
   const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
     enabled: restaurantEnabled,
   });
@@ -81,6 +80,10 @@ export function RestaurantDevicesConsole() {
   const [oneTimeDeviceName, setOneTimeDeviceName] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [coAuthError, setCoAuthError] = useState('');
+  const approversQuery = trpc.restaurantDevices.listApprovers.useQuery(
+    { deviceId: selectedDevice?.id ?? '' },
+    { enabled: restaurantEnabled && selectedDevice !== null }
+  );
 
   const refreshDevices = () => void utils.restaurantDevices.list.invalidate();
   const stationsQuery = trpc.restaurantFloor.listStations.useQuery(
@@ -115,10 +118,8 @@ export function RestaurantDevicesConsole() {
     },
   });
 
-  const activeStaff = useMemo(
-    () => (staffQuery.data ?? []).filter((staff) => staff.status === 'ACTIVE'),
-    [staffQuery.data]
-  );
+  const actingStaff = approversQuery.data?.actingStaff ?? null;
+  const approvers = approversQuery.data?.approvers ?? [];
 
   const permissionDenied = isPermissionError(devicesQuery.error);
   const submitRevocation = (event: FormEvent<HTMLFormElement>) => {
@@ -126,8 +127,7 @@ export function RestaurantDevicesConsole() {
     if (!selectedDevice) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const actingStaffProfileId =
-      deviceAction === 'revoke' ? formText(data, 'actingStaffProfileId') : null;
+    const actingStaffProfileId = deviceAction === 'revoke' ? actingStaff?.id : null;
     const approvingStaffProfileId = formText(data, 'approvingStaffProfileId');
     const approvingSecret = formText(data, 'approvingSecret');
     const approvingType = formText(data, 'approvingType') as 'PIN' | 'BADGE';
@@ -215,23 +215,6 @@ export function RestaurantDevicesConsole() {
               : `${devicesQuery.data?.length ?? 0} device${devicesQuery.data?.length === 1 ? '' : 's'}`
           }
         >
-          {staffQuery.error ? (
-            <div
-              role="alert"
-              className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md bg-warning/10 p-3 text-sm text-warning"
-            >
-              <span>Staff approvers could not be loaded. Device revocation is unavailable.</span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void staffQuery.refetch()}
-              >
-                Retry approvers
-              </Button>
-            </div>
-          ) : null}
-
           {devicesQuery.isLoading ? (
             <div role="status" aria-label="Loading restaurant devices" className="space-y-3 py-2">
               {[0, 1, 2, 3].map((row) => (
@@ -292,7 +275,6 @@ export function RestaurantDevicesConsole() {
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={staffQuery.isLoading || Boolean(staffQuery.error)}
                             onClick={() => {
                               setDeviceAction('rotate');
                               setCoAuthError('');
@@ -304,7 +286,6 @@ export function RestaurantDevicesConsole() {
                           <Button
                             variant="destructive"
                             size="sm"
-                            disabled={staffQuery.isLoading || Boolean(staffQuery.error)}
                             onClick={() => {
                               setDeviceAction('revoke');
                               setCoAuthError('');
@@ -459,31 +440,38 @@ export function RestaurantDevicesConsole() {
                 {coAuthError}
               </p>
             ) : null}
-            {activeStaff.length < 2 ? (
+            {approversQuery.isLoading ? (
+              <p role="status" className="rounded-md bg-muted p-3 text-sm text-text-muted">
+                Loading eligible approvers…
+              </p>
+            ) : approversQuery.error ? (
+              <div
+                role="alert"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+              >
+                <span>Eligible approvers could not be loaded for this device.</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void approversQuery.refetch()}
+                >
+                  Retry approvers
+                </Button>
+              </div>
+            ) : approvers.length === 0 ? (
               <p role="alert" className="rounded-md bg-warning/10 p-3 text-sm text-warning">
-                At least two active restaurant staff profiles are required.
+                No distinct active device manager is eligible to approve this action.
               </p>
             ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
               {deviceAction === 'revoke' ? (
-                <label className="space-y-1.5">
+                <div className="space-y-1.5">
                   <span className={labelClass}>Acting staff</span>
-                  <select
-                    name="actingStaffProfileId"
-                    required
-                    defaultValue=""
-                    className={selectClass}
-                  >
-                    <option value="" disabled>
-                      Select acting staff
-                    </option>
-                    {activeStaff.map((staff) => (
-                      <option key={staff.id} value={staff.id}>
-                        {staff.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <p className="flex h-11 items-center rounded-md border border-input bg-muted px-3 text-sm text-text-strong">
+                    {actingStaff?.displayName ?? 'Loading authenticated staff…'}
+                  </p>
+                </div>
               ) : null}
               <label className="space-y-1.5">
                 <span className={labelClass}>Approving staff</span>
@@ -496,7 +484,7 @@ export function RestaurantDevicesConsole() {
                   <option value="" disabled>
                     Select approving staff
                   </option>
-                  {activeStaff.map((staff) => (
+                  {approvers.map((staff) => (
                     <option key={staff.id} value={staff.id}>
                       {staff.displayName}
                     </option>
@@ -546,7 +534,12 @@ export function RestaurantDevicesConsole() {
                 variant="destructive"
                 className="min-h-11"
                 disabled={
-                  revokeDevice.isPending || rotateDevice.isPending || activeStaff.length < 2
+                  revokeDevice.isPending ||
+                  rotateDevice.isPending ||
+                  approversQuery.isLoading ||
+                  Boolean(approversQuery.error) ||
+                  !actingStaff ||
+                  approvers.length === 0
                 }
               >
                 {rotateDevice.isPending

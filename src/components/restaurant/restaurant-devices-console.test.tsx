@@ -20,13 +20,19 @@ const mocks = vi.hoisted(() => ({
     error: null as unknown,
     isLoading: false,
   },
-  staff: {
-    data: [] as unknown[],
+  approvers: {
+    data: undefined as
+      | {
+          actingStaff: { id: string; displayName: string };
+          approvers: { id: string; displayName: string }[];
+        }
+      | undefined,
     error: null as unknown,
     isLoading: false,
+    refetch: vi.fn(),
   },
   deviceQueryEnabled: [] as boolean[],
-  staffQueryEnabled: [] as boolean[],
+  approverQueries: [] as { deviceId: string; enabled: boolean }[],
   enrollmentOptions: undefined as EnrollmentOptions | undefined,
   rotationOptions: undefined as RotationOptions | undefined,
   enrollmentMutate: vi.fn(),
@@ -47,6 +53,12 @@ vi.mock('@/lib/trpc', () => ({
         useQuery: (_input: undefined, options: { enabled: boolean }) => {
           mocks.deviceQueryEnabled.push(options.enabled);
           return mocks.devices;
+        },
+      },
+      listApprovers: {
+        useQuery: (input: { deviceId: string }, options: { enabled: boolean }) => {
+          mocks.approverQueries.push({ deviceId: input.deviceId, enabled: options.enabled });
+          return mocks.approvers;
         },
       },
       initiateEnrollment: {
@@ -87,12 +99,6 @@ vi.mock('@/lib/trpc', () => ({
           error: null,
           isLoading: false,
         }),
-      },
-      list: {
-        useQuery: (_input: undefined, options: { enabled: boolean }) => {
-          mocks.staffQueryEnabled.push(options.enabled);
-          return mocks.staff;
-        },
       },
     },
     restaurantFloor: {
@@ -138,13 +144,13 @@ describe('Restaurant device security UI', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.deviceQueryEnabled.length = 0;
-    mocks.staffQueryEnabled.length = 0;
+    mocks.approverQueries.length = 0;
     mocks.devices.data = [];
     mocks.devices.error = null;
     mocks.devices.isLoading = false;
-    mocks.staff.data = [];
-    mocks.staff.error = null;
-    mocks.staff.isLoading = false;
+    mocks.approvers.data = undefined;
+    mocks.approvers.error = null;
+    mocks.approvers.isLoading = false;
     mocks.enrollmentOptions = undefined;
     mocks.rotationOptions = undefined;
     mocks.enrollmentMutate.mockImplementation((_input, options?: EnrollmentOptions) => {
@@ -164,7 +170,7 @@ describe('Restaurant device security UI', () => {
   it('gates queries, clears submitted co-auth secrets, and forgets closed enrollment secrets', () => {
     const disabled = renderConsole(false);
     expect(mocks.deviceQueryEnabled).toEqual([false]);
-    expect(mocks.staffQueryEnabled).toEqual([false]);
+    expect(mocks.approverQueries).toEqual([{ deviceId: '', enabled: false }]);
     expect(screen.queryByRole('button', { name: 'Enroll device' })).not.toBeInTheDocument();
     expect(screen.getByText('Restaurant module disabled')).toBeInTheDocument();
     disabled.unmount();
@@ -180,20 +186,10 @@ describe('Restaurant device security UI', () => {
         createdAt: new Date('2026-08-18T07:00:00Z'),
       },
     ];
-    mocks.staff.data = [
-      {
-        id: 'staff_1',
-        displayName: 'Acting Admin',
-        status: 'ACTIVE',
-        primaryBranch: { id: 'branch_1', name: 'Downtown' },
-      },
-      {
-        id: 'staff_2',
-        displayName: 'Shift Manager',
-        status: 'ACTIVE',
-        primaryBranch: { id: 'branch_1', name: 'Downtown' },
-      },
-    ];
+    mocks.approvers.data = {
+      actingStaff: { id: 'staff_1', displayName: 'Acting Admin' },
+      approvers: [{ id: 'staff_2', displayName: 'Shift Manager' }],
+    };
 
     const revokeView = renderConsole(true);
     expect(screen.getByText('POS-1')).toBeVisible();
@@ -201,26 +197,18 @@ describe('Restaurant device security UI', () => {
     expect(screen.queryByText('device_1')).not.toBeInTheDocument();
     expect(screen.queryByText('branch_1')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Revoke POS-1' }));
-    const actingStaff = screen.getByLabelText('Acting staff');
     const approvingStaff = screen.getByLabelText('Approving staff');
     const reason = screen.getByLabelText('Reason');
-    fireEvent.change(actingStaff, { target: { value: 'staff_1' } });
-    fireEvent.change(approvingStaff, { target: { value: 'staff_1' } });
+    expect(screen.getByText('Acting Admin')).toBeVisible();
+    fireEvent.change(approvingStaff, { target: { value: 'staff_2' } });
     const approvingSecret = screen.getByLabelText('Approving PIN or badge secret');
     fireEvent.change(approvingSecret, { target: { value: '482913' } });
     fireEvent.change(reason, { target: { value: 'Lost terminal' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm revocation' }));
 
     expect(approvingSecret).toHaveValue('');
-    expect(actingStaff).toHaveValue('staff_1');
-    expect(approvingStaff).toHaveValue('staff_1');
+    expect(approvingStaff).toHaveValue('staff_2');
     expect(reason).toHaveValue('Lost terminal');
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Acting and approving staff must be different active people.'
-    );
-    expect(mocks.revokeMutate).not.toHaveBeenCalled();
-
-    fireEvent.change(approvingStaff, { target: { value: 'staff_2' } });
     fireEvent.change(approvingSecret, { target: { value: '482913' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm revocation' }));
 
@@ -284,10 +272,10 @@ describe('Restaurant device security UI', () => {
         createdAt: new Date('2026-08-18T07:00:00Z'),
       },
     ];
-    mocks.staff.data = [
-      { id: 'staff_1', displayName: 'Acting Admin', status: 'ACTIVE' },
-      { id: 'staff_2', displayName: 'Shift Manager', status: 'ACTIVE' },
-    ];
+    mocks.approvers.data = {
+      actingStaff: { id: 'staff_1', displayName: 'Acting Admin' },
+      approvers: [{ id: 'staff_2', displayName: 'Shift Manager' }],
+    };
 
     renderConsole(true);
     fireEvent.click(screen.getByRole('button', { name: 'Rotate secret' }));
@@ -322,5 +310,41 @@ describe('Restaurant device security UI', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Secret copied to the clipboard.');
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(screen.queryByDisplayValue('rdk_rotated_once')).not.toBeInTheDocument();
+  });
+
+  it('keeps device actions available without staff-directory access and preserves approver failures', () => {
+    mocks.devices.data = [
+      {
+        id: 'device_1',
+        name: 'Devices-only POS',
+        branch: { id: 'branch_1', name: 'Downtown' },
+        status: 'ACTIVE',
+        health: 'HEALTHY',
+        lastSeenAt: null,
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+      },
+    ];
+    mocks.approvers.isLoading = true;
+
+    const loadingView = renderConsole(true);
+    const rotate = screen.getByRole('button', { name: 'Rotate secret' });
+    const revoke = screen.getByRole('button', { name: 'Revoke Devices-only POS' });
+    expect(rotate).toBeEnabled();
+    expect(revoke).toBeEnabled();
+
+    fireEvent.click(rotate);
+    expect(mocks.approverQueries.at(-1)).toEqual({ deviceId: 'device_1', enabled: true });
+    expect(screen.getByRole('status')).toHaveTextContent('Loading eligible approvers');
+    expect(screen.getByRole('button', { name: 'Confirm rotation' })).toBeDisabled();
+    loadingView.unmount();
+
+    mocks.approvers.isLoading = false;
+    mocks.approvers.error = { message: 'Forbidden', data: { code: 'FORBIDDEN' } };
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate secret' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Eligible approvers could not be loaded for this device.'
+    );
+    expect(screen.getByRole('button', { name: 'Confirm rotation' })).toBeDisabled();
   });
 });
