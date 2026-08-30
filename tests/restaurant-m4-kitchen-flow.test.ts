@@ -224,6 +224,9 @@ beforeAll(async () => {
         startsAt: new Date(0),
       },
     });
+    await tx.organizationLimit.create({
+      data: { organizationId: ids.org, key: 'pos.orders.monthly', value: 1_000_000 },
+    });
   });
   await deps.withTenantDb(ids.org, async (tx) => {
     await tx.restaurantBranch.create({
@@ -314,7 +317,7 @@ beforeAll(async () => {
         menuId: ids.menu,
         priceListId: ids.priceList,
         status: 'PUBLISHED',
-        channels: [],
+        channels: ['DINE_IN'],
       },
     });
   });
