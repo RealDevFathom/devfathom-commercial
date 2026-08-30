@@ -135,6 +135,14 @@ export function FloorConsole() {
     { branchId: normalizedBranchId, includeInactive },
     { enabled: branchReady }
   );
+  const productsQuery = trpc.restaurantCatalog.listProducts.useQuery(
+    { status: 'ACTIVE' },
+    { enabled: posEnabled && editor?.kind === 'routing' && !editor.item }
+  );
+  const categoriesQuery = trpc.restaurantCatalog.listCategories.useQuery(undefined, {
+    enabled: posEnabled && editor?.kind === 'routing' && !editor.item,
+  });
+  const [routingTargetType, setRoutingTargetType] = useState<'product' | 'category'>('product');
 
   const refresh = () => {
     void utils.restaurantFloor.listFloors.invalidate();
@@ -805,7 +813,7 @@ export function FloorConsole() {
                                   <p className="text-sm text-text-strong">
                                     {rule.productName
                                       ? `Product: ${rule.productName}`
-                                      : `Category: ${rule.categoryName ?? rule.categoryId}`}{' '}
+                                      : `Category: ${rule.categoryName ?? 'Unavailable category'}`}{' '}
                                     <span className="text-text-muted">
                                       · priority {rule.priority}
                                     </span>
@@ -1025,13 +1033,59 @@ export function FloorConsole() {
                   {!editor.item ? (
                     <>
                       <Field label="Target type">
-                        <select name="targetType" className={selectClass} defaultValue="product">
+                        <select
+                          name="targetType"
+                          className={selectClass}
+                          value={routingTargetType}
+                          onChange={(event) =>
+                            setRoutingTargetType(event.target.value as 'product' | 'category')
+                          }
+                        >
                           <option value="product">Product</option>
                           <option value="category">Category</option>
                         </select>
                       </Field>
-                      <Field label="Product or category ID">
-                        <Input name="targetId" required className="h-11" />
+                      <Field label={routingTargetType === 'product' ? 'Product' : 'Category'}>
+                        <select
+                          name="targetId"
+                          required
+                          className={selectClass}
+                          disabled={
+                            routingTargetType === 'product'
+                              ? productsQuery.isLoading || Boolean(productsQuery.error)
+                              : categoriesQuery.isLoading || Boolean(categoriesQuery.error)
+                          }
+                        >
+                          <option value="">
+                            {(
+                              routingTargetType === 'product'
+                                ? productsQuery.isLoading
+                                : categoriesQuery.isLoading
+                            )
+                              ? 'Loading catalog…'
+                              : (
+                                    routingTargetType === 'product'
+                                      ? productsQuery.error
+                                      : categoriesQuery.error
+                                  )
+                                ? 'Catalog unavailable for your access'
+                                : `Choose a ${routingTargetType}`}
+                          </option>
+                          {(routingTargetType === 'product'
+                            ? (productsQuery.data ?? []).map((item) => ({
+                                id: item.id,
+                                label: item.name,
+                              }))
+                            : (categoriesQuery.data ?? []).map((item) => ({
+                                id: item.id,
+                                label: item.name,
+                              }))
+                          ).map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
                       </Field>
                     </>
                   ) : (

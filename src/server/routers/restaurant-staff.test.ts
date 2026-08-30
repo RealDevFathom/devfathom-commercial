@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   staffUpdate: vi.fn(),
   branchFindMany: vi.fn(),
   branchFindUnique: vi.fn(),
-  userFindUnique: vi.fn(),
+  userFindFirst: vi.fn(),
   credFindMany: vi.fn(),
   credFindFirst: vi.fn(),
   credFindUnique: vi.fn(),
@@ -58,7 +58,7 @@ const db = {
     update: mocks.staffUpdate,
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
-  user: { findUnique: mocks.userFindUnique },
+  user: { findFirst: mocks.userFindFirst },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
     findFirst: mocks.credFindFirst,
@@ -94,7 +94,7 @@ beforeEach(() => {
   mocks.staffFindFirst.mockResolvedValue(null);
   mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
-  mocks.userFindUnique.mockResolvedValue({ id: 'user_1' });
+  mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'staff_new',

@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    restaurantCatalog: {
+      listProducts: { useQuery: () => ({ data: [], error: null, isLoading: false }) },
+      listCategories: { useQuery: () => ({ data: [], error: null, isLoading: false }) },
+    },
     restaurantStaff: {
       listBranches: {
         useQuery: () => ({

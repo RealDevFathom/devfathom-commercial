@@ -62,6 +62,9 @@ vi.mock('@/lib/trpc', () => ({
     }),
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
+      listEligibleUsers: {
+        useQuery: () => ({ data: [], error: null, isLoading: false }),
+      },
       listBranches: {
         useQuery: () => ({
           data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],

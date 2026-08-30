@@ -91,6 +91,9 @@ export function RestaurantStaffConsole() {
   const [revokeCredential, setRevokeCredential] = useState<Pick<Credential, 'id' | 'type'> | null>(
     null
   );
+  const eligibleUsersQuery = trpc.restaurantStaff.listEligibleUsers.useQuery(undefined, {
+    enabled: restaurantEnabled && staffFormOpen,
+  });
 
   const credentialsQuery = trpc.restaurantStaff.listCredentials.useQuery(
     { staffProfileId: selectedStaff?.id ?? '', includeRevoked: true },
@@ -487,8 +490,37 @@ export function RestaurantStaffConsole() {
                 />
               </label>
               <label className="space-y-1.5">
-                <span className={labelClass}>Linked user ID</span>
-                <Input name="userId" defaultValue={editingStaff?.userId ?? ''} className="h-11" />
+                <span className={labelClass}>Organization user</span>
+                <select
+                  name="userId"
+                  defaultValue={editingStaff?.userId ?? ''}
+                  className={selectClass}
+                  disabled={eligibleUsersQuery.isLoading || Boolean(eligibleUsersQuery.error)}
+                  aria-describedby="staff-user-help"
+                >
+                  <option value="">
+                    {eligibleUsersQuery.isLoading
+                      ? 'Loading available users…'
+                      : eligibleUsersQuery.error
+                        ? isPermissionError(eligibleUsersQuery.error)
+                          ? 'User directory unavailable for your access'
+                          : 'User directory unavailable'
+                        : 'No linked organization user'}
+                  </option>
+                  {editingStaff?.userId ? (
+                    <option value={editingStaff.userId}>Current linked user</option>
+                  ) : null}
+                  {(eligibleUsersQuery.data ?? []).map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name} — {user.email}
+                    </option>
+                  ))}
+                </select>
+                <span id="staff-user-help" className="block text-xs text-text-muted">
+                  {eligibleUsersQuery.data?.length === 0
+                    ? 'No active, unlinked organization users are available.'
+                    : 'Only active organization users without another staff profile are available.'}
+                </span>
               </label>
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>
