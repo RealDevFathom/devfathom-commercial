@@ -36,6 +36,9 @@ function parsePercentage(value: string): { decimal?: string; error?: string } {
   }
 
   const [rawWhole = '0', fraction = ''] = trimmed.split('.');
+  if (fraction.length > 2) {
+    return { error: 'Tax rate percentage can have at most two decimal places.' };
+  }
   const whole = (rawWhole || '0').replace(/^0+(?=\d)/, '');
   if (
     whole.length > 3 ||

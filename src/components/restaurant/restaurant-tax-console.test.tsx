@@ -173,6 +173,7 @@ describe('restaurant tax configuration UI', () => {
   });
 
   it.each([
+    ['8.25', '0.0825'],
     ['16.67', '0.1667'],
     ['99.99', '0.9999'],
   ])('preserves exact decimal digits when converting %s%%', (percentage, decimal) => {
@@ -188,6 +189,25 @@ describe('restaurant tax configuration UI', () => {
         rates: expect.arrayContaining([{ paymentCategory: 'CASH', rate: decimal }]),
       })
     );
+  });
+
+  it('rejects more than two decimal places before preview or publication', () => {
+    render(<RestaurantTaxConsole />);
+    submitCustomRates(['8.251', '8', '15']);
+
+    expect(customRateInput('Cash')).toHaveAttribute('aria-invalid', 'true');
+    expect(customRateInput('Cash')).toHaveAccessibleDescription(
+      'Tax rate percentage can have at most two decimal places.'
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Tax rate percentage can have at most two decimal places.'
+    );
+    expect(mocks.previewCustom).toHaveBeenLastCalledWith(
+      { amount: '1000.00', rate: '0', priceMode: 'EXCLUSIVE' },
+      { enabled: false }
+    );
+    expect(screen.queryByText(/Net 1000.00 · Tax 0.00 · Total 1000.00/)).not.toBeInTheDocument();
+    expect(mocks.publishCustom).not.toHaveBeenCalled();
   });
 
   it('hides a cached zero-rate preview when the current Cash rate becomes invalid', () => {
