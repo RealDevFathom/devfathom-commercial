@@ -16,6 +16,30 @@ const labelClass =
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
 const formatDate = new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium' });
+const paymentCategories = ['CASH', 'CARD', 'OTHER'] as const;
+type PaymentCategory = (typeof paymentCategories)[number];
+type RateErrors = Partial<Record<PaymentCategory, string>>;
+const rateLabels: Record<PaymentCategory, string> = {
+  CASH: 'Cash tax rate (%)',
+  CARD: 'Card tax rate (%)',
+  OTHER: 'Other tax rate (%)',
+};
+
+function parsePercentage(value: string): { decimal?: string; error?: string } {
+  const trimmed = value.trim();
+  if (!trimmed) return { error: 'Enter a tax rate percentage.' };
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) {
+    const numericValue = Number(trimmed);
+    if (Number.isFinite(numericValue) && numericValue < 0) {
+      return { error: 'Tax rate percentage cannot be negative.' };
+    }
+    return { error: 'Enter a valid number.' };
+  }
+
+  const percentage = Number(trimmed);
+  if (percentage > 100) return { error: 'Tax rate percentage cannot exceed 100.' };
+  return { decimal: String(percentage / 100) };
+}
 
 export function RestaurantTaxConsole() {
   const utils = trpc.useUtils();
@@ -23,7 +47,8 @@ export function RestaurantTaxConsole() {
   const [selectedId, setSelectedId] = useState('');
   const [customMode, setCustomMode] = useState<'EXCLUSIVE' | 'INCLUSIVE'>('EXCLUSIVE');
   const [previewAmount, setPreviewAmount] = useState('1000.00');
-  const [previewRate, setPreviewRate] = useState('0.00');
+  const [previewRate, setPreviewRate] = useState('');
+  const [rateErrors, setRateErrors] = useState<RateErrors>({});
   const idempotencyKey = useRef(crypto.randomUUID());
   const selected = useMemo(
     () => configuration.data?.profiles.find((profile) => profile.id === selectedId),
@@ -53,6 +78,17 @@ export function RestaurantTaxConsole() {
   const submitCustom = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const parsedRates = paymentCategories.map((paymentCategory) => ({
+      paymentCategory,
+      parsed: parsePercentage(String(data.get(`rate${paymentCategory}`) ?? '')),
+    }));
+    const nextRateErrors = Object.fromEntries(
+      parsedRates
+        .filter(({ parsed }) => parsed.error)
+        .map(({ paymentCategory, parsed }) => [paymentCategory, parsed.error])
+    ) as RateErrors;
+    setRateErrors(nextRateErrors);
+    if (Object.keys(nextRateErrors).length) return;
     if (data.get('accountantConfirmation') !== 'on') return;
     customPublication.mutate({
       branchId: String(data.get('customBranchId') ?? ''),
@@ -62,9 +98,9 @@ export function RestaurantTaxConsole() {
       effectiveFrom: String(data.get('customEffectiveFrom') ?? ''),
       effectiveTo: String(data.get('customEffectiveTo') ?? '') || undefined,
       priceMode: customMode,
-      rates: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+      rates: parsedRates.map(({ paymentCategory, parsed }) => ({
         paymentCategory,
-        rate: String(data.get(`rate${paymentCategory}`) ?? ''),
+        rate: parsed.decimal!,
       })),
       approvalReference: String(data.get('customApprovalReference') ?? ''),
       accountantConfirmation: true,
@@ -74,10 +110,11 @@ export function RestaurantTaxConsole() {
   };
 
   const amount = Number(previewAmount) || 0;
-  const rate = Number(previewRate) || 0;
+  const parsedPreviewRate = parsePercentage(previewRate);
+  const rate = parsedPreviewRate.decimal;
   const preview = trpc.restaurantTax.previewCustom.useQuery(
-    { amount: previewAmount, rate: previewRate, priceMode: customMode },
-    { enabled: amount >= 0 && rate >= 0 && rate <= 1 }
+    { amount: previewAmount, rate: rate ?? '0', priceMode: customMode },
+    { enabled: amount >= 0 && rate !== undefined }
   );
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -328,23 +365,47 @@ export function RestaurantTaxConsole() {
                   Optional end date (branch local)
                   <Input className="mt-1 min-h-11" name="customEffectiveTo" type="date" />
                 </label>
-                {(['CASH', 'CARD', 'OTHER'] as const).map((category) => (
-                  <label key={category} className={labelClass}>
-                    {category} rate (decimal 0..1)
+                {paymentCategories.map((category) => (
+                  <div key={category}>
+                    <label htmlFor={`rate-${category}`} className={labelClass}>
+                      {rateLabels[category]}
+                    </label>
                     <Input
+                      id={`rate-${category}`}
                       className="mt-1 min-h-11"
                       name={`rate${category}`}
                       inputMode="decimal"
-                      pattern="(?:0(?:\\.\\d{1,6})?|1(?:\\.0{1,6})?)"
-                      required
-                      onChange={
-                        category === 'CASH'
-                          ? (event) => setPreviewRate(event.target.value)
-                          : undefined
+                      aria-required="true"
+                      aria-invalid={Boolean(rateErrors[category])}
+                      aria-describedby={rateErrors[category] ? `rate-${category}-error` : undefined}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (category === 'CASH') setPreviewRate(value);
+                        if (rateErrors[category]) {
+                          setRateErrors((current) => ({
+                            ...current,
+                            [category]: parsePercentage(value).error,
+                          }));
+                        }
+                      }}
+                      onBlur={(event) =>
+                        setRateErrors((current) => ({
+                          ...current,
+                          [category]: parsePercentage(event.target.value).error,
+                        }))
                       }
-                      placeholder="0.150000"
+                      placeholder="15"
                     />
-                  </label>
+                    {rateErrors[category] ? (
+                      <span
+                        id={`rate-${category}-error`}
+                        role="alert"
+                        className="mt-2 block font-sans text-sm font-normal normal-case tracking-normal text-destructive"
+                      >
+                        {rateErrors[category]}
+                      </span>
+                    ) : null}
+                  </div>
                 ))}
                 <label className={labelClass}>
                   Accountant approval reference

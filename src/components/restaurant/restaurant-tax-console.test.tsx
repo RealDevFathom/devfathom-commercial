@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PAKISTAN_TAX_PROFILE_CATALOG } from '@/lib/restaurant/pakistan-tax-profiles';
 
-const mocks = vi.hoisted(() => ({ mutate: vi.fn(), invalidate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  activate: vi.fn(),
+  publishCustom: vi.fn(),
+  invalidate: vi.fn(),
+  previewCustom: vi.fn(() => ({
+    data: { net: '1000.00', tax: '0.00', gross: '1000.00' },
+  })),
+}));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
@@ -23,10 +30,12 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
       previewCustom: {
-        useQuery: () => ({ data: { net: '1000.00', tax: '0.00', gross: '1000.00' } }),
+        useQuery: mocks.previewCustom,
       },
-      activate: { useMutation: () => ({ mutate: mocks.mutate, isPending: false }) },
-      publishCustom: { useMutation: () => ({ mutate: mocks.mutate, isPending: false }) },
+      activate: { useMutation: () => ({ mutate: mocks.activate, isPending: false }) },
+      publishCustom: {
+        useMutation: () => ({ mutate: mocks.publishCustom, isPending: false }),
+      },
     },
   },
 }));
@@ -64,7 +73,7 @@ describe('restaurant tax configuration UI', () => {
 
     fireEvent.change(profileSelect, { target: { value: 'PK-PB-RESTAURANT' } });
     fireEvent.submit(screen.getByRole('button', { name: 'Activate tax profile' }).closest('form')!);
-    expect(mocks.mutate).not.toHaveBeenCalled();
+    expect(mocks.activate).not.toHaveBeenCalled();
   });
 
   it('submits explicit branch, profile, date, approval, and eligibility evidence', () => {
@@ -84,7 +93,7 @@ describe('restaurant tax configuration UI', () => {
     ])
       fireEvent.click(screen.getByLabelText(label));
     fireEvent.click(screen.getByRole('button', { name: 'Activate tax profile' }));
-    expect(mocks.mutate).toHaveBeenCalledWith({
+    expect(mocks.activate).toHaveBeenCalledWith({
       branchId: 'branch_1',
       profileId: 'PK-ICT-RESTAURANT',
       effectiveFrom: '2026-07-01T00:00:00.000Z',
@@ -109,5 +118,82 @@ describe('restaurant tax configuration UI', () => {
     ])
       expect(jurisdiction).toHaveTextContent(name);
     expect(screen.getByText(/live calculation preview/i)).toBeInTheDocument();
+  });
+
+  function customRateInput(category: 'Cash' | 'Card' | 'Other') {
+    return screen.getByLabelText(`${category} tax rate (%)`);
+  }
+
+  function submitCustomRates(rates: [string, string, string]) {
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Custom 2026' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Pakistan jurisdiction'), {
+      target: { value: 'PK-SD' },
+    });
+    fireEvent.change(screen.getByLabelText('Effective date (branch local)'), {
+      target: { value: '2026-08-30' },
+    });
+    fireEvent.change(screen.getByLabelText('Accountant approval reference'), {
+      target: { value: 'Memo 93' },
+    });
+    fireEvent.change(customRateInput('Cash'), { target: { value: rates[0] } });
+    fireEvent.change(customRateInput('Card'), { target: { value: rates[1] } });
+    fireEvent.change(customRateInput('Other'), { target: { value: rates[2] } });
+    fireEvent.click(
+      screen.getByLabelText(/I confirm these exact rates were supplied\/reviewed by my accountant/i)
+    );
+    fireEvent.submit(
+      screen.getByRole('button', { name: 'Publish custom profile' }).closest('form')!
+    );
+  }
+
+  it('converts human and decimal percentages exactly once for preview and publication', () => {
+    render(<RestaurantTaxConsole />);
+    submitCustomRates(['16', '8', '15.5']);
+
+    expect(mocks.previewCustom).toHaveBeenLastCalledWith(
+      { amount: '1000.00', rate: '0.16', priceMode: 'EXCLUSIVE' },
+      { enabled: true }
+    );
+    expect(screen.getByText(/Net 1000.00 · Tax 0.00 · Total 1000.00/)).toBeInTheDocument();
+    expect(mocks.publishCustom).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branchId: 'branch_1',
+        profileName: 'Custom 2026',
+        effectiveFrom: '2026-08-30',
+        approvalReference: 'Memo 93',
+        accountantConfirmation: true,
+        rates: [
+          { paymentCategory: 'CASH', rate: '0.16' },
+          { paymentCategory: 'CARD', rate: '0.08' },
+          { paymentCategory: 'OTHER', rate: '0.155' },
+        ],
+      })
+    );
+  });
+
+  it.each([
+    ['', 'Enter a tax rate percentage.'],
+    ['abc', 'Enter a valid number.'],
+    ['-0.1', 'Tax rate percentage cannot be negative.'],
+    ['100.01', 'Tax rate percentage cannot exceed 100.'],
+  ])('shows accessible inline feedback for invalid rate %j', (value, message) => {
+    render(<RestaurantTaxConsole />);
+    fireEvent.change(customRateInput('Cash'), { target: { value } });
+    fireEvent.blur(customRateInput('Cash'));
+
+    expect(customRateInput('Cash')).toHaveAttribute('aria-invalid', 'true');
+    expect(customRateInput('Cash')).toHaveAccessibleDescription(message);
+    expect(screen.getByRole('alert')).toHaveTextContent(message);
+    expect(mocks.publishCustom).not.toHaveBeenCalled();
+  });
+
+  it.each(['0', '100', '8.25'])('accepts inclusive boundary or decimal percentage %s', (value) => {
+    render(<RestaurantTaxConsole />);
+    fireEvent.change(customRateInput('Cash'), { target: { value } });
+    fireEvent.blur(customRateInput('Cash'));
+
+    expect(customRateInput('Cash')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
