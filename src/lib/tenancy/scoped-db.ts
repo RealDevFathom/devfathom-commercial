@@ -90,7 +90,7 @@ export async function withTenantDb<T>(
 
   return db.$transaction(
     async (tx) => {
-      await tx.$executeRawUnsafe(
+      await tx.$queryRawUnsafe(
         `SELECT set_config('app.current_organization_id', $1, true),
                 set_config('app.is_platform_admin', 'false', true)`,
         organizationId
@@ -110,7 +110,7 @@ export async function withPlatformDb<T>(
 ): Promise<T> {
   return db.$transaction(
     async (tx) => {
-      await tx.$executeRawUnsafe(
+      await tx.$queryRawUnsafe(
         `SELECT set_config('app.current_organization_id', '', true),
                 set_config('app.is_platform_admin', 'true', true)`
       );
