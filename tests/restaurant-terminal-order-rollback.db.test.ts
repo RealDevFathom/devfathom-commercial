@@ -20,6 +20,7 @@ process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha143_${suffix}`;
+const foreignOrgId = `org_wha143_foreign_${suffix}`;
 const businessDate = new Date('2026-08-25T00:00:00.000Z');
 const PIN = '616161';
 const OLD_LAST_SEEN = new Date('2020-01-01T00:00:00.000Z');
@@ -48,6 +49,12 @@ const ids = {
   branch: `branch_${suffix}`,
   operator: `staff_operator_${suffix}`,
   approver: `staff_approver_${suffix}`,
+  unauthorizedApprover: `staff_unauthorized_${suffix}`,
+  foreignApprover: `staff_foreign_${suffix}`,
+  approverUser: `user_approver_${suffix}`,
+  unauthorizedUser: `user_unauthorized_${suffix}`,
+  approverRole: `role_approver_${suffix}`,
+  unauthorizedRole: `role_unauthorized_${suffix}`,
   plainProduct: `product_plain_${suffix}`,
   recipeProduct: `product_recipe_${suffix}`,
   customer: `customer_${suffix}`,
@@ -231,6 +238,15 @@ beforeAll(async () => {
         status: 'ACTIVE',
       },
     });
+    await tx.organization.create({
+      data: {
+        id: foreignOrgId,
+        slug: `wha143-foreign-${suffix}`,
+        legalName: 'WHA-143 Foreign Co',
+        displayName: 'WHA-143 Foreign',
+        status: 'ACTIVE',
+      },
+    });
     const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
       name: 'POS',
       category: 'Operations',
@@ -242,6 +258,37 @@ beforeAll(async () => {
 
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ids.branch, name: 'Rollback' } });
+    await tx.organizationRole.create({
+      data: {
+        id: ids.approverRole,
+        key: `approver_${suffix}`,
+        name: 'Approver',
+        permissions: { create: [{ capability: 'coauth:approve', effect: 'ALLOW' }] },
+      },
+    });
+    await tx.organizationRole.create({
+      data: {
+        id: ids.unauthorizedRole,
+        key: `unauthorized_${suffix}`,
+        name: 'Unauthorized',
+        permissions: { create: [{ capability: 'menu:read', effect: 'ALLOW' }] },
+      },
+    });
+    for (const [id, roleId, label] of [
+      [ids.approverUser, ids.approverRole, 'approver'],
+      [ids.unauthorizedUser, ids.unauthorizedRole, 'unauthorized'],
+    ] as const) {
+      await tx.user.create({
+        data: {
+          id,
+          name: label,
+          email: `${label}_${suffix}@test.local`,
+          department: 'LEADERSHIP',
+          title: label,
+          organizationRoleId: roleId,
+        },
+      });
+    }
     await tx.restaurantProduct.createMany({
       data: [
         { id: ids.plainProduct, name: 'Plain' },
@@ -251,6 +298,7 @@ beforeAll(async () => {
     for (const [staffProfileId, displayName] of [
       [ids.operator, 'Operator'],
       [ids.approver, 'Approver'],
+      [ids.unauthorizedApprover, 'Unauthorized'],
     ] as const) {
       await tx.restaurantStaffProfile.create({
         data: {
@@ -258,6 +306,11 @@ beforeAll(async () => {
           displayName,
           primaryBranchId: ids.branch,
           status: 'ACTIVE',
+          ...(staffProfileId === ids.approver
+            ? { userId: ids.approverUser }
+            : staffProfileId === ids.unauthorizedApprover
+              ? { userId: ids.unauthorizedUser }
+              : {}),
         },
       });
       await tx.restaurantOperatorCredential.create({
@@ -322,6 +375,26 @@ beforeAll(async () => {
         ingredientId: ids.ingredient,
         quantity: '1',
         unitId: ids.kilogram,
+      },
+    });
+  });
+
+  await deps.withTenantDb(foreignOrgId, async (tx) => {
+    const branchId = `branch_foreign_${suffix}`;
+    await tx.restaurantBranch.create({ data: { id: branchId, name: 'Foreign' } });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: ids.foreignApprover,
+        displayName: 'Foreign Approver',
+        primaryBranchId: branchId,
+        status: 'ACTIVE',
+      },
+    });
+    await tx.restaurantOperatorCredential.create({
+      data: {
+        staffProfileId: ids.foreignApprover,
+        type: 'PIN',
+        credentialHash: await deps.hashOperatorCredential('PIN', PIN),
       },
     });
   });
@@ -443,5 +516,34 @@ describeIfDatabase('WHA-143 terminal order routes roll back before HTTP mapping'
     );
     expect(after.failedAttempts).toBe(before.failedAttempts + 2);
     expect((await lastSeen())!.getTime()).toBeGreaterThan(OLD_LAST_SEEN.getTime());
+  });
+
+  it('keeps missing, foreign, unauthorized, and valid approvers oracle-safe', async () => {
+    for (const route of [deps.routes.void, deps.routes.cancel]) {
+      const orderBody =
+        route === deps.routes.void
+          ? { orderId: `missing_order_${suffix}`, itemId: `missing_item_${suffix}` }
+          : { orderId: `missing_order_${suffix}` };
+      for (const [staffProfileId, secret, expectedStatus] of [
+        [`missing_approver_${suffix}`, PIN, 401],
+        [ids.foreignApprover, PIN, 401],
+        [ids.unauthorizedApprover, PIN, 403],
+        [ids.approver, PIN, 404],
+      ] as const) {
+        const refused = await call(route, {
+          key: key('approver-contract'),
+          body: {
+            ...orderBody,
+            reason: 'contract probe',
+            wastageDisposition: 'NONE',
+            approving: { staffProfileId, type: 'PIN', secret },
+          },
+        });
+        expect(
+          refused.status,
+          `${staffProfileId} via ${route === deps.routes.void ? 'void' : 'cancel'}`
+        ).toBe(expectedStatus);
+      }
+    }
   });
 });
