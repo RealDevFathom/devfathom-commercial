@@ -44,9 +44,12 @@ const contractGroups = [
 
 describe('WHA-100 M8 acceptance battery', () => {
   it('requires separate migration-owner and restricted-runtime database connections', () => {
+    const runtimeDatabaseUrl =
+      process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+
     expect(process.env.M8_TEST_OWNER_DATABASE_URL).toBeTruthy();
-    expect(process.env.TEST_DATABASE_URL).toBeTruthy();
-    expect(process.env.M8_TEST_OWNER_DATABASE_URL).not.toBe(process.env.TEST_DATABASE_URL);
+    expect(runtimeDatabaseUrl).toBeTruthy();
+    expect(process.env.M8_TEST_OWNER_DATABASE_URL).not.toBe(runtimeDatabaseUrl);
   });
 
   it.each(contractGroups)(
