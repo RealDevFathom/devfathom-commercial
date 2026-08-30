@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   branchCreate: vi.fn(),
   branchFindMany: vi.fn(),
   branchCount: vi.fn(),
+  acknowledgementFindMany: vi.fn(),
   assignmentCreate: vi.fn(),
   moduleUpsert: vi.fn(),
   orgModuleFindMany: vi.fn(),
@@ -81,6 +82,7 @@ const platformDb = {
     count: mocks.branchCount,
   },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
+  restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
   organizationModule: {
     upsert: mocks.moduleUpsert,
     findMany: mocks.orgModuleFindMany,
@@ -116,6 +118,16 @@ function createPayload(overrides: Record<string, unknown> = {}) {
     adminPassword: 'a-strong-password',
     ...overrides,
   };
+}
+
+function restaurantCreatePayload(overrides: Record<string, unknown> = {}) {
+  return createPayload({
+    vertical: 'RESTAURANT',
+    firstBranchName: 'Main Branch',
+    firstBranchAddress: '1 Restaurant Way',
+    businessDayCutoff: '04:00',
+    ...overrides,
+  });
 }
 
 function run(action: string, payload: unknown) {
@@ -184,7 +196,7 @@ describe('organization.create vertical + package compatibility', () => {
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
 
-    await run('organization.create', createPayload({ vertical: 'RESTAURANT', packageId: 'pkg_r' }));
+    await run('organization.create', restaurantCreatePayload({ packageId: 'pkg_r' }));
 
     expect(mocks.orgCreate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ vertical: 'RESTAURANT' }) })
@@ -260,7 +272,7 @@ describe('organization.create vertical + package compatibility', () => {
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
 
-    await run('organization.create', createPayload({ vertical: 'RESTAURANT', packageId: 'pkg_r' }));
+    await run('organization.create', restaurantCreatePayload({ packageId: 'pkg_r' }));
 
     const seeded = (
       mocks.departmentCreateMany.mock.calls[0]![0] as {
@@ -290,7 +302,7 @@ describe('organization.create vertical + package compatibility', () => {
     });
 
     const error = await caught(
-      run('organization.create', createPayload({ vertical: 'RESTAURANT', packageId: 'pkg_a' }))
+      run('organization.create', restaurantCreatePayload({ packageId: 'pkg_a' }))
     );
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
@@ -624,7 +636,21 @@ describe('restaurant activation preflight', () => {
     mocks.orgUpdate.mockResolvedValue({ id: 'org_r', status: 'ACTIVE' });
     mocks.platformModuleFindMany.mockResolvedValue(restaurantModuleRows);
     mocks.orgModuleFindMany.mockResolvedValue([]);
-    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
+    mocks.branchFindMany.mockResolvedValue([
+      {
+        id: 'branch_1',
+        name: 'Main Branch',
+        address: '1 Restaurant Way',
+        timezone: 'Europe/Berlin',
+        businessDayCutoff: '04:00',
+      },
+    ]);
+    mocks.acknowledgementFindMany.mockResolvedValue(
+      ['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'].map((kind) => ({
+        kind,
+        policyReference: `${kind.toLowerCase()}-policy-v1`,
+      }))
+    );
   });
 
   it('activates a fully-provisioned restaurant organization', async () => {
@@ -721,6 +747,7 @@ describe('agency activation preflight unchanged', () => {
     expect(mocks.orgUpdate).toHaveBeenCalledTimes(1);
     // No restaurant-only preflight queries were made for an agency org.
     expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.acknowledgementFindMany).not.toHaveBeenCalled();
     expect(mocks.platformModuleFindMany).not.toHaveBeenCalled();
   });
 });
