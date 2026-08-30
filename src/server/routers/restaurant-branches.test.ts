@@ -45,16 +45,24 @@ function makeDb() {
     update: vi.fn(async ({ data }: { data: object }) => ({ ...branch, ...data })),
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
   };
-  const count = vi.fn().mockResolvedValue(0);
+  const dependencies = {
+    devices: vi.fn().mockResolvedValue(0),
+    staff: vi.fn().mockResolvedValue(0),
+    orders: vi.fn().mockResolvedValue(0),
+    drawers: vi.fn().mockResolvedValue(0),
+    shifts: vi.fn().mockResolvedValue(0),
+  };
   const db = {
     restaurantBranch: delegate,
-    restaurantRegisteredDevice: { count },
-    restaurantStaffProfile: { count },
-    restaurantOrder: { count },
+    restaurantRegisteredDevice: { count: dependencies.devices },
+    restaurantStaffProfile: { count: dependencies.staff },
+    restaurantOrder: { count: dependencies.orders },
+    restaurantDrawerSession: { count: dependencies.drawers },
+    restaurantShift: { count: dependencies.shifts },
   } as Record<string, unknown>;
   db.$queryRaw = vi.fn().mockResolvedValue([{ pg_advisory_xact_lock: null }]);
   db.$transaction = vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db));
-  return { db, delegate };
+  return { db, delegate, dependencies };
 }
 
 let state = makeDb();
@@ -193,6 +201,19 @@ describe('restaurant branch administration', () => {
     expect(state.delegate.update).toHaveBeenCalledWith({
       where: { id: branch.id },
       data: { active: true, isDefault: true },
+    });
+  });
+
+  it.each([
+    ['open drawer sessions', 'drawers'],
+    ['scheduled shifts', 'shifts'],
+  ] as const)('blocks deactivation with professional guidance for %s', async (_label, key) => {
+    state.delegate.findFirst.mockResolvedValue({ ...branch, active: true, isDefault: false });
+    state.delegate.count.mockResolvedValue(2);
+    state.dependencies[key].mockResolvedValue(1);
+    await expect(caller().setActive({ id: branch.id, active: false })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('operational history will remain available'),
     });
   });
 });

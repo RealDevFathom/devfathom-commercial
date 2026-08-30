@@ -251,7 +251,7 @@ export const restaurantBranchesRouter = router({
               message: 'At least one branch must remain active.',
             });
           }
-          const [devices, staff, openOrders] = await Promise.all([
+          const [devices, staff, openOrders, openDrawers, scheduledShifts] = await Promise.all([
             tx.restaurantRegisteredDevice.count({
               where: { branchId: current.id, status: 'ACTIVE' },
             }),
@@ -264,12 +264,18 @@ export const restaurantBranchesRouter = router({
                 status: { notIn: ['CLOSED', 'CANCELLED'] },
               },
             }),
+            tx.restaurantDrawerSession.count({
+              where: { branchId: current.id, status: 'OPEN' },
+            }),
+            tx.restaurantShift.count({
+              where: { branchId: current.id, status: 'SCHEDULED', endAt: { gt: new Date() } },
+            }),
           ]);
-          if (devices || staff || openOrders) {
+          if (devices || staff || openOrders || openDrawers || scheduledShifts) {
             throw new TRPCError({
               code: 'CONFLICT',
               message:
-                'This branch still has active terminals, assigned staff, or open orders. Reassign or close them before deactivating the branch; operational history will remain available.',
+                'This branch still has active terminals, assigned staff, open orders or drawers, or scheduled shifts. Reassign, close, or cancel them before deactivating the branch; operational history will remain available.',
             });
           }
         }

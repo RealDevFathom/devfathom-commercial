@@ -1,8 +1,26 @@
 -- WHA-908: stable, readable branch identifiers for tenant workflows.
+CREATE SEQUENCE "restaurant_branch_code_seq" AS BIGINT;
+
 ALTER TABLE "restaurant_branches" ADD COLUMN "code" VARCHAR(24);
 
 -- Existing locations receive a deterministic, collision-free code within their
 -- tenant. Creation order keeps the values compact and understandable to staff.
+DO $$
+DECLARE max_locations BIGINT;
+BEGIN
+  SELECT COALESCE(MAX(location_count), 0)
+  INTO max_locations
+  FROM (
+    SELECT COUNT(*) AS location_count
+    FROM "restaurant_branches"
+    GROUP BY "organizationId"
+  ) AS tenant_counts;
+
+  IF LENGTH(max_locations::TEXT) > 21 THEN
+    RAISE EXCEPTION 'Restaurant branch code allocation exceeds the 24-character contract';
+  END IF;
+END $$;
+
 WITH ranked AS (
   SELECT "id",
          ROW_NUMBER() OVER (
@@ -12,13 +30,29 @@ WITH ranked AS (
   FROM "restaurant_branches"
 )
 UPDATE "restaurant_branches" AS branch
-SET "code" = 'BR-' || LPAD(ranked.branch_number::TEXT, 4, '0')
+SET "code" = 'BR-' || ranked.branch_number::TEXT
 FROM ranked
 WHERE ranked."id" = branch."id";
 
+SELECT SETVAL(
+  'restaurant_branch_code_seq',
+  GREATEST(
+    COALESCE((
+      SELECT MAX(location_count)
+      FROM (
+        SELECT COUNT(*) AS location_count
+        FROM "restaurant_branches"
+        GROUP BY "organizationId"
+      ) AS tenant_counts
+    ), 0),
+    1
+  ),
+  EXISTS (SELECT 1 FROM "restaurant_branches")
+);
+
 ALTER TABLE "restaurant_branches" ALTER COLUMN "code" SET NOT NULL;
 ALTER TABLE "restaurant_branches" ALTER COLUMN "code"
-  SET DEFAULT ('BR-' || UPPER(SUBSTRING(MD5(RANDOM()::TEXT || CLOCK_TIMESTAMP()::TEXT) FROM 1 FOR 8)));
+  SET DEFAULT ('BR-' || NEXTVAL('restaurant_branch_code_seq')::TEXT);
 
 CREATE UNIQUE INDEX "restaurant_branches_organizationId_code_key"
   ON "restaurant_branches" ("organizationId", UPPER("code"));
