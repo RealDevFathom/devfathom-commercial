@@ -62,7 +62,7 @@ function links(vertical?: EntitlementView['vertical']) {
 describe('TopNavigation vertical visibility', () => {
   it('uses accessible body text for inactive navigation numbers', () => {
     links('AGENCY');
-    expect(screen.getByText('02')).toHaveClass('text-text-muted');
+    expect(screen.getByText('02')).toHaveClass('text-text-body');
     expect(screen.getByText('02')).not.toHaveClass('text-text-faint');
   });
 
