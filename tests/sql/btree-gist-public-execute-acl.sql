@@ -109,6 +109,14 @@ DROP ROLE wha911_nonowner;
 CREATE ROLE wha911_preparer LOGIN NOSUPERUSER NOBYPASSRLS;
 GRANT postgres TO wha911_preparer WITH INHERIT FALSE, SET TRUE;
 
+\if :preinstall_vulnerable
+\else
+  SELECT format(
+    'GRANT CREATE ON DATABASE %I TO wha911_preparer',
+    current_database()
+  ) \gexec
+\endif
+
 DO $proof$
 DECLARE
   role_row pg_catalog.pg_roles%ROWTYPE;
@@ -126,11 +134,35 @@ BEGIN
 END
 $proof$;
 
+\if :preinstall_vulnerable
+\else
+  SELECT pg_catalog.has_database_privilege(
+    'wha911_preparer', current_database(), 'CREATE'
+  ) AS preparer_can_bootstrap_extension
+  \gset
+  \if :preparer_can_bootstrap_extension
+  \else
+    \echo 'positive absent-state preparation role lacks database CREATE privilege'
+    \quit 1
+  \endif
+\endif
+
 SET SESSION AUTHORIZATION wha911_preparer;
 \ir ../../prisma/prepare-extensions.sql
 RESET SESSION AUTHORIZATION;
+
+\if :preinstall_vulnerable
+\else
+  SELECT format(
+    'REVOKE CREATE ON DATABASE %I FROM wha911_preparer',
+    current_database()
+  ) \gexec
+\endif
+
 REVOKE postgres FROM wha911_preparer;
-DROP ROLE wha911_preparer;
+\if :preinstall_vulnerable
+  DROP ROLE wha911_preparer;
+\endif
 
 -- The SET-capable run above performs the correction. This second run proves
 -- that preparation remains idempotent.
@@ -293,5 +325,12 @@ RESET ROLE;
 
 DROP OWNED BY wha766_restricted;
 DROP ROLE wha766_restricted;
+DROP SCHEMA wha766_proof CASCADE;
+
+\if :preinstall_vulnerable
+\else
+  DROP EXTENSION btree_gist;
+  DROP ROLE wha911_preparer;
+\endif
 
 \echo 'WHA-911 owner-aware btree_gist ACL regression proof passed'

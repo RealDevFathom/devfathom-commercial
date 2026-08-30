@@ -1,5 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-
 DO $preflight$
 DECLARE
   extension_oid oid;
@@ -11,6 +9,30 @@ DECLARE
   owner record;
   member record;
 BEGIN
+  SELECT role.oid, role.rolsuper
+    INTO STRICT configured_role_oid, configured_role_is_superuser
+    FROM pg_catalog.pg_roles AS role
+   WHERE role.rolname = configured_role;
+
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_catalog.pg_extension
+     WHERE extname = 'btree_gist'
+  ) THEN
+    IF NOT configured_role_is_superuser
+       AND NOT pg_catalog.has_database_privilege(
+         configured_role,
+         current_database(),
+         'CREATE'
+       ) THEN
+      RAISE EXCEPTION
+        'extension preparation role % cannot bootstrap btree_gist in database % (CREATE privilege required)',
+        configured_role, current_database();
+    END IF;
+
+    EXECUTE 'CREATE EXTENSION btree_gist';
+  END IF;
+
   SELECT oid
     INTO extension_oid
     FROM pg_catalog.pg_extension
@@ -19,11 +41,6 @@ BEGIN
   IF extension_oid IS NULL THEN
     RAISE EXCEPTION 'btree_gist extension attribution is unavailable';
   END IF;
-
-  SELECT role.oid, role.rolsuper
-    INTO STRICT configured_role_oid, configured_role_is_superuser
-    FROM pg_catalog.pg_roles AS role
-   WHERE role.rolname = configured_role;
 
   SELECT count(*)
     INTO member_count
