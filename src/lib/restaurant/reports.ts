@@ -1055,6 +1055,7 @@ export async function exportRestaurantReportCsv(
     ];
   } else {
     const report = await readSopReport(db, range);
+    truncated = report.truncated;
     columns = ['staffProfileId', 'displayName', 'department', 'owned', 'completed'];
     rows = report.attribution.slice(0, MAX_EXPORT_ROWS).map((row) => ({
       staffProfileId: row.staffProfileId,

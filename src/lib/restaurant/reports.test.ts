@@ -431,5 +431,11 @@ describe('restaurant complete summaries with bounded details', () => {
       truncated: true,
     });
     expect(report.attribution).toHaveLength(5000);
+
+    const exported = await exportRestaurantReportCsv(db, 'sop', boundedRange, {
+      includeLabourCosts: false,
+    });
+    expect(exported.content.split('\n')).toHaveLength(5001);
+    expect(exported.truncated).toBe(true);
   });
 });
