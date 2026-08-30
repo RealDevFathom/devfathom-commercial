@@ -4,7 +4,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * Completion wave (WHA-229) — `restaurant_shifts` cross-tenant and branch
+ * Completion wave (WHA-229 + WHA-909) — roster and workforce cross-tenant
  * isolation probes against REAL PostgreSQL, under an unprivileged role
  * (NOSUPERUSER / NOBYPASSRLS), matching the M1-L1 … M8 RLS batteries.
  *
@@ -12,8 +12,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * composite tenant foreign keys that make a cross-organization branch or staff
  * reference impossible even inside the platform scope, and the two business
  * CHECKs the Prisma schema cannot express (window ordering, cancellation
- * consistency). Domain rules — overlap, business-date stamping, sign-in
- * eligibility — live in `src/lib/restaurant/shifts.test.ts`.
+ * consistency), plus immutable workforce history and race arbiters. Domain
+ * rules live in the focused Restaurant shift/workforce unit suites.
  */
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -26,6 +26,16 @@ const ids = {
   orgB: `org_shift_b_${suffix}`,
   rowA: `shift_a_${suffix}`,
   rowB: `shift_b_${suffix}`,
+  replacementA: `shift_replacement_a_${suffix}`,
+  replacementB: `shift_replacement_b_${suffix}`,
+  breakA: `shift_break_a_${suffix}`,
+  breakB: `shift_break_b_${suffix}`,
+  swapA: `shift_swap_a_${suffix}`,
+  swapB: `shift_swap_b_${suffix}`,
+  eventA: `shift_event_a_${suffix}`,
+  eventB: `shift_event_b_${suffix}`,
+  commandA: `shift_command_a_${suffix}`,
+  commandB: `shift_command_b_${suffix}`,
 };
 
 const START = '2026-08-20T09:00:00Z';
@@ -111,8 +121,47 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
     );
     await insertPrerequisites(ids.orgA, ids.rowA, 'A');
     await insertPrerequisites(ids.orgB, ids.rowB, 'B');
+    await client!.query(
+      `INSERT INTO "restaurant_staff_profiles" (
+        "id", "organizationId", "displayName", "primaryBranchId", "updatedAt"
+      ) VALUES ($1, $2, 'A replacement', $3, CURRENT_TIMESTAMP),
+               ($4, $5, 'B replacement', $6, CURRENT_TIMESTAMP)`,
+      [ids.replacementA, ids.orgA, ids.rowA, ids.replacementB, ids.orgB, ids.rowB]
+    );
     await insertShift(ids.rowA, ids.orgA, ids.rowA, ids.rowA);
     await insertShift(ids.rowB, ids.orgB, ids.rowB, ids.rowB);
+    await client!.query(
+      `INSERT INTO "restaurant_shift_breaks" ("id", "organizationId", "shiftId", "updatedAt")
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP), ($4, $5, $6, CURRENT_TIMESTAMP)`,
+      [ids.breakA, ids.orgA, ids.rowA, ids.breakB, ids.orgB, ids.rowB]
+    );
+    await client!.query(
+      `INSERT INTO "restaurant_shift_swap_requests" (
+         "id", "organizationId", "shiftId", "requestedByStaffProfileId", "replacementStaffProfileId"
+       ) VALUES ($1, $2, $3, $3, $4), ($5, $6, $7, $7, $8)`,
+      [
+        ids.swapA,
+        ids.orgA,
+        ids.rowA,
+        ids.replacementA,
+        ids.swapB,
+        ids.orgB,
+        ids.rowB,
+        ids.replacementB,
+      ]
+    );
+    await client!.query(
+      `INSERT INTO "restaurant_shift_events" (
+         "id", "organizationId", "shiftId", "kind", "actorUserId"
+       ) VALUES ($1, $2, $3, 'PUBLISHED', 'actor-a'), ($4, $5, $6, 'PUBLISHED', 'actor-b')`,
+      [ids.eventA, ids.orgA, ids.rowA, ids.eventB, ids.orgB, ids.rowB]
+    );
+    await client!.query(
+      `INSERT INTO "restaurant_workforce_commands" (
+         "id", "organizationId", "idempotencyKey", "kind", "shiftId"
+       ) VALUES ($1, $2, 'key-a', 'CLOCK_IN', $3), ($4, $5, 'key-b', 'CLOCK_IN', $6)`,
+      [ids.commandA, ids.orgA, ids.rowA, ids.commandB, ids.orgB, ids.rowB]
+    );
 
     await client!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client!.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ids.orgA]);
@@ -131,6 +180,89 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
         WHERE relname = 'restaurant_shifts' AND relkind = 'r'`
     );
     expect(rls.rows).toEqual([{ enabled: true, forced: true }]);
+  });
+
+  it('enables and FORCES RLS on every workforce child table', async () => {
+    const rls = await client!.query<{ relname: string; enabled: boolean; forced: boolean }>(
+      `SELECT relname, relrowsecurity AS enabled, relforcerowsecurity AS forced
+         FROM pg_catalog.pg_class
+        WHERE relname IN (
+          'restaurant_shift_breaks', 'restaurant_shift_swap_requests',
+          'restaurant_shift_swap_decisions', 'restaurant_shift_events',
+          'restaurant_time_adjustments', 'restaurant_workforce_commands'
+        ) ORDER BY relname`
+    );
+    expect(rls.rows).toHaveLength(6);
+    expect(rls.rows.every((row) => row.enabled && row.forced)).toBe(true);
+  });
+
+  it('hides tenant B workforce history and rejects immutable mutation', async () => {
+    expect(
+      (
+        await client!.query<{ id: string }>(
+          `SELECT "id" FROM "restaurant_shift_events" WHERE "id" IN ($1, $2)`,
+          [ids.eventA, ids.eventB]
+        )
+      ).rows
+    ).toEqual([{ id: ids.eventA }]);
+    expect(
+      (
+        await client!.query<{ id: string }>(
+          `SELECT "id" FROM "restaurant_workforce_commands" WHERE "id" IN ($1, $2)`,
+          [ids.commandA, ids.commandB]
+        )
+      ).rows
+    ).toEqual([{ id: ids.commandA }]);
+    expect(
+      (await client!.query(`DELETE FROM "restaurant_shift_events" WHERE "id" = $1`, [ids.eventB]))
+        .rowCount
+    ).toBe(0);
+    expect(
+      (await client!.query(`DELETE FROM "restaurant_shift_events" WHERE "id" = $1`, [ids.eventA]))
+        .rowCount
+    ).toBe(0);
+    const deletePolicies = await client!.query<{ policyname: string }>(
+      `SELECT policyname FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'restaurant_shift_events'
+          AND cmd IN ('DELETE', 'ALL')`
+    );
+    expect(deletePolicies.rows).toEqual([]);
+  });
+
+  it('makes raw punches single-write and command/decision race winners unique', async () => {
+    await client!.query(`UPDATE "restaurant_shifts" SET "clockedInAt" = $1 WHERE "id" = $2`, [
+      START,
+      ids.rowA,
+    ]);
+    await expectDatabaseError('55000', () =>
+      client!.query(`UPDATE "restaurant_shifts" SET "clockedInAt" = $1 WHERE "id" = $2`, [
+        '2026-08-20T09:01:00Z',
+        ids.rowA,
+      ])
+    );
+    await expectDatabaseError('23505', () =>
+      client!.query(
+        `INSERT INTO "restaurant_workforce_commands" (
+          "id", "idempotencyKey", "kind", "shiftId"
+        ) VALUES ($1, 'key-a', 'CLOCK_IN', $2)`,
+        [`duplicate_command_${suffix}`, ids.rowA]
+      )
+    );
+    await client!.query(
+      `INSERT INTO "restaurant_shift_swap_decisions" (
+        "id", "requestId", "decision", "decidedByUserId"
+      ) VALUES ($1, $2, 'REJECTED', 'manager-a')`,
+      [`decision_a_${suffix}`, ids.swapA]
+    );
+    await expectDatabaseError('23505', () =>
+      client!.query(
+        `INSERT INTO "restaurant_shift_swap_decisions" (
+          "id", "requestId", "decision", "decidedByUserId"
+        ) VALUES ($1, $2, 'APPROVED', 'manager-b')`,
+        [`decision_race_${suffix}`, ids.swapA]
+      )
+    );
   });
 
   it('hides tenant B rows and refuses to update or delete them', async () => {
@@ -184,7 +316,10 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
       // Deferred composite tenant FKs: force them to check inside the savepoint
       // rather than at a COMMIT this transaction never reaches.
       await expectDatabaseError('23503', async () => {
-        await insertShift(`xbranch_${suffix}`, ids.orgA, ids.rowB, ids.rowA);
+        await insertShift(`xbranch_${suffix}`, ids.orgA, ids.rowB, ids.rowA, {
+          startAt: '2026-08-20T18:00:00Z',
+          endAt: '2026-08-20T19:00:00Z',
+        });
         await client!.query('SET CONSTRAINTS ALL IMMEDIATE');
       });
       await expectDatabaseError('23503', async () => {

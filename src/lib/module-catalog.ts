@@ -54,9 +54,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   webhooks: 'webhooks',
   restaurantStaff: 'restaurant-core', // M2-L2 back-office staff & operator-credential surface
   restaurantBranches: 'restaurant-core', // WHA-908 tenant branch administration
-  // Completion wave: the branch shift roster. Rostering decides who may operate a
-  // terminal, so it gates on the same mandatory Restaurant Core module as the
-  // staff identity and credential surfaces it builds on.
+  // Scheduling and terminal eligibility are foundational Restaurant Core. Optional
+  // attendance, breaks, swaps and exports fail closed inside their procedures.
   restaurantShifts: 'restaurant-core',
   // M2-L3: back-office terminal-device administration. Device trust and terminal
   // sessions are foundational to running any restaurant terminal, so they gate on
@@ -190,6 +189,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // Core-owned back-office surfaces, then the `/restaurant` core catch-all —
   // the vertical catalog owns the `/restaurant` route prefix via
   // `restaurant-core` (mandatory for every restaurant organization).
+  ['/restaurant/staff/roster', 'restaurant-core'],
   ['/restaurant/staff', 'restaurant-core'],
   ['/restaurant/devices', 'restaurant-core'],
   ['/restaurant/notifications', 'restaurant-core'],

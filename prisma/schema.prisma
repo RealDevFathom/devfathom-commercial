@@ -2794,7 +2794,9 @@ model RestaurantStaffProfile {
 
   // Completion wave: rostered shifts for this operator. A profile may hold many
   // shifts in different roles; they may never overlap in time (shifts.ts).
-  shifts RestaurantShift[]
+  shifts                RestaurantShift[]
+  shiftSwapRequests     RestaurantShiftSwapRequest[] @relation("ShiftSwapRequester")
+  shiftSwapReplacements RestaurantShiftSwapRequest[] @relation("ShiftSwapReplacement")
 
   @@index([organizationId])
   @@index([userId])
@@ -7353,11 +7355,10 @@ model RestaurantPromotionAuditEvent {
 }
 
 // ===========================================================================
-// Completion wave — staff shifts and the shift-aware operator sign-in boundary.
+// Completion wave — branch scheduling and employee timekeeping.
 // Org-scoped under forced RLS (C1) and branch-scoped like every other operating
-// surface. This is scheduling ONLY: no timeclock, no attendance, no payroll and
-// no labour optimization live here (those stay out of scope — the labour seam
-// above remains the imported-cost boundary).
+// surface. This bounded workforce record does not introduce payroll, pay rates,
+// labour optimization, or another financial source of truth.
 // ===========================================================================
 
 /// A scheduled shift is either still on the roster (SCHEDULED) or withdrawn
@@ -7367,6 +7368,37 @@ model RestaurantPromotionAuditEvent {
 enum RestaurantShiftStatus {
   SCHEDULED
   CANCELLED
+}
+
+enum RestaurantShiftSwapDecisionKind {
+  APPROVED
+  REJECTED
+}
+
+enum RestaurantShiftEventKind {
+  PUBLISHED
+  UPDATED
+  CANCELLED
+  SWAP_REQUESTED
+  SWAP_APPROVED
+  SWAP_REJECTED
+}
+
+enum RestaurantTimeAdjustmentKind {
+  CLOCK_IN
+  CLOCK_OUT
+  BREAK_START
+  BREAK_END
+}
+
+enum RestaurantWorkforceCommandKind {
+  CLOCK_IN
+  CLOCK_OUT
+  BREAK_START
+  BREAK_END
+  SWAP_REQUEST
+  SWAP_APPROVE
+  SWAP_REJECT
 }
 
 /// A branch-scoped rostered shift for ONE staff operator.
@@ -7396,16 +7428,148 @@ model RestaurantShift {
   status         RestaurantShiftStatus @default(SCHEDULED)
   cancelledAt    DateTime?
   cancelReason   String?
+  clockedInAt    DateTime?
+  clockedOutAt   DateTime?
+  version        Int                   @default(1)
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
 
-  branch       RestaurantBranch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  staffProfile RestaurantStaffProfile @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+  branch          RestaurantBranch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  staffProfile    RestaurantStaffProfile       @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+  breaks          RestaurantShiftBreak[]
+  swapRequests    RestaurantShiftSwapRequest[]
+  workforceEvents RestaurantShiftEvent[]
+  adjustments     RestaurantTimeAdjustment[]
+  commands        RestaurantWorkforceCommand[]
 
   @@index([organizationId])
   @@index([branchId, businessDate])
   @@index([staffProfileId, startAt])
   @@map("restaurant_shifts")
+}
+
+/// A break is opened and closed with server timestamps. The database permits at
+/// most one open break per shift; corrections are separate immutable adjustments.
+model RestaurantShiftBreak {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  shiftId        String
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  shift       RestaurantShift           @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  adjustments RestaurantTimeAdjustment[]
+  commands    RestaurantWorkforceCommand[]
+
+  @@index([organizationId])
+  @@index([shiftId, startedAt])
+  @@map("restaurant_shift_breaks")
+}
+
+/// The employee-authored request is immutable. A manager appends exactly one
+/// decision instead of rewriting request history.
+model RestaurantShiftSwapRequest {
+  id                        String   @id @default(cuid())
+  organizationId            String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  shiftId                   String
+  requestedByStaffProfileId String
+  replacementStaffProfileId String
+  note                      String?
+  createdAt                 DateTime @default(now())
+
+  shift       RestaurantShift        @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  requestedBy RestaurantStaffProfile @relation("ShiftSwapRequester", fields: [requestedByStaffProfileId], references: [id], onDelete: Restrict)
+  replacement RestaurantStaffProfile @relation("ShiftSwapReplacement", fields: [replacementStaffProfileId], references: [id], onDelete: Restrict)
+  decision    RestaurantShiftSwapDecision?
+  commands    RestaurantWorkforceCommand[]
+
+  @@index([organizationId])
+  @@index([shiftId, createdAt])
+  @@index([requestedByStaffProfileId, createdAt])
+  @@map("restaurant_shift_swap_requests")
+}
+
+model RestaurantShiftSwapDecision {
+  id                    String                          @id @default(cuid())
+  organizationId        String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  requestId             String                          @unique
+  decision              RestaurantShiftSwapDecisionKind
+  decidedByUserId       String
+  decidedByStaffProfileId String?
+  reason                String?
+  decidedAt             DateTime                        @default(now())
+
+  request RestaurantShiftSwapRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([decidedAt])
+  @@map("restaurant_shift_swap_decisions")
+}
+
+/// Immutable transition trail for published roster changes and swap decisions.
+model RestaurantShiftEvent {
+  id                 String                   @id @default(cuid())
+  organizationId     String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  shiftId            String
+  kind               RestaurantShiftEventKind
+  actorUserId        String
+  fromStaffProfileId String?
+  toStaffProfileId   String?
+  reason             String?
+  occurredAt         DateTime                 @default(now())
+
+  shift RestaurantShift @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([shiftId, occurredAt])
+  @@map("restaurant_shift_events")
+}
+
+/// A manager correction never rewrites the original server timestamp. Reads
+/// apply the latest append-only adjustment and retain both values and a reason.
+model RestaurantTimeAdjustment {
+  id                      String                       @id @default(cuid())
+  organizationId          String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  shiftId                 String
+  breakId                 String?
+  kind                    RestaurantTimeAdjustmentKind
+  originalAt              DateTime
+  correctedAt             DateTime
+  reason                  String
+  adjustedByUserId        String
+  adjustedByStaffProfileId String?
+  createdAt               DateTime                     @default(now())
+
+  shift RestaurantShift       @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  break RestaurantShiftBreak? @relation(fields: [breakId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([shiftId, kind, createdAt])
+  @@index([breakId, kind, createdAt])
+  @@map("restaurant_time_adjustments")
+}
+
+/// Command receipts make employee punches and swap decisions retry-safe. They
+/// are immutable and tenant-scoped; the idempotency key is never a source of truth.
+model RestaurantWorkforceCommand {
+  id             String                         @id @default(cuid())
+  organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  idempotencyKey String
+  kind           RestaurantWorkforceCommandKind
+  shiftId        String
+  breakId        String?
+  swapRequestId  String?
+  createdAt      DateTime                       @default(now())
+
+  shift       RestaurantShift             @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  break       RestaurantShiftBreak?        @relation(fields: [breakId], references: [id], onDelete: Restrict)
+  swapRequest RestaurantShiftSwapRequest?  @relation(fields: [swapRequestId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([shiftId, createdAt])
+  @@map("restaurant_workforce_commands")
 }
 
 model PlatformUser {

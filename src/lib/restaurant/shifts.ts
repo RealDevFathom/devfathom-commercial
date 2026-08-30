@@ -60,6 +60,7 @@ export type ShiftErrorReason =
   | 'STAFF_INACTIVE'
   | 'STAFF_WRONG_BRANCH'
   | 'OVERLAP'
+  | 'VERSION_CONFLICT'
   | 'ALREADY_CANCELLED';
 
 export class ShiftError extends Error {
@@ -216,6 +217,7 @@ const SHIFT_SELECT = {
   status: true,
   cancelledAt: true,
   cancelReason: true,
+  version: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -258,12 +260,19 @@ export type UpdateShiftInput = {
   notes?: string | null;
 };
 
+export type ShiftCas = { organizationId: string; expectedVersion: number };
+
 /**
  * Edit a live shift. Rescheduling re-stamps the business date from the NEW start
  * against the branch's cutoff and re-runs the overlap rule against every other
  * live shift. A cancelled shift is terminal: it is replaced, not edited.
  */
-export async function updateShift(db: ScopedDb, id: string, patch: UpdateShiftInput) {
+export async function updateShift(
+  db: ScopedDb,
+  id: string,
+  patch: UpdateShiftInput,
+  cas?: ShiftCas
+) {
   const existing = await db.restaurantShift.findUnique({
     where: { id },
     select: {
@@ -298,15 +307,28 @@ export async function updateShift(db: ScopedDb, id: string, patch: UpdateShiftIn
     reschedule = { startAt, endAt, businessDate: stampBusinessDate(branch, startAt) };
   }
 
-  return db.restaurantShift.update({
-    where: { id: existing.id },
-    data: {
-      ...(reschedule ?? {}),
-      ...(patch.role !== undefined ? { role: normalizeOptionalText(patch.role, 120) } : {}),
-      ...(patch.notes !== undefined ? { notes: normalizeOptionalText(patch.notes, 1000) } : {}),
-    },
-    select: SHIFT_SELECT,
+  const data = {
+    ...(reschedule ?? {}),
+    ...(patch.role !== undefined ? { role: normalizeOptionalText(patch.role, 120) } : {}),
+    ...(patch.notes !== undefined ? { notes: normalizeOptionalText(patch.notes, 1000) } : {}),
+  };
+  if (!cas) {
+    return db.restaurantShift.update({ where: { id: existing.id }, data, select: SHIFT_SELECT });
+  }
+  const won = await db.restaurantShift.updateMany({
+    where: { id: existing.id, organizationId: cas.organizationId, version: cas.expectedVersion },
+    data: { ...data, version: { increment: 1 } },
   });
+  if (won.count !== 1) {
+    throw new ShiftError(
+      'This shift changed since it was loaded. Refresh the roster and try again.',
+      'VERSION_CONFLICT'
+    );
+  }
+  return (await db.restaurantShift.findUnique({
+    where: { id: existing.id },
+    select: SHIFT_SELECT,
+  }))!;
 }
 
 /**
@@ -319,7 +341,8 @@ export async function updateShift(db: ScopedDb, id: string, patch: UpdateShiftIn
 export async function cancelShift(
   db: ScopedDb,
   id: string,
-  options: { now: Date; reason?: string | null }
+  options: { now: Date; reason?: string | null },
+  cas?: ShiftCas
 ) {
   const existing = await db.restaurantShift.findUnique({
     where: { id },
@@ -331,15 +354,28 @@ export async function cancelShift(
   if (existing.status === 'CANCELLED') {
     throw new ShiftError('This shift is already cancelled.', 'ALREADY_CANCELLED');
   }
-  return db.restaurantShift.update({
-    where: { id: existing.id },
-    data: {
-      status: 'CANCELLED',
-      cancelledAt: requireInstant(options.now, 'cancellation time'),
-      cancelReason: normalizeOptionalText(options.reason, 500),
-    },
-    select: SHIFT_SELECT,
+  const data = {
+    status: 'CANCELLED' as const,
+    cancelledAt: requireInstant(options.now, 'cancellation time'),
+    cancelReason: normalizeOptionalText(options.reason, 500),
+  };
+  if (!cas) {
+    return db.restaurantShift.update({ where: { id: existing.id }, data, select: SHIFT_SELECT });
+  }
+  const won = await db.restaurantShift.updateMany({
+    where: { id: existing.id, organizationId: cas.organizationId, version: cas.expectedVersion },
+    data: { ...data, version: { increment: 1 } },
   });
+  if (won.count !== 1) {
+    throw new ShiftError(
+      'This shift changed since it was loaded. Refresh the roster and try again.',
+      'VERSION_CONFLICT'
+    );
+  }
+  return (await db.restaurantShift.findUnique({
+    where: { id: existing.id },
+    select: SHIFT_SELECT,
+  }))!;
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
