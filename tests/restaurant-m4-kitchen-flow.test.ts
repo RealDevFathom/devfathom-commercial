@@ -314,7 +314,7 @@ beforeAll(async () => {
         menuId: ids.menu,
         priceListId: ids.priceList,
         status: 'PUBLISHED',
-        channels: [],
+        channels: ['DINE_IN'],
       },
     });
   });

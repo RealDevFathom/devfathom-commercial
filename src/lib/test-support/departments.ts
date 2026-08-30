@@ -42,17 +42,14 @@ export async function seedDepartments(
  * read-then-write for this shape, so two files can both miss and then both
  * insert — one of them losing on the unique index.
  *
- * Treat the unique violation as proof that the row now exists and read it back.
+ * Let PostgreSQL ignore the losing insert before it can abort the fixture transaction,
+ * then read the shared row back.
  */
 type PlatformModuleCreate = { key: string; name: string; category: string; active?: boolean };
 
 type PlatformModuleDb = {
   platformModule: {
-    upsert(args: {
-      where: { key: string };
-      update: Record<string, never>;
-      create: PlatformModuleCreate;
-    }): Promise<{ id: string }>;
+    createMany(args: { data: PlatformModuleCreate[]; skipDuplicates: boolean }): Promise<unknown>;
     findUniqueOrThrow(args: { where: { key: string } }): Promise<{ id: string }>;
   };
 };
@@ -62,13 +59,9 @@ export async function ensurePlatformModule(
   key: string,
   create: Omit<PlatformModuleCreate, 'key'>
 ): Promise<{ id: string }> {
-  try {
-    return await db.platformModule.upsert({
-      where: { key },
-      update: {},
-      create: { key, ...create },
-    });
-  } catch {
-    return await db.platformModule.findUniqueOrThrow({ where: { key } });
-  }
+  await db.platformModule.createMany({
+    data: [{ key, ...create }],
+    skipDuplicates: true,
+  });
+  return db.platformModule.findUniqueOrThrow({ where: { key } });
 }
