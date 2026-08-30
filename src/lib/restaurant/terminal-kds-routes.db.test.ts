@@ -290,6 +290,9 @@ beforeAll(async () => {
       await tx.organizationModule.create({
         data: { organizationId: orgId, moduleId: posModule.id },
       });
+      await tx.organizationLimit.create({
+        data: { organizationId: orgId, key: 'pos.orders.monthly', value: 1_000_000 },
+      });
     });
   }
 

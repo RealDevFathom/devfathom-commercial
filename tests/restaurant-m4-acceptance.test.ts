@@ -34,6 +34,8 @@ const ids = {
   priceVersion: `price_version_${suffix}`,
   priceEntry: `price_entry_${suffix}`,
   publication: `publication_${suffix}`,
+  taxSource: `tax_source_${suffix}`,
+  taxProfile: `tax_profile_${suffix}`,
   stationA: `station_a_${suffix}`,
   stationB: `station_b_${suffix}`,
 };
@@ -309,6 +311,9 @@ beforeAll(async () => {
           startsAt: new Date(0),
         },
       });
+      await tx.organizationLimit.create({
+        data: { organizationId, key: 'pos.orders.monthly', value: 1_000_000 },
+      });
     });
   }
 
@@ -319,6 +324,43 @@ beforeAll(async () => {
         name: 'New York',
         timezone: 'America/New_York',
         businessDayCutoff: '04:00',
+      },
+    });
+    await tx.restaurantTaxOfficialSource.create({
+      data: {
+        id: ids.taxSource,
+        authorityCode: 'SYNTHETIC_TEST_ONLY',
+        documentTitle: 'Synthetic zero-rate M4 fixture',
+        sourceUrl: 'https://example.invalid/synthetic-tax',
+        contentHash: `synthetic-m4-${suffix}`,
+        retrievedAt: new Date('2026-01-01T00:00:00.000Z'),
+        expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+      },
+    });
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        id: ids.taxProfile,
+        branchId: ids.branchA,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+        approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+        approvedAt: new Date('2026-01-01T00:00:00.000Z'),
+        publishedAt: new Date('2026-01-01T00:00:00.000Z'),
+        rules: {
+          create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+            officialSourceId: ids.taxSource,
+            ruleCode: `SYNTHETIC_${paymentCategory}`,
+            paymentCategory,
+            priceMode: 'EXCLUSIVE',
+            rate: '0.000000',
+            status: 'PUBLISHED',
+            effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+            approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+            approvedAt: new Date('2026-01-01T00:00:00.000Z'),
+            publishedAt: new Date('2026-01-01T00:00:00.000Z'),
+          })),
+        },
       },
     });
     // Operator A settles bills through the M5 checkout routes, which gate on
@@ -429,7 +471,7 @@ beforeAll(async () => {
         menuId: ids.menu,
         priceListId: ids.priceList,
         status: 'PUBLISHED',
-        channels: [],
+        channels: ['DINE_IN', 'TAKEAWAY'],
       },
     });
   });
