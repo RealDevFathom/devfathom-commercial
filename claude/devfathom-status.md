@@ -1,6 +1,6 @@
 # DevFathom delivery status
 
-Last refreshed: 2026-08-30 08:53 PKT (UTC+05:00)
+Last refreshed: 2026-08-30 11:34 PKT (UTC+05:00)
 
 Concise evidence ledger, not delivery chronology. Paperclip status alone does not prove completion.
 
@@ -8,10 +8,10 @@ Concise evidence ledger, not delivery chronology. Paperclip status alone does no
 
 - Canonical observed Restaurant/v1 baseline: `27b4e51165428e00248edc12d1b6e175f31933a6`.
 - Private integration branch: `WHA-842-compose-the-actual-restaurant-candidate-union-on-a-private-integration-branch`.
-- Observed clean private integration head: `1b80ef4cfb3f5e58a656b8c5cb00a132fa84c9b7`.
+- Observed clean private integration head: `8f4609079a87019f2128bc76b9fb5bc1259ae995`.
 - Local `main` observed at `5c4b48cfc208a7bf321ce9e42de7a2f8f67e1ab6`; not Restaurant delivery base.
 - No local `staging` or `production` ref observed. Deployment state is not independently verified.
-- This refresh makes no push, shared-ref merge, deploy, or live-release claim. Restaurant remains incomplete.
+- This refresh makes no push, shared merge, deploy, or live claim. Restaurant is not complete; governed Restaurant seed and browser E2E remain.
 
 References: [restaurant administrator guide](../docs/product/restaurant-administrator-guide.md), [tax/checkout/settlement spec](../docs/specs/restaurant-tax-checkout-settlement.md), [QA guide](../docs/qa.md), [platform testing/release guide](../docs/admin-platform/testing-release.md).
 
@@ -32,14 +32,14 @@ Implementation presence does not prove browser verification, release readiness, 
 | POS/KDS              | Broad POS and kitchen workflows present; guided enrollment privately integrated through `c137a191`.   | Browser enrollment, PIN, KDS, revoke, and no-secret proof pending. |
 | catalog/menu/OCR     | Catalog, menu, modifiers, and OCR/import flows present.                                               | Restaurant E2E and applicable provider-backed OCR proof pending.   |
 | floor/orders         | Floor/order workflows present; refund/void privately integrated via `5be4b523`.                       | Same-SHA Restaurant browser proof pending.                         |
-| money/payments/tax   | Tax privately integrated via `c94b0b91`; restricted combined checks `116/116`.                        | Browser publish and other-branch proof pending.                    |
+| money/payments/tax   | Tax integrated via `c94b0b91`; cash/day close via `a9555e0b` + `0663b465` after independent READY.   | Governed Restaurant seed and browser E2E remain.                   |
 | Restaurant Finance   | Privately integrated as `1b80ef4c`; focused checks `156/156`, zero skip.                              | Browser role/branch/Agency regression pending.                     |
 | inventory/purchasing | Inventory and purchasing workflows present.                                                           | Reconciliation and same-SHA browser proof pending.                 |
 | staff                | Entitlement, hydration, staff selectors, and branch-device security are privately integrated.         | Same-SHA Restaurant browser proof pending.                         |
 | SOP                  | WHA-868 independently accepted and privately integrated via `da4e31d7` + `6d7b9381`.                  | Same-SHA Restaurant browser proof pending.                         |
 | loyalty              | Loyalty surfaces and guided device enrollment candidate present.                                      | Enrollment browser journeys remain pending.                        |
 | Insights/dashboard   | Dashboard privately integrated via `1d97e65f`.                                                        | Reconciliation and browser proof pending.                          |
-| Reports              | Related reporting surfaces exist; aggregate completeness, gates, inventory reads, and UI remain open. | WHA-873 active.                                                    |
+| Reports              | Privately integrated via `d79c8057` + `be91a7d9` + `ef18995d` + `2828bb1e` after independent READY.  | Same-SHA Restaurant browser proof pending.                         |
 | docs                 | Product, QA, and release references maintained.                                                       | Refresh evidence at phase gates.                                   |
 
 ## Concise integration evidence
@@ -51,12 +51,18 @@ Implementation presence does not prove browser verification, release readiness, 
 - Tax: WHA-864, `c94b0b91a61ea4ee5769c672fd74055e88ef9b9d` privately integrated; restricted combined `116/116`; browser publish/other-branch pending.
 - Guided enrollment: WHA-863, integrated through `c137a191eee82fb75645e9afd91bc175b5486586`; focused `49/49` plus real-DB exact-cleanup `5/5`, zero skip; browser enrollment/PIN/KDS/revoke/no-secret pending.
 - Restaurant Finance: WHA-874, integrated as `1b80ef4cfb3f5e58a656b8c5cb00a132fa84c9b7`; `156/156`, zero skip; browser role/branch/Agency regression pending.
+- Cash/day close: `a9555e0b` + `0663b465` privately integrated after independent READY.
+- Reports: `d79c8057` + `be91a7d9` + `ef18995d` + `2828bb1e` privately integrated after independent READY.
+- SuperAdmin E2E test chain: `51c58cc2` + `fe4a0939` + `cd7031bb` + `04d41635` privately integrated; governed execution remains WHA-900.
+- Refund integrity: `31f419d9` + `3b93444d` privately integrated; governed Restaurant seed and browser E2E remain.
+- Agency E2E acceptance candidate: `96677d76` + `8f460907` privately integrated; browser execution is not claimed and governed execution remains WHA-901.
 
 ## Active lanes
 
-- WHA-873 — Reports: correct aggregate completeness, source-module gates, bounded inventory reads, and missing UI.
-- WHA-875 — recoverable cash drawer and day close.
-- WHA-876 — frozen `DINE_IN` service-charge and refund evidence.
+- WHA-899 — immutable Restaurant seed/restoration correction.
+- WHA-900 — governed SuperAdmin E2E.
+- WHA-901 — governed Agency E2E.
+- WHA-902 — module coverage reconciliation.
 
 ## Next-phase audit findings
 
@@ -65,9 +71,9 @@ Implementation presence does not prove browser verification, release readiness, 
 
 ## Required sequence
 
-1. Finish Restaurant E2E.
-2. Then finish SuperAdmin/control-plane E2E.
-3. Then finish Agency every-module E2E.
+1. Finish governed Restaurant seed and browser E2E; Restaurant is not complete.
+2. Finish governed SuperAdmin/control-plane E2E.
+3. Finish governed Agency every-module E2E.
 
 ## Release blockers and owner-authority gate
 
