@@ -3,8 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import PlatformAuditPage from './page';
 
-const mocks = vi.hoisted(() => ({ withPlatformDb: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  requirePlatformRead: vi.fn().mockResolvedValue({ role: 'SUPER_ADMIN' }),
+  withPlatformDb: vi.fn(),
+}));
 
+vi.mock('@/lib/platform/page-access', () => ({
+  requirePlatformRead: mocks.requirePlatformRead,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
 
 describe('PlatformAuditPage', () => {

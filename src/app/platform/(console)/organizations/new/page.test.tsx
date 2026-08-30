@@ -4,10 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import NewOrganizationPage from './page';
 
 const mocks = vi.hoisted(() => ({
+  requirePlatformRead: vi.fn(),
   withPlatformDb: vi.fn(),
   packageFindMany: vi.fn(),
 }));
 
+vi.mock('@/lib/platform/page-access', () => ({
+  requirePlatformRead: mocks.requirePlatformRead,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -25,6 +29,7 @@ function renderPage(searchParams: { opportunityId?: string; vertical?: string })
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requirePlatformRead.mockResolvedValue({ role: 'SUPER_ADMIN' });
   mocks.packageFindMany.mockResolvedValue(RESTAURANT_PACKAGES);
   mocks.withPlatformDb.mockImplementation(
     (
