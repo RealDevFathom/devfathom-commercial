@@ -173,6 +173,48 @@ describe('restaurant tax configuration UI', () => {
   });
 
   it.each([
+    ['16.67', '0.1667'],
+    ['99.99', '0.9999'],
+  ])('preserves exact decimal digits when converting %s%%', (percentage, decimal) => {
+    render(<RestaurantTaxConsole />);
+    submitCustomRates([percentage, '8', '15']);
+
+    expect(mocks.previewCustom).toHaveBeenLastCalledWith(
+      { amount: '1000.00', rate: decimal, priceMode: 'EXCLUSIVE' },
+      { enabled: true }
+    );
+    expect(mocks.publishCustom).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rates: expect.arrayContaining([{ paymentCategory: 'CASH', rate: decimal }]),
+      })
+    );
+  });
+
+  it('hides a cached zero-rate preview when the current Cash rate becomes invalid', () => {
+    render(<RestaurantTaxConsole />);
+    fireEvent.change(customRateInput('Cash'), { target: { value: '0' } });
+
+    expect(mocks.previewCustom).toHaveBeenLastCalledWith(
+      { amount: '1000.00', rate: '0', priceMode: 'EXCLUSIVE' },
+      { enabled: true }
+    );
+    expect(screen.getByText(/Net 1000.00 · Tax 0.00 · Total 1000.00/)).toBeInTheDocument();
+
+    fireEvent.change(customRateInput('Cash'), { target: { value: 'not-a-rate' } });
+    fireEvent.blur(customRateInput('Cash'));
+
+    expect(mocks.previewCustom).toHaveBeenLastCalledWith(
+      { amount: '1000.00', rate: '0', priceMode: 'EXCLUSIVE' },
+      { enabled: false }
+    );
+    expect(customRateInput('Cash')).toHaveAccessibleDescription('Enter a valid number.');
+    expect(screen.queryByText(/Net 1000.00 · Tax 0.00 · Total 1000.00/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Enter a valid sample amount and Cash rate to preview settlement.')
+    ).toBeInTheDocument();
+  });
+
+  it.each([
     ['', 'Enter a tax rate percentage.'],
     ['abc', 'Enter a valid number.'],
     ['-0.1', 'Tax rate percentage cannot be negative.'],
