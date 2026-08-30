@@ -4,7 +4,10 @@ import { TRPCError } from '@trpc/server';
 import type { Prisma } from '@/generated/prisma/client';
 import type { Action } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { operationalOrderChannelSchema } from '@/lib/restaurant/order-channels';
+import {
+  isOperationalOrderChannel,
+  operationalOrderChannelSchema,
+} from '@/lib/restaurant/order-channels';
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
@@ -627,6 +630,12 @@ export const restaurantMenusRouter = router({
       if (publication.status === 'PUBLISHED') {
         publicationError('INVALID_STATE', 'The publication is already published.');
       }
+      if (publication.channels.some((channel) => !isOperationalOrderChannel(channel))) {
+        publicationError(
+          'INVALID_STATE',
+          'Delivery is not configured. Set this publication to dine-in and/or takeaway before publishing.'
+        );
+      }
       const updated = await ctx.db.restaurantBranchMenuPublication.update({
         where: { id: input.id },
         data: { status: 'PUBLISHED', publishedAt: new Date(), retiredAt: null },
@@ -869,7 +878,7 @@ export const restaurantMenusRouter = router({
 async function loadPublication(db: ScopedDb, id: string) {
   const publication = await db.restaurantBranchMenuPublication.findUnique({
     where: { id },
-    select: { id: true, status: true, branchId: true, menuId: true },
+    select: { id: true, status: true, branchId: true, menuId: true, channels: true },
   });
   if (!publication) {
     publicationError('PUBLICATION_NOT_FOUND', 'The publication does not exist.');

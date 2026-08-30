@@ -84,6 +84,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
 import { hashDeviceSecret } from './devices';
 import { hashTerminalSessionToken } from './terminal-session';
 import { TERMINAL_DEVICE_COOKIE, withDeviceAuth, withTerminalAuth } from './terminal-auth';
+import { openOrderBody, terminalCommandRoute } from './terminal-orders';
 
 const ORG = 'org_rest';
 
@@ -268,6 +269,51 @@ describe('withTerminalAuth', () => {
     );
     expect(res.status).toBe(200);
     expect(h.store.sessions[0].lastActivityAt).toBeInstanceOf(Date);
+  });
+
+  it('runs request preflight before persistent device or session touches', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1', lastActivityAt: null });
+    const inner = vi.fn(() => new Response('ok'));
+    const handler = withTerminalAuth(inner, {
+      preflight: () => NextJson({ error: 'Delivery is not configured.' }, 400),
+    });
+
+    const response = await handler(
+      req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken })
+    );
+
+    expect(response.status).toBe(400);
+    expect(inner).not.toHaveBeenCalled();
+    expect(h.store.devices[0].lastSeenAt).toBeNull();
+    expect(h.store.sessions[0].lastActivityAt).toBeNull();
+  });
+
+  it('rejects REST delivery before auth touches or order command work', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1', lastActivityAt: null });
+    const run = vi.fn();
+    const handler = terminalCommandRoute(openOrderBody, run, 201);
+    const response = await handler(
+      new Request('https://tenant.test/api/restaurant/orders/open', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${deviceSecret}`,
+          'x-terminal-session': sessionToken,
+          'idempotency-key': 'delivery-bypass',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ channel: 'DELIVERY' }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Delivery is not configured. Use dine-in or takeaway.',
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(h.store.devices[0].lastSeenAt).toBeNull();
+    expect(h.store.sessions[0].lastActivityAt).toBeNull();
   });
 
   it('rejects mid-session when the device is revoked (403, no trust cache)', async () => {

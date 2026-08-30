@@ -109,6 +109,11 @@ export type TerminalErrorMapper = (err: unknown) => Response | null;
 export type TerminalRouteOptions = {
   /** Shape a domain error into its public response, OUTSIDE the owning transaction. */
   mapError?: TerminalErrorMapper;
+  /**
+   * Reject a malformed request before tenant scope and persistent device/session
+   * check-ins. The validator must be side-effect free and inspect a cloned body.
+   */
+  preflight?: (request: Request) => Promise<Response | null> | Response | null;
 };
 
 function unauthorized(message: string): NextResponse {
@@ -337,6 +342,9 @@ export function withTerminalAuth<T extends unknown[]>(
     }
 
     try {
+      const preflightRejection = await options.preflight?.(request);
+      if (preflightRejection) return preflightRejection;
+
       return await withTenantDb(auth.organizationId, async (db) => {
         const now = new Date();
         // C5: authoritative, FRESH reads inside one consistent transaction.
