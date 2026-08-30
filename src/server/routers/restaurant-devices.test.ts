@@ -9,23 +9,27 @@
  * throwaway database, never DATABASE_URL); without it the suite reports itself
  * skipped rather than passing vacuously.
  *
- * Deliberately does not assert RLS isolation: every row is created and read
- * under one tenant scope for a single, per-run-unique organization id, so the
- * suite is valid on a superuser TEST_DATABASE_URL too. The tRPC middleware that
+ * The suite asserts that its runtime connection is LOGIN, NOSUPERUSER, and
+ * NOBYPASSRLS before making tenant-isolation claims. The tRPC middleware that
  * needs Auth.js / the ABAC engine is mocked (`resolveTenantActor`, `can`) exactly
  * as the sibling admin-router tests do; the database and the router are real.
  */
 import { randomBytes } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  annotateAudit: vi.fn(),
+  can: vi.fn(async (..._args: unknown[]) => true),
+}));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
 vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
-  return { ...actual, can: vi.fn(async () => true) };
+  return { ...actual, can: mocks.can };
 });
 vi.mock('@/server/audit', () => ({
-  annotateAudit: vi.fn(),
+  annotateAudit: mocks.annotateAudit,
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
@@ -39,7 +43,11 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha22_dev_${suffix}`;
+const otherOrgId = `org_wha22_other_${suffix}`;
 const branchId = `branch_${suffix}`;
+const otherBranchId = `branch_other_${suffix}`;
+const foreignBranchId = `branch_foreign_${suffix}`;
+const foreignDeviceId = `device_foreign_${suffix}`;
 const actingStaffId = `staff_acting_${suffix}`;
 const approvingStaffId = `staff_mgr_${suffix}`;
 const unprivilegedStaffId = `staff_unprivileged_${suffix}`;
@@ -51,6 +59,9 @@ type Deps = {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   restaurantDevicesRouter: (typeof import('./restaurant-devices'))['restaurantDevicesRouter'];
   hashOperatorCredential: (typeof import('@/lib/restaurant/operator-credentials'))['hashOperatorCredential'];
+  hashDeviceSecret: (typeof import('@/lib/restaurant/devices'))['hashDeviceSecret'];
+  resolveDeviceBySecret: (typeof import('@/lib/restaurant/devices'))['resolveDeviceBySecret'];
+  rotateDeviceSecret: (typeof import('@/lib/restaurant/devices'))['rotateDeviceSecret'];
 };
 
 let deps: Deps;
@@ -97,10 +108,11 @@ const caller = () =>
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, routerModule, credModule] = await Promise.all([
+  const [scopedDb, routerModule, credModule, deviceModule] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./restaurant-devices'),
     import('@/lib/restaurant/operator-credentials'),
+    import('@/lib/restaurant/devices'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -108,25 +120,60 @@ beforeAll(async () => {
     createTenantDb: scopedDb.createTenantDb,
     restaurantDevicesRouter: routerModule.restaurantDevicesRouter,
     hashOperatorCredential: credModule.hashOperatorCredential,
+    hashDeviceSecret: deviceModule.hashDeviceSecret,
+    resolveDeviceBySecret: deviceModule.resolveDeviceBySecret,
+    rotateDeviceSecret: deviceModule.rotateDeviceSecret,
   };
 
   await deps.withPlatformDb((tx) =>
-    tx.organization.create({
-      data: {
-        id: orgId,
-        slug: `wha863-devices-${suffix}`,
-        legalName: 'WHA-863 Devices Test',
-        displayName: 'WHA-863 Devices',
-        status: 'ACTIVE',
-      },
+    tx.organization.createMany({
+      data: [
+        {
+          id: orgId,
+          slug: `wha920-devices-${suffix}`,
+          legalName: 'WHA-920 Devices Test',
+          displayName: 'WHA-920 Devices',
+          status: 'ACTIVE',
+        },
+        {
+          id: otherOrgId,
+          slug: `wha920-devices-other-${suffix}`,
+          legalName: 'WHA-920 Other Devices Test',
+          displayName: 'WHA-920 Other Devices',
+          status: 'ACTIVE',
+        },
+      ],
     })
   );
 
   const approvingHash = await deps.hashOperatorCredential('PIN', APPROVING_PIN);
   await deps.withTenantDb(orgId, async (tx) => {
-    await tx.restaurantBranch.create({ data: { id: branchId, name: 'Downtown' } });
+    await tx.organizationDepartment.create({
+      data: { key: 'LEADERSHIP', name: 'Leadership' },
+    });
+    await tx.user.create({
+      data: {
+        id: 'user_admin',
+        name: 'Device administrator',
+        email: `device-admin-${suffix}@example.test`,
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        title: 'Device administrator',
+      },
+    });
+    await tx.restaurantBranch.createMany({
+      data: [
+        { id: branchId, name: 'Downtown' },
+        { id: otherBranchId, name: 'Airport' },
+      ],
+    });
     await tx.restaurantStaffProfile.create({
-      data: { id: actingStaffId, displayName: 'Acting Admin', status: 'ACTIVE' },
+      data: {
+        id: actingStaffId,
+        userId: 'user_admin',
+        displayName: 'Acting Admin',
+        status: 'ACTIVE',
+      },
     });
     await tx.restaurantStaffProfile.create({
       data: { id: approvingStaffId, displayName: 'Shift Manager', status: 'ACTIVE' },
@@ -154,6 +201,12 @@ beforeAll(async () => {
     await tx.restaurantJobRoleCapability.create({
       data: { jobRoleId: managerRole.id, capability: 'devices:manage' },
     });
+    await tx.restaurantJobRoleCapability.create({
+      data: { jobRoleId: managerRole.id, capability: 'staff:manage' },
+    });
+    await tx.restaurantStaffJobRole.create({
+      data: { staffProfileId: actingStaffId, jobRoleId: managerRole.id, branchId },
+    });
     await tx.restaurantStaffJobRole.create({
       data: {
         staffProfileId: approvingStaffId,
@@ -162,6 +215,23 @@ beforeAll(async () => {
       },
     });
   });
+  await deps.withTenantDb(otherOrgId, async (tx) => {
+    await tx.restaurantBranch.create({ data: { id: foreignBranchId, name: 'Foreign branch' } });
+    await tx.restaurantRegisteredDevice.create({
+      data: {
+        id: foreignDeviceId,
+        branchId: foreignBranchId,
+        name: 'Foreign POS',
+        deviceSecretHash: deps.hashDeviceSecret(`rdk_foreign_${suffix}`),
+      },
+    });
+  });
+});
+
+beforeEach(() => {
+  mocks.annotateAudit.mockClear();
+  mocks.can.mockReset();
+  mocks.can.mockResolvedValue(true);
 });
 
 afterAll(async () => {
@@ -176,6 +246,8 @@ afterAll(async () => {
     await tx.restaurantStaffProfile.deleteMany({ where: { organizationId: orgId } });
     await tx.restaurantJobRole.deleteMany({ where: { organizationId: orgId } });
     await tx.restaurantBranch.deleteMany({ where: { organizationId: orgId } });
+    await tx.user.deleteMany({ where: { organizationId: orgId } });
+    await tx.organizationDepartment.deleteMany({ where: { organizationId: orgId } });
   });
 
   const remaining = await deps.withPlatformDb((tx) =>
@@ -189,17 +261,34 @@ afterAll(async () => {
       tx.restaurantStaffProfile.count({ where: { organizationId: orgId } }),
       tx.restaurantJobRole.count({ where: { organizationId: orgId } }),
       tx.restaurantBranch.count({ where: { organizationId: orgId } }),
+      tx.user.count({ where: { organizationId: orgId } }),
+      tx.organizationDepartment.count({ where: { organizationId: orgId } }),
     ])
   );
-  expect(remaining).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  expect(remaining).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   await deps.withPlatformDb(async (tx) => {
-    await tx.organization.delete({ where: { id: orgId } });
-    expect(await tx.organization.count({ where: { id: orgId } })).toBe(0);
+    await tx.restaurantRegisteredDevice.deleteMany({ where: { organizationId: otherOrgId } });
+    await tx.restaurantBranch.deleteMany({ where: { organizationId: otherOrgId } });
+    await tx.organization.deleteMany({ where: { id: { in: [orgId, otherOrgId] } } });
+    expect(await tx.organization.count({ where: { id: { in: [orgId, otherOrgId] } } })).toBe(0);
   });
 });
 
 describeIfDatabase('restaurantDevices router (real DB)', () => {
+  it('runs through a LOGIN NOSUPERUSER NOBYPASSRLS runtime connection', async () => {
+    const [role] = await deps.withTenantDb(
+      orgId,
+      (tx) =>
+        tx.$queryRaw<
+          { rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }[]
+        >`SELECT r.rolcanlogin, r.rolsuper, r.rolbypassrls
+          FROM pg_roles r
+         WHERE r.rolname = current_user`
+    );
+    expect(role).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+  });
+
   it('enrolls a device and lists it with health, never leaking the secret', async () => {
     const api = caller();
     const enrolled = await api.initiateEnrollment({ branchId, name: 'POS-1' });
@@ -326,5 +415,101 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         reason: 'again',
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('rotates once, immediately rejects the old secret, and records redacted co-authorization audit', async () => {
+    const api = caller();
+    const enrolled = await api.initiateEnrollment({ branchId, name: 'POS-rotate' });
+    mocks.annotateAudit.mockClear();
+
+    const result = await api.rotate({
+      deviceId: enrolled.device.id,
+      actingStaffProfileId: actingStaffId,
+      approvingStaffProfileId: approvingStaffId,
+      approvingType: 'PIN',
+      approvingSecret: APPROVING_PIN,
+      reason: 'scheduled credential rotation',
+    });
+
+    expect(result.secret).toMatch(/^rdk_/);
+    expect(result.secret).not.toBe(enrolled.enrollmentSecret);
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        deps.resolveDeviceBySecret(tx, enrolled.enrollmentSecret)
+      )
+    ).toBeNull();
+    expect(
+      await deps.withTenantDb(orgId, (tx) => deps.resolveDeviceBySecret(tx, result.secret))
+    ).toMatchObject({ id: enrolled.device.id, status: 'ACTIVE' });
+
+    const coAuth = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantCoAuthorization.findUnique({ where: { id: result.coAuthorizationId } })
+    );
+    expect(coAuth).toMatchObject({
+      actingStaffProfileId: actingStaffId,
+      approvingStaffProfileId: approvingStaffId,
+      capability: 'devices:manage',
+      targetId: enrolled.device.id,
+      reason: 'scheduled credential rotation',
+    });
+    expect(mocks.annotateAudit.mock.calls[0]?.[1]).toEqual({ skipInput: true });
+    expect(mocks.annotateAudit).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        skipInput: true,
+        targetId: enrolled.device.id,
+        metadata: expect.objectContaining({ coAuthorizationId: result.coAuthorizationId }),
+      })
+    );
+    expect(JSON.stringify(mocks.annotateAudit.mock.calls)).not.toContain(APPROVING_PIN);
+    expect(JSON.stringify(mocks.annotateAudit.mock.calls)).not.toContain(result.secret);
+  });
+
+  it('allows only one concurrent rotation from the same observed device state', async () => {
+    const enrolled = await caller().initiateEnrollment({ branchId, name: 'POS-concurrent' });
+    const observed = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantRegisteredDevice.findUniqueOrThrow({ where: { id: enrolled.device.id } })
+    );
+
+    const attempts = await Promise.allSettled([
+      deps.withTenantDb(orgId, (tx) =>
+        deps.rotateDeviceSecret(tx, enrolled.device.id, observed.deviceSecretHash)
+      ),
+      deps.withTenantDb(orgId, (tx) =>
+        deps.rotateDeviceSecret(tx, enrolled.device.id, observed.deviceSecretHash)
+      ),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    const rejected = attempts.find((attempt) => attempt.status === 'rejected');
+    expect(rejected).toMatchObject({ reason: { reason: 'STALE_ROTATION' } });
+  });
+
+  it('denies cross-tenant and unauthorized-branch rotations without revealing device existence', async () => {
+    const api = caller();
+    const branchLocal = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantRegisteredDevice.create({
+        data: {
+          branchId: otherBranchId,
+          name: 'Airport POS',
+          deviceSecretHash: deps.hashDeviceSecret(`rdk_airport_${suffix}`),
+        },
+      })
+    );
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] !== 'restaurant:configure');
+    const input = {
+      actingStaffProfileId: actingStaffId,
+      approvingStaffProfileId: approvingStaffId,
+      approvingType: 'PIN' as const,
+      approvingSecret: APPROVING_PIN,
+      reason: 'scope probe',
+    };
+
+    await expect(api.rotate({ ...input, deviceId: branchLocal.id })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(api.rotate({ ...input, deviceId: foreignDeviceId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
   });
 });
