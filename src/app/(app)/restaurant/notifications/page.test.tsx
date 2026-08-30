@@ -84,4 +84,80 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
     expect(screen.getByText('Permission denied')).toBeDefined();
     expect(mocks.createTRPCContext).not.toHaveBeenCalled();
   });
+
+  it('renders labeled webhook controls and a disabled test action when the endpoint is disabled', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub());
+    mocks.can.mockResolvedValue(true);
+    mocks.createCaller.mockReturnValue({
+      list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+      unreadCount: vi.fn().mockResolvedValue({ count: 0 }),
+      getMatrix: vi.fn().mockResolvedValue({
+        category: 'sop.escalation',
+        branchId: null,
+        channels: ['IN_APP', 'WEBHOOK', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP'].map((channel) => ({
+          channel,
+          enabled: true,
+        })),
+      }),
+      webhookStatus: vi.fn().mockResolvedValue({ config: null, deliveries: [] }),
+    });
+
+    render(await RestaurantNotificationsPage({ searchParams }));
+
+    expect(screen.getByLabelText('HTTPS endpoint')).toBeDefined();
+    expect(screen.getByLabelText('New signing secret')).toHaveAttribute(
+      'aria-describedby',
+      'webhook-secret-help'
+    );
+    expect(screen.getByRole('button', { name: 'Queue test delivery' })).toBeDisabled();
+    expect(screen.getByText('Signed webhook')).toBeDefined();
+  });
+
+  it('exposes enabled test, redacted error, and keyboard-reachable dead-letter retry states', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub());
+    mocks.can.mockResolvedValue(true);
+    mocks.createCaller.mockReturnValue({
+      list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+      unreadCount: vi.fn().mockResolvedValue({ count: 0 }),
+      getMatrix: vi.fn().mockResolvedValue({
+        category: 'sop.escalation',
+        branchId: null,
+        channels: ['IN_APP', 'WEBHOOK', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP'].map((channel) => ({
+          channel,
+          enabled: true,
+        })),
+      }),
+      webhookStatus: vi.fn().mockResolvedValue({
+        config: {
+          id: 'config_1',
+          endpointUrl: 'https://hooks.example.com/sop',
+          enabled: true,
+          signingSecretConfigured: true,
+          lastSuccessAt: null,
+          lastFailureAt: new Date(),
+          lastFailure: 'Webhook endpoint returned HTTP 503.',
+          updatedAt: new Date(),
+        },
+        deliveries: [
+          {
+            id: 'job_dead',
+            status: 'DEAD',
+            attempts: 5,
+            nextAttemptAt: null,
+            lastError: 'Webhook endpoint returned HTTP 503.',
+            createdAt: new Date(),
+          },
+        ],
+      }),
+    });
+
+    render(await RestaurantNotificationsPage({ searchParams }));
+
+    expect(screen.getByRole('button', { name: 'Queue test delivery' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Retry' })).toHaveAttribute('tabindex', '0');
+    expect(screen.getAllByText('Webhook endpoint returned HTTP 503.').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/signing-secret|ciphertext-only/i)).toBeNull();
+  });
 });

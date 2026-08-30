@@ -47,6 +47,7 @@ type RouterOutputs = inferRouterOutputs<AppRouter>;
 type NotificationPage = RouterOutputs['restaurantNotifications']['list'];
 type Notification = NotificationPage['items'][number];
 type Matrix = RouterOutputs['restaurantNotifications']['getMatrix'];
+type WebhookStatus = RouterOutputs['restaurantNotifications']['webhookStatus'];
 type Channel = (typeof RESTAURANT_NOTIFICATION_CHANNELS)[number];
 type Filter = 'all' | 'unread';
 type Notice = { kind: 'success' | 'error'; text: string };
@@ -71,6 +72,7 @@ type LoadedViewProps = {
   matrixBranch: Branch | null;
   canManage: boolean;
   matrices: { organization: Matrix; branch: Matrix | null } | null;
+  webhook: WebhookStatus | null;
 };
 
 export type NotificationsViewProps =
@@ -86,6 +88,7 @@ type SearchParams = Promise<{
 
 const CHANNEL_LABEL: Record<Channel, string> = {
   IN_APP: 'In-app',
+  WEBHOOK: 'Signed webhook',
   EMAIL: 'Email',
   SMS: 'SMS',
   PUSH: 'Push',
@@ -143,15 +146,20 @@ function formatTimestamp(value: Date | string | null, timeZone: string) {
 }
 
 function capabilityLabel(channel: Channel) {
-  return channel === 'IN_APP' ? 'Live delivery' : 'Stub only · not sent';
+  if (channel === 'IN_APP') return 'Live delivery';
+  if (channel === 'WEBHOOK') return 'Signed HTTPS delivery';
+  return 'Unavailable · not sent';
 }
 
 function deliveryLabel(channel: Channel, status: string) {
-  if (channel !== 'IN_APP') return 'Stub only · not sent';
+  if (channel === 'WEBHOOK')
+    return status === 'DELIVERED_WEBHOOK' ? 'Delivered by webhook' : 'Webhook failed';
+  if (channel !== 'IN_APP') return 'Unavailable · not sent';
   return status === 'DELIVERED_IN_APP' ? 'Delivered in app' : status.replaceAll('_', ' ');
 }
 
 function deliveryTone(channel: Channel, status: string): StatusTone {
+  if (channel === 'WEBHOOK') return status === 'DELIVERED_WEBHOOK' ? 'success' : 'warning';
   if (channel !== 'IN_APP') return 'neutral';
   return status === 'DELIVERED_IN_APP' ? 'success' : 'warning';
 }
@@ -282,6 +290,7 @@ function NotificationsView(props: NotificationsViewProps) {
     notice,
     notifications,
     unreadCount,
+    webhook,
   } = props;
   const branchById = new Map(branches.map((branch) => [branch.id, branch]));
   const activeBranches = branches.filter((branch) => branch.active);
@@ -322,6 +331,157 @@ function NotificationsView(props: NotificationsViewProps) {
           {notice.text}
         </div>
       ) : null}
+
+      <SectionCard className="min-w-0" eyebrow="External delivery">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="font-display text-lg font-semibold tracking-tight text-text-strong">
+              Signed SOP webhook
+            </h2>
+            <p className="mt-1 text-sm leading-relaxed text-text-muted">
+              Version 1.0 JSON events use HMAC-SHA256, a timestamp, stable event ID, and idempotency
+              key.
+            </p>
+          </div>
+          <StatusPill
+            status={webhook?.config?.enabled ? 'ENABLED' : 'DISABLED'}
+            label={webhook?.config?.enabled ? 'Enabled' : 'Disabled'}
+            tone={webhook?.config?.enabled ? 'success' : 'neutral'}
+          />
+        </div>
+        {!canManage || !webhook ? (
+          <div className="mt-4 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-4">
+            <p className="font-semibold text-text-strong">Permission denied</p>
+            <p className="mt-1 text-sm text-text-muted">
+              The staff:manage permission is required to configure or inspect webhook delivery.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-5 space-y-5">
+            <form action={action} className="grid gap-4 md:grid-cols-2">
+              <HiddenRouteState filter={filter} cursor={cursor} branch={matrixBranch?.id} />
+              <input type="hidden" name="intent" value="configure-webhook" />
+              <label className="text-sm text-text-body md:col-span-2">
+                HTTPS endpoint
+                <input
+                  className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  name="endpointUrl"
+                  required
+                  type="url"
+                  defaultValue={webhook.config?.endpointUrl ?? ''}
+                />
+              </label>
+              <label className="text-sm text-text-body">
+                New signing secret
+                <input
+                  aria-describedby="webhook-secret-help"
+                  autoComplete="new-password"
+                  className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  minLength={32}
+                  name="signingSecret"
+                  placeholder={
+                    webhook.config ? 'Leave blank to keep current secret' : 'At least 32 characters'
+                  }
+                  required={!webhook.config}
+                  type="password"
+                />
+              </label>
+              <label className="text-sm text-text-body">
+                Delivery state
+                <select
+                  className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  defaultValue={String(webhook.config?.enabled ?? false)}
+                  name="enabled"
+                >
+                  <option value="true">Enabled</option>
+                  <option value="false">Disabled</option>
+                </select>
+              </label>
+              <p
+                className="text-xs leading-relaxed text-text-muted md:col-span-2"
+                id="webhook-secret-help"
+              >
+                The secret is encrypted at rest and is never displayed or returned. Rotating it
+                takes effect for the next attempt.
+              </p>
+              <Button className="min-h-11 md:w-fit" type="submit">
+                Save webhook
+              </Button>
+            </form>
+            <div className="flex flex-wrap gap-2 border-t border-border-subtle pt-4">
+              <form action={action}>
+                <HiddenRouteState filter={filter} cursor={cursor} branch={matrixBranch?.id} />
+                <input type="hidden" name="intent" value="test-webhook" />
+                <Button disabled={!webhook.config?.enabled} type="submit" variant="secondary">
+                  Queue test delivery
+                </Button>
+              </form>
+            </div>
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="font-mono text-xs uppercase text-text-muted">Last success</dt>
+                <dd className="mt-1 text-text-strong">
+                  {formatTimestamp(webhook.config?.lastSuccessAt ?? null, 'UTC')}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-mono text-xs uppercase text-text-muted">Last failure</dt>
+                <dd className="mt-1 break-words text-text-strong">
+                  {webhook.config?.lastFailure ?? 'None'}
+                </dd>
+              </div>
+            </dl>
+            {webhook.deliveries.length ? (
+              <ul className="divide-y divide-border-subtle border-t border-border-subtle">
+                {webhook.deliveries.map((event) => (
+                  <li
+                    className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center"
+                    key={event.id}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <StatusPill
+                        status={event.status}
+                        label={event.status === 'DEAD' ? 'Dead letter' : event.status}
+                        tone={
+                          event.status === 'SUCCEEDED'
+                            ? 'success'
+                            : event.status === 'DEAD' || event.status === 'FAILED'
+                              ? 'danger'
+                              : 'warning'
+                        }
+                      />
+                      <p className="mt-1 font-mono text-xs break-all text-text-muted">
+                        {event.id} · {event.attempts} attempt{event.attempts === 1 ? '' : 's'}
+                      </p>
+                      {event.lastError ? (
+                        <p className="mt-1 text-sm break-words text-destructive-foreground">
+                          {event.lastError}
+                        </p>
+                      ) : null}
+                    </div>
+                    {event.status === 'DEAD' ? (
+                      <form action={action}>
+                        <HiddenRouteState
+                          filter={filter}
+                          cursor={cursor}
+                          branch={matrixBranch?.id}
+                        />
+                        <input type="hidden" name="intent" value="retry-webhook" />
+                        <input type="hidden" name="eventId" value={event.id} />
+                        <Button type="submit" variant="secondary">
+                          Retry
+                        </Button>
+                      </form>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-text-muted">No webhook deliveries have been queued.</p>
+            )}
+          </div>
+        )}
+      </SectionCard>
 
       <SectionCard eyebrow="Channel boundary">
         <h2 className="font-display text-lg leading-snug font-semibold tracking-tight text-text-strong">
@@ -692,9 +852,25 @@ export default async function RestaurantNotificationsPage({
           await caller.updateMatrix({ category, branchId, channel, enabled });
           success = `${CHANNEL_LABEL[channel]} routing ${enabled ? 'enabled' : 'disabled'} for ${
             scope === 'branch' ? 'this branch' : 'the organization'
-          }.${channel === 'IN_APP' ? '' : ' Delivery remains stub only and not sent.'}`;
+          }.${channel === 'WEBHOOK' ? ' Webhook configuration also controls final delivery.' : channel === 'IN_APP' ? '' : ' This channel is unavailable and is not sent.'}`;
           break;
         }
+        case 'configure-webhook':
+          await caller.configureWebhook({
+            endpointUrl: field(form, 'endpointUrl'),
+            enabled: parseEnabled(field(form, 'enabled')),
+            signingSecret: optionalField(form, 'signingSecret'),
+          });
+          success = 'Webhook configuration saved. The signing secret was not returned.';
+          break;
+        case 'test-webhook':
+          await caller.testWebhook({});
+          success = 'Webhook test delivery queued.';
+          break;
+        case 'retry-webhook':
+          await caller.retryWebhook({ eventId: field(form, 'eventId') });
+          success = 'Webhook event returned to the delivery queue.';
+          break;
         default:
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown notification command.' });
       }
@@ -740,6 +916,7 @@ export default async function RestaurantNotificationsPage({
             : null,
         }
       : null;
+    const webhook = canManage ? await caller.webhookStatus({}) : null;
     const noticeText = queryValue(query.notice);
     const notice = noticeText
       ? {
@@ -761,6 +938,7 @@ export default async function RestaurantNotificationsPage({
       notifications: page.items,
       state: page.items.length ? 'ready' : 'empty',
       unreadCount: unread.count,
+      webhook,
     };
   } catch (error) {
     if (

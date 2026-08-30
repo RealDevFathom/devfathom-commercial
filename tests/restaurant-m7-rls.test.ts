@@ -32,6 +32,7 @@ const M7_TABLES = [
   'restaurant_notifications',
   'restaurant_notification_channel_settings',
   'restaurant_notification_deliveries',
+  'restaurant_notification_webhooks',
 ] as const;
 
 const APPEND_ONLY_TABLES = [
