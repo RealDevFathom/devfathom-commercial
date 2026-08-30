@@ -11,6 +11,8 @@ describe('openOrder delivery fail-closed guard', () => {
 
     await expect(
       openOrder(db, {
+        organizationId: 'org-1',
+        entitlementLimits: { 'pos.orders.monthly': 1000000 },
         branchId: 'branch-1',
         channel: 'DELIVERY',
         actor: {

@@ -84,6 +84,8 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
 async function openWithItem(over?: { course?: number }) {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
     branchId: ids.branch,
     channel: 'DINE_IN',
     publicationId: ids.publication,
@@ -261,6 +263,8 @@ describeIfDatabase('orders command layer (real DB)', () => {
   it('opens an order: stamps business date, allocates a number, appends event + outbox', async () => {
     const db = deps.createTenantDb(orgId);
     const opened = await deps.orders.openOrder(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
       branchId: ids.branch,
       channel: 'DINE_IN',
       publicationId: ids.publication,
@@ -299,6 +303,8 @@ describeIfDatabase('orders command layer (real DB)', () => {
     const opens = await Promise.all(
       Array.from({ length: 5 }, () =>
         deps.orders.openOrder(db, {
+          organizationId: orgId,
+          entitlementLimits: { 'pos.orders.monthly': 1000000 },
           branchId: ids.branch,
           channel: 'TAKEAWAY',
           actor: actor(),
@@ -374,6 +380,8 @@ describeIfDatabase('orders command layer (real DB)', () => {
   it('fires one course without touching another (hold/fire isolation)', async () => {
     const db = deps.createTenantDb(orgId);
     const opened = await deps.orders.openOrder(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
       branchId: ids.branch,
       channel: 'DINE_IN',
       publicationId: ids.publication,
@@ -647,6 +655,8 @@ describeIfDatabase('orders command layer (real DB)', () => {
   it('replays an idempotent command and creates nothing (C7)', async () => {
     const db = deps.createTenantDb(orgId);
     const opened = await deps.orders.openOrder(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
       branchId: ids.branch,
       channel: 'DINE_IN',
       publicationId: ids.publication,

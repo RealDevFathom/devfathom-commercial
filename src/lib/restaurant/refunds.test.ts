@@ -88,6 +88,8 @@ async function newDevice(label: string): Promise<string> {
 async function openBill(count: number): Promise<string> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
     branchId: ids.branch,
     channel: 'DINE_IN',
     publicationId: ids.publication,
@@ -112,6 +114,8 @@ async function openBill(count: number): Promise<string> {
 async function cardTenderAtBranchTwo(): Promise<{ billId: string; tenderId: string }> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
     branchId: ids.branchTwo,
     channel: 'DINE_IN',
     publicationId: ids.publicationTwo,
@@ -167,6 +171,8 @@ async function cashTender(device: string): Promise<{ billId: string; tenderId: s
 
 async function openDrawer(device: string): Promise<void> {
   await deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
     branchId: ids.branch,
     openingFloat: '100.00',
     actor: actor(device),

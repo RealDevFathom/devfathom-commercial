@@ -1,4 +1,5 @@
 import { openOrder } from '@/lib/restaurant/orders';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { openOrderBody, terminalCommandRoute } from '@/lib/restaurant/terminal-orders';
 
 /**
@@ -10,7 +11,10 @@ import { openOrderBody, terminalCommandRoute } from '@/lib/restaurant/terminal-o
 export const POST = terminalCommandRoute(
   openOrderBody,
   async ({ ctx, data, actor }) => {
+    const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, ctx.db);
     const result = await openOrder(ctx.db, {
+      organizationId: ctx.organizationId,
+      entitlementLimits: entitlements.limits,
       branchId: ctx.device.branchId,
       channel: data.channel,
       publicationId: data.publicationId ?? null,

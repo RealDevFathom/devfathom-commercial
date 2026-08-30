@@ -360,6 +360,8 @@ async function openWithItems(
 ): Promise<{ orderId: string; itemIds: string[]; db: ScopedDb }> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
     branchId: ids.branch,
     channel: 'DINE_IN',
     publicationId: ids.publication,

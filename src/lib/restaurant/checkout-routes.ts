@@ -350,7 +350,9 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
       err.reason === 'DRAWER_NOT_OPEN' ||
       err.reason === 'DRAWER_ALREADY_OPEN' ||
       err.reason === 'ALREADY_CLOSED' ||
-      err.reason === 'DEVICE_BRANCH_MISMATCH';
+      err.reason === 'DEVICE_BRANCH_MISMATCH' ||
+      err.reason === 'LIMIT_REACHED' ||
+      err.reason === 'LIMIT_UNAVAILABLE';
     return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
   }
   if (err instanceof DailyCloseError) {

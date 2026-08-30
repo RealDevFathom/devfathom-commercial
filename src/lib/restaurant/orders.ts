@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { POS_MONTHLY_ORDERS_LIMIT, resolveEntitlementLimit } from '@/lib/entitlement-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { evaluateOrderSettlement } from './bills';
@@ -77,7 +78,9 @@ export type OrderCommandErrorReason =
   | 'CHANNEL_UNAVAILABLE'
   | 'CHANNEL_TABLE'
   | 'NOT_CLOSABLE'
-  | 'NOT_SETTLED';
+  | 'NOT_SETTLED'
+  | 'LIMIT_REACHED'
+  | 'LIMIT_UNAVAILABLE';
 
 export class OrderCommandError extends Error {
   constructor(
@@ -332,6 +335,8 @@ async function assertTablesInBranch(
 // ── Open ─────────────────────────────────────────────────────────────────────
 
 export type OpenOrderInput = {
+  organizationId: string;
+  entitlementLimits: Readonly<Record<string, number>>;
   branchId: string;
   channel: OrderChannel;
   /** The effective-menu publication the order is taken from (required to add menu
@@ -352,6 +357,44 @@ export type OpenOrderResult = {
   businessDate: Date;
   replayed: boolean;
 };
+
+export async function enforceMonthlyOrderLimit(
+  tx: ScopedDb,
+  input: Pick<OpenOrderInput, 'organizationId' | 'entitlementLimits'>,
+  businessDate: Date
+): Promise<void> {
+  const limit = resolveEntitlementLimit(input.entitlementLimits, POS_MONTHLY_ORDERS_LIMIT);
+  if (limit.status !== 'configured') {
+    throw new OrderCommandError(
+      'The monthly order limit is not configured correctly.',
+      'LIMIT_UNAVAILABLE'
+    );
+  }
+  if (limit.value === 0) {
+    throw new OrderCommandError('Monthly order creation is disabled.', 'LIMIT_REACHED');
+  }
+  const monthStart = new Date(
+    Date.UTC(businessDate.getUTCFullYear(), businessDate.getUTCMonth(), 1)
+  );
+  const nextMonth = new Date(
+    Date.UTC(businessDate.getUTCFullYear(), businessDate.getUTCMonth() + 1, 1)
+  );
+  await tx.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pos-orders-monthly:${input.organizationId}:${monthStart.toISOString().slice(0, 10)}`}, 0))`
+  );
+  const monthlyOrders = await tx.restaurantOrder.count({
+    where: {
+      organizationId: input.organizationId,
+      businessDate: { gte: monthStart, lt: nextMonth },
+    },
+  });
+  if (monthlyOrders >= limit.value) {
+    throw new OrderCommandError(
+      `Monthly order limit reached (${monthlyOrders}/${limit.value}).`,
+      'LIMIT_REACHED'
+    );
+  }
+}
 
 export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<OpenOrderResult> {
   if (!isOperationalOrderChannel(input.channel)) {
@@ -390,6 +433,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
+    await enforceMonthlyOrderLimit(tx, input, businessDate);
     const orderNumber = await allocateOrderNumber(tx, { branchId: branch.id, businessDate });
 
     const serviceChargePolicy =

@@ -137,6 +137,8 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const deviceId = await newDevice('POS-open');
     const db = deps.createTenantDb(orgId);
     const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '150.00',
       actor: actor(deviceId),
@@ -170,6 +172,8 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const deviceId = await newDevice('POS-dupe');
     const db = deps.createTenantDb(orgId);
     await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '50.00',
       actor: actor(deviceId),
@@ -177,6 +181,8 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     });
     await expect(
       deps.drawer.openDrawerSession(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
         branchId: ids.branch,
         openingFloat: '50.00',
         actor: actor(deviceId),
@@ -190,6 +196,8 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const results = await Promise.allSettled(
       Array.from({ length: 4 }, () =>
         deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+          organizationId: orgId,
+          entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
           branchId: ids.branch,
           openingFloat: '10.00',
           actor: actor(deviceId),
@@ -210,6 +218,8 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const deviceId = await newDevice('POS-adjust');
     const db = deps.createTenantDb(orgId);
     const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '100.00',
       actor: actor(deviceId),
@@ -237,6 +247,8 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const deviceId = await newDevice('POS-appendclosed');
     const db = deps.createTenantDb(orgId);
     const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '20.00',
       actor: actor(deviceId),
@@ -264,6 +276,8 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const deviceId = await newDevice('POS-close');
     const db = deps.createTenantDb(orgId);
     const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '100.00',
       actor: actor(deviceId),
@@ -329,12 +343,16 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const db = deps.createTenantDb(orgId);
     const reuse = key();
     const first = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '75.00',
       actor: actor(deviceId, reuse),
       now: AT,
     });
     const replay = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '75.00',
       actor: actor(deviceId, reuse),

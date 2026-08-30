@@ -434,6 +434,8 @@ beforeAll(async () => {
 
   // Cash tenders and cash refunds both require this register to have an OPEN drawer.
   await deps.drawers.openDrawerSession(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
     branchId: ctx.branch,
     openingFloat: '100.00',
     actor: actor('drawer'),
