@@ -333,9 +333,9 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
     return {
       id: line.id,
       consideration,
-      net: Decimal.sum(...buckets.map((bucket) => bucket.net)),
-      tax: Decimal.sum(...buckets.map((bucket) => bucket.tax)),
-      gross: Decimal.sum(...buckets.map((bucket) => bucket.gross)),
+      net: Decimal.sum(ZERO, ...buckets.map((bucket) => bucket.net)),
+      tax: Decimal.sum(ZERO, ...buckets.map((bucket) => bucket.tax)),
+      gross: Decimal.sum(ZERO, ...buckets.map((bucket) => bucket.gross)),
       buckets,
     };
   });

@@ -606,6 +606,13 @@ async function finalizeTaxSettlement(
     settlement,
     lines
   );
+  const inclusiveMerchandiseTax = sum(
+    settlement.quote.lines.flatMap((line) =>
+      line.buckets
+        .filter((bucket) => requireRule(settlement, bucket.ruleId).priceMode === 'INCLUSIVE')
+        .map((bucket) => bucket.tax)
+    )
+  );
   return finalizeBillSettlement(tx, {
     billId: bill.id,
     organizationId: bill.organizationId,
@@ -615,7 +622,7 @@ async function finalizeTaxSettlement(
     transactionReference: `bill:${bill.id}:settlement:v1`,
     profileVersionId: settlement.profileId,
     currency: settlement.currency,
-    subtotal: bill.subtotal,
+    subtotal: sub(bill.subtotal, inclusiveMerchandiseTax),
     discountTotal: add(
       sum(settlement.lines.map((line) => line.beforeTaxDiscount)),
       settlement.quote.afterTaxDiscount

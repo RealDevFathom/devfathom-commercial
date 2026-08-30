@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -151,6 +152,7 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Main', timezone: 'UTC', businessDayCutoff: '00:00' },
     });
+    await ensureRestaurantTaxProfile(tx, orgId, ids.branch);
     await tx.restaurantStaffProfile.create({
       data: { id: ids.operator, displayName: 'Operator', status: 'ACTIVE' },
     });

@@ -52,6 +52,7 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
+import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -211,6 +212,7 @@ async function provisionTenant(t: Tenant, slug: string, program: { redemptionVal
   }
   await deps.withTenantDb(t.orgId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: t.branch, name: 'Lifecycle' } });
+    await ensureRestaurantTaxProfile(tx, t.orgId, t.branch);
     await tx.restaurantProduct.create({ data: { id: t.product, name: 'Plate' } });
     await tx.restaurantStaffProfile.create({
       data: { id: t.operator, displayName: 'Operator', status: 'ACTIVE' },
@@ -633,8 +635,8 @@ describeIfDatabase('M8/M2 — refunds around the order close', () => {
     });
     expect(tender.settled).toBe(true);
 
-    // Refunded BEFORE the close: the order is still PAYMENT_PENDING, so no EARN
-    // exists to reverse — the close must not earn on this money.
+    // Settlement earns on the tax-exclusive merchandise value; a pre-close refund
+    // reverses only the points attributable to the refunded inclusive amount.
     await deps.refunds.refundTender(db, {
       originalTenderId: tender.tenderId,
       amount: '4.00',
@@ -642,11 +644,18 @@ describeIfDatabase('M8/M2 — refunds around the order close', () => {
       approvingStaffProfileId: ctx.manager,
       actor: actor('refund-pre'),
     });
-    expect(await ledger(guest.accountId)).toHaveLength(0);
+    let entries = await ledger(guest.accountId);
+    expect(entries.map((e) => [e.kind, e.points])).toEqual([
+      ['EARN', 8],
+      ['REVERSAL', -2],
+    ]);
 
     await deps.orders.closeOrder(db, { orderId, actor: actor('close') });
-    let entries = await ledger(guest.accountId);
-    expect(entries.map((e) => [e.kind, e.points])).toEqual([['EARN', 6]]);
+    entries = await ledger(guest.accountId);
+    expect(entries.map((e) => [e.kind, e.points])).toEqual([
+      ['EARN', 8],
+      ['REVERSAL', -2],
+    ]);
     expect(entries[0]!.billId).toBe(billId);
     expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(6);
 
@@ -661,10 +670,11 @@ describeIfDatabase('M8/M2 — refunds around the order close', () => {
     });
     entries = await ledger(guest.accountId);
     expect(entries.map((e) => [e.kind, e.points])).toEqual([
-      ['EARN', 6],
+      ['EARN', 8],
+      ['REVERSAL', -2],
       ['REVERSAL', -2],
     ]);
-    expect(entries[1]!.refundId).toBeTruthy();
+    expect(entries[2]!.refundId).toBeTruthy();
     expect(await deps.loyalty.loyaltyBalance(db, guest.accountId)).toBe(4);
 
     // Refunding the rest strands nothing: the balance lands exactly at zero.
@@ -745,15 +755,16 @@ describeIfDatabase('M8/M2 — close ↔ refund serialization under real concurre
       await observer.end();
     }
 
-    // The close won the lock, so its full earn was committed and visible by the time
-    // the refund ran: the refund reverses exactly the 4 points the refunded 4.00 bought.
+    // Settlement earned eight points on the tax-exclusive basis. Whichever contender
+    // wins the bill lock, the inclusive refund reverses the same two attributable points.
     expect(closeFirst.entries).toEqual([
-      ['EARN', 10],
-      ['REVERSAL', -4],
+      ['EARN', 8],
+      ['REVERSAL', -2],
     ]);
-    // The refund won, so there was no earn to reverse — and the close, released from
-    // the same lock, read the committed refund and earned on the net 6.00.
-    expect(refundFirst.entries).toEqual([['EARN', 6]]);
+    expect(refundFirst.entries).toEqual([
+      ['EARN', 8],
+      ['REVERSAL', -2],
+    ]);
 
     // Neither ordering double-earns or double-reverses…
     for (const outcome of [closeFirst, refundFirst]) {
