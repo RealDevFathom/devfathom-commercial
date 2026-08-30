@@ -51,6 +51,7 @@ describe('module catalog routing', () => {
     ['restaurantCustomers.list', 'restaurant-loyalty'],
     ['restaurantLoyalty.readAccount', 'restaurant-loyalty'],
     ['restaurantInsights.listFinancialReports', 'restaurant-insights'],
+    ['restaurantDashboard.getPreferences', 'restaurant-core'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
@@ -81,6 +82,7 @@ describe('module catalog routing', () => {
       restaurantCustomers: 'restaurant-loyalty',
       restaurantLoyalty: 'restaurant-loyalty',
       restaurantInsights: 'restaurant-insights',
+      restaurantDashboard: 'restaurant-core',
     });
   });
 

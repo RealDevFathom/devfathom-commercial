@@ -15,6 +15,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { moduleForPath } from '@/lib/module-catalog';
+import { RestaurantManagementOverview } from './restaurant-management-overview';
 
 const operationalLinks = [
   { label: 'Point of sale', href: '/pos', icon: ReceiptText },
@@ -39,25 +40,29 @@ export function RestaurantDashboardContent({ enabledModules }: { enabledModules:
     <div>
       <PageHeader
         eyebrow="Restaurant workspace"
-        heading="Service dashboard"
-        description="Move from service readiness to orders, stock, procedures, and guest insights."
+        heading="Restaurant dashboard"
+        description="Review reconciled closed-day performance, then move into the operational workspace that needs attention."
         actions={
           <StatusPill
-            status="Live"
-            tone="success"
-            label="Workspace ready"
-            className="text-text-body [&>span]:bg-success"
+            status="Closed-day data"
+            tone="neutral"
+            label="Management workspace"
+            className="text-text-body"
           />
         }
         className="[&_[data-slot=eyebrow]]:text-text-body"
       />
 
+      <RestaurantManagementOverview
+        insightsEnabled={enabledModules.includes('restaurant-insights')}
+      />
+
       {visibleLinks.length > 0 ? (
         <SectionCard
           eyebrow="Operations"
-          title="Open a workspace"
+          title="Quick access"
           titleLevel={2}
-          className="[&_[data-slot=eyebrow]]:text-text-body"
+          className="mt-5 [&_[data-slot=eyebrow]]:text-text-body"
         >
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {visibleLinks.map((item) => {
