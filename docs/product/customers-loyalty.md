@@ -1,5 +1,7 @@
 # Customers & loyalty PRD
 
+Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#10-customers-and-loyalty).
+
 ## Problem
 
 Restaurants need tenant-safe customer profiles and a replay-safe loyalty ledger that earns and redeems points while preserving an auditable liability balance. Customer and loyalty entities are defined in `prisma/schema.prisma`; core behavior is in `src/lib/restaurant/customers.ts` and `src/lib/restaurant/loyalty.ts`.

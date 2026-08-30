@@ -1,5 +1,7 @@
 # Menu import/OCR PRD
 
+Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#5-import-with-ocr-reviewcorrect-then-publish-manually).
+
 ## Problem
 
 Restaurant teams need to upload an existing menu, extract structured candidates, review every uncertain value, and commit only approved rows into the canonical catalog. The database acceptance flow is `tests/restaurant-menu-import-acceptance.db.test.ts`.
@@ -15,6 +17,18 @@ Restaurant teams need to upload an existing menu, extract structured candidates,
 - Extraction normalizes OCR/vision output into page-preserving candidates, flags ambiguous currency, duplicates, low legibility, and injection-like text, then creates no catalog rows before review. See `src/lib/restaurant/menu-extraction.ts`, `src/lib/restaurant/menu-extraction.test.ts`, and `extracts asynchronously into a review queue, creating no catalog rows` in `tests/restaurant-menu-import-acceptance.db.test.ts`.
 - The review console preserves extracted and corrected values and forces every row to accept/reject/merge before import. See `src/components/restaurant/menu-import/menu-import-console.tsx`, `keeps the extracted value alongside the reviewer’s correction`, and `refuses to import while any line is still undecided` in `tests/restaurant-menu-import-acceptance.db.test.ts`.
 - Commit transactionally creates catalog products, a DRAFT menu, and DRAFT price version or merges an existing product; replay creates nothing new. See `imports confirmed rows into catalog, a DRAFT menu and a DRAFT price version`, `merges into an existing product instead of duplicating it`, and `is idempotent on commit: a replay creates nothing and reports the same evidence` in `tests/restaurant-menu-import-acceptance.db.test.ts`.
+
+### After import: review and publish
+
+1. Open Restaurant → Catalog and inspect every imported product; complete categories, variants,
+   modifier groups/options, allergens, ingredients, and recipe/BOM data as applicable.
+2. Open Restaurant → Menus, select the imported draft, and complete its sections and items.
+3. Create and activate the required price version, then preview the effective menu for the intended
+   branch, channel, daypart, and date.
+4. Create the branch publication and publish only after the preview is correct. This handoff
+   requires `menu:price` and `menu:publish`; OCR commit itself never publishes.
+5. If the preview is missing an item or price, return to Catalog/Menus and correct the draft or
+   version. Do not publish incomplete OCR output or invent a value unsupported by the source.
 
 ## Data model
 
