@@ -2,16 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   grants: new Set<string>(),
+  modules: new Set<string>(),
   can: vi.fn(),
   overview: vi.fn(),
   payments: vi.fn(),
   workforce: vi.fn(),
+  exportCsv: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: vi.fn(() => true),
+  hasModule: vi.fn((_entitlements, key: string) => mocks.modules.has(key)),
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
@@ -28,6 +30,7 @@ vi.mock('@/lib/restaurant/reports', async () => ({
   readOverviewReport: mocks.overview,
   readPaymentsReport: mocks.payments,
   readWorkforceReport: mocks.workforce,
+  exportRestaurantReportCsv: mocks.exportCsv,
 }));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -63,6 +66,14 @@ function caller() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.grants.clear();
+  mocks.modules.clear();
+  for (const key of [
+    'restaurant-inventory',
+    'restaurant-purchasing',
+    'restaurant-workforce',
+    'restaurant-sop',
+  ])
+    mocks.modules.add(key);
   mocks.can.mockImplementation((_subject, action) =>
     Promise.resolve(mocks.grants.has(String(action)))
   );
@@ -72,6 +83,11 @@ beforeEach(() => {
   mocks.overview.mockResolvedValue({ orderCount: 1 });
   mocks.payments.mockResolvedValue({ netSales: '1.00' });
   mocks.workforce.mockResolvedValue({ labourCostsVisible: true, labourCost: '10.00' });
+  mocks.exportCsv.mockResolvedValue({
+    filename: 'restaurant-workforce.csv',
+    contentType: 'text/csv; charset=utf-8',
+    content: 'scheduledShifts\n1',
+  });
 });
 
 describe('restaurant report capability and branch matrix', () => {
@@ -129,5 +145,20 @@ describe('restaurant report capability and branch matrix', () => {
       { branchIds: ['b1'], from: input.from, to: input.to },
       { includeLabourCosts: true }
     );
+  });
+
+  it('denies direct workforce reads and exports when Restaurant Workforce is disabled', async () => {
+    mocks.grants.add('reports:operational');
+    mocks.grants.add('reports:financial');
+    mocks.grants.add('workforce:rates');
+    mocks.modules.delete('restaurant-workforce');
+
+    await expect(caller().workforce(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().workforceFinancial(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().exportCsv({ ...input, section: 'workforce' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.workforce).not.toHaveBeenCalled();
+    expect(mocks.exportCsv).not.toHaveBeenCalled();
   });
 });

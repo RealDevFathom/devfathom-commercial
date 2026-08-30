@@ -4,8 +4,6 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
-import { listStockOnHand } from './inventory';
-import { summarizeSopReport } from './sop-reporting';
 
 export const MAX_REPORT_DAYS = 90;
 export const MAX_REPORT_BRANCHES = 100;
@@ -28,7 +26,6 @@ export class RestaurantReportError extends Error {
 }
 
 const ZERO = new Prisma.Decimal(0);
-const WASTAGE_REASONS = ['WASTAGE', 'SPOILAGE', 'STAFF_MEAL'] as const;
 
 function dateKey(value: Date): string {
   return value.toISOString().slice(0, 10);
@@ -46,6 +43,10 @@ function add(values: readonly Prisma.Decimal[]): Prisma.Decimal {
 
 function serializeDecimal(value: Prisma.Decimal): string {
   return value.toDecimalPlaces(2).toString();
+}
+
+function boundedRows<T>(rows: readonly T[], limit = MAX_INTERACTIVE_ROWS) {
+  return { rows: rows.slice(0, limit), truncated: rows.length > limit };
 }
 
 export function validateRestaurantReportRange(range: RestaurantReportRange) {
@@ -183,49 +184,37 @@ export async function readOverviewReport(db: ScopedDb, range: RestaurantReportRa
   const currentRollups = rollups.filter(
     (row) => tipByDay.get(`${row.branchId}:${dateKey(row.businessDate)}`) === row.sourceDailyCloseId
   );
-  const itemRows = closes.length
-    ? await db.insightItemMixRollup.findMany({
-        where: {
-          branchId: { in: range.branchIds },
-          businessDate: { gte: parsed.from, lte: parsed.to },
-        },
-        orderBy: [{ businessDate: 'asc' }, { branchId: 'asc' }, { productId: 'asc' }],
-        take: MAX_EXPORT_ROWS,
-        select: {
-          branchId: true,
-          businessDate: true,
-          sourceDailyCloseId: true,
-          productId: true,
-          quantity: true,
-          product: { select: { name: true } },
-        },
-      })
+  const topItems = closes.length
+    ? await db.$queryRaw<
+        Array<{ productId: string; productName: string; quantity: bigint }>
+      >(Prisma.sql`
+        SELECT
+          mix."productId" AS "productId",
+          product."name" AS "productName",
+          SUM(mix."quantity")::bigint AS "quantity"
+        FROM "restaurant_insight_item_mix_rollups" mix
+        JOIN "restaurant_daily_closes" close
+          ON close."id" = mix."sourceDailyCloseId"
+        JOIN "restaurant_products" product ON product."id" = mix."productId"
+        WHERE mix."branchId" IN (${Prisma.join(range.branchIds)})
+          AND mix."businessDate" >= ${parsed.from}
+          AND mix."businessDate" <= ${parsed.to}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "restaurant_daily_closes" successor
+            WHERE successor."supersedesCloseId" = close."id"
+          )
+        GROUP BY mix."productId", product."name"
+        ORDER BY SUM(mix."quantity") DESC, mix."productId" ASC
+        LIMIT 10
+      `)
     : [];
-  const currentItems = itemRows.filter(
-    (row) => tipByDay.get(`${row.branchId}:${dateKey(row.businessDate)}`) === row.sourceDailyCloseId
-  );
-  const topItems = new Map<string, { productId: string; productName: string; quantity: number }>();
-  for (const row of currentItems) {
-    const current = topItems.get(row.productId) ?? {
-      productId: row.productId,
-      productName: row.product.name,
-      quantity: 0,
-    };
-    current.quantity += row.quantity;
-    topItems.set(row.productId, current);
-  }
   return {
     range,
     freshness: freshnessFor(range, parsed, closes, rollups),
     orderCount: currentRollups.reduce((total, row) => total + row.orderCount, 0),
     coverCount: currentRollups.reduce((total, row) => total + row.coverCount, 0),
-    topItems: [...topItems.values()]
-      .sort(
-        (left, right) =>
-          right.quantity - left.quantity || left.productId.localeCompare(right.productId)
-      )
-      .slice(0, 10),
-    itemRowsTruncated: itemRows.length === MAX_EXPORT_ROWS,
+    topItems: topItems.map((row) => ({ ...row, quantity: Number(row.quantity) })),
   };
 }
 
@@ -305,38 +294,179 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
 
 export async function readInventoryReport(db: ScopedDb, range: RestaurantReportRange) {
   const parsed = validateRestaurantReportRange(range);
-  const byBranch = await Promise.all(
-    range.branchIds.map(async (branchId) => ({
-      branchId,
-      rows: await listStockOnHand(db, { branchId }),
-    }))
-  );
-  const rows = byBranch.flatMap(({ branchId, rows: branchRows }) =>
-    branchRows.map((row) => ({ ...row, branchId }))
-  );
-  rows.sort(
-    (left, right) =>
-      left.branchId.localeCompare(right.branchId) ||
-      left.ingredientName.localeCompare(right.ingredientName) ||
-      left.locationId.localeCompare(right.locationId)
-  );
-  const locationIds = [...new Set(rows.map((row) => row.locationId))];
-  const [rules, movements] = await Promise.all([
-    locationIds.length
-      ? db.restaurantLowStockRule.findMany({
-          where: { locationId: { in: locationIds } },
-          orderBy: [{ locationId: 'asc' }, { stockItemId: 'asc' }, { id: 'asc' }],
-          take: MAX_EXPORT_ROWS,
-          select: { id: true, stockItemId: true, locationId: true, threshold: true },
-        })
-      : [],
+  const [summaryRows, onHandRows, lowStockRows, movementRows] = await Promise.all([
+    db.$queryRaw<
+      Array<{
+        negativeStockCount: number;
+        lowStockCount: number;
+        valuation: Prisma.Decimal;
+        wastageMovementCount: number;
+        wastageQuantity: Prisma.Decimal;
+      }>
+    >(Prisma.sql`
+      WITH balances AS (
+        SELECT
+          movement."stockItemId",
+          movement."locationId",
+          SUM(movement."quantity") AS "onHand"
+        FROM "restaurant_stock_movements" movement
+        JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+        WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+          AND location."isActive" = true
+        GROUP BY movement."stockItemId", movement."locationId"
+      ), costs AS (
+        SELECT
+          movement."stockItemId",
+          movement."locationId",
+          SUM(movement."quantity" * movement."unitCost") AS "totalCost",
+          SUM(movement."quantity") AS "totalQuantity"
+        FROM "restaurant_stock_movements" movement
+        JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+        WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+          AND location."isActive" = true
+          AND movement."unitCost" IS NOT NULL
+        GROUP BY movement."stockItemId", movement."locationId"
+      ), inventory AS (
+        SELECT
+          balance."stockItemId",
+          balance."locationId",
+          balance."onHand",
+          COALESCE(cost."totalCost" / NULLIF(cost."totalQuantity", 0), 0) AS "weightedAverageCost"
+        FROM balances balance
+        LEFT JOIN costs cost
+          ON cost."stockItemId" = balance."stockItemId"
+         AND cost."locationId" = balance."locationId"
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE inventory."onHand" < 0)::int AS "negativeStockCount",
+        (
+          SELECT COUNT(*)::int
+          FROM "restaurant_low_stock_rules" rule
+          JOIN "restaurant_stock_locations" location ON location."id" = rule."locationId"
+          LEFT JOIN balances balance
+            ON balance."stockItemId" = rule."stockItemId"
+           AND balance."locationId" = rule."locationId"
+          WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+            AND location."isActive" = true
+            AND COALESCE(balance."onHand", 0) < rule."threshold"
+        ) AS "lowStockCount",
+        COALESCE(SUM(inventory."onHand" * inventory."weightedAverageCost"), 0) AS "valuation",
+        (
+          SELECT COUNT(*)::int
+          FROM "restaurant_stock_movements" movement
+          JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+          WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+            AND movement."occurredAt" >= ${parsed.from}
+            AND movement."occurredAt" < ${parsed.toExclusive}
+            AND movement."reason" IN ('WASTAGE', 'SPOILAGE', 'STAFF_MEAL')
+        ) AS "wastageMovementCount",
+        (
+          SELECT COALESCE(SUM(ABS(movement."quantity")), 0)
+          FROM "restaurant_stock_movements" movement
+          JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+          WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+            AND movement."occurredAt" >= ${parsed.from}
+            AND movement."occurredAt" < ${parsed.toExclusive}
+            AND movement."reason" IN ('WASTAGE', 'SPOILAGE', 'STAFF_MEAL')
+        ) AS "wastageQuantity"
+      FROM inventory
+    `),
+    db.$queryRaw<
+      Array<{
+        branchId: string;
+        stockItemId: string;
+        ingredientName: string;
+        locationId: string;
+        locationName: string;
+        onHand: Prisma.Decimal;
+        weightedAverageCost: Prisma.Decimal;
+      }>
+    >(Prisma.sql`
+      WITH balances AS (
+        SELECT
+          movement."stockItemId",
+          movement."locationId",
+          SUM(movement."quantity") AS "onHand"
+        FROM "restaurant_stock_movements" movement
+        JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+        WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+          AND location."isActive" = true
+        GROUP BY movement."stockItemId", movement."locationId"
+      ), costs AS (
+        SELECT
+          movement."stockItemId",
+          movement."locationId",
+          SUM(movement."quantity" * movement."unitCost") AS "totalCost",
+          SUM(movement."quantity") AS "totalQuantity"
+        FROM "restaurant_stock_movements" movement
+        JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+        WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+          AND location."isActive" = true
+          AND movement."unitCost" IS NOT NULL
+        GROUP BY movement."stockItemId", movement."locationId"
+      )
+      SELECT
+        location."branchId" AS "branchId",
+        balance."stockItemId" AS "stockItemId",
+        ingredient."name" AS "ingredientName",
+        balance."locationId" AS "locationId",
+        location."name" AS "locationName",
+        balance."onHand" AS "onHand",
+        COALESCE(cost."totalCost" / NULLIF(cost."totalQuantity", 0), 0) AS "weightedAverageCost"
+      FROM balances balance
+      JOIN "restaurant_stock_locations" location ON location."id" = balance."locationId"
+      JOIN "restaurant_stock_items" item ON item."id" = balance."stockItemId"
+      JOIN "restaurant_ingredients" ingredient ON ingredient."id" = item."ingredientId"
+      LEFT JOIN costs cost
+        ON cost."stockItemId" = balance."stockItemId"
+       AND cost."locationId" = balance."locationId"
+      ORDER BY location."branchId" ASC, ingredient."name" ASC, balance."locationId" ASC
+      LIMIT ${MAX_INTERACTIVE_ROWS + 1}
+    `),
+    db.$queryRaw<
+      Array<{
+        ruleId: string;
+        stockItemId: string;
+        locationId: string;
+        threshold: Prisma.Decimal;
+        onHand: Prisma.Decimal;
+      }>
+    >(Prisma.sql`
+      WITH balances AS (
+        SELECT
+          movement."stockItemId",
+          movement."locationId",
+          SUM(movement."quantity") AS "onHand"
+        FROM "restaurant_stock_movements" movement
+        JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+        WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+          AND location."isActive" = true
+        GROUP BY movement."stockItemId", movement."locationId"
+      )
+      SELECT
+        rule."id" AS "ruleId",
+        rule."stockItemId" AS "stockItemId",
+        rule."locationId" AS "locationId",
+        rule."threshold" AS "threshold",
+        COALESCE(balance."onHand", 0) AS "onHand"
+      FROM "restaurant_low_stock_rules" rule
+      JOIN "restaurant_stock_locations" location ON location."id" = rule."locationId"
+      LEFT JOIN balances balance
+        ON balance."stockItemId" = rule."stockItemId"
+       AND balance."locationId" = rule."locationId"
+      WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+        AND location."isActive" = true
+        AND COALESCE(balance."onHand", 0) < rule."threshold"
+      ORDER BY rule."locationId" ASC, rule."stockItemId" ASC, rule."id" ASC
+      LIMIT ${MAX_INTERACTIVE_ROWS + 1}
+    `),
     db.restaurantStockMovement.findMany({
       where: {
         location: { branchId: { in: range.branchIds } },
         occurredAt: { gte: parsed.from, lt: parsed.toExclusive },
       },
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
-      take: MAX_INTERACTIVE_ROWS,
+      take: MAX_INTERACTIVE_ROWS + 1,
       select: {
         id: true,
         stockItemId: true,
@@ -348,139 +478,177 @@ export async function readInventoryReport(db: ScopedDb, range: RestaurantReportR
       },
     }),
   ]);
-  const balanceByKey = new Map(
-    rows.map((row) => [`${row.stockItemId}:${row.locationId}`, row.onHand])
-  );
-  const lowStock = rules
-    .filter((rule) =>
-      (balanceByKey.get(`${rule.stockItemId}:${rule.locationId}`) ?? ZERO).lessThan(rule.threshold)
-    )
-    .map((rule) => ({
-      ruleId: rule.id,
-      stockItemId: rule.stockItemId,
-      locationId: rule.locationId,
-      threshold: rule.threshold.toString(),
-      onHand: (balanceByKey.get(`${rule.stockItemId}:${rule.locationId}`) ?? ZERO).toString(),
-    }));
-  const valuation = add(rows.map((row) => row.onHand.times(row.weightedAverageCost)));
-  const wastage = movements.filter((movement) =>
-    WASTAGE_REASONS.includes(movement.reason as (typeof WASTAGE_REASONS)[number])
-  );
+  const summary = summaryRows[0] ?? {
+    negativeStockCount: 0,
+    lowStockCount: 0,
+    valuation: ZERO,
+    wastageMovementCount: 0,
+    wastageQuantity: ZERO,
+  };
+  const onHand = boundedRows(onHandRows);
+  const lowStock = boundedRows(lowStockRows);
+  const movements = boundedRows(movementRows);
   return {
     range,
-    onHand: rows.slice(0, MAX_INTERACTIVE_ROWS).map((row) => ({
+    onHand: onHand.rows.map((row) => ({
       branchId: row.branchId,
       stockItemId: row.stockItemId,
       ingredientName: row.ingredientName,
       locationId: row.locationId,
       locationName: row.locationName,
       onHand: row.onHand.toString(),
-      isNegative: row.isNegative,
+      isNegative: row.onHand.lessThan(ZERO),
       weightedAverageCost: row.weightedAverageCost.toString(),
     })),
-    negativeStockCount: rows.filter((row) => row.isNegative).length,
-    lowStock: lowStock.slice(0, MAX_INTERACTIVE_ROWS),
-    valuation: serializeDecimal(valuation),
-    movements: movements.map((movement) => ({
+    negativeStockCount: summary.negativeStockCount,
+    lowStockCount: summary.lowStockCount,
+    lowStock: lowStock.rows.map((row) => ({
+      ...row,
+      threshold: row.threshold.toString(),
+      onHand: row.onHand.toString(),
+    })),
+    valuation: serializeDecimal(summary.valuation),
+    movements: movements.rows.map((movement) => ({
       ...movement,
       quantity: movement.quantity.toString(),
       unitCost: movement.unitCost?.toString() ?? null,
       occurredAt: movement.occurredAt.toISOString(),
     })),
     wastage: {
-      movementCount: wastage.length,
-      quantity: wastage.reduce((total, row) => total.plus(row.quantity.abs()), ZERO).toString(),
+      movementCount: summary.wastageMovementCount,
+      quantity: summary.wastageQuantity.toString(),
     },
-    truncated:
-      rows.length > MAX_INTERACTIVE_ROWS ||
-      rules.length === MAX_EXPORT_ROWS ||
-      movements.length === MAX_INTERACTIVE_ROWS,
+    detailLimits: {
+      onHand: onHand.truncated,
+      lowStock: lowStock.truncated,
+      movements: movements.truncated,
+    },
+    truncated: onHand.truncated || lowStock.truncated || movements.truncated,
   };
 }
 
 export async function readPurchasingReport(db: ScopedDb, range: RestaurantReportRange) {
   const parsed = validateRestaurantReportRange(range);
-  const [orderCount, orders, receiptCount, receipts] = await Promise.all([
-    db.restaurantPurchaseOrder.count({
+  const [summaryRows, statusRows, supplierRows, discrepancyRows] = await Promise.all([
+    db.$queryRaw<
+      Array<{
+        purchaseOrderCount: number;
+        purchaseOrderValue: Prisma.Decimal;
+        receiptCount: number;
+        receivedSupplierSpend: Prisma.Decimal;
+        discrepancyCount: number;
+      }>
+    >(Prisma.sql`
+      SELECT
+        (
+          SELECT COUNT(*)::int
+          FROM "restaurant_purchase_orders" purchase_order
+          WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
+            AND purchase_order."createdAt" >= ${parsed.from}
+            AND purchase_order."createdAt" < ${parsed.toExclusive}
+        ) AS "purchaseOrderCount",
+        (
+          SELECT COALESCE(SUM(line."orderedQuantity" * line."unitCost"), 0)
+          FROM "restaurant_purchase_order_lines" line
+          JOIN "restaurant_purchase_orders" purchase_order
+            ON purchase_order."id" = line."purchaseOrderId"
+          WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
+            AND purchase_order."createdAt" >= ${parsed.from}
+            AND purchase_order."createdAt" < ${parsed.toExclusive}
+        ) AS "purchaseOrderValue",
+        (
+          SELECT COUNT(*)::int
+          FROM "restaurant_purchase_receipts" receipt
+          WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
+            AND receipt."receivedAt" >= ${parsed.from}
+            AND receipt."receivedAt" < ${parsed.toExclusive}
+        ) AS "receiptCount",
+        (
+          SELECT COALESCE(SUM(line."receivedQuantity" * line."unitCost"), 0)
+          FROM "restaurant_purchase_receipt_lines" line
+          JOIN "restaurant_purchase_receipts" receipt
+            ON receipt."id" = line."purchaseReceiptId"
+          WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
+            AND receipt."receivedAt" >= ${parsed.from}
+            AND receipt."receivedAt" < ${parsed.toExclusive}
+        ) AS "receivedSupplierSpend",
+        (
+          SELECT COUNT(*)::int
+          FROM "restaurant_receiving_discrepancies" discrepancy
+          JOIN "restaurant_purchase_receipts" receipt
+            ON receipt."id" = discrepancy."purchaseReceiptId"
+          WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
+            AND receipt."receivedAt" >= ${parsed.from}
+            AND receipt."receivedAt" < ${parsed.toExclusive}
+        ) AS "discrepancyCount"
+    `),
+    db.$queryRaw<Array<{ status: string; count: number }>>(Prisma.sql`
+      SELECT purchase_order."status"::text AS "status", COUNT(*)::int AS "count"
+      FROM "restaurant_purchase_orders" purchase_order
+      WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
+        AND purchase_order."createdAt" >= ${parsed.from}
+        AND purchase_order."createdAt" < ${parsed.toExclusive}
+      GROUP BY purchase_order."status"
+      ORDER BY purchase_order."status" ASC
+    `),
+    db.$queryRaw<Array<{ supplierName: string; amount: Prisma.Decimal }>>(Prisma.sql`
+      SELECT supplier."name" AS "supplierName",
+        SUM(line."receivedQuantity" * line."unitCost") AS "amount"
+      FROM "restaurant_purchase_receipt_lines" line
+      JOIN "restaurant_purchase_receipts" receipt
+        ON receipt."id" = line."purchaseReceiptId"
+      JOIN "restaurant_suppliers" supplier ON supplier."id" = receipt."supplierId"
+      WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
+        AND receipt."receivedAt" >= ${parsed.from}
+        AND receipt."receivedAt" < ${parsed.toExclusive}
+      GROUP BY supplier."name"
+      ORDER BY supplier."name" ASC
+    `),
+    db.restaurantReceivingDiscrepancy.findMany({
       where: {
-        branchId: { in: range.branchIds },
-        createdAt: { gte: parsed.from, lt: parsed.toExclusive },
+        purchaseReceipt: {
+          branchId: { in: range.branchIds },
+          receivedAt: { gte: parsed.from, lt: parsed.toExclusive },
+        },
       },
-    }),
-    db.restaurantPurchaseOrder.findMany({
-      where: {
-        branchId: { in: range.branchIds },
-        createdAt: { gte: parsed.from, lt: parsed.toExclusive },
-      },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      take: MAX_INTERACTIVE_ROWS,
+      orderBy: [{ purchaseReceipt: { receivedAt: 'asc' } }, { id: 'asc' }],
+      take: MAX_INTERACTIVE_ROWS + 1,
       select: {
         id: true,
-        branchId: true,
-        status: true,
-        createdAt: true,
-        supplier: { select: { name: true } },
-        lines: { orderBy: { id: 'asc' }, select: { orderedQuantity: true, unitCost: true } },
-      },
-    }),
-    db.restaurantPurchaseReceipt.count({
-      where: {
-        branchId: { in: range.branchIds },
-        receivedAt: { gte: parsed.from, lt: parsed.toExclusive },
-      },
-    }),
-    db.restaurantPurchaseReceipt.findMany({
-      where: {
-        branchId: { in: range.branchIds },
-        receivedAt: { gte: parsed.from, lt: parsed.toExclusive },
-      },
-      orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
-      take: MAX_INTERACTIVE_ROWS,
-      select: {
-        id: true,
-        branchId: true,
-        receivedAt: true,
-        supplier: { select: { name: true } },
-        lines: { orderBy: { id: 'asc' }, select: { receivedQuantity: true, unitCost: true } },
-        discrepancies: { orderBy: { id: 'asc' }, select: { id: true, kind: true } },
+        kind: true,
+        purchaseReceipt: {
+          select: { receivedAt: true, supplier: { select: { name: true } } },
+        },
       },
     }),
   ]);
-  const statusCounts: Record<string, number> = {};
-  for (const order of orders) statusCounts[order.status] = (statusCounts[order.status] ?? 0) + 1;
-  const orderValue = add(
-    orders.flatMap((order) => order.lines.map((line) => line.orderedQuantity.times(line.unitCost)))
-  );
-  const supplierSpend = new Map<string, Prisma.Decimal>();
-  for (const receipt of receipts) {
-    const value = add(receipt.lines.map((line) => line.receivedQuantity.times(line.unitCost)));
-    supplierSpend.set(
-      receipt.supplier.name,
-      (supplierSpend.get(receipt.supplier.name) ?? ZERO).plus(value)
-    );
-  }
+  const summary = summaryRows[0] ?? {
+    purchaseOrderCount: 0,
+    purchaseOrderValue: ZERO,
+    receiptCount: 0,
+    receivedSupplierSpend: ZERO,
+    discrepancyCount: 0,
+  };
+  const discrepancies = boundedRows(discrepancyRows);
   return {
     range,
-    purchaseOrderCount: orderCount,
-    statusCounts,
-    purchaseOrderValue: serializeDecimal(orderValue),
-    receiptCount,
-    receivedSupplierSpend: serializeDecimal(add([...supplierSpend.values()])),
-    supplierSpend: [...supplierSpend.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([supplierName, amount]) => ({ supplierName, amount: serializeDecimal(amount) })),
-    discrepancyCount: receipts.reduce((total, receipt) => total + receipt.discrepancies.length, 0),
-    discrepancies: receipts
-      .flatMap((receipt) =>
-        receipt.discrepancies.map((item) => ({
-          id: item.id,
-          kind: item.kind,
-          supplierName: receipt.supplier.name,
-          receivedAt: receipt.receivedAt.toISOString(),
-        }))
-      )
-      .slice(0, MAX_INTERACTIVE_ROWS),
-    truncated: orderCount > orders.length || receiptCount > receipts.length,
+    purchaseOrderCount: summary.purchaseOrderCount,
+    statusCounts: Object.fromEntries(statusRows.map((row) => [row.status, row.count])),
+    purchaseOrderValue: serializeDecimal(summary.purchaseOrderValue),
+    receiptCount: summary.receiptCount,
+    receivedSupplierSpend: serializeDecimal(summary.receivedSupplierSpend),
+    supplierSpend: supplierRows.map((row) => ({
+      supplierName: row.supplierName,
+      amount: serializeDecimal(row.amount),
+    })),
+    discrepancyCount: summary.discrepancyCount,
+    discrepancies: discrepancies.rows.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      supplierName: item.purchaseReceipt.supplier.name,
+      receivedAt: item.purchaseReceipt.receivedAt.toISOString(),
+    })),
+    truncated: discrepancies.truncated,
   };
 }
 
@@ -490,107 +658,194 @@ export async function readWorkforceReport(
   options: { includeLabourCosts: boolean }
 ) {
   const parsed = validateRestaurantReportRange(range);
-  const [shiftCount, shifts, labour] = await Promise.all([
-    db.restaurantShift.count({
-      where: {
-        branchId: { in: range.branchIds },
-        businessDate: { gte: parsed.from, lte: parsed.to },
-        status: { not: 'CANCELLED' },
-      },
-    }),
-    db.restaurantShift.findMany({
-      where: {
-        branchId: { in: range.branchIds },
-        businessDate: { gte: parsed.from, lte: parsed.to },
-        status: { not: 'CANCELLED' },
-      },
-      orderBy: [{ businessDate: 'asc' }, { startAt: 'asc' }, { id: 'asc' }],
-      take: MAX_EXPORT_ROWS,
-      select: {
-        id: true,
-        branchId: true,
-        businessDate: true,
-        startAt: true,
-        endAt: true,
-        status: true,
-      },
-    }),
+  const [shiftRows, labour] = await Promise.all([
+    db.$queryRaw<Array<{ scheduledShiftCount: number; scheduledHours: Prisma.Decimal }>>(
+      Prisma.sql`
+        SELECT
+          COUNT(*)::int AS "scheduledShiftCount",
+          COALESCE(
+            SUM(GREATEST(EXTRACT(EPOCH FROM (shift."endAt" - shift."startAt")), 0)) / 3600,
+            0
+          ) AS "scheduledHours"
+        FROM "restaurant_shifts" shift
+        WHERE shift."branchId" IN (${Prisma.join(range.branchIds)})
+          AND shift."businessDate" >= ${parsed.from}
+          AND shift."businessDate" <= ${parsed.to}
+          AND shift."status" <> 'CANCELLED'
+      `
+    ),
     options.includeLabourCosts
-      ? db.labourCostFact.findMany({
+      ? db.labourCostFact.aggregate({
           where: {
             branchId: { in: range.branchIds },
             businessDate: { gte: parsed.from, lte: parsed.to },
           },
-          orderBy: [{ businessDate: 'asc' }, { branchId: 'asc' }, { id: 'asc' }],
-          take: MAX_EXPORT_ROWS,
-          select: { labourHours: true, labourCost: true },
+          _sum: { labourHours: true, labourCost: true },
         })
-      : [],
+      : null,
   ]);
-  const scheduledMilliseconds = shifts.reduce(
-    (total, shift) => total + Math.max(0, shift.endAt.getTime() - shift.startAt.getTime()),
-    0
-  );
+  const shifts = shiftRows[0] ?? { scheduledShiftCount: 0, scheduledHours: ZERO };
   return {
     range,
-    scheduledShiftCount: shiftCount,
-    scheduledHours: (scheduledMilliseconds / 3_600_000).toFixed(2),
+    scheduledShiftCount: shifts.scheduledShiftCount,
+    scheduledHours: shifts.scheduledHours.toDecimalPlaces(2).toString(),
     rosterLabel: 'Scheduled roster — not actual attendance',
     labourCostsVisible: options.includeLabourCosts,
     labourHours: options.includeLabourCosts
-      ? add(labour.map((row) => row.labourHours))
-          .toDecimalPlaces(2)
-          .toString()
+      ? (labour?._sum.labourHours ?? ZERO).toDecimalPlaces(2).toString()
       : null,
     labourCost: options.includeLabourCosts
-      ? serializeDecimal(add(labour.map((row) => row.labourCost)))
+      ? serializeDecimal(labour?._sum.labourCost ?? ZERO)
       : null,
-    truncated: shiftCount > shifts.length || labour.length === MAX_EXPORT_ROWS,
+    truncated: false,
   };
 }
 
 export async function readSopReport(db: ScopedDb, range: RestaurantReportRange) {
   const parsed = validateRestaurantReportRange(range);
-  const total = await db.restaurantSopOccurrence.count({
-    where: {
-      branchId: { in: range.branchIds },
-      businessDate: { gte: parsed.from, lte: parsed.to },
-    },
-  });
-  const rows = await db.restaurantSopOccurrence.findMany({
-    where: {
-      branchId: { in: range.branchIds },
-      businessDate: { gte: parsed.from, lte: parsed.to },
-    },
-    orderBy: [{ businessDate: 'asc' }, { dueAt: 'asc' }, { id: 'asc' }],
-    take: MAX_EXPORT_ROWS,
-    select: {
-      id: true,
-      status: true,
-      dueAt: true,
-      windowEndsAt: true,
-      submittedAt: true,
-      resolvedAt: true,
-      assignedStaff: {
-        select: { id: true, displayName: true, user: { select: { department: true } } },
-      },
-      claimedBy: {
-        select: { id: true, displayName: true, user: { select: { department: true } } },
-      },
-      steps: {
-        select: {
-          completed: true,
-          completedBy: {
-            select: { id: true, displayName: true, user: { select: { department: true } } },
-          },
-        },
-      },
-      evidence: { select: { id: true } },
-      verifications: { select: { action: true } },
-      escalationEvents: { select: { kind: true } },
-    },
-  });
-  return { range, ...summarizeSopReport(rows), truncated: total > rows.length };
+  const [summaryRows, outcomeRows, attribution] = await Promise.all([
+    db.$queryRaw<
+      Array<{
+        total: number;
+        onTime: number;
+        late: number;
+        withProof: number;
+        verified: number;
+        escalated: number;
+        performancePoints: Prisma.Decimal;
+      }>
+    >(Prisma.sql`
+      SELECT
+        COUNT(*)::int AS "total",
+        COUNT(*) FILTER (
+          WHERE occurrence."status" IN ('VERIFIED', 'WAIVED', 'MISSED')
+            AND COALESCE(occurrence."resolvedAt", occurrence."submittedAt") IS NOT NULL
+            AND COALESCE(occurrence."resolvedAt", occurrence."submittedAt") <= occurrence."windowEndsAt"
+        )::int AS "onTime",
+        COUNT(*) FILTER (
+          WHERE occurrence."status" IN ('VERIFIED', 'WAIVED', 'MISSED')
+            AND COALESCE(occurrence."resolvedAt", occurrence."submittedAt") IS NOT NULL
+            AND COALESCE(occurrence."resolvedAt", occurrence."submittedAt") > occurrence."windowEndsAt"
+        )::int AS "late",
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM "restaurant_sop_evidence" evidence
+            WHERE evidence."occurrenceId" = occurrence."id"
+          )
+        )::int AS "withProof",
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM "restaurant_sop_verifications" verification
+            WHERE verification."occurrenceId" = occurrence."id"
+              AND verification."action" = 'VERIFY'
+          )
+        )::int AS "verified",
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM "restaurant_sop_escalation_events" event
+            WHERE event."occurrenceId" = occurrence."id"
+              AND event."kind" = 'FIRED'
+          )
+        )::int AS "escalated",
+        COALESCE(SUM(
+          CASE
+            WHEN occurrence."status" = 'WAIVED' THEN 50
+            WHEN occurrence."status" = 'VERIFIED'
+              AND occurrence."resolvedAt" <= occurrence."windowEndsAt" THEN 100
+            WHEN occurrence."status" = 'VERIFIED' THEN 75
+            ELSE 0
+          END
+        ), 0)::numeric AS "performancePoints"
+      FROM "restaurant_sop_occurrences" occurrence
+      WHERE occurrence."branchId" IN (${Prisma.join(range.branchIds)})
+        AND occurrence."businessDate" >= ${parsed.from}
+        AND occurrence."businessDate" <= ${parsed.to}
+    `),
+    db.$queryRaw<Array<{ status: string; count: number }>>(Prisma.sql`
+      SELECT occurrence."status"::text AS "status", COUNT(*)::int AS "count"
+      FROM "restaurant_sop_occurrences" occurrence
+      WHERE occurrence."branchId" IN (${Prisma.join(range.branchIds)})
+        AND occurrence."businessDate" >= ${parsed.from}
+        AND occurrence."businessDate" <= ${parsed.to}
+      GROUP BY occurrence."status"
+      ORDER BY occurrence."status" ASC
+    `),
+    db.$queryRaw<
+      Array<{
+        staffProfileId: string;
+        displayName: string;
+        department: string | null;
+        owned: number;
+        completed: number;
+      }>
+    >(Prisma.sql`
+      WITH owned AS (
+        SELECT
+          COALESCE(occurrence."assignedStaffProfileId", occurrence."claimedByStaffProfileId") AS "staffProfileId",
+          COUNT(*)::int AS "owned"
+        FROM "restaurant_sop_occurrences" occurrence
+        WHERE occurrence."branchId" IN (${Prisma.join(range.branchIds)})
+          AND occurrence."businessDate" >= ${parsed.from}
+          AND occurrence."businessDate" <= ${parsed.to}
+          AND COALESCE(occurrence."assignedStaffProfileId", occurrence."claimedByStaffProfileId") IS NOT NULL
+        GROUP BY COALESCE(occurrence."assignedStaffProfileId", occurrence."claimedByStaffProfileId")
+      ), completed AS (
+        SELECT
+          step."completedByStaffProfileId" AS "staffProfileId",
+          COUNT(DISTINCT step."occurrenceId")::int AS "completed"
+        FROM "restaurant_sop_occurrence_steps" step
+        JOIN "restaurant_sop_occurrences" occurrence ON occurrence."id" = step."occurrenceId"
+        WHERE occurrence."branchId" IN (${Prisma.join(range.branchIds)})
+          AND occurrence."businessDate" >= ${parsed.from}
+          AND occurrence."businessDate" <= ${parsed.to}
+          AND step."completed" = true
+          AND step."completedByStaffProfileId" IS NOT NULL
+        GROUP BY step."completedByStaffProfileId"
+      ), people AS (
+        SELECT owned."staffProfileId" FROM owned
+        UNION
+        SELECT completed."staffProfileId" FROM completed
+      )
+      SELECT
+        profile."id" AS "staffProfileId",
+        profile."displayName" AS "displayName",
+        web_user."department" AS "department",
+        COALESCE(owned."owned", 0)::int AS "owned",
+        COALESCE(completed."completed", 0)::int AS "completed"
+      FROM people
+      JOIN "restaurant_staff_profiles" profile ON profile."id" = people."staffProfileId"
+      LEFT JOIN "users" web_user ON web_user."id" = profile."userId"
+      LEFT JOIN owned ON owned."staffProfileId" = people."staffProfileId"
+      LEFT JOIN completed ON completed."staffProfileId" = people."staffProfileId"
+      ORDER BY profile."displayName" ASC, profile."id" ASC
+      LIMIT ${MAX_INTERACTIVE_ROWS + 1}
+    `),
+  ]);
+  const summary = summaryRows[0] ?? {
+    total: 0,
+    onTime: 0,
+    late: 0,
+    withProof: 0,
+    verified: 0,
+    escalated: 0,
+    performancePoints: ZERO,
+  };
+  const attributionRows = boundedRows(attribution);
+  return {
+    range,
+    total: summary.total,
+    outcomes: Object.fromEntries(outcomeRows.map((row) => [row.status, row.count])),
+    onTime: summary.onTime,
+    late: summary.late,
+    withProof: summary.withProof,
+    verified: summary.verified,
+    escalated: summary.escalated,
+    performanceScore: summary.total
+      ? Math.round(summary.performancePoints.toNumber() / summary.total)
+      : 0,
+    attribution: attributionRows.rows,
+    truncated: attributionRows.truncated,
+  };
 }
 
 function neutralizeFormula(value: unknown): string {
