@@ -24,6 +24,116 @@ GRANT EXECUTE ON FUNCTION public.wha766_unrelated_fixture(integer) TO PUBLIC;
   GRANT EXECUTE ON FUNCTION public.int4_dist(integer, integer) TO PUBLIC;
 \endif
 
+CREATE ROLE wha911_nonowner LOGIN NOSUPERUSER NOBYPASSRLS;
+
+DO $proof$
+DECLARE
+  role_row pg_catalog.pg_roles%ROWTYPE;
+BEGIN
+  SELECT * INTO STRICT role_row
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'wha911_nonowner';
+
+  IF role_row.rolsuper OR role_row.rolbypassrls THEN
+    RAISE EXCEPTION 'negative preparation role can bypass authorization';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_auth_members WHERE member = role_row.oid
+  ) THEN
+    RAISE EXCEPTION 'negative preparation role unexpectedly has memberships';
+  END IF;
+END
+$proof$;
+
+SELECT count(*) AS public_execute_before_failed_preparation
+  FROM pg_catalog.pg_proc AS procedure
+  JOIN pg_catalog.pg_depend AS dependency
+    ON dependency.classid = 'pg_catalog.pg_proc'::regclass
+   AND dependency.objid = procedure.oid
+   AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+   AND dependency.deptype = 'e'
+  JOIN pg_catalog.pg_extension AS extension
+    ON extension.oid = dependency.refobjid
+   AND extension.extname = 'btree_gist'
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_catalog.aclexplode(
+       coalesce(procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))
+     ) AS acl
+    WHERE acl.grantee = 0
+      AND acl.privilege_type = 'EXECUTE'
+ )
+\gset
+
+SET SESSION AUTHORIZATION wha911_nonowner;
+\set ON_ERROR_STOP off
+\ir ../../prisma/prepare-extensions.sql
+\set failed_preparation_sqlstate :SQLSTATE
+\set ON_ERROR_STOP on
+RESET SESSION AUTHORIZATION;
+
+SELECT :'failed_preparation_sqlstate' = 'P0001' AS failed_closed \gset
+\if :failed_closed
+\else
+  \echo 'expected non-owner preparation to fail with SQLSTATE P0001, got' :failed_preparation_sqlstate
+  \quit 1
+\endif
+
+SELECT count(*) = :public_execute_before_failed_preparation AS failed_preparation_left_acl_unchanged
+  FROM pg_catalog.pg_proc AS procedure
+  JOIN pg_catalog.pg_depend AS dependency
+    ON dependency.classid = 'pg_catalog.pg_proc'::regclass
+   AND dependency.objid = procedure.oid
+   AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+   AND dependency.deptype = 'e'
+  JOIN pg_catalog.pg_extension AS extension
+    ON extension.oid = dependency.refobjid
+   AND extension.extname = 'btree_gist'
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_catalog.aclexplode(
+       coalesce(procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))
+     ) AS acl
+    WHERE acl.grantee = 0
+      AND acl.privilege_type = 'EXECUTE'
+ )
+\gset
+\if :failed_preparation_left_acl_unchanged
+\else
+  \echo 'failed preparation changed btree_gist ACLs'
+  \quit 1
+\endif
+
+DROP ROLE wha911_nonowner;
+
+CREATE ROLE wha911_preparer LOGIN NOSUPERUSER NOBYPASSRLS;
+GRANT postgres TO wha911_preparer WITH INHERIT FALSE, SET TRUE;
+
+DO $proof$
+DECLARE
+  role_row pg_catalog.pg_roles%ROWTYPE;
+BEGIN
+  SELECT * INTO STRICT role_row
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'wha911_preparer';
+
+  IF role_row.rolsuper OR role_row.rolbypassrls THEN
+    RAISE EXCEPTION 'SET-capable preparation role can bypass authorization';
+  END IF;
+  IF NOT pg_catalog.pg_has_role('wha911_preparer', 'postgres', 'SET') THEN
+    RAISE EXCEPTION 'positive preparation role lacks expected SET privilege';
+  END IF;
+END
+$proof$;
+
+SET SESSION AUTHORIZATION wha911_preparer;
+\ir ../../prisma/prepare-extensions.sql
+RESET SESSION AUTHORIZATION;
+REVOKE postgres FROM wha911_preparer;
+DROP ROLE wha911_preparer;
+
+-- The SET-capable run above performs the correction. This second run proves
+-- that preparation remains idempotent.
 \ir ../../prisma/prepare-extensions.sql
 \ir ../../prisma/migrations/20260830120000_btree_gist_public_execute_acl/migration.sql
 
@@ -184,4 +294,4 @@ RESET ROLE;
 DROP OWNED BY wha766_restricted;
 DROP ROLE wha766_restricted;
 
-\echo 'WHA-771 btree_gist ACL regression proof passed'
+\echo 'WHA-911 owner-aware btree_gist ACL regression proof passed'
