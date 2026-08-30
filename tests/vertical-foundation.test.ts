@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   orgModuleCount: vi.fn(),
   platformModuleFindMany: vi.fn(),
   platformModuleFindUnique: vi.fn(),
+  acknowledgementFindMany: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -91,6 +92,7 @@ const platformDb = {
     findUnique: mocks.platformModuleFindUnique,
     findMany: mocks.platformModuleFindMany,
   },
+  restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
 };
 
 import { executePlatformCommand } from '@/lib/platform/commands';
@@ -124,6 +126,9 @@ function restaurantPayload(overrides: Record<string, unknown> = {}) {
     adminEmail: 'admin@burger.co',
     adminPassword: 'a-strong-password',
     vertical: 'RESTAURANT',
+    firstBranchName: 'Downtown',
+    firstBranchAddress: '1 Market Street',
+    businessDayCutoff: '04:00',
     ...overrides,
   };
 }
@@ -470,7 +475,21 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
     mocks.orgUpdate.mockResolvedValue({ id: 'org_r', status: 'ACTIVE' });
     mocks.platformModuleFindMany.mockResolvedValue(restaurantModuleRows);
     mocks.orgModuleFindMany.mockResolvedValue([]);
-    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
+    mocks.branchFindMany.mockResolvedValue([
+      {
+        id: 'branch_1',
+        name: 'Downtown',
+        address: '1 Market Street',
+        timezone: 'Asia/Dubai',
+        businessDayCutoff: '04:00',
+      },
+    ]);
+    mocks.acknowledgementFindMany.mockResolvedValue(
+      ['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'].map((kind) => ({
+        kind,
+        policyReference: `${kind}-v1`,
+      }))
+    );
   });
 
   it('activates when all conditions are met', async () => {

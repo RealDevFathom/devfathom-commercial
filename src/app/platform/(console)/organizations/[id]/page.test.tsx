@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   packageFindMany: vi.fn(),
   contractFindMany: vi.fn(),
   branchCount: vi.fn(),
+  branchFindMany: vi.fn(),
 }));
 
 vi.mock('@/lib/platform/page-access', () => ({
@@ -103,6 +104,7 @@ function organization(overrides: Record<string, unknown> = {}) {
     contracts: [],
     invoices: [],
     lifecycleEvents: [],
+    restaurantActivationAcknowledgements: [],
     users: [],
     _count: { users: 3, supportSessions: 0 },
     ...overrides,
@@ -117,6 +119,7 @@ async function renderDetail({
   mocks.orgFindUnique.mockResolvedValue(org);
   mocks.contractFindMany.mockResolvedValue(contracts);
   mocks.branchCount.mockResolvedValue(branchCount);
+  mocks.branchFindMany.mockResolvedValue([]);
   return render(await OrganizationDetailPage({ params: Promise.resolve({ id: 'org_1' }) }));
 }
 
@@ -138,7 +141,7 @@ beforeEach(() => {
       platformModule: { findMany: mocks.moduleFindMany },
       platformPackage: { findMany: mocks.packageFindMany },
       platformContract: { findMany: mocks.contractFindMany },
-      restaurantBranch: { count: mocks.branchCount },
+      restaurantBranch: { count: mocks.branchCount, findMany: mocks.branchFindMany },
     })
   );
 });

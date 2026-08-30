@@ -36,94 +36,102 @@ export default async function OrganizationDetailPage({
   const { id } = await params;
   const now = new Date();
   const data = await withPlatformDb(async (db) => {
-    const [organization, modules, packages, liveContracts, branchCount] = await Promise.all([
-      db.organization.findUnique({
-        where: { id },
-        include: {
-          package: {
-            select: {
-              id: true,
-              name: true,
-              key: true,
-              vertical: true,
-              // Package defaults are the entitlement baseline; only enabled links
-              // to still-active catalog modules count.
-              moduleLinks: {
-                where: { enabled: true },
-                select: {
-                  moduleId: true,
-                  limits: true,
-                  module: { select: { active: true, key: true } },
+    const [organization, modules, packages, liveContracts, branchCount, restaurantBranches] =
+      await Promise.all([
+        db.organization.findUnique({
+          where: { id },
+          include: {
+            package: {
+              select: {
+                id: true,
+                name: true,
+                key: true,
+                vertical: true,
+                // Package defaults are the entitlement baseline; only enabled links
+                // to still-active catalog modules count.
+                moduleLinks: {
+                  where: { enabled: true },
+                  select: {
+                    moduleId: true,
+                    limits: true,
+                    module: { select: { active: true, key: true } },
+                  },
                 },
               },
             },
-          },
-          modules: {
-            include: { module: true },
-            orderBy: { module: { sortOrder: 'asc' } },
-          },
-          limits: { orderBy: { key: 'asc' } },
-          usageCounters: { orderBy: { updatedAt: 'desc' }, take: 12 },
-          brand: true,
-          emailSettings: true,
-          domains: { orderBy: [{ isPrimary: 'desc' }, { host: 'asc' }] },
-          identityConnections: { orderBy: { createdAt: 'desc' } },
-          scimTokens: { orderBy: { createdAt: 'desc' } },
-          scimEvents: { orderBy: { createdAt: 'desc' }, take: 20 },
-          roles: {
-            orderBy: { name: 'asc' },
-            include: {
-              permissions: { orderBy: { capability: 'asc' } },
-              _count: { select: { users: true } },
+            modules: {
+              include: { module: true },
+              orderBy: { module: { sortOrder: 'asc' } },
             },
-          },
-          permissionOverrides: {
-            orderBy: { updatedAt: 'desc' },
-            include: { user: { select: { name: true, email: true } } },
-          },
-          deployments: { orderBy: { environment: 'asc' } },
-          contracts: { orderBy: { endDate: 'desc' }, take: 5 },
-          invoices: { orderBy: { dueAt: 'desc' }, take: 5 },
-          lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 12 },
-          users: {
-            orderBy: [{ role: 'asc' }, { name: 'asc' }],
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              role: true,
-              status: true,
-              title: true,
-              department: true,
-              organizationRoleId: true,
+            limits: { orderBy: { key: 'asc' } },
+            usageCounters: { orderBy: { updatedAt: 'desc' }, take: 12 },
+            brand: true,
+            emailSettings: true,
+            domains: { orderBy: [{ isPrimary: 'desc' }, { host: 'asc' }] },
+            identityConnections: { orderBy: { createdAt: 'desc' } },
+            scimTokens: { orderBy: { createdAt: 'desc' } },
+            scimEvents: { orderBy: { createdAt: 'desc' }, take: 20 },
+            roles: {
+              orderBy: { name: 'asc' },
+              include: {
+                permissions: { orderBy: { capability: 'asc' } },
+                _count: { select: { users: true } },
+              },
             },
+            permissionOverrides: {
+              orderBy: { updatedAt: 'desc' },
+              include: { user: { select: { name: true, email: true } } },
+            },
+            deployments: { orderBy: { environment: 'asc' } },
+            contracts: { orderBy: { endDate: 'desc' }, take: 5 },
+            invoices: { orderBy: { dueAt: 'desc' }, take: 5 },
+            lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 12 },
+            restaurantActivationAcknowledgements: {
+              orderBy: { kind: 'asc' },
+            },
+            users: {
+              orderBy: [{ role: 'asc' }, { name: 'asc' }],
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                status: true,
+                title: true,
+                department: true,
+                organizationRoleId: true,
+              },
+            },
+            _count: { select: { users: true, supportSessions: true } },
           },
-          _count: { select: { users: true, supportSessions: true } },
-        },
-      }),
-      db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
-      // Every active package is loaded once and partitioned by vertical below:
-      // the profile form may offer only same-vertical packages (§2.3), while a
-      // pre-activation correction may offer only the target vertical's packages.
-      db.platformPackage.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
-      // Mirrors the live-contract predicate in `resolveOrganizationEntitlements`
-      // so the console reports the same effective source the runtime resolves.
-      db.platformContract.findMany({
-        where: {
-          organizationId: id,
-          status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
-          startDate: { lte: now },
-          OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
-        },
-        select: {
-          modules: { select: { moduleId: true, module: { select: { active: true } } } },
-        },
-      }),
-      // §2.2 — the command refuses a vertical correction once vertical-owned rows
-      // exist, so the affordance must not be offered once they do.
-      db.restaurantBranch.count({ where: { organizationId: id } }),
-    ]);
-    return { organization, modules, packages, liveContracts, branchCount };
+        }),
+        db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
+        // Every active package is loaded once and partitioned by vertical below:
+        // the profile form may offer only same-vertical packages (§2.3), while a
+        // pre-activation correction may offer only the target vertical's packages.
+        db.platformPackage.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+        // Mirrors the live-contract predicate in `resolveOrganizationEntitlements`
+        // so the console reports the same effective source the runtime resolves.
+        db.platformContract.findMany({
+          where: {
+            organizationId: id,
+            status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
+            startDate: { lte: now },
+            OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
+          },
+          select: {
+            modules: { select: { moduleId: true, module: { select: { active: true } } } },
+          },
+        }),
+        // §2.2 — the command refuses a vertical correction once vertical-owned rows
+        // exist, so the affordance must not be offered once they do.
+        db.restaurantBranch.count({ where: { organizationId: id } }),
+        db.restaurantBranch.findMany({
+          where: { organizationId: id, isDefault: true, active: true },
+          select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
+        }),
+      ]);
+    return { organization, modules, packages, liveContracts, branchCount, restaurantBranches };
   });
   if (!data.organization) notFound();
   const organization = data.organization;
@@ -244,6 +252,96 @@ export default async function OrganizationDetailPage({
 
       <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-7">
+          {vertical === 'RESTAURANT' &&
+          !['TERMINATED', 'PURGING', 'PURGED'].includes(organization.status) ? (
+            <section
+              className="border border-border-default bg-surface-card"
+              aria-labelledby="restaurant-readiness"
+            >
+              <div className="border-b border-border-subtle px-5 py-4">
+                <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent-brand">
+                  Restaurant readiness
+                </p>
+                <h2 id="restaurant-readiness" className="mt-1 font-display text-xl font-semibold">
+                  Branch setup and policy acknowledgements
+                </h2>
+                <p className="mt-1 text-xs text-text-muted">
+                  Complete branch operating fields and explicitly acknowledge each policy before
+                  activation.
+                </p>
+              </div>
+              {data.restaurantBranches.length === 1 ? (
+                <div className="p-5">
+                  <PlatformCommandForm
+                    compact
+                    action="organization.restaurant.setup"
+                    submitLabel="Save Restaurant readiness"
+                    fields={[
+                      {
+                        name: 'organizationId',
+                        label: 'Organization',
+                        type: 'hidden',
+                        defaultValue: organization.id,
+                      },
+                      {
+                        name: 'branchName',
+                        label: 'Default branch name',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.name,
+                      },
+                      {
+                        name: 'address',
+                        label: 'Branch address',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.address,
+                      },
+                      {
+                        name: 'timezone',
+                        label: 'IANA timezone',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.timezone,
+                      },
+                      {
+                        name: 'businessDayCutoff',
+                        label: 'Business-day cutoff',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.businessDayCutoff,
+                        placeholder: '04:00',
+                      },
+                      ...(['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const).flatMap((kind) => {
+                        const existing = organization.restaurantActivationAcknowledgements.find(
+                          (row) => row.kind === kind
+                        );
+                        const title = kind.charAt(0) + kind.slice(1).toLowerCase();
+                        return [
+                          {
+                            name: `${kind.toLowerCase()}PolicyReference`,
+                            label: `${title} policy reference`,
+                            required: true,
+                            defaultValue: existing?.policyReference,
+                            help: 'Operator-supplied versioned reference; no provider or device is created.',
+                          },
+                          {
+                            name: `${kind.toLowerCase()}Acknowledged`,
+                            label: `${title} acknowledgement`,
+                            type: 'checkbox' as const,
+                            required: true,
+                            defaultValue: Boolean(existing),
+                            checkboxText: `I acknowledge the ${title.toLowerCase()} policy reference above.`,
+                          },
+                        ];
+                      }),
+                    ]}
+                  />
+                </div>
+              ) : (
+                <p className="p-5 text-sm text-destructive">
+                  Setup requires exactly one active default branch. Repair branch state before
+                  activation.
+                </p>
+              )}
+            </section>
+          ) : null}
           <section
             id="lifecycle"
             className="scroll-mt-24 border border-border-default bg-surface-card"

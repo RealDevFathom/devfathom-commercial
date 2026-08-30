@@ -27,6 +27,7 @@ export type CommandField = {
   defaultValue?: string | number | boolean | null | Record<string, unknown> | unknown[];
   placeholder?: string;
   help?: string;
+  checkboxText?: string;
   min?: number;
   max?: number;
   step?: number;
@@ -241,11 +242,12 @@ export function PlatformCommandForm({
                   <input
                     name={field.name}
                     type="checkbox"
+                    required={field.required}
                     disabled={field.disabled}
                     defaultChecked={Boolean(field.defaultValue)}
                     className="h-4 w-4 accent-[var(--accent-brand)]"
                   />
-                  Enabled
+                  {field.checkboxText ?? 'Enabled'}
                 </span>
               ) : (
                 <input

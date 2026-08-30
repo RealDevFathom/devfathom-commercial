@@ -227,6 +227,30 @@ export default async function NewOrganizationPage({
               },
               { name: 'currency', label: 'Currency', required: true, defaultValue: 'USD' },
               { name: 'timezone', label: 'Timezone', required: true, defaultValue: 'UTC' },
+              ...(vertical === 'RESTAURANT'
+                ? [
+                    {
+                      name: 'firstBranchName',
+                      label: 'First branch name',
+                      required: true,
+                      placeholder: 'Downtown',
+                      help: '2–120 characters. The stable branch code remains MAIN.',
+                    },
+                    {
+                      name: 'firstBranchAddress',
+                      label: 'First branch address',
+                      required: true,
+                      placeholder: 'Street, city, region',
+                    },
+                    {
+                      name: 'businessDayCutoff',
+                      label: 'Business-day cutoff',
+                      required: true,
+                      placeholder: '04:00',
+                      help: '24-hour HH:MM in the organization timezone.',
+                    },
+                  ]
+                : []),
               { name: 'locale', label: 'Locale', required: true, defaultValue: 'en' },
               {
                 name: 'gracePeriodDays',
