@@ -206,12 +206,14 @@ export function requireActingOperator(
 export async function authenticateApprover(
   db: ScopedDb,
   deviceId: string,
+  branchId: string,
   approving: z.infer<typeof APPROVING>,
   now: Date
 ): Promise<{ ok: true; staffProfileId: string } | { ok: false; response: NextResponse }> {
   const auth: OperatorAuthResult = await authenticateOperator(db, {
     staffProfileId: approving.staffProfileId,
     deviceId,
+    branchId,
     type: approving.type,
     secret: approving.secret,
     now,

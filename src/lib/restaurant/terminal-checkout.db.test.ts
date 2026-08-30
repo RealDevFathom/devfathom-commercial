@@ -70,9 +70,11 @@ const ctx = {
   roleNone: `role_none_${suffix}`,
   userA: `user_a_${suffix}`,
   userMgr: `user_m_${suffix}`,
+  userForeignMgr: `user_fm_${suffix}`,
   userNoCap: `user_n_${suffix}`,
   staffA: `staff_a_${suffix}`,
   managerA: `staff_m_${suffix}`,
+  managerForeign: `staff_fm_${suffix}`,
   staffNoCap: `staff_n_${suffix}`,
   productA: `prod_a_${suffix}`,
   posA: { deviceId: '', secret: '' },
@@ -319,6 +321,7 @@ beforeAll(async () => {
     for (const [id, roleId, tag] of [
       [ctx.userA, ctx.roleFull, 'a'],
       [ctx.userMgr, ctx.roleFull, 'm'],
+      [ctx.userForeignMgr, ctx.roleFull, 'fm'],
       [ctx.userNoCap, ctx.roleNone, 'n'],
     ] as const) {
       await tx.user.create({
@@ -335,6 +338,7 @@ beforeAll(async () => {
     for (const [id, userId, name] of [
       [ctx.staffA, ctx.userA, 'Operator A'],
       [ctx.managerA, ctx.userMgr, 'Manager A'],
+      [ctx.managerForeign, ctx.userForeignMgr, 'Manager Foreign'],
       [ctx.staffNoCap, ctx.userNoCap, 'No-cap Op'],
     ] as const) {
       await tx.restaurantStaffProfile.create({
@@ -351,6 +355,10 @@ beforeAll(async () => {
         data: [ctx.branchDay, ctx.branchReplay].map((branchId) => ({ branchId, userId })),
       });
     }
+    await tx.restaurantStaffProfile.update({
+      where: { id: ctx.managerForeign },
+      data: { primaryBranchId: ctx.branchDay },
+    });
   });
 
   ctx.posA = await enroll(ctx.branchA, 'posA');
@@ -525,6 +533,36 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(res.status).toBe(200);
       eqMoney(res.json.amount, '10.00');
       expect(res.json.kind).toBe('REFUND');
+    });
+
+    it('rejects a foreign-branch manager before a refund writes anything', async () => {
+      const before = {
+        ...(await moneyCounts()),
+        ...(await deps.withTenantDb(orgA, async (tx) => ({
+          coAuthorizations: await tx.restaurantCoAuthorization.count(),
+          idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+        }))),
+      };
+      const res = await call(deps.routes.refund, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('foreign-manager-refund'),
+        body: {
+          originalTenderId: order1Tender,
+          amount: '1.00',
+          reason: 'must not cross branch',
+          approving: { staffProfileId: ctx.managerForeign, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(res.status).toBe(401);
+      const after = {
+        ...(await moneyCounts()),
+        ...(await deps.withTenantDb(orgA, async (tx) => ({
+          coAuthorizations: await tx.restaurantCoAuthorization.count(),
+          idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+        }))),
+      };
+      expect(after).toEqual(before);
     });
 
     it('comps a bill line with manager co-authorization (payments:collect)', async () => {
