@@ -1,6 +1,8 @@
 import 'server-only';
 
-import type { Prisma } from '@/generated/prisma/client';
+import { createHash } from 'node:crypto';
+
+import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
@@ -397,8 +399,14 @@ export type CutCloseResult = {
 export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
-    const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close');
-    if (idem.replay) return replayClose(tx, idem.resultRef);
+    await lockDailyClose(tx, input.branchId, input.businessDate);
+    const canonical = canonicalClosePayload({
+      version: 1,
+      branchId: input.branchId,
+      businessDate: input.businessDate,
+    });
+    const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
+    if (idem.replay) return decodeFrozenCloseResult(idem.resultPayload);
 
     const existing = await tx.restaurantDailyClose.count({
       where: { branchId: input.branchId, businessDate },
@@ -421,14 +429,15 @@ export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutC
       cutByStaffProfileId: input.actor.staffProfileId,
       deviceId: input.actor.deviceId,
     });
-    await recordMoneyResult(tx, input.actor, closeId);
+    const result = { dailyCloseId: closeId, ...splitAggregate(aggregate), replayed: false };
+    await recordMoneyResult(tx, input.actor, closeId, freezeCloseResult(result));
     await enqueueInsightRollup(tx, {
       branchId: input.branchId,
       businessDate: input.businessDate,
       sourceDailyCloseId: closeId,
     });
 
-    return { dailyCloseId: closeId, ...splitAggregate(aggregate), replayed: false };
+    return result;
   });
 }
 
@@ -472,11 +481,17 @@ export async function correctClose(
   }
 
   return runMoneyTransaction(db, async (tx) => {
-    const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_correct');
-    if (idem.replay) {
-      const result = await replayClose(tx, idem.resultRef);
-      return { ...result, supersedesCloseId: input.supersedesCloseId };
-    }
+    await lockDailyClose(tx, input.branchId, input.businessDate);
+    const canonical = canonicalClosePayload({
+      version: 1,
+      branchId: input.branchId,
+      businessDate: input.businessDate,
+      supersedesCloseId: input.supersedesCloseId,
+      reason,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+    });
+    const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_correct', canonical);
+    if (idem.replay) return decodeFrozenCorrectCloseResult(idem.resultPayload);
 
     const chain = await tx.restaurantDailyClose.findMany({
       where: { branchId: input.branchId, businessDate },
@@ -521,20 +536,86 @@ export async function correctClose(
       correctionReason: reason,
       coAuthorizationId,
     });
-    await recordMoneyResult(tx, input.actor, closeId);
+    const result = {
+      dailyCloseId: closeId,
+      ...splitAggregate(aggregate),
+      supersedesCloseId: tip.id,
+      replayed: false,
+    };
+    await recordMoneyResult(tx, input.actor, closeId, freezeCloseResult(result));
     await enqueueInsightRollup(tx, {
       branchId: input.branchId,
       businessDate: input.businessDate,
       sourceDailyCloseId: closeId,
     });
 
-    return {
-      dailyCloseId: closeId,
-      ...splitAggregate(aggregate),
-      supersedesCloseId: tip.id,
-      replayed: false,
-    };
+    return result;
   });
+}
+
+function canonicalClosePayload(value: Record<string, unknown>) {
+  const bytes = JSON.stringify(value);
+  return { bytes, hash: createHash('sha256').update(bytes, 'utf8').digest('hex') };
+}
+
+function freezeCloseResult(result: CorrectCloseResult | CutCloseResult): Prisma.InputJsonValue {
+  return {
+    dailyCloseId: result.dailyCloseId,
+    totals: Object.fromEntries(
+      Object.entries(result.totals).map(([key, value]) => [key, value.toString()])
+    ),
+    tenderTotals: result.tenderTotals.map((total) => ({
+      tenderType: total.tenderType,
+      amount: total.amount.toString(),
+      tipAmount: total.tipAmount.toString(),
+      count: total.count,
+    })),
+    ...('supersedesCloseId' in result ? { supersedesCloseId: result.supersedesCloseId } : {}),
+  };
+}
+
+function decodeFrozenCloseResult(payload: Prisma.JsonValue | null | undefined): CutCloseResult {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new DailyCloseError('The stored daily-close replay result is invalid.', 'INVALID');
+  }
+  const value = payload as Record<string, unknown>;
+  const totals = value.totals as Record<string, string>;
+  const tenderTotals = value.tenderTotals as Array<Record<string, unknown>>;
+  return {
+    dailyCloseId: String(value.dailyCloseId),
+    totals: Object.fromEntries(
+      Object.entries(totals).map(([key, amount]) => [key, new Prisma.Decimal(amount)])
+    ) as CloseTotals,
+    tenderTotals: tenderTotals.map((total) => ({
+      tenderType: String(total.tenderType) as RestaurantTenderType,
+      amount: new Prisma.Decimal(String(total.amount)),
+      tipAmount: new Prisma.Decimal(String(total.tipAmount)),
+      count: Number(total.count),
+    })),
+    replayed: true,
+  };
+}
+
+function decodeFrozenCorrectCloseResult(
+  payload: Prisma.JsonValue | null | undefined
+): CorrectCloseResult {
+  const result = decodeFrozenCloseResult(payload);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new DailyCloseError('The stored daily-close replay result is invalid.', 'INVALID');
+  }
+  return { ...result, supersedesCloseId: String(payload.supersedesCloseId) };
+}
+
+/** Serialize a close chain at the organization + branch + business-date grain.
+ * The transaction-scoped advisory lock releases automatically on commit/rollback. */
+async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: string): Promise<void> {
+  const branch = await tx.restaurantBranch.findUnique({
+    where: { id: branchId },
+    select: { organizationId: true },
+  });
+  if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
+  const key = `${branch.organizationId}:${branchId}:${businessDate}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -545,44 +626,4 @@ function splitAggregate(aggregate: CloseAggregate): {
 } {
   const { tenderTotals, ...totals } = aggregate;
   return { totals, tenderTotals };
-}
-
-/** Re-read a close by its idempotent result reference and reshape it as the
- * command result, for a replay. */
-async function replayClose(tx: ScopedDb, closeId: string | null): Promise<CutCloseResult> {
-  if (!closeId) {
-    throw new DailyCloseError('The idempotent result reference is missing.', 'INVALID');
-  }
-  const close = await tx.restaurantDailyClose.findUnique({
-    where: { id: closeId },
-    select: {
-      id: true,
-      grossSales: true,
-      netSales: true,
-      taxTotal: true,
-      serviceChargeTotal: true,
-      tipTotal: true,
-      compTotal: true,
-      discountTotal: true,
-      refundTotal: true,
-      voidTotal: true,
-      cashExpected: true,
-      cashCounted: true,
-      cashVariance: true,
-      tenderTotals: {
-        orderBy: { tenderType: 'asc' },
-        select: { tenderType: true, amount: true, tipAmount: true, count: true },
-      },
-    },
-  });
-  if (!close) {
-    throw new DailyCloseError('The recorded daily close no longer exists.', 'CLOSE_NOT_FOUND');
-  }
-  const { id, tenderTotals, ...totals } = close;
-  return {
-    dailyCloseId: id,
-    totals,
-    tenderTotals: tenderTotals as TenderTypeTotal[],
-    replayed: true,
-  };
 }

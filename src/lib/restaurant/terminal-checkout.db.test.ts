@@ -210,9 +210,11 @@ beforeAll(async () => {
     import('@/app/api/restaurant/checkout/summary/route'),
     import('@/app/api/restaurant/checkout/receipt/route'),
     import('@/app/api/restaurant/cash/drawer/open/route'),
+    import('@/app/api/restaurant/cash/drawer/current/route'),
     import('@/app/api/restaurant/cash/drawer/movement/route'),
     import('@/app/api/restaurant/cash/drawer/close/route'),
     import('@/app/api/restaurant/cash/day/preview/route'),
+    import('@/app/api/restaurant/cash/day/current/route'),
     import('@/app/api/restaurant/cash/day/close/route'),
     import('@/app/api/restaurant/cash/day/correct/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
@@ -227,9 +229,11 @@ beforeAll(async () => {
     summary,
     receipt,
     drawerOpen,
+    drawerCurrent,
     drawerMovement,
     drawerClose,
     dayPreview,
+    dayCurrent,
     dayClose,
     dayCorrect,
     establish,
@@ -250,9 +254,11 @@ beforeAll(async () => {
       summary,
       receipt,
       drawerOpen,
+      drawerCurrent,
       drawerMovement,
       drawerClose,
       dayPreview,
+      dayCurrent,
       dayClose,
       dayCorrect,
     },
@@ -380,6 +386,25 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(res.json.replayed).toBe(false);
       drawerSessionId = res.json.drawerSessionId as string;
       expect(drawerSessionId).toBeTruthy();
+    });
+
+    it('reads the authenticated device drawer and its persisted business date directly', async () => {
+      const drawer = await call(deps.routes.drawerCurrent, {
+        method: 'GET',
+        secret: ctx.posA.secret,
+        session: token,
+      });
+      expect(drawer.status).toBe(200);
+      expect(drawer.json.drawerSessionId).toBe(drawerSessionId);
+      expect(drawer.json.businessDate).toBe(TODAY);
+
+      const day = await call(deps.routes.dayCurrent, {
+        method: 'GET',
+        secret: ctx.posA.secret,
+        session: token,
+      });
+      expect(day.status).toBe(200);
+      expect(day.json.businessDate).toBe(TODAY);
     });
 
     it('cuts a bill, tenders it to settlement, and reads the summary + receipt', async () => {
@@ -586,12 +611,78 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
     });
   });
 
+  describe('terminal tender branch and business-date boundary', () => {
+    it('rejects foreign-branch and old-date cash bills with zero tender or drawer writes', async () => {
+      const tokenA = await establishUnlock(ctx.posA.secret, ctx.staffA, ctx.branchA);
+      const tokenDay = await establishUnlock(ctx.posDay.secret, ctx.staffA, ctx.branchDay);
+
+      const foreignOrder = await seedOrder(ctx.branchDay, ctx.posDay.deviceId, TODAY, ['5.00']);
+      const foreignCut = await call(deps.routes.bill, {
+        secret: ctx.posDay.secret,
+        session: tokenDay,
+        key: uniqueKey('foreign-cut'),
+        body: { orderId: foreignOrder.orderId, split: { kind: 'NONE' } },
+      });
+      const foreignBillId = (foreignCut.json.billIds as string[])[0]!;
+      const beforeForeign = await moneyCounts();
+      const foreign = await call(deps.routes.tender, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('foreign-tender'),
+        body: {
+          billId: foreignBillId,
+          tender: { type: 'CASH', amount: '5.00', cashReceived: '5.00' },
+        },
+      });
+      expect(foreign.status).toBe(404);
+      expect(await moneyCounts()).toEqual(beforeForeign);
+
+      const open = await call(deps.routes.drawerOpen, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('date-drawer'),
+        body: { openingFloat: '0.00' },
+      });
+      expect(open.status).toBe(200);
+      const oldDate = '2026-08-18';
+      const oldOrder = await seedOrder(ctx.branchA, ctx.posA.deviceId, oldDate, ['5.00']);
+      const oldCut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('old-cut'),
+        body: { orderId: oldOrder.orderId, split: { kind: 'NONE' } },
+      });
+      const oldBillId = (oldCut.json.billIds as string[])[0]!;
+      const beforeOld = await moneyCounts();
+      const old = await call(deps.routes.tender, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('old-tender'),
+        body: {
+          billId: oldBillId,
+          tender: { type: 'CASH', amount: '5.00', cashReceived: '5.00' },
+        },
+      });
+      expect(old.status).toBe(409);
+      expect(await moneyCounts()).toEqual(beforeOld);
+
+      await call(deps.routes.drawerClose, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('date-drawer-close'),
+        body: { drawerSessionId: open.json.drawerSessionId, countedCash: '0.00' },
+      });
+    });
+  });
+
   // ── Day close flow (its own branch, so bills/drawers are fully resolved) ─────
   describe('daily close', () => {
     let token = '';
     let dayDate = '';
     let closeId = '';
+    let correctionId = '';
     const closeKey = uniqueKey('dayclose');
+    const correctionKey = uniqueKey('daycorrect');
 
     beforeAll(async () => {
       token = await establishUnlock(ctx.posDay.secret, ctx.staffA, ctx.branchDay);
@@ -676,11 +767,23 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(after.closes).toBe(before.closes);
     });
 
+    it('rejects a day-close key reused with a changed business date with zero writes', async () => {
+      const before = await moneyCounts();
+      const res = await call(deps.routes.dayClose, {
+        secret: ctx.posDay.secret,
+        session: token,
+        key: closeKey,
+        body: { businessDate: '2026-08-18' },
+      });
+      expect(res.status).toBe(409);
+      expect(await moneyCounts()).toEqual(before);
+    });
+
     it('corrects the close, superseding the chain tip (cash:close + co-auth)', async () => {
       const res = await call(deps.routes.dayCorrect, {
         secret: ctx.posDay.secret,
         session: token,
-        key: uniqueKey('dcorrect'),
+        key: correctionKey,
         body: {
           businessDate: dayDate,
           supersedesCloseId: closeId,
@@ -691,6 +794,46 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(res.status).toBe(200);
       expect(res.json.supersedesCloseId).toBe(closeId);
       expect(res.json.dailyCloseId).not.toBe(closeId);
+      correctionId = res.json.dailyCloseId as string;
+    });
+
+    it('replays one frozen correction and conflicts on changed reason or approver evidence', async () => {
+      const body = {
+        businessDate: dayDate,
+        supersedesCloseId: closeId,
+        reason: 'recount adjustment',
+        approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
+      };
+      const before = await moneyCounts();
+      const replay = await call(deps.routes.dayCorrect, {
+        secret: ctx.posDay.secret,
+        session: token,
+        key: correctionKey,
+        body,
+      });
+      expect(replay.status).toBe(200);
+      expect(replay.json.dailyCloseId).toBe(correctionId);
+      expect(replay.json.supersedesCloseId).toBe(closeId);
+      expect(replay.json.replayed).toBe(true);
+      expect(await moneyCounts()).toEqual(before);
+
+      for (const changed of [
+        { ...body, reason: 'different reason' },
+        { ...body, supersedesCloseId: correctionId },
+        {
+          ...body,
+          approving: { staffProfileId: ctx.staffA, type: 'PIN', secret: PIN },
+        },
+      ]) {
+        const conflict = await call(deps.routes.dayCorrect, {
+          secret: ctx.posDay.secret,
+          session: token,
+          key: correctionKey,
+          body: changed,
+        });
+        expect(conflict.status).toBe(409);
+      }
+      expect(await moneyCounts()).toEqual(before);
     });
   });
 

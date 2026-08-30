@@ -5,10 +5,11 @@ import { DrawerPanel } from './drawer-panel';
 import type { TerminalRequest, TerminalRequestOptions } from './checkout-panel';
 
 describe('DrawerPanel', () => {
-  it('opens, adjusts, and closes one in-memory drawer session', async () => {
+  it('hydrates, opens, adjusts, and closes the authenticated device drawer', async () => {
     const calls: { path: string; options?: TerminalRequestOptions }[] = [];
     const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
       calls.push({ path, options });
+      if (path.endsWith('/current')) return null as T;
       if (path.endsWith('/open')) {
         return {
           drawerSessionId: 'drawer-1',
@@ -32,7 +33,7 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     fireEvent.click(screen.getByRole('button', { name: 'Cash drawer' }));
     const dialog = screen.getByRole('dialog', { name: 'Cash drawer' });
-    expect(within(dialog).getByText(/state exists only in this page memory/)).toBeVisible();
+    await within(dialog).findByText('No open drawer');
 
     fireEvent.change(within(dialog).getByLabelText('Opening float'), {
       target: { value: '100.00' },
@@ -56,19 +57,20 @@ describe('DrawerPanel', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close drawer' }));
     await within(dialog).findByText('Drawer closed.');
 
-    await waitFor(() => expect(calls).toHaveLength(3));
+    await waitFor(() => expect(calls).toHaveLength(4));
     expect(calls.map(({ path }) => path)).toEqual([
+      '/api/restaurant/cash/drawer/current',
       '/api/restaurant/cash/drawer/open',
       '/api/restaurant/cash/drawer/movement',
       '/api/restaurant/cash/drawer/close',
     ]);
-    expect(calls[1]?.options?.body).toEqual({
+    expect(calls[2]?.options?.body).toEqual({
       drawerSessionId: 'drawer-1',
       kind: 'PAID_OUT',
       amount: '10.00',
       reason: 'Petty cash',
     });
-    expect(calls[2]?.options?.body).toEqual({
+    expect(calls[3]?.options?.body).toEqual({
       drawerSessionId: 'drawer-1',
       countedCash: '90.00',
     });
@@ -90,8 +92,8 @@ describe('DrawerPanel', () => {
       resolveOpen = resolve;
     });
     const requestMock = vi.fn(async (path: string, options?: TerminalRequestOptions) => {
-      void path;
       void options;
+      if (path.endsWith('/current')) return null;
       return pendingOpen;
     });
     const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) =>
@@ -100,6 +102,7 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     fireEvent.click(screen.getByRole('button', { name: 'Cash drawer' }));
     const dialog = screen.getByRole('dialog', { name: 'Cash drawer' });
+    await within(dialog).findByText('No open drawer');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open drawer' }));
 
     expect(within(dialog).getByRole('button', { name: 'Close drawer panel' })).toBeDisabled();

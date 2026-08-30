@@ -118,6 +118,8 @@ export type ApplyTenderInput = {
   billId: string;
   tender: TenderSpec;
   actor: MoneyActor;
+  /** Authenticated terminal branch. Required at the REST edge. */
+  branchId?: string;
   /** Authoritative server instant used at settlement (C6). Defaults to now. */
   now?: Date;
 };
@@ -286,6 +288,9 @@ export async function applyTenderInTransaction(
   });
   if (!bill) {
     throw new TenderError('The bill does not exist.', 'BILL_NOT_FOUND');
+  }
+  if (input.branchId && bill.branchId !== input.branchId) {
+    throw new TenderError('The bill is not available to this terminal.', 'BILL_NOT_FOUND');
   }
   if (bill.status !== 'OPEN') {
     throw new TenderError('Only an OPEN bill can be tendered.', 'BILL_NOT_OPEN');
@@ -800,7 +805,12 @@ async function persistCashTender(
   const changeGiven = sub(cashReceived, amount);
 
   const drawer = await tx.restaurantDrawerSession.findFirst({
-    where: { deviceId: actor.deviceId, status: 'OPEN' },
+    where: {
+      deviceId: actor.deviceId,
+      branchId: bill.branchId,
+      businessDate: bill.businessDate,
+      status: 'OPEN',
+    },
     select: { id: true },
   });
   if (!drawer) {

@@ -339,6 +339,31 @@ export type OpenDrawerSessionResult = {
   replayed: boolean;
 };
 
+export type CurrentDrawerSessionResult = {
+  drawerSessionId: string;
+  businessDate: Date;
+  openingFloat: Prisma.Decimal;
+};
+
+/** Return only the authenticated register's open drawer. The branch predicate is
+ * deliberately part of the same query so a foreign drawer is never disclosed. */
+export async function getCurrentDrawerSession(
+  db: ScopedDb,
+  input: { branchId: string; deviceId: string }
+): Promise<CurrentDrawerSessionResult | null> {
+  const session = await db.restaurantDrawerSession.findFirst({
+    where: { branchId: input.branchId, deviceId: input.deviceId, status: 'OPEN' },
+    select: { id: true, businessDate: true, openingFloat: true },
+  });
+  return session
+    ? {
+        drawerSessionId: session.id,
+        businessDate: session.businessDate,
+        openingFloat: session.openingFloat,
+      }
+    : null;
+}
+
 /**
  * Open a drawer for `actor.deviceId` (the register) operated by
  * `actor.staffProfileId`, on the branch's current business date. Rejects a second
@@ -480,6 +505,7 @@ export async function recordDrawerAdjustment(
     if (idem.replay) return { movementId: idem.resultRef ?? '', replayed: true };
 
     const reason = requireReason(input.reason);
+    await requireActorDrawer(tx, input.drawerSessionId, input.actor.deviceId);
     const { movementId } = await appendMovement(tx, {
       drawerSessionId: input.drawerSessionId,
       kind: input.kind,
@@ -534,15 +560,17 @@ export async function closeDrawerSession(
       };
     }
 
-    const session = await tx.restaurantDrawerSession.findUnique({
-      where: { id: input.drawerSessionId },
+    const session = await tx.restaurantDrawerSession.findFirst({
+      where: { id: input.drawerSessionId, deviceId: input.actor.deviceId },
       select: {
         id: true,
         status: true,
+        branchId: true,
+        device: { select: { branchId: true } },
         movements: { select: { kind: true, amount: true } },
       },
     });
-    if (!session) {
+    if (!session || session.branchId !== session.device.branchId) {
       throw new DrawerSessionError('The drawer session does not exist.', 'DRAWER_NOT_FOUND');
     }
     if (session.status !== 'OPEN') {
@@ -576,6 +604,18 @@ export async function closeDrawerSession(
 
     return { drawerSessionId: session.id, expectedCash, countedCash, variance, replayed: false };
   });
+}
+
+/** Uniform ownership/branch guard used before adjustment writes. */
+async function requireActorDrawer(tx: ScopedDb, drawerSessionId: string, deviceId: string) {
+  const session = await tx.restaurantDrawerSession.findFirst({
+    where: { id: drawerSessionId, deviceId },
+    select: { id: true, branchId: true, device: { select: { branchId: true } } },
+  });
+  if (!session || session.branchId !== session.device.branchId) {
+    throw new DrawerSessionError('The drawer session does not exist.', 'DRAWER_NOT_FOUND');
+  }
+  return session;
 }
 
 async function requireClosedSummary(tx: ScopedDb, sessionId: string | null) {
