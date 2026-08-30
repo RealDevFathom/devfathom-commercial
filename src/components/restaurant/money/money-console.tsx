@@ -38,7 +38,7 @@ type DrawerDetail = RouterOutputs['restaurantCash']['getDrawerSession'];
 type ClosePage = RouterOutputs['restaurantCash']['listDailyCloses'];
 type CloseDetail = RouterOutputs['restaurantCash']['getDailyClose'];
 type StaffOption = RouterOutputs['restaurantStaff']['listDirectory'][number];
-type MoneyTab = 'bills' | 'payments' | 'drawers' | 'daily-close' | 'terminal';
+export type MoneyTab = 'bills' | 'payments' | 'drawers' | 'daily-close' | 'terminal';
 type UiError = { message: string; data?: { code?: string } | null };
 type ReadQuery<T> = {
   data: T | undefined;
@@ -238,7 +238,7 @@ function deviceDisplayName(devices: RestaurantDeviceOption[], deviceId: string |
   return devices.find((device) => device.id === deviceId)?.name ?? 'Device name unavailable';
 }
 
-export function MoneyConsole() {
+export function MoneyConsole({ initialTab = 'bills' }: { initialTab?: MoneyTab }) {
   const entitlements = useEntitlements();
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
@@ -250,7 +250,7 @@ export function MoneyConsole() {
   const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, { enabled: posEnabled });
   const [branchId, setBranchId] = useState('');
   const [businessDate, setBusinessDate] = useState('');
-  const [tab, setTab] = useState<MoneyTab>('bills');
+  const [tab, setTab] = useState<MoneyTab>(initialTab);
   const [selectedBillId, setSelectedBillId] = useState('');
   const [selectedPaymentId, setSelectedPaymentId] = useState('');
   const [selectedDrawerId, setSelectedDrawerId] = useState('');

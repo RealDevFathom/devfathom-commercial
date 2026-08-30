@@ -686,6 +686,12 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
 
     beforeAll(async () => {
       token = await establishUnlock(ctx.posDay.secret, ctx.staffA, ctx.branchDay);
+      await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantBranch.update({
+          where: { id: ctx.branchDay },
+          data: { timezone: 'UTC', businessDayCutoff: '23:59' },
+        })
+      );
       const open = await call(deps.routes.drawerOpen, {
         secret: ctx.posDay.secret,
         session: token,
@@ -718,6 +724,23 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         body: { drawerSessionId, countedCash: '60.00' },
       });
       expect(close.status).toBe(200);
+      await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantBranch.update({
+          where: { id: ctx.branchDay },
+          data: { businessDayCutoff: '00:00' },
+        })
+      );
+    });
+
+    it('recovers the pending drawer date after the cutoff advances', async () => {
+      const res = await call(deps.routes.dayCurrent, {
+        method: 'GET',
+        secret: ctx.posDay.secret,
+        session: token,
+      });
+      expect(res.status).toBe(200);
+      expect(res.json.businessDate).toBe(dayDate);
+      expect(dayDate).not.toBe(TODAY);
     });
 
     it('previews the day (cash:close read): ready to close, no existing close', async () => {

@@ -360,10 +360,10 @@ function entitlements(enabled: boolean): EntitlementView {
   };
 }
 
-function renderConsole(enabled = true) {
+function renderConsole(enabled = true, initialTab?: 'daily-close') {
   return render(
     <EntitlementsProvider value={entitlements(enabled)}>
-      <MoneyConsole />
+      <MoneyConsole initialTab={initialTab} />
     </EntitlementsProvider>
   );
 }
@@ -443,6 +443,22 @@ describe('MoneyConsole', () => {
     expect(mocks.calls.drawers.at(-1)?.enabled).toBe(false);
     expect(mocks.calls.closes.at(-1)?.enabled).toBe(true);
     expect(mocks.calls.close.at(-1)?.enabled).toBe(false);
+  });
+
+  it('opens the requested read-only ledger while preserving the denied state', () => {
+    const console = renderConsole(true, 'daily-close');
+    expect(screen.getByRole('tab', { name: 'Daily close' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    expect(mocks.calls.closes.at(-1)?.enabled).toBe(false);
+    console.unmount();
+
+    renderConsole(false, 'daily-close');
+    expect(screen.getByText('Restaurant POS module disabled')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('tablist', { name: 'Restaurant Finance ledgers' })
+    ).not.toBeInTheDocument();
   });
 
   it('renders one server read model on every tab', () => {
