@@ -26,6 +26,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 type Row = {
   id: string;
+  organizationId: string;
   branchId: string;
   staffProfileId: string;
   businessDate: Date;
@@ -36,6 +37,7 @@ type Row = {
   status: 'SCHEDULED' | 'CANCELLED';
   cancelledAt: Date | null;
   cancelReason: string | null;
+  version: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -73,7 +75,11 @@ function matches(row: Row, where: Record<string, unknown>): boolean {
       if (!matchesDate(row[field], condition as Comparator)) return false;
       continue;
     }
-    if (row[field as 'branchId' | 'staffProfileId' | 'status'] !== condition) return false;
+    if (
+      row[field as 'branchId' | 'staffProfileId' | 'status' | 'organizationId' | 'version'] !==
+      condition
+    )
+      return false;
   }
   return true;
 }
@@ -128,11 +134,13 @@ const db = {
     create: async ({ data }: { data: Partial<Row> }) => {
       const row: Row = {
         id: `shift_${++sequence}`,
+        organizationId: 'org_1',
         role: null,
         notes: null,
         status: 'SCHEDULED',
         cancelledAt: null,
         cancelReason: null,
+        version: 1,
         createdAt: new Date('2026-08-01T00:00:00Z'),
         updatedAt: new Date('2026-08-01T00:00:00Z'),
         ...data,
@@ -145,6 +153,23 @@ const db = {
       if (!row) throw new Error(`No shift ${where.id}`);
       Object.assign(row, data);
       return row;
+    },
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    }) => {
+      const found = shifts.filter((row) => matches(row, where));
+      for (const row of found) {
+        const version = data.version as { increment: number } | undefined;
+        Object.assign(row, {
+          ...data,
+          ...(version ? { version: row.version + version.increment } : {}),
+        });
+      }
+      return { count: found.length };
     },
   },
 } as unknown as ScopedDb;
@@ -302,6 +327,36 @@ describe('the overlap rule', () => {
 });
 
 describe('updateShift', () => {
+  it('atomically increments version and rejects a stale update', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    const updated = await updateShift(
+      db,
+      shift.id,
+      { role: 'Kitchen' },
+      {
+        organizationId: 'org_1',
+        expectedVersion: 1,
+      }
+    );
+    expect(updated.version).toBe(2);
+    await expect(
+      updateShift(
+        db,
+        shift.id,
+        { role: 'Close' },
+        {
+          organizationId: 'org_1',
+          expectedVersion: 1,
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'VERSION_CONFLICT' });
+  });
+
   it('re-stamps the business date and re-checks overlap against other shifts only', async () => {
     staff.set('staff_late', { id: 'staff_late', status: 'ACTIVE', primaryBranchId: LATE_BRANCH });
     const shift = await createShift(db, {
@@ -371,6 +426,35 @@ describe('updateShift', () => {
 });
 
 describe('cancelShift', () => {
+  it('rejects a stale cancellation version', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    await updateShift(
+      db,
+      shift.id,
+      { role: 'Kitchen' },
+      {
+        organizationId: 'org_1',
+        expectedVersion: 1,
+      }
+    );
+    await expect(
+      cancelShift(
+        db,
+        shift.id,
+        { now: NOON },
+        {
+          organizationId: 'org_1',
+          expectedVersion: 1,
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'VERSION_CONFLICT' });
+  });
+
   it('records the cancellation state, timestamp and reason without deleting the row', async () => {
     const shift = await createShift(db, {
       branchId: BRANCH,

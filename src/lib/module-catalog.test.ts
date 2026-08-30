@@ -32,7 +32,7 @@ describe('module catalog routing', () => {
     ['finance.summary', 'finance'],
     ['apiTokens.create', 'api'],
     ['restaurantStaff.issueCredential', 'restaurant-core'],
-    ['restaurantShifts.create', 'restaurant-workforce'],
+    ['restaurantShifts.create', 'restaurant-core'],
     ['restaurantDevices.registerDevice', 'restaurant-core'],
     ['restaurantCatalog.listItems', 'restaurant-menu'],
     ['restaurantMenus.publishPublication', 'restaurant-menu'],
@@ -65,7 +65,7 @@ describe('module catalog routing', () => {
     );
     expect(Object.fromEntries(restaurantEntries)).toEqual({
       restaurantStaff: 'restaurant-core',
-      restaurantShifts: 'restaurant-workforce',
+      restaurantShifts: 'restaurant-core',
       restaurantDevices: 'restaurant-core',
       restaurantCatalog: 'restaurant-menu',
       restaurantMenuImport: 'restaurant-menu',
@@ -139,7 +139,7 @@ describe('module catalog routing', () => {
     ['/restaurant/insights', 'restaurant-insights'],
     ['/restaurant/catalog', 'restaurant-menu'],
     ['/restaurant/menus', 'restaurant-menu'],
-    ['/restaurant/staff/roster', 'restaurant-workforce'],
+    ['/restaurant/staff/roster', 'restaurant-core'],
     ['/restaurant/staff', 'restaurant-core'],
     ['/restaurant/devices', 'restaurant-core'],
     ['/restaurant/notifications', 'restaurant-core'],

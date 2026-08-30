@@ -99,6 +99,7 @@ async function createCommand(
 
 export const WORKFORCE_SHIFT_SELECT = {
   id: true,
+  version: true,
   branchId: true,
   staffProfileId: true,
   businessDate: true,
