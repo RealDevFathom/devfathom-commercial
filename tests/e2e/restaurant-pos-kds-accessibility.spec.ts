@@ -159,7 +159,7 @@ async function mockPos(page: Page, failure?: { status: number; error: string }) 
 async function unlockPos(page: Page) {
   await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await page.getByLabel('Operator').selectOption('operator-1');
+  await page.getByLabel('Operator', { exact: true }).selectOption('operator-1');
   await fillHydratedForm(page, [['Operator PIN', '4242']], 'Unlock terminal');
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await assertTerminalSecretIsBrowserIsolated(page, fixture.pos.secret);
@@ -224,7 +224,8 @@ async function fillHydratedForm(
   await expect
     .poll(
       async () => {
-        for (const [label, value] of fields) await page.getByLabel(label).fill(value);
+        for (const [label, value] of fields)
+          await page.getByLabel(label, { exact: true }).fill(value);
         return submit.isEnabled();
       },
       { timeout: 30_000 }
@@ -299,7 +300,7 @@ test('POS and KDS default, labels, disabled controls, focus, and axe WCAG 2.2 AA
   await mockPos(pos);
   await pos.goto('/pos');
   await expect(pos.getByRole('button', { name: 'Unlock terminal' })).toBeDisabled();
-  await expect(pos.getByLabel('Operator')).toBeVisible();
+  await expect(pos.getByLabel('Operator', { exact: true })).toBeVisible();
   await pos.keyboard.press('Tab');
   await expect(pos.locator(':focus')).toBeVisible();
   await assertAxe(pos);

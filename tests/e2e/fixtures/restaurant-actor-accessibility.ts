@@ -89,14 +89,65 @@ export async function completeWorkspaceSelection(
   workspace: RegExp
 ) {
   const chooser = page.getByText('Choose a workspace', { exact: true });
+  const authAlert = page.getByRole('alert').first();
   const outcome = await Promise.race([
     chooser.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'chooser' as const),
     page
-      .waitForURL((url) => url.pathname !== loginPath, { timeout: 60_000 })
+      .waitForURL((url) => isAuthenticatedAppDestination(url, loginPath), { timeout: 60_000 })
       .then(() => 'navigation' as const),
+    page
+      .waitForURL((url) => url.pathname === '/api/auth/error', { timeout: 60_000 })
+      .then(() => 'auth-error' as const),
+    authAlert.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'auth-alert' as const),
   ]);
+  if (outcome === 'auth-error' || outcome === 'auth-alert') {
+    const message = (await authAlert.isVisible().catch(() => false))
+      ? (await authAlert.textContent())?.trim()
+      : undefined;
+    throw new Error(`Authentication failed${message ? `: ${message}` : ` at ${page.url()}`}`);
+  }
   if (outcome === 'chooser') await page.getByRole('button', { name: workspace }).click();
   return { chooser, outcome };
+}
+
+export function isAuthenticatedAppDestination(url: URL, loginPath: Actor['loginPath']) {
+  return (
+    url.pathname !== loginPath &&
+    url.pathname !== '/login' &&
+    url.pathname !== '/platform/login' &&
+    url.pathname !== '/api/auth/error' &&
+    !url.pathname.startsWith('/api/auth/')
+  );
+}
+
+async function waitForAuthenticatedApp(page: Page, loginPath: Actor['loginPath']) {
+  try {
+    const alert = page.getByRole('alert').first();
+    const outcome = await Promise.race([
+      page
+        .waitForURL((url) => isAuthenticatedAppDestination(url, loginPath), { timeout: 60_000 })
+        .then(() => 'destination' as const),
+      page
+        .waitForURL((url) => url.pathname === '/api/auth/error', { timeout: 60_000 })
+        .then(() => 'auth-error' as const),
+      alert.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'auth-alert' as const),
+    ]);
+    if (outcome !== 'destination') {
+      const message = (await alert.isVisible().catch(() => false))
+        ? (await alert.textContent())?.trim()
+        : undefined;
+      throw new Error(`Authentication failed${message ? `: ${message}` : ` at ${page.url()}`}`);
+    }
+    await page.waitForLoadState('domcontentloaded');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Authentication failed')) throw error;
+    const alert = page.getByRole('alert').first();
+    if (await alert.isVisible().catch(() => false)) {
+      const message = (await alert.textContent())?.trim();
+      throw new Error(`Authentication failed${message ? `: ${message}` : '.'}`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 export async function signInAs(page: Page, key: ActorKey) {
@@ -130,7 +181,7 @@ export async function signInAs(page: Page, key: ActorKey) {
     );
     if (key === 'agency' && outcome === 'chooser') await expect(chooser).toBeHidden();
   }
-  await page.waitForURL((url) => url.pathname !== actor.loginPath, { timeout: 60_000 });
+  await waitForAuthenticatedApp(page, actor.loginPath);
   if (key === 'agency') expect(new URL(page.url()).pathname).not.toBe('/login');
   return new URL(page.url()).origin;
 }
