@@ -14,13 +14,23 @@ export function RestaurantCamerasConsole() {
   const utils = trpc.useUtils();
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [playbackUrl, setPlaybackUrl] = useState('');
-  const presets = trpc.restaurantCameras.presets.useQuery(undefined, { enabled });
-  const cameras = trpc.restaurantCameras.list.useQuery(undefined, { enabled });
-  const gateways = trpc.restaurantCameras.listGateways.useQuery(undefined, { enabled });
-  const staff = trpc.restaurantStaff.list.useQuery(undefined, { enabled });
+  const availability = trpc.restaurantCameras.availability.useQuery(undefined, { enabled });
+  const gatewayAvailable = availability.data?.available === true;
+  const presets = trpc.restaurantCameras.presets.useQuery(undefined, {
+    enabled: enabled && gatewayAvailable,
+  });
+  const cameras = trpc.restaurantCameras.list.useQuery(undefined, {
+    enabled: enabled && gatewayAvailable,
+  });
+  const gateways = trpc.restaurantCameras.listGateways.useQuery(undefined, {
+    enabled: enabled && gatewayAvailable,
+  });
+  const staff = trpc.restaurantStaff.list.useQuery(undefined, {
+    enabled: enabled && gatewayAvailable,
+  });
   const recordings = trpc.restaurantCameras.listRecordings.useQuery(
     { cameraId: selectedCameraId },
-    { enabled: enabled && Boolean(selectedCameraId) }
+    { enabled: enabled && gatewayAvailable && Boolean(selectedCameraId) }
   );
   const branches = useMemo(() => {
     const map = new Map<string, string>();
@@ -47,6 +57,30 @@ export function RestaurantCamerasConsole() {
       <SectionCard title="Camera integrations unavailable">
         <p className="text-sm text-text-muted">This module is not enabled for your organization.</p>
       </SectionCard>
+    );
+  if (availability.isLoading)
+    return (
+      <SectionCard title="Checking camera gateway">
+        <p className="text-sm text-text-muted" role="status">
+          Checking whether camera services are available…
+        </p>
+      </SectionCard>
+    );
+  if (availability.isError || !gatewayAvailable)
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Device settings"
+          heading="Cameras"
+          description="Camera services are currently unavailable."
+        />
+        <SectionCard eyebrow="Gateway" title="Camera gateway not configured">
+          <p className="text-sm text-text-muted" role="status">
+            Live feeds and recordings remain unavailable until an administrator configures a
+            supported camera gateway. No camera footage is being simulated.
+          </p>
+        </SectionCard>
+      </div>
     );
   async function onTest(values: CameraWizardValues) {
     return test.mutateAsync({ username: values.username, password: values.password });

@@ -9,7 +9,10 @@ import {
   revokeCameraGateway,
   rotateCameraGatewaySecret,
 } from '@/lib/restaurant/cameras';
-import { createSimulatedCameraGateway } from '@/lib/restaurant/camera-gateway.simulated';
+import {
+  cameraGatewayRuntime,
+  cameraGatewayPublicState,
+} from '@/lib/restaurant/camera-gateway-runtime';
 import { sealCameraCredential } from '@/lib/restaurant/camera-credentials';
 import {
   CoAuthorizationError,
@@ -22,12 +25,20 @@ import { adminProcedure, router } from '../trpc';
 
 const strict = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const branchId = z.string().min(1);
-const adapter = createSimulatedCameraGateway();
-
 function entitled(ctx: { entitlements: Parameters<typeof hasModule>[0] }) {
   if (!hasModule(ctx.entitlements, 'restaurant-integrations')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Camera integrations are not enabled.' });
   }
+}
+
+function requireCameraGateway() {
+  if (!cameraGatewayRuntime.available) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Camera gateway service is not configured.',
+    });
+  }
+  return cameraGatewayRuntime.adapter;
 }
 
 async function requireBranch(db: ScopedDb, id: string) {
@@ -37,6 +48,10 @@ async function requireBranch(db: ScopedDb, id: string) {
 }
 
 export const restaurantCamerasRouter = router({
+  availability: adminProcedure.query(({ ctx }) => {
+    entitled(ctx);
+    return cameraGatewayPublicState(cameraGatewayRuntime);
+  }),
   presets: adminProcedure.query(async ({ ctx }) => {
     entitled(ctx);
     return listActiveCameraBrandPresets();
@@ -57,7 +72,6 @@ export const restaurantCamerasRouter = router({
       status: row.status,
       revokedAt: row.revokedAt,
       lastSeenAt: row.lastSeenAt,
-      baseUrl: row.baseUrl,
       retentionDays: row.retentionDays,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -172,7 +186,7 @@ export const restaurantCamerasRouter = router({
       where: { branchId: input.branchId, status: 'ACTIVE' },
       select: { retentionDays: true },
     });
-    const state = await adapter.getRetentionState();
+    const state = await requireCameraGateway().getRetentionState();
     return { days: gateway?.retentionDays ?? state.days, usedBytes: state.usedBytes };
   }),
   setRetention: adminProcedure
@@ -190,12 +204,13 @@ export const restaurantCamerasRouter = router({
     .input(strict({ cameraId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       entitled(ctx);
-      return adapter.listRecordings(input.cameraId);
+      return requireCameraGateway().listRecordings(input.cameraId);
     }),
   issueStreamGrant: adminProcedure
     .input(strict({ cameraId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
+      requireCameraGateway();
       const camera = await ctx.db.restaurantCamera.findUnique({ where: { id: input.cameraId } });
       if (!camera) throw new TRPCError({ code: 'NOT_FOUND', message: 'Camera not found.' });
       const grant = await ctx.db.restaurantCameraStreamGrant.create({
@@ -217,7 +232,7 @@ export const restaurantCamerasRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
-      return adapter.testConnection({ outcome: input.outcome });
+      return requireCameraGateway().testConnection({ outcome: input.outcome });
     }),
   register: adminProcedure
     .input(
