@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => {
     findBranchAssignments: fn(),
     findPurchaseOrder: fn(),
     findStockLocation: fn(),
+    annotateAudit: fn(),
   };
 });
 
@@ -64,7 +65,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
-  annotateAudit: vi.fn(),
+  annotateAudit: mocks.annotateAudit,
   diffChanges: vi.fn(() => ({})),
 }));
 vi.mock('@/lib/abac', async () => {
@@ -128,7 +129,7 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
   mocks.findBranchAssignments.mockResolvedValue([]);
-  mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1' });
+  mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
 });
 
@@ -232,6 +233,32 @@ describe('Decimal-as-string serialization (D07)', () => {
 });
 
 describe('actor + idempotency plumbing', () => {
+  it('rejects a create location outside the authorized branch before mutation', async () => {
+    mocks.findStockLocation.mockResolvedValue({ branchId: 'b2' });
+
+    await expect(
+      caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b1', locationId: 'loc2' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a receive override outside the purchase-order branch before mutation', async () => {
+    mocks.findStockLocation.mockResolvedValue({ branchId: 'b2' });
+
+    await expect(
+      caller().receivePurchaseOrder({
+        purchaseOrderId: 'po1',
+        locationId: 'loc2',
+        lines: [{ purchaseOrderLineId: 'l1', receivedQuantity: '1' }],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.receivePurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
   it('derives receipt staff from the session and leaves device attribution absent', async () => {
     mocks.receivePurchaseOrder.mockResolvedValue({
       receiptId: 'r1',
