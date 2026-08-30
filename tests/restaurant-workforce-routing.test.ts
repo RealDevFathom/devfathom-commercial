@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { moduleForPath, moduleForProcedure } from '../src/lib/module-catalog';
+
 const router = readFileSync('src/server/routers/restaurant-shifts.ts', 'utf8');
 
 function procedureSource(name: string, nextName?: string) {
@@ -28,13 +30,11 @@ describe('restaurant workforce router boundary', () => {
     expect(procedureSource(name, nextName)).toContain('requireWorkforce(ctx)');
   });
 
-  it.each([
-    ['list', 'create'],
-    ['create', 'update'],
-    ['update', 'cancel'],
-    ['cancel', 'myRoster'],
-  ])('keeps Core scheduling procedure %s independent of Workforce', (name, nextName) => {
-    expect(procedureSource(name, nextName)).not.toContain('requireWorkforce(ctx)');
+  it('assigns the full shift namespace and roster route to Workforce', () => {
+    expect(moduleForProcedure('restaurantShifts.list')).toBe('restaurant-workforce');
+    expect(moduleForProcedure('restaurantShifts.create')).toBe('restaurant-workforce');
+    expect(moduleForPath('/restaurant/staff/roster')).toBe('restaurant-workforce');
+    expect(moduleForPath('/restaurant/staff')).toBe('restaurant-core');
   });
 
   it('serializes overlap decisions and rejects stale manager writes', () => {
