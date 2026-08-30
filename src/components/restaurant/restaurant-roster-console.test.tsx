@@ -28,8 +28,15 @@ const mocks = vi.hoisted(() => ({
     isLoading: false,
     refetch: vi.fn(),
   },
+  mine: {
+    data: { actor: { id: 'staff_1', displayName: 'Shift Lead' }, shifts: [] as unknown[] },
+    error: null as { message: string; data?: { code?: string } } | null,
+    isLoading: false,
+  },
   createMutate: vi.fn(),
   cancelMutate: vi.fn(),
+  clockInMutate: vi.fn(),
+  requestSwapMutate: vi.fn(),
   noop: vi.fn(),
   invalidate: vi.fn(),
 }));
@@ -37,9 +44,23 @@ const mocks = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ restaurantShifts: { list: { invalidate: mocks.invalidate } } }),
+    useUtils: () => ({
+      restaurantShifts: {
+        managerRoster: { invalidate: mocks.invalidate },
+        myRoster: { invalidate: mocks.invalidate },
+        exportAttendanceCsv: { fetch: vi.fn() },
+      },
+    }),
     restaurantShifts: {
-      list: { useQuery: () => mocks.roster },
+      managerRoster: { useQuery: () => mocks.roster },
+      myRoster: { useQuery: () => mocks.mine },
+      swapCandidates: {
+        useQuery: () => ({
+          data: [{ id: 'staff_2', displayName: 'Kitchen Colleague' }],
+          error: null,
+          isLoading: false,
+        }),
+      },
       create: {
         useMutation: () => ({
           mutate: mocks.createMutate,
@@ -64,6 +85,15 @@ vi.mock('@/lib/trpc', () => ({
           error: null,
         }),
       },
+      clockIn: { useMutation: () => ({ mutate: mocks.clockInMutate, isPending: false }) },
+      startBreak: { useMutation: () => ({ mutate: mocks.noop, isPending: false }) },
+      endBreak: { useMutation: () => ({ mutate: mocks.noop, isPending: false }) },
+      clockOut: { useMutation: () => ({ mutate: mocks.noop, isPending: false }) },
+      requestSwap: { useMutation: () => ({ mutate: mocks.requestSwapMutate, isPending: false }) },
+      reviewSwap: { useMutation: () => ({ mutate: mocks.noop, isPending: false }) },
+      correctTime: {
+        useMutation: () => ({ mutate: mocks.noop, isPending: false, error: null }),
+      },
     },
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
@@ -85,11 +115,19 @@ const entitlements = {
   organizationId: 'org_1',
   seatLimit: 10,
   activeSeats: 1,
-  enabledModules: ['restaurant-core'],
+  enabledModules: ['restaurant-core', 'restaurant-workforce'],
   modules: [
     {
       key: 'restaurant-core',
       name: 'Restaurant Core',
+      enabled: true,
+      source: 'OVERRIDE',
+      seatLimit: null,
+      expiresAt: null,
+    },
+    {
+      key: 'restaurant-workforce',
+      name: 'Restaurant Workforce',
       enabled: true,
       source: 'OVERRIDE',
       seatLimit: null,
@@ -125,6 +163,15 @@ const SHIFT = {
   cancelReason: null,
   createdAt: new Date('2026-08-19T00:00:00Z'),
   updatedAt: new Date('2026-08-19T00:00:00Z'),
+  clockedInAt: null,
+  clockedOutAt: null,
+  breaks: [],
+  adjustments: [],
+  swapRequests: [],
+  attendanceStatus: 'SCHEDULED',
+  lateMinutes: 0,
+  lateThresholdMinutes: 5,
+  branch: { id: 'branch_1', name: 'Downtown', timezone: 'UTC' },
   staffProfile: { id: 'staff_1', displayName: 'Shift Lead', status: 'ACTIVE' },
 };
 
@@ -202,11 +249,17 @@ describe('Restaurant roster console', () => {
 
   it('renders a cancelled shift as cancelled and locks its row actions', () => {
     mocks.roster.data = [
-      { ...SHIFT, status: 'CANCELLED', cancelledAt: new Date(), cancelReason: 'Storm closure' },
+      {
+        ...SHIFT,
+        status: 'CANCELLED',
+        attendanceStatus: 'CANCELLED',
+        cancelledAt: new Date(),
+        cancelReason: 'Storm closure',
+      },
     ];
     renderConsole();
     chooseBranch();
-    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.getByText('CANCELLED')).toBeInTheDocument();
     expect(screen.getByText('Storm closure')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel shift' })).toBeDisabled();
