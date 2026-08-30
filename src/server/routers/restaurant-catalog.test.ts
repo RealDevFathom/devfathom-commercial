@@ -102,7 +102,7 @@ beforeEach(() => {
   mocks.annotateAudit.mockReset();
 });
 
-function caller() {
+function caller(limits: Record<string, number> = { 'restaurant.brands.max': 5 }) {
   return restaurantCatalogRouter.createCaller({
     db,
     entitlements: {
@@ -110,7 +110,7 @@ function caller() {
       activeSeats: 1,
       seatLimit: 50,
       modules: [],
-      limits: { 'restaurant.brands.max': 5 },
+      limits,
     },
     session: {
       expires: 'later',
@@ -149,6 +149,47 @@ describe('C2 shadow-copy guard (strict canonical creation)', () => {
     await caller().createProduct({ name: 'Burger', categoryId: 'cat1' });
     const createCall = (db.restaurantProduct as Delegate).create.mock.calls[0][0];
     expect(createCall.data).not.toHaveProperty('branchId');
+  });
+});
+
+describe('createBrand commercial limit resolution', () => {
+  it('uses the explicit ceiling and the bootstrapped alias', async () => {
+    (db.restaurantBrand as Delegate).count.mockResolvedValue(1);
+    await expect(
+      caller({ 'restaurant.brands.max': 1 }).createBrand({ name: 'Explicit' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(
+      caller({ 'restaurant-core.restaurant.brands.max': 1 }).createBrand({ name: 'Alias' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('preserves explicit zero precedence over a positive alias', async () => {
+    await expect(
+      caller({
+        'restaurant.brands.max': 0,
+        'restaurant-core.restaurant.brands.max': 5,
+      }).createBrand({ name: 'Disabled' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect((db.restaurantBrand as Delegate).create).not.toHaveBeenCalled();
+  });
+
+  it.each<Record<string, number>>([
+    {},
+    { 'restaurant.brands.max': -1 },
+    { 'restaurant.brands.max': 1.5 },
+    { 'restaurant.brands.max': Number.NaN },
+  ])('fails closed for missing or invalid limits', async (limits) => {
+    await expect(caller(limits).createBrand({ name: 'Blocked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'The restaurant brand entitlement is not configured correctly.',
+    });
+    expect((db.restaurantBrand as Delegate).count).not.toHaveBeenCalled();
+  });
+
+  it('rejects caller-supplied tenant ownership', async () => {
+    const input = { name: 'Foreign', organizationId: 'org_other' };
+    await expect(caller().createBrand(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect((db.restaurantBrand as Delegate).create).not.toHaveBeenCalled();
   });
 });
 

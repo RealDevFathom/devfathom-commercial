@@ -6,35 +6,99 @@ export type EntitlementLimitDefinition = {
 
 export type EntitlementLimitResolution =
   | { status: 'configured'; key: string; source: 'explicit' | 'bootstrapped'; value: number }
-  | { status: 'missing'; explicitKey: string; bootstrappedKey: string };
+  | {
+      status: 'missing';
+      explicitKey: string;
+      bootstrappedKey: string;
+      invalidKey?: string;
+      invalidReason?: 'negative' | 'fractional' | 'non-finite' | 'unsafe-integer';
+    };
 
-export const SOP_TEMPLATES_LIMIT = {
-  label: 'SOP template limit',
-  explicitKey: 'sop.templates.max',
-  bootstrappedKey: 'restaurant-core.sop.templates.max',
-} as const satisfies EntitlementLimitDefinition;
+function restaurantLimit(label: string, explicitKey: string): EntitlementLimitDefinition {
+  return { label, explicitKey, bootstrappedKey: `restaurant-core.${explicitKey}` };
+}
+
+export const RESTAURANT_LOCATIONS_LIMIT = restaurantLimit(
+  'Restaurant location limit',
+  'restaurant.locations.max'
+);
+export const RESTAURANT_BRANDS_LIMIT = restaurantLimit(
+  'Restaurant brand limit',
+  'restaurant.brands.max'
+);
+export const POS_TERMINALS_LIMIT = restaurantLimit('POS terminal limit', 'pos.terminals.max');
+export const POS_REGISTERED_DEVICES_LIMIT = restaurantLimit(
+  'Registered device limit',
+  'pos.registeredDevices.max'
+);
+export const POS_MONTHLY_ORDERS_LIMIT = restaurantLimit(
+  'Monthly order limit',
+  'pos.orders.monthly'
+);
+export const POS_CONCURRENT_REGISTERS_LIMIT = restaurantLimit(
+  'Concurrent register limit',
+  'pos.concurrentRegisters.max'
+);
+export const RESTAURANT_OPERATORS_LIMIT = restaurantLimit(
+  'Restaurant operator limit',
+  'restaurant.operators.max'
+);
+export const INVENTORY_STOCK_LOCATIONS_LIMIT = restaurantLimit(
+  'Inventory stock location limit',
+  'inventory.stockLocations.max'
+);
+
+export const SOP_TEMPLATES_LIMIT = restaurantLimit('SOP template limit', 'sop.templates.max');
+
+export const RESTAURANT_COMMERCIAL_LIMITS = [
+  RESTAURANT_LOCATIONS_LIMIT,
+  RESTAURANT_BRANDS_LIMIT,
+  POS_TERMINALS_LIMIT,
+  POS_REGISTERED_DEVICES_LIMIT,
+  POS_MONTHLY_ORDERS_LIMIT,
+  POS_CONCURRENT_REGISTERS_LIMIT,
+  RESTAURANT_OPERATORS_LIMIT,
+  INVENTORY_STOCK_LOCATIONS_LIMIT,
+  SOP_TEMPLATES_LIMIT,
+] as const;
+
+function invalidReason(
+  value: number
+): 'negative' | 'fractional' | 'non-finite' | 'unsafe-integer' | undefined {
+  if (!Number.isFinite(value)) return 'non-finite';
+  if (!Number.isInteger(value)) return 'fractional';
+  if (value < 0) return 'negative';
+  if (!Number.isSafeInteger(value)) return 'unsafe-integer';
+  return undefined;
+}
 
 export function resolveEntitlementLimit(
   limits: Readonly<Record<string, number>>,
   definition: EntitlementLimitDefinition
 ): EntitlementLimitResolution {
-  const explicit = limits[definition.explicitKey];
-  if (Number.isSafeInteger(explicit) && explicit! >= 0) {
+  const source = Object.prototype.hasOwnProperty.call(limits, definition.explicitKey)
+    ? ('explicit' as const)
+    : Object.prototype.hasOwnProperty.call(limits, definition.bootstrappedKey)
+      ? ('bootstrapped' as const)
+      : undefined;
+  const key = source === 'explicit' ? definition.explicitKey : definition.bootstrappedKey;
+
+  if (!source) {
     return {
-      status: 'configured',
-      key: definition.explicitKey,
-      source: 'explicit',
-      value: explicit!,
+      status: 'missing',
+      explicitKey: definition.explicitKey,
+      bootstrappedKey: definition.bootstrappedKey,
     };
   }
 
-  const bootstrapped = limits[definition.bootstrappedKey];
-  if (Number.isSafeInteger(bootstrapped) && bootstrapped! >= 0) {
+  const value = limits[key]!;
+  const reason = invalidReason(value);
+  if (!reason) {
     return {
       status: 'configured',
-      key: definition.bootstrappedKey,
-      source: 'bootstrapped',
-      value: bootstrapped!,
+      key,
+      source,
+      value,
     };
   }
 
@@ -42,5 +106,7 @@ export function resolveEntitlementLimit(
     status: 'missing',
     explicitKey: definition.explicitKey,
     bootstrappedKey: definition.bootstrappedKey,
+    invalidKey: key,
+    invalidReason: reason,
   };
 }

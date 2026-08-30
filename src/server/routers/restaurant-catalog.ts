@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { CatalogError } from '@/lib/restaurant/catalog';
+import { resolveEntitlementLimit, RESTAURANT_BRANDS_LIMIT } from '@/lib/entitlement-limits';
 import {
   ensureDefaultBrand,
   createBrand,
@@ -167,9 +168,17 @@ export const restaurantCatalogRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const brandsMax =
-          (ctx.entitlements.limits as Record<string, number>)['restaurant.brands.max'] ?? 1;
-        const brand = await createBrand(ctx.db, input, brandsMax);
+        const resolution = resolveEntitlementLimit(
+          ctx.entitlements.limits as Record<string, number>,
+          RESTAURANT_BRANDS_LIMIT
+        );
+        if (resolution.status === 'missing') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'The restaurant brand entitlement is not configured correctly.',
+          });
+        }
+        const brand = await createBrand(ctx.db, input, resolution.value);
         annotateAudit(ctx, {
           targetType: 'RestaurantBrand',
           targetId: brand.id,

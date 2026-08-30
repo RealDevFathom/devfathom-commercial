@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 
 import { annotateAudit } from '../audit';
 import { capabilityProcedure, router } from '../trpc';
+import { resolveEntitlementLimit, RESTAURANT_LOCATIONS_LIMIT } from '@/lib/entitlement-limits';
 
 const branchProcedure = capabilityProcedure('restaurant:configure');
 const code = z
@@ -36,14 +37,14 @@ const editableFields = z
 const createFields = editableFields.extend({ code });
 
 function locationsLimit(limits: Record<string, number>): number {
-  const limit = limits['restaurant.locations.max'];
-  if (!Number.isSafeInteger(limit) || limit < 1) {
+  const resolution = resolveEntitlementLimit(limits, RESTAURANT_LOCATIONS_LIMIT);
+  if (resolution.status === 'missing') {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'The restaurant location entitlement is not configured correctly.',
     });
   }
-  return limit;
+  return resolution.value;
 }
 
 async function lockOrganization(
