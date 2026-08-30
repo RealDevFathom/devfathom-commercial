@@ -7,6 +7,7 @@ import { DrawerPanel } from './drawer-panel';
 import { DayClosePanel } from './day-close-panel';
 import { MenuGrid, type AddMenuItemInput, type EffectiveMenu } from './menu-grid';
 import { OperatorSwitch, type OperatorSwitchInput } from './operator-switch';
+import { RefundPanel } from './refund-panel';
 import { OrderTicketPanel, type OrderDetail, type VoidItemInput } from './order-ticket-panel';
 import { FathomMark } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
@@ -754,6 +755,18 @@ export function OrderPad() {
                       (source) => source.staffProfileId === operator.id && source.canApprove
                     )
                   )}
+                disabled={busy}
+              />
+              <RefundPanel
+                request={checkoutRequest}
+                actingOperatorId={runtime.operator?.staffProfileId ?? ''}
+                operators={operators
+                  .filter((operator) => operator.canApprove)
+                  .map((operator) => ({
+                    id: operator.staffProfileId,
+                    displayName: operator.displayName,
+                    role: operator.role,
+                  }))}
                 disabled={busy}
               />
               <Button

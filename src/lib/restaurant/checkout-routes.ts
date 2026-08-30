@@ -155,7 +155,7 @@ export const refundBody = z
     amount: MONEY,
     tipRefundAmount: MONEY.optional(),
     kind: z.enum(['REFUND', 'VOID_REVERSAL']).optional(),
-    reason: z.string().min(1),
+    reason: z.string().trim().min(1).max(240),
     approving: APPROVING,
   })
   .strict();
@@ -626,6 +626,10 @@ export function serializeRefundResult(result: RefundTenderResult) {
     paymentId: result.paymentId,
     drawerSessionId: result.drawerSessionId,
     paymentStatus: result.paymentStatus,
+    taxRefundAmount: result.taxRefundAmount,
+    // The service-charge allocation candidate is not present at this exact base.
+    // Null is an explicit compatibility seam; never infer or recompute it here.
+    serviceChargeRefundAmount: null,
     replayed: result.replayed,
   };
 }

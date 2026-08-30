@@ -95,8 +95,20 @@ export type RefundTenderResult = {
   drawerSessionId: string | null;
   /** The card payment's resulting normalized status (null for cash/other). */
   paymentStatus: PaymentStatus | null;
+  /** Persisted frozen tax allocations attached to this refund; never client-derived. */
+  taxRefundAmount: string;
   replayed: boolean;
 };
+
+async function persistedTaxRefundAmount(tx: ScopedDb, refundId: string): Promise<string> {
+  const allocations = await tx.restaurantTaxRefundAllocation.findMany({
+    where: { refundId },
+    select: { cents: true },
+  });
+  const cents = allocations.reduce((total, allocation) => total + allocation.cents, BigInt(0));
+  const scale = BigInt(100);
+  return `${cents / scale}.${(cents % scale).toString().padStart(2, '0')}`;
+}
 
 type LoadedTender = {
   id: string;
@@ -268,6 +280,7 @@ export async function refundTender(
       paymentId,
       drawerSessionId,
       paymentStatus,
+      taxRefundAmount: await persistedTaxRefundAmount(tx, refund.id),
       replayed: false,
     };
   });
@@ -399,6 +412,7 @@ async function replayRefundResult(
     paymentId: refund.paymentId,
     drawerSessionId: refund.drawerSessionId,
     paymentStatus: (refund.payment?.status as PaymentStatus | undefined) ?? null,
+    taxRefundAmount: await persistedTaxRefundAmount(tx, refund.id),
     replayed: true,
   };
 }
