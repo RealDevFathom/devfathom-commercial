@@ -27,11 +27,22 @@ async function unlockPos(page: Page) {
   await page.getByLabel('Bearer device secret').fill(fixture.pos.secret);
   await page.getByRole('button', { name: 'Establish session' }).click();
   await expect(page.getByRole('heading', { name: 'Terminal locked' })).toBeVisible();
-  await page.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await expect(page.getByText('E2E Menu loaded.')).toBeVisible();
+}
+
+async function loadKdsOperators(page: Page) {
+  const load = page.getByRole('button', { name: 'Load branch operators' });
+  await expect
+    .poll(async () => {
+      await page.getByLabel('Bearer device secret').fill(fixture.kds.secret);
+      return load.isEnabled();
+    })
+    .toBe(true);
+  await load.click();
 }
 
 test.describe('restaurant POS and KDS core flow', () => {
@@ -111,8 +122,8 @@ test.describe('restaurant POS and KDS core flow', () => {
 
     const kdsPage = await page.context().newPage();
     await kdsPage.goto('/kds');
-    await kdsPage.getByLabel('Bearer device secret').fill(fixture.kds.secret);
-    await kdsPage.getByLabel('Acting operator profile ID').fill(fixture.operator.staffProfileId);
+    await loadKdsOperators(kdsPage);
+    await kdsPage.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
     await kdsPage.getByRole('button', { name: 'Connect display' }).click();
     await expect(kdsPage.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
     await expect(kdsPage.getByText(`Order #${orderNumber}`)).toBeVisible();

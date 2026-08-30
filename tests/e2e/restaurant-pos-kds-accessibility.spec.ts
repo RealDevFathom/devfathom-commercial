@@ -12,6 +12,25 @@ const VIEWPORTS = [
 ] as const;
 const THEMES = ['light', 'dark'] as const;
 
+type OperatorDirectoryResponse = {
+  operators: { staffProfileId: string; displayName: string; role: string }[];
+};
+type EstablishSessionResponse = {
+  sessionToken: string;
+  session: { id: string; state: 'LOCKED'; establishedAt: string };
+  device: { id: string; branchName: string };
+};
+
+const operatorDirectoryResponse = {
+  operators: [{ staffProfileId: 'operator-1', displayName: 'Avery Chen', role: 'Line cook' }],
+} satisfies OperatorDirectoryResponse;
+
+const establishSessionResponse = {
+  sessionToken: 'session-token',
+  session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-28T04:00:00Z' },
+  device: { id: 'device-1', branchName: 'Chai Chowk' },
+} satisfies EstablishSessionResponse;
+
 const menu = {
   publicationId: 'publication-1',
   channelOpen: true,
@@ -102,16 +121,9 @@ async function mockPos(page: Page, failure?: { status: number; error: string }) 
     const pathname = new URL(route.request().url()).pathname;
     if (failure) return json(route, { error: failure.error }, failure.status);
     if (pathname.endsWith('/terminal/establish')) {
-      return json(
-        route,
-        {
-          sessionToken: 'session-token',
-          session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-28T04:00:00Z' },
-          device: { id: 'device-1', branchId: 'branch-1' },
-        },
-        201
-      );
+      return json(route, establishSessionResponse, 201);
     }
+    if (pathname.endsWith('/terminal/operators')) return json(route, operatorDirectoryResponse);
     if (pathname.endsWith('/terminal/unlock')) {
       return json(route, {
         session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'operator-1' },
@@ -141,32 +153,24 @@ async function mockPos(page: Page, failure?: { status: number; error: string }) 
 async function unlockPos(page: Page) {
   await page.goto('/pos');
   await fillHydratedForm(page, [['Bearer device secret', 'pos-secret']], 'Establish session');
-  await fillHydratedForm(
-    page,
-    [
-      ['Operator profile ID', 'operator-1'],
-      ['Operator PIN', '4242'],
-    ],
-    'Unlock terminal'
-  );
+  await page.getByLabel('Operator').selectOption('operator-1');
+  await fillHydratedForm(page, [['Operator PIN', '4242']], 'Unlock terminal');
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
 }
 
 async function mockKds(page: Page, response: typeof queue | { error: string }, status = 200) {
-  await page.route('**/api/restaurant/kds/**', (route) => json(route, {}));
+  await page.route('**/api/restaurant/kds/**', (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    return json(route, pathname.endsWith('/operators') ? operatorDirectoryResponse : {});
+  });
   await page.route('**/api/restaurant/kds/queue**', (route) => json(route, response, status));
 }
 
 async function connectKds(page: Page) {
   await page.goto('/kds');
-  await fillHydratedForm(
-    page,
-    [
-      ['Bearer device secret', 'kds-secret'],
-      ['Acting operator profile ID', 'operator-1'],
-    ],
-    'Connect display'
-  );
+  await fillHydratedForm(page, [['Bearer device secret', 'kds-secret']], 'Load branch operators');
+  await page.getByLabel('Acting operator').selectOption('operator-1');
+  await page.getByRole('button', { name: 'Connect display' }).click();
   await expect(page.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
 }
 
@@ -256,7 +260,7 @@ test('POS and KDS default, labels, disabled controls, focus, and axe WCAG 2.2 AA
 
   await page.goto('/kds');
   await expect(page.getByRole('button', { name: 'Connect display' })).toBeDisabled();
-  await expect(page.getByLabel('Acting operator profile ID')).toBeVisible();
+  await expect(page.getByLabel('Acting operator')).toBeVisible();
   await assertAxe(page);
 });
 

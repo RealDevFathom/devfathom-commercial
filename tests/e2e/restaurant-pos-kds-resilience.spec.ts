@@ -4,8 +4,15 @@ import { restaurantE2eCredentials as fixture } from './restaurant-fixture';
 
 async function connectKds(page: import('@playwright/test').Page) {
   await page.goto('/kds');
-  await page.getByLabel('Bearer device secret').fill(fixture.kds.secret);
-  await page.getByLabel('Acting operator profile ID').fill(fixture.operator.staffProfileId);
+  const load = page.getByRole('button', { name: 'Load branch operators' });
+  await expect
+    .poll(async () => {
+      await page.getByLabel('Bearer device secret').fill(fixture.kds.secret);
+      return load.isEnabled();
+    })
+    .toBe(true);
+  await load.click();
+  await page.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
   await page.getByRole('button', { name: 'Connect display' }).click();
   await expect(page.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
 }
@@ -43,7 +50,7 @@ test.describe('restaurant browser resilience', () => {
     await pos.goto('/pos');
     await pos.getByLabel('Bearer device secret').fill(fixture.pos.secret);
     await pos.getByRole('button', { name: 'Establish session' }).click();
-    await pos.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
+    await pos.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
     await pos.getByLabel('Operator PIN').fill(fixture.operator.pin);
     await pos.getByRole('button', { name: 'Unlock terminal' }).click();
     await expect(pos.getByRole('button', { name: /Test Burger/ })).toBeDisabled();
