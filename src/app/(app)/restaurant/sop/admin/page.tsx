@@ -26,6 +26,7 @@ import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from '@/components/restaurant/restaurant-branch-select';
 import { RestaurantStaffSelect } from '@/components/restaurant/restaurant-staff-select';
+import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type SopTemplate = RouterOutputs['restaurantSop']['listTemplates'][number];
@@ -98,8 +99,6 @@ function statusTone(status: string): StatusTone {
   return status === 'INACTIVE' ? 'neutral' : 'info';
 }
 
-const TEMPLATE_LIMIT_KEY = 'sop.templates.max';
-
 /**
  * Active-template quota presentation states.
  *
@@ -114,15 +113,6 @@ type TemplateCapacity =
   | { kind: 'available'; limit: number; used: number; remaining: number }
   | { kind: 'exhausted'; limit: number; used: number }
   | { kind: 'unconfigured'; used: number };
-
-/**
- * Reads the limit without collapsing "absent" into `0`. `EntitlementView.limits`
- * is typed `Record<string, number>`, so the index signature over-promises and an
- * unconfigured key still arrives as `undefined` at runtime.
- */
-function readTemplateLimit(limits: Record<string, number>): number | undefined {
-  return TEMPLATE_LIMIT_KEY in limits ? limits[TEMPLATE_LIMIT_KEY] : undefined;
-}
 
 /**
  * WHA-265 owns the shared resolver policy for absent limits (declare-every-limit
@@ -1167,7 +1157,9 @@ export default function RestaurantSopAdminPage() {
   const sopModule = entitlements.modules.find((module) => module.key === 'restaurant-sop');
   const moduleEnabled =
     sopModule?.enabled ?? entitlements.enabledModules.includes('restaurant-sop');
-  const templateLimit = readTemplateLimit(entitlements.limits);
+  const templateLimitResolution = resolveEntitlementLimit(entitlements.limits, SOP_TEMPLATES_LIMIT);
+  const templateLimit =
+    templateLimitResolution.status === 'configured' ? templateLimitResolution.value : undefined;
   const utils = trpc.useUtils();
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedVersionId, setSelectedVersionId] = useState('');
