@@ -50,7 +50,7 @@ export function RestaurantDashboardContent({ enabledModules }: { enabledModules:
             className="text-text-body"
           />
         }
-        className="[&_[data-slot=eyebrow]]:text-text-body"
+        className="[&_[data-slot=eyebrow]]:text-text-body [&_p]:text-text-body"
       />
 
       <RestaurantManagementOverview

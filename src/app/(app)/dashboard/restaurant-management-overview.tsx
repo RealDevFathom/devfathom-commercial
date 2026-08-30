@@ -88,7 +88,7 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="rounded-md border border-dashed border-border-default px-5 py-8 text-center">
       <p className="font-medium text-text-strong">{title}</p>
-      <p className="mt-1 text-sm text-text-muted">{detail}</p>
+      <p className="mt-1 text-sm text-text-body">{detail}</p>
     </div>
   );
 }
@@ -117,8 +117,12 @@ function ErrorState({
       aria-label={`${subject} ${denied ? 'restricted' : 'unavailable'}`}
       className="space-y-3"
     >
-      <StatusPill status={denied ? 'Restricted' : 'Unavailable'} tone="warning" />
-      <p className="text-sm text-text-muted">
+      <StatusPill
+        status={denied ? 'Restricted' : 'Unavailable'}
+        tone="warning"
+        className="text-text-body [&>span]:bg-warning"
+      />
+      <p className="text-sm text-text-body">
         {denied
           ? `${subject} require the existing financial-report permission. No cached figures are shown.`
           : `${subject} could not be loaded. No cached figures are shown. Other dashboard tools remain available.`}
@@ -306,7 +310,7 @@ function TrendWidget({
                 key={row.id}
                 className="grid grid-cols-[6rem_1fr_auto] items-center gap-3 text-sm"
               >
-                <span className="font-mono text-xs text-text-muted">
+                <span className="font-mono text-xs text-text-body">
                   {row.businessDate.slice(5)}
                 </span>
                 <span className="h-2 overflow-hidden rounded-full bg-surface-sunken" aria-hidden>
@@ -360,7 +364,7 @@ function ExceptionsWidget({ rows, query }: { rows: FinancialRow[]; query: ReadQu
               key={String(label)}
               className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0"
             >
-              <dt className="text-sm text-text-muted">{label}</dt>
+              <dt className="text-sm text-text-body">{label}</dt>
               <dd className="font-mono text-sm font-semibold tabular-nums text-text-strong">
                 {formatDecimal(Number(value))}
               </dd>
@@ -411,7 +415,7 @@ function ItemMixWidget({
         />
       ) : detail.data?.itemMix.length ? (
         <div>
-          <p className="mb-3 font-mono text-xs text-text-muted">
+          <p className="mb-3 font-mono text-xs text-text-body">
             Business date {detail.data.businessDate}
           </p>
           <ol className="divide-y divide-border-subtle">
@@ -423,7 +427,7 @@ function ItemMixWidget({
                 <span className="min-w-0 truncate text-sm font-medium text-text-strong">
                   {item.productName}
                 </span>
-                <span className="shrink-0 font-mono text-xs tabular-nums text-text-muted">
+                <span className="shrink-0 font-mono text-xs tabular-nums text-text-body">
                   {item.quantity} sold
                 </span>
               </li>
@@ -642,10 +646,15 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
         eyebrow="Management overview"
         title="Analytics module not enabled"
         titleLevel={2}
+        className="[&_[data-slot=eyebrow]]:text-text-body"
       >
         <div className="space-y-3" role="status">
-          <StatusPill status="Disabled" tone="warning" />
-          <p className="max-w-2xl text-sm leading-6 text-text-muted">
+          <StatusPill
+            status="Disabled"
+            tone="warning"
+            className="text-text-body [&>span]:bg-warning"
+          />
+          <p className="max-w-2xl text-sm leading-6 text-text-body">
             Reconciled closed-day analytics require Restaurant Insights. Quick access remains
             available for every enabled operational module.
           </p>
@@ -655,7 +664,7 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 [&_[data-slot=eyebrow]]:text-text-body">
       <SectionCard
         eyebrow="Reconciled closed-day rollups"
         title="Management overview"
@@ -666,6 +675,7 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
               <StatusPill
                 status={freshness === 'STALE' ? 'Stale rollups' : 'Current rollups'}
                 tone={freshness === 'STALE' ? 'warning' : 'success'}
+                className={freshness === 'STALE' ? 'text-text-body [&>span]:bg-warning' : undefined}
               />
             ) : null}
             {!editing ? (
@@ -692,7 +702,7 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
           </div>
         }
       >
-        <p className="mb-5 max-w-3xl text-sm leading-6 text-text-muted">
+        <p className="mb-5 max-w-3xl text-sm leading-6 text-text-body">
           Figures come only from reconciled business-day closes. They are not current-shift or live
           service data.
         </p>
@@ -736,7 +746,7 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
             </select>
           </label>
         </div>
-        <p className="mt-3 font-mono text-xs text-text-muted">
+        <p className="mt-3 font-mono text-xs text-text-body">
           Inclusive range {range.from} — {range.to}
         </p>
         {updatePreferences.error ? (
