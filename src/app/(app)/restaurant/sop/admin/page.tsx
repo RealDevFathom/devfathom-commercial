@@ -103,6 +103,7 @@ const TEMPLATE_LIMIT_KEY = 'sop.templates.max';
 /**
  * Active-template quota presentation states.
  *
+ * `disabled` means the plan deliberately grants zero active templates.
  * `exhausted` means the plan grants this workspace a quota and the workspace has
  * used all of it — the remedy is in-product (archive a template). It is
  * deliberately distinct from the module-level "not in your plan" state, whose
@@ -112,6 +113,7 @@ const TEMPLATE_LIMIT_KEY = 'sop.templates.max';
  */
 type TemplateCapacity =
   | { kind: 'available'; limit: number; used: number; remaining: number }
+  | { kind: 'disabled'; used: number }
   | { kind: 'exhausted'; limit: number; used: number }
   | { kind: 'unconfigured'; used: number };
 
@@ -137,6 +139,7 @@ function resolveTemplateCapacity(limit: number | undefined, activeCount: number)
   if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 0) {
     return { kind: 'unconfigured', used: activeCount };
   }
+  if (limit === 0) return { kind: 'disabled', used: activeCount };
   const remaining = Math.max(0, limit - activeCount);
   return remaining === 0
     ? { kind: 'exhausted', limit, used: activeCount }
@@ -287,6 +290,12 @@ export function SopAdminView({
                 tone="danger"
                 label={`Limit not set · ${capacity.used} active`}
               />
+            ) : capacity.kind === 'disabled' ? (
+              <StatusPill
+                status="Plan disabled"
+                tone="neutral"
+                label="Plan allowance · 0 allowed"
+              />
             ) : capacity.kind === 'exhausted' ? (
               <StatusPill
                 status="Limit reached"
@@ -394,6 +403,12 @@ export function SopAdminView({
                   tone="danger"
                   label={`Not configured · ${capacity.used} active`}
                 />
+              ) : capacity.kind === 'disabled' ? (
+                <StatusPill
+                  status="Disabled by plan"
+                  tone="neutral"
+                  label={`Disabled · ${capacity.used} active · 0 allowed`}
+                />
               ) : capacity.kind === 'exhausted' ? (
                 <StatusPill
                   status="Quota used"
@@ -438,18 +453,22 @@ export function SopAdminView({
                 className={`mt-2 text-xs ${
                   capacity.kind === 'unconfigured'
                     ? 'text-destructive'
-                    : capacity.kind === 'exhausted'
-                      ? 'text-warning'
-                      : 'text-text-faint'
+                    : capacity.kind === 'disabled'
+                      ? 'text-text-muted'
+                      : capacity.kind === 'exhausted'
+                        ? 'text-warning'
+                        : 'text-text-faint'
                 }`}
               >
                 {capacity.kind === 'unconfigured'
                   ? 'The active-template allowance is not configured for this plan. Creating templates is paused until a platform administrator sets sop.templates.max — this is a configuration fault, not a used-up quota.'
-                  : capacity.kind === 'exhausted'
-                    ? `Your plan’s active-template quota is fully used (${capacity.limit} of ${capacity.limit}). Archive an active template below to free a slot.`
-                    : `${capacity.remaining} active template slot${
-                        capacity.remaining === 1 ? '' : 's'
-                      } remaining.`}
+                  : capacity.kind === 'disabled'
+                    ? 'Your plan deliberately disables active SOP templates with an allowance of 0. Ask your administrator to change the plan allowance to enable template creation.'
+                    : capacity.kind === 'exhausted'
+                      ? `Your plan’s active-template quota is fully used (${capacity.limit} of ${capacity.limit}). Archive an active template below to free a slot.`
+                      : `${capacity.remaining} active template slot${
+                          capacity.remaining === 1 ? '' : 's'
+                        } remaining.`}
               </p>
             </form>
 
