@@ -161,6 +161,8 @@ describe('refund reads (C12)', () => {
       kind: 'REFUND',
       amount: D('5.00'),
       tipRefundAmount: D('0.00'),
+      serviceChargeRefundAmount: D('1.25'),
+      taxRefundAmount: D('0.75'),
       businessDate: new Date('2026-08-20T00:00:00.000Z'),
       reason: 'return',
       coAuthorizationId: 'coauth_1',
@@ -174,6 +176,8 @@ describe('refund reads (C12)', () => {
     const result = await caller().listRefunds({ branchId: 'b1', limit: 1 });
     expect(result.refunds).toHaveLength(1);
     expect(result.refunds[0].amount).toBe('5');
+    expect(result.refunds[0].serviceChargeRefundAmount).toBe('1.25');
+    expect(result.refunds[0].taxRefundAmount).toBe('0.75');
     expect(result.refunds[0].kind).toBe('REFUND');
     expect(result.refunds[0].businessDate).toBe('2026-08-20');
     expect(result.nextCursor).toBe('r1');
@@ -231,6 +235,8 @@ describe('getPayment (full event trail, C12)', () => {
           kind: 'REFUND',
           amount: D('12.50'),
           tipRefundAmount: D('0.00'),
+          serviceChargeRefundAmount: D('1.25'),
+          taxRefundAmount: D('0.75'),
           businessDate: new Date('2026-08-19T00:00:00.000Z'),
           createdAt: new Date(),
         },
@@ -245,6 +251,11 @@ describe('getPayment (full event trail, C12)', () => {
     expect(result.events[1]).toMatchObject({ eventType: 'REFUND_APPROVED' });
     expect(result.tenders[0]).toMatchObject({ type: 'CARD', amount: '12.5' });
     expect(result.refunds[0]).toMatchObject({ kind: 'REFUND', amount: '12.5' });
+    expect(result.refunds[0]).toMatchObject({
+      tipRefundAmount: '0',
+      serviceChargeRefundAmount: '1.25',
+      taxRefundAmount: '0.75',
+    });
     expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 

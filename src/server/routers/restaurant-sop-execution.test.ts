@@ -48,6 +48,7 @@ function model(): Delegate {
       createdAt: new Date(),
       ...data,
     })),
+    createMany: vi.fn().mockResolvedValue({ count: 1 }),
     update: vi
       .fn()
       .mockImplementation(
@@ -421,7 +422,12 @@ describe('SOP depth entitlement gating', () => {
     });
     db.restaurantSopVerification.create.mockResolvedValue({ id: 'ver_1', createdAt: new Date() });
     db.restaurantCoAuthorization.create.mockResolvedValue({ id: 'coauth_1' });
-    db.restaurantSopEvidence.create.mockResolvedValue({ id: 'ev_1', createdAt: new Date() });
+    db.restaurantSopEvidence.createMany.mockResolvedValue({ count: 1 });
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
+      id: 'ev_1',
+      contentHash: EVIDENCE_INPUT.contentHashHex,
+      createdAt: new Date(),
+    });
     db.restaurantSopEscalationEvent.findFirst.mockResolvedValue(null);
     db.restaurantSopEscalationEvent.create.mockResolvedValue({ id: 'evt_1' });
   }
@@ -513,6 +519,14 @@ describe('SOP depth entitlement gating', () => {
     it('may capture evidence', async () => {
       await expect(caller(OPERATIONS).attachEvidence(EVIDENCE_INPUT)).resolves.toMatchObject({
         evidenceId: 'ev_1',
+        created: true,
+      });
+      expect(db.restaurantSopEvidence.createMany).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          occurrenceId: OCC_ID,
+          contentHash: EVIDENCE_INPUT.contentHashHex,
+        }),
+        skipDuplicates: true,
       });
     });
 

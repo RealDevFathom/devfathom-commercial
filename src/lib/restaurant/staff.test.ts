@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   staffCreate: vi.fn(),
   staffUpdate: vi.fn(),
   branchFindUnique: vi.fn(),
-  userFindUnique: vi.fn(),
+  userFindFirst: vi.fn(),
 }));
 
 const db = {
@@ -26,7 +26,7 @@ const db = {
     update: mocks.staffUpdate,
   },
   restaurantBranch: { findUnique: mocks.branchFindUnique },
-  user: { findUnique: mocks.userFindUnique },
+  user: { findFirst: mocks.userFindFirst },
 } as unknown as ScopedDb;
 
 beforeEach(() => {
@@ -34,7 +34,7 @@ beforeEach(() => {
   // Defaults: no email clash, branch and user exist, writes echo their data.
   mocks.staffFindFirst.mockResolvedValue(null);
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
-  mocks.userFindUnique.mockResolvedValue({ id: 'user_1' });
+  mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'staff_new',
@@ -108,7 +108,7 @@ describe('createStaffProfile', () => {
   });
 
   it('rejects a non-existent linked user', async () => {
-    mocks.userFindUnique.mockResolvedValue(null);
+    mocks.userFindFirst.mockResolvedValue(null);
     await expect(
       createStaffProfile(db, { displayName: 'x', userId: 'user_gone' })
     ).rejects.toMatchObject({ reason: 'USER_NOT_FOUND' });
@@ -120,6 +120,14 @@ describe('createStaffProfile', () => {
       displayName: 'Linked',
       userId: 'user_1',
       primaryBranchId: 'branch_1',
+    });
+    expect(mocks.userFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'user_1',
+        status: 'ACTIVE',
+        restaurantStaffProfiles: { none: {} },
+      },
+      select: { id: true },
     });
     expect(mocks.staffCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -148,7 +156,7 @@ describe('updateStaffProfile', () => {
 
   it('clears the user link when userId is explicitly null (one-way detach, C3)', async () => {
     await updateStaffProfile(db, 'staff_1', { userId: null });
-    expect(mocks.userFindUnique).not.toHaveBeenCalled();
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
     expect(mocks.staffUpdate).toHaveBeenCalledWith({
       where: { id: 'staff_1' },
       data: { userId: null },
@@ -157,7 +165,14 @@ describe('updateStaffProfile', () => {
 
   it('validates a newly linked user and normalises a changed email', async () => {
     await updateStaffProfile(db, 'staff_1', { userId: 'user_1', email: 'New@R.com' });
-    expect(mocks.userFindUnique).toHaveBeenCalled();
+    expect(mocks.userFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'user_1',
+        status: 'ACTIVE',
+        restaurantStaffProfiles: { every: { id: 'staff_1' } },
+      },
+      select: { id: true },
+    });
     expect(mocks.staffUpdate).toHaveBeenCalledWith({
       where: { id: 'staff_1' },
       data: { userId: 'user_1', email: 'new@r.com' },
