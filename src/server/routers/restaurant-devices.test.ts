@@ -166,7 +166,37 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!TEST_DATABASE_URL || !deps) return;
-  await deps.withPlatformDb((tx) => tx.organization.delete({ where: { id: orgId } }));
+  await deps.withTenantDb(orgId, async (tx) => {
+    await tx.restaurantCoAuthorization.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantTerminalSession.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantOperatorCredential.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantStaffJobRole.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantJobRoleCapability.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantRegisteredDevice.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantStaffProfile.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantJobRole.deleteMany({ where: { organizationId: orgId } });
+    await tx.restaurantBranch.deleteMany({ where: { organizationId: orgId } });
+  });
+
+  const remaining = await deps.withPlatformDb((tx) =>
+    Promise.all([
+      tx.restaurantCoAuthorization.count({ where: { organizationId: orgId } }),
+      tx.restaurantTerminalSession.count({ where: { organizationId: orgId } }),
+      tx.restaurantOperatorCredential.count({ where: { organizationId: orgId } }),
+      tx.restaurantStaffJobRole.count({ where: { organizationId: orgId } }),
+      tx.restaurantJobRoleCapability.count({ where: { organizationId: orgId } }),
+      tx.restaurantRegisteredDevice.count({ where: { organizationId: orgId } }),
+      tx.restaurantStaffProfile.count({ where: { organizationId: orgId } }),
+      tx.restaurantJobRole.count({ where: { organizationId: orgId } }),
+      tx.restaurantBranch.count({ where: { organizationId: orgId } }),
+    ])
+  );
+  expect(remaining).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.delete({ where: { id: orgId } });
+    expect(await tx.organization.count({ where: { id: orgId } })).toBe(0);
+  });
 });
 
 describeIfDatabase('restaurantDevices router (real DB)', () => {
