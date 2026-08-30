@@ -8,6 +8,10 @@
   \set preinstall_vulnerable true
 \endif
 
+-- Trusted extension scripts run as the cluster's privileged bootstrap role.
+-- Capture that fixture role instead of assuming the conventional postgres name.
+SELECT current_user AS extension_function_owner \gset
+
 \if :preinstall_vulnerable
   CREATE EXTENSION IF NOT EXISTS btree_gist;
 \endif
@@ -130,9 +134,6 @@ DROP ROLE wha911_nonowner;
     ) THEN
       RAISE EXCEPTION 'CREATE-only preparation role unexpectedly has memberships';
     END IF;
-    IF pg_catalog.pg_has_role('wha911_creator_only', 'postgres', 'SET') THEN
-      RAISE EXCEPTION 'CREATE-only preparation role can unexpectedly SET postgres';
-    END IF;
     IF NOT pg_catalog.has_database_privilege(
       'wha911_creator_only', current_database(), 'CREATE'
     ) THEN
@@ -140,6 +141,16 @@ DROP ROLE wha911_nonowner;
     END IF;
   END
   $proof$;
+
+  SELECT NOT pg_catalog.pg_has_role(
+    'wha911_creator_only', :'extension_function_owner', 'SET'
+  ) AS creator_only_lacks_owner_set
+  \gset
+  \if :creator_only_lacks_owner_set
+  \else
+    \echo 'CREATE-only preparation role can unexpectedly SET extension function owner' :extension_function_owner
+    \quit 1
+  \endif
 
   SET SESSION AUTHORIZATION wha911_creator_only;
   \set ON_ERROR_STOP off
@@ -192,7 +203,10 @@ DROP ROLE wha911_nonowner;
 \endif
 
 CREATE ROLE wha911_preparer LOGIN NOSUPERUSER NOBYPASSRLS;
-GRANT postgres TO wha911_preparer WITH INHERIT FALSE, SET TRUE;
+SELECT format(
+  'GRANT %I TO wha911_preparer WITH INHERIT FALSE, SET TRUE',
+  :'extension_function_owner'
+) \gexec
 
 \if :preinstall_vulnerable
 \else
@@ -213,11 +227,18 @@ BEGIN
   IF role_row.rolsuper OR role_row.rolbypassrls THEN
     RAISE EXCEPTION 'SET-capable preparation role can bypass authorization';
   END IF;
-  IF NOT pg_catalog.pg_has_role('wha911_preparer', 'postgres', 'SET') THEN
-    RAISE EXCEPTION 'positive preparation role lacks expected SET privilege';
-  END IF;
 END
 $proof$;
+
+SELECT pg_catalog.pg_has_role(
+  'wha911_preparer', :'extension_function_owner', 'SET'
+) AS preparer_can_set_function_owner
+\gset
+\if :preparer_can_set_function_owner
+\else
+  \echo 'positive preparation role lacks SET privilege for extension function owner' :extension_function_owner
+  \quit 1
+\endif
 
 \if :preinstall_vulnerable
 \else
@@ -244,7 +265,10 @@ RESET SESSION AUTHORIZATION;
   ) \gexec
 \endif
 
-REVOKE postgres FROM wha911_preparer;
+SELECT format(
+  'REVOKE %I FROM wha911_preparer',
+  :'extension_function_owner'
+) \gexec
 \if :preinstall_vulnerable
   DROP ROLE wha911_preparer;
 \endif
