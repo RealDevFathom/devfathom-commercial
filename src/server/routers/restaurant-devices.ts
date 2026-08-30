@@ -67,6 +67,59 @@ export const restaurantDevicesRouter = router({
     }));
   }),
 
+  /** Minimal co-authorization directory for one authorized device branch. */
+  listApprovers: manageDevicesProcedure
+    .input(z.object({ deviceId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage',
+        { requireExactlyOneActiveActor: true }
+      );
+      const actingStaffProfileId = authorization.actorStaffProfileId;
+      if (!actingStaffProfileId) denyStaffBranchAccess();
+
+      const device = await ctx.db.restaurantRegisteredDevice.findUnique({
+        where: { id: input.deviceId },
+        select: { branchId: true },
+      });
+      if (!device) denyStaffBranchAccess();
+      assertAuthorizedBranch(authorization, device.branchId);
+      assertActorEligibleForBranch(authorization, device.branchId);
+
+      const actingStaff = await ctx.db.restaurantStaffProfile.findUnique({
+        where: { id: actingStaffProfileId },
+        select: { id: true, displayName: true },
+      });
+      if (!actingStaff) denyStaffBranchAccess();
+
+      const candidates = await ctx.db.restaurantStaffProfile.findMany({
+        where: {
+          id: { not: actingStaffProfileId },
+          status: 'ACTIVE',
+          OR: [
+            { primaryBranchId: device.branchId },
+            { jobRoles: { some: { branchId: device.branchId } } },
+            { directCapabilityGrants: { some: { branchId: device.branchId } } },
+          ],
+        },
+        select: { id: true, displayName: true },
+        orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+      });
+      const eligibility = await Promise.all(
+        candidates.map(async (profile) => ({
+          profile,
+          eligible: await staffHasCapability(ctx.db, profile.id, device.branchId, 'devices:manage'),
+        }))
+      );
+
+      return {
+        actingStaff,
+        approvers: eligibility.filter(({ eligible }) => eligible).map(({ profile }) => profile),
+      };
+    }),
+
   /** Enroll a device to a branch; returns the one-time enrollment secret. */
   initiateEnrollment: manageDevicesProcedure
     .input(
