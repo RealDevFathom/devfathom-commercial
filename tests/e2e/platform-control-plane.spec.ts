@@ -13,7 +13,7 @@ test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1440, height: 900 } });
 test.skip(
   !controlPlaneEnvironmentAvailable(),
-  'Requires a fresh test/e2e PostgreSQL database, restricted DATABASE_URL, admin setup URL, and seeded platform admin.'
+  'Requires a fresh test/e2e PostgreSQL database, restricted DATABASE_URL, admin setup URL, and seeded platform admin email/password.'
 );
 
 const routes = [
@@ -320,6 +320,11 @@ test('compact navigation preserves keyboard focus and has no hydration/request e
   await close.focus();
   await expect(close).toBeFocused();
   await page.keyboard.press('Enter');
+  await expect(page.getByRole('complementary', { name: 'Platform navigation' })).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('complementary', { name: 'Platform navigation' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('complementary', { name: 'Platform navigation' })).toHaveCount(0);
   await expect(trigger).toBeFocused();
   expect(failures).toEqual([]);
