@@ -174,7 +174,12 @@ async function mockKds(page: Page, response: typeof queue | { error: string }, s
         {
           sessionToken: 'kds-session-token',
           session: { id: 'kds-session-1', state: 'LOCKED' },
-          device: { id: 'kds-device-1', name: 'Expo display', branchName: 'Gulberg Café' },
+          device: {
+            id: 'kds-device-1',
+            name: 'Expo display',
+            branchName: 'Gulberg Café',
+            kind: 'KDS',
+          },
         },
         201
       );
@@ -286,8 +291,9 @@ test.beforeAll(async () => mkdir(OUTPUT, { recursive: true }));
 
 test('POS and KDS default, labels, disabled controls, focus, and axe WCAG 2.2 AA', async ({
   browser,
+  baseURL,
 }) => {
-  const posContext = await browser.newContext();
+  const posContext = await browser.newContext({ baseURL });
   await installSeededTerminalCookie(posContext, fixture.pos);
   const pos = await posContext.newPage();
   await mockPos(pos);
@@ -298,7 +304,7 @@ test('POS and KDS default, labels, disabled controls, focus, and axe WCAG 2.2 AA
   await expect(pos.locator(':focus')).toBeVisible();
   await assertAxe(pos);
 
-  const kdsContext = await browser.newContext();
+  const kdsContext = await browser.newContext({ baseURL });
   await installSeededTerminalCookie(kdsContext, fixture.kds);
   const kds = await kdsContext.newPage();
   await mockKds(kds, queue);

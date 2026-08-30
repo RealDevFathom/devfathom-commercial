@@ -36,6 +36,7 @@ test.describe('restaurant browser resilience', () => {
   test('KDS keeps stale state offline, reconnects, and refreshes server 86 availability', async ({
     page,
     browser,
+    baseURL,
   }) => {
     await connectKds(page);
     await expect(page.getByText(/Last synced/)).toBeVisible();
@@ -48,7 +49,7 @@ test.describe('restaurant browser resilience', () => {
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await expect(page.getByText(/Last synced/)).toBeVisible();
 
-    const posContext = await browser.newContext();
+    const posContext = await browser.newContext({ baseURL });
     const pos = await posContext.newPage();
     await pos.route('**/api/restaurant/orders/effective-menu?**', async (route) => {
       const response = await route.fetch();
@@ -79,8 +80,9 @@ test.describe('restaurant browser resilience', () => {
   test('a dropped KDS mutation retries with the same idempotency key exactly once', async ({
     page,
     browser,
+    baseURL,
   }) => {
-    const posContext = await browser.newContext();
+    const posContext = await browser.newContext({ baseURL });
     const pos = await posContext.newPage();
     await createAndFireOrder(pos);
     await posContext.close();

@@ -41,6 +41,7 @@ test.describe('restaurant POS and KDS core flow', () => {
   test('shift, order, KOT, KDS, split tender, drawer and close ledgers reconcile', async ({
     page,
     browser,
+    baseURL,
     request,
   }) => {
     test.slow();
@@ -117,7 +118,7 @@ test.describe('restaurant POS and KDS core flow', () => {
     const orderButton = page.getByRole('button', { name: /#\d+ · 2 items/ });
     const orderNumber = String(opened.orderNumber);
 
-    const kdsContext = await browser.newContext();
+    const kdsContext = await browser.newContext({ baseURL });
     await installSeededTerminalCookie(kdsContext, fixture.kds);
     const kdsPage = await kdsContext.newPage();
     await kdsPage.goto('/kds');
