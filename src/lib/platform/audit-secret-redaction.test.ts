@@ -16,12 +16,10 @@
  * DATABASE_URL). Without it the suite reports itself skipped rather than
  * passing vacuously.
  *
- * DELIBERATELY DOES NOT CALL `assertRlsEnforcingRole` (#39). Nothing here is
- * decided by row level security: there is one organization, every read goes
- * through `withPlatformDb`, which sets `app.is_platform_admin` ON PURPOSE, and
- * every assertion is scoped by a per-run random suffix, so wider visibility
- * cannot reach the rows being asserted on. Guarding this file would reject a
- * superuser database on which it is perfectly valid.
+ * The failure-path assertions depend on a transaction rollback followed by a
+ * separate durable write. The suite therefore refuses a SUPERUSER/BYPASSRLS
+ * runtime role instead of allowing privileged test behavior to stand in for
+ * the production boundary.
  */
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -62,6 +60,7 @@ type Deps = {
   executePlatformCommand: (typeof import('./commands'))['executePlatformCommand'];
   auditProjection: (typeof import('./commands'))['auditProjection'];
   decryptSecret: (typeof import('@/lib/secret-crypto'))['decryptSecret'];
+  assertRlsEnforcingRole: (typeof import('@/lib/testing/rls-role-guard'))['assertRlsEnforcingRole'];
 };
 
 let deps: Deps;
@@ -119,7 +118,10 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
       executePlatformCommand: commands.executePlatformCommand,
       auditProjection: commands.auditProjection,
       decryptSecret: (await import('@/lib/secret-crypto')).decryptSecret,
+      assertRlsEnforcingRole: (await import('@/lib/testing/rls-role-guard')).assertRlsEnforcingRole,
     };
+
+    await deps.assertRlsEnforcingRole(deps.withPlatformDb);
 
     await deps.withPlatformDb((db) =>
       db.organization.create({
@@ -264,7 +266,7 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
     expect((plain!.after as { value: unknown }).value).toEqual({ retentionDays: 30 });
   });
 
-  it('leaks nothing when a command is denied or fails', async () => {
+  it('persists sanitized durable rows when a command is denied or fails', async () => {
     const auditRowsBefore = await deps.withPlatformDb((db) =>
       db.platformAuditLog.count({ where: { actorPlatformUserId: OPERATOR } })
     );
@@ -279,11 +281,28 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
       run('organization.scim.token', { organizationId: id('missing_org'), name: 'Orphan' })
     ).rejects.toThrow();
 
+    const failures = await deps.withPlatformDb((db) =>
+      db.platformAuditLog.findMany({
+        where: {
+          actorPlatformUserId: OPERATOR,
+          action: 'organization.scim.token',
+          success: false,
+        },
+        orderBy: { createdAt: 'asc' },
+      })
+    );
+    expect(failures).toHaveLength(2);
     expect(
       await deps.withPlatformDb((db) =>
         db.platformAuditLog.count({ where: { actorPlatformUserId: OPERATOR } })
       )
-    ).toBe(auditRowsBefore);
+    ).toBe(auditRowsBefore + 2);
+    expect(failures.map((row) => row.metadata)).toEqual([
+      { outcomeCategory: 'capability_denied' },
+      { outcomeCategory: 'command_failed' },
+    ]);
+    expect(JSON.stringify(failures)).not.toContain('Denied');
+    expect(JSON.stringify(failures)).not.toContain('Orphan');
     // Neither attempt left a credential behind either.
     expect(
       await deps.withPlatformDb((db) =>
