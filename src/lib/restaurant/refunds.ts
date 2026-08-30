@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -13,7 +15,19 @@ import {
   type MoneyActor,
 } from './drawer-sessions';
 import { reverseLoyaltyForRefund } from './loyalty';
-import { add, allocate, compare, equals, isNegative, isZero, money, roundMoney, sub, sum, ZERO } from './money';
+import {
+  add,
+  allocate,
+  compare,
+  equals,
+  isNegative,
+  isZero,
+  money,
+  roundMoney,
+  sub,
+  sum,
+  ZERO,
+} from './money';
 import {
   appendPaymentEvent,
   getPaymentProvider,
@@ -75,6 +89,8 @@ export type RefundTenderInput = {
   /** Defaults to REFUND. VOID_REVERSAL is only valid for a same-day FULL reversal. */
   kind?: RefundKind;
   reason: string;
+  /** Authenticated device branch; direct engine callers fall back to actor device lookup. */
+  branchId?: string;
   /** The manager co-authorizing the refund (must differ from the actor, C6). */
   approvingStaffProfileId: string;
   actor: MoneyActor;
@@ -133,9 +149,6 @@ export async function refundTender(
   const at = input.now ?? new Date();
   const kind: RefundKind = input.kind ?? 'REFUND';
   return runMoneyTransaction(db, async (tx) => {
-    const idem = await beginMoneyIdempotent(tx, input.actor, `refund.${kind.toLowerCase()}`);
-    if (idem.replay) return replayRefundResult(tx, idem.resultRef);
-
     const reason = requireReason(input.reason);
     const amount = money(input.amount);
     if (isZero(amount) || isNegative(amount)) {
@@ -147,7 +160,24 @@ export async function refundTender(
       throw new RefundError('A tip refund must not be negative.', 'INVALID_AMOUNT');
     }
 
-    const tender = await loadTender(tx, input.originalTenderId);
+    // This branch-scoped read MUST precede the idempotency-key insert and every other
+    // side effect. A tenant-known tender from another branch is the same 404 as an
+    // unknown tender and cannot burn a key or write co-auth/payment/drawer rows.
+    const branchId = await loadActorBranch(tx, input.actor.deviceId, input.branchId);
+    const tender = await loadTender(tx, input.originalTenderId, branchId);
+    const canonicalBytes = JSON.stringify({
+      originalTenderId: tender.id,
+      amount: amount.toString(),
+      tipRefundAmount: tipRefundAmount.toString(),
+      kind,
+      reason,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+    });
+    const idem = await beginMoneyIdempotent(tx, input.actor, `refund.${kind.toLowerCase()}`, {
+      bytes: canonicalBytes,
+      hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),
+    });
+    if (idem.replay) return replayRefundResult(tx, idem.resultRef, idem.resultPayload);
 
     // Serialize concurrent refunds against this bill so Σ(refunds) cannot overshoot
     // the tender (the bill row carries a full RLS policy, so FOR UPDATE is valid).
@@ -181,10 +211,12 @@ export async function refundTender(
     const tenderIndex = tender.bill.tenders.findIndex((row) => row.id === tender.id);
     const tenderServiceTotal = serviceShares[tenderIndex] ?? ZERO;
     const priorServiceRefund = money(
-      (await tx.restaurantRefund.aggregate({
-        where: { originalTenderId: tender.id },
-        _sum: { serviceChargeRefundAmount: true },
-      }))._sum.serviceChargeRefundAmount ?? ZERO
+      (
+        await tx.restaurantRefund.aggregate({
+          where: { originalTenderId: tender.id },
+          _sum: { serviceChargeRefundAmount: true },
+        })
+      )._sum.serviceChargeRefundAmount ?? ZERO
     );
     const cumulativePrincipal = add(refundedSoFar, amount);
     const cumulativeService = equals(cumulativePrincipal, tender.amount)
@@ -204,9 +236,7 @@ export async function refundTender(
         refundAllocations: { select: { cents: true } },
       },
     });
-    const originalTaxCents = frozenTaxAllocations.map((allocation) =>
-      Number(allocation.cents)
-    );
+    const originalTaxCents = frozenTaxAllocations.map((allocation) => Number(allocation.cents));
     const tenderTaxTotal = originalTaxCents.reduce((total, cents) => total + cents, 0);
     const cumulativeTaxCents = equals(cumulativePrincipal, tender.amount)
       ? tenderTaxTotal
@@ -216,7 +246,9 @@ export async function refundTender(
           .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP)
           .toNumber();
     const cumulativeTaxShares =
-      tenderTaxTotal === 0 ? [] : allocate(new Prisma.Decimal(cumulativeTaxCents).div(100), originalTaxCents);
+      tenderTaxTotal === 0
+        ? []
+        : allocate(new Prisma.Decimal(cumulativeTaxCents).div(100), originalTaxCents);
     const taxRefundRows = frozenTaxAllocations.map((allocation, index) => {
       const already = sum(allocation.refundAllocations.map((row) => row.cents.toString()));
       const cumulative = cumulativeTaxShares[index]?.mul(100) ?? ZERO;
@@ -265,7 +297,9 @@ export async function refundTender(
 
     // Resolve the channel-specific attachment (open cash drawer / card payment).
     const drawerSessionId =
-      tender.type === 'CASH' ? await requireOpenDrawer(tx, input.actor) : null;
+      tender.type === 'CASH'
+        ? await requireOpenDrawer(tx, input.actor, branchId, businessDate)
+        : null;
     const paymentId = tender.type === 'CARD' ? tender.paymentId : null;
     if (tender.type === 'CARD' && !paymentId) {
       throw new RefundError('The card tender has no payment to refund.', 'PAYMENT_NOT_FOUND');
@@ -335,8 +369,7 @@ export async function refundTender(
       });
     }
 
-    await recordMoneyResult(tx, input.actor, refund.id);
-    return {
+    const result: RefundTenderResult = {
       refundId: refund.id,
       originalTenderId: tender.id,
       billId: tender.billId,
@@ -351,12 +384,29 @@ export async function refundTender(
       paymentStatus,
       replayed: false,
     };
+    await recordMoneyResult(tx, input.actor, refund.id, freezeRefundResult(result));
+    return result;
   });
 }
 
-async function loadTender(tx: ScopedDb, tenderId: string): Promise<LoadedTender> {
-  const tender = await tx.restaurantTender.findUnique({
-    where: { id: tenderId },
+async function loadActorBranch(
+  tx: ScopedDb,
+  deviceId: string,
+  expectedBranchId?: string
+): Promise<string> {
+  const device = await tx.restaurantRegisteredDevice.findFirst({
+    where: { id: deviceId, ...(expectedBranchId ? { branchId: expectedBranchId } : {}) },
+    select: { branchId: true },
+  });
+  if (!device) {
+    throw new RefundError('The original tender does not exist.', 'TENDER_NOT_FOUND');
+  }
+  return device.branchId;
+}
+
+async function loadTender(tx: ScopedDb, tenderId: string, branchId: string): Promise<LoadedTender> {
+  const tender = await tx.restaurantTender.findFirst({
+    where: { id: tenderId, bill: { branchId } },
     select: {
       id: true,
       type: true,
@@ -383,9 +433,14 @@ async function loadTender(tx: ScopedDb, tenderId: string): Promise<LoadedTender>
   return tender as LoadedTender;
 }
 
-async function requireOpenDrawer(tx: ScopedDb, actor: MoneyActor): Promise<string> {
+async function requireOpenDrawer(
+  tx: ScopedDb,
+  actor: MoneyActor,
+  branchId: string,
+  businessDate: Date
+): Promise<string> {
   const drawer = await tx.restaurantDrawerSession.findFirst({
-    where: { deviceId: actor.deviceId, status: 'OPEN' },
+    where: { deviceId: actor.deviceId, branchId, businessDate, status: 'OPEN' },
     select: { id: true },
   });
   if (!drawer) {
@@ -455,8 +510,11 @@ async function applyCardRefund(
 
 async function replayRefundResult(
   tx: ScopedDb,
-  resultRef: string | null
+  resultRef: string | null,
+  resultPayload?: Prisma.JsonValue | null
 ): Promise<RefundTenderResult> {
+  const frozen = thawRefundResult(resultPayload);
+  if (frozen) return { ...frozen, replayed: true };
   if (!resultRef) {
     throw new RefundError('The idempotent result reference is missing.', 'INVALID');
   }
@@ -493,6 +551,71 @@ async function replayRefundResult(
     paymentId: refund.paymentId,
     drawerSessionId: refund.drawerSessionId,
     paymentStatus: (refund.payment?.status as PaymentStatus | undefined) ?? null,
+    replayed: true,
+  };
+}
+
+type FrozenRefundResult = {
+  refundId: string;
+  originalTenderId: string;
+  billId: string;
+  kind: RefundKind;
+  amount: string;
+  tipRefundAmount: string;
+  serviceChargeRefundAmount: string;
+  taxRefundAmount: string;
+  businessDate: string;
+  paymentId: string | null;
+  drawerSessionId: string | null;
+  paymentStatus: PaymentStatus | null;
+};
+
+function freezeRefundResult(result: RefundTenderResult): Prisma.InputJsonValue {
+  return {
+    refundId: result.refundId,
+    originalTenderId: result.originalTenderId,
+    billId: result.billId,
+    kind: result.kind,
+    amount: result.amount.toString(),
+    tipRefundAmount: result.tipRefundAmount.toString(),
+    serviceChargeRefundAmount: result.serviceChargeRefundAmount.toString(),
+    taxRefundAmount: result.taxRefundAmount.toString(),
+    businessDate: result.businessDate.toISOString(),
+    paymentId: result.paymentId,
+    drawerSessionId: result.drawerSessionId,
+    paymentStatus: result.paymentStatus,
+  } satisfies FrozenRefundResult;
+}
+
+function thawRefundResult(payload: Prisma.JsonValue | null | undefined): RefundTenderResult | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const row = payload as Partial<FrozenRefundResult>;
+  if (
+    typeof row.refundId !== 'string' ||
+    typeof row.originalTenderId !== 'string' ||
+    typeof row.billId !== 'string' ||
+    (row.kind !== 'REFUND' && row.kind !== 'VOID_REVERSAL') ||
+    typeof row.amount !== 'string' ||
+    typeof row.tipRefundAmount !== 'string' ||
+    typeof row.serviceChargeRefundAmount !== 'string' ||
+    typeof row.taxRefundAmount !== 'string' ||
+    typeof row.businessDate !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    refundId: row.refundId,
+    originalTenderId: row.originalTenderId,
+    billId: row.billId,
+    kind: row.kind,
+    amount: money(row.amount),
+    tipRefundAmount: money(row.tipRefundAmount),
+    serviceChargeRefundAmount: money(row.serviceChargeRefundAmount),
+    taxRefundAmount: money(row.taxRefundAmount),
+    businessDate: new Date(row.businessDate),
+    paymentId: row.paymentId ?? null,
+    drawerSessionId: row.drawerSessionId ?? null,
+    paymentStatus: row.paymentStatus ?? null,
     replayed: true,
   };
 }

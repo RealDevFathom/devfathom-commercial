@@ -155,7 +155,7 @@ export const refundBody = z
     amount: MONEY,
     tipRefundAmount: MONEY.optional(),
     kind: z.enum(['REFUND', 'VOID_REVERSAL']).optional(),
-    reason: z.string().min(1),
+    reason: z.string().trim().min(1).max(240),
     approving: APPROVING,
   })
   .strict();

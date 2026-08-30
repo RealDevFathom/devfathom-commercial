@@ -24,13 +24,16 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha58r_${suffix}`;
+const otherOrgId = `org_wha892_other_${suffix}`;
 const ids = {
   branch: `branch_${suffix}`,
+  branchTwo: `branch_two_${suffix}`,
   customer: `customer_${suffix}`,
   loyaltyAccount: `loyalty_account_${suffix}`,
   loyaltyProgram: `loyalty_program_${suffix}`,
   operator: `staff_op_${suffix}`,
   manager: `staff_mgr_${suffix}`,
+  managerTwo: `staff_mgr_two_${suffix}`,
   category: `cat_${suffix}`,
   product: `prod_${suffix}`,
   brand: `brand_${suffix}`,
@@ -40,8 +43,10 @@ const ids = {
   priceList: `pl_${suffix}`,
   priceVersion: `plv_${suffix}`,
   publication: `pub_${suffix}`,
+  publicationTwo: `pub_two_${suffix}`,
   taxSource: `tax_source_${suffix}`,
   taxProfile: `tax_profile_${suffix}`,
+  taxProfileTwo: `tax_profile_two_${suffix}`,
 };
 const AT = new Date('2026-08-19T18:00:00.000Z');
 const NEXT_DAY = new Date('2026-08-20T18:00:00.000Z');
@@ -60,6 +65,7 @@ type Deps = {
 
 let deps: Deps;
 let deviceId: string;
+let branchTwoDeviceId: string;
 let keyCounter = 0;
 const key = () => `key_${suffix}_${++keyCounter}`;
 const actor = (device = deviceId, idempotencyKey = key()) => ({
@@ -101,6 +107,36 @@ async function openBill(count: number): Promise<string> {
     actor: actor(),
   });
   return cut.billIds[0]!;
+}
+
+async function cardTenderAtBranchTwo(): Promise<{ billId: string; tenderId: string }> {
+  const db = deps.createTenantDb(orgId);
+  const opened = await deps.orders.openOrder(db, {
+    branchId: ids.branchTwo,
+    channel: 'DINE_IN',
+    publicationId: ids.publicationTwo,
+    actor: actor(branchTwoDeviceId),
+    now: AT,
+  });
+  await deps.orders.addItem(db, {
+    orderId: opened.orderId,
+    menuItemId: ids.menuItem,
+    actor: actor(branchTwoDeviceId),
+  });
+  const cut = await deps.bills.cutBills(db, {
+    orderId: opened.orderId,
+    split: { kind: 'NONE' },
+    actor: actor(branchTwoDeviceId),
+  });
+  const billId = cut.billIds[0]!;
+  const tender = await deps.tenders.applyTender(db, {
+    billId,
+    // 12.50 merchandise + 1.25 exclusive tax + 1.25 non-taxable service charge.
+    tender: { type: 'CARD', amount: '15.00' },
+    actor: actor(branchTwoDeviceId),
+    now: AT,
+  });
+  return { billId, tenderId: tender.tenderId };
 }
 
 /** Settle a single-item (12.50) bill with a card tender and return the tender id. */
@@ -161,14 +197,41 @@ beforeAll(async () => {
     refunds,
   };
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  const role = await deps.withPlatformDb(
+    (tx) =>
+      tx.$queryRaw<Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>>`
+      SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user
+    `
+  );
+  expect(role[0]).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.createMany({
+      data: [
+        {
+          id: orgId,
+          slug: `wha58r-${suffix}`,
+          legalName: 'Refunds Test Co',
+          displayName: 'Refunds Test',
+          status: 'ACTIVE',
+        },
+        {
+          id: otherOrgId,
+          slug: `wha892-other-${suffix}`,
+          legalName: 'Other Refunds Co',
+          displayName: 'Other Refunds',
+          status: 'ACTIVE',
+        },
+      ],
+    });
+  });
+  await deps.withTenantDb(otherOrgId, (tx) =>
+    tx.restaurantBranch.create({
       data: {
-        id: orgId,
-        slug: `wha58r-${suffix}`,
-        legalName: 'Refunds Test Co',
-        displayName: 'Refunds Test',
-        status: 'ACTIVE',
+        id: `other_branch_${suffix}`,
+        name: 'Other org',
+        timezone: 'UTC',
+        businessDayCutoff: '00:00',
       },
     })
   );
@@ -176,6 +239,9 @@ beforeAll(async () => {
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Main', timezone: 'UTC', businessDayCutoff: '00:00' },
+    });
+    await tx.restaurantBranch.create({
+      data: { id: ids.branchTwo, name: 'Annex', timezone: 'UTC', businessDayCutoff: '00:00' },
     });
     await tx.restaurantTaxOfficialSource.create({
       data: {
@@ -214,11 +280,40 @@ beforeAll(async () => {
         },
       },
     });
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        id: ids.taxProfileTwo,
+        branchId: ids.branchTwo,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+        approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+        publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+        rules: {
+          create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+            officialSourceId: ids.taxSource,
+            ruleCode: `SYNTHETIC_TEN_PERCENT_${paymentCategory}`,
+            paymentCategory,
+            priceMode: 'EXCLUSIVE' as const,
+            rate: '0.100000',
+            status: 'PUBLISHED' as const,
+            effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+            approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+            approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+            publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          })),
+        },
+      },
+    });
     await tx.restaurantStaffProfile.create({
       data: { id: ids.operator, displayName: 'Operator', status: 'ACTIVE' },
     });
     await tx.restaurantStaffProfile.create({
       data: { id: ids.manager, displayName: 'Manager', status: 'ACTIVE' },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: { id: ids.managerTwo, displayName: 'Manager Two', status: 'ACTIVE' },
     });
     await tx.restaurantCustomer.create({ data: { id: ids.customer, displayName: 'Loyal Guest' } });
     await tx.loyaltyAccount.create({
@@ -235,6 +330,11 @@ beforeAll(async () => {
     });
     const enrolled = await deps.enrollDevice(tx, { branchId: ids.branch, name: 'POS-1' });
     deviceId = enrolled.device.id;
+    const branchTwoDevice = await deps.enrollDevice(tx, {
+      branchId: ids.branchTwo,
+      name: 'POS-2',
+    });
+    branchTwoDeviceId = branchTwoDevice.device.id;
 
     await tx.restaurantCategory.create({ data: { id: ids.category, name: 'Mains' } });
     await tx.restaurantProduct.create({
@@ -276,6 +376,27 @@ beforeAll(async () => {
         priceListId: ids.priceList,
         status: 'PUBLISHED',
         channels: [],
+      },
+    });
+    await tx.restaurantBranchMenuPublication.create({
+      data: {
+        id: ids.publicationTwo,
+        branchId: ids.branchTwo,
+        menuId: ids.menu,
+        priceListId: ids.priceList,
+        status: 'PUBLISHED',
+        channels: [],
+      },
+    });
+    await tx.restaurantServiceChargePolicyVersion.create({
+      data: {
+        branchId: ids.branchTwo,
+        rate: '0.100000',
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        acknowledgedAt: new Date('2026-08-01T00:00:00.000Z'),
+        acknowledgementRef: 'SYNTHETIC_SERVICE_ACK',
+        idempotencyKey: `service_${suffix}`,
+        payloadHash: `synthetic-service-${suffix}`,
       },
     });
   });
@@ -538,5 +659,121 @@ describeIfDatabase('refund idempotency (real DB)', () => {
       tx.restaurantRefund.count({ where: { originalTenderId: tenderId } })
     );
     expect(count).toBe(1);
+  });
+
+  it('conflicts when the same key changes only the selected manager', async () => {
+    const { tenderId } = await cardTender();
+    const reuse = actor();
+    await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '5.00',
+      reason: 'manager-bound return',
+      approvingStaffProfileId: ids.manager,
+      actor: reuse,
+      now: AT,
+    });
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tenderId,
+        amount: '5.00',
+        reason: 'manager-bound return',
+        approvingStaffProfileId: ids.managerTwo,
+        actor: reuse,
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
+    expect(
+      await read((tx) => tx.restaurantRefund.count({ where: { originalTenderId: tenderId } }))
+    ).toBe(1);
+  });
+});
+
+describeIfDatabase('WHA-892 branch and allocation integrity (restricted real DB)', () => {
+  it('makes a same-tenant cross-branch tender indistinguishable from missing and writes zero rows', async () => {
+    const { tenderId } = await cardTenderAtBranchTwo();
+    const before = await read(async (tx) => ({
+      refunds: await tx.restaurantRefund.count(),
+      coAuthorizations: await tx.restaurantCoAuthorization.count(),
+      paymentEvents: await tx.restaurantPaymentEvent.count(),
+      drawerMovements: await tx.restaurantDrawerMovement.count(),
+      idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+    }));
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tenderId,
+        amount: '1.00',
+        reason: 'must not cross branch',
+        branchId: ids.branch,
+        approvingStaffProfileId: ids.manager,
+        actor: actor(deviceId),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'TENDER_NOT_FOUND' });
+    const after = await read(async (tx) => ({
+      refunds: await tx.restaurantRefund.count(),
+      coAuthorizations: await tx.restaurantCoAuthorization.count(),
+      paymentEvents: await tx.restaurantPaymentEvent.count(),
+      drawerMovements: await tx.restaurantDrawerMovement.count(),
+      idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+    }));
+    expect(after).toEqual(before);
+  });
+
+  it('records and replays actual non-null server-authored service and tax allocations', async () => {
+    const { tenderId } = await cardTenderAtBranchTwo();
+    const reuse = actor(branchTwoDeviceId);
+    const first = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '5.00',
+      reason: 'allocated return',
+      branchId: ids.branchTwo,
+      approvingStaffProfileId: ids.manager,
+      actor: reuse,
+      now: AT,
+    });
+    expect(first.serviceChargeRefundAmount.toNumber()).toBeGreaterThan(0);
+    expect(first.taxRefundAmount.toNumber()).toBeGreaterThan(0);
+    const persisted = await read((tx) =>
+      tx.restaurantRefund.findUniqueOrThrow({ where: { id: first.refundId } })
+    );
+    expect(first.serviceChargeRefundAmount.toString()).toBe(
+      persisted.serviceChargeRefundAmount.toString()
+    );
+    expect(first.taxRefundAmount.toString()).toBe(persisted.taxRefundAmount.toString());
+
+    const replay = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '5.0',
+      reason: '  allocated return  ',
+      branchId: ids.branchTwo,
+      approvingStaffProfileId: ids.manager,
+      actor: reuse,
+      now: NEXT_DAY,
+    });
+    expect(replay).toMatchObject({ refundId: first.refundId, replayed: true });
+    expect(replay.businessDate).toEqual(first.businessDate);
+    expect(replay.paymentStatus).toBe(first.paymentStatus);
+  });
+
+  it('denies cash when only a wrong-device drawer exists or the business date changed', async () => {
+    const refundDevice = await newDevice('POS-refund-drawer-date');
+    const otherDevice = await newDevice('POS-other-open-drawer');
+    await openDrawer(refundDevice);
+    await openDrawer(otherDevice);
+    const { tenderId } = await cashTender(refundDevice);
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tenderId,
+        amount: '1.00',
+        reason: 'next date drawer mismatch',
+        branchId: ids.branch,
+        approvingStaffProfileId: ids.manager,
+        actor: actor(refundDevice),
+        now: NEXT_DAY,
+      })
+    ).rejects.toMatchObject({ reason: 'DRAWER_NOT_OPEN' });
+    expect(
+      await read((tx) => tx.restaurantRefund.count({ where: { originalTenderId: tenderId } }))
+    ).toBe(0);
   });
 });
