@@ -47,7 +47,7 @@ import { RestaurantBranchSelect } from './restaurant-branch-select';
  */
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
-type Shift = RouterOutputs['restaurantShifts']['list'][number];
+type Shift = RouterOutputs['restaurantShifts']['managerRoster'][number];
 type StaffProfile = RouterOutputs['restaurantStaff']['list'][number];
 type UiError = { message: string; data?: { code?: string } | null };
 
@@ -56,7 +56,12 @@ const labelClass =
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
 const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' });
-const timeFormat = new Intl.DateTimeFormat('en', { timeStyle: 'short' });
+
+function formatBranchTime(value: Date | string, timezone: string): string {
+  return new Intl.DateTimeFormat('en', { timeStyle: 'short', timeZone: timezone }).format(
+    new Date(value)
+  );
+}
 
 function isPermissionError(error?: UiError | null) {
   return error?.data?.code === 'FORBIDDEN' || error?.data?.code === 'UNAUTHORIZED';
@@ -84,6 +89,21 @@ function toLocalInputValue(value: Date | string): string {
   )}:${pad(date.getMinutes())}`;
 }
 
+function commandKey(kind: string, shiftId: string) {
+  return `${kind}:${shiftId}:${crypto.randomUUID()}`;
+}
+
+function triggerCsvDownload(file: { filename: string; csv: string }) {
+  const url = URL.createObjectURL(new Blob([file.csv], { type: 'text/csv;charset=utf-8' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = file.filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function RosterSkeleton() {
   return (
     <div role="status" aria-label="Loading roster" className="space-y-3 py-2">
@@ -96,25 +116,30 @@ function RosterSkeleton() {
 
 export function RestaurantRosterConsole() {
   const entitlements = useEntitlements();
-  const restaurantModule = entitlements.modules.find((module) => module.key === 'restaurant-core');
-  const restaurantEnabled =
-    restaurantModule?.enabled ?? entitlements.enabledModules.includes('restaurant-core');
+  const workforceModule = entitlements.modules.find(
+    (module) => module.key === 'restaurant-workforce'
+  );
+  const workforceEnabled =
+    workforceModule?.enabled ?? entitlements.enabledModules.includes('restaurant-workforce');
   const utils = trpc.useUtils();
 
   const [branchId, setBranchId] = useState('');
   const [fromDate, setFromDate] = useState(() => isoDay(0));
   const [toDate, setToDate] = useState(() => isoDay(6));
-  const [includeCancelled, setIncludeCancelled] = useState(false);
+  const [includeCancelled, setIncludeCancelled] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Shift | null>(null);
   const [cancelling, setCancelling] = useState<Shift | null>(null);
+  const [correcting, setCorrecting] = useState<Shift | null>(null);
+  const [replacementByShift, setReplacementByShift] = useState<Record<string, string>>({});
+  const [exporting, setExporting] = useState(false);
 
   const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
-    enabled: restaurantEnabled,
+    enabled: workforceEnabled,
   });
 
   const normalizedBranchId = branchId.trim();
-  const branchReady = restaurantEnabled && normalizedBranchId.length > 0;
+  const branchReady = workforceEnabled && normalizedBranchId.length > 0;
   const rosterInput = {
     branchId: normalizedBranchId,
     fromBusinessDate: fromDate,
@@ -122,13 +147,28 @@ export function RestaurantRosterConsole() {
     includeCancelled,
   };
 
-  const rosterQuery = trpc.restaurantShifts.list.useQuery(rosterInput, { enabled: branchReady });
+  const rosterQuery = trpc.restaurantShifts.managerRoster.useQuery(rosterInput, {
+    enabled: branchReady,
+  });
   const staffQuery = trpc.restaurantStaff.list.useQuery(
     { branchId: normalizedBranchId, status: 'ACTIVE' },
     { enabled: branchReady }
   );
+  const myRosterQuery = trpc.restaurantShifts.myRoster.useQuery(
+    {
+      from: new Date(`${fromDate}T00:00:00`),
+      to: new Date(`${toDate}T23:59:59.999`),
+    },
+    { enabled: workforceEnabled }
+  );
+  const swapCandidatesQuery = trpc.restaurantShifts.swapCandidates.useQuery(undefined, {
+    enabled: workforceEnabled && Boolean(myRosterQuery.data?.actor),
+  });
 
-  const refreshRoster = () => void utils.restaurantShifts.list.invalidate(rosterInput);
+  const refreshRoster = () => {
+    void utils.restaurantShifts.managerRoster.invalidate(rosterInput);
+    void utils.restaurantShifts.myRoster.invalidate();
+  };
   const mutationFailure = (error: { message: string }) => toast.error(error.message);
 
   const createShift = trpc.restaurantShifts.create.useMutation({
@@ -152,6 +192,44 @@ export function RestaurantRosterConsole() {
       refreshRoster();
       setCancelling(null);
       toast.success('Shift cancelled.');
+    },
+    onError: mutationFailure,
+  });
+  const clockInMutation = trpc.restaurantShifts.clockIn.useMutation({
+    onSuccess: refreshRoster,
+    onError: mutationFailure,
+  });
+  const startBreakMutation = trpc.restaurantShifts.startBreak.useMutation({
+    onSuccess: refreshRoster,
+    onError: mutationFailure,
+  });
+  const endBreakMutation = trpc.restaurantShifts.endBreak.useMutation({
+    onSuccess: refreshRoster,
+    onError: mutationFailure,
+  });
+  const clockOutMutation = trpc.restaurantShifts.clockOut.useMutation({
+    onSuccess: refreshRoster,
+    onError: mutationFailure,
+  });
+  const requestSwapMutation = trpc.restaurantShifts.requestSwap.useMutation({
+    onSuccess: () => {
+      refreshRoster();
+      toast.success('Swap request sent for manager review.');
+    },
+    onError: mutationFailure,
+  });
+  const reviewSwapMutation = trpc.restaurantShifts.reviewSwap.useMutation({
+    onSuccess: () => {
+      refreshRoster();
+      toast.success('Swap decision recorded.');
+    },
+    onError: mutationFailure,
+  });
+  const correctTimeMutation = trpc.restaurantShifts.correctTime.useMutation({
+    onSuccess: () => {
+      refreshRoster();
+      setCorrecting(null);
+      toast.success('Time correction appended.');
     },
     onError: mutationFailure,
   });
@@ -204,12 +282,42 @@ export function RestaurantRosterConsole() {
     cancelShift.mutate({ id: cancelling.id, reason });
   };
 
+  const submitCorrection = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!correcting) return;
+    const data = new FormData(event.currentTarget);
+    correctTimeMutation.mutate({
+      shiftId: correcting.id,
+      branchId: correcting.branchId,
+      kind: formText(data, 'kind') as 'CLOCK_IN' | 'CLOCK_OUT',
+      correctedAt: new Date(formText(data, 'correctedAt')),
+      reason: formText(data, 'reason'),
+    });
+  };
+
+  const exportCsv = async () => {
+    if (!branchReady) return;
+    setExporting(true);
+    try {
+      const file = await utils.restaurantShifts.exportAttendanceCsv.fetch({
+        branchId: rosterInput.branchId,
+        fromBusinessDate: rosterInput.fromBusinessDate,
+        toBusinessDate: rosterInput.toBusinessDate,
+      });
+      triggerCsvDownload(file);
+    } catch (error) {
+      mutationFailure(error as { message: string });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Roster"
-        description="Schedule branch shifts, keep them free of overlaps, and control who can sign in at the terminal."
+        description="Publish branch shifts, record server-timestamped attendance, and resolve employee swap requests."
         actions={
           branchReady && !permissionDenied ? (
             <Button className="min-h-11" onClick={openCreate} disabled={staffOptions.length === 0}>
@@ -219,18 +327,170 @@ export function RestaurantRosterConsole() {
         }
       />
 
-      {!restaurantEnabled ? (
-        <SectionCard title="Restaurant module disabled">
+      {!workforceEnabled ? (
+        <SectionCard title="Restaurant Workforce disabled">
           <div className="space-y-3" role="status">
             <StatusPill status="Disabled" tone="warning" />
             <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
-              Shift scheduling is unavailable for this organization. Enable Restaurant Core to build
-              a roster.
+              Enable Restaurant Workforce to publish rosters, record attendance, and manage swaps.
             </p>
           </div>
         </SectionCard>
       ) : (
         <>
+          <SectionCard eyebrow="My shift" title="Employee timekeeping">
+            {myRosterQuery.isLoading ? (
+              <RosterSkeleton />
+            ) : myRosterQuery.error ? (
+              <p role="alert" className="text-sm text-text-muted">
+                {isPermissionError(myRosterQuery.error as UiError)
+                  ? 'An active staff profile is required for employee timekeeping.'
+                  : 'Your shifts could not be loaded. Try again.'}
+              </p>
+            ) : (myRosterQuery.data?.shifts.length ?? 0) === 0 ? (
+              <div className="rounded-md border border-dashed border-border-default px-5 py-8 text-center">
+                <p className="font-medium text-text-strong">No shifts in this date range.</p>
+                <p className="mt-1 text-sm text-text-muted">
+                  Your manager&rsquo;s published assignments will appear here by branch name.
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {myRosterQuery.data!.shifts.map((shift) => {
+                  const activeBreak = shift.breaks.find((row) => row.endedAt === null);
+                  const pendingSwap = shift.swapRequests.find((request) => !request.decision);
+                  const replacement = replacementByShift[shift.id] ?? '';
+                  return (
+                    <article
+                      key={shift.id}
+                      className="rounded-md border border-border-subtle bg-surface-sunken p-4"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-text-strong">
+                            {shift.branch.name} · {shift.role ?? 'Assigned shift'}
+                          </p>
+                          <p className="mt-1 text-sm tabular-nums text-text-muted">
+                            {dayFormat.format(new Date(shift.businessDate))},{' '}
+                            {formatBranchTime(shift.startAt, shift.branch.timezone)} –{' '}
+                            {formatBranchTime(shift.endAt, shift.branch.timezone)}{' '}
+                            <span className="font-mono text-[0.6875rem]">
+                              {shift.branch.timezone}
+                            </span>
+                          </p>
+                        </div>
+                        <StatusPill
+                          status={shift.attendanceStatus.replaceAll('_', ' ')}
+                          tone={shift.attendanceStatus === 'LATE' ? 'warning' : 'neutral'}
+                        />
+                      </div>
+                      {shift.attendanceStatus === 'LATE' ? (
+                        <p className="mt-2 text-xs text-text-muted">
+                          {shift.lateMinutes} minutes after the {shift.lateThresholdMinutes}-minute
+                          attendance threshold.
+                        </p>
+                      ) : null}
+                      <div className="mt-4 flex flex-wrap gap-2" aria-label="Timekeeping actions">
+                        {!shift.clockedInAt ? (
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              clockInMutation.mutate({
+                                shiftId: shift.id,
+                                idempotencyKey: commandKey('clock-in', shift.id),
+                              })
+                            }
+                            disabled={clockInMutation.isPending}
+                          >
+                            Clock in
+                          </Button>
+                        ) : !shift.clockedOutAt ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                (activeBreak ? endBreakMutation : startBreakMutation).mutate({
+                                  shiftId: shift.id,
+                                  idempotencyKey: commandKey(
+                                    activeBreak ? 'break-end' : 'break-start',
+                                    shift.id
+                                  ),
+                                })
+                              }
+                              disabled={startBreakMutation.isPending || endBreakMutation.isPending}
+                            >
+                              {activeBreak ? 'End break' : 'Start break'}
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                clockOutMutation.mutate({
+                                  shiftId: shift.id,
+                                  idempotencyKey: commandKey('clock-out', shift.id),
+                                })
+                              }
+                              disabled={Boolean(activeBreak) || clockOutMutation.isPending}
+                            >
+                              Clock out
+                            </Button>
+                          </>
+                        ) : (
+                          <span className="text-sm text-text-muted">Timekeeping complete.</span>
+                        )}
+                      </div>
+                      <div className="mt-4 border-t border-border-subtle pt-4">
+                        {pendingSwap ? (
+                          <p className="text-sm text-text-muted">
+                            Swap pending with {pendingSwap.replacement.displayName}.
+                          </p>
+                        ) : shift.status === 'SCHEDULED' && !shift.clockedInAt ? (
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <label className="min-w-0 flex-1">
+                              <span className={labelClass}>Replacement employee</span>
+                              <select
+                                className={selectClass}
+                                value={replacement}
+                                onChange={(event) =>
+                                  setReplacementByShift((current) => ({
+                                    ...current,
+                                    [shift.id]: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">Choose a colleague</option>
+                                {(swapCandidatesQuery.data ?? []).map((candidate) => (
+                                  <option key={candidate.id} value={candidate.id}>
+                                    {candidate.displayName}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <Button
+                              className="self-end"
+                              size="sm"
+                              variant="secondary"
+                              disabled={!replacement || requestSwapMutation.isPending}
+                              onClick={() =>
+                                requestSwapMutation.mutate({
+                                  shiftId: shift.id,
+                                  replacementStaffProfileId: replacement,
+                                  idempotencyKey: commandKey('swap', shift.id),
+                                })
+                              }
+                            >
+                              Request swap
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </SectionCard>
+
           <SectionCard eyebrow="Roster window" title="Branch and dates">
             <p className="mb-4 max-w-3xl text-sm leading-relaxed text-text-muted">
               Shifts are grouped by the branch&rsquo;s operating day, which the server stamps from
@@ -284,6 +544,19 @@ export function RestaurantRosterConsole() {
                 Show cancelled
               </label>
             </div>
+            {branchReady && !permissionDenied ? (
+              <div className="mt-4 flex justify-end border-t border-border-subtle pt-4">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={exporting}
+                  onClick={() => void exportCsv()}
+                >
+                  {exporting ? 'Preparing export…' : 'Export attendance CSV'}
+                </Button>
+              </div>
+            ) : null}
           </SectionCard>
 
           {permissionDenied ? (
@@ -337,28 +610,33 @@ export function RestaurantRosterConsole() {
                   </p>
                 </div>
               ) : (
-                <Table className="min-w-[900px]">
+                <Table className="min-w-[1120px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Operating day</TableHead>
                       <TableHead>Hours</TableHead>
                       <TableHead>Operator</TableHead>
                       <TableHead>Role</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead>Attendance</TableHead>
+                      <TableHead>Swap request</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {shifts.map((shift) => {
                       const cancelled = shift.status === 'CANCELLED';
+                      const pendingSwap = shift.swapRequests.find((request) => !request.decision);
                       return (
                         <TableRow key={shift.id}>
                           <TableCell className="font-medium text-text-strong">
                             {dayFormat.format(new Date(shift.businessDate))}
                           </TableCell>
                           <TableCell className="tabular-nums text-text-body">
-                            {timeFormat.format(new Date(shift.startAt))} –{' '}
-                            {timeFormat.format(new Date(shift.endAt))}
+                            {formatBranchTime(shift.startAt, shift.branch.timezone)} –{' '}
+                            {formatBranchTime(shift.endAt, shift.branch.timezone)}
+                            <span className="mt-1 block font-mono text-[0.625rem] text-text-muted">
+                              {shift.branch.timezone}
+                            </span>
                           </TableCell>
                           <TableCell>
                             <span className="block text-text-strong">
@@ -368,9 +646,21 @@ export function RestaurantRosterConsole() {
                           <TableCell className="text-text-muted">{shift.role ?? '—'}</TableCell>
                           <TableCell>
                             <StatusPill
-                              status={cancelled ? 'Cancelled' : 'Scheduled'}
-                              tone={cancelled ? 'danger' : 'success'}
+                              status={shift.attendanceStatus.replaceAll('_', ' ')}
+                              tone={
+                                cancelled
+                                  ? 'danger'
+                                  : shift.attendanceStatus === 'LATE' ||
+                                      shift.attendanceStatus === 'ABSENT'
+                                    ? 'warning'
+                                    : 'success'
+                              }
                             />
+                            {shift.lateMinutes > 0 ? (
+                              <span className="mt-1 block text-xs text-text-muted">
+                                {shift.lateMinutes} min late
+                              </span>
+                            ) : null}
                             {cancelled && shift.cancelReason ? (
                               <span className="mt-1 block text-xs text-text-muted">
                                 {shift.cancelReason}
@@ -378,7 +668,52 @@ export function RestaurantRosterConsole() {
                             ) : null}
                           </TableCell>
                           <TableCell>
-                            <div className="flex justify-end gap-2">
+                            {pendingSwap ? (
+                              <div className="space-y-2">
+                                <p className="text-sm text-text-body">
+                                  {pendingSwap.requestedBy.displayName} →{' '}
+                                  {pendingSwap.replacement.displayName}
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  <Button
+                                    size="sm"
+                                    aria-label={`Approve swap for ${pendingSwap.requestedBy.displayName}`}
+                                    onClick={() =>
+                                      reviewSwapMutation.mutate({
+                                        requestId: pendingSwap.id,
+                                        branchId: shift.branchId,
+                                        decision: 'APPROVED',
+                                        idempotencyKey: commandKey('swap-approve', shift.id),
+                                      })
+                                    }
+                                    disabled={reviewSwapMutation.isPending}
+                                  >
+                                    Approve
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    aria-label={`Reject swap for ${pendingSwap.requestedBy.displayName}`}
+                                    onClick={() =>
+                                      reviewSwapMutation.mutate({
+                                        requestId: pendingSwap.id,
+                                        branchId: shift.branchId,
+                                        decision: 'REJECTED',
+                                        idempotencyKey: commandKey('swap-reject', shift.id),
+                                      })
+                                    }
+                                    disabled={reviewSwapMutation.isPending}
+                                  >
+                                    Reject
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-text-muted">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap justify-end gap-2">
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -386,6 +721,14 @@ export function RestaurantRosterConsole() {
                                 onClick={() => openEdit(shift)}
                               >
                                 Edit
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={cancelled || (!shift.clockedInAt && !shift.clockedOutAt)}
+                                onClick={() => setCorrecting(shift)}
+                              >
+                                Correct time
                               </Button>
                               <Button
                                 variant="secondary"
@@ -509,6 +852,58 @@ export function RestaurantRosterConsole() {
               </Button>
               <Button type="submit" className="min-h-11" disabled={formPending}>
                 {formPending ? 'Saving…' : editing ? 'Save shift' : 'Schedule shift'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={correcting != null}
+        onOpenChange={(open) => {
+          if (!open && !correctTimeMutation.isPending) setCorrecting(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Append a time correction</DialogTitle>
+            <DialogDescription>
+              The original server timestamp remains unchanged. This adds a reasoned adjustment to
+              the permanent workforce history.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="space-y-4" onSubmit={submitCorrection}>
+            {correctTimeMutation.error ? (
+              <p role="alert" className="text-sm text-destructive">
+                {correctTimeMutation.error.message}
+              </p>
+            ) : null}
+            <label className="space-y-1.5">
+              <span className={labelClass}>Timestamp</span>
+              <select name="kind" className={selectClass} required>
+                {correcting?.clockedInAt ? <option value="CLOCK_IN">Clock in</option> : null}
+                {correcting?.clockedOutAt ? <option value="CLOCK_OUT">Clock out</option> : null}
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className={labelClass}>Corrected time</span>
+              <Input name="correctedAt" type="datetime-local" className="h-11" required />
+            </label>
+            <label className="space-y-1.5">
+              <span className={labelClass}>Reason</span>
+              <Input name="reason" maxLength={500} className="h-11" required />
+            </label>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={correctTimeMutation.isPending}
+                onClick={() => setCorrecting(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={correctTimeMutation.isPending}>
+                {correctTimeMutation.isPending ? 'Appending…' : 'Append correction'}
               </Button>
             </DialogFooter>
           </form>

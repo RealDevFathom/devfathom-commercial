@@ -28,8 +28,16 @@ const mocks = vi.hoisted(() => ({
     isLoading: false,
     refetch: vi.fn(),
   },
+  mine: {
+    data: { actor: { id: 'staff_1', displayName: 'Shift Lead' }, shifts: [] as unknown[] },
+    error: null as { message: string; data?: { code?: string } } | null,
+    isLoading: false,
+  },
   createMutate: vi.fn(),
   cancelMutate: vi.fn(),
+  clockInMutate: vi.fn(),
+  requestSwapMutate: vi.fn(),
+  reviewSwapMutate: vi.fn(),
   noop: vi.fn(),
   invalidate: vi.fn(),
 }));
@@ -37,9 +45,23 @@ const mocks = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ restaurantShifts: { list: { invalidate: mocks.invalidate } } }),
+    useUtils: () => ({
+      restaurantShifts: {
+        managerRoster: { invalidate: mocks.invalidate },
+        myRoster: { invalidate: mocks.invalidate },
+        exportAttendanceCsv: { fetch: vi.fn() },
+      },
+    }),
     restaurantShifts: {
-      list: { useQuery: () => mocks.roster },
+      managerRoster: { useQuery: () => mocks.roster },
+      myRoster: { useQuery: () => mocks.mine },
+      swapCandidates: {
+        useQuery: () => ({
+          data: [{ id: 'staff_2', displayName: 'Kitchen Colleague' }],
+          error: null,
+          isLoading: false,
+        }),
+      },
       create: {
         useMutation: () => ({
           mutate: mocks.createMutate,
@@ -64,6 +86,15 @@ vi.mock('@/lib/trpc', () => ({
           error: null,
         }),
       },
+      clockIn: { useMutation: () => ({ mutate: mocks.clockInMutate, isPending: false }) },
+      startBreak: { useMutation: () => ({ mutate: mocks.noop, isPending: false }) },
+      endBreak: { useMutation: () => ({ mutate: mocks.noop, isPending: false }) },
+      clockOut: { useMutation: () => ({ mutate: mocks.noop, isPending: false }) },
+      requestSwap: { useMutation: () => ({ mutate: mocks.requestSwapMutate, isPending: false }) },
+      reviewSwap: { useMutation: () => ({ mutate: mocks.reviewSwapMutate, isPending: false }) },
+      correctTime: {
+        useMutation: () => ({ mutate: mocks.noop, isPending: false, error: null }),
+      },
     },
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
@@ -85,11 +116,19 @@ const entitlements = {
   organizationId: 'org_1',
   seatLimit: 10,
   activeSeats: 1,
-  enabledModules: ['restaurant-core'],
+  enabledModules: ['restaurant-core', 'restaurant-workforce'],
   modules: [
     {
       key: 'restaurant-core',
       name: 'Restaurant Core',
+      enabled: true,
+      source: 'OVERRIDE',
+      seatLimit: null,
+      expiresAt: null,
+    },
+    {
+      key: 'restaurant-workforce',
+      name: 'Restaurant Workforce',
       enabled: true,
       source: 'OVERRIDE',
       seatLimit: null,
@@ -125,6 +164,15 @@ const SHIFT = {
   cancelReason: null,
   createdAt: new Date('2026-08-19T00:00:00Z'),
   updatedAt: new Date('2026-08-19T00:00:00Z'),
+  clockedInAt: null,
+  clockedOutAt: null,
+  breaks: [],
+  adjustments: [],
+  swapRequests: [],
+  attendanceStatus: 'SCHEDULED',
+  lateMinutes: 0,
+  lateThresholdMinutes: 5,
+  branch: { id: 'branch_1', name: 'Downtown', timezone: 'UTC' },
   staffProfile: { id: 'staff_1', displayName: 'Shift Lead', status: 'ACTIVE' },
 };
 
@@ -135,6 +183,9 @@ describe('Restaurant roster console', () => {
     mocks.roster.error = null;
     mocks.roster.isLoading = false;
     mocks.staff.isLoading = false;
+    mocks.mine.data = { actor: { id: 'staff_1', displayName: 'Shift Lead' }, shifts: [] };
+    mocks.mine.error = null;
+    mocks.mine.isLoading = false;
   });
 
   it('asks for a branch before claiming the roster is empty', () => {
@@ -202,11 +253,17 @@ describe('Restaurant roster console', () => {
 
   it('renders a cancelled shift as cancelled and locks its row actions', () => {
     mocks.roster.data = [
-      { ...SHIFT, status: 'CANCELLED', cancelledAt: new Date(), cancelReason: 'Storm closure' },
+      {
+        ...SHIFT,
+        status: 'CANCELLED',
+        attendanceStatus: 'CANCELLED',
+        cancelledAt: new Date(),
+        cancelReason: 'Storm closure',
+      },
     ];
     renderConsole();
     chooseBranch();
-    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.getByText('CANCELLED')).toBeInTheDocument();
     expect(screen.getByText('Storm closure')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel shift' })).toBeDisabled();
@@ -229,5 +286,70 @@ describe('Restaurant roster console', () => {
       id: 'shift_1',
       reason: 'Called in sick',
     });
+  });
+
+  it('renders an employee path with readable names and server punch actions', () => {
+    mocks.mine.data = {
+      actor: { id: 'staff_1', displayName: 'Shift Lead' },
+      shifts: [SHIFT],
+    };
+    const { container } = renderConsole();
+    expect(screen.getByText('Downtown · Cashier')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clock in' }));
+    expect(mocks.clockInMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ shiftId: 'shift_1', idempotencyKey: expect.any(String) })
+    );
+    expect(container).not.toHaveTextContent('branch_1');
+    expect(container).not.toHaveTextContent('staff_1');
+  });
+
+  it('lets an employee request a same-branch colleague by name', () => {
+    mocks.mine.data = {
+      actor: { id: 'staff_1', displayName: 'Shift Lead' },
+      shifts: [SHIFT],
+    };
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Replacement employee'), {
+      target: { value: 'staff_2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Request swap' }));
+    expect(mocks.requestSwapMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shiftId: 'shift_1',
+        replacementStaffProfileId: 'staff_2',
+        idempotencyKey: expect.any(String),
+      })
+    );
+  });
+
+  it('gives managers labelled approve and reject actions for a pending swap', () => {
+    mocks.roster.data = [
+      {
+        ...SHIFT,
+        swapRequests: [
+          {
+            id: 'swap_1',
+            note: 'Family appointment',
+            createdAt: new Date('2026-08-19T08:00:00Z'),
+            requestedBy: { id: 'staff_1', displayName: 'Shift Lead' },
+            replacement: { id: 'staff_2', displayName: 'Kitchen Colleague' },
+            decision: null,
+          },
+        ],
+      },
+    ];
+    renderConsole();
+    chooseBranch();
+
+    expect(screen.getByText(/Shift Lead → Kitchen Colleague/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve swap for Shift Lead' }));
+    expect(mocks.reviewSwapMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'swap_1',
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: expect.any(String),
+      })
+    );
   });
 });
