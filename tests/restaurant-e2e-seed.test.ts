@@ -45,7 +45,6 @@ describe('Restaurant E2E seed restoration guards', () => {
     'restaurantMenuAvailabilityWindow',
     'restaurantStationRoutingRule',
     'restaurantCustomer',
-    'loyaltyProgramVersion',
     'loyaltyAccount',
     'loyaltyPointsEntry',
     'restaurantSopTemplate',
@@ -59,6 +58,12 @@ describe('Restaurant E2E seed restoration guards', () => {
     );
     expect(upsert?.[1], `${model} upsert`).toMatch(/update: (?:\{|department)/);
     expect(upsert?.[1], `${model} update`).not.toMatch(/update:\s*\{\s*\}/);
+  });
+
+  test('does not update the immutable effective loyalty program on rerun', () => {
+    expect(seed).toContain('tx.loyaltyProgramVersion.findUnique');
+    expect(seed).toContain('tx.loyaltyProgramVersion.create');
+    expect(seed).not.toContain('tx.loyaltyProgramVersion.upsert');
   });
 
   test('retains the named menu, required modifier, and exact matrix total inputs', () => {
