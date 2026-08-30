@@ -11,20 +11,43 @@ const mocks = vi.hoisted(() => ({
   settingFindFirst: vi.fn(),
   settingUpdate: vi.fn(),
   settingCreate: vi.fn(),
+  webhookFindFirst: vi.fn(),
+  webhookUpdate: vi.fn(),
+  webhookCreate: vi.fn(),
+  jobFindMany: vi.fn(),
+  jobFindFirst: vi.fn(),
+  jobCreate: vi.fn(),
+  jobUpsert: vi.fn(),
+  annotateAudit: vi.fn(),
+  recordTrpcAudit: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn(() => 'ciphertext-only') }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
-vi.mock('@/server/audit', () => ({
-  ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
-}));
+vi.mock('@/server/audit', async () => {
+  const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
+  return {
+    ...actual,
+    annotateAudit: (...args: Parameters<typeof actual.annotateAudit>) => {
+      mocks.annotateAudit(...args);
+      actual.annotateAudit(...args);
+    },
+    isAuditExcludedPath: vi.fn(() => false),
+    recordTrpcAudit: (...args: Parameters<typeof actual.recordTrpcAudit>) => {
+      const [entry] = args;
+      mocks.recordTrpcAudit({
+        ...entry,
+        input: entry.ctx.audit?.detail.skipInput ? '[skipped]' : entry.input,
+      });
+    },
+  };
+});
 vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
@@ -47,6 +70,18 @@ const db = {
     update: mocks.settingUpdate,
     create: mocks.settingCreate,
   },
+  restaurantNotificationWebhook: {
+    findFirst: mocks.webhookFindFirst,
+    update: mocks.webhookUpdate,
+    create: mocks.webhookCreate,
+  },
+  restaurantJob: {
+    findMany: mocks.jobFindMany,
+    findFirst: mocks.jobFindFirst,
+    create: mocks.jobCreate,
+    upsert: mocks.jobUpsert,
+  },
+  $transaction: vi.fn(async (work) => work(db)),
 };
 
 function caller() {
@@ -83,6 +118,11 @@ beforeEach(() => {
   mocks.notificationUpdateMany.mockResolvedValue({ count: 1 });
   mocks.settingFindMany.mockResolvedValue([]);
   mocks.settingFindFirst.mockResolvedValue(null);
+  mocks.webhookFindFirst.mockResolvedValue(null);
+  mocks.jobFindMany.mockResolvedValue([]);
+  mocks.jobFindFirst.mockResolvedValue(null);
+  mocks.jobCreate.mockImplementation(async ({ data }) => ({ id: 'job_new', ...data }));
+  mocks.jobUpsert.mockImplementation(async ({ create }) => ({ id: 'job_retry', ...create }));
   mocks.settingCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'setting_1',
     ...data,
@@ -143,6 +183,7 @@ describe('notification matrix administration', () => {
     ).resolves.toMatchObject({
       channels: [
         { channel: 'IN_APP', enabled: true },
+        { channel: 'WEBHOOK', enabled: true },
         { channel: 'EMAIL', enabled: true },
         { channel: 'SMS', enabled: true },
         { channel: 'PUSH', enabled: true },
@@ -164,5 +205,115 @@ describe('notification matrix administration', () => {
     await expect(
       caller().getMatrix({ category: 'sop.escalation', branchId: null })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+describe('signed webhook administration', () => {
+  it('configures and rotates a write-only encrypted secret, then lists redacted status', async () => {
+    mocks.webhookFindFirst.mockResolvedValueOnce(null);
+    mocks.webhookCreate.mockResolvedValue({
+      id: 'config_1',
+      endpointUrl: 'https://93.184.216.34/hook',
+      enabled: true,
+      updatedAt: new Date(),
+    });
+    await caller().configureWebhook({
+      endpointUrl: 'https://93.184.216.34/hook',
+      enabled: true,
+      signingSecret: 'a-signing-secret-with-at-least-32-characters',
+    });
+    expect(mocks.webhookCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ encryptedSigningSecret: 'ciphertext-only' }),
+        select: expect.not.objectContaining({ encryptedSigningSecret: true }),
+      })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      action: 'CONFIGURE_RESTAURANT_NOTIFICATION_WEBHOOK',
+      targetType: 'RestaurantNotificationWebhook',
+      skipInput: true,
+    });
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ input: '[skipped]' })
+    );
+    expect(JSON.stringify(mocks.recordTrpcAudit.mock.calls)).not.toContain(
+      'a-signing-secret-with-at-least-32-characters'
+    );
+
+    mocks.webhookFindFirst.mockResolvedValueOnce({ id: 'config_1' });
+    mocks.webhookUpdate.mockResolvedValue({
+      id: 'config_1',
+      endpointUrl: 'https://93.184.216.34/hook',
+      enabled: true,
+      updatedAt: new Date(),
+    });
+    await caller().configureWebhook({
+      endpointUrl: 'https://93.184.216.34/hook',
+      enabled: true,
+      signingSecret: 'a-different-secret-with-at-least-32-characters',
+    });
+    expect(JSON.stringify(mocks.webhookUpdate.mock.calls)).not.toContain('a-different-secret');
+
+    mocks.webhookFindFirst.mockResolvedValueOnce({
+      id: 'config_1',
+      endpointUrl: 'https://93.184.216.34/hook',
+      enabled: true,
+      lastSuccessAt: null,
+      lastFailureAt: null,
+      lastFailure: null,
+      updatedAt: new Date(),
+    });
+    const status = await caller().webhookStatus({});
+    expect(status.config).toMatchObject({ signingSecretConfigured: true });
+    expect(JSON.stringify(status)).not.toContain('ciphertext-only');
+  });
+
+  it('queues an allowlisted synthetic test and retries dead jobs without resetting attempts', async () => {
+    mocks.webhookFindFirst.mockResolvedValueOnce({ enabled: true });
+    await caller().testWebhook({});
+    expect(mocks.jobCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: 'notification.webhook.deliver.v1',
+        payload: expect.objectContaining({ synthetic: true, attemptOffset: 0 }),
+      }),
+    });
+    expect(mocks.notificationFindFirst).not.toHaveBeenCalled();
+
+    mocks.jobFindFirst.mockResolvedValue({
+      id: 'dead_1',
+      organizationId: 'org_1',
+      attempts: 5,
+      payload: {
+        eventId: 'event_1',
+        notificationId: 'notification_1',
+        attemptOffset: 0,
+        version: '1.0',
+      },
+    });
+    await expect(caller().retryWebhook({ eventId: 'dead_1' })).resolves.toMatchObject({
+      eventId: 'job_retry',
+      status: 'QUEUED',
+    });
+    mocks.jobUpsert.mockResolvedValueOnce({ id: 'job_retry', status: 'SUCCEEDED' });
+    await expect(caller().retryWebhook({ eventId: 'dead_1' })).resolves.toMatchObject({
+      eventId: 'job_retry',
+      status: 'SUCCEEDED',
+    });
+    expect(mocks.jobUpsert).toHaveBeenCalledTimes(2);
+    expect(mocks.jobUpsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId_idempotencyKey: {
+            organizationId: 'org_1',
+            idempotencyKey: 'notification-webhook:event_1:retry:dead_1',
+          },
+        },
+        update: {},
+        create: expect.objectContaining({
+          status: 'QUEUED',
+          payload: expect.objectContaining({ attemptOffset: 5 }),
+        }),
+      })
+    );
   });
 });
