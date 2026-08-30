@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   staffFindUnique: vi.fn(),
   staffCreate: vi.fn(),
   staffUpdate: vi.fn(),
+  branchFindMany: vi.fn(),
   branchFindUnique: vi.fn(),
   userFindUnique: vi.fn(),
   credFindMany: vi.fn(),
@@ -56,7 +57,7 @@ const db = {
     create: mocks.staffCreate,
     update: mocks.staffUpdate,
   },
-  restaurantBranch: { findUnique: mocks.branchFindUnique },
+  restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
   user: { findUnique: mocks.userFindUnique },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
@@ -91,6 +92,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.staffFindFirst.mockResolvedValue(null);
+  mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
   mocks.userFindUnique.mockResolvedValue({ id: 'user_1' });
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
@@ -149,17 +151,17 @@ describe('staff CRUD', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
-  it('maps a missing primary branch to BAD_REQUEST', async () => {
+  it('does not reveal whether an unauthorized primary branch exists', async () => {
     mocks.branchFindUnique.mockResolvedValue(null);
     await expect(
       caller().create({ displayName: 'x', primaryBranchId: 'branch_gone' })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
-  it('maps a missing profile on update to NOT_FOUND', async () => {
+  it('does not reveal whether an unauthorized profile exists', async () => {
     mocks.staffFindUnique.mockResolvedValue(null);
     await expect(caller().update({ id: 'gone', displayName: 'x' })).rejects.toMatchObject({
-      code: 'NOT_FOUND',
+      code: 'FORBIDDEN',
     });
   });
 
