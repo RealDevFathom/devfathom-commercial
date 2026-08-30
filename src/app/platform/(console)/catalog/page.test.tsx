@@ -3,8 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import CatalogPage from './page';
 
-const mocks = vi.hoisted(() => ({ withPlatformDb: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  requirePlatformRead: vi.fn().mockResolvedValue({ role: 'SUPER_ADMIN' }),
+  withPlatformDb: vi.fn(),
+}));
 
+vi.mock('@/lib/platform/page-access', () => ({
+  requirePlatformRead: mocks.requirePlatformRead,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -12,6 +18,16 @@ vi.mock('next/navigation', () => ({
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
 
 describe('CatalogPage', () => {
+  it('stops before platform data reads when the read gate denies access', async () => {
+    const denied = new Error('NEXT_REDIRECT');
+    mocks.requirePlatformRead.mockRejectedValueOnce(denied);
+
+    await expect(CatalogPage()).rejects.toBe(denied);
+
+    expect(mocks.requirePlatformRead).toHaveBeenCalledWith('/platform/catalog');
+    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
+  });
+
   it('shows each package vertical', async () => {
     const database = {
       platformModule: { findMany: vi.fn().mockResolvedValue([]) },
@@ -40,6 +56,10 @@ describe('CatalogPage', () => {
 
     render(await CatalogPage());
 
+    expect(mocks.requirePlatformRead).toHaveBeenCalledWith('/platform/catalog');
+    expect(mocks.requirePlatformRead.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.withPlatformDb.mock.invocationCallOrder[0]
+    );
     expect(screen.getByText('restaurant-essentials · version 1 · Restaurant')).toBeVisible();
   });
 });

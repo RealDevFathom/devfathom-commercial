@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import OrganizationDetailPage from './page';
 
 const mocks = vi.hoisted(() => ({
+  requirePlatformRead: vi.fn(),
   withPlatformDb: vi.fn(),
   orgFindUnique: vi.fn(),
   moduleFindMany: vi.fn(),
@@ -12,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   branchCount: vi.fn(),
 }));
 
+vi.mock('@/lib/platform/page-access', () => ({
+  requirePlatformRead: mocks.requirePlatformRead,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -125,6 +129,7 @@ function moduleRow(name: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requirePlatformRead.mockResolvedValue({ role: 'SUPER_ADMIN' });
   mocks.moduleFindMany.mockResolvedValue(CATALOG);
   mocks.packageFindMany.mockResolvedValue(PACKAGES);
   mocks.withPlatformDb.mockImplementation((run: (db: unknown) => Promise<unknown>) =>
