@@ -1,10 +1,60 @@
+import { Prisma } from '@/generated/prisma/client';
 import {
+  moneyReadRoute,
   moneyMutationRoute,
   refundBody,
   resolveApprover,
   serializeRefundResult,
 } from '@/lib/restaurant/checkout-routes';
 import { refundTender } from '@/lib/restaurant/refunds';
+
+const money = (value: Prisma.Decimal) => value.toString();
+
+/** Bounded refundable tender selector for the authenticated device branch. */
+export const GET = moneyReadRoute({
+  capability: 'payments:refund',
+  run: async (ctx) => {
+    const tenders = await ctx.db.restaurantTender.findMany({
+      where: { bill: { branchId: ctx.device.branchId, status: 'SETTLED' } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 50,
+      select: {
+        id: true,
+        type: true,
+        amount: true,
+        tipAmount: true,
+        createdAt: true,
+        bill: { select: { receiptNumber: true, order: { select: { orderNumber: true } } } },
+        refunds: { select: { amount: true, tipRefundAmount: true } },
+      },
+    });
+    return Response.json({
+      tenders: tenders.map((tender) => {
+        const refunded = tender.refunds.reduce(
+          (sum, row) => sum.plus(row.amount),
+          new Prisma.Decimal(0)
+        );
+        const tipRefunded = tender.refunds.reduce(
+          (sum, row) => sum.plus(row.tipRefundAmount),
+          new Prisma.Decimal(0)
+        );
+        return {
+          tenderId: tender.id,
+          orderNumber: tender.bill.order.orderNumber,
+          receiptNumber: tender.bill.receiptNumber,
+          type: tender.type,
+          paidAmount: money(tender.amount),
+          refundedAmount: money(refunded),
+          remainingAmount: money(tender.amount.minus(refunded)),
+          tipPaidAmount: money(tender.tipAmount),
+          tipRefundedAmount: money(tipRefunded),
+          tipRemainingAmount: money(tender.tipAmount.minus(tipRefunded)),
+          paidAt: tender.createdAt.toISOString(),
+        };
+      }),
+    });
+  },
+});
 
 /**
  * POST /api/restaurant/checkout/refund
@@ -29,6 +79,7 @@ export const POST = moneyMutationRoute({
         tipRefundAmount: data.tipRefundAmount,
         kind: data.kind,
         reason: data.reason,
+        branchId: ctx.device.branchId,
         approvingStaffProfileId: approver.staffProfileId,
         actor,
         now,
