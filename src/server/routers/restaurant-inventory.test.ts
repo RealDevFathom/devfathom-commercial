@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
   createLowStockRule: vi.fn(),
   updateLowStockRule: vi.fn(),
   deleteLowStockRule: vi.fn(),
+  findStaffProfiles: vi.fn(),
+  findBranchAssignments: vi.fn(),
+  findStockLocation: vi.fn(),
+  findStockCount: vi.fn(),
+  findStockTransfer: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -92,7 +97,13 @@ import { restaurantInventoryRouter } from './restaurant-inventory';
 import type { TRPCContext } from '../trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-const db = {} as unknown as ScopedDb;
+const db = {
+  restaurantStaffProfile: { findMany: mocks.findStaffProfiles },
+  restaurantBranchAssignment: { findMany: mocks.findBranchAssignments },
+  restaurantStockLocation: { findUnique: mocks.findStockLocation },
+  restaurantStockCount: { findUnique: mocks.findStockCount },
+  restaurantStockTransfer: { findUnique: mocks.findStockTransfer },
+} as unknown as ScopedDb;
 
 function caller(canOverride?: boolean) {
   if (canOverride !== undefined) mocks.can.mockResolvedValue(canOverride);
@@ -118,6 +129,16 @@ function caller(canOverride?: boolean) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_test', primaryBranchId: 'branch_1' }]);
+  mocks.findBranchAssignments.mockResolvedValue([]);
+  mocks.findStockLocation.mockImplementation(async ({ where }) => ({
+    branchId: where.id === 'loc_2' ? 'branch_2' : 'branch_1',
+  }));
+  mocks.findStockCount.mockResolvedValue({ location: { branchId: 'branch_1' } });
+  mocks.findStockTransfer.mockResolvedValue({
+    sourceLocation: { branchId: 'branch_1' },
+    destinationLocation: { branchId: 'branch_1' },
+  });
 });
 
 describe('restaurantInventoryRouter', () => {
@@ -216,8 +237,127 @@ describe('restaurantInventoryRouter', () => {
       db,
       expect.objectContaining({
         locationId: 'loc_1',
-        actor: expect.objectContaining({ staffProfileId: 'user_test' }),
+        actor: expect.objectContaining({ staffProfileId: 'staff_test' }),
       })
+    );
+  });
+
+  it('resolves the distinct active staff profile for every actor-bearing mutation family', async () => {
+    mocks.createStockCount.mockResolvedValue({ id: 'count_1', status: 'DRAFT' });
+    mocks.submitStockCount.mockResolvedValue({ stockCountId: 'count_1' });
+    mocks.postStockCount.mockResolvedValue({ stockCountId: 'count_1', movementsPosted: 0 });
+    mocks.createStockTransfer.mockResolvedValue({ id: 'transfer_1', status: 'DRAFT' });
+    mocks.completeStockTransfer.mockResolvedValue({
+      stockTransferId: 'transfer_1',
+      movementsPosted: 0,
+    });
+    mocks.postWastage.mockResolvedValue({ id: 'waste_1', quantity: D('-1') });
+    mocks.postSaleReversal.mockResolvedValue({ id: 'reversal_1', quantity: D('1') });
+
+    const api = caller();
+    await api.createStockCount({ locationId: 'loc_1' });
+    await api.submitStockCount({ stockCountId: 'count_1' });
+    await api.postStockCount({ stockCountId: 'count_1' });
+    await api.createStockTransfer({ sourceLocationId: 'loc_1', destinationLocationId: 'loc_1' });
+    await api.completeStockTransfer({ stockTransferId: 'transfer_1' });
+    await api.postWastage({
+      stockItemId: 'item_1',
+      locationId: 'loc_1',
+      reason: 'WASTAGE',
+      quantity: '1',
+    });
+    await api.postSaleReversal({
+      stockItemId: 'item_1',
+      locationId: 'loc_1',
+      quantity: '1',
+    });
+
+    for (const mutation of [
+      mocks.createStockCount,
+      mocks.submitStockCount,
+      mocks.postStockCount,
+      mocks.createStockTransfer,
+      mocks.completeStockTransfer,
+      mocks.postWastage,
+      mocks.postSaleReversal,
+    ]) {
+      expect(mutation).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ actor: { staffProfileId: 'staff_test' } })
+      );
+    }
+    expect(mocks.findStaffProfiles).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'user_test', status: 'ACTIVE' } })
+    );
+  });
+
+  it.each(['absent', 'inactive', 'cross-tenant'])(
+    '%s staff mapping fails before mutation',
+    async () => {
+      mocks.findStaffProfiles.mockResolvedValue([]);
+      const api = caller();
+      const attempts = [
+        () => api.createStockCount({ locationId: 'loc_1' }),
+        () => api.submitStockCount({ stockCountId: 'count_1' }),
+        () => api.postStockCount({ stockCountId: 'count_1' }),
+        () =>
+          api.createStockTransfer({ sourceLocationId: 'loc_1', destinationLocationId: 'loc_1' }),
+        () => api.completeStockTransfer({ stockTransferId: 'transfer_1' }),
+        () =>
+          api.postWastage({
+            stockItemId: 'item_1',
+            locationId: 'loc_1',
+            reason: 'WASTAGE',
+            quantity: '1',
+          }),
+        () => api.postSaleReversal({ stockItemId: 'item_1', locationId: 'loc_1', quantity: '1' }),
+      ];
+      for (const attempt of attempts) {
+        await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      for (const mutation of [
+        mocks.createStockCount,
+        mocks.submitStockCount,
+        mocks.postStockCount,
+        mocks.createStockTransfer,
+        mocks.completeStockTransfer,
+        mocks.postWastage,
+        mocks.postSaleReversal,
+      ]) {
+        expect(mutation).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it('cross-branch staff mapping fails before mutation without an assignment or configure grant', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await expect(
+      caller().postWastage({
+        stockItemId: 'item_1',
+        locationId: 'loc_2',
+        reason: 'WASTAGE',
+        quantity: '1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.postWastage).not.toHaveBeenCalled();
+  });
+
+  it('allows an active staff profile through an explicit branch assignment', async () => {
+    mocks.findBranchAssignments.mockResolvedValue([{ branchId: 'branch_2' }]);
+    mocks.postWastage.mockResolvedValue({ id: 'waste_1', quantity: D('-1') });
+
+    await expect(
+      caller().postWastage({
+        stockItemId: 'item_1',
+        locationId: 'loc_2',
+        reason: 'WASTAGE',
+        quantity: '1',
+      })
+    ).resolves.toEqual({ id: 'waste_1', quantity: '-1' });
+    expect(mocks.postWastage).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ actor: { staffProfileId: 'staff_test' } })
     );
   });
 
