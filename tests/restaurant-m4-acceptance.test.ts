@@ -20,6 +20,7 @@ const ids = {
   branchB: `branch_b_${suffix}`,
   operatorA: `staff_a_${suffix}`,
   operatorAUser: `user_a_${suffix}`,
+  managerAUser: `user_manager_a_${suffix}`,
   settleRole: `role_settle_${suffix}`,
   managerA: `manager_a_${suffix}`,
   operatorB: `staff_b_${suffix}`,
@@ -321,14 +322,18 @@ beforeAll(async () => {
       },
     });
     // Operator A settles bills through the M5 checkout routes, which gate on
-    // `payments:collect` (the M4 order routes do not); grant it via the standard
-    // user + organization-role linkage. Manager A stays a bare profile.
+    // `payments:collect`; post-prep void approval also requires `coauth:approve`.
     await tx.organizationRole.create({
       data: {
         id: ids.settleRole,
         key: `wha49_settle_${suffix}`,
         name: 'WHA-49 Settlement',
-        permissions: { create: [{ capability: 'payments:collect', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'payments:collect', effect: 'ALLOW' },
+            { capability: 'coauth:approve', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.user.create({
@@ -341,9 +346,19 @@ beforeAll(async () => {
         organizationRoleId: ids.settleRole,
       },
     });
+    await tx.user.create({
+      data: {
+        id: ids.managerAUser,
+        name: 'Manager A',
+        email: `manager_a_${suffix}@test.local`,
+        department: 'LEADERSHIP',
+        title: 'Manager',
+        organizationRoleId: ids.settleRole,
+      },
+    });
     for (const [id, displayName, pin, userId] of [
       [ids.operatorA, 'Operator A', PIN, ids.operatorAUser],
-      [ids.managerA, 'Manager A', MANAGER_PIN, undefined],
+      [ids.managerA, 'Manager A', MANAGER_PIN, ids.managerAUser],
     ] as const) {
       await tx.restaurantStaffProfile.create({
         data: {

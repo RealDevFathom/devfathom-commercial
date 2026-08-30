@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { readJson } from '@/lib/api-json';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
 import { cancelOrder } from '@/lib/restaurant/orders';
 import { withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 import {
@@ -36,24 +37,26 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   const parsed = cancelBody.safeParse(parsedJson.data);
   if (!parsed.success) return invalidBody(parsed.error.issues);
 
+  let approvingStaffProfileId: string | null = null;
+  if (parsed.data.approving) {
+    const now = new Date();
+    const approver = await authenticateApprover(ctx.db, ctx.device.id, parsed.data.approving, now);
+    if (!approver.ok) return approver.response;
+    if (!(await operatorHasCapability(ctx.db, approver.staffProfileId, 'coauth:approve', now))) {
+      return NextResponse.json(
+        { error: 'The approving manager lacks the "coauth:approve" capability.' },
+        { status: 403 }
+      );
+    }
+    approvingStaffProfileId = approver.staffProfileId;
+  }
+
   try {
     await requireOrderInDeviceBranch(ctx.db, parsed.data.orderId, ctx.device.branchId);
   } catch (err) {
     const response = orderErrorResponse(err);
     if (response) return response;
     throw err;
-  }
-
-  let approvingStaffProfileId: string | null = null;
-  if (parsed.data.approving) {
-    const approver = await authenticateApprover(
-      ctx.db,
-      ctx.device.id,
-      parsed.data.approving,
-      new Date()
-    );
-    if (!approver.ok) return approver.response;
-    approvingStaffProfileId = approver.staffProfileId;
   }
 
   const actor = buildActor(operator.staffProfileId, ctx.device.id, key);

@@ -18,13 +18,18 @@ async function expectPgCode(code: string, operation: () => Promise<unknown>) {
   await client.query('SAVEPOINT expected_failure');
   try {
     await operation();
-    throw new Error(`Expected PostgreSQL error ${code}`);
   } catch (error) {
-    expect(error).toMatchObject({ code });
-  } finally {
+    // PostgreSQL keeps the transaction aborted after an expected trigger/RLS
+    // rejection. Restore it before making the assertion so the next immutable
+    // ledger probe always starts from a usable transaction.
     await client.query('ROLLBACK TO SAVEPOINT expected_failure');
     await client.query('RELEASE SAVEPOINT expected_failure');
+    expect(error).toMatchObject({ code });
+    return;
   }
+  await client.query('ROLLBACK TO SAVEPOINT expected_failure');
+  await client.query('RELEASE SAVEPOINT expected_failure');
+  throw new Error(`Expected PostgreSQL error ${code}`);
 }
 
 describe('tax core real-PostgreSQL RLS and immutability', () => {
