@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
-
-import { TerminalConsole } from '@/components/terminal/terminal-console';
+import { redirect } from 'next/navigation';
 
 export const metadata: Metadata = {
   title: 'Restaurant terminal',
@@ -8,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function TerminalPage() {
-  return <TerminalConsole />;
+  redirect('/pos');
 }

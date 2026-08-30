@@ -77,6 +77,11 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
     },
+    restaurantFloor: {
+      listStations: {
+        useQuery: () => ({ data: [], error: null, isLoading: false }),
+      },
+    },
   },
 }));
 
@@ -214,21 +219,20 @@ describe('Restaurant device security UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Enroll device' }));
     fireEvent.change(screen.getByLabelText('Device name'), { target: { value: 'Expo terminal' } });
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Enroll' }));
-
-    expect(screen.getByText('rdk_once_only')).toBeInTheDocument();
-    mocks.enrollmentReset.mockClear();
-    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Save the enrollment secret' }), {
-      key: 'Escape',
+    const confirmation = screen.getByRole('checkbox', {
+      name: /sign out of administration and open only as this terminal/,
     });
-    expect(screen.getByText('rdk_once_only')).toBeInTheDocument();
-    expect(mocks.enrollmentReset).not.toHaveBeenCalled();
+    fireEvent.click(confirmation);
 
-    const acknowledgement = screen.getByRole('button', { name: 'Close enrollment secret' });
-    expect(acknowledgement).toHaveTextContent('I saved it');
-    fireEvent.click(acknowledgement);
-    expect(screen.queryByText('rdk_once_only')).not.toBeInTheDocument();
-    expect(mocks.enrollmentReset).toHaveBeenCalledOnce();
+    const enrollButton = screen.getByRole('button', { name: 'Enroll this browser' });
+    expect(enrollButton).toHaveAttribute('type', 'submit');
+    expect(enrollButton.closest('form')).toHaveAttribute(
+      'action',
+      '/api/restaurant/devices/browser-enroll'
+    );
+    expect(confirmation).toBeChecked();
+    expect(document.body.textContent).not.toContain('rdk_');
+    expect(mocks.enrollmentMutate).not.toHaveBeenCalled();
   });
 
   it('shows loading instead of a false zero device count', () => {
