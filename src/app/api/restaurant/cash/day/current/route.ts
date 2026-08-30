@@ -4,10 +4,29 @@ import { resolveBusinessDate } from '@/lib/restaurant/business-date';
 import { moneyReadRoute } from '@/lib/restaurant/checkout-routes';
 import { getCurrentDrawerSession } from '@/lib/restaurant/drawer-sessions';
 
-/** Authoritative business date for this device: persisted drawer first, branch calendar otherwise. */
+/** Authoritative eligible close date: unresolved closed day, open drawer, then branch calendar. */
 export const GET = moneyReadRoute({
   capability: 'cash:close',
   run: async (ctx) => {
+    const representedDates = await ctx.db.restaurantDailyClose.findMany({
+      where: { branchId: ctx.device.branchId },
+      select: { businessDate: true },
+      distinct: ['businessDate'],
+    });
+    const pendingDrawer = await ctx.db.restaurantDrawerSession.findFirst({
+      where: {
+        branchId: ctx.device.branchId,
+        status: 'CLOSED',
+        businessDate: { notIn: representedDates.map((close) => close.businessDate) },
+      },
+      orderBy: [{ businessDate: 'desc' }, { closedAt: 'desc' }],
+      select: { businessDate: true },
+    });
+    if (pendingDrawer) {
+      return NextResponse.json({
+        businessDate: pendingDrawer.businessDate.toISOString().slice(0, 10),
+      });
+    }
     const drawer = await getCurrentDrawerSession(ctx.db, {
       branchId: ctx.device.branchId,
       deviceId: ctx.device.id,
