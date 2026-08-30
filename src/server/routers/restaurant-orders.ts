@@ -9,6 +9,7 @@ import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
 import { KitchenTicketError } from '@/lib/restaurant/kitchen-tickets';
 import { OrderPricingError } from '@/lib/restaurant/order-pricing';
+import { operationalOrderChannelSchema, orderChannelSchema } from '@/lib/restaurant/order-channels';
 import { OrderInvariantError, OrderTransitionError } from '@/lib/restaurant/order-state-machine';
 import {
   OrderCommandError,
@@ -62,7 +63,6 @@ import {
  * its own server query.
  */
 
-const CHANNEL = z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY']);
 const ORDER_STATUS = z.enum([
   'DRAFT',
   'OPEN',
@@ -157,7 +157,7 @@ export const restaurantOrdersRouter = router({
           branchId: ID,
           businessDate: BUSINESS_DATE.optional(),
           status: ORDER_STATUS.optional(),
-          channel: CHANNEL.optional(),
+          channel: orderChannelSchema.optional(),
           limit: z.number().int().min(1).max(100).optional(),
           cursor: ID.optional(),
         })
@@ -187,7 +187,7 @@ export const restaurantOrdersRouter = router({
       z
         .object({
           branchId: ID,
-          channel: CHANNEL,
+          channel: operationalOrderChannelSchema,
           publicationId: ID.nullish(),
           tableIds: z.array(ID).optional(),
           coverCount: z.number().int().min(0).nullish(),
@@ -584,7 +584,7 @@ type ListOrdersInput = {
   branchId: string;
   businessDate?: string;
   status?: z.infer<typeof ORDER_STATUS>;
-  channel?: z.infer<typeof CHANNEL>;
+  channel?: z.infer<typeof orderChannelSchema>;
   limit?: number;
   cursor?: string;
 };

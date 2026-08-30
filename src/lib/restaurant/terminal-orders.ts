@@ -12,6 +12,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { CoAuthorizationError } from './co-authorization';
 import { KitchenTicketError } from './kitchen-tickets';
 import {
+  DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE,
+  operationalOrderChannelSchema,
+} from './order-channels';
+import {
   channelPublished,
   isItemAvailableAt,
   partitionWindows,
@@ -54,7 +58,6 @@ import {
 // ── Strict input schemas (C7) ────────────────────────────────────────────────
 
 const ID = z.string().min(1);
-const CHANNEL = z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY']);
 const DISPOSITION = z.enum(['WASTE', 'RESTOCK', 'NONE']);
 
 /** A manager co-authorization presented inline for a post-preparation void or a
@@ -71,7 +74,7 @@ const APPROVING = z
 export const openOrderBody = z
   .object({
     // branchId is the terminal's bound branch (from the device), never the body.
-    channel: CHANNEL,
+    channel: operationalOrderChannelSchema,
     publicationId: ID.nullish(),
     tableIds: z.array(ID).optional(),
     coverCount: z.number().int().min(0).nullish(),
@@ -174,6 +177,9 @@ export function missingIdempotencyKey(): NextResponse {
 
 /** 400 with the strict-schema validation issues. */
 export function invalidBody(issues: z.ZodIssue[]): NextResponse {
+  if (issues.some((issue) => issue.message === DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE)) {
+    return json({ error: DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE }, 400);
+  }
   return json({ error: 'Invalid input', details: issues }, 400);
 }
 
@@ -695,7 +701,7 @@ export async function resolveTerminalEffectiveMenu(
  */
 export const effectiveMenuQuery = z
   .object({
-    channel: CHANNEL,
+    channel: operationalOrderChannelSchema,
     publicationId: ID.optional(),
     at: z.string().datetime().optional(),
   })

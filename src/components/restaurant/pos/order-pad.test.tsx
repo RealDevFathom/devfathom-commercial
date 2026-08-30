@@ -285,16 +285,10 @@ describe('OrderPad transport', () => {
       )
     ).toBe(true);
 
-    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
-    await waitFor(() =>
-      expect(
-        fetch.mock.calls.some(([input]) =>
-          String(input).includes('/orders/effective-menu?channel=DELIVERY')
-        )
-      ).toBe(true)
-    );
-    expect(screen.getByRole('button', { name: /Pinned coffee/ })).toBeEnabled();
-    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DINE_IN' } });
+    const channel = screen.getByLabelText('Channel');
+    expect(channel).toHaveValue('DINE_IN');
+    expect(screen.getByRole('option', { name: 'Delivery — not configured' })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Takeaway' })).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Open order' }));

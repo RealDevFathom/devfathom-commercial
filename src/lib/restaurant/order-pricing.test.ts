@@ -142,7 +142,7 @@ const basePublication = {
   id: 'pub_1',
   menuId: 'menu_1',
   priceListId: 'pl_pub',
-  channels: [] as string[], // empty = every channel
+  channels: [] as string[], // empty = every operational channel
 };
 const baseMenuItem = {
   id: 'mi_1',

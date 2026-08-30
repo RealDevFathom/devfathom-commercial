@@ -229,6 +229,22 @@ describe('console read models (menu:read)', () => {
 });
 
 describe('createPublication — cross-org reference validation (C1/C2)', () => {
+  it('rejects delivery publication create/update before database or audit work', async () => {
+    await expect(
+      caller().createPublication({
+        branchId: 'branch_1',
+        menuId: 'menu_1',
+        channels: ['DELIVERY'] as never[],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().setPublicationChannels({ id: 'pub_1', channels: ['DELIVERY'] as never[] })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.pubCreate).not.toHaveBeenCalled();
+    expect(mocks.pubUpdate).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
   it('rejects a publication naming a branch outside the organization', async () => {
     mocks.branchFindUnique.mockResolvedValue(null); // RLS makes a foreign branch invisible
     await expect(
@@ -425,6 +441,13 @@ function withPriceLists(config: {
 }
 
 describe('effectiveMenu — winning-price precedence (override > pub list > base list)', () => {
+  it('rejects delivery before loading a publication', async () => {
+    await expect(
+      caller().effectiveMenu({ publicationId: 'pub_1', channel: 'DELIVERY' as never })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.pubFindUnique).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     withPriceLists({
       defaultListId: 'pl_base',
@@ -541,9 +564,8 @@ describe('effectiveMenu — branch-timezone availability (C5, through the router
     expect(await availabilityOf(pub, 'DINE_IN', new Date('2026-12-26T12:00:00Z'))).toBe(true);
   });
 
-  it('marks every item unavailable when the requested channel is not published', async () => {
+  it('keeps supported channels available only when published', async () => {
     const pub = effectiveMenuPublication({ timezone: NY, channels: ['DINE_IN'] });
-    expect(await availabilityOf(pub, 'DELIVERY', new Date('2026-06-01T12:00:00Z'))).toBe(false);
     expect(await availabilityOf(pub, 'DINE_IN', new Date('2026-06-01T12:00:00Z'))).toBe(true);
   });
 

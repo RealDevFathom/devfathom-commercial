@@ -89,6 +89,8 @@ test.describe('restaurant POS and KDS core flow', () => {
     });
 
     await unlockPos(page);
+    await expect(page.getByRole('option', { name: 'Delivery — not configured' })).toBeDisabled();
+    await expect(page.getByLabel('Channel')).toHaveValue('DINE_IN');
     await expect(page.getByLabel(/table id/i)).toHaveCount(0);
     await expect(page.getByLabel(/modifier option id/i)).toHaveCount(0);
     await page.getByRole('checkbox').first().check();

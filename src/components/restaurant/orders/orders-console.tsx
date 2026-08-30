@@ -29,6 +29,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
+import { ORDER_CHANNELS } from '@/lib/restaurant/order-channels';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from '../restaurant-branch-select';
 import { RestaurantDeviceSelect } from '../restaurant-device-select';
@@ -55,7 +56,7 @@ const statuses: OrderStatus[] = [
   'CLOSED',
   'CANCELLED',
 ];
-const channels: Channel[] = ['DINE_IN', 'TAKEAWAY', 'DELIVERY'];
+const channels: Channel[] = [...ORDER_CHANNELS];
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 const selectClass =

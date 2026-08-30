@@ -125,9 +125,9 @@ require a distinct manager credential.
   triggers full reconciliation. There is no KDS push channel, offline queue, bump-bar integration,
   or kitchen printing.
 
-### 8. Run dine-in, takeaway, and delivery
+### 8. Run dine-in and takeaway
 
-- **Navigate:** `/pos` → New order → Dine in, Takeaway, or Delivery → add menu items/modifiers →
+- **Navigate:** `/pos` → New order → Dine in or Takeaway → add menu items/modifiers →
   hold/fire → serve → close for payment. Managers review Orders (`/restaurant/orders`) and Floor
   (`/restaurant/floor`).
 - **Required:** `orders:take`/`pos:operate`; `orders:read` to review; protected changes require the
@@ -138,7 +138,8 @@ require a distinct manager credential.
   offered safeguarded cancel/void actions. POS dine-in fields requiring typed **Table IDs** or
   **Section ID**, table moves requiring **From/To table IDs**, and table merges requiring
   **Additional table IDs** are **NOT OPERATOR READY** pending product correction. Never query a
-  database; use takeaway/delivery or another supported floor flow until selectors exist.
+  database; use takeaway or another supported floor flow until selectors exist. Delivery is shown
+  as not configured and is rejected before any order or audit mutation until D06 is resolved.
 
 ### 9. Split, tender, void, refund, and receipt
 

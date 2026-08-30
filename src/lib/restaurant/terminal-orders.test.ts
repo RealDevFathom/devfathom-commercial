@@ -24,6 +24,7 @@ import {
   fireBody,
   idempotencyKeyFromRequest,
   ifNoneMatchSatisfied,
+  invalidBody,
   openOrderBody,
   orderErrorResponse,
   requireActingOperator,
@@ -47,9 +48,19 @@ describe('strict input schemas (C7)', () => {
     ).toBe(false); // server defaults to the authenticated operator; reassignment is unsupported
   });
 
-  it('requires a channel on open and a valid enum value', () => {
+  it('accepts operational open channels and rejects delivery with a stable REST error', async () => {
+    expect(openOrderBody.safeParse({ channel: 'DINE_IN' }).success).toBe(true);
+    expect(openOrderBody.safeParse({ channel: 'TAKEAWAY' }).success).toBe(true);
     expect(openOrderBody.safeParse({}).success).toBe(false);
     expect(openOrderBody.safeParse({ channel: 'EAT_IN' }).success).toBe(false);
+    const delivery = openOrderBody.safeParse({ channel: 'DELIVERY' });
+    expect(delivery.success).toBe(false);
+    if (delivery.success) throw new Error('DELIVERY must fail closed');
+    const response = invalidBody(delivery.error.issues);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Delivery is not configured. Use dine-in or takeaway.',
+    });
   });
 
   it('treats fire course as optional (whole-order vs single-course fire)', () => {
@@ -206,6 +217,7 @@ describe('effectiveMenuQuery — STRICT device-authed query (C7)', () => {
     );
     expect(effectiveMenuQuery.safeParse({ channel: 'DRIVE_THRU' }).success).toBe(false);
     expect(effectiveMenuQuery.safeParse({}).success).toBe(false);
+    expect(effectiveMenuQuery.safeParse({ channel: 'DELIVERY' }).success).toBe(false);
   });
 });
 

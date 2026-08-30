@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import type { Prisma } from '@/generated/prisma/client';
 import type { Action } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { operationalOrderChannelSchema } from '@/lib/restaurant/order-channels';
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
@@ -74,7 +75,6 @@ const writeProcedure = capabilityProcedure(MENU_WRITE);
 const priceProcedure = capabilityProcedure(MENU_PRICE);
 const publishProcedure = capabilityProcedure(MENU_PUBLISH);
 
-const CHANNEL = z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY']);
 const LOCALIZED = z.record(z.string(), z.string());
 // Money arrives as a string so it never passes through a float (C4); the lib
 // normalizes it through `Prisma.Decimal` and rejects anything malformed.
@@ -576,7 +576,7 @@ export const restaurantMenusRouter = router({
         branchId: z.string().min(1),
         menuId: z.string().min(1),
         priceListId: z.string().nullable().optional(),
-        channels: z.array(CHANNEL).optional(),
+        channels: z.array(operationalOrderChannelSchema).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -660,7 +660,7 @@ export const restaurantMenusRouter = router({
     }),
 
   setPublicationChannels: publishProcedure
-    .input(z.object({ id: z.string().min(1), channels: z.array(CHANNEL) }))
+    .input(z.object({ id: z.string().min(1), channels: z.array(operationalOrderChannelSchema) }))
     .mutation(async ({ ctx, input }) => {
       await loadPublication(ctx.db, input.id);
       const updated = await ctx.db.restaurantBranchMenuPublication.update({
@@ -852,7 +852,7 @@ export const restaurantMenusRouter = router({
     .input(
       z.object({
         publicationId: z.string().min(1),
-        channel: CHANNEL,
+        channel: operationalOrderChannelSchema,
         // Optional evaluation instant (preview / historical). Absent = server now;
         // client time is never trusted for availability, only for an explicit query.
         at: z.date().optional(),

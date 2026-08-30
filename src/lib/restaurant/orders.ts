@@ -9,7 +9,11 @@ import { buildCoAuthorizationRecord } from './co-authorization';
 import { postOrderRecipeConsumption } from './inventory';
 import { generateKitchenTickets, type FiredItem, type GeneratedTicket } from './kitchen-tickets';
 import { earnLoyaltyForClosedOrder } from './loyalty';
-import type { OrderChannel } from './menu-availability';
+import {
+  DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE,
+  isOperationalOrderChannel,
+  type OrderChannel,
+} from './order-channels';
 import { allocateOrderNumber } from './order-numbers';
 import {
   resolveItemSnapshot,
@@ -70,6 +74,7 @@ export type OrderCommandErrorReason =
   | 'BRANCH_NOT_FOUND'
   | 'TABLE_NOT_FOUND'
   | 'TABLE_LINK_NOT_FOUND'
+  | 'CHANNEL_UNAVAILABLE'
   | 'CHANNEL_TABLE'
   | 'NOT_CLOSABLE'
   | 'NOT_SETTLED';
@@ -349,6 +354,9 @@ export type OpenOrderResult = {
 };
 
 export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<OpenOrderResult> {
+  if (!isOperationalOrderChannel(input.channel)) {
+    throw new OrderCommandError(DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE, 'CHANNEL_UNAVAILABLE');
+  }
   const at = input.now ?? new Date();
   return runInTransaction(db, async (tx) => {
     const idem = await beginIdempotent(tx, input.actor, 'order.open');

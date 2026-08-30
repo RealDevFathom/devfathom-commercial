@@ -24,10 +24,12 @@
  *   PREVIOUS calendar day for the day-of-week test.
  * - An availability exception overrides the whole publication for its branch-local
  *   date: `isClosed` forces closed, `!isClosed` forces open (regardless of windows).
- * - An empty publication `channels` set means "published on every channel".
+ * - An empty publication `channels` set means "published on every operational channel".
  */
 
-export type OrderChannel = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY';
+import { isOperationalOrderChannel, type OrderChannel } from './order-channels';
+
+export type { OrderChannel } from './order-channels';
 
 /** A publication- or item-scoped availability window (branch-local wall clock). */
 export type AvailabilityWindow = {
@@ -170,13 +172,14 @@ export function isItemAvailableAt(input: AvailabilityInput): boolean {
 }
 
 /**
- * Channel filter (D06). An empty `channels` set means the publication is offered
- * on every channel; otherwise the requested channel must be listed.
+ * Channel filter (D06). DELIVERY always fails closed. An empty `channels` set
+ * means every operational channel; otherwise the requested channel must be listed.
  */
 export function channelPublished(
   channels: readonly OrderChannel[],
   channel: OrderChannel
 ): boolean {
+  if (!isOperationalOrderChannel(channel)) return false;
   return channels.length === 0 || channels.includes(channel);
 }
 
