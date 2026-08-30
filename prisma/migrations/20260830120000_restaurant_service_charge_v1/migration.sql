@@ -49,7 +49,7 @@ ALTER TABLE "restaurant_bills" ADD CONSTRAINT "restaurant_bills_service_charge_e
   OR
   ("serviceChargeTotal" > 0 AND "serviceChargeBasis" = 0 AND "serviceChargePolicyVersionId" IS NULL AND "serviceChargeRate" IS NULL AND "serviceChargeTaxTreatment" IS NULL)
   OR
-  ("serviceChargeTotal" > 0 AND "serviceChargeBasis" > 0 AND "serviceChargePolicyVersionId" IS NOT NULL AND "serviceChargeRate" IS NOT NULL AND "serviceChargeRate" > 0 AND "serviceChargeRate" <= 1 AND "serviceChargeTaxTreatment" IS NOT NULL AND "serviceChargeTaxTreatment" = 'NON_TAXABLE')
+  ("serviceChargeTotal" >= 0 AND "serviceChargeBasis" > 0 AND "serviceChargePolicyVersionId" IS NOT NULL AND "serviceChargeRate" IS NOT NULL AND "serviceChargeRate" > 0 AND "serviceChargeRate" <= 1 AND "serviceChargeTaxTreatment" IS NOT NULL AND "serviceChargeTaxTreatment" = 'NON_TAXABLE')
 );
 
 ALTER TABLE "restaurant_refunds"
