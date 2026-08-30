@@ -17,6 +17,11 @@ CREATE INDEX "restaurant_recipe_line_substitutes_organizationId_idx"
 CREATE INDEX "restaurant_recipe_line_substitutes_substituteIngredientId_idx"
     ON "restaurant_recipe_line_substitutes"("substituteIngredientId");
 
+-- Required parent key for the tenant-scoped recipe-line foreign key below.
+ALTER TABLE "restaurant_recipe_lines"
+    ADD CONSTRAINT "restaurant_recipe_lines_organizationId_id_key"
+    UNIQUE ("organizationId", "id");
+
 ALTER TABLE "restaurant_recipe_line_substitutes"
     ADD CONSTRAINT "restaurant_recipe_line_substitutes_recipeLineId_fkey"
     FOREIGN KEY ("recipeLineId") REFERENCES "restaurant_recipe_lines"("id")

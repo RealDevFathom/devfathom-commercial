@@ -3478,6 +3478,7 @@ model RestaurantRecipeLine {
   unit                RestaurantUnit                   @relation(fields: [unitId], references: [id], onDelete: Restrict)
   approvedSubstitutes RestaurantRecipeLineSubstitute[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([recipeVersionId])
   @@index([ingredientId])
