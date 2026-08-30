@@ -117,6 +117,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   restaurantCustomers: 'restaurant-loyalty',
   restaurantLoyalty: 'restaurant-loyalty',
   restaurantInsights: 'restaurant-insights',
+  restaurantDashboard: 'restaurant-core',
 };
 
 export function moduleForProcedure(path: string): string | null {
