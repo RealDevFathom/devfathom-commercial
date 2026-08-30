@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   staffFindUnique: vi.fn(),
   staffCreate: vi.fn(),
   staffUpdate: vi.fn(),
+  staffCount: vi.fn(),
+  raw: vi.fn(),
   branchFindMany: vi.fn(),
   branchFindUnique: vi.fn(),
   deviceFindUnique: vi.fn(),
@@ -58,12 +60,15 @@ import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials'
 import type { TRPCContext } from '../trpc';
 
 const db = {
+  $queryRaw: mocks.raw,
+  $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
   restaurantStaffProfile: {
     findMany: mocks.staffFindMany,
     findFirst: mocks.staffFindFirst,
     findUnique: mocks.staffFindUnique,
     create: mocks.staffCreate,
     update: mocks.staffUpdate,
+    count: mocks.staffCount,
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
   restaurantRegisteredDevice: { findUnique: mocks.deviceFindUnique },
@@ -85,6 +90,7 @@ function caller() {
       activeSeats: 1,
       seatLimit: 50,
       modules: [],
+      limits: { 'restaurant.operators.max': 50 },
     },
     session: {
       expires: 'later',
@@ -101,6 +107,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
+  mocks.staffFindMany.mockResolvedValue([]);
+  mocks.staffCount.mockResolvedValue(0);
+  mocks.raw.mockResolvedValue([{ id: 'org_1' }]);
   mocks.staffFindFirst.mockResolvedValue(null);
   mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });

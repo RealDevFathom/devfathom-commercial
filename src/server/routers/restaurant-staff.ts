@@ -3,12 +3,13 @@ import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
+import { StaffProfileError } from '@/lib/restaurant/staff';
 import {
-  StaffProfileError,
-  createStaffProfile,
-  setStaffProfileStatus,
-  updateStaffProfile,
-} from '@/lib/restaurant/staff';
+  CommercialLimitError,
+  createStaffProfileWithinCommercialLimit,
+  setStaffProfileStatusWithinCommercialLimit,
+  updateStaffProfileWithinCommercialLimit,
+} from '@/lib/restaurant/commercial-limits';
 import {
   CredentialLifecycleError,
   issueOperatorCredential,
@@ -64,6 +65,9 @@ const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
+  if (err instanceof CommercialLimitError) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
+  }
   if (err instanceof StaffProfileError) {
     const code =
       err.reason === 'EMAIL_TAKEN'
@@ -218,7 +222,11 @@ export const restaurantStaffRouter = router({
         } else if (input.primaryBranchId) {
           assertAuthorizedBranch(authorization, input.primaryBranchId);
         }
-        const staff = await createStaffProfile(ctx.db, input);
+        const staff = await createStaffProfileWithinCommercialLimit(
+          ctx.db,
+          ctx.entitlements.limits,
+          input
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
           targetId: staff.id,
@@ -254,7 +262,12 @@ export const restaurantStaffRouter = router({
         if (patch.primaryBranchId !== undefined && patch.primaryBranchId !== null) {
           assertAuthorizedBranch(authorization, patch.primaryBranchId);
         }
-        const staff = await updateStaffProfile(ctx.db, id, patch);
+        const staff = await updateStaffProfileWithinCommercialLimit(
+          ctx.db,
+          ctx.entitlements.limits,
+          id,
+          patch
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
           targetId: staff.id,
@@ -275,7 +288,12 @@ export const restaurantStaffRouter = router({
       try {
         const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
         await assertAuthorizedStaffProfile(ctx.db, authorization, input.id);
-        const staff = await setStaffProfileStatus(ctx.db, input.id, input.status);
+        const staff = await setStaffProfileStatusWithinCommercialLimit(
+          ctx.db,
+          ctx.entitlements.limits,
+          input.id,
+          input.status
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
           targetId: staff.id,

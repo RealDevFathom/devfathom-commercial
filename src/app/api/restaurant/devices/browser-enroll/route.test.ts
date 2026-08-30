@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   enrollDevice: vi.fn(),
+  resolveOrganizationEntitlements: vi.fn(),
   recordAudit: vi.fn(),
   branchFindUnique: vi.fn(),
   stationFindFirst: vi.fn(),
@@ -20,7 +21,13 @@ vi.mock('@/lib/auth/session-state', () => ({
 vi.mock('@/lib/http-origin', () => ({
   publicRequestOrigin: () => 'https://tenant.test',
 }));
-vi.mock('@/lib/restaurant/devices', () => ({ enrollDevice: mocks.enrollDevice }));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: mocks.resolveOrganizationEntitlements,
+}));
+vi.mock('@/lib/restaurant/commercial-limits', () => ({
+  CommercialLimitError: class CommercialLimitError extends Error {},
+  enrollDeviceWithinCommercialLimits: mocks.enrollDevice,
+}));
 vi.mock('@/lib/restaurant/terminal-auth', () => ({
   TERMINAL_DEVICE_COOKIE: 'devfathom-terminal',
 }));
@@ -75,6 +82,10 @@ beforeEach(() => {
   vi.stubEnv('NODE_ENV', 'production');
   mocks.can.mockClear();
   mocks.enrollDevice.mockClear();
+  mocks.resolveOrganizationEntitlements.mockReset();
+  mocks.resolveOrganizationEntitlements.mockResolvedValue({
+    limits: { 'pos.registeredDevices.max': 10, 'pos.terminals.max': 10 },
+  });
   mocks.recordAudit.mockClear();
   mocks.support = null;
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1', name: 'Downtown' });

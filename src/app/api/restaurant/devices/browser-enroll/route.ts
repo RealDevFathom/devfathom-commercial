@@ -3,8 +3,12 @@ import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { publicRequestOrigin } from '@/lib/http-origin';
-import { enrollDevice } from '@/lib/restaurant/devices';
+import {
+  CommercialLimitError,
+  enrollDeviceWithinCommercialLimits,
+} from '@/lib/restaurant/commercial-limits';
 import { TERMINAL_DEVICE_COOKIE } from '@/lib/restaurant/terminal-auth';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -61,16 +65,21 @@ export async function POST(request: Request) {
       });
       if (!station) return null;
     }
-    return enrollDevice(db, {
+    const entitlements = await resolveOrganizationEntitlements(actor.organization.id, db);
+    return enrollDeviceWithinCommercialLimits(db, entitlements.limits, {
       name: input.name,
       branchId: input.branchId,
       kind: input.kind,
       stationId: input.kind === 'KDS' ? input.stationId : null,
     });
+  }).catch((error: unknown) => {
+    if (error instanceof CommercialLimitError) return { commercialLimit: error.message } as const;
+    throw error;
   });
   if (result && 'denied' in result) {
     return reject('Device-management permission is required.', 403);
   }
+  if (result && 'commercialLimit' in result) return reject(result.commercialLimit, 403);
   if (!result) return reject('Branch or station was not found.', 404);
 
   recordAudit({
