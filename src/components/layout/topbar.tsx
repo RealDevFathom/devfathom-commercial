@@ -221,7 +221,7 @@ export function Topbar({
             <span className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block">
               Search workspace
             </span>
-            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-muted-foreground xl:inline-flex">
+            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-text-body xl:inline-flex">
               ⌘K
             </kbd>
           </button>

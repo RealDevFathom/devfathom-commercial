@@ -561,7 +561,7 @@ export function TopNavigation() {
               {numbered ? (
                 <span
                   className={cn(
-                    'font-mono text-[10px] tabular-nums text-text-muted',
+                    'font-mono text-[10px] tabular-nums text-text-body',
                     isActive && 'text-accent-brand'
                   )}
                 >

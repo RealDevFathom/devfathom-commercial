@@ -37,7 +37,7 @@ describe('AppShell module guard', () => {
     );
     expect(topbar).toContain('href="/dashboard"');
     expect(topbar).toContain('aria-label="Open dashboard"');
-    expect(topbar).toContain('text-muted-foreground xl:inline-flex');
+    expect(topbar).toContain('text-text-body xl:inline-flex');
   });
 
   it('uses restaurant route ownership for direct routes', () => {
