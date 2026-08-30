@@ -139,12 +139,17 @@ function cookieValue(request: Request, name: string): string | null {
 
 function deviceSecretFromRequest(request: Request): { secret: string; cookie: boolean } | null {
   const header = request.headers.get('authorization');
+  const cookieSecret = cookieValue(request, TERMINAL_DEVICE_COOKIE);
+  // Two credential channels make precedence ambiguous and can accidentally bind a
+  // browser request to a different device than its enrolled cookie. Fail closed.
+  if (header && cookieSecret) return null;
   if (header?.startsWith(BEARER_PREFIX)) {
     const secret = header.slice(BEARER_PREFIX.length).trim();
     return isDeviceSecretFormat(secret) ? { secret, cookie: false } : null;
   }
-  const secret = cookieValue(request, TERMINAL_DEVICE_COOKIE);
-  return secret && isDeviceSecretFormat(secret) ? { secret, cookie: true } : null;
+  return cookieSecret && isDeviceSecretFormat(cookieSecret)
+    ? { secret: cookieSecret, cookie: true }
+    : null;
 }
 
 function cookieOriginAllowed(request: Request): boolean {

@@ -38,15 +38,17 @@ export async function POST(request: Request) {
   if (!actor?.session.user || !evaluateSessionUser(actor.session.user).ok) {
     return reject('A current administrator session is required.', 401);
   }
-  const allowed = await can(subjectFromSession(actor.session.user), 'restaurant:configure');
-  if (!allowed) return reject('Restaurant configuration permission is required.', 403);
-
   const parsed = inputSchema.safeParse(Object.fromEntries(await request.formData()));
   if (!parsed.success) return reject('Review the terminal enrollment fields.', 400);
   const input = parsed.data;
   if (input.kind === 'KDS' && !input.stationId) return reject('Select a KDS station.', 400);
 
   const result = await withTenantDb(actor.organization.id, async (db) => {
+    const allowed = await can(subjectFromSession(actor.session.user), 'devices:manage', undefined, {
+      db,
+      source: 'REST',
+    });
+    if (!allowed) return { denied: true } as const;
     const branch = await db.restaurantBranch.findUnique({ where: { id: input.branchId } });
     if (!branch) return null;
     if (input.kind === 'KDS') {
@@ -62,6 +64,9 @@ export async function POST(request: Request) {
       stationId: input.kind === 'KDS' ? input.stationId : null,
     });
   });
+  if (result && 'denied' in result) {
+    return reject('Device-management permission is required.', 403);
+  }
   if (!result) return reject('Branch or station was not found.', 404);
 
   const response = NextResponse.redirect(

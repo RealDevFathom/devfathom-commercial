@@ -42,6 +42,7 @@ const orgId = `org_wha22_dev_${suffix}`;
 const branchId = `branch_${suffix}`;
 const actingStaffId = `staff_acting_${suffix}`;
 const approvingStaffId = `staff_mgr_${suffix}`;
+const unprivilegedStaffId = `staff_unprivileged_${suffix}`;
 const APPROVING_PIN = '482913';
 
 type Deps = {
@@ -116,11 +117,34 @@ beforeAll(async () => {
     await tx.restaurantStaffProfile.create({
       data: { id: approvingStaffId, displayName: 'Shift Manager', status: 'ACTIVE' },
     });
+    await tx.restaurantStaffProfile.create({
+      data: { id: unprivilegedStaffId, displayName: 'Unprivileged Manager', status: 'ACTIVE' },
+    });
     await tx.restaurantOperatorCredential.create({
       data: {
         staffProfileId: approvingStaffId,
         type: 'PIN',
         credentialHash: approvingHash,
+      },
+    });
+    await tx.restaurantOperatorCredential.create({
+      data: {
+        staffProfileId: unprivilegedStaffId,
+        type: 'PIN',
+        credentialHash: approvingHash,
+      },
+    });
+    const managerRole = await tx.restaurantJobRole.create({
+      data: { key: `device-manager-${suffix}`, name: 'Device manager', active: true },
+    });
+    await tx.restaurantJobRoleCapability.create({
+      data: { jobRoleId: managerRole.id, capability: 'devices:manage' },
+    });
+    await tx.restaurantStaffJobRole.create({
+      data: {
+        staffProfileId: approvingStaffId,
+        jobRoleId: managerRole.id,
+        branchId,
       },
     });
   });
@@ -182,6 +206,25 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
       tx.restaurantOperatorCredential.findFirst({ where: { staffProfileId: approvingStaffId } })
     );
     expect(failed!.failedAttempts).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rejects a valid approving credential without device-management capability', async () => {
+    const api = caller();
+    const { device } = await api.initiateEnrollment({ branchId, name: 'POS-no-capability' });
+
+    await expect(
+      api.revoke({
+        deviceId: device.id,
+        actingStaffProfileId: actingStaffId,
+        approvingStaffProfileId: unprivilegedStaffId,
+        approvingType: 'PIN',
+        approvingSecret: APPROVING_PIN,
+        reason: 'capability check',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const still = (await api.list()).find((d) => d.id === device.id);
+    expect(still!.status).toBe('ACTIVE');
   });
 
   it('revokes with manager co-authorization, writing the C7 evidence record atomically', async () => {

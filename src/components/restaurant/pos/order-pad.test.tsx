@@ -87,7 +87,7 @@ function transport({
         {
           sessionToken: 'session-token',
           session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-19T00:00:00Z' },
-          device: { id: 'device-1', branchName: 'Clifton Flagship' },
+          device: { id: 'device-1', name: 'Front register', branchName: 'Clifton Flagship' },
         },
         201
       );
@@ -192,12 +192,8 @@ async function unlock(fetch: ReturnType<typeof transport>) {
   vi.stubGlobal('fetch', fetch);
   render(<OrderPad />);
 
-  fireEvent.change(screen.getByLabelText('Bearer device secret'), {
-    target: { value: 'device-secret' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Establish session' }));
   await screen.findByRole('heading', { name: 'Terminal locked' });
-  expect(screen.getByText('Device session active for Clifton Flagship.')).toBeVisible();
+  expect(screen.getByText('Front register · Clifton Flagship')).toBeVisible();
   expect(screen.queryByText(/branch-1/)).not.toBeInTheDocument();
   await screen.findByRole('option', { name: 'Amina Rahman — Shift lead' });
   fireEvent.change(screen.getByLabelText('Operator'), {
@@ -222,7 +218,9 @@ describe('OrderPad transport', () => {
     expect(
       screen.getByText('Restaurant POS', { selector: '[data-slot="eyebrow"] span' })
     ).toHaveClass('text-text-strong');
-    expect(screen.getByText(/Start a device-authenticated session/)).toHaveClass('text-text-body');
+    expect(screen.getByText(/Verifying this browser with the server/)).toHaveClass(
+      'text-text-body'
+    );
   });
 
   it('composes item taps locally without a round trip', async () => {
@@ -421,7 +419,7 @@ describe('OrderPad transport', () => {
     expect(screen.getByRole('heading', { name: 'Order pad' })).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
-    await screen.findByRole('heading', { name: 'Establish device' });
+    await screen.findByRole('heading', { name: 'Not enrolled' });
     expect(screen.getByText(/Device revoked:/)).toBeVisible();
   });
 
@@ -471,7 +469,7 @@ describe('OrderPad transport', () => {
       split: { kind: 'NONE' },
     });
     const headers = new Headers(bill?.[1]?.headers);
-    expect(headers.get('Authorization')).toBe('Bearer device-secret');
+    expect(headers.get('Authorization')).toBeNull();
     expect(headers.get('X-Terminal-Session')).toBe('session-token');
     expect(headers.get('Idempotency-Key')).toBe('00000000-0000-4000-8000-000000000062');
   });

@@ -81,16 +81,39 @@ async function flush() {
   });
 }
 
-async function connect(secret = 'device-secret') {
-  fireEvent.change(screen.getByLabelText('Bearer device secret'), {
-    target: { value: secret },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Load branch operators' }));
+async function connect(enrolled = true) {
+  const fetch = globalThis.fetch;
+  if (enrolled) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path.endsWith('/terminal/establish')) {
+          return Promise.resolve(
+            json({
+              sessionToken: 'session-token',
+              device: {
+                name: 'Kitchen screen',
+                branchName: 'Clifton Flagship',
+                kind: 'KDS',
+              },
+            })
+          );
+        }
+        if (path.endsWith('/terminal/unlock')) {
+          return Promise.resolve(json({ session: { id: 'session-1', state: 'UNLOCKED' } }));
+        }
+        return fetch(input, init);
+      })
+    );
+  }
   await flush();
+  if (!enrolled) return;
   fireEvent.change(screen.getByLabelText('Acting operator'), {
     target: { value: 'staff-1' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Connect display' }));
+  fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Verify PIN and unlock' }));
   await flush();
 }
 
@@ -274,10 +297,10 @@ describe('KdsBoard transport', () => {
       { orderItemId: 'item-3', operatorStaffProfileId: 'staff-1' },
     ]);
     expect(posts.map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual([
-      'Bearer device-secret',
-      'Bearer device-secret',
-      'Bearer device-secret',
-      'Bearer device-secret',
+      null,
+      null,
+      null,
+      null,
     ]);
     expect(posts.map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
       '00000000-0000-4000-8000-000000000047',
@@ -296,13 +319,13 @@ describe('KdsBoard transport', () => {
     );
 
     render(<KdsBoard />);
-    await connect('top-secret-value');
+    await connect(false);
 
-    expect(screen.getByRole('heading', { name: 'Connect kitchen display' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Checking enrollment' })).toBeVisible();
     expect(
       screen.getByRole('option', { name: 'Operators unavailable — verify the device secret' })
     ).toBeVisible();
-    expect(screen.queryByText('top-secret-value')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('rdk_');
   });
 
   it('renders a served sibling without offering another action', async () => {
