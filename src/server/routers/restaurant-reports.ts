@@ -128,14 +128,14 @@ export const restaurantReportsRouter = router({
     requireModule(ctx, 'restaurant-purchasing');
     return guarded(ctx, input, (resolved) => readPurchasingReport(ctx.db, resolved));
   }),
-  workforce: operational
-    .input(range)
-    .query(({ ctx, input }) =>
-      guarded(ctx, input, (resolved) =>
-        readWorkforceReport(ctx.db, resolved, { includeLabourCosts: false })
-      )
-    ),
+  workforce: operational.input(range).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-workforce');
+    return guarded(ctx, input, (resolved) =>
+      readWorkforceReport(ctx.db, resolved, { includeLabourCosts: false })
+    );
+  }),
   workforceFinancial: financial.input(range).query(async ({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-workforce');
     if (!(await allowed(ctx, 'reports:operational')))
       throw new TRPCError({
         code: 'FORBIDDEN',
@@ -162,6 +162,7 @@ export const restaurantReportsRouter = router({
       throw new TRPCError({ code: 'FORBIDDEN' });
     if (input.section === 'inventory') requireModule(ctx, 'restaurant-inventory');
     if (input.section === 'purchasing') requireModule(ctx, 'restaurant-purchasing');
+    if (input.section === 'workforce') requireModule(ctx, 'restaurant-workforce');
     if (input.section === 'sop') requireModule(ctx, 'restaurant-sop');
     const includeLabourCosts =
       input.section === 'workforce' &&
