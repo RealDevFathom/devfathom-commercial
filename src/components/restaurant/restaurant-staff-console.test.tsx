@@ -45,6 +45,22 @@ const mocks = vi.hoisted(() => ({
   roleSaveOptions: undefined as MutationOptions | undefined,
   setOverride: vi.fn(),
   clearOverride: vi.fn(),
+  eligibleUsers: [
+    {
+      id: 'user_available',
+      name: 'Ayesha Khan',
+      email: 'ayesha@example.com',
+      status: 'ACTIVE',
+      restaurantStaffProfiles: [],
+    },
+    {
+      id: 'user_linked',
+      name: 'Bilal Ahmed',
+      email: 'bilal@example.com',
+      status: 'ACTIVE',
+      restaurantStaffProfiles: [{ id: 'staff_other', displayName: 'Sous Chef' }],
+    },
+  ],
 }));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -62,6 +78,9 @@ vi.mock('@/lib/trpc', () => ({
     }),
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
+      listEligibleUsers: {
+        useQuery: () => ({ data: mocks.eligibleUsers, error: null, isLoading: false }),
+      },
       listBranches: {
         useQuery: () => ({
           data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
@@ -203,6 +222,25 @@ const entitlements = {
 } as EntitlementView;
 
 describe('Restaurant staff credential UI', () => {
+  it('selects organization users by human identity and marks linked users unavailable', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    const selector = within(dialog).getByLabelText('Organization user');
+    expect(
+      within(selector).getByRole('option', { name: 'Ayesha Khan — ayesha@example.com' })
+    ).toBeEnabled();
+    expect(
+      within(selector).getByRole('option', {
+        name: 'Bilal Ahmed — bilal@example.com — linked to Sous Chef',
+      })
+    ).toBeDisabled();
+    expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.issueOptions = undefined;

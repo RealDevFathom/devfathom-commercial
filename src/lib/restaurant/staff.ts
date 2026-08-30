@@ -83,10 +83,23 @@ async function assertBranchInScope(db: ScopedDb, branchId: string): Promise<void
 }
 
 /** A linked `User` must exist in the caller's organization (RLS scopes the lookup). */
-async function assertUserInScope(db: ScopedDb, userId: string): Promise<void> {
-  const user = await db.user.findUnique({ where: { id: userId }, select: { id: true } });
+async function assertUserInScope(
+  db: ScopedDb,
+  userId: string,
+  currentProfileId?: string
+): Promise<void> {
+  const user = await db.user.findFirst({
+    where: {
+      id: userId,
+      status: 'ACTIVE',
+      restaurantStaffProfiles: currentProfileId
+        ? { every: { id: currentProfileId } }
+        : { none: {} },
+    },
+    select: { id: true },
+  });
   if (!user) {
-    throw new StaffProfileError('The linked user does not exist.', 'USER_NOT_FOUND');
+    throw new StaffProfileError('The selected organization user is unavailable.', 'USER_NOT_FOUND');
   }
 }
 
@@ -157,7 +170,7 @@ export async function updateStaffProfile(db: ScopedDb, id: string, patch: Update
     data.email = email;
   }
   if (patch.userId !== undefined) {
-    if (patch.userId) await assertUserInScope(db, patch.userId);
+    if (patch.userId) await assertUserInScope(db, patch.userId, id);
     data.userId = patch.userId;
   }
   if (patch.primaryBranchId !== undefined) {

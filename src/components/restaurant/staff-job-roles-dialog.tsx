@@ -202,7 +202,7 @@ export function StaffJobRolesDialog({
                       >
                         <span>
                           <span className="block font-medium">{role.name}</span>
-                          <span className="block text-xs font-normal text-text-muted">
+                          <span className="block text-xs font-normal text-text-strong">
                             {role.capabilities.length} inherited capabilities
                           </span>
                         </span>
