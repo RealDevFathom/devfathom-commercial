@@ -130,7 +130,7 @@ async function pageWithCount(status: Status) {
   const caller = callerStub(status);
   mocks.createCaller.mockReturnValue(caller);
   mocks.createTRPCContext.mockResolvedValue(contextStub(countDetail(status)));
-  return { page: await InventoryPage(), caller };
+  return { page: await InventoryPage({ searchParams: Promise.resolve({}) }), caller };
 }
 
 beforeEach(() => {
@@ -143,7 +143,7 @@ beforeEach(() => {
 
 describe('InventoryPage tenancy and access', () => {
   it('resolves tenancy explicitly and renders inventory', async () => {
-    render(await InventoryPage());
+    render(await InventoryPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByRole('heading', { name: 'Inventory' })).toBeDefined();
     expect(mocks.createTRPCContext).toHaveBeenCalledWith({
       session: actor.session,
@@ -153,13 +153,13 @@ describe('InventoryPage tenancy and access', () => {
   });
   it('renders the access state when the organization is absent', async () => {
     mocks.resolveTenantActor.mockResolvedValue(null);
-    render(await InventoryPage());
+    render(await InventoryPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByRole('heading', { name: 'Permission denied' })).toBeDefined();
     expect(mocks.createTRPCContext).not.toHaveBeenCalled();
   });
   it('keeps reads visible but disables mutations without inventory:count', async () => {
     mocks.can.mockImplementation(async (_subject, capability) => capability === 'inventory:read');
-    render(await InventoryPage());
+    render(await InventoryPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByText('Stock on hand')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Create count' })).toBeDisabled();
     expect(screen.getByText(/inventory count permission is required/i)).toBeDefined();
@@ -225,7 +225,7 @@ describe('physical count workflow', () => {
     mocks.createCaller.mockReturnValue(caller);
     mocks.createTRPCContext.mockResolvedValue(contextStub(detail));
 
-    const page = await InventoryPage();
+    const page = await InventoryPage({ searchParams: Promise.resolve({}) });
     const addLine = formAction(page, 'Add count line');
     const view = render(page);
     let previousDetail = screen

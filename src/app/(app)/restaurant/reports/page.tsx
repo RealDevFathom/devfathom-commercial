@@ -12,11 +12,12 @@ import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import {
   MAX_EXPORT_ROWS,
   MAX_INTERACTIVE_ROWS,
-  type RestaurantReportSection,
 } from '@/lib/restaurant/reports';
 import { hasModule } from '@/lib/entitlements';
 import { restaurantReportsRouter } from '@/server/routers/restaurant-reports';
 import { createTRPCContext } from '@/server/trpc';
+
+import { ExportLink } from './export-link';
 
 export const metadata: Metadata = { title: 'Restaurant reports' };
 
@@ -57,28 +58,6 @@ function freshnessCopy(status: 'CURRENT' | 'STALE' | 'PARTIAL' | 'NO_CLOSED_DAYS
     PARTIAL: { label: 'Partial', tone: 'warning' as const },
     NO_CLOSED_DAYS: { label: 'No closed days', tone: 'neutral' as const },
   }[status];
-}
-
-function ExportLink({
-  section,
-  branch,
-  from,
-  to,
-}: {
-  section: RestaurantReportSection;
-  branch: string;
-  from: string;
-  to: string;
-}) {
-  const params = new URLSearchParams({ section, branch, from, to });
-  return (
-    <Link
-      className={buttonVariants({ variant: 'secondary', size: 'sm' })}
-      href={`/api/restaurant/reports/export?${params.toString()}`}
-    >
-      Export CSV
-    </Link>
-  );
 }
 
 function SectionNotice({
