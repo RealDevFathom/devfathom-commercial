@@ -1,5 +1,17 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const requiredEnvironment = [
+  'DATABASE_URL',
+  'PLAYWRIGHT_DATABASE_ADMIN_URL',
+  'PLAYWRIGHT_PLATFORM_ADMIN_EMAIL',
+  'PLAYWRIGHT_PLATFORM_ADMIN_PASSWORD',
+] as const;
+const missingEnvironment = requiredEnvironment.filter((name) => !process.env[name]);
+
+if (missingEnvironment.length > 0) {
+  throw new Error(`Platform control-plane E2E requires: ${missingEnvironment.join(', ')}.`);
+}
+
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4319);
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
 
