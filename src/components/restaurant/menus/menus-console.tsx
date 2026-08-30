@@ -29,8 +29,13 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
+import {
+  OPERATIONAL_ORDER_CHANNELS,
+  type OperationalOrderChannel,
+  type OrderChannel,
+} from '@/lib/restaurant/order-channels';
 
-type Channel = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY';
+type Channel = OrderChannel;
 type VersionStatus = 'DRAFT' | 'ACTIVE' | 'SUPERSEDED';
 type PublicationStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
 
@@ -166,7 +171,7 @@ type Confirmation = {
 
 type PreviewInput = {
   publicationId: string;
-  channel: Channel;
+  channel: OperationalOrderChannel;
   at?: Date;
 };
 
@@ -179,7 +184,7 @@ type MenusConsoleProps = {
   loadError?: boolean;
 };
 
-const channels: Channel[] = ['DINE_IN', 'TAKEAWAY', 'DELIVERY'];
+const channels: Channel[] = [...OPERATIONAL_ORDER_CHANNELS];
 const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
@@ -536,14 +541,14 @@ export function RestaurantMenusConsole({
           branchId: text(data, 'branchId'),
           menuId: text(data, 'menuId'),
           priceListId: text(data, 'priceListId') || null,
-          channels: data.getAll('channels') as Channel[],
+          channels: data.getAll('channels') as OperationalOrderChannel[],
         });
         break;
       case 'channels':
         if (!canPublish) return;
         setPublicationChannels.mutate({
           id: editor.publication.id,
-          channels: data.getAll('channels') as Channel[],
+          channels: data.getAll('channels') as OperationalOrderChannel[],
         });
         break;
       case 'window':
@@ -1582,7 +1587,7 @@ export function RestaurantMenusConsole({
                       const instant = text(data, 'at');
                       setPreviewRequest({
                         publicationId: text(data, 'publicationId'),
-                        channel: text(data, 'channel') as Channel,
+                        channel: text(data, 'channel') as OperationalOrderChannel,
                         ...(instant ? { at: new Date(instant) } : {}),
                       });
                     }}
@@ -1604,6 +1609,9 @@ export function RestaurantMenusConsole({
                             {channel.replace('_', ' ')}
                           </option>
                         ))}
+                        <option value="DELIVERY" disabled>
+                          DELIVERY — not configured
+                        </option>
                       </select>
                     </Field>
                     <Field label="Preview instant">
@@ -1969,6 +1977,10 @@ export function RestaurantMenusConsole({
                         {channel.replace('_', ' ')}
                       </label>
                     ))}
+                    <label className="flex min-h-11 items-center gap-2 rounded-md border border-border-default px-3 text-sm text-text-muted">
+                      <input name="channels" type="checkbox" value="DELIVERY" disabled />
+                      DELIVERY — not configured
+                    </label>
                   </div>
                 </fieldset>
               ) : null}

@@ -94,6 +94,16 @@ beforeEach(() => {
 });
 
 describe('read model (C10)', () => {
+  it('keeps historical DELIVERY orders readable through the channel filter', async () => {
+    mocks.orderFindMany.mockResolvedValue([]);
+
+    await caller().listOrders({ branchId: 'b1', channel: 'DELIVERY' });
+
+    expect(mocks.orderFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ channel: 'DELIVERY' }) })
+    );
+  });
+
   it('lists orders with a derived, string-serialized subtotal and pagination cursor', async () => {
     mocks.orderFindMany.mockResolvedValue([
       {
@@ -261,6 +271,17 @@ describe('mutation wiring', () => {
     expect(result.orderId).toBe('o9');
     expect(result.businessDate).toBe('2026-08-19');
     expect(mocks.annotateAudit).toHaveBeenCalled();
+  });
+
+  it('rejects delivery at the tRPC schema before command or audit work', async () => {
+    await expect(
+      // @ts-expect-error — deliberate bypass attempt against the operational schema
+      caller().open({ branchId: 'b1', channel: 'DELIVERY', actor: ACTOR })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.openOrder).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
 
   it('serializes fired-ticket results', async () => {

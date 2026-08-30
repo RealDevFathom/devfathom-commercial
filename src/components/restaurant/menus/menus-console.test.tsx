@@ -152,12 +152,13 @@ describe('Restaurant menus console', () => {
     expect(screen.queryByRole('button', { name: 'Add brand' })).not.toBeInTheDocument();
   });
 
-  it('queries effectiveMenu with publication, channel, and instant from preview controls', () => {
+  it('offers supported channels and queries effectiveMenu with channel and instant', () => {
     renderConsole();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Effective preview' }));
+    expect(screen.getByRole('option', { name: 'DELIVERY — not configured' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Preview channel'), {
-      target: { value: 'DELIVERY' },
+      target: { value: 'TAKEAWAY' },
     });
     fireEvent.change(screen.getByLabelText('Preview instant'), {
       target: { value: '2026-08-18T12:30' },
@@ -167,8 +168,20 @@ describe('Restaurant menus console', () => {
     const enabledCall = mocks.effectiveMenu.mock.calls.find((call) => call[1]?.enabled);
     expect(enabledCall?.[0]).toEqual({
       publicationId: 'publication_1',
-      channel: 'DELIVERY',
+      channel: 'TAKEAWAY',
       at: new Date('2026-08-18T12:30'),
     });
+  });
+
+  it('shows delivery as not configured in publication channel controls', () => {
+    renderConsole();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Publications/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Channels' }));
+
+    expect(screen.getByLabelText('DELIVERY — not configured')).toBeDisabled();
+    expect(screen.getByLabelText('DINE IN')).toBeEnabled();
+    expect(screen.getByLabelText('TAKEAWAY')).toBeEnabled();
   });
 });

@@ -429,7 +429,7 @@ function caller(fixture: Fixture) {
 
 async function publish(
   fixture: Fixture,
-  options: { channels?: Array<'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'>; priceListId?: string } = {}
+  options: { channels?: Array<'DINE_IN' | 'TAKEAWAY'>; priceListId?: string } = {}
 ) {
   const api = caller(fixture).restaurantMenus;
   const draft = await api.createPublication({
@@ -463,7 +463,7 @@ async function itemAt(
   publicationId: string,
   itemId: string,
   at: string,
-  channel: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' = 'DINE_IN'
+  channel: 'DINE_IN' | 'TAKEAWAY' = 'DINE_IN'
 ) {
   const result = await caller(fixture).restaurantMenus.effectiveMenu({
     publicationId,
@@ -568,10 +568,6 @@ describe('branch-timezone availability', () => {
     expect(
       (await itemAt(fixture, publication.id, 'item_pub', '2026-01-15T16:30:00Z'))?.available
     ).toBe(true);
-    expect(
-      (await itemAt(fixture, publication.id, 'item_base', '2026-01-15T16:30:00Z', 'DELIVERY'))
-        ?.available
-    ).toBe(false);
   });
 });
 

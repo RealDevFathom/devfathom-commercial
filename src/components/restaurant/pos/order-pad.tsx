@@ -16,8 +16,9 @@ import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { OPERATIONAL_ORDER_CHANNELS, type OrderChannel } from '@/lib/restaurant/order-channels';
 
-type Channel = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY';
+type Channel = OrderChannel;
 type Runtime = {
   deviceId: string;
   deviceName: string;
@@ -808,9 +809,14 @@ export function OrderPad() {
                     }}
                     className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                   >
-                    <option value="DINE_IN">Dine in</option>
-                    <option value="TAKEAWAY">Takeaway</option>
-                    <option value="DELIVERY">Delivery</option>
+                    {OPERATIONAL_ORDER_CHANNELS.map((value) => (
+                      <option key={value} value={value}>
+                        {value === 'DINE_IN' ? 'Dine in' : 'Takeaway'}
+                      </option>
+                    ))}
+                    <option value="DELIVERY" disabled>
+                      Delivery — not configured
+                    </option>
                   </select>
                 </div>
                 {channel === 'DINE_IN' ? (
