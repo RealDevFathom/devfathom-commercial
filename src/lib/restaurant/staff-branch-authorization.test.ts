@@ -10,8 +10,10 @@ vi.mock('@/lib/restaurant/job-roles', () => ({ resolveStaffCapabilities: mocks.r
 
 import {
   assertAuthorizedBranch,
+  assertActorEligibleForBranch,
   assertAuthorizedStaffProfile,
   assertStaffProfileExists,
+  resolveCapabilityBranchAuthorization,
   resolveStaffBranchAuthorization,
 } from './staff-branch-authorization';
 
@@ -19,11 +21,14 @@ const user = { id: 'user_actor', role: 'EMPLOYEE', status: 'ACTIVE' };
 const database = () => ({
   restaurantBranch: { findMany: vi.fn(async () => [{ id: 'a' }, { id: 'b' }]) },
   restaurantStaffProfile: {
-    findFirst: vi.fn(async () => ({
-      id: 'actor',
-      jobRoles: [{ branchId: 'a' }, { branchId: 'b' }],
-      directCapabilityGrants: [],
-    })),
+    findMany: vi.fn(async () => [
+      {
+        id: 'actor',
+        primaryBranchId: null,
+        jobRoles: [{ branchId: 'a' }, { branchId: 'b' }],
+        directCapabilityGrants: [],
+      },
+    ]),
     findUnique: vi.fn(async ({ where }: { where: { id: string } }) =>
       where.id === 'target'
         ? { primaryBranchId: 'a', jobRoles: [], directCapabilityGrants: [] }
@@ -60,6 +65,54 @@ describe('staff branch authorization', () => {
       }
     );
     expect(mocks.resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves a device scope with devices:manage rather than staff:manage', async () => {
+    mocks.resolve.mockImplementation(
+      async (_db, _staff, branch) => new Set(branch === 'b' ? ['devices:manage'] : [])
+    );
+
+    await expect(
+      resolveCapabilityBranchAuthorization(database() as never, user, 'devices:manage', {
+        requireExactlyOneActiveActor: true,
+      })
+    ).resolves.toMatchObject({ actorStaffProfileId: 'actor', branchIds: ['b'] });
+  });
+
+  it('does not treat organization-wide authority as an unlinked actor branch assignment', async () => {
+    mocks.can.mockResolvedValue(true);
+    const authorization = await resolveCapabilityBranchAuthorization(
+      database() as never,
+      user,
+      'devices:manage',
+      { requireExactlyOneActiveActor: true }
+    );
+
+    expect(() => assertActorEligibleForBranch(authorization, 'a')).not.toThrow();
+    expect(() => assertActorEligibleForBranch(authorization, 'unlinked')).toThrowError(
+      expect.objectContaining({ code: 'FORBIDDEN' })
+    );
+  });
+
+  it('fails closed when an exact active actor mapping is absent or ambiguous', async () => {
+    const missing = database();
+    missing.restaurantStaffProfile.findMany.mockResolvedValueOnce([]);
+    await expect(
+      resolveCapabilityBranchAuthorization(missing as never, user, 'devices:manage', {
+        requireExactlyOneActiveActor: true,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const ambiguous = database();
+    ambiguous.restaurantStaffProfile.findMany.mockResolvedValueOnce([
+      { id: 'actor-a' },
+      { id: 'actor-b' },
+    ] as never);
+    await expect(
+      resolveCapabilityBranchAuthorization(ambiguous as never, user, 'devices:manage', {
+        requireExactlyOneActiveActor: true,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('returns one error for unauthorized, arbitrary, and missing identifiers', async () => {

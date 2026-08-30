@@ -293,7 +293,7 @@ describe('Restaurant device security UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Rotate secret' }));
     expect(screen.getByRole('heading', { name: 'Rotate Kitchen display?' })).toBeInTheDocument();
     expect(screen.getByText(/current secret stops working immediately/i)).toBeVisible();
-    fireEvent.change(screen.getByLabelText('Acting staff'), { target: { value: 'staff_1' } });
+    expect(screen.queryByLabelText('Acting staff')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Approving staff'), { target: { value: 'staff_2' } });
     fireEvent.change(screen.getByLabelText('Approving PIN or badge secret'), {
       target: { value: '482913' },
@@ -302,6 +302,17 @@ describe('Restaurant device security UI', () => {
       target: { value: 'Scheduled rotation' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm rotation' }));
+
+    expect(mocks.rotateMutate).toHaveBeenCalledWith(
+      {
+        deviceId: 'device_1',
+        approvingStaffProfileId: 'staff_2',
+        approvingType: 'PIN',
+        approvingSecret: '482913',
+        reason: 'Scheduled rotation',
+      },
+      expect.objectContaining({ onSettled: expect.any(Function) })
+    );
 
     expect(screen.getByRole('heading', { name: 'New secret for Kitchen display' })).toBeVisible();
     expect(screen.getByLabelText('One-time device secret')).toHaveValue('rdk_rotated_once');
