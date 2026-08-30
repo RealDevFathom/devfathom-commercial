@@ -53,6 +53,7 @@ import {
 import { buildScoreReport } from '@/lib/restaurant/sop-score';
 import { getOccurrenceAuditTrail } from '@/lib/restaurant/sop-audit';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { resolveStaffBranchAuthorization } from '@/lib/restaurant/staff-branch-authorization';
 
 /**
  * M7-L3 — the SOP authoring console (back-office server surface).
@@ -818,6 +819,22 @@ export const restaurantSopRouter = router({
 
   // ── Audit history ───────────────────────────────────────────────────────────
 
+  listRecentOccurrences: manageProcedure.query(async ({ ctx }) => {
+    const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+    return ctx.db.restaurantSopOccurrence.findMany({
+      where: { branchId: { in: authorization.branchIds } },
+      select: {
+        id: true,
+        businessDate: true,
+        status: true,
+        branch: { select: { name: true } },
+        templateVersion: { select: { template: { select: { name: true } } } },
+      },
+      orderBy: [{ businessDate: 'desc' }, { createdAt: 'desc' }],
+      take: 100,
+    });
+  }),
+
   /**
    * The immutable trail for one occurrence, folded from the append-only step,
    * evidence, verification and escalation records. Read-only by construction.
@@ -825,9 +842,17 @@ export const restaurantSopRouter = router({
   occurrenceAuditTrail: manageProcedure
     .input(z.object({ occurrenceId: z.string() }).strict())
     .query(async ({ ctx, input }) => {
+      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const accessible = await ctx.db.restaurantSopOccurrence.findFirst({
+        where: { id: input.occurrenceId, branchId: { in: authorization.branchIds } },
+        select: { id: true },
+      });
+      if (!accessible) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence unavailable.' });
+      }
       const trail = await getOccurrenceAuditTrail(ctx.db, input.occurrenceId);
       if (!trail) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence unavailable.' });
       }
       return trail;
     }),

@@ -201,7 +201,6 @@ export default function RestaurantSopOversightPage() {
     from: isoDaysAgo(30),
     to: isoDaysAgo(0),
   }));
-  const [occurrenceInput, setOccurrenceInput] = useState('');
   const [auditOccurrenceId, setAuditOccurrenceId] = useState('');
 
   const policiesQuery = trpc.restaurantSop.listEscalationPolicies.useQuery(undefined, {
@@ -211,6 +210,9 @@ export default function RestaurantSopOversightPage() {
     { from: scoreWindow.from, to: scoreWindow.to, branchId: null },
     { enabled: moduleEnabled }
   );
+  const recentOccurrencesQuery = trpc.restaurantSop.listRecentOccurrences.useQuery(undefined, {
+    enabled: moduleEnabled,
+  });
   const auditQuery = trpc.restaurantSop.occurrenceAuditTrail.useQuery(
     { occurrenceId: auditOccurrenceId },
     { enabled: moduleEnabled && auditOccurrenceId.length > 0, retry: false }
@@ -905,32 +907,45 @@ export default function RestaurantSopOversightPage() {
               records — it is never written to, so it cannot drift from what actually happened.
             </p>
 
-            <form
-              className="flex flex-wrap items-end gap-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setAuditOccurrenceId(occurrenceInput.trim());
-              }}
-            >
+            <div className="flex flex-wrap items-end gap-3">
               <div className="min-w-64 flex-1 space-y-1.5">
                 <label className={labelClass} htmlFor="audit-occurrence">
-                  Occurrence id
+                  Recent occurrence
                 </label>
-                <Input
+                <select
                   id="audit-occurrence"
-                  value={occurrenceInput}
-                  onChange={(event) => setOccurrenceInput(event.target.value)}
-                  placeholder="Paste an SOP occurrence id"
-                />
+                  className={selectClass}
+                  value={auditOccurrenceId}
+                  onChange={(event) => setAuditOccurrenceId(event.target.value)}
+                  disabled={
+                    recentOccurrencesQuery.isLoading || Boolean(recentOccurrencesQuery.error)
+                  }
+                >
+                  <option value="">
+                    {recentOccurrencesQuery.isLoading
+                      ? 'Loading recent occurrences…'
+                      : recentOccurrencesQuery.error
+                        ? isPermissionError(recentOccurrencesQuery.error)
+                          ? 'Occurrences unavailable for your access'
+                          : 'Occurrences unavailable'
+                        : recentOccurrencesQuery.data?.length
+                          ? 'Choose an occurrence'
+                          : 'No accessible recent occurrences'}
+                  </option>
+                  {(recentOccurrencesQuery.data ?? []).map((occurrence) => (
+                    <option key={occurrence.id} value={occurrence.id}>
+                      {occurrence.templateVersion.template.name} — {occurrence.branch.name} —{' '}
+                      {new Date(occurrence.businessDate).toLocaleDateString()} —{' '}
+                      {occurrence.status.replaceAll('_', ' ').toLowerCase()}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <Button type="submit" variant="secondary" disabled={!occurrenceInput.trim()}>
-                {auditQuery.isFetching ? 'Loading…' : 'Load trail'}
-              </Button>
-            </form>
+            </div>
 
             {!auditOccurrenceId ? (
               <p className="mt-6 text-sm leading-relaxed text-text-muted">
-                Enter an occurrence id to read its history.
+                Choose a recent occurrence to read its history.
               </p>
             ) : auditQuery.isLoading ? (
               <div className="mt-6 space-y-2">

@@ -135,6 +135,15 @@ export function FloorConsole() {
     { branchId: normalizedBranchId, includeInactive },
     { enabled: branchReady }
   );
+  const productsQuery = trpc.restaurantCatalog.listProducts.useQuery(
+    { status: 'ACTIVE' },
+    { enabled: posEnabled && editor?.kind === 'routing' && !editor.item }
+  );
+  const categoriesQuery = trpc.restaurantCatalog.listCategories.useQuery(undefined, {
+    enabled: posEnabled && editor?.kind === 'routing' && !editor.item,
+  });
+  const [routingTargetType, setRoutingTargetType] = useState<'product' | 'category'>('product');
+  const [routingTargetSearch, setRoutingTargetSearch] = useState('');
 
   const refresh = () => {
     void utils.restaurantFloor.listFloors.invalidate();
@@ -748,9 +757,6 @@ export function FloorConsole() {
                                   }
                                 />
                               </div>
-                              <p className="mt-1 font-mono text-[0.6875rem] text-text-faint">
-                                {station.id}
-                              </p>
                             </div>
                             <div className="flex flex-wrap gap-2">
                               {!station.isDefault ? (
@@ -805,7 +811,7 @@ export function FloorConsole() {
                                   <p className="text-sm text-text-strong">
                                     {rule.productName
                                       ? `Product: ${rule.productName}`
-                                      : `Category: ${rule.categoryName ?? rule.categoryId}`}{' '}
+                                      : `Category: ${rule.categoryName ?? 'Unavailable category'}`}{' '}
                                     <span className="text-text-muted">
                                       · priority {rule.priority}
                                     </span>
@@ -1025,14 +1031,78 @@ export function FloorConsole() {
                   {!editor.item ? (
                     <>
                       <Field label="Target type">
-                        <select name="targetType" className={selectClass} defaultValue="product">
+                        <select
+                          name="targetType"
+                          className={selectClass}
+                          value={routingTargetType}
+                          onChange={(event) =>
+                            setRoutingTargetType(event.target.value as 'product' | 'category')
+                          }
+                        >
                           <option value="product">Product</option>
                           <option value="category">Category</option>
                         </select>
                       </Field>
-                      <Field label="Product or category ID">
-                        <Input name="targetId" required className="h-11" />
-                      </Field>
+                      <div className="space-y-1.5">
+                        <label htmlFor="routing-target" className={labelClass}>
+                          {routingTargetType === 'product' ? 'Product' : 'Category'}
+                        </label>
+                        <Input
+                          type="search"
+                          aria-label={`Search ${routingTargetType === 'product' ? 'products' : 'categories'}`}
+                          value={routingTargetSearch}
+                          onChange={(event) => setRoutingTargetSearch(event.target.value)}
+                          placeholder={`Search ${routingTargetType === 'product' ? 'products' : 'categories'}`}
+                          className="mb-2 h-11"
+                        />
+                        <select
+                          id="routing-target"
+                          name="targetId"
+                          required
+                          className={selectClass}
+                          disabled={
+                            routingTargetType === 'product'
+                              ? productsQuery.isLoading || Boolean(productsQuery.error)
+                              : categoriesQuery.isLoading || Boolean(categoriesQuery.error)
+                          }
+                        >
+                          <option value="">
+                            {(
+                              routingTargetType === 'product'
+                                ? productsQuery.isLoading
+                                : categoriesQuery.isLoading
+                            )
+                              ? 'Loading catalog…'
+                              : (
+                                    routingTargetType === 'product'
+                                      ? productsQuery.error
+                                      : categoriesQuery.error
+                                  )
+                                ? 'Catalog unavailable for your access'
+                                : `Choose a ${routingTargetType}`}
+                          </option>
+                          {(routingTargetType === 'product'
+                            ? (productsQuery.data ?? []).map((item) => ({
+                                id: item.id,
+                                label: item.name,
+                              }))
+                            : (categoriesQuery.data ?? []).map((item) => ({
+                                id: item.id,
+                                label: item.name,
+                              }))
+                          )
+                            .filter((item) =>
+                              item.label
+                                .toLowerCase()
+                                .includes(routingTargetSearch.trim().toLowerCase())
+                            )
+                            .map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.label}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
                     </>
                   ) : (
                     <p className="rounded-md bg-surface-sunken p-3 text-sm text-text-muted">

@@ -146,6 +146,19 @@ export const restaurantStaffRouter = router({
       }));
     }),
 
+  listEligibleUsers: staffProcedure.query(({ ctx }) =>
+    ctx.db.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        status: true,
+        restaurantStaffProfiles: { select: { id: true, displayName: true }, take: 1 },
+      },
+      orderBy: [{ name: 'asc' }, { email: 'asc' }],
+    })
+  ),
+
   // ── Staff profiles ────────────────────────────────────────────────────────
   list: staffProcedure
     .input(

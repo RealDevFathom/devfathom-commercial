@@ -13,11 +13,19 @@ const mocks = vi.hoisted(() => ({
   createFloor: vi.fn(),
   mutate: vi.fn(),
   invalidate: vi.fn(),
+  products: [
+    { id: 'product_1', name: 'Chicken Karahi' },
+    { id: 'product_2', name: 'Mango Lassi' },
+  ],
 }));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    restaurantCatalog: {
+      listProducts: { useQuery: () => ({ data: mocks.products, error: null, isLoading: false }) },
+      listCategories: { useQuery: () => ({ data: [], error: null, isLoading: false }) },
+    },
     restaurantStaff: {
       listBranches: {
         useQuery: () => ({
@@ -159,5 +167,28 @@ describe('FloorConsole', () => {
       name: 'Patio',
       sortOrder: 3,
     });
+  });
+
+  it('searches active catalog labels and submits the selected product invisibly', () => {
+    mocks.stations.data = [
+      {
+        id: 'station_1',
+        name: 'Hot Kitchen',
+        active: true,
+        isDefault: true,
+        routingRules: [],
+      },
+    ];
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add routing rule' });
+    fireEvent.change(within(dialog).getByPlaceholderText('Search products'), {
+      target: { value: 'karahi' },
+    });
+    const product = within(dialog).getByLabelText('Product');
+    expect(within(product).getByRole('option', { name: 'Chicken Karahi' })).toBeVisible();
+    expect(within(product).queryByRole('option', { name: 'Mango Lassi' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/product or category id/i)).not.toBeInTheDocument();
   });
 });

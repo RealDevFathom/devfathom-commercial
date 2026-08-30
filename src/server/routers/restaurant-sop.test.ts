@@ -10,6 +10,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   annotateAudit: vi.fn(),
+  resolveStaffBranchAuthorization: vi.fn(async () => ({
+    actorStaffProfileId: 'staff_1',
+    organizationWide: false,
+    branchIds: ['branch_1'],
+  })),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -30,6 +35,9 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/lib/restaurant/staff-branch-authorization', () => ({
+  resolveStaffBranchAuthorization: mocks.resolveStaffBranchAuthorization,
+}));
 
 import { restaurantSopRouter } from './restaurant-sop';
 
@@ -68,6 +76,10 @@ function makeDb() {
     // SOP-1: createAssignment now resolves an assignee target before persisting.
     restaurantJobRole: model(),
     restaurantStaffProfile: model(),
+    restaurantSopOccurrence: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   };
   (db as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
     fn(db)
@@ -81,6 +93,35 @@ beforeEach(() => {
   db = makeDb();
   mocks.can.mockResolvedValue(true);
   mocks.annotateAudit.mockReset();
+});
+
+describe('oversight occurrence directory', () => {
+  it('lists only recent occurrences in the effective branch scope with human labels', async () => {
+    db.restaurantSopOccurrence.findMany.mockResolvedValue([
+      {
+        id: 'occurrence_1',
+        businessDate: new Date('2026-08-30T00:00:00Z'),
+        status: 'SCHEDULED',
+        branch: { name: 'Downtown' },
+        templateVersion: { template: { name: 'Opening checklist' } },
+      },
+    ]);
+    const result = await caller().listRecentOccurrences();
+    expect(result[0]).toMatchObject({
+      branch: { name: 'Downtown' },
+      templateVersion: { template: { name: 'Opening checklist' } },
+    });
+    expect(db.restaurantSopOccurrence.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { branchId: { in: ['branch_1'] } }, take: 100 })
+    );
+  });
+
+  it('returns the same unavailable response for foreign and inaccessible occurrences', async () => {
+    db.restaurantSopOccurrence.findFirst.mockResolvedValue(null);
+    await expect(
+      caller().occurrenceAuditTrail({ occurrenceId: 'arbitrary_value' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Occurrence unavailable.' });
+  });
 });
 
 function caller(limits: Record<string, number> = { 'sop.templates.max': 25 }) {
