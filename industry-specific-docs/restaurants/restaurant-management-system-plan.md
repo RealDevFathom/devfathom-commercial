@@ -1,15 +1,15 @@
 # DevFathom Restaurant Management System
 
-| Field                         | Value                                                                                                                                                                             |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Document version              | `1.3`                                                                                                                                                                             |
-| Document status               | `FINAL PLANNING BASELINE — READY FOR PHASE 0`                                                                                                                                     |
-| Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                                                                    |
-| Product                       | DevFathom Commercial                                                                                                                                                              |
-| Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                                                                   |
-| Last updated                  | 2026-08-18                                                                                                                                                                        |
-| Current implementation status | Restaurant-specific operational modules have not been implemented                                                                                                                 |
-| Revision basis                | Original platform plan, BA functional PRD, front-of-house gap review, adversarial v1.1 review, and final independent verification review (v1.3) against repository HEAD `5c4b48c` |
+| Field                         | Value                                                                                                                               |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Document version              | `1.4`                                                                                                                               |
+| Document status               | `FINAL PLANNING BASELINE — READY FOR PHASE 0`                                                                                       |
+| Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                      |
+| Product                       | DevFathom Commercial                                                                                                                |
+| Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                     |
+| Last updated                  | 2026-08-30                                                                                                                          |
+| Current implementation status | Restaurant source is repository-implemented in whole or in part by area; this does not establish deployment or production readiness |
+| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against commit `03731baab29b29278165c7a169078d4fec897a10`   |
 
 ## 1. Purpose
 
@@ -1301,21 +1301,22 @@ The following existing files provide patterns to reuse. They do not imply that r
 
 ## 20. Status summary
 
-This table is reconciled against commit `03731baab29b29278165c7a169078d4fec897a10`. `IMPLEMENTED`
-means committed source plus focused evidence; it does not assert deployment, browser, hardware, or
-external-service acceptance. Use the
+This table is reconciled against commit `03731baab29b29278165c7a169078d4fec897a10`. `SOURCE
+IMPLEMENTED` means committed source plus focused evidence; it does not assert deployment, browser,
+hardware, external-service acceptance, or production readiness. Use the
 [restaurant administrator guide](../../docs/product/restaurant-administrator-guide.md) for safe
 operator workflows and current limits.
 
-| Area                                                                          | Evidence status                                                                                                                                 |
-| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Planning baseline and decision register                                       | `FINAL FOR PHASE 0`; unresolved decisions remain `OPEN — SEE SECTION 17.2`                                                                      |
-| Onboarding, packages, modules, roles, staff, and registered devices           | `IMPLEMENTED / PARTIAL` — onboarding, entitlement gates, staff, and device consoles exist; complete branch administration is not operator-ready |
-| Catalog, menus, pricing, modifiers, recipes, OCR import, and publication      | `IMPLEMENTED` — catalog/menu/import consoles and focused tests exist; OCR publication remains manual                                            |
-| POS, KDS, orders, bills, tenders, drawer, business date, and numbering        | `IMPLEMENTED / MOCKED` — terminal flows and focused tests exist; card processing is mocked and printing is not built                            |
-| Tax                                                                           | `IMPLEMENTED / CONFIGURATION-BOUND` — branch activation and Pakistan profiles exist; applicability requires qualified adviser confirmation      |
-| Inventory, purchasing, workforce, SOP, customers/loyalty, and insights        | `IMPLEMENTED / PARTIAL` — routes, domain logic, and focused tests exist; operator limits remain documented                                      |
-| Browser, hardware, external payment, native mobile, and production deployment | `NOT CLAIMED`                                                                                                                                   |
+| Area                                                                          | Evidence status                                                                                                                                        |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Planning baseline and decision register                                       | `FINAL FOR PHASE 0`; unresolved decisions remain `OPEN — SEE SECTION 17.2`                                                                             |
+| Onboarding, packages, modules, roles, staff, and registered devices           | `SOURCE IMPLEMENTED / PARTIAL` — onboarding, entitlement gates, staff, and device consoles exist; complete branch administration is not operator-ready |
+| Catalog, menus, pricing, modifiers, recipes, OCR import, and publication      | `SOURCE IMPLEMENTED` — catalog/menu/import consoles and focused tests exist; OCR publication remains manual                                            |
+| POS, KDS, orders, bills, tenders, drawer, business date, and numbering        | `SOURCE IMPLEMENTED / MOCKED` — terminal flows and focused tests exist; card processing is mocked and printing is not built                            |
+| Tax                                                                           | `SOURCE IMPLEMENTED / CONFIGURATION-BOUND` — branch activation and Pakistan profiles exist; applicability requires qualified adviser confirmation      |
+| Inventory, purchasing, workforce, SOP, customers/loyalty, and insights        | `SOURCE IMPLEMENTED / PARTIAL` — routes, domain logic, and focused tests exist; operator limits remain documented                                      |
+| Browser, hardware, external payment, native mobile, and production deployment | `NOT CLAIMED`                                                                                                                                          |
 
-No restaurant-specific capability should be marketed as implemented until its code, migrations,
-authorization, tenant isolation, QA, deployment, and documentation are complete.
+Repository evidence must not be presented as production availability. Market a restaurant-specific
+capability as production-ready only after its code, migrations, authorization, tenant isolation,
+QA, deployment, and documentation are complete.
