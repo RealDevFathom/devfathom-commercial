@@ -1,8 +1,8 @@
 import type { Metadata, Viewport } from 'next';
 import { Instrument_Sans, IBM_Plex_Mono } from 'next/font/google';
-import Script from 'next/script';
 import './globals.css';
 import { Providers } from '@/components/providers';
+import { PreferenceBootstrap } from '@/components/preference-bootstrap';
 
 // Instrument Sans gives the workspace its precise, editorial geometry.
 const instrumentSans = Instrument_Sans({
@@ -18,14 +18,6 @@ const plexMono = IBM_Plex_Mono({
   weight: ['400', '500', '600'],
   display: 'swap',
 });
-
-// FOUC guard for the five configurable surface toggles (see
-// preferences-provider.tsx). Runs synchronously in <head> before the body
-// paints, mirroring localStorage `devfathom-prefs` onto <html> data-* so the
-// CSS in globals.css applies pre-hydration. Theme is included here too so the
-// saved surface and color choices become visible together. The values are
-// allow-listed and no user content is evaluated.
-const PREFERENCES_FOUC_SCRIPT = `(function(){try{var d=document.documentElement;var allow={density:['default','compact'],type:['default','lg'],accent:['quiet','bold'],layout:['rail','top'],icons:['numeric','architectural']};var def={density:'default',type:'default',accent:'quiet',layout:'rail',icons:'numeric'};var raw=localStorage.getItem('devfathom-prefs');var p=raw?JSON.parse(raw):{};Object.keys(allow).forEach(function(k){var v=p&&p[k];if(allow[k].indexOf(v)===-1)v=def[k];d.setAttribute('data-'+k,v);});var theme=localStorage.getItem('theme');theme=theme==='dark'?'dark':'light';d.setAttribute('data-theme',theme);d.style.colorScheme=theme;}catch(e){}})();`;
 
 const description =
   'The DevFathom company hub — projects, finance, clients, people, and real-time collaboration in one calm, unified workspace for the team that designs, builds, and advises.';
@@ -90,13 +82,8 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full">
+        <PreferenceBootstrap />
         <Providers>{children}</Providers>
-        {/* Injected by Next before hydration, avoiding a raw React <script>. */}
-        <Script
-          id="apply-user-preferences"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{ __html: PREFERENCES_FOUC_SCRIPT }}
-        />
       </body>
     </html>
   );

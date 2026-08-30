@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import Image from 'next/image';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
 import {
@@ -14,7 +14,6 @@ import {
   Sun,
   LogOut,
   User,
-  ChevronRight,
   CheckCheck,
   Menu,
   FolderKanban,
@@ -30,12 +29,12 @@ import {
 import { useTheme } from '@/components/theme-provider';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
-import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { FathomMark } from '@/components/brand/logo';
 import type { TenantBrand } from '@/lib/tenant-brand';
+import { routeLabels, TopbarBreadcrumbs } from './topbar-breadcrumbs';
 // Badge unused after notification refactor
 import {
   DropdownMenu,
@@ -61,31 +60,6 @@ const CommandList = dynamic(() => import('@/components/ui/command').then((m) => 
 // rendered, but opening it no longer has to wait on a cold network request.
 const preloadCommandPalette = () => import('@/components/ui/command');
 
-const routeLabels: Record<string, string> = {
-  '/dashboard': 'Dashboard',
-  '/projects': 'Projects',
-  '/projects/import': 'Import',
-  '/clients': 'Clients',
-  '/notes': 'Notes',
-  '/email': 'Email',
-  '/finance': 'Finance',
-  '/meetings': 'Meetings',
-  '/chat': 'Chat',
-  '/team': 'Team',
-  '/team/stats': 'Insights',
-  '/hr': 'HR & Leave',
-  '/reviews': 'Reviews',
-  '/audit-logs': 'Audit Log',
-  '/api-docs': 'API Access',
-  '/settings': 'Settings',
-};
-
-const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
-
-function isLinkableBreadcrumb(href: string) {
-  return href in routeLabels || linkableDetailRoute.test(href);
-}
-
 const subscribeToHydration = () => () => {};
 
 export function Topbar({
@@ -101,14 +75,10 @@ export function Topbar({
   const [commandLoaded, setCommandLoaded] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
-  // Detail pages register their loaded entity name here (id segment -> name),
-  // so e.g. /team/<id> shows "Saad Ajmal" instead of the raw id.
-  const breadcrumbLabels = useBreadcrumbStore((s) => s.labels);
   const mounted = useSyncExternalStore(
     subscribeToHydration,
     () => true,
@@ -163,25 +133,6 @@ export function Topbar({
     document.addEventListener('keydown', down);
     return () => document.removeEventListener('keydown', down);
   }, [commandOpen, handleCommandOpenChange]);
-
-  const getBreadcrumbs = useCallback(() => {
-    const segments = pathname.split('/').filter(Boolean);
-    const crumbs: { label: string; href: string; linkable: boolean }[] = [];
-
-    let path = '';
-    for (const segment of segments) {
-      path += `/${segment}`;
-      const label =
-        routeLabels[path] ||
-        breadcrumbLabels[segment] ||
-        segment.charAt(0).toUpperCase() + segment.slice(1);
-      crumbs.push({ label, href: path, linkable: isLinkableBreadcrumb(path) });
-    }
-
-    return crumbs;
-  }, [pathname, breadcrumbLabels]);
-
-  const breadcrumbs = getBreadcrumbs();
 
   const getInitials = (name: string) =>
     name
@@ -253,31 +204,7 @@ export function Topbar({
           aria-label="Breadcrumb"
           className="ml-2 hidden min-w-0 items-center gap-1 overflow-hidden border-l border-border-subtle pl-4 text-xs xl:flex"
         >
-          {breadcrumbs.map((crumb, i) => (
-            <div key={crumb.href} className="flex min-w-0 items-center gap-1">
-              {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
-              {i === breadcrumbs.length - 1 || !crumb.linkable ? (
-                <span
-                  className={cn(
-                    'truncate',
-                    i === breadcrumbs.length - 1
-                      ? 'font-medium text-foreground'
-                      : 'text-muted-foreground'
-                  )}
-                  aria-current={i === breadcrumbs.length - 1 ? 'page' : undefined}
-                >
-                  {crumb.label}
-                </span>
-              ) : (
-                <Link
-                  href={crumb.href}
-                  className="truncate text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  {crumb.label}
-                </Link>
-              )}
-            </div>
-          ))}
+          <TopbarBreadcrumbs />
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
