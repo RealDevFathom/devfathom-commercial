@@ -79,6 +79,23 @@ const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 // §2 — the organization operating model. The literal values come from the
 // generated Prisma enum, so the vertical list is never re-typed here.
 const vertical = z.enum(OrganizationVertical);
+const businessDayCutoff = z
+  .string()
+  .trim()
+  .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+const ianaTimezone = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .refine((value) => {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: value }).format();
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Choose a valid IANA timezone.');
 
 const COMMAND_CAPABILITY: Record<string, string> = {
   organization: 'organizations:write',
@@ -403,10 +420,30 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
   // §4 / §9 Steps 3/5 — exactly one active default branch.
   const defaultBranches = await db.restaurantBranch.findMany({
     where: { organizationId, isDefault: true, active: true },
-    select: { id: true },
+    select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
   });
   if (defaultBranches.length !== 1) {
     restaurantMissing.push('exactly one active default restaurant branch');
+  } else {
+    const branch = defaultBranches[0]!;
+    if (!branch.name?.trim()) restaurantMissing.push('a nonblank default branch name');
+    if (!branch.address?.trim()) restaurantMissing.push('a default branch address');
+    if (!ianaTimezone.safeParse(branch.timezone ?? '').success)
+      restaurantMissing.push('a valid default branch IANA timezone');
+    if (!businessDayCutoff.safeParse(branch.businessDayCutoff ?? '').success)
+      restaurantMissing.push('a valid default branch business-day cutoff');
+  }
+
+  const acknowledgements = await db.restaurantActivationAcknowledgement.findMany({
+    where: { organizationId },
+    select: { kind: true, policyReference: true },
+  });
+  const acknowledgedKinds = new Set(
+    acknowledgements.filter((row) => row.policyReference.trim()).map((row) => row.kind)
+  );
+  for (const kind of ['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const) {
+    if (!acknowledgedKinds.has(kind))
+      restaurantMissing.push(`${kind.toLowerCase()} policy acknowledgement`);
   }
 
   if (restaurantMissing.length) {
@@ -468,29 +505,51 @@ async function syncContractEntitlements(
   });
 }
 
-const organizationInput = z.object({
-  // §2 — default AGENCY keeps every existing onboarding payload valid.
-  vertical: vertical.default('AGENCY'),
-  slug,
-  legalName: requiredText,
-  displayName: requiredText,
-  deploymentMode: z.enum(['SHARED', 'DEDICATED']).default('SHARED'),
-  packageId: id,
-  timezone: z.string().trim().min(1).max(100).default('UTC'),
-  locale: z.string().trim().min(2).max(20).default('en'),
-  currency: currency.default('USD'),
-  // Legacy callers may omit seats; the selected package supplies the baseline.
-  seatLimit: z.coerce.number().int().min(1).max(100_000).optional(),
-  gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
-  dataResidency: optionalText.optional(),
-  primaryContactName: requiredText,
-  primaryContactEmail: email,
-  notes: optionalText.optional(),
-  adminName: requiredText,
-  adminEmail: email,
-  adminPassword: z.string().min(12).max(256),
-  opportunityId: optionalId.optional(),
-});
+const organizationInput = z
+  .object({
+    // §2 — default AGENCY keeps every existing onboarding payload valid.
+    vertical: vertical.default('AGENCY'),
+    slug,
+    legalName: requiredText,
+    displayName: requiredText,
+    deploymentMode: z.enum(['SHARED', 'DEDICATED']).default('SHARED'),
+    packageId: id,
+    timezone: z.string().trim().min(1).max(100).default('UTC'),
+    locale: z.string().trim().min(2).max(20).default('en'),
+    currency: currency.default('USD'),
+    // Legacy callers may omit seats; the selected package supplies the baseline.
+    seatLimit: z.coerce.number().int().min(1).max(100_000).optional(),
+    gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
+    dataResidency: optionalText.optional(),
+    primaryContactName: requiredText,
+    primaryContactEmail: email,
+    notes: optionalText.optional(),
+    adminName: requiredText,
+    adminEmail: email,
+    adminPassword: z.string().min(12).max(256),
+    opportunityId: optionalId.optional(),
+    firstBranchName: z.string().trim().min(2).max(120).optional(),
+    firstBranchAddress: z.string().trim().min(1).max(300).optional(),
+    businessDayCutoff: businessDayCutoff.optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.vertical !== 'RESTAURANT') return;
+    for (const field of ['firstBranchName', 'firstBranchAddress', 'businessDayCutoff'] as const) {
+      if (!input[field])
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: 'Required for Restaurant organizations.',
+        });
+    }
+    const timezone = ianaTimezone.safeParse(input.timezone);
+    if (!timezone.success)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['timezone'],
+        message: 'Choose a valid IANA timezone.',
+      });
+  });
 
 async function bootstrapOrganization(
   db: PrismaClient,
@@ -589,9 +648,11 @@ async function bootstrapOrganization(
     const defaultBranch = await db.restaurantBranch.create({
       data: {
         organizationId: organization.id,
-        name: 'Main Branch',
+        name: input.firstBranchName!,
         code: 'MAIN',
         timezone: input.timezone,
+        address: input.firstBranchAddress!,
+        businessDayCutoff: input.businessDayCutoff!,
         isDefault: true,
       },
     });
@@ -701,6 +762,99 @@ async function runCommand(
         organizationId: organization.id,
         data: organization,
         audit: organization,
+      };
+    }
+    case 'organization.restaurant.setup': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchName: z.string().trim().min(2).max(120),
+          address: z.string().trim().min(1).max(300),
+          timezone: ianaTimezone,
+          businessDayCutoff,
+          taxAcknowledged: z.literal(true),
+          taxPolicyReference: z.string().trim().min(1).max(300),
+          paymentAcknowledged: z.literal(true),
+          paymentPolicyReference: z.string().trim().min(1).max(300),
+          deviceAcknowledged: z.literal(true),
+          devicePolicyReference: z.string().trim().min(1).max(300),
+          operatorAcknowledged: z.literal(true),
+          operatorPolicyReference: z.string().trim().min(1).max(300),
+        })
+        .parse(payload);
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+        select: { vertical: true, status: true },
+      });
+      if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+      if (organization.vertical !== 'RESTAURANT')
+        throw new PlatformSecurityError(
+          'Restaurant setup is only available to Restaurant organizations.',
+          400
+        );
+      if (['TERMINATED', 'PURGING', 'PURGED'].includes(organization.status))
+        throw new PlatformSecurityError(
+          'Restaurant setup is unavailable for a terminal organization.',
+          400
+        );
+      const branches = await db.restaurantBranch.findMany({
+        where: { organizationId: input.organizationId, isDefault: true, active: true },
+        select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
+      });
+      if (branches.length !== 1)
+        throw new PlatformSecurityError(
+          'Restaurant setup requires exactly one active default branch.',
+          400
+        );
+      const branch = branches[0]!;
+      const beforeAcknowledgements = await db.restaurantActivationAcknowledgement.findMany({
+        where: { organizationId: input.organizationId },
+        select: { kind: true, policyReference: true, acknowledgedById: true, acknowledgedAt: true },
+      });
+      const savedBranch = await db.restaurantBranch.update({
+        where: { id: branch.id },
+        data: {
+          name: input.branchName,
+          address: input.address,
+          timezone: input.timezone,
+          businessDayCutoff: input.businessDayCutoff,
+        },
+      });
+      const references = {
+        TAX: input.taxPolicyReference,
+        PAYMENT: input.paymentPolicyReference,
+        DEVICE: input.devicePolicyReference,
+        OPERATOR: input.operatorPolicyReference,
+      } as const;
+      const savedAcknowledgements = [];
+      for (const [kind, policyReference] of Object.entries(references)) {
+        savedAcknowledgements.push(
+          await db.restaurantActivationAcknowledgement.upsert({
+            where: {
+              organizationId_kind: {
+                organizationId: input.organizationId,
+                kind: kind as keyof typeof references,
+              },
+            },
+            update: { policyReference, acknowledgedById: actor.id, acknowledgedAt: new Date() },
+            create: {
+              organizationId: input.organizationId,
+              kind: kind as keyof typeof references,
+              policyReference,
+              acknowledgedById: actor.id,
+            },
+          })
+        );
+      }
+      const beforeProjection = { branch, acknowledgements: beforeAcknowledgements };
+      const afterProjection = { branch: savedBranch, acknowledgements: savedAcknowledgements };
+      return {
+        targetType: 'RestaurantActivationSetup',
+        targetId: input.organizationId,
+        organizationId: input.organizationId,
+        auditBefore: beforeProjection,
+        data: afterProjection,
+        audit: afterProjection,
       };
     }
     case 'organization.update': {

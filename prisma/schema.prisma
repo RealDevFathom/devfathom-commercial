@@ -2246,6 +2246,13 @@ enum OrganizationVertical {
   RESTAURANT
 }
 
+enum RestaurantActivationAcknowledgementKind {
+  TAX
+  PAYMENT
+  DEVICE
+  OPERATOR
+}
+
 model Organization {
   id                  String                     @id @default(cuid())
   slug                String                     @unique
@@ -2271,41 +2278,59 @@ model Organization {
   createdAt           DateTime                   @default(now())
   updatedAt           DateTime                   @updatedAt
 
-  package                   PlatformPackage?                 @relation(fields: [packageId], references: [id], onDelete: SetNull)
-  users                     User[]
-  roles                     OrganizationRole[]
-  departments               OrganizationDepartment[]
-  permissionOverrides       UserPermissionOverride[]
-  modules                   OrganizationModule[]
-  limits                    OrganizationLimit[]
-  usageCounters             OrganizationUsageCounter[]
-  brand                     OrganizationBrand?
-  emailSettings             OrganizationEmailSettings?
-  domains                   OrganizationDomain[]
-  identityConnections       OrganizationIdentityConnection[]
-  scimTokens                OrganizationScimToken[]
-  scimEvents                OrganizationScimEvent[]
-  accounts                  PlatformAccount[]
-  convertedOpportunities    PlatformOpportunity[]
-  contracts                 PlatformContract[]
-  invoices                  PlatformInvoice[]
-  payments                  PlatformPayment[]
-  renewals                  PlatformRenewal[]
-  deployments               OrganizationDeployment[]
-  jobs                      PlatformJob[]
-  lifecycleEvents           OrganizationLifecycleEvent[]
-  supportSessions           PlatformSupportSession[]
-  auditLogs                 PlatformAuditLog[]
-  ssoStates                 OrganizationSsoState[]
-  ssoTickets                TenantSsoTicket[]
-  insightLoyaltyLiabilities InsightLoyaltyLiability[]
-  restaurantNotificationWebhook RestaurantNotificationWebhook?
+  package                              PlatformPackage?                      @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  users                                User[]
+  roles                                OrganizationRole[]
+  departments                          OrganizationDepartment[]
+  permissionOverrides                  UserPermissionOverride[]
+  modules                              OrganizationModule[]
+  limits                               OrganizationLimit[]
+  usageCounters                        OrganizationUsageCounter[]
+  brand                                OrganizationBrand?
+  emailSettings                        OrganizationEmailSettings?
+  domains                              OrganizationDomain[]
+  identityConnections                  OrganizationIdentityConnection[]
+  scimTokens                           OrganizationScimToken[]
+  scimEvents                           OrganizationScimEvent[]
+  accounts                             PlatformAccount[]
+  convertedOpportunities               PlatformOpportunity[]
+  contracts                            PlatformContract[]
+  invoices                             PlatformInvoice[]
+  payments                             PlatformPayment[]
+  renewals                             PlatformRenewal[]
+  deployments                          OrganizationDeployment[]
+  jobs                                 PlatformJob[]
+  lifecycleEvents                      OrganizationLifecycleEvent[]
+  supportSessions                      PlatformSupportSession[]
+  auditLogs                            PlatformAuditLog[]
+  ssoStates                            OrganizationSsoState[]
+  ssoTickets                           TenantSsoTicket[]
+  insightLoyaltyLiabilities            InsightLoyaltyLiability[]
+  restaurantNotificationWebhook        RestaurantNotificationWebhook?
+  restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
 
   @@index([status])
   @@index([deploymentMode])
   @@index([packageId])
   @@index([vertical])
   @@map("organizations")
+}
+
+model RestaurantActivationAcknowledgement {
+  id               String                                  @id @default(cuid())
+  organizationId   String
+  kind             RestaurantActivationAcknowledgementKind
+  policyReference  String
+  acknowledgedById String
+  acknowledgedAt   DateTime                                @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  acknowledgedBy PlatformUser @relation(fields: [acknowledgedById], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, kind])
+  @@index([organizationId, acknowledgedAt])
+  @@index([acknowledgedById, acknowledgedAt])
+  @@map("restaurant_activation_acknowledgements")
 }
 
 /// §4/§4.1: branch-first schema. A restaurant company is one organization; its
@@ -7459,7 +7484,7 @@ model RestaurantShiftBreak {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  shift       RestaurantShift           @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  shift       RestaurantShift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
   adjustments RestaurantTimeAdjustment[]
   commands    RestaurantWorkforceCommand[]
 
@@ -7479,9 +7504,9 @@ model RestaurantShiftSwapRequest {
   note                      String?
   createdAt                 DateTime @default(now())
 
-  shift       RestaurantShift        @relation(fields: [shiftId], references: [id], onDelete: Cascade)
-  requestedBy RestaurantStaffProfile @relation("ShiftSwapRequester", fields: [requestedByStaffProfileId], references: [id], onDelete: Restrict)
-  replacement RestaurantStaffProfile @relation("ShiftSwapReplacement", fields: [replacementStaffProfileId], references: [id], onDelete: Restrict)
+  shift       RestaurantShift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  requestedBy RestaurantStaffProfile       @relation("ShiftSwapRequester", fields: [requestedByStaffProfileId], references: [id], onDelete: Restrict)
+  replacement RestaurantStaffProfile       @relation("ShiftSwapReplacement", fields: [replacementStaffProfileId], references: [id], onDelete: Restrict)
   decision    RestaurantShiftSwapDecision?
   commands    RestaurantWorkforceCommand[]
 
@@ -7492,14 +7517,14 @@ model RestaurantShiftSwapRequest {
 }
 
 model RestaurantShiftSwapDecision {
-  id                    String                          @id @default(cuid())
-  organizationId        String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  requestId             String                          @unique
-  decision              RestaurantShiftSwapDecisionKind
-  decidedByUserId       String
+  id                      String                          @id @default(cuid())
+  organizationId          String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  requestId               String                          @unique
+  decision                RestaurantShiftSwapDecisionKind
+  decidedByUserId         String
   decidedByStaffProfileId String?
-  reason                String?
-  decidedAt             DateTime                        @default(now())
+  reason                  String?
+  decidedAt               DateTime                        @default(now())
 
   request RestaurantShiftSwapRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
 
@@ -7530,17 +7555,17 @@ model RestaurantShiftEvent {
 /// A manager correction never rewrites the original server timestamp. Reads
 /// apply the latest append-only adjustment and retain both values and a reason.
 model RestaurantTimeAdjustment {
-  id                      String                       @id @default(cuid())
-  organizationId          String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  shiftId                 String
-  breakId                 String?
-  kind                    RestaurantTimeAdjustmentKind
-  originalAt              DateTime
-  correctedAt             DateTime
-  reason                  String
-  adjustedByUserId        String
+  id                       String                       @id @default(cuid())
+  organizationId           String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  shiftId                  String
+  breakId                  String?
+  kind                     RestaurantTimeAdjustmentKind
+  originalAt               DateTime
+  correctedAt              DateTime
+  reason                   String
+  adjustedByUserId         String
   adjustedByStaffProfileId String?
-  createdAt               DateTime                     @default(now())
+  createdAt                DateTime                     @default(now())
 
   shift RestaurantShift       @relation(fields: [shiftId], references: [id], onDelete: Restrict)
   break RestaurantShiftBreak? @relation(fields: [breakId], references: [id], onDelete: Restrict)
@@ -7564,8 +7589,8 @@ model RestaurantWorkforceCommand {
   createdAt      DateTime                       @default(now())
 
   shift       RestaurantShift             @relation(fields: [shiftId], references: [id], onDelete: Restrict)
-  break       RestaurantShiftBreak?        @relation(fields: [breakId], references: [id], onDelete: Restrict)
-  swapRequest RestaurantShiftSwapRequest?  @relation(fields: [swapRequestId], references: [id], onDelete: Restrict)
+  break       RestaurantShiftBreak?       @relation(fields: [breakId], references: [id], onDelete: Restrict)
+  swapRequest RestaurantShiftSwapRequest? @relation(fields: [swapRequestId], references: [id], onDelete: Restrict)
 
   @@unique([organizationId, idempotencyKey])
   @@index([shiftId, createdAt])
@@ -7586,8 +7611,9 @@ model PlatformUser {
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
 
-  sessions      PlatformSession[]
-  recoveryCodes PlatformRecoveryCode[]
+  sessions                             PlatformSession[]
+  recoveryCodes                        PlatformRecoveryCode[]
+  restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
 
   @@index([role, active])
   @@map("platform_users")
