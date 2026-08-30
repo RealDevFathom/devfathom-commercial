@@ -86,7 +86,7 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
         <p className="mt-2 text-sm text-text-muted">
           {moduleEnabled
             ? 'Inventory read permission is required to open the purchasing console.'
-            : 'Enable the Restaurant POS module to use purchasing.'}
+            : 'Enable the Restaurant Purchasing module to use purchasing.'}
         </p>
       </SectionCard>
     </main>
@@ -103,10 +103,10 @@ export default async function PurchasingPage({
   // Tenancy did not resolve. Entitlements are unknowable here, so show the
   // permission surface rather than let a missing workspace reach the user as an
   // unhandled Server Component crash.
-  if (!ctx) return <AccessState moduleEnabled />;
+  if (!ctx) return <AccessState moduleEnabled={false} />;
 
   const user = ctx.session?.user;
-  const moduleEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
+  const moduleEnabled = hasModule(ctx.entitlements, 'restaurant-purchasing');
 
   if (!user) return <AccessState moduleEnabled={moduleEnabled} />;
 

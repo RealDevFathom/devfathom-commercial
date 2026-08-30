@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   createCaller: vi.fn(),
   revalidatePath: vi.fn(),
   redirect: vi.fn(),
+  hasModule: vi.fn(),
 }));
 
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidatePath }));
@@ -19,7 +20,7 @@ vi.mock('@/lib/abac', () => ({
   can: mocks.can,
   subjectFromSession: (user: { id: string }) => ({ id: user.id }),
 }));
-vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
+vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.hasModule }));
 vi.mock('@/server/routers/restaurant-inventory', () => ({
   restaurantInventoryRouter: { createCaller: mocks.createCaller },
 }));
@@ -64,11 +65,14 @@ function countDetail(status: Status = 'DRAFT') {
     ],
   };
 }
-function contextStub(detail: ReturnType<typeof countDetail> | null = null) {
+function contextStub(
+  detail: ReturnType<typeof countDetail> | null = null,
+  enabledModules = ['restaurant-inventory']
+) {
   return {
     session: actor.session,
     organization: actor.organization,
-    entitlements: { enabledModules: ['restaurant-pos'] },
+    entitlements: { enabledModules },
     db: {
       restaurantStockLocation: {
         findMany: vi.fn().mockResolvedValue(locations),
@@ -138,11 +142,15 @@ beforeEach(() => {
   mocks.resolveTenantActor.mockResolvedValue(actor);
   mocks.createTRPCContext.mockResolvedValue(contextStub());
   mocks.can.mockResolvedValue(true);
+  mocks.hasModule.mockImplementation(
+    (entitlements: { enabledModules: string[] }, module: string) =>
+      entitlements.enabledModules.includes(module)
+  );
   mocks.createCaller.mockReturnValue(callerStub());
 });
 
 describe('InventoryPage tenancy and access', () => {
-  it('resolves tenancy explicitly and renders inventory', async () => {
+  it('renders when inventory is enabled even with POS disabled', async () => {
     render(await InventoryPage());
     expect(screen.getByRole('heading', { name: 'Inventory' })).toBeDefined();
     expect(mocks.createTRPCContext).toHaveBeenCalledWith({
@@ -150,12 +158,28 @@ describe('InventoryPage tenancy and access', () => {
       organization: actor.organization,
       support: actor.support,
     });
+    expect(mocks.hasModule).toHaveBeenCalledWith(
+      { enabledModules: ['restaurant-inventory'] },
+      'restaurant-inventory'
+    );
+  });
+  it('denies access when inventory is disabled', async () => {
+    mocks.createTRPCContext.mockResolvedValue(contextStub(null, ['restaurant-pos']));
+    render(await InventoryPage());
+    expect(screen.getByRole('heading', { name: 'Module disabled' })).toBeDefined();
+    expect(mocks.createCaller).not.toHaveBeenCalled();
   });
   it('renders the access state when the organization is absent', async () => {
     mocks.resolveTenantActor.mockResolvedValue(null);
     render(await InventoryPage());
-    expect(screen.getByRole('heading', { name: 'Permission denied' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Module disabled' })).toBeDefined();
     expect(mocks.createTRPCContext).not.toHaveBeenCalled();
+  });
+  it('renders the access state when the session is absent', async () => {
+    mocks.createTRPCContext.mockResolvedValue({ ...contextStub(), session: null });
+    render(await InventoryPage());
+    expect(screen.getByRole('heading', { name: 'Permission denied' })).toBeDefined();
+    expect(mocks.createCaller).not.toHaveBeenCalled();
   });
   it('keeps reads visible but disables mutations without inventory:count', async () => {
     mocks.can.mockImplementation(async (_subject, capability) => capability === 'inventory:read');

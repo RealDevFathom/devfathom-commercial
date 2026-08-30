@@ -80,7 +80,7 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
         <p className="mt-2 text-sm text-text-muted">
           {moduleEnabled
             ? 'Inventory read permission is required to open the inventory console.'
-            : 'Enable the Restaurant POS module to use inventory.'}
+            : 'Enable the Restaurant Inventory module to use inventory.'}
         </p>
       </SectionCard>
     </main>
@@ -97,10 +97,10 @@ export default async function InventoryPage({
   // Tenancy did not resolve. Entitlements are unknowable here, so show the
   // permission surface rather than let a missing workspace reach the user as an
   // unhandled Server Component crash.
-  if (!ctx) return <AccessState moduleEnabled />;
+  if (!ctx) return <AccessState moduleEnabled={false} />;
 
   const user = ctx.session?.user;
-  const moduleEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
+  const moduleEnabled = hasModule(ctx.entitlements, 'restaurant-inventory');
 
   if (!user) return <AccessState moduleEnabled={moduleEnabled} />;
 
