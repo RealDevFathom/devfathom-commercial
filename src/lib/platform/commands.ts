@@ -235,11 +235,9 @@ function safeFailureTarget(action: string, payload: unknown) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
   const candidate = payload as Record<string, unknown>;
   const organizationId = auditId.safeParse(candidate.organizationId);
-  const targetId = auditId.safeParse(candidate.id);
   return {
     organizationId: organizationId.success ? organizationId.data : undefined,
     targetType: action === 'platform.command.invalid' ? undefined : action.split('.')[0],
-    targetId: targetId.success ? targetId.data : undefined,
   };
 }
 
@@ -252,7 +250,9 @@ async function persistCommandFailure(
 ) {
   const category = failureCategory(error);
   const correlation = requestId.safeParse(request.headers.get('x-devfathom-request-id'));
-  const correlationId = correlation.success ? correlation.data : undefined;
+  const correlationId = correlation.success
+    ? `pcorr_${createHash('sha256').update(correlation.data).digest('hex').slice(0, 32)}`
+    : undefined;
   const deterministicId = correlationId
     ? `pcfail_${createHash('sha256')
         .update(`${actor.id}\0${action}\0${category}\0${correlationId}`)

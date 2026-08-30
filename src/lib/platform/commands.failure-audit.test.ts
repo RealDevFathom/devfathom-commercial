@@ -16,9 +16,9 @@ vi.mock('@/lib/platform/auth', async (importOriginal) => {
 });
 
 const platformDb = {
-  $queryRawUnsafe: vi.fn(async (_query: string, organizationId: string) => [
-    { id: organizationId },
-  ]),
+  $queryRawUnsafe: vi.fn(async (_query: string, organizationId: string) =>
+    organizationId === 'org_verified_1' ? [{ id: organizationId }] : []
+  ),
   platformSetting: {
     findUnique: vi.fn(async () => null),
     upsert: vi.fn(async (args: { data?: unknown; create: Record<string, unknown> }) => {
@@ -88,7 +88,7 @@ describe('platform command failure auditing', () => {
       success: false,
       reason: 'Platform command capability denied.',
       metadata: { outcomeCategory: 'capability_denied' },
-      requestId: 'req_failure_1',
+      requestId: expect.stringMatching(/^pcorr_[a-f0-9]{32}$/),
     });
   });
 
@@ -106,6 +106,80 @@ describe('platform command failure auditing', () => {
       metadata: { outcomeCategory: 'validation_failed' },
     });
     expect(JSON.stringify(state.audits[0])).not.toContain(secret);
+  });
+
+  it('omits arbitrary target ids for unknown commands', async () => {
+    const secret = 'token_live_UNKNOWN123';
+
+    await expect(
+      executePlatformCommand(actor(), 'setting.unknown', { id: secret }, request())
+    ).rejects.toMatchObject({ status: 400 });
+
+    expect(state.audits).toHaveLength(1);
+    expect(state.audits[0]).toMatchObject({
+      action: 'setting.unknown',
+      reason: 'Platform command validation failed.',
+      metadata: { outcomeCategory: 'validation_failed' },
+    });
+    expect(state.audits[0].targetId).toBeUndefined();
+    expect(JSON.stringify(state.audits[0])).not.toContain(secret);
+  });
+
+  it('never persists hostile failed-command input while retaining a verified organization FK', async () => {
+    const secrets = {
+      id: 'token_live_SECRET123',
+      organizationId: 'password_SECRET456',
+      nested: 'apiKey_SECRET789',
+      requestId: 'correlation_SECRET012',
+      userAgent: 'agent_SECRET345',
+      forwardedFor: 'forwarded_SECRET678',
+    };
+    const hostileRequest = new Request('https://admin.devfathom.test/api/platform/control', {
+      method: 'POST',
+      headers: {
+        'x-devfathom-request-id': secrets.requestId,
+        'user-agent': secrets.userAgent,
+        'x-forwarded-for': secrets.forwardedFor,
+      },
+    });
+
+    await expect(
+      executePlatformCommand(
+        actor(),
+        'setting.upsert',
+        {
+          ...setting(),
+          id: secrets.id,
+          organizationId: secrets.organizationId,
+          value: { token: secrets.nested },
+          key: 'INVALID KEY',
+        },
+        hostileRequest
+      )
+    ).rejects.toThrow();
+
+    expect(state.audits).toHaveLength(1);
+    expect(state.audits[0]).toMatchObject({
+      targetType: 'setting',
+      reason: 'Platform command validation failed.',
+      error: 'Platform command validation failed.',
+      metadata: { outcomeCategory: 'validation_failed' },
+    });
+    expect(state.audits[0].targetId).toBeUndefined();
+    expect(state.audits[0].organizationId).toBeUndefined();
+    const durable = JSON.stringify(state.audits[0]);
+    for (const secret of Object.values(secrets)) expect(durable).not.toContain(secret);
+
+    await expect(
+      executePlatformCommand(
+        actor(),
+        'setting.upsert',
+        { ...setting(), organizationId: 'org_verified_1', key: 'INVALID KEY' },
+        request('req_verified_org')
+      )
+    ).rejects.toThrow();
+    expect(state.audits[1]).toMatchObject({ organizationId: 'org_verified_1' });
+    expect(state.audits[1].targetId).toBeUndefined();
   });
 
   it('persists runtime failure after the command transaction rejects', async () => {
@@ -144,7 +218,7 @@ describe('platform command failure auditing', () => {
     }
 
     expect(state.audits).toHaveLength(1);
-    expect(state.audits[0].requestId).toBe('req_replay');
+    expect(state.audits[0].requestId).toMatch(/^pcorr_[a-f0-9]{32}$/);
   });
 
   it('fails closed with a generic error and constant operational log if audit persistence fails', async () => {
