@@ -45,6 +45,20 @@ type SessionResponse = {
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
 };
 type LocalDraftLine = AddMenuItemInput & { lineId: string; name: string; quotedUnitPrice: string };
+type TerminalLayout = {
+  floors: Array<{
+    id: string;
+    name: string;
+    tables: Array<{
+      id: string;
+      code: string;
+      capacity: number;
+      occupied: boolean;
+      activeOrderIds: string[];
+    }>;
+  }>;
+  sections: Array<{ id: string; name: string }>;
+};
 
 class RequestError extends Error {
   constructor(
@@ -97,13 +111,6 @@ function authHeaders(runtime: Runtime, json = false): HeadersInit {
   };
 }
 
-function splitIds(value: string) {
-  return value
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-}
-
 function effectiveMenuPath(channel: Channel, publicationId?: string | null) {
   const query = new URLSearchParams({ channel });
   if (publicationId) query.set('publicationId', publicationId);
@@ -120,9 +127,13 @@ export function OrderPad() {
   >('idle');
   const [operatorPin, setOperatorPin] = useState('');
   const [channel, setChannel] = useState<Channel>('DINE_IN');
-  const [tableIds, setTableIds] = useState('');
+  const [tableIds, setTableIds] = useState<string[]>([]);
   const [covers, setCovers] = useState('');
   const [sectionId, setSectionId] = useState('');
+  const [layout, setLayout] = useState<TerminalLayout | null>(null);
+  const [layoutState, setLayoutState] = useState<'idle' | 'loading' | 'ready' | 'error' | 'denied'>(
+    'idle'
+  );
   const [draftMenu, setDraftMenu] = useState<EffectiveMenu | null>(null);
   const [orderMenu, setOrderMenu] = useState<EffectiveMenu | null>(null);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
@@ -155,6 +166,20 @@ export function OrderPad() {
     }
   }, []);
 
+  const loadLayout = useCallback(async (activeRuntime: Runtime) => {
+    setLayoutState('loading');
+    try {
+      const data = await request<TerminalLayout>('/api/restaurant/terminal/layout', {
+        headers: authHeaders(activeRuntime),
+      });
+      setLayout(data);
+      setLayoutState('ready');
+    } catch (error) {
+      setLayout(null);
+      setLayoutState(error instanceof RequestError && error.status === 403 ? 'denied' : 'error');
+    }
+  }, []);
+
   const clearTerminalState = useCallback(() => {
     stateEpoch.current += 1;
     setRuntime(null);
@@ -167,6 +192,8 @@ export function OrderPad() {
     setOperators([]);
     setOperatorId('');
     setOperatorDirectoryState('idle');
+    setLayout(null);
+    setLayoutState('idle');
     idempotencyKeys.current.clear();
   }, []);
 
@@ -366,7 +393,11 @@ export function OrderPad() {
       setRuntime(unlocked);
       setOperatorPin('');
       setNotice({ tone: 'success', message: 'Terminal unlocked.' });
-      await Promise.all([loadMenu(channel, unlocked, false), loadOpenOrders(unlocked, false)]);
+      await Promise.all([
+        loadMenu(channel, unlocked, false),
+        loadOpenOrders(unlocked, false),
+        loadLayout(unlocked),
+      ]);
     } catch (error) {
       setOperatorPin('');
       handleError(error);
@@ -394,6 +425,8 @@ export function OrderPad() {
       setOrder(null);
       setCheckoutOrderId(null);
       setOpenOrders([]);
+      setLayout(null);
+      setLayoutState('idle');
       idempotencyKeys.current.clear();
       setNotice({ tone: 'success', message: 'Terminal locked.' });
       await loadOperators(locked);
@@ -460,7 +493,7 @@ export function OrderPad() {
         setOrder(null);
         setOrderMenu(null);
       }
-      await loadOpenOrders(runtime, false);
+      await Promise.all([loadOpenOrders(runtime, false), loadLayout(runtime)]);
       return true;
     } catch (error) {
       if (isDefinitiveMutationFailure(error)) idempotencyKeys.current.delete(intent);
@@ -477,11 +510,9 @@ export function OrderPad() {
     const body = {
       channel,
       publicationId: draftMenu.publicationId,
-      ...(channel === 'DINE_IN' && splitIds(tableIds).length
-        ? { tableIds: splitIds(tableIds) }
-        : {}),
+      ...(channel === 'DINE_IN' && tableIds.length ? { tableIds } : {}),
       ...(covers ? { coverCount: Number.parseInt(covers, 10) } : {}),
-      ...(sectionId.trim() ? { sectionId: sectionId.trim() } : {}),
+      ...(channel === 'DINE_IN' && sectionId ? { sectionId } : {}),
     };
     const intent = `open:${JSON.stringify(body)}`;
     setPending('open');
@@ -519,7 +550,11 @@ export function OrderPad() {
       }
       setDraftLines([]);
       setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
-      await Promise.all([loadDetail(data.orderId, runtime, false), loadOpenOrders(runtime, false)]);
+      await Promise.all([
+        loadDetail(data.orderId, runtime, false),
+        loadOpenOrders(runtime, false),
+        loadLayout(runtime),
+      ]);
     } catch (error) {
       if (isDefinitiveMutationFailure(error)) idempotencyKeys.current.delete(intent);
       handleError(error);
@@ -722,6 +757,10 @@ export function OrderPad() {
                     onChange={(event) => {
                       const next = event.target.value as Channel;
                       setChannel(next);
+                      if (next !== 'DINE_IN') {
+                        setTableIds([]);
+                        setSectionId('');
+                      }
                       void loadMenu(next);
                     }}
                     className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
@@ -731,17 +770,64 @@ export function OrderPad() {
                     <option value="DELIVERY">Delivery</option>
                   </select>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="order-table-ids">Table IDs</Label>
-                  <Input
-                    id="order-table-ids"
-                    value={tableIds}
-                    onChange={(event) => setTableIds(event.target.value)}
-                    disabled={channel !== 'DINE_IN'}
-                    placeholder="table-id-1, table-id-2"
-                    className="h-11"
-                  />
-                </div>
+                {channel === 'DINE_IN' ? (
+                  <div className="space-y-3">
+                    {layoutState === 'loading' ? (
+                      <p className="text-sm text-text-muted">Loading floor tables…</p>
+                    ) : null}
+                    {layoutState === 'error' ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        Floor plan unavailable. Check the connection and retry.
+                      </p>
+                    ) : null}
+                    {layoutState === 'denied' ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        Permission denied for the floor plan.
+                      </p>
+                    ) : null}
+                    {layoutState === 'ready' &&
+                    layout?.floors.every((floor) => floor.tables.length === 0) ? (
+                      <p className="text-sm text-text-muted">
+                        No active tables are configured for this branch.
+                      </p>
+                    ) : null}
+                    {layout?.floors.map((floor) => (
+                      <fieldset
+                        key={floor.id}
+                        className="space-y-2 rounded-lg border border-border-subtle p-3"
+                      >
+                        <legend className="px-1 text-sm font-semibold text-text-strong">
+                          {floor.name}
+                        </legend>
+                        <div className="grid grid-cols-2 gap-2">
+                          {floor.tables.map((table) => (
+                            <label
+                              key={table.id}
+                              className="flex min-h-11 items-center gap-2 rounded-md border border-border-subtle px-3 py-2 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={tableIds.includes(table.id)}
+                                disabled={busy || table.occupied}
+                                onChange={() =>
+                                  setTableIds((current) =>
+                                    current.includes(table.id)
+                                      ? current.filter((id) => id !== table.id)
+                                      : [...current, table.id]
+                                  )
+                                }
+                              />
+                              <span>{table.code}</span>
+                              <span className="ml-auto text-xs text-text-muted">
+                                {table.occupied ? 'Occupied' : `${table.capacity} seats`}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="order-covers">Covers</Label>
@@ -755,21 +841,30 @@ export function OrderPad() {
                       className="h-11"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="order-section">Section ID</Label>
-                    <Input
-                      id="order-section"
-                      value={sectionId}
-                      onChange={(event) => setSectionId(event.target.value)}
-                      className="h-11"
-                    />
-                  </div>
+                  {channel === 'DINE_IN' ? (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="order-section">Floor section</Label>
+                      <select
+                        id="order-section"
+                        value={sectionId}
+                        onChange={(event) => setSectionId(event.target.value)}
+                        disabled={busy || layoutState !== 'ready'}
+                        className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                      >
+                        <option value="">No section</option>
+                        {layout?.sections.map((section) => (
+                          <option key={section.id} value={section.id}>
+                            {section.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div />
+                  )}
                 </div>
                 <p className="text-sm text-text-muted">
                   Server: {runtime.operator?.displayName ?? 'Active operator'}
-                </p>
-                <p className="break-all font-mono text-xs text-text-faint">
-                  Publication: {draftMenu?.publicationId ?? 'Loading current publication…'}
                 </p>
                 <Button
                   type="submit"
@@ -905,6 +1000,14 @@ export function OrderPad() {
                 role: operator.role,
               }))}
               pending={busy}
+              tables={layout?.floors.flatMap((floor) =>
+                floor.tables.map((table) => ({
+                  id: table.id,
+                  label: `${floor.name} · ${table.code}`,
+                  occupied: table.occupied,
+                  activeOrderIds: table.activeOrderIds,
+                }))
+              )}
               onHold={(course) =>
                 order &&
                 void mutate('hold', { orderId: order.id, course }, `Course ${course} held.`)

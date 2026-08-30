@@ -12,6 +12,13 @@ export type EffectiveMenuItem = {
   product: { name: string };
   price: string | null;
   available: boolean;
+  modifierGroups?: Array<{
+    id: string;
+    name: string;
+    minSelect: number;
+    maxSelect: number | null;
+    options: Array<{ id: string; name: string; priceDelta: string }>;
+  }>;
 };
 
 export type EffectiveMenuSection = {
@@ -43,19 +50,13 @@ type MenuGridProps = {
   cacheState?: 'live' | 'cached' | 'stale';
 };
 
-function ids(value: string) {
-  return value
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-}
-
 export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGridProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [quantity, setQuantity] = useState('1');
   const [course, setCourse] = useState('1');
   const [seat, setSeat] = useState('');
-  const [modifierIds, setModifierIds] = useState('');
+  const [modifierIds, setModifierIds] = useState<string[]>([]);
+  const [modifierError, setModifierError] = useState<string | null>(null);
 
   const selected = menu?.sections
     .flatMap((section) => section.items)
@@ -64,12 +65,22 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected?.available || selected.price === null || pending) return;
+    for (const group of selected.modifierGroups ?? []) {
+      const count = group.options.filter((option) => modifierIds.includes(option.id)).length;
+      if (count < group.minSelect || (group.maxSelect !== null && count > group.maxSelect)) {
+        setModifierError(
+          `${group.name} requires ${group.maxSelect === group.minSelect ? group.minSelect : `${group.minSelect}–${group.maxSelect ?? 'any'}`} selection${group.maxSelect === 1 ? '' : 's'}.`
+        );
+        return;
+      }
+    }
+    setModifierError(null);
     onAdd({
       menuItemId: selected.id,
       quantity: Math.max(1, Number.parseInt(quantity, 10) || 1),
       course: Math.max(1, Number.parseInt(course, 10) || 1),
       seatNumber: seat ? Math.max(1, Number.parseInt(seat, 10) || 1) : null,
-      modifierOptionIds: ids(modifierIds),
+      modifierOptionIds: modifierIds,
     });
   }
 
@@ -131,7 +142,11 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                           disabled={
                             !item.available || item.price === null || pending || !menu.channelOpen
                           }
-                          onClick={() => setSelectedId(item.id)}
+                          onClick={() => {
+                            setSelectedId(item.id);
+                            setModifierIds([]);
+                            setModifierError(null);
+                          }}
                           className="min-h-11 h-auto min-w-0 justify-between gap-2 px-3 py-2 text-left whitespace-normal"
                         >
                           <span className="min-w-0 truncate">{name}</span>
@@ -190,19 +205,59 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                 />
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pos-modifiers">Modifier option IDs</Label>
-              <Input
-                id="pos-modifiers"
-                value={modifierIds}
-                onChange={(event) => setModifierIds(event.target.value)}
-                placeholder="option-id-1, option-id-2"
-                className="h-11"
-              />
-              <p className="text-xs leading-5 text-text-faint">
-                Modifier option IDs may be entered when supplied by the menu setup.
+            {(selected?.modifierGroups ?? []).map((group) => (
+              <fieldset
+                key={group.id}
+                className="space-y-2 rounded-lg border border-border-subtle p-3"
+              >
+                <legend className="px-1 text-sm font-semibold text-text-strong">
+                  {group.name}
+                </legend>
+                <p className="text-xs text-text-muted">
+                  {group.minSelect > 0 ? 'Required' : 'Optional'} · Choose {group.minSelect}
+                  {group.maxSelect === group.minSelect ? '' : `–${group.maxSelect ?? 'any'}`}
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {group.options.map((option) => {
+                    const checked = modifierIds.includes(option.id);
+                    const atMax =
+                      group.maxSelect !== null &&
+                      group.options.filter((candidate) => modifierIds.includes(candidate.id))
+                        .length >= group.maxSelect;
+                    return (
+                      <label
+                        key={option.id}
+                        className="flex min-h-11 items-center gap-3 rounded-md border border-border-subtle px-3 py-2 text-sm focus-within:ring-3 focus-within:ring-ring/50"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={pending || (!checked && atMax)}
+                          onChange={() =>
+                            setModifierIds((current) =>
+                              checked
+                                ? current.filter((id) => id !== option.id)
+                                : [...current, option.id]
+                            )
+                          }
+                        />
+                        <span className="flex-1">{option.name}</span>
+                        {option.priceDelta !== '0' && option.priceDelta !== '0.00' ? (
+                          <span className="font-mono text-xs tabular-nums">
+                            +{option.priceDelta}
+                          </span>
+                        ) : null}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            ))}
+            {modifierError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {modifierError}
               </p>
-            </div>
+            ) : null}
             <Button
               type="submit"
               disabled={

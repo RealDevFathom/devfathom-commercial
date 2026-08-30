@@ -84,7 +84,9 @@ test.describe('restaurant POS and KDS core flow', () => {
     });
 
     await unlockPos(page);
-    await page.getByLabel('Table IDs').fill('table-e2e-1');
+    await expect(page.getByLabel(/table id/i)).toHaveCount(0);
+    await expect(page.getByLabel(/modifier option id/i)).toHaveCount(0);
+    await page.getByRole('checkbox').first().check();
     await page.getByLabel('Covers').fill('2');
     const openedResponse = page.waitForResponse(
       (response) =>
