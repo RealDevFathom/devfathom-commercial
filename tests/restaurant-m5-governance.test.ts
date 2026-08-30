@@ -1,9 +1,15 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
-const client = TEST_DATABASE_URL ? new pg.Client({ connectionString: TEST_DATABASE_URL }) : null;
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
+if (!runtimeUrl || !ownerUrl) {
+  throw new Error(
+    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
+  );
+}
+if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
+const client = new pg.Client({ connectionString: runtimeUrl });
 
 const M5_COLUMNS = {
   restaurant_bills: [
@@ -31,6 +37,10 @@ const M5_COLUMNS = {
     'createdAt',
     'updatedAt',
     'discountTotal',
+    'serviceChargePolicyVersionId',
+    'serviceChargeRate',
+    'serviceChargeBasis',
+    'serviceChargeTaxTreatment',
   ],
   restaurant_bill_lines: [
     'id',
@@ -109,6 +119,8 @@ const M5_COLUMNS = {
     'deviceId',
     'createdAt',
     'fullReversalSnapshotId',
+    'serviceChargeRefundAmount',
+    'taxRefundAmount',
   ],
   restaurant_drawer_sessions: [
     'id',
@@ -412,20 +424,20 @@ const M8_MUTABLE_TABLES = M8_TABLES.filter(
   (table) => !(M8_APPEND_ONLY_TABLES as readonly string[]).includes(table)
 );
 
-describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
+describe('M5 schema governance (real PostgreSQL)', () => {
   beforeAll(async () => {
-    const parsed = new URL(TEST_DATABASE_URL!);
+    const parsed = new URL(runtimeUrl);
     if (
       !['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname) &&
       process.env.ALLOW_REMOTE_RLS_TEST !== 'true'
     ) {
       throw new Error('Refusing to run M5 governance probes against a non-local database.');
     }
-    await client!.connect();
+    await client.connect();
   }, 60_000);
 
   afterAll(async () => {
-    await client?.end();
+    await client.end();
   });
 
   it('pins all 12 M5 table column allowlists', async () => {

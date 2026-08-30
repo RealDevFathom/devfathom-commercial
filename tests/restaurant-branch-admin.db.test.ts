@@ -3,15 +3,21 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 
-const databaseUrl = process.env.WHA908_TEST_DATABASE_URL;
-const describeIfDatabase = databaseUrl ? describe : describe.skip;
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
+if (!runtimeUrl || !ownerUrl) {
+  throw new Error(
+    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
+  );
+}
+if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
 const runKey = `${process.pid}_${Date.now()}`;
-const schema = `wha908_${runKey}`;
-const runtimeRole = `wha908_runtime_${runKey}`;
+const schema = `wha910_${runKey}`;
 const quoted = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
 
-describeIfDatabase('WHA-908 PostgreSQL branch administration', () => {
-  const owner = new pg.Client({ connectionString: databaseUrl });
+describe('WHA-910 PostgreSQL branch administration', () => {
+  const owner = new pg.Client({ connectionString: ownerUrl });
+  const runtimeRole = new URL(runtimeUrl).username;
 
   beforeAll(async () => {
     await owner.connect();
@@ -52,7 +58,6 @@ describeIfDatabase('WHA-908 PostgreSQL branch administration', () => {
       CREATE POLICY tenant_isolation ON restaurant_branches
         USING ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
         WITH CHECK ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
-      CREATE ROLE ${quoted(runtimeRole)} NOLOGIN NOSUPERUSER NOBYPASSRLS;
       GRANT USAGE ON SCHEMA ${quoted(schema)} TO ${quoted(runtimeRole)};
       GRANT SELECT, INSERT, UPDATE ON restaurant_branches TO ${quoted(runtimeRole)};
       GRANT USAGE, SELECT ON SEQUENCE restaurant_branch_code_seq TO ${quoted(runtimeRole)};
@@ -60,9 +65,7 @@ describeIfDatabase('WHA-908 PostgreSQL branch administration', () => {
   });
 
   afterAll(async () => {
-    await owner.query('RESET ROLE').catch(() => undefined);
     await owner.query(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`);
-    await owner.query(`DROP ROLE IF EXISTS ${quoted(runtimeRole)}`);
     await owner.end();
   });
 
@@ -107,25 +110,30 @@ describeIfDatabase('WHA-908 PostgreSQL branch administration', () => {
   });
 
   it('enforces cross-tenant RLS for a restricted NOBYPASSRLS role', async () => {
-    const role = await owner.query(`SELECT rolbypassrls FROM pg_roles WHERE rolname = $1`, [
-      runtimeRole,
-    ]);
-    expect(role.rows[0]?.rolbypassrls).toBe(false);
-    await owner.query(`SET ROLE ${quoted(runtimeRole)}`);
-    await owner.query(`SET app.current_organization_id = 'legacy-a'`);
-    const visible = await owner.query(`SELECT DISTINCT "organizationId" FROM restaurant_branches`);
-    expect(visible.rows).toEqual([{ organizationId: 'legacy-a' }]);
-    await expect(
-      owner.query(
-        `INSERT INTO restaurant_branches (id,"organizationId",name)
-         VALUES ('cross-tenant','legacy-b','Forbidden')`
-      )
-    ).rejects.toMatchObject({ code: '42501' });
-    await owner.query('RESET ROLE');
+    const runtime = await client();
+    try {
+      const role = await runtime.query(
+        `SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
+      );
+      expect(role.rows[0]).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+      await runtime.query(`SET app.current_organization_id = 'legacy-a'`);
+      const visible = await runtime.query(
+        `SELECT DISTINCT "organizationId" FROM restaurant_branches`
+      );
+      expect(visible.rows).toEqual([{ organizationId: 'legacy-a' }]);
+      await expect(
+        runtime.query(
+          `INSERT INTO restaurant_branches (id,"organizationId",name)
+           VALUES ('cross-tenant','legacy-b','Forbidden')`
+        )
+      ).rejects.toMatchObject({ code: '42501' });
+    } finally {
+      await runtime.end();
+    }
   });
 
   async function client() {
-    const connection = new pg.Client({ connectionString: databaseUrl });
+    const connection = new pg.Client({ connectionString: runtimeUrl });
     await connection.connect();
     await connection.query(`SET search_path TO ${quoted(schema)}, public`);
     return connection;
@@ -134,6 +142,7 @@ describeIfDatabase('WHA-908 PostgreSQL branch administration', () => {
   async function createWithinLimit(connection: pg.Client, org: string, id: string, limit: number) {
     await connection.query('BEGIN');
     try {
+      await connection.query(`SELECT set_config('app.current_organization_id', $1, true)`, [org]);
       await connection.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [org]);
       const count = await connection.query(
         `SELECT count(*)::int AS count FROM restaurant_branches WHERE "organizationId"=$1 AND active`,
@@ -164,6 +173,7 @@ describeIfDatabase('WHA-908 PostgreSQL branch administration', () => {
   ) {
     await connection.query('BEGIN');
     try {
+      await connection.query(`SELECT set_config('app.current_organization_id', $1, true)`, [org]);
       await connection.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [org]);
       const count = await connection.query(
         `SELECT count(*)::int AS count FROM restaurant_branches WHERE "organizationId"=$1 AND active`,
@@ -185,6 +195,7 @@ describeIfDatabase('WHA-908 PostgreSQL branch administration', () => {
   async function deactivateSafely(connection: pg.Client, org: string, id: string) {
     await connection.query('BEGIN');
     try {
+      await connection.query(`SELECT set_config('app.current_organization_id', $1, true)`, [org]);
       await connection.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [org]);
       const count = await connection.query(
         `SELECT count(*)::int AS count FROM restaurant_branches WHERE "organizationId"=$1 AND active`,
