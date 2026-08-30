@@ -4,6 +4,7 @@ import {
   serializeDrawerOpenResult,
 } from '@/lib/restaurant/checkout-routes';
 import { openDrawerSession } from '@/lib/restaurant/drawer-sessions';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 
 /**
  * POST /api/restaurant/cash/drawer/open
@@ -17,13 +18,17 @@ import { openDrawerSession } from '@/lib/restaurant/drawer-sessions';
 export const POST = moneyMutationRoute({
   schema: drawerOpenBody,
   capability: 'cash:open',
-  run: async ({ ctx, data, actor, now }) =>
-    serializeDrawerOpenResult(
+  run: async ({ ctx, data, actor, now }) => {
+    const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, ctx.db, now);
+    return serializeDrawerOpenResult(
       await openDrawerSession(ctx.db, {
+        organizationId: ctx.organizationId,
+        entitlementLimits: entitlements.limits,
         branchId: ctx.device.branchId,
         openingFloat: data.openingFloat,
         actor,
         now,
       })
-    ),
+    );
+  },
 });

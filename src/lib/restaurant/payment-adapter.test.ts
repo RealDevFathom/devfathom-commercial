@@ -232,6 +232,8 @@ async function newBillWithPayment(): Promise<{ billId: string; paymentId: string
   const actor = { staffProfileId: ids.operator, deviceId, idempotencyKey: `k_${key}` };
   const scoped = (await import('@/lib/tenancy/scoped-db')).createTenantDb(orgId);
   const opened = await deps.orders.openOrder(scoped, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
     branchId: ids.branch,
     channel: 'DINE_IN',
     publicationId: ids.publication,

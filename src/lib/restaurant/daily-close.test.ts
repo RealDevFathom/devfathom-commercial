@@ -255,6 +255,8 @@ async function seedClosedDrawer(input: {
   const deviceId = await newDevice(`POS-${input.businessDate}`);
   const db = deps.createTenantDb(orgId);
   const opened = await deps.drawer.openDrawerSession(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
     branchId: ids.branch,
     openingFloat: input.openingFloat,
     actor: mActor(deviceId),
@@ -365,6 +367,8 @@ describeIfDatabase('daily close (real DB)', () => {
     const deviceId = await newDevice('POS-openblock');
     const db = deps.createTenantDb(orgId);
     const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
       branchId: ids.branch,
       openingFloat: '25.00',
       actor: mActor(deviceId),

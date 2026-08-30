@@ -108,7 +108,9 @@ function mapDomainError(err: unknown): never {
       err.reason === 'ITEM_STATE' ||
       err.reason === 'NOT_CLOSABLE' ||
       err.reason === 'NOTHING_TO_SEND' ||
-      err.reason === 'NOTHING_TO_FIRE';
+      err.reason === 'NOTHING_TO_FIRE' ||
+      err.reason === 'LIMIT_REACHED' ||
+      err.reason === 'LIMIT_UNAVAILABLE';
     const notFound = err.reason.endsWith('_NOT_FOUND');
     const code = notFound ? 'NOT_FOUND' : conflict ? 'CONFLICT' : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
@@ -200,6 +202,8 @@ export const restaurantOrdersRouter = router({
     .mutation(async ({ ctx, input }) => {
       const result = await run(() =>
         openOrder(ctx.db, {
+          organizationId: ctx.entitlements.organizationId,
+          entitlementLimits: ctx.entitlements.limits,
           branchId: input.branchId,
           channel: input.channel,
           publicationId: input.publicationId ?? null,

@@ -3,6 +3,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
+import { POS_CONCURRENT_REGISTERS_LIMIT, resolveEntitlementLimit } from '@/lib/entitlement-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
@@ -49,6 +50,8 @@ export type DrawerSessionErrorReason =
   | 'ALREADY_CLOSED'
   | 'NEGATIVE_AMOUNT'
   | 'REASON_REQUIRED'
+  | 'LIMIT_REACHED'
+  | 'LIMIT_UNAVAILABLE'
   | 'INVALID';
 
 export class DrawerSessionError extends Error {
@@ -325,6 +328,8 @@ export async function appendMovement(
 // ── Open ──────────────────────────────────────────────────────────────────────
 
 export type OpenDrawerSessionInput = {
+  organizationId: string;
+  entitlementLimits: Readonly<Record<string, number>>;
   branchId: string;
   openingFloat: Prisma.Decimal | string;
   actor: MoneyActor;
@@ -344,6 +349,34 @@ export type CurrentDrawerSessionResult = {
   businessDate: Date;
   openingFloat: Prisma.Decimal;
 };
+
+export async function enforceConcurrentRegisterLimit(
+  tx: ScopedDb,
+  input: Pick<OpenDrawerSessionInput, 'organizationId' | 'entitlementLimits'>
+): Promise<void> {
+  const limit = resolveEntitlementLimit(input.entitlementLimits, POS_CONCURRENT_REGISTERS_LIMIT);
+  if (limit.status !== 'configured') {
+    throw new DrawerSessionError(
+      'The concurrent register limit is not configured correctly.',
+      'LIMIT_UNAVAILABLE'
+    );
+  }
+  if (limit.value === 0) {
+    throw new DrawerSessionError('Register sessions are disabled.', 'LIMIT_REACHED');
+  }
+  await tx.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pos-concurrent-registers:${input.organizationId}`}, 0))`
+  );
+  const openRegisters = await tx.restaurantDrawerSession.count({
+    where: { organizationId: input.organizationId, status: 'OPEN' },
+  });
+  if (openRegisters >= limit.value) {
+    throw new DrawerSessionError(
+      `Concurrent register limit reached (${openRegisters}/${limit.value}).`,
+      'LIMIT_REACHED'
+    );
+  }
+}
 
 /** Return only the authenticated register's open drawer. The branch predicate is
  * deliberately part of the same query so a foreign drawer is never disclosed. */
@@ -408,6 +441,8 @@ export async function openDrawerSession(
         'DEVICE_BRANCH_MISMATCH'
       );
     }
+
+    await enforceConcurrentRegisterLimit(tx, input);
 
     const existingOpen = await tx.restaurantDrawerSession.findFirst({
       where: { deviceId: device.id, status: 'OPEN' },

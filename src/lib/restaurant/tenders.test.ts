@@ -111,6 +111,8 @@ async function openBill(
 ): Promise<{ orderId: string; billId: string; grandTotal: string }> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
     branchId: ids.branch,
     channel: 'DINE_IN',
     publicationId: ids.publication,
@@ -141,6 +143,8 @@ async function openBill(
 
 async function openDrawer(device = deviceId): Promise<string> {
   const opened = await deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
     branchId: ids.branch,
     openingFloat: '100.00',
     actor: actor(device),
