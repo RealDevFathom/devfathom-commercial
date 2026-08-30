@@ -1,5 +1,7 @@
 # Tax PRD
 
+Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#6-activate-pakistan-tax).
+
 ## Problem
 
 Restaurants need a jurisdiction-neutral tax core that selects effective-dated rules and freezes the applied calculation for audit, while allowing a Pakistan configuration without hard-coding Pakistan into the engine. Core contracts are `src/lib/restaurant/tax-contracts.ts`; schema is in `prisma/schema.prisma`.
@@ -22,7 +24,7 @@ Official source, tax profile/version, rule/version, transaction snapshot, and ra
 
 ## API surface
 
-Tax calculation contracts and effective interval input validation are in `src/lib/restaurant/tax-contracts.ts`; calculation is in `src/lib/restaurant/tax-calculator.ts`. A restaurant-admin CRUD/publishing router dedicated to tax: **NOT IMPLEMENTED**; the currently registered restaurant routers in `src/server/routers/_app.ts` expose no tax router.
+Tax calculation contracts and effective interval input validation are in `src/lib/restaurant/tax-contracts.ts`; calculation is in `src/lib/restaurant/tax-calculator.ts`. The operator surface is `/restaurant/tax`, backed by the registered `restaurantTax` router. It lists branch/profile choices and activates an effective-dated profile only after approval-reference, eligibility, and accountant confirmations.
 
 ## Edge cases and failure modes
 
@@ -32,5 +34,5 @@ Tax calculation contracts and effective interval input validation are in `src/li
 
 ## Gaps
 
-- A maintained Pakistan profile (federal/provincial sources, restaurant/service rules, payment-method distinctions, effective dates, approval references, and PKR presentation): **NOT IMPLEMENTED**. `PKR` exists in the currency enum in `prisma/schema.prisma`, but no seeded Pakistan tax profile was found.
+- Pakistan activation profiles are exposed with official-source evidence and fail-closed availability. Activation is branch-specific and requires explicit accountant confirmation. This is configuration support, not tax/legal advice or proof that a profile applies to a particular restaurant.
 - Tax filing, invoice/fiscal-device certification, authority e-invoicing, and automated legal-rate updates: **NOT IMPLEMENTED**.

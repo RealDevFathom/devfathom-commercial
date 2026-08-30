@@ -1,5 +1,7 @@
 # KDS PRD
 
+Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#7-open-the-terminal-drawer-and-kds).
+
 ## Problem
 
 Kitchen teams need fired items routed to the correct station, displayed safely, and recoverable after disconnects without corrupting fulfillment state. The full terminal-to-kitchen path is exercised by `tests/restaurant-m4-kitchen-flow.test.ts`.

@@ -1,5 +1,7 @@
 # SOP PRD
 
+Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#12-execute-sops-and-evidence).
+
 ## Problem
 
 Restaurants need versioned operating-procedure templates, branch-timezone scheduling, staff proof, and independent manager verification. The end-to-end acceptance cases are in `tests/restaurant-m7-acceptance.test.ts`.
@@ -8,7 +10,11 @@ Restaurants need versioned operating-procedure templates, branch-timezone schedu
 
 - Staff execute assigned occurrences and attach evidence; managers verify/reject and may waive with distinct co-authorization. See `keeps evidence append-only through rejection, resubmission, and verification` and `requires verify permission and distinct manager co-authorization for a waiver` in `tests/restaurant-m7-acceptance.test.ts`.
 - Restaurant-admins create/publish templates and schedules. Platform-admins control organization/module availability only; restaurant operations use `src/server/routers/restaurant-sop.ts` and platform control uses `src/lib/platform/auth.ts`.
-- Staff roles as M:N membership plus a deduplicated union of role-targeted and direct-person assignments: **IN PROGRESS**. No M9 acceptance test proves this union; current SOP assignment schema/logic is in `prisma/schema.prisma` and `src/lib/restaurant/sop-occurrence-generation.ts`.
+- Staff roles are M:N memberships. SOP assignments target either a role pool or a named person,
+  with eligible staff claiming role-pool work and duplicate eligibility collapsed: **IMPLEMENTED**.
+  The target contract is in `src/lib/restaurant/sop-assignment.ts`; projection tests are in
+  `src/lib/restaurant/sop-template-packs.test.ts`, and pool eligibility/claim coverage is in
+  `src/lib/restaurant/job-roles.db.test.ts`.
 
 ## Current behaviour
 
@@ -33,5 +39,4 @@ Restaurant-admin template/schedule operations are exposed by `src/server/routers
 
 ## Gaps
 
-- M:N staff-role membership and role/direct-person deduplicated assignment union: **IN PROGRESS**, pending an explicit acceptance test. M9 acceptance evidence covers POS/offline behavior in `src/lib/restaurant/pos-command-queue.test.ts`, not SOP assignment resolution; the current SOP generator remains `src/lib/restaurant/sop-occurrence-generation.ts`.
 - Evidence malware scanning, external object-storage retention policy, and offline SOP execution: **NOT IMPLEMENTED**.

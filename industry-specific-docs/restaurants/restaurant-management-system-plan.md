@@ -19,7 +19,11 @@ Restaurant support is a new product vertical built on the existing DevFathom pla
 
 ### 1.1 Document authority and precedence
 
-This plan is the restaurant product's planning source of truth. The BA PRD remains a functional-workflow input. Where the documents disagree on architecture, identity, tenancy, authorization, money, tax, business date, numbering, audit, offline behavior, reliability, or release scope, this plan governs until an accepted ADR explicitly supersedes it.
+This plan is the restaurant product's planning and architecture baseline. The canonical current
+operator instructions are in [`docs/product/restaurant-administrator-guide.md`](../../docs/product/restaurant-administrator-guide.md).
+The BA PRD remains a functional-workflow input. Where planning documents disagree on architecture,
+identity, tenancy, authorization, money, tax, business date, numbering, audit, offline behavior,
+reliability, or release scope, this plan governs until an accepted ADR explicitly supersedes it.
 
 An accepted ADR may refine an implementation decision but must link the affected plan section and preserve the commercial and operational intent. Code, seed data, mockups, or an older PRD paragraph do not silently answer an open decision. Restaurant-specific implementation must not begin from the BA PRD alone.
 
@@ -1297,28 +1301,21 @@ The following existing files provide patterns to reuse. They do not imply that r
 
 ## 20. Status summary
 
-| Area                                                                                     | Status                    |
-| ---------------------------------------------------------------------------------------- | ------------------------- |
-| Restaurant planning baseline                                                             | `FINAL FOR PHASE 0`       |
-| Phase 0 decision register                                                                | `OPEN — SEE SECTION 17.2` |
-| Restaurant implementation                                                                | `NOT STARTED`             |
-| Organization-type onboarding                                                             | `PLANNED`                 |
-| Restaurant package catalog                                                               | `PLANNED`                 |
-| Branch model                                                                             | `PLANNED`                 |
-| Restaurant roles/capabilities                                                            | `PLANNED`                 |
-| Restaurant staff/operator and registered-device identity                                 | `PLANNED`                 |
-| Scheduler and durable worker foundation                                                  | `PLANNED`                 |
-| POS and kitchen                                                                          | `PLANNED`                 |
-| Bills/checks, tips, drawer sessions, business date, item/course lifecycle, and numbering | `PLANNED`                 |
-| Organization brands, canonical catalog, branch menus, and dayparts                       | `PLANNED`                 |
-| Menu and recipes                                                                         | `PLANNED`                 |
-| Inventory and purchasing                                                                 | `PLANNED`                 |
-| Restaurant workforce                                                                     | `PLANNED`                 |
-| SOP and compliance                                                                       | `PLANNED`                 |
-| Customers and loyalty                                                                    | `PLANNED`                 |
-| Restaurant insights                                                                      | `PLANNED`                 |
-| Integrations and devices                                                                 | `PLANNED`                 |
-| Responsive accessibility and localization/RTL                                            | `PLANNED`                 |
-| Native mobile applications                                                               | `FUTURE`                  |
+This table is reconciled against commit `03731baab29b29278165c7a169078d4fec897a10`. `IMPLEMENTED`
+means committed source plus focused evidence; it does not assert deployment, browser, hardware, or
+external-service acceptance. Use the
+[restaurant administrator guide](../../docs/product/restaurant-administrator-guide.md) for safe
+operator workflows and current limits.
 
-No restaurant-specific capability should be marketed as implemented until its code, migrations, authorization, tenant isolation, QA, deployment, and documentation are complete.
+| Area                                                                          | Evidence status                                                                                                                                 |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Planning baseline and decision register                                       | `FINAL FOR PHASE 0`; unresolved decisions remain `OPEN — SEE SECTION 17.2`                                                                      |
+| Onboarding, packages, modules, roles, staff, and registered devices           | `IMPLEMENTED / PARTIAL` — onboarding, entitlement gates, staff, and device consoles exist; complete branch administration is not operator-ready |
+| Catalog, menus, pricing, modifiers, recipes, OCR import, and publication      | `IMPLEMENTED` — catalog/menu/import consoles and focused tests exist; OCR publication remains manual                                            |
+| POS, KDS, orders, bills, tenders, drawer, business date, and numbering        | `IMPLEMENTED / MOCKED` — terminal flows and focused tests exist; card processing is mocked and printing is not built                            |
+| Tax                                                                           | `IMPLEMENTED / CONFIGURATION-BOUND` — branch activation and Pakistan profiles exist; applicability requires qualified adviser confirmation      |
+| Inventory, purchasing, workforce, SOP, customers/loyalty, and insights        | `IMPLEMENTED / PARTIAL` — routes, domain logic, and focused tests exist; operator limits remain documented                                      |
+| Browser, hardware, external payment, native mobile, and production deployment | `NOT CLAIMED`                                                                                                                                   |
+
+No restaurant-specific capability should be marketed as implemented until its code, migrations,
+authorization, tenant isolation, QA, deployment, and documentation are complete.

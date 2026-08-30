@@ -1,10 +1,12 @@
 # Kitchen Display System (KDS) — Module PRD
 
+Operator workflow: [Restaurant administrator guide](../restaurant-administrator-guide.md#7-open-the-terminal-drawer-and-kds).
+
 **Status vocabulary:** IMPLEMENTED — present in the repository and covered by a cited verification or
 source path. PLANNED — accepted design exists; implementation is not complete. MOCKED — exercised in
 tests or simulation; no production hardware acceptance claimed.
 
-**Base commit:** `8a46543565edd47a616288eecb7e1d10082d2d31`
+**Evidence commit:** `03731baab29b29278165c7a169078d4fec897a10`
 
 ---
 
@@ -30,8 +32,9 @@ machine.
 
 ## 3. Non-goals
 
-- **Hardware driver integration** — the UI runs in any modern browser; direct hardware I/O (bump
-  bars, specialty KDS monitors) is not implemented or planned in this milestone.
+- **Browser and hardware acceptance** — source, jsdom, and database integration are evidenced; no
+  browser compatibility matrix or production hardware acceptance has been run. Direct hardware I/O
+  (bump bars and specialty KDS monitors) is not implemented or planned in this milestone.
 - **Real-time push transport** — M4 deliberately omits SSE and WebSocket channels (see
   `src/lib/restaurant/kds.ts` comment, C2). The display is level-triggered bounded polling only.
 - **Cross-station aggregation** — a single KDS device sees only its bound station's queue. A
@@ -164,7 +167,8 @@ DB test: `src/lib/restaurant/terminal-kds-routes.db.test.ts` (idempotent replay 
 ### 6.1 Connect flow
 
 1. Operator navigates to `/kds` on the enrolled device browser.
-2. The KDS board renders a credential form (device secret + acting operator profile ID). Credentials
+2. The KDS board renders a credential form (device secret + operator selector populated after the
+   secret is authorized). Credentials
    are held in component state only — never persisted to `localStorage` or cookies.
 3. On submit, the board begins polling `GET /api/restaurant/kds/queue`. A 401/403 response
    disconnects and clears credentials.
@@ -285,7 +289,7 @@ Source: `src/components/restaurant/kds/kds-board.tsx`
 | AC9  | `HELD` items show `HOLD — DO NOT FIRE` and have no action button                                                                                     | IMPLEMENTED | `src/components/restaurant/kds/kds-board.tsx` (`ACTIONS` map has no `HELD` entry)                                     |
 | AC10 | A cross-tenant probe on KDS routes is indistinguishable from "not found"                                                                             | IMPLEMENTED | `src/lib/restaurant/terminal-kds-routes.db.test.ts` (cross-tenant assertions)                                         |
 | AC11 | The board renders 4 swimlane columns responsive to viewport; skip-to-content link present                                                            | IMPLEMENTED | `src/components/restaurant/kds/kds-board.tsx` (CSS grid, KdsShell skip link)                                          |
-| AC12 | No production hardware acceptance is claimed — display runs in any modern browser                                                                    | IMPLEMENTED | UI is a browser-rendered React component; no hardware driver code exists in the codebase                              |
+| AC12 | Browser and production-hardware compatibility are not claimed                                                                                        | NOT CLAIMED | Current evidence is source, jsdom, and database integration; no browser/hardware matrix was run                       |
 
 ---
 
@@ -304,9 +308,9 @@ Source: `src/components/restaurant/kds/kds-board.tsx`
 
 ## 12. Document provenance
 
-This PRD is evidence-linked to commit `8a46543565edd47a616288eecb7e1d10082d2d31` (M9 union base).
+This PRD is reconciled against commit `03731baab29b29278165c7a169078d4fec897a10`.
 Every IMPLEMENTED claim cites a source file, migration, test, or explicit owner decision at that
-base. PLANNED and FUTURE items are clearly distinguished. No hardware or network production
+commit. PLANNED and FUTURE items are clearly distinguished. No browser, hardware, or network production
 acceptance is claimed from simulation or integration-test results.
 
 Last authored: 2026-08-28.
