@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   recordAudit: vi.fn(),
   branchFindUnique: vi.fn(),
   stationFindFirst: vi.fn(),
+  support: null as null | { platformUserId: string },
 }));
 
 vi.mock('server-only', () => ({}));
@@ -33,7 +34,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
   resolveTenantActor: async () => ({
     organization: { id: 'org_1' },
-    support: null,
+    support: mocks.support,
     session: {
       expires: 'later',
       user: {
@@ -73,7 +74,9 @@ function request() {
 beforeEach(() => {
   vi.stubEnv('NODE_ENV', 'production');
   mocks.can.mockClear();
+  mocks.enrollDevice.mockClear();
   mocks.recordAudit.mockClear();
+  mocks.support = null;
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1', name: 'Downtown' });
   mocks.stationFindFirst.mockResolvedValue({ id: 'station_1', name: 'Expo' });
   mocks.enrollDevice.mockResolvedValue({
@@ -130,5 +133,39 @@ describe('POST browser enrollment', () => {
     );
     expect(JSON.stringify(mocks.recordAudit.mock.calls)).not.toContain(rawSecret);
     expect(JSON.stringify(mocks.recordAudit.mock.calls)).not.toContain('cookie');
+  });
+
+  it('rejects support impersonation before authorization, device creation, or success audit', async () => {
+    mocks.support = { platformUserId: 'platform_support_1' };
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Support sessions cannot enroll restaurant terminals.',
+    });
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.enrollDevice).not.toHaveBeenCalled();
+    expect(mocks.recordAudit).not.toHaveBeenCalled();
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('keeps local terminal and normal Auth.js cookies non-Secure', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+
+    const response = await POST(request());
+    const cookies = response.headers.getSetCookie();
+    const terminalCookie = cookies.find((cookie) => cookie.startsWith('devfathom-terminal='));
+    const localAuthDeletion = cookies.find((cookie) => cookie.startsWith('authjs.session-token='));
+    const secureAuthDeletion = cookies.find((cookie) =>
+      cookie.startsWith('__Secure-authjs.session-token=')
+    );
+
+    expect(terminalCookie).toContain('HttpOnly');
+    expect(terminalCookie).toContain('SameSite=strict');
+    expect(terminalCookie).not.toContain('Secure');
+    expect(localAuthDeletion).toContain('Max-Age=0');
+    expect(localAuthDeletion).not.toContain('Secure');
+    expect(secureAuthDeletion).toContain('Secure');
   });
 });
