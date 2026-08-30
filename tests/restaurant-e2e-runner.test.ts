@@ -94,6 +94,9 @@ describe('Restaurant integrated E2E safety', () => {
     expect(config.workers).toBe(1);
     expect(config.projects).toHaveLength(1);
     expect(config.projects?.[0]?.name).toBe('restaurant-integrated-serial');
-    expect(config.webServer).toMatchObject({ reuseExistingServer: false });
+    expect(config.webServer).toMatchObject({
+      reuseExistingServer: false,
+      env: { AUTH_TRUST_HOST: 'true' },
+    });
   });
 });

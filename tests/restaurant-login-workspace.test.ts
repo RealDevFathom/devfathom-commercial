@@ -1,7 +1,10 @@
 import type { Page } from '@playwright/test';
 import { describe, expect, test } from 'vitest';
 
-import { completeWorkspaceSelection } from './e2e/fixtures/restaurant-actor-accessibility';
+import {
+  completeWorkspaceSelection,
+  isAuthenticatedAppDestination,
+} from './e2e/fixtures/restaurant-actor-accessibility';
 
 function deferred() {
   let resolve!: () => void;
@@ -12,17 +15,33 @@ function deferred() {
 }
 
 describe('Restaurant actor workspace selection', () => {
+  test('accepts only stable authenticated app destinations', () => {
+    for (const pathname of ['/login', '/platform/login', '/api/auth/error', '/api/auth/callback']) {
+      expect(
+        isAuthenticatedAppDestination(new URL(`http://app.localhost${pathname}`), '/login')
+      ).toBe(false);
+    }
+    expect(isAuthenticatedAppDestination(new URL('http://app.localhost/dashboard'), '/login')).toBe(
+      true
+    );
+  });
+
   test('awaits a delayed chooser and selects Chai Chowk by stable identity', async () => {
     const chooserVisible = deferred();
     let selected: RegExp | undefined;
     const page = {
       getByText: () => ({ waitFor: () => chooserVisible.promise }),
       waitForURL: () => new Promise<void>(() => undefined),
-      getByRole: (_role: string, options: { name: RegExp }) => ({
-        click: async () => {
-          selected = options.name;
-        },
-      }),
+      getByRole: (role: string, options?: { name: RegExp }) =>
+        role === 'alert'
+          ? {
+              first: () => ({ waitFor: () => new Promise<void>(() => undefined) }),
+            }
+          : {
+              click: async () => {
+                selected = options?.name;
+              },
+            },
     } as unknown as Page;
 
     const result = completeWorkspaceSelection(page, '/login', /Chai Chowk Café|chai-chowk/i);
@@ -39,7 +58,12 @@ describe('Restaurant actor workspace selection', () => {
       waitForURL: async (predicate: (url: URL) => boolean) => {
         expect(predicate(new URL('http://app.localhost/dashboard'))).toBe(true);
       },
-      getByRole: () => ({ click: async () => (clicked = true) }),
+      getByRole: (role: string) =>
+        role === 'alert'
+          ? {
+              first: () => ({ waitFor: () => new Promise<void>(() => undefined) }),
+            }
+          : { click: async () => (clicked = true) },
     } as unknown as Page;
 
     await expect(

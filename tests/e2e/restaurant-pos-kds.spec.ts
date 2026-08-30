@@ -29,8 +29,8 @@ async function unlockPos(page: Page) {
   await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
   await expect(page.getByRole('heading', { name: 'Terminal locked' })).toBeVisible();
-  await page.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
-  await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
+  await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await expect(page.getByText('E2E Menu loaded.')).toBeVisible();
@@ -123,7 +123,7 @@ test.describe('restaurant POS and KDS core flow', () => {
     const kdsPage = await kdsContext.newPage();
     await kdsPage.goto('/kds');
     await kdsPage.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
-    await kdsPage.getByLabel('Operator PIN').fill(fixture.operator.pin);
+    await kdsPage.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
     await kdsPage.getByRole('button', { name: 'Verify PIN and unlock' }).click();
     await expect(kdsPage.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
     await assertTerminalSecretIsBrowserIsolated(kdsPage, fixture.kds.secret);

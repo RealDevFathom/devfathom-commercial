@@ -20,6 +20,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
+      AUTH_TRUST_HOST: 'true',
       DATABASE_URL: process.env.DATABASE_URL ?? '',
       RESTAURANT_INTEGRATED_E2E: '1',
     },

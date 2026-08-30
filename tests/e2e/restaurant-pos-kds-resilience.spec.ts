@@ -10,7 +10,7 @@ async function connectKds(page: import('@playwright/test').Page) {
   await installSeededTerminalCookie(page.context(), fixture.kds);
   await page.goto('/kds');
   await page.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
-  await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Verify PIN and unlock' }).click();
   await expect(page.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
   await assertTerminalSecretIsBrowserIsolated(page, fixture.kds.secret);
@@ -19,8 +19,8 @@ async function connectKds(page: import('@playwright/test').Page) {
 async function createAndFireOrder(page: import('@playwright/test').Page) {
   await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await page.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
-  await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
+  await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await page.getByRole('checkbox').first().check();
   await page.getByRole('button', { name: 'Open order' }).click();
@@ -43,7 +43,9 @@ test.describe('restaurant browser resilience', () => {
 
     await page.context().setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.getByRole('alert')).toContainText('Queue refresh failed');
+    await expect(page.getByRole('alert').filter({ hasText: 'Queue refresh failed' })).toContainText(
+      'Queue refresh failed'
+    );
     await expect(page.getByText(/Showing the last confirmed station state/)).toBeVisible();
     await page.context().setOffline(false);
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
@@ -67,8 +69,8 @@ test.describe('restaurant browser resilience', () => {
     });
     await installSeededTerminalCookie(posContext, fixture.pos);
     await pos.goto('/pos');
-    await pos.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
-    await pos.getByLabel('Operator PIN').fill(fixture.operator.pin);
+    await pos.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
+    await pos.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
     await pos.getByRole('button', { name: 'Unlock terminal' }).click();
     await expect(
       pos.getByRole('button', { name: new RegExp(fixture.menuItem.name) })

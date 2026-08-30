@@ -49,7 +49,7 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
     const response = await page.goto(new URL(routes[0][0], origin).href);
     expect(response?.ok(), `dashboard at ${width}px`).toBe(true);
     await expect(page).toHaveURL(new RegExp(`${routes[0][0]}(?:\\?|$)`));
-    await expect(page.getByRole('heading', { name: routes[0][1] })).toBeVisible();
+    await expect(page.getByRole('heading', { name: routes[0][1], exact: true })).toBeVisible();
     await page.keyboard.press('Tab');
     await expect(page.locator(':focus')).toBeVisible();
   }
@@ -59,7 +59,7 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
     const response = await page.goto(new URL(route, origin).href);
     expect(response?.ok(), route).toBe(true);
     await expect(page).toHaveURL(new RegExp(`${route}(?:\\?|$)`));
-    await expect(page.getByRole('heading', { name: heading })).toBeVisible();
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
 
   const origin = await signInAs(page, 'restaurantAdmin');
@@ -70,7 +70,9 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
     ).href
   );
   expect(forbidden?.ok()).toBe(true);
-  await expect(page.getByRole('heading', { name: 'Restaurant dashboard' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Restaurant dashboard', exact: true })
+  ).toBeVisible();
   await expect(page).not.toHaveURL(/org_restaurant_b_forbidden/);
   expect(failures, failures.join('\n')).toEqual([]);
 });
@@ -78,8 +80,8 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
 test('fixture publishes named order inputs and explicit pending UI seams', async ({ page }) => {
   await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await page.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
-  await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
+  await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await expect(page.getByText(fixture.menuItem.name)).toBeVisible();
