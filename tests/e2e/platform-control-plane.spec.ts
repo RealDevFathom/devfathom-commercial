@@ -28,6 +28,9 @@ const routes = [
   ['Audit ledger', '/platform/audit'],
   ['Platform settings', '/platform/settings'],
 ] as const;
+const sharedBaseUrl = process.env.PLAYWRIGHT_SHARED_BASE_URL;
+const fixtureIdentity =
+  /E2E Restaurant|e2e-restaurant-control-plane|restaurant-owner@e2e\.invalid|E2E Platform Operator|platform-operator@e2e\.invalid/i;
 
 test.beforeAll(async () => prepareControlPlaneFixture());
 
@@ -73,6 +76,11 @@ test('restricted operator sees only grants and denied document/data requests fai
       page.getByRole('navigation').getByRole('link', { name: label, exact: true })
     ).toBeVisible();
   }
+  for (const [, href] of granted) {
+    const response = await page.goto(href);
+    expect(response?.status(), href).toBe(200);
+    await expect(page.getByRole('main')).toBeVisible();
+  }
   for (const [label] of denied) {
     await expect(
       page.getByRole('navigation').getByRole('link', { name: label, exact: true })
@@ -82,16 +90,19 @@ test('restricted operator sees only grants and denied document/data requests fai
   for (const [, href] of denied) {
     const document = await page.request.get(href, { failOnStatusCode: false, maxRedirects: 0 });
     expect([302, 303, 307, 308, 403]).toContain(document.status());
-    expect(document.status()).toBeLessThan(500);
-    expect(await document.text()).not.toMatch(/passwordHash|tokenHash|platform_users/);
+    const documentBody = await document.text();
+    expect(documentBody).not.toMatch(/passwordHash|tokenHash|platform_users/);
+    expect(documentBody).not.toMatch(fixtureIdentity);
 
     const flight = await page.request.get(href, {
       headers: { RSC: '1', 'Next-Router-Prefetch': '1' },
       failOnStatusCode: false,
       maxRedirects: 0,
     });
-    expect(flight.status()).toBeLessThan(500);
-    expect(await flight.text()).not.toMatch(/passwordHash|tokenHash|platform_users/);
+    expect([200, 302, 303, 307, 308, 403]).toContain(flight.status());
+    const flightBody = await flight.text();
+    expect(flightBody).not.toMatch(/passwordHash|tokenHash|platform_users/);
+    expect(flightBody).not.toMatch(fixtureIdentity);
   }
   expect(unexpectedErrors).toEqual([]);
 });
@@ -190,15 +201,15 @@ test('failure ledger records denial, validation, rollback, success, replay, and 
       1
     );
     expect(byRequest.get(`${correlation}-rollback`)?.success).toBe(false);
+    expect(byRequest.get(`${correlation}-deny`)?.success).toBe(false);
+    expect(byRequest.get(`${correlation}-invalid`)?.success).toBe(false);
+    expect(byRequest.get(`${correlation}-success`)?.success).toBe(true);
     expect(JSON.stringify(evidence.rows)).not.toContain(secret);
     expect(JSON.stringify(evidence.rows)).not.toMatch(/forced e2e rollback|\bat .+\(.+\.ts:/);
   });
 });
 
-test('restaurant onboarding reaches ACTIVE and shared-host tenant dashboard', async ({
-  page,
-  request,
-}) => {
+test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await loginPlatform(page);
   await page.goto('/platform/organizations/new');
   await page.getByRole('link', { name: /Continue as Restaurant/ }).click();
@@ -248,27 +259,43 @@ test('restaurant onboarding reaches ACTIVE and shared-host tenant dashboard', as
     expect(proof.rows[0].roles).toBeGreaterThan(1);
     expect(proof.rows[0].modules).toBeGreaterThan(1);
   });
+});
 
-  const shared = process.env.PLAYWRIGHT_SHARED_BASE_URL;
-  test.skip(!shared, 'PLAYWRIGHT_SHARED_BASE_URL is required for shared-host proof.');
-  await page.goto(`${shared}/login`);
+test('shared-host login succeeds and forged tenant selection is generic', async ({ browser }) => {
+  test.skip(!sharedBaseUrl, 'PLAYWRIGHT_SHARED_BASE_URL is required before shared-host proof.');
+
+  const loginContext = await browser.newContext();
+  const page = await loginContext.newPage();
+  await page.goto(`${sharedBaseUrl}/login`);
   await page.getByLabel('Email').fill(platformFixture.tenant.email);
   await page.locator('input[name="password"]').fill(platformFixture.tenant.password);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/dashboard(?:\?|$)/);
   expect(page.url()).not.toMatch(/organizationId|workspace|org_/);
+  await loginContext.close();
 
-  await request.post(`${shared}/api/login`, {
-    headers: { origin: new URL(shared!).origin },
+  const forgedContext = await browser.newContext({ baseURL: sharedBaseUrl });
+  const intent = await forgedContext.request.post('/api/login', {
+    headers: { origin: new URL(sharedBaseUrl!).origin },
     data: { email: platformFixture.tenant.email, password: platformFixture.tenant.password },
   });
-  const forged = await request.post(`${shared}/api/auth/callback/login-intent`, {
-    headers: { origin: new URL(shared!).origin },
+  expect(intent.ok()).toBe(true);
+  const forged = await forgedContext.request.post('/api/auth/callback/login-intent', {
+    headers: { origin: new URL(sharedBaseUrl!).origin },
     form: { organizationId: 'forged-incompatible-selection', redirect: 'false' },
     failOnStatusCode: false,
   });
   expect(forged.status()).toBeLessThan(500);
-  expect(await forged.text()).not.toMatch(/organization.*not found|E2E Restaurant/i);
+  const forgedBody = await forged.text();
+  expect(forgedBody).not.toMatch(/organization.*not found|E2E Restaurant/i);
+  expect(forgedBody).not.toMatch(fixtureIdentity);
+  const forgedCookies = (await forgedContext.storageState()).cookies.map((cookie) => cookie.name);
+  expect(forgedCookies).not.toContain('authjs.session-token');
+  expect(forgedCookies).not.toContain('__Secure-authjs.session-token');
+  const forgedPage = await forgedContext.newPage();
+  await forgedPage.goto('/dashboard');
+  await expect(forgedPage).not.toHaveURL(/\/dashboard(?:\?|$)/);
+  await forgedContext.close();
 });
 
 test('compact navigation preserves keyboard focus and has no hydration/request errors', async ({
@@ -284,12 +311,16 @@ test('compact navigation preserves keyboard focus and has no hydration/request e
     failures.push(request.failure()?.errorText ?? 'request failed')
   );
   await loginPlatform(page);
-  await page.getByRole('button', { name: 'Open platform navigation' }).click();
+  const trigger = page.getByRole('button', { name: 'Open platform navigation' });
+  await trigger.focus();
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('complementary', { name: 'Platform navigation' })).toBeVisible();
-  await page.keyboard.press('Tab');
-  await expect(page.locator(':focus')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Close menu' }).click();
+  const close = page.getByRole('button', { name: 'Close menu' });
+  await close.focus();
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('complementary', { name: 'Platform navigation' })).toHaveCount(0);
+  await expect(trigger).toBeFocused();
   expect(failures).toEqual([]);
 });
