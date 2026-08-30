@@ -201,6 +201,114 @@ function capabilityFor(action: string): string {
   return capability;
 }
 
+const auditId = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(/^[a-zA-Z0-9_-]+$/);
+const requestId = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z0-9._:-]+$/);
+
+type FailureCategory = 'capability_denied' | 'validation_failed' | 'command_failed';
+
+const FAILURE_REASON: Record<FailureCategory, string> = {
+  capability_denied: 'Platform command capability denied.',
+  validation_failed: 'Platform command validation failed.',
+  command_failed: 'Platform command transaction failed.',
+};
+
+function failureCategory(error: unknown): FailureCategory {
+  if (error instanceof PlatformSecurityError && error.status === 403) return 'capability_denied';
+  if (
+    error instanceof z.ZodError ||
+    (error instanceof PlatformSecurityError && error.status === 400)
+  ) {
+    return 'validation_failed';
+  }
+  return 'command_failed';
+}
+
+function safeFailureTarget(action: string, payload: unknown) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
+  const candidate = payload as Record<string, unknown>;
+  const organizationId = auditId.safeParse(candidate.organizationId);
+  const targetId = auditId.safeParse(candidate.id);
+  return {
+    organizationId: organizationId.success ? organizationId.data : undefined,
+    targetType: action === 'platform.command.invalid' ? undefined : action.split('.')[0],
+    targetId: targetId.success ? targetId.data : undefined,
+  };
+}
+
+async function persistCommandFailure(
+  actor: PlatformIdentity,
+  action: string,
+  payload: unknown,
+  request: Request,
+  error: unknown
+) {
+  const category = failureCategory(error);
+  const correlation = requestId.safeParse(request.headers.get('x-devfathom-request-id'));
+  const correlationId = correlation.success ? correlation.data : undefined;
+  const deterministicId = correlationId
+    ? `pcfail_${createHash('sha256')
+        .update(`${actor.id}\0${action}\0${category}\0${correlationId}`)
+        .digest('hex')
+        .slice(0, 32)}`
+    : undefined;
+
+  try {
+    await withPlatformDb(async (db) => {
+      const target = safeFailureTarget(action, payload);
+      if (target.organizationId) {
+        const organization = await db.$queryRawUnsafe<Array<{ id: string }>>(
+          'SELECT id FROM organizations WHERE id = $1 FOR KEY SHARE',
+          target.organizationId
+        );
+        if (organization.length === 0) target.organizationId = undefined;
+      }
+
+      try {
+        await db.platformAuditLog.create({
+          data: {
+            ...(deterministicId ? { id: deterministicId } : {}),
+            ...target,
+            actorPlatformUserId: actor.id,
+            action,
+            metadata: { outcomeCategory: category },
+            requestId: correlationId,
+            reason: FAILURE_REASON[category],
+            success: false,
+            error: FAILURE_REASON[category],
+          },
+        });
+      } catch (auditError) {
+        if (
+          deterministicId &&
+          typeof auditError === 'object' &&
+          auditError !== null &&
+          'code' in auditError &&
+          auditError.code === 'P2002'
+        ) {
+          return;
+        }
+        throw auditError;
+      }
+    });
+  } catch {
+    // Operational signal is deliberately constant: neither the command error nor
+    // attacker-controlled input is safe to emit when the audit sink is unhealthy.
+    console.error('[platform-audit] failed to persist command failure');
+    throw new PlatformSecurityError(
+      'The platform command failed and its audit record could not be persisted.',
+      500
+    );
+  }
+}
+
 function lifecycleAction(from: OrganizationStatus, to: OrganizationStatus): LifecycleAction {
   if (to === 'ACTIVE') return from === 'SUSPENDED' ? 'RESUMED' : 'ACTIVATED';
   if (to === 'GRACE') return 'ENTERED_GRACE';
@@ -2601,36 +2709,42 @@ export async function executePlatformCommand(
   payload: unknown,
   request: Request
 ) {
-  const action = z
-    .string()
-    .trim()
-    .min(3)
-    .max(100)
-    .regex(/^[a-z]+(?:\.[a-z]+)+$/)
-    .parse(actionInput);
-  assertPlatformCapability(actor, capabilityFor(action));
+  let action = 'platform.command.invalid';
+  try {
+    action = z
+      .string()
+      .trim()
+      .min(3)
+      .max(100)
+      .regex(/^[a-z]+(?:\.[a-z]+)+$/)
+      .parse(actionInput);
+    assertPlatformCapability(actor, capabilityFor(action));
 
-  return withPlatformDb(async (db) => {
-    const result = await runCommand(db, actor, action, payload);
-    // The audit row is built from the command's declared projection only.
-    // `result.data` is the reveal channel and never reaches this table.
-    const { before, after } = auditProjection(result);
-    await db.platformAuditLog.create({
-      data: {
-        organizationId: result.organizationId,
-        actorPlatformUserId: actor.id,
-        action,
-        targetType: result.targetType,
-        targetId: result.targetId,
-        before,
-        after,
-        requestId: request.headers.get('x-devfathom-request-id'),
-        ip:
-          request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-          request.headers.get('x-real-ip'),
-        userAgent: request.headers.get('user-agent')?.slice(0, 500),
-      },
+    return await withPlatformDb(async (db) => {
+      const result = await runCommand(db, actor, action, payload);
+      // The audit row is built from the command's declared projection only.
+      // `result.data` is the reveal channel and never reaches this table.
+      const { before, after } = auditProjection(result);
+      await db.platformAuditLog.create({
+        data: {
+          organizationId: result.organizationId,
+          actorPlatformUserId: actor.id,
+          action,
+          targetType: result.targetType,
+          targetId: result.targetId,
+          before,
+          after,
+          requestId: request.headers.get('x-devfathom-request-id'),
+          ip:
+            request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+            request.headers.get('x-real-ip'),
+          userAgent: request.headers.get('user-agent')?.slice(0, 500),
+        },
+      });
+      return result.data;
     });
-    return result.data;
-  });
+  } catch (error) {
+    await persistCommandFailure(actor, action, payload, request, error);
+    throw error;
+  }
 }
