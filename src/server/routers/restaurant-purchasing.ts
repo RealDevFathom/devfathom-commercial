@@ -105,25 +105,30 @@ const RETURN_LINE_INPUT = z
   })
   .strict();
 
-async function requirePurchaseOrderBranch(
-  ctx: TRPCContext,
-  purchaseOrderId: string
-): Promise<string> {
+async function requirePurchaseOrderScope(ctx: TRPCContext, purchaseOrderId: string) {
   const order = await ctx.db.restaurantPurchaseOrder.findUnique({
     where: { id: purchaseOrderId },
-    select: { branchId: true },
+    select: { branchId: true, locationId: true },
   });
   if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Purchase order not found.' });
-  return order.branchId;
+  return order;
 }
 
-async function requireLocationBranch(ctx: TRPCContext, locationId: string): Promise<string> {
+async function requireLocationInBranch(
+  ctx: TRPCContext,
+  locationId: string,
+  branchId: string
+): Promise<void> {
   const location = await ctx.db.restaurantStockLocation.findUnique({
     where: { id: locationId },
     select: { branchId: true },
   });
-  if (!location) throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock location not found.' });
-  return location.branchId;
+  if (!location || location.branchId !== branchId) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'The stock location is not authorized for this purchase order branch.',
+    });
+  }
 }
 
 export const restaurantPurchasingRouter = router({
@@ -240,6 +245,9 @@ export const restaurantPurchasingRouter = router({
     .mutation(({ ctx, input }) =>
       run(async () => {
         const actor = await resolveRestaurantActor(ctx, [input.branchId]);
+        if (input.locationId) {
+          await requireLocationInBranch(ctx, input.locationId, input.branchId);
+        }
         const order = await createPurchaseOrder(ctx.db, {
           ...input,
           expectedDate: parseDateOnly(input.expectedDate),
@@ -319,24 +327,21 @@ export const restaurantPurchasingRouter = router({
 
   approvePurchaseOrder: approveProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantPurchaseOrder',
-        targetId: input.purchaseOrderId,
-        description: 'Approved purchase order',
-      });
-      return run(async () =>
-        serializePurchaseOrder(
-          await approvePurchaseOrder(ctx.db, input.purchaseOrderId, {
-            approvedByStaffProfileId: (
-              await resolveRestaurantActor(ctx, [
-                await requirePurchaseOrderBranch(ctx, input.purchaseOrderId),
-              ])
-            ).staffProfileId,
-          })
-        )
-      );
-    }),
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        const actor = await resolveRestaurantActor(ctx, [scope.branchId]);
+        const order = await approvePurchaseOrder(ctx.db, input.purchaseOrderId, {
+          approvedByStaffProfileId: actor.staffProfileId,
+        });
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPurchaseOrder',
+          targetId: input.purchaseOrderId,
+          description: 'Approved purchase order',
+        });
+        return serializePurchaseOrder(order);
+      })
+    ),
 
   cancelPurchaseOrder: writeProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
@@ -376,16 +381,12 @@ export const restaurantPurchasingRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantPurchaseOrder',
-        targetId: input.purchaseOrderId,
-        description: 'Received goods against purchase order',
-      });
-      return run(async () => {
-        const actor = await resolveRestaurantActor(ctx, [
-          await requirePurchaseOrderBranch(ctx, input.purchaseOrderId),
-        ]);
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        const actor = await resolveRestaurantActor(ctx, [scope.branchId]);
+        const locationId = input.locationId ?? scope.locationId;
+        if (locationId) await requireLocationInBranch(ctx, locationId, scope.branchId);
         const result = await receivePurchaseOrder(ctx.db, {
           purchaseOrderId: input.purchaseOrderId,
           locationId: input.locationId,
@@ -406,9 +407,14 @@ export const restaurantPurchasingRouter = router({
             discrepancies: line.discrepancies,
           })),
         });
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPurchaseOrder',
+          targetId: input.purchaseOrderId,
+          description: 'Received goods against purchase order',
+        });
         return serializeReceiveResult(result);
-      });
-    }),
+      })
+    ),
 
   createSupplierReturn: writeProcedure
     .input(
@@ -422,16 +428,16 @@ export const restaurantPurchasingRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantStockLocation',
-        targetId: input.locationId,
-        description: 'Recorded supplier return',
-      });
-      return run(async () => {
-        const actor = await resolveRestaurantActor(ctx, [
-          await requireLocationBranch(ctx, input.locationId),
-        ]);
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        const location = await ctx.db.restaurantStockLocation.findUnique({
+          where: { id: input.locationId },
+          select: { branchId: true },
+        });
+        if (!location) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock location not found.' });
+        }
+        const actor = await resolveRestaurantActor(ctx, [location.branchId]);
         const result = await createSupplierReturn(ctx.db, {
           locationId: input.locationId,
           reference: input.reference,
@@ -442,12 +448,17 @@ export const restaurantPurchasingRouter = router({
           },
           lines: input.lines,
         });
+        annotateAudit(ctx, {
+          targetType: 'RestaurantStockLocation',
+          targetId: input.locationId,
+          description: 'Recorded supplier return',
+        });
         return {
           replayed: result.replayed,
           movements: result.movements.map(serializeMovement),
         };
-      });
-    }),
+      })
+    ),
 });
 
 // ── Error mapping ─────────────────────────────────────────────────────────────────

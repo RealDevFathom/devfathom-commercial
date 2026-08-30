@@ -103,6 +103,7 @@ type Deps = {
 let deps: Deps;
 let api: { inventory: InventoryCaller; orders: OrdersCaller; purchasing: PurchasingCaller };
 let inventoryCallerFor: (userId: string) => InventoryCaller;
+let purchasingCallerFor: (userId: string) => PurchasingCaller;
 
 function failAfterFirstMovementCreate(tx: ScopedDb): ScopedDb {
   const movements = new Proxy(tx.restaurantStockMovement, {
@@ -373,6 +374,24 @@ beforeAll(async () => {
       requestMeta: { ip: null, userAgent: null },
       audit: { detail: {} },
     } as unknown as TRPCContext);
+  purchasingCallerFor = (userId) =>
+    purchasingRouter.restaurantPurchasingRouter.createCaller({
+      db: scopedDb.createTenantDb(orgId),
+      entitlements: {
+        enabledModules: ['restaurant-pos'],
+        activeSeats: 1,
+        seatLimit: 50,
+        modules: [],
+      },
+      session: {
+        expires: 'later',
+        user: { id: userId, role: 'ADMIN', status: 'ACTIVE', organizationId: orgId },
+      },
+      organization: null,
+      support: null,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as unknown as TRPCContext);
   const context = {
     db: scopedDb.createTenantDb(orgId),
     entitlements: {
@@ -393,7 +412,7 @@ beforeAll(async () => {
   api = {
     inventory: inventoryCallerFor(ids.user),
     orders: ordersRouter.restaurantOrdersRouter.createCaller(context),
-    purchasing: purchasingRouter.restaurantPurchasingRouter.createCaller(context),
+    purchasing: purchasingCallerFor(ids.user),
   };
 }, 60_000);
 
@@ -417,6 +436,133 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
       `
     );
     expect(role).toEqual([{ rolcanlogin: true, rolsuper: false, rolbypassrls: false }]);
+  });
+
+  it('rejects cross-branch purchasing locations before creating or receiving stock', async () => {
+    const supplier = await api.purchasing.createSupplier({ name: `Branch Bound ${suffix}` });
+    const order = await api.purchasing.createPurchaseOrder({
+      supplierId: supplier.id,
+      branchId: ids.inventoryBranch,
+      locationId: ids.receiptLocation,
+      lines: [
+        {
+          stockItemId: ids.receiptItem,
+          orderedQuantity: '1',
+          unitId: ids.each,
+          unitCost: '1',
+        },
+      ],
+    });
+    await api.purchasing.submitPurchaseOrder({ purchaseOrderId: order.id });
+    await api.purchasing.approvePurchaseOrder({ purchaseOrderId: order.id });
+    const before = await deps.withTenantDb(orgId, async (tx) => ({
+      orders: await tx.restaurantPurchaseOrder.count(),
+      receipts: await tx.restaurantPurchaseReceipt.count(),
+      receiptLines: await tx.restaurantPurchaseReceiptLine.count(),
+      movements: await tx.restaurantStockMovement.count(),
+      idempotencyKeys: await tx.restaurantInventoryIdempotencyKey.count(),
+      audits: await tx.auditLog.count(),
+    }));
+    mocks.annotateAudit.mockClear();
+
+    await expect(
+      api.purchasing.createPurchaseOrder({
+        supplierId: supplier.id,
+        branchId: ids.inventoryBranch,
+        locationId: ids.recipeLocation,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.purchasing.receivePurchaseOrder({
+        purchaseOrderId: order.id,
+        locationId: ids.recipeLocation,
+        idempotencyKey: `cross_branch_receipt_${suffix}`,
+        lines: [{ purchaseOrderLineId: order.lines[0]!.id, receivedQuantity: '1' }],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const after = await deps.withTenantDb(orgId, async (tx) => ({
+      orders: await tx.restaurantPurchaseOrder.count(),
+      receipts: await tx.restaurantPurchaseReceipt.count(),
+      receiptLines: await tx.restaurantPurchaseReceiptLine.count(),
+      movements: await tx.restaurantStockMovement.count(),
+      idempotencyKeys: await tx.restaurantInventoryIdempotencyKey.count(),
+      audits: await tx.auditLog.count(),
+    }));
+    expect(after).toEqual(before);
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('denies invalid staff mappings across purchasing entry points without partial rows', async () => {
+    const supplier = await api.purchasing.createSupplier({ name: `Denied Mapping ${suffix}` });
+    const order = await api.purchasing.createPurchaseOrder({
+      supplierId: supplier.id,
+      branchId: ids.inventoryBranch,
+      locationId: ids.receiptLocation,
+      lines: [
+        {
+          stockItemId: ids.receiptItem,
+          orderedQuantity: '1',
+          unitId: ids.each,
+          unitCost: '1',
+        },
+      ],
+    });
+    await api.purchasing.submitPurchaseOrder({ purchaseOrderId: order.id });
+    const snapshot = () =>
+      deps.withTenantDb(orgId, async (tx) => ({
+        orders: await tx.restaurantPurchaseOrder.count(),
+        orderLines: await tx.restaurantPurchaseOrderLine.count(),
+        receipts: await tx.restaurantPurchaseReceipt.count(),
+        receiptLines: await tx.restaurantPurchaseReceiptLine.count(),
+        batches: await tx.restaurantStockBatch.count(),
+        movements: await tx.restaurantStockMovement.count(),
+        idempotencyKeys: await tx.restaurantInventoryIdempotencyKey.count(),
+        audits: await tx.auditLog.count(),
+      }));
+    const before = await snapshot();
+    mocks.annotateAudit.mockClear();
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+
+    try {
+      for (const userId of [
+        `user_absent_${suffix}`,
+        ids.inactiveUser,
+        ids.foreignUser,
+        ids.crossBranchUser,
+      ]) {
+        const denied = purchasingCallerFor(userId);
+        await expect(
+          denied.createPurchaseOrder({
+            supplierId: supplier.id,
+            branchId: ids.inventoryBranch,
+            locationId: ids.receiptLocation,
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          denied.approvePurchaseOrder({ purchaseOrderId: order.id })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          denied.receivePurchaseOrder({
+            purchaseOrderId: order.id,
+            idempotencyKey: `denied_receipt_${userId}`,
+            lines: [{ purchaseOrderLineId: order.lines[0]!.id, receivedQuantity: '1' }],
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          denied.createSupplierReturn({
+            locationId: ids.receiptLocation,
+            idempotencyKey: `denied_return_${userId}`,
+            lines: [{ stockItemId: ids.receiptItem, quantity: '1', unitId: ids.each }],
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    } finally {
+      mocks.can.mockResolvedValue(true);
+    }
+
+    expect(await snapshot()).toEqual(before);
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
 
   it('receives converted PO cases idempotently and derives exact read-time WAC', async () => {
