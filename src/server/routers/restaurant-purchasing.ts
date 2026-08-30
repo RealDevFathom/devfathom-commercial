@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
-import { router, capabilityProcedure } from '../trpc';
+import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
+import { resolveRestaurantActor } from '../restaurant-actor';
 import {
   PurchasingError,
   createSupplier,
@@ -103,6 +104,27 @@ const RETURN_LINE_INPUT = z
     batchId: ID.optional(),
   })
   .strict();
+
+async function requirePurchaseOrderBranch(
+  ctx: TRPCContext,
+  purchaseOrderId: string
+): Promise<string> {
+  const order = await ctx.db.restaurantPurchaseOrder.findUnique({
+    where: { id: purchaseOrderId },
+    select: { branchId: true },
+  });
+  if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Purchase order not found.' });
+  return order.branchId;
+}
+
+async function requireLocationBranch(ctx: TRPCContext, locationId: string): Promise<string> {
+  const location = await ctx.db.restaurantStockLocation.findUnique({
+    where: { id: locationId },
+    select: { branchId: true },
+  });
+  if (!location) throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock location not found.' });
+  return location.branchId;
+}
 
 export const restaurantPurchasingRouter = router({
   // ── Suppliers ─────────────────────────────────────────────────────────────────
@@ -211,16 +233,17 @@ export const restaurantPurchasingRouter = router({
           locationId: ID.optional(),
           reference: z.string().max(200).optional(),
           expectedDate: DATE_ONLY.optional(),
-          createdByStaffProfileId: ID.optional(),
           lines: z.array(PO_LINE_INPUT).optional(),
         })
         .strict()
     )
     .mutation(({ ctx, input }) =>
       run(async () => {
+        const actor = await resolveRestaurantActor(ctx, [input.branchId]);
         const order = await createPurchaseOrder(ctx.db, {
           ...input,
           expectedDate: parseDateOnly(input.expectedDate),
+          createdByStaffProfileId: actor.staffProfileId,
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantPurchaseOrder',
@@ -295,7 +318,7 @@ export const restaurantPurchasingRouter = router({
     }),
 
   approvePurchaseOrder: approveProcedure
-    .input(z.object({ purchaseOrderId: ID, approvedByStaffProfileId: ID.optional() }).strict())
+    .input(z.object({ purchaseOrderId: ID }).strict())
     .mutation(({ ctx, input }) => {
       annotateAudit(ctx, {
         targetType: 'RestaurantPurchaseOrder',
@@ -305,7 +328,11 @@ export const restaurantPurchasingRouter = router({
       return run(async () =>
         serializePurchaseOrder(
           await approvePurchaseOrder(ctx.db, input.purchaseOrderId, {
-            approvedByStaffProfileId: input.approvedByStaffProfileId,
+            approvedByStaffProfileId: (
+              await resolveRestaurantActor(ctx, [
+                await requirePurchaseOrderBranch(ctx, input.purchaseOrderId),
+              ])
+            ).staffProfileId,
           })
         )
       );
@@ -345,8 +372,6 @@ export const restaurantPurchasingRouter = router({
           reference: z.string().max(200).optional(),
           receivedAt: z.date().optional(),
           idempotencyKey: ID.optional(),
-          actingStaffProfileId: ID.optional(),
-          deviceId: ID.optional(),
           lines: z.array(RECEIVE_LINE_INPUT).min(1),
         })
         .strict()
@@ -358,14 +383,16 @@ export const restaurantPurchasingRouter = router({
         description: 'Received goods against purchase order',
       });
       return run(async () => {
+        const actor = await resolveRestaurantActor(ctx, [
+          await requirePurchaseOrderBranch(ctx, input.purchaseOrderId),
+        ]);
         const result = await receivePurchaseOrder(ctx.db, {
           purchaseOrderId: input.purchaseOrderId,
           locationId: input.locationId,
           reference: input.reference,
           receivedAt: input.receivedAt,
           actor: {
-            staffProfileId: input.actingStaffProfileId,
-            deviceId: input.deviceId,
+            staffProfileId: actor.staffProfileId,
             idempotencyKey: input.idempotencyKey,
           },
           lines: input.lines.map((line) => ({
@@ -391,8 +418,6 @@ export const restaurantPurchasingRouter = router({
           reference: z.string().max(200).optional(),
           occurredAt: z.date().optional(),
           idempotencyKey: ID.optional(),
-          actingStaffProfileId: ID.optional(),
-          deviceId: ID.optional(),
           lines: z.array(RETURN_LINE_INPUT).min(1),
         })
         .strict()
@@ -404,13 +429,15 @@ export const restaurantPurchasingRouter = router({
         description: 'Recorded supplier return',
       });
       return run(async () => {
+        const actor = await resolveRestaurantActor(ctx, [
+          await requireLocationBranch(ctx, input.locationId),
+        ]);
         const result = await createSupplierReturn(ctx.db, {
           locationId: input.locationId,
           reference: input.reference,
           occurredAt: input.occurredAt,
           actor: {
-            staffProfileId: input.actingStaffProfileId,
-            deviceId: input.deviceId,
+            staffProfileId: actor.staffProfileId,
             idempotencyKey: input.idempotencyKey,
           },
           lines: input.lines,

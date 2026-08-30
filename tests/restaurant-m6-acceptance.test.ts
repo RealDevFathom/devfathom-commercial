@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { seedDepartments } from '@/lib/test-support/departments';
 import type { TRPCContext } from '@/server/trpc';
 
 const mocks = vi.hoisted(() => ({
@@ -37,6 +38,7 @@ process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha74_${suffix}`;
+const foreignOrgId = `org_wha918_foreign_${suffix}`;
 const ids = {
   inventoryBranch: `branch_inventory_${suffix}`,
   recipeBranch: `branch_recipe_${suffix}`,
@@ -64,7 +66,15 @@ const ids = {
   product: `product_recipe_${suffix}`,
   recipe: `recipe_${suffix}`,
   recipeVersion: `recipe_version_${suffix}`,
+  user: `user_inventory_${suffix}`,
   staff: `staff_${suffix}`,
+  inactiveUser: `user_inactive_${suffix}`,
+  inactiveStaff: `staff_inactive_${suffix}`,
+  crossBranchUser: `user_cross_branch_${suffix}`,
+  crossBranchStaff: `staff_cross_branch_${suffix}`,
+  foreignUser: `user_foreign_${suffix}`,
+  foreignStaff: `staff_foreign_${suffix}`,
+  foreignBranch: `branch_foreign_${suffix}`,
   inventoryDevice: `device_inventory_${suffix}`,
   recipeDevice: `device_recipe_${suffix}`,
   reversalOrder: `order_reversal_${suffix}`,
@@ -92,6 +102,7 @@ type Deps = {
 
 let deps: Deps;
 let api: { inventory: InventoryCaller; orders: OrdersCaller; purchasing: PurchasingCaller };
+let inventoryCallerFor: (userId: string) => InventoryCaller;
 
 function failAfterFirstMovementCreate(tx: ScopedDb): ScopedDb {
   const movements = new Proxy(tx.restaurantStockMovement, {
@@ -135,8 +146,8 @@ beforeAll(async () => {
     settleBill: billsDomain.settleBill,
   };
 
-  await deps.withPlatformDb((tx) =>
-    tx.organization.create({
+  await deps.withPlatformDb(async (tx) => {
+    await tx.organization.create({
       data: {
         id: orgId,
         slug: `wha74-${suffix}`,
@@ -144,8 +155,18 @@ beforeAll(async () => {
         displayName: 'WHA-74 Acceptance',
         status: 'ACTIVE',
       },
-    })
-  );
+    });
+    await tx.organization.create({
+      data: {
+        id: foreignOrgId,
+        slug: `wha918-foreign-${suffix}`,
+        legalName: 'WHA-918 Foreign Tenant',
+        displayName: 'WHA-918 Foreign Tenant',
+        status: 'ACTIVE',
+      },
+    });
+    await seedDepartments(tx, [orgId, foreignOrgId], ['LEADERSHIP']);
+  });
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.createMany({
       data: [
@@ -235,9 +256,42 @@ beforeAll(async () => {
         unitId: ids.kilogram,
       },
     });
-    await tx.restaurantStaffProfile.create({
-      data: { id: ids.staff, displayName: 'Acceptance Staff' },
+    await tx.user.create({
+      data: {
+        id: ids.user,
+        name: 'Inventory Administrator',
+        email: `inventory_admin_${suffix}@test.local`,
+        department: 'LEADERSHIP',
+        title: 'Administrator',
+        role: 'ADMIN',
+      },
     });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: ids.staff,
+        userId: ids.user,
+        displayName: 'Acceptance Staff',
+        primaryBranchId: ids.inventoryBranch,
+        status: 'ACTIVE',
+      },
+    });
+    for (const [userId, staffId, status, primaryBranchId] of [
+      [ids.inactiveUser, ids.inactiveStaff, 'SUSPENDED', ids.inventoryBranch],
+      [ids.crossBranchUser, ids.crossBranchStaff, 'ACTIVE', ids.recipeBranch],
+    ] as const) {
+      await tx.user.create({
+        data: {
+          id: userId,
+          name: userId,
+          email: `${userId}@test.local`,
+          department: 'LEADERSHIP',
+          title: 'Inventory test user',
+        },
+      });
+      await tx.restaurantStaffProfile.create({
+        data: { id: staffId, userId, displayName: staffId, primaryBranchId, status },
+      });
+    }
     await tx.restaurantRegisteredDevice.createMany({
       data: [
         {
@@ -278,7 +332,47 @@ beforeAll(async () => {
       },
     });
   });
+  await deps.withTenantDb(foreignOrgId, async (tx) => {
+    await tx.restaurantBranch.create({
+      data: { id: ids.foreignBranch, name: 'Foreign Branch', timezone: 'UTC' },
+    });
+    await tx.user.create({
+      data: {
+        id: ids.foreignUser,
+        name: 'Foreign User',
+        email: `foreign_${suffix}@test.local`,
+        department: 'LEADERSHIP',
+        title: 'Foreign User',
+      },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: ids.foreignStaff,
+        userId: ids.foreignUser,
+        displayName: 'Foreign Staff',
+        primaryBranchId: ids.foreignBranch,
+      },
+    });
+  });
 
+  inventoryCallerFor = (userId) =>
+    inventoryRouter.restaurantInventoryRouter.createCaller({
+      db: scopedDb.createTenantDb(orgId),
+      entitlements: {
+        enabledModules: ['restaurant-pos'],
+        activeSeats: 1,
+        seatLimit: 50,
+        modules: [],
+      },
+      session: {
+        expires: 'later',
+        user: { id: userId, role: 'ADMIN', status: 'ACTIVE', organizationId: orgId },
+      },
+      organization: null,
+      support: null,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as unknown as TRPCContext);
   const context = {
     db: scopedDb.createTenantDb(orgId),
     entitlements: {
@@ -289,12 +383,7 @@ beforeAll(async () => {
     },
     session: {
       expires: 'later',
-      user: {
-        id: ids.staff,
-        role: 'ADMIN',
-        status: 'ACTIVE',
-        organizationId: orgId,
-      },
+      user: { id: ids.user, role: 'ADMIN', status: 'ACTIVE', organizationId: orgId },
     },
     organization: null,
     support: null,
@@ -302,7 +391,7 @@ beforeAll(async () => {
     audit: { detail: {} },
   } as unknown as TRPCContext;
   api = {
-    inventory: inventoryRouter.restaurantInventoryRouter.createCaller(context),
+    inventory: inventoryCallerFor(ids.user),
     orders: ordersRouter.restaurantOrdersRouter.createCaller(context),
     purchasing: purchasingRouter.restaurantPurchasingRouter.createCaller(context),
   };
@@ -310,19 +399,26 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!TEST_DATABASE_URL || !deps) return;
-  await deps.withTenantDb(orgId, async (tx) => {
-    await tx.restaurantBranch.deleteMany();
-    await tx.restaurantInventoryIdempotencyKey.deleteMany();
-    await tx.restaurantSupplier.deleteMany();
-    await tx.restaurantProduct.deleteMany();
-    await tx.restaurantIngredient.deleteMany();
-    await tx.restaurantStaffProfile.deleteMany();
-    await tx.restaurantUnit.deleteMany();
-  });
-  await deps.withPlatformDb((tx) => tx.organization.deleteMany({ where: { id: orgId } }));
+  // This flow creates append-only money idempotency evidence. Its database
+  // trigger rejects DELETE (including FK cascades), so the randomly-suffixed
+  // primary fixture remains in the suite's required disposable test database.
+  await deps.withPlatformDb((tx) => tx.organization.deleteMany({ where: { id: foreignOrgId } }));
 }, 60_000);
 
 describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL + API)', () => {
+  it('runs through a LOGIN role that is neither SUPERUSER nor BYPASSRLS', async () => {
+    const role = await deps.withTenantDb(
+      orgId,
+      (tx) =>
+        tx.$queryRaw<Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>>`
+        SELECT rolcanlogin, rolsuper, rolbypassrls
+        FROM pg_catalog.pg_roles
+        WHERE rolname = current_user
+      `
+    );
+    expect(role).toEqual([{ rolcanlogin: true, rolsuper: false, rolbypassrls: false }]);
+  });
+
   it('receives converted PO cases idempotently and derives exact read-time WAC', async () => {
     const supplier = await api.purchasing.createSupplier({ name: 'Case Supplier' });
     const created = await api.purchasing.createPurchaseOrder({
@@ -346,6 +442,17 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
     });
     await api.purchasing.submitPurchaseOrder({ purchaseOrderId: created.id });
     await api.purchasing.approvePurchaseOrder({ purchaseOrderId: created.id });
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantPurchaseOrder.findUniqueOrThrow({
+          where: { id: created.id },
+          select: { createdByStaffProfileId: true, approvedByStaffProfileId: true },
+        })
+      )
+    ).toEqual({
+      createdByStaffProfileId: ids.staff,
+      approvedByStaffProfileId: ids.staff,
+    });
 
     const firstInput = {
       purchaseOrderId: created.id,
@@ -372,6 +479,14 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
     expect(first.replayed).toBe(false);
     expect(first.movements).toHaveLength(1);
     expect(first.movements[0]).toMatchObject({ quantity: '12', unitCost: '10' });
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantPurchaseReceipt.findUniqueOrThrow({
+          where: { id: first.receiptId },
+          select: { staffProfileId: true, deviceId: true },
+        })
+      )
+    ).toEqual({ staffProfileId: ids.staff, deviceId: null });
 
     const replay = await api.purchasing.receivePurchaseOrder(firstInput);
     expect(replay).toEqual({ ...first, replayed: true });
@@ -433,6 +548,21 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
         weightedAverageCost: '15',
       }),
     ]);
+
+    const returned = await api.purchasing.createSupplierReturn({
+      locationId: ids.receiptLocation,
+      idempotencyKey: `return_${suffix}`,
+      lines: [{ stockItemId: ids.receiptItem, quantity: '1', unitId: ids.each }],
+    });
+    expect(returned.movements).toHaveLength(1);
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStockMovement.findUniqueOrThrow({
+          where: { id: returned.movements[0]!.id },
+          select: { staffProfileId: true, deviceId: true, reason: true },
+        })
+      )
+    ).toEqual({ staffProfileId: ids.staff, deviceId: null, reason: 'SUPPLIER_RETURN' });
   });
 
   it('freezes zero count snapshot, posts +7, and triggers threshold 8', async () => {
@@ -446,6 +576,14 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
       locationId: ids.countLocation,
       reference: 'count-seven',
     });
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStockCount.findUniqueOrThrow({
+          where: { id: count.id },
+          select: { staffProfileId: true },
+        })
+      )
+    ).toEqual({ staffProfileId: ids.staff });
     await api.inventory.addStockCountLine({
       stockCountId: count.id,
       stockItemId: ids.countItem,
@@ -500,6 +638,14 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
       destinationLocationId: ids.transferDestination,
       reference: 'atomic-four',
     });
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStockTransfer.findUniqueOrThrow({
+          where: { id: transfer.id },
+          select: { staffProfileId: true },
+        })
+      )
+    ).toEqual({ staffProfileId: ids.staff });
     await api.inventory.addStockTransferLine({
       stockTransferId: transfer.id,
       stockItemId: ids.transferItem,
@@ -559,6 +705,14 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
     });
     expect(wastage.quantity).toBe('-2');
     expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStockMovement.findUniqueOrThrow({
+          where: { id: wastage.id },
+          select: { staffProfileId: true },
+        })
+      )
+    ).toEqual({ staffProfileId: ids.staff });
+    expect(
       await api.inventory.listStockOnHand({
         stockItemId: ids.negativeItem,
         locationId: ids.negativeLocation,
@@ -582,6 +736,14 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
     });
     const appendFinished = Date.now();
     expect(reversalResult.quantity).toBe('2');
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStockMovement.findUniqueOrThrow({
+          where: { id: reversalResult.id },
+          select: { staffProfileId: true },
+        })
+      )
+    ).toEqual({ staffProfileId: ids.staff });
 
     const after = await api.inventory.listStockMovements({
       stockItemId: ids.negativeItem,
@@ -601,6 +763,59 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
     expect(reversal.recordedAt.getTime()).toBeGreaterThanOrEqual(appendStarted);
     expect(reversal.recordedAt.getTime()).toBeLessThanOrEqual(appendFinished);
     expect(reversal.occurredAt.getTime()).toBeLessThan(wastageOccurredAt.getTime());
+  });
+
+  it('denies absent, inactive, cross-tenant, and cross-branch mappings before inventory writes', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    const before = await deps.withTenantDb(orgId, async (tx) => ({
+      counts: await tx.restaurantStockCount.count(),
+      transfers: await tx.restaurantStockTransfer.count(),
+      movements: await tx.restaurantStockMovement.count(),
+    }));
+
+    try {
+      for (const userId of [
+        `user_absent_${suffix}`,
+        ids.inactiveUser,
+        ids.foreignUser,
+        ids.crossBranchUser,
+      ]) {
+        const denied = inventoryCallerFor(userId);
+        await expect(
+          denied.createStockCount({ locationId: ids.countLocation })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          denied.createStockTransfer({
+            sourceLocationId: ids.transferSource,
+            destinationLocationId: ids.transferDestination,
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          denied.postWastage({
+            stockItemId: ids.negativeItem,
+            locationId: ids.negativeLocation,
+            reason: 'WASTAGE',
+            quantity: '1',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          denied.postSaleReversal({
+            stockItemId: ids.negativeItem,
+            locationId: ids.negativeLocation,
+            quantity: '1',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    } finally {
+      mocks.can.mockResolvedValue(true);
+    }
+
+    const after = await deps.withTenantDb(orgId, async (tx) => ({
+      counts: await tx.restaurantStockCount.count(),
+      transfers: await tx.restaurantStockTransfer.count(),
+      movements: await tx.restaurantStockMovement.count(),
+    }));
+    expect(after).toEqual(before);
   });
 
   it('binds recipe yield, kg-to-g conversion, and C6 void dispositions', async () => {

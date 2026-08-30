@@ -46,6 +46,10 @@ const mocks = vi.hoisted(() => {
     listPurchaseOrders: fn(),
     getPurchaseOrder: fn(),
     getPurchaseReceipt: fn(),
+    findStaffProfiles: fn(),
+    findBranchAssignments: fn(),
+    findPurchaseOrder: fn(),
+    findStockLocation: fn(),
   };
 });
 
@@ -94,7 +98,12 @@ import type { TRPCContext } from '../trpc';
 
 function caller() {
   return restaurantPurchasingRouter.createCaller({
-    db: {} as never,
+    db: {
+      restaurantStaffProfile: { findMany: mocks.findStaffProfiles },
+      restaurantBranchAssignment: { findMany: mocks.findBranchAssignments },
+      restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
+      restaurantStockLocation: { findUnique: mocks.findStockLocation },
+    } as never,
     entitlements: {
       enabledModules: ['restaurant-pos'],
       activeSeats: 1,
@@ -117,6 +126,10 @@ const usedActions = () => mocks.can.mock.calls.map((c) => c[1]);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
+  mocks.findBranchAssignments.mockResolvedValue([]);
+  mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1' });
+  mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
 });
 
 describe('capability gating', () => {
@@ -219,7 +232,7 @@ describe('Decimal-as-string serialization (D07)', () => {
 });
 
 describe('actor + idempotency plumbing', () => {
-  it('maps acting staff / device / idempotency key into the command actor', async () => {
+  it('derives receipt staff from the session and leaves device attribution absent', async () => {
     mocks.receivePurchaseOrder.mockResolvedValue({
       receiptId: 'r1',
       purchaseOrderId: 'po1',
@@ -231,16 +244,90 @@ describe('actor + idempotency plumbing', () => {
     await caller().receivePurchaseOrder({
       purchaseOrderId: 'po1',
       idempotencyKey: 'idem-1',
-      actingStaffProfileId: 'staff-1',
-      deviceId: 'dev-1',
       lines: [{ purchaseOrderLineId: 'l1', receivedQuantity: '10' }],
     });
     const arg = mocks.receivePurchaseOrder.mock.calls[0]![1];
     expect(arg.actor).toEqual({
-      staffProfileId: 'staff-1',
-      deviceId: 'dev-1',
+      staffProfileId: 'staff_server',
       idempotencyKey: 'idem-1',
     });
+  });
+
+  it('derives PO creator and approver from the same active branch-authorized profile', async () => {
+    mocks.createPurchaseOrder.mockResolvedValue(minimalOrder());
+    mocks.approvePurchaseOrder.mockResolvedValue(minimalOrder());
+
+    await caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b1' });
+    await caller().approvePurchaseOrder({ purchaseOrderId: 'po1' });
+
+    expect(mocks.createPurchaseOrder).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ createdByStaffProfileId: 'staff_server' })
+    );
+    expect(mocks.approvePurchaseOrder).toHaveBeenCalledWith(expect.anything(), 'po1', {
+      approvedByStaffProfileId: 'staff_server',
+    });
+  });
+
+  it('derives supplier-return staff and leaves device attribution absent', async () => {
+    mocks.createSupplierReturn.mockResolvedValue({ replayed: false, movements: [] });
+    await caller().createSupplierReturn({
+      locationId: 'loc1',
+      idempotencyKey: 'return-idem',
+      lines: [{ stockItemId: 'si1', quantity: '1' }],
+    });
+    expect(mocks.createSupplierReturn.mock.calls[0]![1].actor).toEqual({
+      staffProfileId: 'staff_server',
+      idempotencyKey: 'return-idem',
+    });
+  });
+
+  it.each([
+    ['createPurchaseOrder', { supplierId: 's1', branchId: 'b1', createdByStaffProfileId: 'spoof' }],
+    ['approvePurchaseOrder', { purchaseOrderId: 'po1', approvedByStaffProfileId: 'spoof' }],
+    [
+      'receivePurchaseOrder',
+      {
+        purchaseOrderId: 'po1',
+        actingStaffProfileId: 'spoof',
+        deviceId: 'spoof-device',
+        lines: [{ purchaseOrderLineId: 'l1', receivedQuantity: '1' }],
+      },
+    ],
+    [
+      'createSupplierReturn',
+      {
+        locationId: 'loc1',
+        actingStaffProfileId: 'spoof',
+        deviceId: 'spoof-device',
+        lines: [{ stockItemId: 'si1', quantity: '1' }],
+      },
+    ],
+  ] as const)('rejects client attribution spoofing on %s', async (procedure, input) => {
+    await expect(
+      (caller()[procedure] as (value: never) => Promise<unknown>)(input as never)
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+  });
+
+  it('fails before purchasing mutation when no active staff mapping exists', async () => {
+    mocks.findStaffProfiles.mockResolvedValue([]);
+    await expect(
+      caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
+  });
+
+  it('fails before purchasing mutation when the active staff mapping is ambiguous', async () => {
+    mocks.findStaffProfiles.mockResolvedValue([
+      { id: 'staff_one', primaryBranchId: 'b1' },
+      { id: 'staff_two', primaryBranchId: 'b1' },
+    ]);
+    await expect(
+      caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
   });
 });
 
