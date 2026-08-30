@@ -47,6 +47,14 @@ export async function prepareControlPlaneFixture() {
     expect(role.rows).toEqual([{ rolsuper: false, rolbypassrls: false }]);
 
     const operatorHash = await hash(platformFixture.operator.password, 12);
+    await admin.query(`DROP TRIGGER IF EXISTS e2e_force_setting_rollback ON platform_settings`);
+    await admin.query(`DROP FUNCTION IF EXISTS e2e_force_setting_rollback()`);
+    await admin.query(
+      `DELETE FROM platform_audit_logs WHERE "requestId" LIKE 'e2e-failure-ledger-%'`
+    );
+    await admin.query(
+      `DELETE FROM platform_settings WHERE key IN ('e2e.denied', 'e2e.ledger.success', 'e2e.rollback')`
+    );
     await admin.query(
       `INSERT INTO platform_users (id, name, email, "passwordHash", role, active, "mfaRequired", "createdAt", "updatedAt")
        VALUES ('e2e_platform_operator', 'E2E Platform Operator', $1, $2, 'OPERATIONS', true, false, now(), now())
