@@ -273,7 +273,13 @@ async function resolveApprover(
   approving: z.infer<typeof APPROVING>,
   now: Date
 ): Promise<{ ok: true; staffProfileId: string } | { ok: false; response: NextResponse }> {
-  const auth = await authenticateApprover(ctx.db, ctx.device.id, approving, now);
+  const auth = await authenticateApprover(
+    ctx.db,
+    ctx.device.id,
+    ctx.device.branchId,
+    approving,
+    now
+  );
   if (!auth.ok) return auth;
   const canApprove = await operatorHasCapability(
     ctx.db,

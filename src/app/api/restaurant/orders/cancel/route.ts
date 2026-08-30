@@ -40,7 +40,13 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   let approvingStaffProfileId: string | null = null;
   if (parsed.data.approving) {
     const now = new Date();
-    const approver = await authenticateApprover(ctx.db, ctx.device.id, parsed.data.approving, now);
+    const approver = await authenticateApprover(
+      ctx.db,
+      ctx.device.id,
+      ctx.device.branchId,
+      parsed.data.approving,
+      now
+    );
     if (!approver.ok) return approver.response;
     if (!(await operatorHasCapability(ctx.db, approver.staffProfileId, 'coauth:approve', now))) {
       return NextResponse.json(
