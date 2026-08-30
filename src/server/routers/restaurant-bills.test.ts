@@ -7,6 +7,7 @@
  * internals (covered by `bills.test.ts`).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
 
@@ -17,7 +18,11 @@ const mocks = vi.hoisted(() => ({
   annotateAudit: vi.fn(),
   billFindMany: vi.fn(),
   billFindUnique: vi.fn(),
+  orderFindUnique: vi.fn(async () => ({ branchId: 'b1' })),
   evaluateOrderSettlement: vi.fn(),
+  requireBranchScope: vi.fn<(ctx: unknown, branchId: string) => Promise<void>>(
+    async () => undefined
+  ),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -43,6 +48,9 @@ vi.mock('@/lib/restaurant/bills', async () => {
     await vi.importActual<typeof import('@/lib/restaurant/bills')>('@/lib/restaurant/bills');
   return { ...actual, evaluateOrderSettlement: mocks.evaluateOrderSettlement };
 });
+vi.mock('@/server/restaurant-branch-scope', () => ({
+  requireRestaurantBranchScope: mocks.requireBranchScope,
+}));
 
 import { restaurantBillsRouter } from './restaurant-bills';
 import type { TRPCContext } from '../trpc';
@@ -50,6 +58,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const db = {
   restaurantBill: { findMany: mocks.billFindMany, findUnique: mocks.billFindUnique },
+  restaurantOrder: { findUnique: mocks.orderFindUnique },
 } as unknown as ScopedDb;
 
 function caller() {
@@ -196,6 +205,7 @@ describe('read model (C12)', () => {
     expect(bill!.netCollected).toBe('17'); // 22 tendered − 5 refunded
     expect(bill!.receiptNumber).toBe(5);
     expect(bill!.tenders[1].changeGiven).toBe('3');
+    expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 
   it('returns null for a missing bill', async () => {
@@ -228,13 +238,34 @@ describe('read model (C12)', () => {
     expect(s.derivedOrderTotal).toBe('26');
     expect(s.accountedTotal).toBe('26');
     expect(s.bills[0].grandTotal).toBe('26');
+    expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 });
 
 describe('capability gating + strict inputs', () => {
-  it('gates every read on money:read', async () => {
+  it('guards every list by its exact branch', async () => {
     await caller().listBills({ branchId: 'b1' });
     expect(mocks.can.mock.calls.some((c) => c[1] === 'money:read')).toBe(true);
+    expect(mocks.requireBranchScope.mock.calls.map((call) => call[1])).toEqual(['b1']);
+  });
+
+  it('denies direct IDs before fetching bill or settlement detail', async () => {
+    mocks.requireBranchScope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+    mocks.billFindUnique.mockResolvedValue({ branchId: 'blocked' });
+    await expect(caller().getBill({ billId: 'bill-blocked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.billFindUnique).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.requireBranchScope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+    mocks.orderFindUnique.mockResolvedValue({ branchId: 'blocked' });
+    await expect(caller().getOrderSettlement({ orderId: 'order-blocked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.orderFindUnique).toHaveBeenCalledTimes(1);
+    expect(mocks.billFindMany).not.toHaveBeenCalled();
   });
 
   it('denies a caller without money:read', async () => {

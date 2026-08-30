@@ -21,12 +21,12 @@ const operationalLinks = [
   { label: 'Kitchen display', href: '/kds', icon: CookingPot },
   { label: 'Floor', href: '/restaurant/floor', icon: LayoutGrid },
   { label: 'Orders', href: '/restaurant/orders', icon: ReceiptText },
-  { label: 'Money', href: '/restaurant/money', icon: DollarSign },
+  { label: 'Restaurant Finance', href: '/restaurant/money', icon: DollarSign },
   { label: 'Inventory', href: '/restaurant/inventory', icon: PackageSearch },
   { label: 'Purchasing', href: '/restaurant/purchasing', icon: ShoppingCart },
   { label: 'SOP board', href: '/restaurant/sop', icon: ListChecks },
   { label: 'Customers & loyalty', href: '/restaurant/loyalty', icon: Users },
-  { label: 'Insights', href: '/restaurant/insights', icon: BarChart3 },
+  { label: 'Advanced Insights', href: '/restaurant/insights', icon: BarChart3 },
 ] as const;
 
 export function RestaurantDashboardContent({ enabledModules }: { enabledModules: string[] }) {

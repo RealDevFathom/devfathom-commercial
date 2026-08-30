@@ -6,6 +6,7 @@
  * middleware). The exact Decimal fold in `getTenderTypeTotals` runs for real.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
 
@@ -16,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   tenderFindMany: vi.fn(),
   refundFindMany: vi.fn(),
   paymentFindUnique: vi.fn(),
+  reconciliationFindMany: vi.fn(async () => []),
+  terminalConfigFindMany: vi.fn(async () => []),
+  requireBranchScope: vi.fn<(ctx: unknown, branchId: string) => Promise<void>>(
+    async () => undefined
+  ),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -36,6 +42,9 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/server/restaurant-branch-scope', () => ({
+  requireRestaurantBranchScope: mocks.requireBranchScope,
+}));
 
 import { restaurantPaymentsRouter } from './restaurant-payments';
 import type { TRPCContext } from '../trpc';
@@ -45,6 +54,8 @@ const db = {
   restaurantTender: { findMany: mocks.tenderFindMany },
   restaurantRefund: { findMany: mocks.refundFindMany },
   restaurantPayment: { findUnique: mocks.paymentFindUnique },
+  restaurantTerminalReconciliation: { findMany: mocks.reconciliationFindMany },
+  restaurantTerminalProviderConfig: { findMany: mocks.terminalConfigFindMany },
 } as unknown as ScopedDb;
 
 function caller() {
@@ -174,6 +185,7 @@ describe('getPayment (full event trail, C12)', () => {
     mocks.paymentFindUnique.mockResolvedValue({
       id: 'pay_1',
       billId: 'bill_1',
+      bill: { branchId: 'b1' },
       provider: 'MOCK',
       capability: 'SALE',
       status: 'REFUNDED',
@@ -233,6 +245,7 @@ describe('getPayment (full event trail, C12)', () => {
     expect(result.events[1]).toMatchObject({ eventType: 'REFUND_APPROVED' });
     expect(result.tenders[0]).toMatchObject({ type: 'CARD', amount: '12.5' });
     expect(result.refunds[0]).toMatchObject({ kind: 'REFUND', amount: '12.5' });
+    expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 
   it('throws NOT_FOUND for a missing payment', async () => {
@@ -269,9 +282,29 @@ describe('getTenderTypeTotals (per-date summary, C12)', () => {
 });
 
 describe('capability gating + strict inputs', () => {
-  it('gates every read on money:read', async () => {
+  it('guards every list and summary by its exact branch', async () => {
     await caller().listTenders({ branchId: 'b1' });
+    await caller().listRefunds({ branchId: 'b2' });
+    await caller().listTerminalReconciliations({ branchId: 'b3' });
+    await caller().getTenderTypeTotals({ branchId: 'b4', businessDate: '2026-08-19' });
+    await caller().getTerminalConfig({ branchId: 'b5' });
     expect(mocks.can.mock.calls.some((c) => c[1] === 'money:read')).toBe(true);
+    expect(mocks.requireBranchScope.mock.calls.map((call) => call[1])).toEqual([
+      'b1',
+      'b2',
+      'b3',
+      'b4',
+      'b5',
+    ]);
+  });
+
+  it('denies a direct payment ID before fetching event detail', async () => {
+    mocks.paymentFindUnique.mockResolvedValue({ bill: { branchId: 'blocked' } });
+    mocks.requireBranchScope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+    await expect(caller().getPayment({ paymentId: 'payment-blocked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.paymentFindUnique).toHaveBeenCalledTimes(1);
   });
 
   it('rejects unknown input fields (strict)', async () => {

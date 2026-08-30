@@ -343,7 +343,9 @@ function entitlements(enabled: boolean): EntitlementView {
     organizationId: 'org_1',
     seatLimit: 10,
     activeSeats: 1,
-    enabledModules: enabled ? ['restaurant-pos'] : [],
+    enabledModules: enabled
+      ? ['restaurant-core', 'restaurant-pos', 'restaurant-purchasing', 'restaurant-insights']
+      : ['restaurant-core'],
     modules: [
       {
         key: 'restaurant-pos',
@@ -409,6 +411,11 @@ describe('MoneyConsole', () => {
     expect(mocks.calls.bills.at(-1)?.enabled).toBe(false);
     expect(mocks.calls.tenders.at(-1)?.enabled).toBe(false);
     expect(screen.getByText('Restaurant POS module disabled')).toBeInTheDocument();
+    expect(screen.getByLabelText('Branch')).toBeDisabled();
+    expect(screen.getByLabelText('Business date')).toBeDisabled();
+    expect(
+      screen.queryByRole('tablist', { name: 'Restaurant Finance ledgers' })
+    ).not.toBeInTheDocument();
     disabled.unmount();
 
     renderConsole();
@@ -554,7 +561,26 @@ describe('MoneyConsole', () => {
     };
     renderConsole();
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-    expect(screen.getByText('Money access denied')).toBeInTheDocument();
+    expect(screen.getByText('Restaurant Finance access denied')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  it('links only entitled Restaurant Finance companion surfaces', () => {
+    const enabled = renderConsole();
+    expect(screen.getByRole('link', { name: 'Tax' })).toHaveAttribute('href', '/restaurant/tax');
+    expect(screen.getByRole('link', { name: 'Purchasing' })).toHaveAttribute(
+      'href',
+      '/restaurant/purchasing'
+    );
+    expect(screen.getByRole('link', { name: 'Advanced Insights' })).toHaveAttribute(
+      'href',
+      '/restaurant/insights'
+    );
+    enabled.unmount();
+
+    renderConsole(false);
+    expect(screen.getByRole('link', { name: 'Tax' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Purchasing' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Advanced Insights' })).not.toBeInTheDocument();
   });
 });

@@ -36,6 +36,8 @@ describe('AppShell module guard', () => {
     expect(isPathModuleEnabled('/dashboard', entitlements)).toBe(true);
     expect(isPathModuleEnabled('/restaurant/inventory/items', entitlements)).toBe(true);
     expect(isPathModuleEnabled('/restaurant/orders', entitlements)).toBe(false);
+    expect(isPathModuleEnabled('/restaurant/insights', entitlements)).toBe(false);
+    expect(isPathModuleEnabled('/finance', entitlements)).toBe(false);
   });
 
   it('closes the mobile navigation dialog with Escape', () => {

@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { evaluateOrderSettlement } from '@/lib/restaurant/bills';
 import { sub, sum } from '@/lib/restaurant/money';
+import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 import { router, capabilityProcedure } from '../trpc';
 
 /**
@@ -283,13 +284,28 @@ export const restaurantBillsRouter = router({
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => listBills(ctx.db, input)),
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      return listBills(ctx.db, input);
+    }),
 
-  getBill: readProcedure
-    .input(z.object({ billId: ID }).strict())
-    .query(async ({ ctx, input }) => getBill(ctx.db, input.billId)),
+  getBill: readProcedure.input(z.object({ billId: ID }).strict()).query(async ({ ctx, input }) => {
+    const scope = await ctx.db.restaurantBill.findUnique({
+      where: { id: input.billId },
+      select: { branchId: true },
+    });
+    if (scope) await requireRestaurantBranchScope(ctx, scope.branchId);
+    return getBill(ctx.db, input.billId);
+  }),
 
   getOrderSettlement: readProcedure
     .input(z.object({ orderId: ID }).strict())
-    .query(async ({ ctx, input }) => getOrderSettlement(ctx.db, input.orderId)),
+    .query(async ({ ctx, input }) => {
+      const order = await ctx.db.restaurantOrder.findUnique({
+        where: { id: input.orderId },
+        select: { branchId: true },
+      });
+      if (order) await requireRestaurantBranchScope(ctx, order.branchId);
+      return getOrderSettlement(ctx.db, input.orderId);
+    }),
 });
