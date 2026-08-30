@@ -75,7 +75,8 @@ describeIfOptedIn('Restaurant E2E seed canonical restoration (real disposable DB
 
     runSeed();
 
-    const restored = await pool.query<{
+    const restorationClient = await pool.connect();
+    let restored: pg.QueryResult<{
       businessDayCutoff: string;
       shiftSignInEnforced: boolean;
       address: string | null;
@@ -89,20 +90,34 @@ describeIfOptedIn('Restaurant E2E seed canonical restoration (real disposable DB
       retiredAt: Date | null;
       customerName: string;
       customerNotes: string | null;
-    }>(`
-      SELECT b."businessDayCutoff", b."shiftSignInEnforced", b.address,
-        brand.status AS "brandStatus", brand."nameLocalized" AS "brandLocalized",
-        product.type AS "productType", product.status AS "productStatus",
-        product.description, product."descriptionLocalized", product."sortOrder",
-        publication."retiredAt", customer."displayName" AS "customerName",
-        customer.notes AS "customerNotes"
-      FROM restaurant_branches b
-      JOIN restaurant_brands brand ON brand.id = 'brand_restaurant_e2e'
-      JOIN restaurant_products product ON product.id = 'product_restaurant_e2e_burger'
-      JOIN restaurant_branch_menu_publications publication ON publication.id = 'menu_publication_restaurant_e2e'
-      JOIN restaurant_customers customer ON customer.id = 'customer_restaurant_e2e'
-      WHERE b.id = 'branch_restaurant_e2e'
-    `);
+    }>;
+    try {
+      await restorationClient.query('BEGIN');
+      await restorationClient.query(
+        `SELECT set_config('app.current_organization_id', $1, true), set_config('app.is_platform_admin', 'false', true)`,
+        ['org_chai_chowk']
+      );
+      restored = await restorationClient.query(`
+        SELECT b."businessDayCutoff", b."shiftSignInEnforced", b.address,
+          brand.status AS "brandStatus", brand."nameLocalized" AS "brandLocalized",
+          product.type AS "productType", product.status AS "productStatus",
+          product.description, product."descriptionLocalized", product."sortOrder",
+          publication."retiredAt", customer."displayName" AS "customerName",
+          customer.notes AS "customerNotes"
+        FROM restaurant_branches b
+        JOIN restaurant_brands brand ON brand.id = 'brand_restaurant_e2e'
+        JOIN restaurant_products product ON product.id = 'product_restaurant_e2e_burger'
+        JOIN restaurant_branch_menu_publications publication ON publication.id = 'menu_publication_restaurant_e2e'
+        JOIN restaurant_customers customer ON customer.id = 'customer_restaurant_e2e'
+        WHERE b.id = 'branch_restaurant_e2e'
+      `);
+      await restorationClient.query('COMMIT');
+    } catch (error) {
+      await restorationClient.query('ROLLBACK');
+      throw error;
+    } finally {
+      restorationClient.release();
+    }
     expect(restored.rows).toEqual([
       {
         businessDayCutoff: '00:00',

@@ -1001,9 +1001,26 @@ async function main() {
         });
         const existingLoyaltyProgram = await tx.loyaltyProgramVersion.findUnique({
           where: { id: IDS.loyaltyProgram },
-          select: { id: true },
+          select: {
+            id: true,
+            versionNumber: true,
+            effectiveFrom: true,
+            earnRate: true,
+            redemptionValue: true,
+          },
         });
-        if (!existingLoyaltyProgram) {
+        if (existingLoyaltyProgram) {
+          const matchesCanonicalFixture =
+            existingLoyaltyProgram.versionNumber === 1 &&
+            existingLoyaltyProgram.effectiveFrom.getTime() === FIXED_AT.getTime() &&
+            existingLoyaltyProgram.earnRate.equals(new Prisma.Decimal('1.000000')) &&
+            existingLoyaltyProgram.redemptionValue.equals(new Prisma.Decimal('0.010000'));
+          if (!matchesCanonicalFixture) {
+            throw new Error(
+              `Immutable loyalty program ${IDS.loyaltyProgram} does not match the canonical fixture.`
+            );
+          }
+        } else {
           await tx.loyaltyProgramVersion.create({
             data: {
               id: IDS.loyaltyProgram,
