@@ -1,6 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { restaurantE2eCredentials as fixture } from './restaurant-fixture';
+import {
+  assertTerminalSecretIsBrowserIsolated,
+  installSeededTerminalCookie,
+  restaurantE2eCredentials as fixture,
+} from './restaurant-fixture';
 import { signInAs } from './fixtures/restaurant-actor-accessibility';
 
 test.describe.configure({ mode: 'serial' });
@@ -72,14 +76,14 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
 });
 
 test('fixture publishes named order inputs and explicit pending UI seams', async ({ page }) => {
+  await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await page.getByLabel('Bearer device secret').fill(fixture.pos.secret);
-  await page.getByRole('button', { name: 'Establish session' }).click();
-  await page.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await expect(page.getByText(fixture.menuItem.name)).toBeVisible();
+  await assertTerminalSecretIsBrowserIsolated(page, fixture.pos.secret);
 
   test
     .info()

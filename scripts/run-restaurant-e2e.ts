@@ -3,10 +3,15 @@ import { spawnSync } from 'node:child_process';
 import { restaurantE2eEnvironment } from './restaurant-e2e-database.js';
 
 const env = restaurantE2eEnvironment();
+const listOnly = process.argv.slice(2).includes('--list');
 const commands: Array<[string, string[]]> = [
-  ['bunx', ['tsx', 'scripts/preflight-restaurant-e2e.ts']],
-  ['bunx', ['tsx', 'scripts/seed-restaurant-e2e.ts']],
-  ['bunx', ['tsx', 'scripts/seed-restaurant-e2e.ts']],
+  ...(listOnly
+    ? []
+    : ([
+        ['bunx', ['tsx', 'scripts/preflight-restaurant-e2e.ts']],
+        ['bunx', ['tsx', 'scripts/seed-restaurant-e2e.ts']],
+        ['bunx', ['tsx', 'scripts/seed-restaurant-e2e.ts']],
+      ] as Array<[string, string[]]>)),
   [
     'bunx',
     [

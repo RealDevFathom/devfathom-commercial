@@ -41,14 +41,14 @@ export const actorFixture: Record<ActorKey, Actor> = {
     password: value('RESTAURANT_ACTOR_ADMIN_PASSWORD'),
     loginPath: '/login',
     host: 'app.localhost',
-    workspace: /restaurant/i,
+    workspace: /Chai Chowk Café|chai-chowk/i,
   },
   restaurantOperator: {
     email: value('RESTAURANT_ACTOR_OPERATOR_EMAIL'),
     password: value('RESTAURANT_ACTOR_OPERATOR_PASSWORD'),
     loginPath: '/login',
     host: 'app.localhost',
-    workspace: /restaurant/i,
+    workspace: /Chai Chowk Café|chai-chowk/i,
   },
 };
 
@@ -83,6 +83,22 @@ export async function assertDisposableDatabaseRoles() {
   }
 }
 
+export async function completeWorkspaceSelection(
+  page: Page,
+  loginPath: Actor['loginPath'],
+  workspace: RegExp
+) {
+  const chooser = page.getByText('Choose a workspace', { exact: true });
+  const outcome = await Promise.race([
+    chooser.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'chooser' as const),
+    page
+      .waitForURL((url) => url.pathname !== loginPath, { timeout: 60_000 })
+      .then(() => 'navigation' as const),
+  ]);
+  if (outcome === 'chooser') await page.getByRole('button', { name: workspace }).click();
+  return { chooser, outcome };
+}
+
 export async function signInAs(page: Page, key: ActorKey) {
   const actor = actorFixture[key];
   await page.goto(new URL(actor.loginPath, actorBaseUrl(actor.host)).href);
@@ -107,11 +123,12 @@ export async function signInAs(page: Page, key: ActorKey) {
   }
 
   if (actor.workspace) {
-    const chooser = page.getByText('Choose a workspace', { exact: true });
-    if (await chooser.isVisible({ timeout: 30_000 }).catch(() => false)) {
-      await page.getByRole('button', { name: actor.workspace }).click();
-      if (key === 'agency') await expect(chooser).toBeHidden();
-    }
+    const { chooser, outcome } = await completeWorkspaceSelection(
+      page,
+      actor.loginPath,
+      actor.workspace
+    );
+    if (key === 'agency' && outcome === 'chooser') await expect(chooser).toBeHidden();
   }
   await page.waitForURL((url) => url.pathname !== actor.loginPath, { timeout: 60_000 });
   if (key === 'agency') expect(new URL(page.url()).pathname).not.toBe('/login');

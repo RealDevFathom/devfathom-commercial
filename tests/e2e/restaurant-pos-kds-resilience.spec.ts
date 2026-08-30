@@ -1,20 +1,25 @@
 import { expect, test } from '@playwright/test';
 
-import { restaurantE2eCredentials as fixture } from './restaurant-fixture';
+import {
+  assertTerminalSecretIsBrowserIsolated,
+  installSeededTerminalCookie,
+  restaurantE2eCredentials as fixture,
+} from './restaurant-fixture';
 
 async function connectKds(page: import('@playwright/test').Page) {
+  await installSeededTerminalCookie(page.context(), fixture.kds);
   await page.goto('/kds');
-  await page.getByLabel('Bearer device secret').fill(fixture.kds.secret);
-  await page.getByLabel('Acting operator profile ID').fill(fixture.operator.staffProfileId);
-  await page.getByRole('button', { name: 'Connect display' }).click();
+  await page.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
+  await page.getByRole('button', { name: 'Verify PIN and unlock' }).click();
   await expect(page.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
+  await assertTerminalSecretIsBrowserIsolated(page, fixture.kds.secret);
 }
 
 async function createAndFireOrder(page: import('@playwright/test').Page) {
+  await installSeededTerminalCookie(page.context(), fixture.pos);
   await page.goto('/pos');
-  await page.getByLabel('Bearer device secret').fill(fixture.pos.secret);
-  await page.getByRole('button', { name: 'Establish session' }).click();
-  await page.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await page.getByRole('checkbox').first().check();
@@ -30,6 +35,7 @@ async function createAndFireOrder(page: import('@playwright/test').Page) {
 test.describe('restaurant browser resilience', () => {
   test('KDS keeps stale state offline, reconnects, and refreshes server 86 availability', async ({
     page,
+    browser,
   }) => {
     await connectKds(page);
     await expect(page.getByText(/Last synced/)).toBeVisible();
@@ -42,7 +48,8 @@ test.describe('restaurant browser resilience', () => {
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await expect(page.getByText(/Last synced/)).toBeVisible();
 
-    const pos = await page.context().newPage();
+    const posContext = await browser.newContext();
+    const pos = await posContext.newPage();
     await pos.route('**/api/restaurant/orders/effective-menu?**', async (route) => {
       const response = await route.fetch();
       const body = await response.json();
@@ -57,23 +64,26 @@ test.describe('restaurant browser resilience', () => {
         },
       });
     });
+    await installSeededTerminalCookie(posContext, fixture.pos);
     await pos.goto('/pos');
-    await pos.getByLabel('Bearer device secret').fill(fixture.pos.secret);
-    await pos.getByRole('button', { name: 'Establish session' }).click();
-    await pos.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
+    await pos.getByLabel('Operator').selectOption(fixture.operator.staffProfileId);
     await pos.getByLabel('Operator PIN').fill(fixture.operator.pin);
     await pos.getByRole('button', { name: 'Unlock terminal' }).click();
     await expect(
       pos.getByRole('button', { name: new RegExp(fixture.menuItem.name) })
     ).toBeDisabled();
+    await assertTerminalSecretIsBrowserIsolated(pos, fixture.pos.secret);
+    await posContext.close();
   });
 
   test('a dropped KDS mutation retries with the same idempotency key exactly once', async ({
     page,
+    browser,
   }) => {
-    const pos = await page.context().newPage();
+    const posContext = await browser.newContext();
+    const pos = await posContext.newPage();
     await createAndFireOrder(pos);
-    await pos.close();
+    await posContext.close();
     const keys: string[] = [];
     let dropped = false;
     await page.route('**/api/restaurant/kds/*', async (route) => {
