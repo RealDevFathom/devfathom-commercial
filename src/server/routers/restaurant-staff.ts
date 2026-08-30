@@ -324,6 +324,16 @@ export const restaurantStaffRouter = router({
       try {
         const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
         await assertAuthorizedStaffProfile(ctx.db, authorization, input.staffProfileId);
+        if (input.deviceId == null) {
+          assertOrganizationWide(authorization);
+        } else {
+          const device = await ctx.db.restaurantRegisteredDevice.findUnique({
+            where: { id: input.deviceId },
+            select: { branchId: true },
+          });
+          if (!device) denyStaffBranchAccess();
+          assertAuthorizedBranch(authorization, device.branchId);
+        }
         const credential = await issueOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
@@ -357,10 +367,15 @@ export const restaurantStaffRouter = router({
         const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
         const existing = await ctx.db.restaurantOperatorCredential.findUnique({
           where: { id: input.credentialId },
-          select: { staffProfileId: true },
+          select: { staffProfileId: true, deviceId: true, device: { select: { branchId: true } } },
         });
         if (!existing) denyStaffBranchAccess();
         await assertAuthorizedStaffProfile(ctx.db, authorization, existing.staffProfileId);
+        if (existing.deviceId == null) assertOrganizationWide(authorization);
+        else {
+          if (!existing.device) denyStaffBranchAccess();
+          assertAuthorizedBranch(authorization, existing.device.branchId);
+        }
         const credential = await rotateOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
@@ -389,10 +404,15 @@ export const restaurantStaffRouter = router({
         const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
         const existing = await ctx.db.restaurantOperatorCredential.findUnique({
           where: { id: input.credentialId },
-          select: { staffProfileId: true },
+          select: { staffProfileId: true, deviceId: true, device: { select: { branchId: true } } },
         });
         if (!existing) denyStaffBranchAccess();
         await assertAuthorizedStaffProfile(ctx.db, authorization, existing.staffProfileId);
+        if (existing.deviceId == null) assertOrganizationWide(authorization);
+        else {
+          if (!existing.device) denyStaffBranchAccess();
+          assertAuthorizedBranch(authorization, existing.device.branchId);
+        }
         const credential = await revokeOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
