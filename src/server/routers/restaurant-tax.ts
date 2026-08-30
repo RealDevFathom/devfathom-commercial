@@ -31,13 +31,20 @@ const serviceChargePublishSchema = z.object({
 });
 const serviceChargeEndSchema = z.object({
   branchId: z.string().min(1),
+  policyVersionId: z.string().min(1),
   effectiveTo: z.iso.datetime(),
+  idempotencyKey: z.string().trim().min(8).max(128),
 });
 
 function serviceChargeError(error: unknown): never {
   if (error instanceof ServiceChargePolicyError) {
     throw new TRPCError({
-      code: error.reason === 'CONFLICT' ? 'CONFLICT' : error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      code:
+        error.reason === 'CONFLICT'
+          ? 'CONFLICT'
+          : error.reason === 'NOT_FOUND'
+            ? 'NOT_FOUND'
+            : 'BAD_REQUEST',
       message: error.message,
     });
   }
@@ -117,28 +124,55 @@ export const restaurantTaxRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requireRestaurantBranchScope(ctx, input.branchId);
       try {
-        return await publishServiceChargePolicy(ctx.db, {
+        const published = await publishServiceChargePolicy(ctx.db, {
           ...input,
           organizationId: ctx.entitlements.organizationId,
           effectiveFrom: new Date(input.effectiveFrom),
         });
+        annotateAudit(ctx, {
+          targetType: 'RestaurantServiceChargePolicyVersion',
+          targetId: published.id,
+          description: 'Published DINE_IN service-charge policy',
+          metadata: {
+            branchId: input.branchId,
+            rate: published.rate.toString(),
+            effectiveFrom: published.effectiveFrom.toISOString(),
+            payloadHash: published.payloadHash,
+            acknowledgedByUserId: ctx.session.user.id,
+          },
+        });
+        return published;
       } catch (error) {
         serviceChargeError(error);
       }
     }),
 
-  endServiceCharge: configureProcedure.input(serviceChargeEndSchema).mutation(async ({ ctx, input }) => {
-    await requireRestaurantBranchScope(ctx, input.branchId);
-    try {
-      return await endServiceChargePolicy(ctx.db, {
-        organizationId: ctx.entitlements.organizationId,
-        branchId: input.branchId,
-        effectiveTo: new Date(input.effectiveTo),
-      });
-    } catch (error) {
-      serviceChargeError(error);
-    }
-  }),
+  endServiceCharge: configureProcedure
+    .input(serviceChargeEndSchema)
+    .mutation(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      try {
+        const ended = await endServiceChargePolicy(ctx.db, {
+          organizationId: ctx.entitlements.organizationId,
+          ...input,
+          effectiveTo: new Date(input.effectiveTo),
+        });
+        annotateAudit(ctx, {
+          targetType: 'RestaurantServiceChargePolicyVersion',
+          targetId: ended.id,
+          description: 'Ended DINE_IN service-charge policy',
+          metadata: {
+            branchId: input.branchId,
+            effectiveTo: ended.effectiveTo?.toISOString(),
+            payloadHash: ended.endPayloadHash,
+            endedByUserId: ctx.session.user.id,
+          },
+        });
+        return ended;
+      } catch (error) {
+        serviceChargeError(error);
+      }
+    }),
 
   previewCustom: adminProcedure.input(previewSchema).query(({ input }) => {
     const at = new Date('2030-01-01T00:00:00.000Z');

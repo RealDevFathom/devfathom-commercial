@@ -2313,26 +2313,26 @@ model Organization {
 /// the operational tables (bare RLS-guarded organizationId, no cross-org
 /// aggregation — D09); a partial unique index enforces one default branch per org.
 model RestaurantBranch {
-  id                String   @id @default(cuid())
-  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  name              String
-  timezone          String   @default("UTC")
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name                String
+  timezone            String   @default("UTC")
   // M4-L1/C5: the branch-local wall-clock time (24h "HH:MM") at which one
   // business day rolls into the next. Additive with a conservative "00:00"
   // default (midnight = calendar day); the order business date is resolved from
   // timezone + this cutoff (src/lib/restaurant/business-date.ts) and stamped
   // explicitly, never recomputed later from UTC (§11.1 / BUILD-ASSUMPTIONS).
-  businessDayCutoff String   @default("00:00")
+  businessDayCutoff   String   @default("00:00")
   // Completion wave: when true, an operator may only sign in at this branch's
   // terminals while holding an active, eligible `RestaurantShift`. Opt-in with a
   // conservative `false` default so a branch that does not roster keeps its
   // existing M2 sign-in behaviour untouched.
-  shiftSignInEnforced Boolean @default(false)
-  address           String?
-  active            Boolean  @default(true)
-  isDefault         Boolean  @default(false)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  shiftSignInEnforced Boolean  @default(false)
+  address             String?
+  active              Boolean  @default(true)
+  isDefault           Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   assignments                 RestaurantBranchAssignment[]
   // M2-L1: staff pinned to this branch as their primary, and devices registered
@@ -2427,26 +2427,26 @@ model RestaurantTaxOfficialSource {
 }
 
 model RestaurantTaxProfileVersion {
-  id                String                     @id @default(cuid())
-  organizationId    String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId          String
-  versionNumber     Int
-  status            RestaurantTaxVersionStatus @default(DRAFT)
-  effectiveFrom     DateTime
-  effectiveTo       DateTime?
-  approvalReference String?
-  approvedAt        DateTime?
-  publishedAt       DateTime?
-  presetId           String?
+  id                       String                     @id @default(cuid())
+  organizationId           String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                 String
+  versionNumber            Int
+  status                   RestaurantTaxVersionStatus @default(DRAFT)
+  effectiveFrom            DateTime
+  effectiveTo              DateTime?
+  approvalReference        String?
+  approvedAt               DateTime?
+  publishedAt              DateTime?
+  presetId                 String?
   activationIdempotencyKey String?
-  activationPayloadHash String?
-  eligibilityEvidence Json?
-  profileName         String?
-  jurisdictionCode    String?
-  priceMode           RestaurantTaxPriceMode?
-  evidenceKind        String?
-  createdAt         DateTime                   @default(now())
-  updatedAt         DateTime                   @updatedAt
+  activationPayloadHash    String?
+  eligibilityEvidence      Json?
+  profileName              String?
+  jurisdictionCode         String?
+  priceMode                RestaurantTaxPriceMode?
+  evidenceKind             String?
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
 
   branch               RestaurantBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
   rules                RestaurantTaxRuleVersion[]
@@ -2462,23 +2462,23 @@ model RestaurantTaxProfileVersion {
 }
 
 model RestaurantTaxRuleVersion {
-  id                String                     @id @default(cuid())
-  organizationId    String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                String                         @id @default(cuid())
+  organizationId    String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   profileVersionId  String
   officialSourceId  String
   ruleCode          String
   paymentCategory   String
   priceMode         RestaurantTaxPriceMode
   discountTreatment RestaurantTaxDiscountTreatment @default(BEFORE_TAX)
-  rate              Decimal                    @db.Decimal(9, 6)
-  status            RestaurantTaxVersionStatus @default(DRAFT)
+  rate              Decimal                        @db.Decimal(9, 6)
+  status            RestaurantTaxVersionStatus     @default(DRAFT)
   effectiveFrom     DateTime
   effectiveTo       DateTime?
   approvalReference String?
   approvedAt        DateTime?
   publishedAt       DateTime?
-  createdAt         DateTime                   @default(now())
-  updatedAt         DateTime                   @updatedAt
+  createdAt         DateTime                       @default(now())
+  updatedAt         DateTime                       @updatedAt
 
   profile        RestaurantTaxProfileVersion       @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Cascade)
   officialSource RestaurantTaxOfficialSource       @relation(fields: [organizationId, officialSourceId], references: [organizationId, id], onDelete: Restrict)
@@ -2791,7 +2791,7 @@ model RestaurantStaffProfile {
 
   // Completion wave: rostered shifts for this operator. A profile may hold many
   // shifts in different roles; they may never overlap in time (shifts.ts).
-  shifts                 RestaurantShift[]
+  shifts RestaurantShift[]
 
   @@index([organizationId])
   @@index([userId])
@@ -3970,46 +3970,46 @@ model RestaurantStationRoutingRule {
 /// publication and price-list-version used for calculation are snapshotted (C4).
 /// There is NO stored total/aggregate column — aggregates are derived (C3).
 model RestaurantOrder {
-  id                   String                 @id @default(cuid())
-  organizationId       String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId             String
-  orderNumber          Int
-  businessDate         DateTime               @db.Date
-  status               RestaurantOrderStatus  @default(DRAFT)
-  channel              RestaurantOrderChannel
-  coverCount           Int?
-  sectionId            String?
-  serverStaffProfileId String?
-  staffProfileId       String
-  deviceId             String
-  publicationId        String?
-  priceListVersionId   String?
+  id                           String                 @id @default(cuid())
+  organizationId               String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                     String
+  orderNumber                  Int
+  businessDate                 DateTime               @db.Date
+  status                       RestaurantOrderStatus  @default(DRAFT)
+  channel                      RestaurantOrderChannel
+  coverCount                   Int?
+  sectionId                    String?
+  serverStaffProfileId         String?
+  staffProfileId               String
+  deviceId                     String
+  publicationId                String?
+  priceListVersionId           String?
   serviceChargePolicyVersionId String?
-  customerId           String?
-  openedAt             DateTime?
-  closedAt             DateTime?
-  cancelledAt          DateTime?
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
+  customerId                   String?
+  openedAt                     DateTime?
+  closedAt                     DateTime?
+  cancelledAt                  DateTime?
+  createdAt                    DateTime               @default(now())
+  updatedAt                    DateTime               @updatedAt
 
-  branch               RestaurantBranch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  section              RestaurantServerSection?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
-  serverStaff          RestaurantStaffProfile?          @relation("OrderServerStaff", fields: [serverStaffProfileId], references: [id], onDelete: SetNull)
-  openingStaff         RestaurantStaffProfile           @relation("OrderOpeningStaff", fields: [staffProfileId], references: [id], onDelete: Restrict)
-  openingDevice        RestaurantRegisteredDevice       @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
-  publication          RestaurantBranchMenuPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
-  priceListVersion     RestaurantPriceListVersion?      @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
+  branch                     RestaurantBranch                      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  section                    RestaurantServerSection?              @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  serverStaff                RestaurantStaffProfile?               @relation("OrderServerStaff", fields: [serverStaffProfileId], references: [id], onDelete: SetNull)
+  openingStaff               RestaurantStaffProfile                @relation("OrderOpeningStaff", fields: [staffProfileId], references: [id], onDelete: Restrict)
+  openingDevice              RestaurantRegisteredDevice            @relation("OrderOpeningDevice", fields: [deviceId], references: [id], onDelete: Restrict)
+  publication                RestaurantBranchMenuPublication?      @relation(fields: [publicationId], references: [id], onDelete: SetNull)
+  priceListVersion           RestaurantPriceListVersion?           @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
   serviceChargePolicyVersion RestaurantServiceChargePolicyVersion? @relation(fields: [organizationId, serviceChargePolicyVersionId], references: [organizationId, id], onDelete: Restrict)
-  customer             RestaurantCustomer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  items                RestaurantOrderItem[]
-  orderTables          RestaurantOrderTable[]
-  events               RestaurantOrderEvent[]
-  kitchenTickets       RestaurantKitchenTicket[]
-  bills                RestaurantBill[]
+  customer                   RestaurantCustomer?                   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items                      RestaurantOrderItem[]
+  orderTables                RestaurantOrderTable[]
+  events                     RestaurantOrderEvent[]
+  kitchenTickets             RestaurantKitchenTicket[]
+  bills                      RestaurantBill[]
   // M6-L1: RECIPE_CONSUMPTION / SALE_REVERSAL movements posted at order close and
   // for post-close corrections reference the originating order (nullable, SetNull).
-  stockMovements       RestaurantStockMovement[]
-  customerInteractions CustomerInteraction[]
+  stockMovements             RestaurantStockMovement[]
+  customerInteractions       CustomerInteraction[]
 
   @@unique([branchId, businessDate, orderNumber])
   @@index([organizationId])
@@ -4421,47 +4421,47 @@ enum RestaurantDrawerMovementKind {
 /// (branchId, businessDate, receiptNumber) in the migration. Void records a
 /// reason + co-authorization (C4). Opener operator + device attribute the cut.
 model RestaurantBill {
-  id                    String                  @id @default(cuid())
-  organizationId        String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  orderId               String
-  branchId              String
-  businessDate          DateTime                @db.Date
-  status                RestaurantBillStatus    @default(OPEN)
-  splitKind             RestaurantBillSplitKind @default(NONE)
-  fractionNumerator     Int?
-  fractionDenominator   Int?
-  subtotal              Decimal                 @default(0) @db.Decimal(12, 2)
-  taxTotal              Decimal                 @default(0) @db.Decimal(12, 2)
-  serviceChargeTotal    Decimal                 @default(0) @db.Decimal(12, 2)
+  id                           String                  @id @default(cuid())
+  organizationId               String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId                      String
+  branchId                     String
+  businessDate                 DateTime                @db.Date
+  status                       RestaurantBillStatus    @default(OPEN)
+  splitKind                    RestaurantBillSplitKind @default(NONE)
+  fractionNumerator            Int?
+  fractionDenominator          Int?
+  subtotal                     Decimal                 @default(0) @db.Decimal(12, 2)
+  taxTotal                     Decimal                 @default(0) @db.Decimal(12, 2)
+  serviceChargeTotal           Decimal                 @default(0) @db.Decimal(12, 2)
   serviceChargePolicyVersionId String?
-  serviceChargeRate     Decimal?                @db.Decimal(9, 6)
-  serviceChargeBasis    Decimal                 @default(0) @db.Decimal(12, 2)
-  serviceChargeTaxTreatment String?              @db.VarChar(24)
-  compTotal             Decimal                 @default(0) @db.Decimal(12, 2)
-  discountTotal         Decimal                 @default(0) @db.Decimal(12, 2)
-  roundingAdjustment    Decimal                 @default(0) @db.Decimal(12, 2)
-  grandTotal            Decimal                 @default(0) @db.Decimal(12, 2)
-  receiptNumber         Int?
-  settledAt             DateTime?
-  voidReason            String?
-  voidCoAuthorizationId String?
-  openerStaffProfileId  String
-  deviceId              String
-  createdAt             DateTime                @default(now())
-  updatedAt             DateTime                @updatedAt
+  serviceChargeRate            Decimal?                @db.Decimal(9, 6)
+  serviceChargeBasis           Decimal                 @default(0) @db.Decimal(12, 2)
+  serviceChargeTaxTreatment    String?                 @db.VarChar(24)
+  compTotal                    Decimal                 @default(0) @db.Decimal(12, 2)
+  discountTotal                Decimal                 @default(0) @db.Decimal(12, 2)
+  roundingAdjustment           Decimal                 @default(0) @db.Decimal(12, 2)
+  grandTotal                   Decimal                 @default(0) @db.Decimal(12, 2)
+  receiptNumber                Int?
+  settledAt                    DateTime?
+  voidReason                   String?
+  voidCoAuthorizationId        String?
+  openerStaffProfileId         String
+  deviceId                     String
+  createdAt                    DateTime                @default(now())
+  updatedAt                    DateTime                @updatedAt
 
-  order                   RestaurantOrder                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  branch                  RestaurantBranch                   @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  openerStaff             RestaurantStaffProfile             @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
-  device                  RestaurantRegisteredDevice         @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  voidCoAuthorization     RestaurantCoAuthorization?         @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
-  lines                   RestaurantBillLine[]
-  payments                RestaurantPayment[]
-  tenders                 RestaurantTender[]
-  refunds                 RestaurantRefund[]
-  loyaltyPointsEntries    LoyaltyPointsEntry[]
-  terminalReconciliations RestaurantTerminalReconciliation[]
-  taxTransactionSnapshots RestaurantTaxTransactionSnapshot[]
+  order                      RestaurantOrder                       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch                     RestaurantBranch                      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  openerStaff                RestaurantStaffProfile                @relation(fields: [openerStaffProfileId], references: [id], onDelete: Restrict)
+  device                     RestaurantRegisteredDevice            @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  voidCoAuthorization        RestaurantCoAuthorization?            @relation(fields: [voidCoAuthorizationId], references: [id], onDelete: SetNull)
+  lines                      RestaurantBillLine[]
+  payments                   RestaurantPayment[]
+  tenders                    RestaurantTender[]
+  refunds                    RestaurantRefund[]
+  loyaltyPointsEntries       LoyaltyPointsEntry[]
+  terminalReconciliations    RestaurantTerminalReconciliation[]
+  taxTransactionSnapshots    RestaurantTaxTransactionSnapshot[]
   serviceChargePolicyVersion RestaurantServiceChargePolicyVersion? @relation(fields: [organizationId, serviceChargePolicyVersionId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
@@ -4618,24 +4618,24 @@ model RestaurantTender {
 /// movement; card refunds carry a `paymentId`. No updatedAt; DB-enforced
 /// append-only.
 model RestaurantRefund {
-  id                     String               @id @default(cuid())
-  organizationId         String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  originalTenderId       String
-  billId                 String
-  amount                 Decimal              @db.Decimal(12, 2)
-  tipRefundAmount        Decimal              @default(0) @db.Decimal(12, 2)
-  serviceChargeRefundAmount Decimal            @default(0) @db.Decimal(12, 2)
-  taxRefundAmount        Decimal              @default(0) @db.Decimal(12, 2)
-  kind                   RestaurantRefundKind
-  businessDate           DateTime             @db.Date
-  reason                 String
-  coAuthorizationId      String
-  drawerSessionId        String?
-  paymentId              String?
-  staffProfileId         String
-  deviceId               String
-  fullReversalSnapshotId String?              @unique
-  createdAt              DateTime             @default(now())
+  id                        String               @id @default(cuid())
+  organizationId            String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  originalTenderId          String
+  billId                    String
+  amount                    Decimal              @db.Decimal(12, 2)
+  tipRefundAmount           Decimal              @default(0) @db.Decimal(12, 2)
+  serviceChargeRefundAmount Decimal              @default(0) @db.Decimal(12, 2)
+  taxRefundAmount           Decimal              @default(0) @db.Decimal(12, 2)
+  kind                      RestaurantRefundKind
+  businessDate              DateTime             @db.Date
+  reason                    String
+  coAuthorizationId         String
+  drawerSessionId           String?
+  paymentId                 String?
+  staffProfileId            String
+  deviceId                  String
+  fullReversalSnapshotId    String?              @unique
+  createdAt                 DateTime             @default(now())
 
   originalTender       RestaurantTender                  @relation(fields: [originalTenderId], references: [id], onDelete: Cascade)
   bill                 RestaurantBill                    @relation(fields: [billId], references: [id], onDelete: Cascade)
@@ -4664,24 +4664,27 @@ model RestaurantRefund {
 /// intervals are migration-constrained not to overlap; tax treatment is frozen
 /// to NON_TAXABLE by the database.
 model RestaurantServiceChargePolicyVersion {
-  id                  String   @id @default(cuid())
-  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId            String
-  rate                Decimal  @db.Decimal(9, 6)
-  effectiveFrom       DateTime
-  effectiveTo         DateTime?
-  acknowledgedAt      DateTime
-  acknowledgementRef  String
-  idempotencyKey      String
-  payloadHash         String
-  createdAt           DateTime @default(now())
+  id                 String    @id @default(cuid())
+  organizationId     String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  rate               Decimal   @db.Decimal(9, 6)
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  acknowledgedAt     DateTime
+  acknowledgementRef String
+  idempotencyKey     String
+  payloadHash        String
+  endIdempotencyKey  String?
+  endPayloadHash     String?
+  createdAt          DateTime  @default(now())
 
-  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  branch RestaurantBranch  @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   orders RestaurantOrder[]
   bills  RestaurantBill[]
 
-  @@unique([organizationId, id])
-  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, id], map: "restaurant_service_charge_policy_org_id_key")
+  @@unique([organizationId, idempotencyKey], map: "restaurant_service_charge_policy_org_idem_key")
+  @@unique([organizationId, endIdempotencyKey], map: "restaurant_service_charge_policy_org_end_idem_key")
   @@index([organizationId])
   @@index([branchId, effectiveFrom])
   @@map("restaurant_service_charge_policy_versions")

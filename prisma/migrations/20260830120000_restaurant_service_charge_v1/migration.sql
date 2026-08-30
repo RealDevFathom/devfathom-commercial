@@ -11,6 +11,8 @@ CREATE TABLE "restaurant_service_charge_policy_versions" (
   "acknowledgementRef" TEXT NOT NULL,
   "idempotencyKey" TEXT NOT NULL,
   "payloadHash" TEXT NOT NULL,
+  "endIdempotencyKey" TEXT,
+  "endPayloadHash" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "restaurant_service_charge_policy_versions_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "restaurant_service_charge_policy_rate_check" CHECK ("rate" > 0 AND "rate" <= 1),
@@ -19,6 +21,7 @@ CREATE TABLE "restaurant_service_charge_policy_versions" (
   CONSTRAINT "restaurant_service_charge_policy_branch_fkey" FOREIGN KEY ("organizationId", "branchId") REFERENCES "restaurant_branches"("organizationId", "id") ON DELETE RESTRICT,
   CONSTRAINT "restaurant_service_charge_policy_org_id_key" UNIQUE ("organizationId", "id"),
   CONSTRAINT "restaurant_service_charge_policy_org_idem_key" UNIQUE ("organizationId", "idempotencyKey"),
+  CONSTRAINT "restaurant_service_charge_policy_org_end_idem_key" UNIQUE ("organizationId", "endIdempotencyKey"),
   CONSTRAINT "restaurant_service_charge_policy_no_overlap" EXCLUDE USING gist (
     "organizationId" WITH =,
     "branchId" WITH =,
@@ -68,7 +71,8 @@ LANGUAGE plpgsql AS $$ BEGIN
   IF TG_OP = 'UPDATE'
      AND OLD."effectiveTo" IS NULL AND NEW."effectiveTo" IS NOT NULL
      AND NEW."effectiveTo" > OLD."effectiveFrom"
-     AND (to_jsonb(NEW) - 'effectiveTo') = (to_jsonb(OLD) - 'effectiveTo') THEN
+     AND (to_jsonb(NEW) - ARRAY['effectiveTo', 'endIdempotencyKey', 'endPayloadHash'])
+       = (to_jsonb(OLD) - ARRAY['effectiveTo', 'endIdempotencyKey', 'endPayloadHash']) THEN
     RETURN NEW;
   END IF;
   RAISE EXCEPTION 'restaurant service charge policy versions are immutable';
