@@ -4,6 +4,7 @@ import { VersionImmutabilityError } from './effective-dating';
 import {
   RecipeError,
   activateRecipeVersion,
+  addRecipeLineSubstitute,
   attachIngredientAllergen,
   createAllergen,
   createIngredient,
@@ -67,6 +68,7 @@ function makeDb() {
     restaurantRecipe: model(),
     restaurantRecipeVersion: model(),
     restaurantRecipeLine: model(),
+    restaurantRecipeLineSubstitute: model(),
     restaurantProduct: model(),
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
   };
@@ -446,5 +448,93 @@ describe('createRecipeLine — recipe cycle detection', () => {
         unitId: 'u1',
       } as unknown as Parameters<typeof createRecipeLine>[1])
     ).rejects.toMatchObject({ reason: 'INVALID' });
+  });
+});
+
+describe('recipe ingredient substitutes', () => {
+  beforeEach(() => {
+    db.restaurantRecipeLine.findUnique.mockResolvedValue({
+      id: 'line_1',
+      recipeVersionId: 'version_1',
+      ingredientId: 'ingredient_original',
+    });
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'version_1',
+      status: 'DRAFT',
+      recipeId: 'recipe_1',
+    });
+    db.restaurantIngredient.findUnique.mockResolvedValue({ id: 'ingredient_substitute' });
+  });
+
+  it('adds a distinct, tenant-visible ingredient to a draft ingredient line', async () => {
+    await addRecipeLineSubstitute(scoped(), {
+      recipeLineId: 'line_1',
+      substituteIngredientId: 'ingredient_substitute',
+    });
+    expect(db.restaurantRecipeLineSubstitute.create).toHaveBeenCalledWith({
+      data: {
+        recipeLineId: 'line_1',
+        substituteIngredientId: 'ingredient_substitute',
+      },
+    });
+  });
+
+  it('rejects self-substitution and sub-recipe lines', async () => {
+    await expect(
+      addRecipeLineSubstitute(scoped(), {
+        recipeLineId: 'line_1',
+        substituteIngredientId: 'ingredient_original',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    db.restaurantRecipeLine.findUnique.mockResolvedValue({
+      id: 'line_1',
+      recipeVersionId: 'version_1',
+      ingredientId: null,
+    });
+    await expect(
+      addRecipeLineSubstitute(scoped(), {
+        recipeLineId: 'line_1',
+        substituteIngredientId: 'ingredient_substitute',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(db.restaurantRecipeLineSubstitute.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a cross-tenant or missing substitute hidden by the scoped database', async () => {
+    db.restaurantIngredient.findUnique.mockResolvedValue(null);
+    await expect(
+      addRecipeLineSubstitute(scoped(), {
+        recipeLineId: 'line_1',
+        substituteIngredientId: 'other_tenant_ingredient',
+      })
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+    expect(db.restaurantRecipeLineSubstitute.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects changes to an active recipe version and duplicate approval', async () => {
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'version_1',
+      status: 'ACTIVE',
+      recipeId: 'recipe_1',
+    });
+    await expect(
+      addRecipeLineSubstitute(scoped(), {
+        recipeLineId: 'line_1',
+        substituteIngredientId: 'ingredient_substitute',
+      })
+    ).rejects.toBeInstanceOf(VersionImmutabilityError);
+
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'version_1',
+      status: 'DRAFT',
+      recipeId: 'recipe_1',
+    });
+    db.restaurantRecipeLineSubstitute.findUnique.mockResolvedValue({ id: 'existing' });
+    await expect(
+      addRecipeLineSubstitute(scoped(), {
+        recipeLineId: 'line_1',
+        substituteIngredientId: 'ingredient_substitute',
+      })
+    ).rejects.toMatchObject({ reason: 'ALREADY_ATTACHED' });
   });
 });
