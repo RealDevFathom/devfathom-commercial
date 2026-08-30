@@ -14,7 +14,7 @@ import {
   NOTIFICATION_WEBHOOK_PAYLOAD_VERSION,
   notificationWebhookJobPayloadSchema,
 } from '@/lib/restaurant/notification-webhook';
-import { enqueue } from '@/lib/restaurant/scheduler';
+import { enqueue, type RestaurantJobStatus } from '@/lib/restaurant/scheduler';
 import { capabilityProcedure, protectedProcedure, router } from '../trpc';
 import { annotateAudit } from '../audit';
 
@@ -274,22 +274,21 @@ export const restaurantNotificationsRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Dead-letter webhook event not found.' });
       const payload = notificationWebhookJobPayloadSchema.parse(dead.payload);
       const idempotencyKey = `notification-webhook:${payload.eventId}:retry:${dead.id}`;
-      const job = await ctx.db.restaurantJob.upsert({
-        where: {
-          organizationId_idempotencyKey: {
-            organizationId: dead.organizationId,
-            idempotencyKey,
-          },
-        },
-        update: {},
-        create: {
-          organizationId: dead.organizationId,
-          type: NOTIFICATION_WEBHOOK_JOB_TYPE,
-          idempotencyKey,
-          payload: { ...payload, attemptOffset: payload.attemptOffset + dead.attempts },
-          status: 'QUEUED',
-        },
+      const successorPayload = JSON.stringify({
+        ...payload,
+        attemptOffset: payload.attemptOffset + dead.attempts,
       });
+      const [job] = await ctx.db.$queryRaw<{ id: string; status: RestaurantJobStatus }[]>`
+        INSERT INTO "restaurant_jobs"
+          ("id", "organizationId", "type", "idempotencyKey", "payload", "status", "updatedAt")
+        VALUES
+          (${randomUUID()}, ${dead.organizationId}, ${NOTIFICATION_WEBHOOK_JOB_TYPE},
+           ${idempotencyKey}, ${successorPayload}::jsonb, 'QUEUED', now())
+        ON CONFLICT ("organizationId", "idempotencyKey") DO UPDATE
+          SET "idempotencyKey" = EXCLUDED."idempotencyKey"
+        RETURNING "id", "status"::text
+      `;
+      if (!job) throw new Error('Webhook retry successor was not returned.');
       annotateAudit(ctx, {
         action: 'RETRY_RESTAURANT_NOTIFICATION_WEBHOOK',
         targetType: 'RestaurantJob',

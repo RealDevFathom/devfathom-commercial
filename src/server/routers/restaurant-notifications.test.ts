@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   jobFindMany: vi.fn(),
   jobFindFirst: vi.fn(),
   jobCreate: vi.fn(),
-  jobUpsert: vi.fn(),
+  queryRaw: vi.fn(),
   annotateAudit: vi.fn(),
   recordTrpcAudit: vi.fn(),
 }));
@@ -79,8 +79,8 @@ const db = {
     findMany: mocks.jobFindMany,
     findFirst: mocks.jobFindFirst,
     create: mocks.jobCreate,
-    upsert: mocks.jobUpsert,
   },
+  $queryRaw: mocks.queryRaw,
   $transaction: vi.fn(async (work) => work(db)),
 };
 
@@ -122,7 +122,7 @@ beforeEach(() => {
   mocks.jobFindMany.mockResolvedValue([]);
   mocks.jobFindFirst.mockResolvedValue(null);
   mocks.jobCreate.mockImplementation(async ({ data }) => ({ id: 'job_new', ...data }));
-  mocks.jobUpsert.mockImplementation(async ({ create }) => ({ id: 'job_retry', ...create }));
+  mocks.queryRaw.mockResolvedValue([{ id: 'job_retry', status: 'QUEUED' }]);
   mocks.settingCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'setting_1',
     ...data,
@@ -294,25 +294,22 @@ describe('signed webhook administration', () => {
       eventId: 'job_retry',
       status: 'QUEUED',
     });
-    mocks.jobUpsert.mockResolvedValueOnce({ id: 'job_retry', status: 'SUCCEEDED' });
+    mocks.queryRaw.mockResolvedValueOnce([{ id: 'job_retry', status: 'SUCCEEDED' }]);
     await expect(caller().retryWebhook({ eventId: 'dead_1' })).resolves.toMatchObject({
       eventId: 'job_retry',
       status: 'SUCCEEDED',
     });
-    expect(mocks.jobUpsert).toHaveBeenCalledTimes(2);
-    expect(mocks.jobUpsert).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        where: {
-          organizationId_idempotencyKey: {
-            organizationId: 'org_1',
-            idempotencyKey: 'notification-webhook:event_1:retry:dead_1',
-          },
-        },
-        update: {},
-        create: expect.objectContaining({
-          status: 'QUEUED',
-          payload: expect.objectContaining({ attemptOffset: 5 }),
-        }),
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
+    const query = mocks.queryRaw.mock.calls[1]?.[0] as TemplateStringsArray;
+    const values = mocks.queryRaw.mock.calls[1]?.slice(1) as unknown[];
+    expect(query.join(' ')).toContain('ON CONFLICT ("organizationId", "idempotencyKey") DO UPDATE');
+    expect(values).toContain('notification-webhook:event_1:retry:dead_1');
+    expect(values).toContain(
+      JSON.stringify({
+        eventId: 'event_1',
+        notificationId: 'notification_1',
+        attemptOffset: 5,
+        version: '1.0',
       })
     );
   });
