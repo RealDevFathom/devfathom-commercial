@@ -16,10 +16,10 @@ import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  assertActorEligibleForBranch,
   assertAuthorizedBranch,
-  assertAuthorizedStaffProfile,
   denyStaffBranchAccess,
-  resolveStaffBranchAuthorization,
+  resolveCapabilityBranchAuthorization,
 } from '@/lib/restaurant/staff-branch-authorization';
 import { annotateAudit } from '../audit';
 import { capabilityProcedure, router } from '../trpc';
@@ -42,7 +42,11 @@ const manageDevicesProcedure = capabilityProcedure('devices:manage');
 export const restaurantDevicesRouter = router({
   /** List registered devices with derived operational health (no secret material). */
   list: manageDevicesProcedure.query(async ({ ctx }) => {
-    const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+    const authorization = await resolveCapabilityBranchAuthorization(
+      ctx.db,
+      ctx.session!.user,
+      'devices:manage'
+    );
     const now = new Date();
     const devices = await ctx.db.restaurantRegisteredDevice.findMany({
       where: { branchId: { in: authorization.branchIds } },
@@ -74,7 +78,11 @@ export const restaurantDevicesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
       assertAuthorizedBranch(authorization, input.branchId);
       const branch = await ctx.db.restaurantBranch.findUnique({
         where: { id: input.branchId },
@@ -144,7 +152,11 @@ export const restaurantDevicesRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
 
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
 
       const device = await ctx.db.restaurantRegisteredDevice.findUnique({
         where: { id: input.deviceId },
@@ -257,23 +269,32 @@ export const restaurantDevicesRouter = router({
   /** Rotate an active device secret with the same two-person approval as revoke. */
   rotate: manageDevicesProcedure
     .input(
-      z.object({
-        deviceId: z.string().min(1),
-        actingStaffProfileId: z.string().min(1),
-        approvingStaffProfileId: z.string().min(1),
-        approvingType: z.enum(['PIN', 'BADGE']),
-        approvingSecret: z.string().min(1),
-        reason: z.string().min(1),
-      })
+      z
+        .object({
+          deviceId: z.string().min(1),
+          approvingStaffProfileId: z.string().min(1),
+          approvingType: z.enum(['PIN', 'BADGE']),
+          approvingSecret: z.string().min(1),
+          reason: z.string().min(1),
+        })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage',
+        { requireExactlyOneActiveActor: true }
+      );
+      const actingStaffProfileId = authorization.actorStaffProfileId;
+      if (!actingStaffProfileId) denyStaffBranchAccess();
       const device = await ctx.db.restaurantRegisteredDevice.findUnique({
         where: { id: input.deviceId },
       });
       if (!device) denyStaffBranchAccess();
       assertAuthorizedBranch(authorization, device.branchId);
+      assertActorEligibleForBranch(authorization, device.branchId);
       if (device.status === 'REVOKED' || device.revokedAt !== null) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -281,34 +302,20 @@ export const restaurantDevicesRouter = router({
         });
       }
 
-      const [acting, approving] = await Promise.all([
-        ctx.db.restaurantStaffProfile.findUnique({
-          where: { id: input.actingStaffProfileId },
-          select: { id: true, status: true },
-        }),
-        ctx.db.restaurantStaffProfile.findUnique({
-          where: { id: input.approvingStaffProfileId },
-          select: { id: true, status: true },
-        }),
-      ]);
-      if (!acting || acting.status !== 'ACTIVE') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Acting staff profile is not active.',
-        });
-      }
+      const approving = await ctx.db.restaurantStaffProfile.findUnique({
+        where: { id: input.approvingStaffProfileId },
+        select: { id: true, status: true },
+      });
       if (!approving || approving.status !== 'ACTIVE') {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Approving manager profile is not active.',
         });
       }
-      await assertAuthorizedStaffProfile(ctx.db, authorization, input.actingStaffProfileId);
-
       let record;
       try {
         record = buildCoAuthorizationRecord({
-          actingStaffProfileId: input.actingStaffProfileId,
+          actingStaffProfileId,
           approvingStaffProfileId: input.approvingStaffProfileId,
           capability: 'devices:manage',
           reason: input.reason,
@@ -369,7 +376,7 @@ export const restaurantDevicesRouter = router({
           description: `Rotated terminal device "${device.name}" with manager co-authorization`,
           metadata: {
             coAuthorizationId: coAuthorization.id,
-            actingStaffProfileId: input.actingStaffProfileId,
+            actingStaffProfileId,
             approvingStaffProfileId: input.approvingStaffProfileId,
           },
         });

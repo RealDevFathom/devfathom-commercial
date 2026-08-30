@@ -48,6 +48,8 @@ const branchId = `branch_${suffix}`;
 const otherBranchId = `branch_other_${suffix}`;
 const foreignBranchId = `branch_foreign_${suffix}`;
 const foreignDeviceId = `device_foreign_${suffix}`;
+const inactiveStaffId = `staff_inactive_${suffix}`;
+const foreignStaffId = `staff_foreign_${suffix}`;
 const actingStaffId = `staff_acting_${suffix}`;
 const approvingStaffId = `staff_mgr_${suffix}`;
 const unprivilegedStaffId = `staff_unprivileged_${suffix}`;
@@ -66,7 +68,7 @@ type Deps = {
 
 let deps: Deps;
 
-function adminCtx(db: unknown) {
+function adminCtx(db: unknown, userId = 'user_admin') {
   return {
     db,
     entitlements: {
@@ -89,7 +91,7 @@ function adminCtx(db: unknown) {
     session: {
       expires: 'later',
       user: {
-        id: 'user_admin',
+        id: userId,
         role: 'ADMIN',
         department: 'LEADERSHIP',
         status: 'ACTIVE',
@@ -103,8 +105,28 @@ function adminCtx(db: unknown) {
   } as never;
 }
 
-const caller = () =>
-  deps.restaurantDevicesRouter.createCaller(adminCtx(deps.createTenantDb(orgId)));
+const caller = (userId = 'user_admin') =>
+  deps.restaurantDevicesRouter.createCaller(adminCtx(deps.createTenantDb(orgId), userId));
+
+async function rotationState(deviceId: string) {
+  return deps.withTenantDb(orgId, async (tx) => {
+    const [device, coAuthorizationCount] = await Promise.all([
+      tx.restaurantRegisteredDevice.findUniqueOrThrow({
+        where: { id: deviceId },
+        select: { deviceSecretHash: true },
+      }),
+      tx.restaurantCoAuthorization.count({ where: { targetId: deviceId } }),
+    ]);
+    return { deviceSecretHash: device.deviceSecretHash, coAuthorizationCount };
+  });
+}
+
+async function expectUnchangedRotationState(
+  deviceId: string,
+  expected: Awaited<ReturnType<typeof rotationState>>
+) {
+  await expect(rotationState(deviceId)).resolves.toEqual(expected);
+}
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
@@ -161,6 +183,26 @@ beforeAll(async () => {
         title: 'Device administrator',
       },
     });
+    await tx.user.createMany({
+      data: [
+        {
+          id: 'user_absent',
+          name: 'Unmapped administrator',
+          email: `device-absent-${suffix}@example.test`,
+          role: 'ADMIN',
+          department: 'LEADERSHIP',
+          title: 'Device administrator',
+        },
+        {
+          id: 'user_inactive',
+          name: 'Inactive administrator',
+          email: `device-inactive-${suffix}@example.test`,
+          role: 'ADMIN',
+          department: 'LEADERSHIP',
+          title: 'Device administrator',
+        },
+      ],
+    });
     await tx.restaurantBranch.createMany({
       data: [
         { id: branchId, name: 'Downtown' },
@@ -180,6 +222,14 @@ beforeAll(async () => {
     });
     await tx.restaurantStaffProfile.create({
       data: { id: unprivilegedStaffId, displayName: 'Unprivileged Manager', status: 'ACTIVE' },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: inactiveStaffId,
+        userId: 'user_inactive',
+        displayName: 'Inactive Admin',
+        status: 'SUSPENDED',
+      },
     });
     await tx.restaurantOperatorCredential.create({
       data: {
@@ -201,9 +251,6 @@ beforeAll(async () => {
     await tx.restaurantJobRoleCapability.create({
       data: { jobRoleId: managerRole.id, capability: 'devices:manage' },
     });
-    await tx.restaurantJobRoleCapability.create({
-      data: { jobRoleId: managerRole.id, capability: 'staff:manage' },
-    });
     await tx.restaurantStaffJobRole.create({
       data: { staffProfileId: actingStaffId, jobRoleId: managerRole.id, branchId },
     });
@@ -216,7 +263,28 @@ beforeAll(async () => {
     });
   });
   await deps.withTenantDb(otherOrgId, async (tx) => {
+    await tx.organizationDepartment.create({
+      data: { key: 'LEADERSHIP', name: 'Leadership' },
+    });
+    await tx.user.create({
+      data: {
+        id: 'user_foreign',
+        name: 'Foreign administrator',
+        email: `device-foreign-${suffix}@example.test`,
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        title: 'Device administrator',
+      },
+    });
     await tx.restaurantBranch.create({ data: { id: foreignBranchId, name: 'Foreign branch' } });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: foreignStaffId,
+        userId: 'user_foreign',
+        displayName: 'Foreign Admin',
+        status: 'ACTIVE',
+      },
+    });
     await tx.restaurantRegisteredDevice.create({
       data: {
         id: foreignDeviceId,
@@ -269,7 +337,10 @@ afterAll(async () => {
 
   await deps.withPlatformDb(async (tx) => {
     await tx.restaurantRegisteredDevice.deleteMany({ where: { organizationId: otherOrgId } });
+    await tx.restaurantStaffProfile.deleteMany({ where: { organizationId: otherOrgId } });
     await tx.restaurantBranch.deleteMany({ where: { organizationId: otherOrgId } });
+    await tx.user.deleteMany({ where: { organizationId: otherOrgId } });
+    await tx.organizationDepartment.deleteMany({ where: { organizationId: otherOrgId } });
     await tx.organization.deleteMany({ where: { id: { in: [orgId, otherOrgId] } } });
     expect(await tx.organization.count({ where: { id: { in: [orgId, otherOrgId] } } })).toBe(0);
   });
@@ -424,7 +495,6 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
 
     const result = await api.rotate({
       deviceId: enrolled.device.id,
-      actingStaffProfileId: actingStaffId,
       approvingStaffProfileId: approvingStaffId,
       approvingType: 'PIN',
       approvingSecret: APPROVING_PIN,
@@ -485,7 +555,67 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(rejected).toMatchObject({ reason: { reason: 'STALE_ROTATION' } });
   });
 
-  it('denies cross-tenant and unauthorized-branch rotations without revealing device existence', async () => {
+  it('uses devices:manage without implicitly requiring staff:manage', async () => {
+    const api = caller();
+    const enrolled = await api.initiateEnrollment({ branchId, name: 'POS-device-capability' });
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] !== 'restaurant:configure');
+
+    await expect(
+      api.rotate({
+        deviceId: enrolled.device.id,
+        approvingStaffProfileId: approvingStaffId,
+        approvingType: 'PIN',
+        approvingSecret: APPROVING_PIN,
+        reason: 'device capability only',
+      })
+    ).resolves.toMatchObject({ device: { id: enrolled.device.id, status: 'ACTIVE' } });
+  });
+
+  it('rejects spoofed actor input before any rotation or audit annotation', async () => {
+    const api = caller();
+    const enrolled = await api.initiateEnrollment({ branchId, name: 'POS-spoof' });
+    const before = await rotationState(enrolled.device.id);
+    mocks.annotateAudit.mockClear();
+
+    await expect(
+      api.rotate({
+        deviceId: enrolled.device.id,
+        actingStaffProfileId: approvingStaffId,
+        approvingStaffProfileId: approvingStaffId,
+        approvingType: 'PIN',
+        approvingSecret: APPROVING_PIN,
+        reason: 'spoof actor',
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await expectUnchangedRotationState(enrolled.device.id, before);
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['absent', 'user_absent'],
+    ['inactive', 'user_inactive'],
+    ['cross-tenant', 'user_foreign'],
+  ])('fails closed for an %s authenticated actor mapping', async (_label, userId) => {
+    const enrolled = await caller().initiateEnrollment({ branchId, name: `POS-${_label}` });
+    const before = await rotationState(enrolled.device.id);
+    mocks.annotateAudit.mockClear();
+
+    await expect(
+      caller(userId).rotate({
+        deviceId: enrolled.device.id,
+        approvingStaffProfileId: approvingStaffId,
+        approvingType: 'PIN',
+        approvingSecret: APPROVING_PIN,
+        reason: `${_label} actor`,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    await expectUnchangedRotationState(enrolled.device.id, before);
+    expect(mocks.annotateAudit.mock.calls).toEqual([[expect.anything(), { skipInput: true }]]);
+  });
+
+  it('denies cross-tenant devices and cross-branch actor mappings without mutation', async () => {
     const api = caller();
     const branchLocal = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantRegisteredDevice.create({
@@ -496,20 +626,25 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         },
       })
     );
-    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] !== 'restaurant:configure');
     const input = {
-      actingStaffProfileId: actingStaffId,
       approvingStaffProfileId: approvingStaffId,
       approvingType: 'PIN' as const,
       approvingSecret: APPROVING_PIN,
       reason: 'scope probe',
     };
 
+    const branchBefore = await rotationState(branchLocal.id);
+    mocks.annotateAudit.mockClear();
     await expect(api.rotate({ ...input, deviceId: branchLocal.id })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+    await expectUnchangedRotationState(branchLocal.id, branchBefore);
+    expect(mocks.annotateAudit.mock.calls).toEqual([[expect.anything(), { skipInput: true }]]);
+
+    mocks.annotateAudit.mockClear();
     await expect(api.rotate({ ...input, deviceId: foreignDeviceId })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+    expect(mocks.annotateAudit.mock.calls).toEqual([[expect.anything(), { skipInput: true }]]);
   });
 });

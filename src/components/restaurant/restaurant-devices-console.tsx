@@ -126,7 +126,8 @@ export function RestaurantDevicesConsole() {
     if (!selectedDevice) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const actingStaffProfileId = formText(data, 'actingStaffProfileId');
+    const actingStaffProfileId =
+      deviceAction === 'revoke' ? formText(data, 'actingStaffProfileId') : null;
     const approvingStaffProfileId = formText(data, 'approvingStaffProfileId');
     const approvingSecret = formText(data, 'approvingSecret');
     const approvingType = formText(data, 'approvingType') as 'PIN' | 'BADGE';
@@ -135,14 +136,13 @@ export function RestaurantDevicesConsole() {
     if (secretInput instanceof HTMLInputElement) secretInput.value = '';
     setCoAuthError('');
 
-    if (actingStaffProfileId === approvingStaffProfileId) {
+    if (deviceAction === 'revoke' && actingStaffProfileId === approvingStaffProfileId) {
       setCoAuthError('Acting and approving staff must be different active people.');
       return;
     }
 
     const payload = {
       deviceId: selectedDevice.id,
-      actingStaffProfileId,
       approvingStaffProfileId,
       approvingType,
       approvingSecret,
@@ -151,7 +151,10 @@ export function RestaurantDevicesConsole() {
     if (deviceAction === 'rotate') {
       rotateDevice.mutate(payload, { onSettled: () => rotateDevice.reset() });
     } else {
-      revokeDevice.mutate(payload, { onSettled: () => revokeDevice.reset() });
+      revokeDevice.mutate(
+        { ...payload, actingStaffProfileId: actingStaffProfileId ?? '' },
+        { onSettled: () => revokeDevice.reset() }
+      );
     }
   };
 
@@ -462,24 +465,26 @@ export function RestaurantDevicesConsole() {
               </p>
             ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="space-y-1.5">
-                <span className={labelClass}>Acting staff</span>
-                <select
-                  name="actingStaffProfileId"
-                  required
-                  defaultValue=""
-                  className={selectClass}
-                >
-                  <option value="" disabled>
-                    Select acting staff
-                  </option>
-                  {activeStaff.map((staff) => (
-                    <option key={staff.id} value={staff.id}>
-                      {staff.displayName}
+              {deviceAction === 'revoke' ? (
+                <label className="space-y-1.5">
+                  <span className={labelClass}>Acting staff</span>
+                  <select
+                    name="actingStaffProfileId"
+                    required
+                    defaultValue=""
+                    className={selectClass}
+                  >
+                    <option value="" disabled>
+                      Select acting staff
                     </option>
-                  ))}
-                </select>
-              </label>
+                    {activeStaff.map((staff) => (
+                      <option key={staff.id} value={staff.id}>
+                        {staff.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <label className="space-y-1.5">
                 <span className={labelClass}>Approving staff</span>
                 <select
