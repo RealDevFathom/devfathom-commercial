@@ -108,6 +108,7 @@ const M5_COLUMNS = {
     'staffProfileId',
     'deviceId',
     'createdAt',
+    'fullReversalSnapshotId',
   ],
   restaurant_drawer_sessions: [
     'id',
@@ -191,6 +192,9 @@ const M5_COLUMNS = {
     'resultRef',
     'createdAt',
     'updatedAt',
+    'canonicalPayloadHash',
+    'resultPayload',
+    'completedAt',
   ],
 } as const;
 
@@ -486,7 +490,7 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
     expect(result.rows.map((row) => row.enumlabel)).toEqual(expected);
   });
 
-  it('denies app-role UPDATE and DELETE on append-only M5 tables', async () => {
+  it('pins append-only policies and the guarded refund reversal-link exception', async () => {
     const result = await client!.query<{ table_name: string; commands: string[] }>(
       `SELECT table_row.relname AS table_name,
               array_agg(DISTINCT CASE policy_row.polcmd
@@ -513,7 +517,10 @@ describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
     expect(result.rows).toEqual(
       [...APPEND_ONLY_TABLES].sort().map((table_name) => ({
         table_name,
-        commands: ['INSERT', 'SELECT'],
+        commands:
+          table_name === 'restaurant_refunds'
+            ? ['INSERT', 'SELECT', 'UPDATE']
+            : ['INSERT', 'SELECT'],
       }))
     );
   });

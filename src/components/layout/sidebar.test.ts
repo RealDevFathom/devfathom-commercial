@@ -37,6 +37,16 @@ describe('restaurant navigation', () => {
     expect(visible).toContain('/restaurant/staff');
     expect(visible).not.toContain('/restaurant/orders');
     expect(visible).not.toContain('/restaurant/purchasing');
+    expect(visible).not.toContain('/restaurant/insights');
+
+    const withInsights = visibleNavigation(
+      {
+        vertical: 'RESTAURANT',
+        enabledModules: ['restaurant-core', 'restaurant-insights'],
+      },
+      'ADMIN'
+    ).map((item) => item.href);
+    expect(withInsights).toContain('/restaurant/insights');
   });
 
   it('keeps restaurant routes out of an Agency workspace', () => {
@@ -45,5 +55,18 @@ describe('restaurant navigation', () => {
       'ADMIN'
     );
     expect(visible.some((item) => item.group === 'Restaurant')).toBe(false);
+  });
+
+  it('names Restaurant finance, tax, purchasing, and entitled insights distinctly', () => {
+    expect(navigation.find((item) => item.href === '/restaurant/money')?.label).toBe(
+      'Finance & reconciliation'
+    );
+    expect(navigation.find((item) => item.href === '/restaurant/tax')?.label).toBe('Tax');
+    expect(navigation.find((item) => item.href === '/restaurant/purchasing')?.label).toBe(
+      'Purchasing'
+    );
+    expect(navigation.find((item) => item.href === '/restaurant/insights')?.label).toBe(
+      'Advanced Insights'
+    );
   });
 });

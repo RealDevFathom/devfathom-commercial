@@ -7,6 +7,7 @@
  * for real, so the derived expected cash and tip flags are exercised end to end.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
 
@@ -18,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   drawerFindUnique: vi.fn(),
   closeFindMany: vi.fn(),
   closeFindUnique: vi.fn(),
+  requireBranchScope: vi.fn<(ctx: unknown, branchId: string) => Promise<void>>(
+    async () => undefined
+  ),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -38,6 +42,9 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/server/restaurant-branch-scope', () => ({
+  requireRestaurantBranchScope: mocks.requireBranchScope,
+}));
 
 import { restaurantCashRouter } from './restaurant-cash';
 import type { TRPCContext } from '../trpc';
@@ -226,6 +233,7 @@ describe('drawer session reads (C12)', () => {
     expect(result.variance).toBe('-1');
     expect(result.movements).toHaveLength(7);
     expect(result.movements[1].amount).toBe('30');
+    expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 
   it('throws NOT_FOUND for a missing drawer session', async () => {
@@ -332,6 +340,7 @@ describe('daily close reads (C12)', () => {
     expect(result.tenderTotals[0]).toMatchObject({ tenderType: 'CASH', amount: '200', count: 3 });
     expect(result.drawerVariances[0]).toMatchObject({ drawerSessionId: 's1', variance: '-1' });
     expect(result.chain[0].isTip).toBe(true);
+    expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 
   it('throws NOT_FOUND for a missing daily close', async () => {
@@ -343,9 +352,29 @@ describe('daily close reads (C12)', () => {
 });
 
 describe('capability gating + strict inputs', () => {
-  it('gates every read on money:read', async () => {
+  it('guards every list by its exact branch', async () => {
     await caller().listDrawerSessions({ branchId: 'b1' });
+    await caller().listDailyCloses({ branchId: 'b2' });
     expect(mocks.can.mock.calls.some((c) => c[1] === 'money:read')).toBe(true);
+    expect(mocks.requireBranchScope.mock.calls.map((call) => call[1])).toEqual(['b1', 'b2']);
+  });
+
+  it('denies direct IDs before fetching drawer or close detail', async () => {
+    mocks.requireBranchScope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+    mocks.drawerFindUnique.mockResolvedValue({ branchId: 'blocked' });
+    await expect(
+      caller().getDrawerSession({ drawerSessionId: 'drawer-blocked' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.drawerFindUnique).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.requireBranchScope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+    mocks.closeFindUnique.mockResolvedValue({ branchId: 'blocked' });
+    await expect(caller().getDailyClose({ dailyCloseId: 'close-blocked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.closeFindUnique).toHaveBeenCalledTimes(1);
   });
 
   it('rejects unknown input fields (strict)', async () => {
