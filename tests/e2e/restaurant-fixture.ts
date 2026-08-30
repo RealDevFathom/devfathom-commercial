@@ -7,7 +7,20 @@ export const restaurantE2eCredentials = {
   manager: { staffProfileId: 'staff_restaurant_e2e_manager', pin: '848484' },
   pos: { deviceId: 'device_restaurant_e2e_pos', secret: 'rdk_restaurant_e2e_pos_local_ci_only' },
   kds: { deviceId: 'device_restaurant_e2e_kds', secret: 'rdk_restaurant_e2e_kds_local_ci_only' },
+  branchA2Id: 'branch_restaurant_e2e_a2',
+  table: { id: 'table_restaurant_e2e_a1_12', name: 'Table 12' },
+  modifier: { optionId: 'modifier_option_restaurant_e2e_spicy', name: 'Spicy', delta: '1.50' },
+  menuItem: { name: 'Chicken Tikka Bun', unitPrice: '12.50' },
+  expected: { twoItemTotal: '28.00' },
+  seams: {
+    servicePolicy: 'service-policy-pending-integration',
+    refundEvidence: 'refund-evidence-derived-from-settled-bill',
+  },
 } as const;
+
+export function e2eIdempotencyKey(operation: string, discriminator: string | number) {
+  return `restaurant-integrated-${operation}-${discriminator}`;
+}
 
 export type RestaurantTerminalFixture = {
   deviceId: string;

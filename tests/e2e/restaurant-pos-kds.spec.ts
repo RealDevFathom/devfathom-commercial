@@ -3,6 +3,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import {
   establishKdsFixture,
   establishPosFixture,
+  e2eIdempotencyKey,
   restaurantE2eCredentials as fixture,
   type RestaurantTerminalFixture,
 } from './restaurant-fixture';
@@ -156,8 +157,8 @@ test.describe('restaurant POS and KDS core flow', () => {
     expect(summary).toMatchObject({
       settled: true,
       blocker: null,
-      derivedOrderTotal: '25.00',
-      accountedTotal: '25.00',
+      derivedOrderTotal: fixture.expected.twoItemTotal,
+      accountedTotal: fixture.expected.twoItemTotal,
     });
 
     const businessDate = new Date().toISOString().slice(0, 10);
@@ -167,9 +168,16 @@ test.describe('restaurant POS and KDS core flow', () => {
     );
     expect(previewResponse.status()).toBe(200);
     const preview = await previewResponse.json();
-    expect(preview.totals).toMatchObject({ grossSales: '25.00', netSales: '25.00' });
+    expect(preview.totals).toMatchObject({
+      grossSales: fixture.expected.twoItemTotal,
+      netSales: fixture.expected.twoItemTotal,
+    });
     expect(preview.tenderTotals).toEqual([
-      expect.objectContaining({ tenderType: 'CASH', amount: '25.00', count: 2 }),
+      expect.objectContaining({
+        tenderType: 'CASH',
+        amount: fixture.expected.twoItemTotal,
+        count: 2,
+      }),
     ]);
 
     await post(
@@ -182,7 +190,7 @@ test.describe('restaurant POS and KDS core flow', () => {
         amount: '5.00',
         reason: 'E2E exact reconciliation',
       },
-      'e2e-drawer-paid-in'
+      e2eIdempotencyKey('drawer-paid-in', opened.orderNumber)
     );
     await post(
       request,
@@ -194,18 +202,18 @@ test.describe('restaurant POS and KDS core flow', () => {
           .concat('.00')
           .replace('.00.00', '.00'),
       },
-      'e2e-drawer-close'
+      e2eIdempotencyKey('drawer-close', opened.orderNumber)
     );
     const closeResponse = await post(
       request,
       pos,
       '/api/restaurant/cash/day/close',
       { businessDate },
-      'e2e-daily-close'
+      e2eIdempotencyKey('daily-close', opened.orderNumber)
     );
     const close = await closeResponse.json();
     expect(close.totals.cashVariance).toBe('0.00');
-    expect(close.totals.grossSales).toBe('25.00');
+    expect(close.totals.grossSales).toBe(fixture.expected.twoItemTotal);
     expect(close.replayed).toBe(false);
 
     const kds = await establishKdsFixture(request);

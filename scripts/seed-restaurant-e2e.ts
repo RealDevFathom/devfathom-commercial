@@ -18,6 +18,7 @@ import {
 export const RESTAURANT_E2E = {
   organizationId: 'org_chai_chowk',
   branchId: 'branch_restaurant_e2e',
+  branchA2Id: 'branch_restaurant_e2e_a2',
   posDeviceId: 'device_restaurant_e2e_pos',
   kdsDeviceId: 'device_restaurant_e2e_kds',
   operatorId: 'staff_restaurant_e2e_operator',
@@ -56,6 +57,21 @@ const IDS = {
   loyaltyProgram: 'loyalty_program_restaurant_e2e_v1',
   loyaltyAccount: 'loyalty_account_restaurant_e2e',
   loyaltyEntry: 'loyalty_entry_restaurant_e2e_opening',
+  floor: 'floor_restaurant_e2e_a1',
+  table: 'table_restaurant_e2e_a1_12',
+  modifierGroup: 'modifier_group_restaurant_e2e_heat',
+  modifierOption: 'modifier_option_restaurant_e2e_spicy',
+  productModifier: 'product_modifier_restaurant_e2e_heat',
+  unit: 'unit_restaurant_e2e_each',
+  ingredient: 'ingredient_restaurant_e2e_bun',
+  recipe: 'recipe_restaurant_e2e_burger',
+  recipeVersion: 'recipe_version_restaurant_e2e_burger_v1',
+  recipeLine: 'recipe_line_restaurant_e2e_bun',
+  sopTemplate: 'sop_template_restaurant_e2e_opening',
+  sopVersion: 'sop_version_restaurant_e2e_opening_v1',
+  sopStep: 'sop_step_restaurant_e2e_opening_1',
+  sopAssignment: 'sop_assignment_restaurant_e2e_opening',
+  sopOccurrence: 'sop_occurrence_restaurant_e2e_opening',
 } as const;
 
 const FIXED_AT = new Date('2026-08-27T00:00:00.000Z');
@@ -162,6 +178,42 @@ async function main() {
             name: 'Gulberg Café',
             timezone: 'Asia/Karachi',
             isDefault: true,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantBranch.upsert({
+          where: { id: RESTAURANT_E2E.branchA2Id },
+          update: { name: 'DHA Café', active: true },
+          create: {
+            id: RESTAURANT_E2E.branchA2Id,
+            name: 'DHA Café',
+            timezone: 'Asia/Karachi',
+            active: true,
+            isDefault: false,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantFloor.upsert({
+          where: { id: IDS.floor },
+          update: { name: 'Main dining' },
+          create: {
+            id: IDS.floor,
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'Main dining',
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantTable.upsert({
+          where: { id: IDS.table },
+          update: { code: 'Table 12', capacity: 4 },
+          create: {
+            id: IDS.table,
+            floorId: IDS.floor,
+            code: 'Table 12',
+            capacity: 4,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },
@@ -413,6 +465,102 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await tx.restaurantModifierGroup.upsert({
+          where: { id: IDS.modifierGroup },
+          update: { minSelect: 1, maxSelect: 1 },
+          create: {
+            id: IDS.modifierGroup,
+            name: 'Heat',
+            minSelect: 1,
+            maxSelect: 1,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantModifierOption.upsert({
+          where: { id: IDS.modifierOption },
+          update: { name: 'Spicy', priceDelta: '1.50' },
+          create: {
+            id: IDS.modifierOption,
+            modifierGroupId: IDS.modifierGroup,
+            name: 'Spicy',
+            priceDelta: '1.50',
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantProductModifierGroup.upsert({
+          where: { id: IDS.productModifier },
+          update: {},
+          create: {
+            id: IDS.productModifier,
+            productId: IDS.product,
+            modifierGroupId: IDS.modifierGroup,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantUnit.upsert({
+          where: { id: IDS.unit },
+          update: {},
+          create: {
+            id: IDS.unit,
+            name: 'Each',
+            abbreviation: 'ea',
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantIngredient.upsert({
+          where: { id: IDS.ingredient },
+          update: {},
+          create: {
+            id: IDS.ingredient,
+            name: 'Tikka bun',
+            baseUnitId: IDS.unit,
+            referenceCost: '3.0000',
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantRecipe.upsert({
+          where: { id: IDS.recipe },
+          update: {},
+          create: {
+            id: IDS.recipe,
+            productId: IDS.product,
+            name: 'Chicken Tikka Bun BOM',
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantRecipeVersion.upsert({
+          where: { id: IDS.recipeVersion },
+          update: {},
+          create: {
+            id: IDS.recipeVersion,
+            recipeId: IDS.recipe,
+            versionNumber: 1,
+            status: 'ACTIVE',
+            portionCount: 1,
+            activatedAt: FIXED_AT,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantRecipeLine.upsert({
+          where: { id: IDS.recipeLine },
+          update: {},
+          create: {
+            id: IDS.recipeLine,
+            recipeVersionId: IDS.recipeVersion,
+            ingredientId: IDS.ingredient,
+            quantity: '1.0000',
+            unitId: IDS.unit,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         await tx.restaurantPriceList.upsert({
           where: { id: IDS.priceList },
           update: { name: 'Chai Chowk Prices', isDefault: true },
@@ -574,6 +722,78 @@ async function main() {
             occurredAt: FIXED_AT,
             idempotencyKey: 'restaurant-e2e-opening-balance-v1',
             createdAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantSopTemplate.upsert({
+          where: { id: IDS.sopTemplate },
+          update: {},
+          create: {
+            id: IDS.sopTemplate,
+            name: 'Opening food-safety check',
+            category: 'OPENING',
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantSopTemplateVersion.upsert({
+          where: { id: IDS.sopVersion },
+          update: {},
+          create: {
+            id: IDS.sopVersion,
+            templateId: IDS.sopTemplate,
+            versionNumber: 1,
+            status: 'PUBLISHED',
+            publishedAt: FIXED_AT,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantSopTemplateStep.upsert({
+          where: { id: IDS.sopStep },
+          update: {},
+          create: {
+            id: IDS.sopStep,
+            templateVersionId: IDS.sopVersion,
+            stepOrder: 1,
+            title: 'Record cold-storage temperature',
+            requiresNote: true,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantSopAssignment.upsert({
+          where: { id: IDS.sopAssignment },
+          update: {},
+          create: {
+            id: IDS.sopAssignment,
+            branchId: RESTAURANT_E2E.branchId,
+            templateId: IDS.sopTemplate,
+            frequency: 'DAILY',
+            interval: 1,
+            daysOfWeek: [],
+            startDate: BUSINESS_DATE,
+            dueTimeMinutes: 480,
+            assigneeTargetType: 'PERSON',
+            assigneeStaffProfileId: RESTAURANT_E2E.operatorId,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantSopOccurrence.upsert({
+          where: { id: IDS.sopOccurrence },
+          update: {},
+          create: {
+            id: IDS.sopOccurrence,
+            assignmentId: IDS.sopAssignment,
+            templateVersionId: IDS.sopVersion,
+            branchId: RESTAURANT_E2E.branchId,
+            businessDate: BUSINESS_DATE,
+            status: 'SCHEDULED',
+            dueAt: new Date('2026-08-27T03:00:00.000Z'),
+            windowEndsAt: new Date('2026-08-28T03:00:00.000Z'),
+            assignedStaffProfileId: RESTAURANT_E2E.operatorId,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
           },
         });
       },
