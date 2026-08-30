@@ -68,6 +68,7 @@ beforeEach(() => {
   mocks.grants.clear();
   mocks.modules.clear();
   for (const key of [
+    'restaurant-pos',
     'restaurant-inventory',
     'restaurant-purchasing',
     'restaurant-workforce',
@@ -118,6 +119,22 @@ describe('restaurant report capability and branch matrix', () => {
     await expect(caller().payments(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     mocks.grants.add('reports:financial');
     await expect(caller().payments(input)).resolves.toMatchObject({ netSales: '1.00' });
+  });
+  it('denies POS-derived direct reads and exports when Restaurant POS is disabled', async () => {
+    mocks.grants.add('reports:operational');
+    mocks.grants.add('reports:financial');
+    mocks.modules.delete('restaurant-pos');
+    await expect(caller().overview(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().payments(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().exportCsv({ ...input, section: 'overview' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().exportCsv({ ...input, section: 'payments' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.overview).not.toHaveBeenCalled();
+    expect(mocks.payments).not.toHaveBeenCalled();
+    expect(mocks.exportCsv).not.toHaveBeenCalled();
   });
   it('requires operational, financial, and workforce rates grants for labour costs', async () => {
     for (const missing of [

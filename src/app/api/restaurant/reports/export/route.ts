@@ -32,6 +32,7 @@ export async function GET(request: Request) {
         'Content-Disposition': `attachment; filename="${file.filename}"`,
         'Content-Type': file.contentType,
         'X-Content-Type-Options': 'nosniff',
+        'X-Report-Truncated': String(file.truncated),
       },
     });
   } catch (error) {

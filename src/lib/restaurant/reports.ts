@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
+import { resolveChainTip } from './daily-close';
 
 export const MAX_REPORT_DAYS = 90;
 export const MAX_REPORT_BRANCHES = 100;
@@ -76,8 +77,6 @@ export function validateRestaurantReportRange(range: RestaurantReportRange) {
   return { from, to, toExclusive: nextUtcDay(to), days };
 }
 
-type CloseRow = Awaited<ReturnType<typeof loadReportBackbone>>['closes'][number];
-
 async function loadReportBackbone(db: ScopedDb, range: RestaurantReportRange) {
   const parsed = validateRestaurantReportRange(range);
   const where = {
@@ -86,8 +85,8 @@ async function loadReportBackbone(db: ScopedDb, range: RestaurantReportRange) {
   } as const;
   const [closes, rollups] = await Promise.all([
     db.restaurantDailyClose.findMany({
-      where: { ...where, supersededBy: { none: {} } },
-      orderBy: [{ businessDate: 'asc' }, { branchId: 'asc' }, { createdAt: 'asc' }],
+      where,
+      orderBy: [{ businessDate: 'asc' }, { branchId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
         branchId: true,
@@ -127,7 +126,17 @@ async function loadReportBackbone(db: ScopedDb, range: RestaurantReportRange) {
       },
     }),
   ]);
-  return { closes, rollups, parsed };
+  const closesByDay = new Map<string, (typeof closes)[number][]>();
+  for (const close of closes) {
+    const key = `${close.branchId}:${dateKey(close.businessDate)}`;
+    const day = closesByDay.get(key) ?? [];
+    day.push(close);
+    closesByDay.set(key, day);
+  }
+  const authoritativeCloses = [...closesByDay.values()]
+    .map((day) => resolveChainTip(day))
+    .filter((close): close is (typeof closes)[number] => close !== null);
+  return { closes: authoritativeCloses, rollups, parsed };
 }
 
 function freshnessFor(
@@ -188,22 +197,32 @@ export async function readOverviewReport(db: ScopedDb, range: RestaurantReportRa
     ? await db.$queryRaw<
         Array<{ productId: string; productName: string; quantity: bigint }>
       >(Prisma.sql`
+        WITH unsuperseded_tips AS (
+          SELECT close."id",
+            ROW_NUMBER() OVER (
+              PARTITION BY close."branchId", close."businessDate"
+              ORDER BY close."createdAt" DESC, close."id" DESC
+            ) AS authority_rank
+          FROM "restaurant_daily_closes" close
+          WHERE close."branchId" IN (${Prisma.join(range.branchIds)})
+            AND close."businessDate" >= ${parsed.from}
+            AND close."businessDate" <= ${parsed.to}
+            AND NOT EXISTS (
+              SELECT 1 FROM "restaurant_daily_closes" successor
+              WHERE successor."supersedesCloseId" = close."id"
+            )
+        )
         SELECT
           mix."productId" AS "productId",
           product."name" AS "productName",
           SUM(mix."quantity")::bigint AS "quantity"
         FROM "restaurant_insight_item_mix_rollups" mix
-        JOIN "restaurant_daily_closes" close
-          ON close."id" = mix."sourceDailyCloseId"
+        JOIN unsuperseded_tips close
+          ON close."id" = mix."sourceDailyCloseId" AND close.authority_rank = 1
         JOIN "restaurant_products" product ON product."id" = mix."productId"
         WHERE mix."branchId" IN (${Prisma.join(range.branchIds)})
           AND mix."businessDate" >= ${parsed.from}
           AND mix."businessDate" <= ${parsed.to}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM "restaurant_daily_closes" successor
-            WHERE successor."supersedesCloseId" = close."id"
-          )
         GROUP BY mix."productId", product."name"
         ORDER BY SUM(mix."quantity") DESC, mix."productId" ASC
         LIMIT 10
@@ -248,8 +267,7 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
     }
   }
   const total = (
-    key: keyof Pick<
-      CloseRow,
+    key:
       | 'grossSales'
       | 'netSales'
       | 'taxTotal'
@@ -262,7 +280,6 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
       | 'cashExpected'
       | 'cashCounted'
       | 'cashVariance'
-    >
   ) => add(closes.map((close) => close[key]));
   const netSales = total('netSales');
   return {
@@ -525,6 +542,54 @@ export async function readInventoryReport(db: ScopedDb, range: RestaurantReportR
     },
     truncated: onHand.truncated || lowStock.truncated || movements.truncated,
   };
+}
+
+async function readInventoryExportRows(db: ScopedDb, range: RestaurantReportRange) {
+  validateRestaurantReportRange(range);
+  const rows = await db.$queryRaw<
+    Array<{
+      branchId: string;
+      ingredientName: string;
+      locationId: string;
+      locationName: string;
+      stockItemId: string;
+      onHand: Prisma.Decimal;
+      weightedAverageCost: Prisma.Decimal;
+    }>
+  >(Prisma.sql`
+    WITH balances AS (
+      SELECT movement."stockItemId", movement."locationId", SUM(movement."quantity") AS "onHand"
+      FROM "restaurant_stock_movements" movement
+      JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+      WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+        AND location."isActive" = true
+      GROUP BY movement."stockItemId", movement."locationId"
+    ), costs AS (
+      SELECT movement."stockItemId", movement."locationId",
+        SUM(movement."quantity" * movement."unitCost") AS "totalCost",
+        SUM(movement."quantity") AS "totalQuantity"
+      FROM "restaurant_stock_movements" movement
+      JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+      WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+        AND location."isActive" = true
+        AND movement."unitCost" IS NOT NULL
+      GROUP BY movement."stockItemId", movement."locationId"
+    )
+    SELECT location."branchId" AS "branchId", ingredient."name" AS "ingredientName",
+      balance."locationId" AS "locationId", location."name" AS "locationName",
+      balance."stockItemId" AS "stockItemId", balance."onHand" AS "onHand",
+      COALESCE(cost."totalCost" / NULLIF(cost."totalQuantity", 0), 0) AS "weightedAverageCost"
+    FROM balances balance
+    JOIN "restaurant_stock_locations" location ON location."id" = balance."locationId"
+    JOIN "restaurant_stock_items" item ON item."id" = balance."stockItemId"
+    JOIN "restaurant_ingredients" ingredient ON ingredient."id" = item."ingredientId"
+    LEFT JOIN costs cost ON cost."stockItemId" = balance."stockItemId"
+      AND cost."locationId" = balance."locationId"
+    ORDER BY location."branchId" ASC, ingredient."name" ASC,
+      balance."locationId" ASC, balance."stockItemId" ASC
+    LIMIT ${MAX_EXPORT_ROWS + 1}
+  `);
+  return boundedRows(rows, MAX_EXPORT_ROWS);
 }
 
 export async function readPurchasingReport(db: ScopedDb, range: RestaurantReportRange) {
@@ -879,6 +944,7 @@ export async function exportRestaurantReportCsv(
 ) {
   let rows: Record<string, unknown>[];
   let columns: string[];
+  let truncated = false;
   if (section === 'overview') {
     const report = await readOverviewReport(db, range);
     columns = ['from', 'to', 'freshness', 'orders', 'covers', 'closedDays', 'expectedDays'];
@@ -932,15 +998,16 @@ export async function exportRestaurantReportCsv(
       },
     ];
   } else if (section === 'inventory') {
-    const report = await readInventoryReport(db, range);
+    const inventory = await readInventoryExportRows(db, range);
+    truncated = inventory.truncated;
     columns = ['branchId', 'ingredient', 'location', 'onHand', 'weightedAverageCost', 'negative'];
-    rows = report.onHand.slice(0, MAX_EXPORT_ROWS).map((row) => ({
+    rows = inventory.rows.map((row) => ({
       branchId: row.branchId,
       ingredient: row.ingredientName,
       location: row.locationName,
-      onHand: row.onHand,
-      weightedAverageCost: row.weightedAverageCost,
-      negative: row.isNegative,
+      onHand: row.onHand.toString(),
+      weightedAverageCost: row.weightedAverageCost.toString(),
+      negative: row.onHand.lessThan(ZERO),
     }));
   } else if (section === 'purchasing') {
     const report = await readPurchasingReport(db, range);
@@ -1001,5 +1068,6 @@ export async function exportRestaurantReportCsv(
     filename: `restaurant-${section}-${range.from}-to-${range.to}.csv`,
     contentType: 'text/csv; charset=utf-8',
     content: rowsToCsv(rows, columns),
+    truncated,
   };
 }
