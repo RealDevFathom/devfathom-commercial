@@ -47,6 +47,7 @@ const APPROVING_PIN = '482913';
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   restaurantDevicesRouter: (typeof import('./restaurant-devices'))['restaurantDevicesRouter'];
   hashOperatorCredential: (typeof import('@/lib/restaurant/operator-credentials'))['hashOperatorCredential'];
@@ -103,10 +104,23 @@ beforeAll(async () => {
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
+    withPlatformDb: scopedDb.withPlatformDb,
     createTenantDb: scopedDb.createTenantDb,
     restaurantDevicesRouter: routerModule.restaurantDevicesRouter,
     hashOperatorCredential: credModule.hashOperatorCredential,
   };
+
+  await deps.withPlatformDb((tx) =>
+    tx.organization.create({
+      data: {
+        id: orgId,
+        slug: `wha863-devices-${suffix}`,
+        legalName: 'WHA-863 Devices Test',
+        displayName: 'WHA-863 Devices',
+        status: 'ACTIVE',
+      },
+    })
+  );
 
   const approvingHash = await deps.hashOperatorCredential('PIN', APPROVING_PIN);
   await deps.withTenantDb(orgId, async (tx) => {
