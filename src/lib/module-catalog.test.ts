@@ -138,6 +138,7 @@ describe('module catalog routing', () => {
     ['/restaurant/insights', 'restaurant-insights'],
     ['/restaurant/catalog', 'restaurant-menu'],
     ['/restaurant/menus', 'restaurant-menu'],
+    ['/restaurant/staff/roster', 'restaurant-core'],
     ['/restaurant/staff', 'restaurant-core'],
     ['/restaurant/devices', 'restaurant-core'],
     ['/restaurant/notifications', 'restaurant-core'],

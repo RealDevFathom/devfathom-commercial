@@ -53,9 +53,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   email: 'email',
   webhooks: 'webhooks',
   restaurantStaff: 'restaurant-core', // M2-L2 back-office staff & operator-credential surface
-  // Completion wave: the branch shift roster. Rostering decides who may operate a
-  // terminal, so it gates on the same mandatory Restaurant Core module as the
-  // staff identity and credential surfaces it builds on.
+  // Existing scheduling and terminal eligibility remain foundational Core. The
+  // optional workforce procedures enforce their finer entitlement in-router.
   restaurantShifts: 'restaurant-core',
   // M2-L3: back-office terminal-device administration. Device trust and terminal
   // sessions are foundational to running any restaurant terminal, so they gate on
