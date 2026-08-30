@@ -300,6 +300,39 @@ describe('RestaurantManagementOverview', () => {
     expect(document.querySelector('[data-widget="labour"]')).not.toBeInTheDocument();
   });
 
+  it('renders meaningful accessible unavailable states for all five failed widgets', () => {
+    const unavailable = { data: { code: 'INTERNAL_SERVER_ERROR', httpStatus: 503 } };
+    mocks.financial.error = unavailable;
+    mocks.operational.error = unavailable;
+    mocks.detail.error = unavailable;
+    mocks.labour.error = unavailable;
+
+    render(<RestaurantManagementOverview insightsEnabled />);
+
+    for (const heading of [
+      'Performance',
+      'Net sales and orders',
+      'Exceptions',
+      'Item mix',
+      'Imported labour',
+    ]) {
+      expect(screen.getByRole('heading', { name: heading })).toBeVisible();
+    }
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(5);
+    for (const alert of alerts) {
+      expect(alert).toHaveAccessibleName(/unavailable/i);
+      expect(alert).toHaveTextContent(/could not be loaded/i);
+      expect(alert).not.toBeEmptyDOMElement();
+    }
+    const retries = screen.getAllByRole('button', { name: 'Retry' });
+    expect(retries).toHaveLength(5);
+    retries.forEach((retry) => fireEvent.click(retry));
+    expect(mocks.financial.refetch).toHaveBeenCalledTimes(2);
+    expect(mocks.operational.refetch).toHaveBeenCalledTimes(2);
+    expect(mocks.labour.refetch).toHaveBeenCalledOnce();
+  });
+
   it('supports keyboard-addressable ordering, visibility, spans, restore, and save', async () => {
     const view = render(<RestaurantManagementOverview insightsEnabled />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit dashboard' }));
@@ -341,7 +374,9 @@ describe('RestaurantManagementOverview', () => {
     expect(rows[0]).toHaveTextContent('Performance summary');
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }));
     await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(2));
-    expect(mocks.mutate.mock.calls[1]![0]).toEqual(mocks.preference);
+    const defaults = { ...mocks.preference, defaultBranchId: null };
+    expect(mocks.mutate.mock.calls[1]![0]).toEqual(defaults);
+    expect(mocks.setData).toHaveBeenLastCalledWith(undefined, defaults);
   });
 
   it('renders an honest disabled state without starting insight reads', () => {
