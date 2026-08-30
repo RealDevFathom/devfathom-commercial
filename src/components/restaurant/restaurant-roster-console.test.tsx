@@ -166,6 +166,7 @@ const SHIFT = {
   status: 'SCHEDULED',
   cancelledAt: null,
   cancelReason: null,
+  version: 1,
   createdAt: new Date('2026-08-19T00:00:00Z'),
   updatedAt: new Date('2026-08-19T00:00:00Z'),
   clockedInAt: null,
@@ -294,7 +295,7 @@ describe('Restaurant roster console', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel shift', hidden: false }));
     expect(mocks.cancelMutate).toHaveBeenCalledWith({
       id: 'shift_1',
-      expectedUpdatedAt: SHIFT.updatedAt,
+      expectedVersion: SHIFT.version,
       reason: 'Called in sick',
     });
   });

@@ -12,14 +12,12 @@ import {
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { hasModule } from '@/lib/entitlements';
 import {
-  ShiftError,
   cancelShift,
   createShift,
   listShifts,
   updateShift,
 } from '@/lib/restaurant/shifts';
 import {
-  WorkforceError,
   appendTimeAdjustment,
   clockIn,
   clockOut,
@@ -32,6 +30,7 @@ import {
   startBreak,
   WORKFORCE_SHIFT_SELECT,
 } from '@/lib/restaurant/workforce';
+import { mapShiftError, mapWorkforceError } from './restaurant-shifts.errors';
 
 /**
  * Completion wave — back-office roster surface for branch-scoped staff shifts.
@@ -51,37 +50,6 @@ import {
 const BUSINESS_DATE = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD business date');
-
-/** Translate a shift-domain error into the right tRPC status; rethrow anything else. */
-function mapShiftError(err: unknown): never {
-  if (err instanceof ShiftError) {
-    const code =
-      err.reason === 'OVERLAP' || err.reason === 'ALREADY_CANCELLED'
-        ? 'CONFLICT'
-        : err.reason === 'SHIFT_NOT_FOUND' ||
-            err.reason === 'BRANCH_NOT_FOUND' ||
-            err.reason === 'STAFF_NOT_FOUND'
-          ? 'NOT_FOUND'
-          : 'BAD_REQUEST';
-    throw new TRPCError({ code, message: err.message });
-  }
-  throw err;
-}
-
-function mapWorkforceError(err: unknown): never {
-  if (err instanceof WorkforceError) {
-    const code =
-      err.reason === 'NOT_FOUND'
-        ? 'NOT_FOUND'
-        : err.reason === 'FORBIDDEN'
-          ? 'FORBIDDEN'
-          : err.reason === 'INVALID'
-            ? 'BAD_REQUEST'
-            : 'CONFLICT';
-    throw new TRPCError({ code, message: err.message });
-  }
-  throw err;
-}
 
 const shiftProcedure = capabilityProcedure('staff:manage');
 const IDEMPOTENCY_KEY = z.string().trim().min(1).max(200);
@@ -129,10 +97,10 @@ async function branchForShift(ctx: TRPCContext, shiftId: string) {
   return shift.branchId;
 }
 
-async function lockManagerShift(tx: Prisma.TransactionClient, shiftId: string) {
-  const rows = await tx.$queryRaw<Array<{ staffProfileId: string; updatedAt: Date }>>(
-    Prisma.sql`SELECT "staffProfileId", "updatedAt" FROM "restaurant_shifts"
-      WHERE "id" = ${shiftId} FOR UPDATE`
+async function managerShift(tx: Prisma.TransactionClient, organizationId: string, shiftId: string) {
+  const rows = await tx.$queryRaw<Array<{ staffProfileId: string; version: number }>>(
+    Prisma.sql`SELECT "staffProfileId", "version" FROM "restaurant_shifts"
+      WHERE "id" = ${shiftId} AND "organizationId" = ${organizationId}`
   );
   if (!rows[0]) throw new TRPCError({ code: 'NOT_FOUND', message: 'Shift not found.' });
   return rows[0];
@@ -142,15 +110,6 @@ async function lockStaffRoster(tx: Prisma.TransactionClient, staffProfileId: str
   await tx.$queryRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`restaurant-roster:${staffProfileId}`}, 0))`
   );
-}
-
-function assertCurrentVersion(actual: Date, expected: Date) {
-  if (actual.getTime() !== expected.getTime()) {
-    throw new TRPCError({
-      code: 'CONFLICT',
-      message: 'This shift changed since it was loaded. Refresh the roster and try again.',
-    });
-  }
 }
 
 export const restaurantShiftsRouter = router({
@@ -223,7 +182,7 @@ export const restaurantShiftsRouter = router({
     .input(
       z.object({
         id: z.string().min(1),
-        expectedUpdatedAt: z.coerce.date(),
+        expectedVersion: z.number().int().positive(),
         startAt: z.coerce.date().optional(),
         endAt: z.coerce.date().optional(),
         role: z.string().max(120).nullable().optional(),
@@ -231,14 +190,16 @@ export const restaurantShiftsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, expectedUpdatedAt, ...patch } = input;
+      const { id, expectedVersion, ...patch } = input;
       try {
         await managerAuthorization(ctx, await branchForShift(ctx, id));
         const shift = await ctx.db.$transaction(async (tx) => {
-          const locked = await lockManagerShift(tx, id);
-          assertCurrentVersion(locked.updatedAt, expectedUpdatedAt);
-          await lockStaffRoster(tx, locked.staffProfileId);
-          const updated = await updateShift(tx as unknown as ScopedDb, id, patch);
+          const current = await managerShift(tx, ctx.entitlements.organizationId, id);
+          await lockStaffRoster(tx, current.staffProfileId);
+          const updated = await updateShift(tx as unknown as ScopedDb, id, patch, {
+            organizationId: ctx.entitlements.organizationId,
+            expectedVersion,
+          });
           await tx.restaurantShiftEvent.create({
             data: {
               shiftId: updated.id,
@@ -267,7 +228,7 @@ export const restaurantShiftsRouter = router({
     .input(
       z.object({
         id: z.string().min(1),
-        expectedUpdatedAt: z.coerce.date(),
+        expectedVersion: z.number().int().positive(),
         reason: z.string().max(500).nullable().optional(),
       })
     )
@@ -275,12 +236,19 @@ export const restaurantShiftsRouter = router({
       try {
         await managerAuthorization(ctx, await branchForShift(ctx, input.id));
         const shift = await ctx.db.$transaction(async (tx) => {
-          const locked = await lockManagerShift(tx, input.id);
-          assertCurrentVersion(locked.updatedAt, input.expectedUpdatedAt);
-          const cancelled = await cancelShift(tx as unknown as ScopedDb, input.id, {
-            now: new Date(),
-            reason: input.reason,
-          });
+          await managerShift(tx, ctx.entitlements.organizationId, input.id);
+          const cancelled = await cancelShift(
+            tx as unknown as ScopedDb,
+            input.id,
+            {
+              now: new Date(),
+              reason: input.reason,
+            },
+            {
+              organizationId: ctx.entitlements.organizationId,
+              expectedVersion: input.expectedVersion,
+            }
+          );
           await tx.restaurantShiftEvent.create({
             data: {
               shiftId: cancelled.id,

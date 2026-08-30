@@ -217,9 +217,17 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
       (await client!.query(`DELETE FROM "restaurant_shift_events" WHERE "id" = $1`, [ids.eventB]))
         .rowCount
     ).toBe(0);
-    await expectDatabaseError('55000', () =>
-      client!.query(`DELETE FROM "restaurant_shift_events" WHERE "id" = $1`, [ids.eventA])
+    expect(
+      (await client!.query(`DELETE FROM "restaurant_shift_events" WHERE "id" = $1`, [ids.eventA]))
+        .rowCount
+    ).toBe(0);
+    const deletePolicies = await client!.query<{ policyname: string }>(
+      `SELECT policyname FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'restaurant_shift_events'
+          AND cmd IN ('DELETE', 'ALL')`
     );
+    expect(deletePolicies.rows).toEqual([]);
   });
 
   it('makes raw punches single-write and command/decision race winners unique', async () => {
@@ -308,7 +316,10 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
       // Deferred composite tenant FKs: force them to check inside the savepoint
       // rather than at a COMMIT this transaction never reaches.
       await expectDatabaseError('23503', async () => {
-        await insertShift(`xbranch_${suffix}`, ids.orgA, ids.rowB, ids.rowA);
+        await insertShift(`xbranch_${suffix}`, ids.orgA, ids.rowB, ids.rowA, {
+          startAt: '2026-08-20T18:00:00Z',
+          endAt: '2026-08-20T19:00:00Z',
+        });
         await client!.query('SET CONSTRAINTS ALL IMMEDIATE');
       });
       await expectDatabaseError('23503', async () => {

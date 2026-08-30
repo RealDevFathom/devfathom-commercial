@@ -7,6 +7,7 @@ import { exportWorkforceAttendanceCsv, presentWorkforceShift } from './workforce
 
 const baseShift = {
   id: 'shift_1',
+  version: 1,
   organizationId: 'org_1',
   branchId: 'branch_1',
   staffProfileId: 'staff_1',
