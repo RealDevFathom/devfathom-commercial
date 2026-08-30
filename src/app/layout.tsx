@@ -79,10 +79,14 @@ export default function RootLayout({
       lang="en"
       data-theme="light"
       className={`${instrumentSans.variable} ${plexMono.variable} h-full`}
+      // Saved preferences intentionally mutate only <html> before hydration.
+      // React's one-level escape hatch must not spread to descendants.
       suppressHydrationWarning
     >
-      <body className="min-h-full">
+      <head>
         <PreferenceBootstrap />
+      </head>
+      <body className="min-h-full">
         <Providers>{children}</Providers>
       </body>
     </html>
