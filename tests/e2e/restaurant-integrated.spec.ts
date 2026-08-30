@@ -1,12 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { restaurantE2eCredentials as fixture } from './restaurant-fixture';
-import { actorFixtureReady, signInAs } from './fixtures/restaurant-actor-accessibility';
+import { signInAs } from './fixtures/restaurant-actor-accessibility';
 
 test.describe.configure({ mode: 'serial' });
 
-const enabled = Boolean(process.env.RESTAURANT_INTEGRATED_E2E) && actorFixtureReady;
-test.skip(!enabled, 'Requires the disposable fixture and restaurantAdmin credentials.');
+if (process.env.RESTAURANT_INTEGRATED_E2E !== '1') {
+  throw new Error('RESTAURANT_INTEGRATED_E2E=1 is required.');
+}
 
 function observeRuntimeFailures(page: Page) {
   const failures: string[] = [];

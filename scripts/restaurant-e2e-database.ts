@@ -1,6 +1,10 @@
 const DISPOSABLE_NAME = /(?:^|[_-])(test|e2e|tmp|disposable)(?:[_-]|$)/i;
 const FORBIDDEN_HOST = /(?:^|[.-])(prod|production|preview|staging)(?:[.-]|$)/i;
 const COMMON_POSTGRES_PORTS = new Set(['5432', '6432']);
+const REQUIRED_INTEGRATED_ENV = [
+  'RESTAURANT_ACTOR_ADMIN_EMAIL',
+  'RESTAURANT_ACTOR_ADMIN_PASSWORD',
+] as const;
 
 export function resolveRestaurantE2eDatabaseUrl(
   env: Record<string, string | undefined> = process.env
@@ -14,6 +18,10 @@ export function resolveRestaurantE2eDatabaseUrl(
   } catch {
     throw new Error('RESTAURANT_E2E_DATABASE_URL must be a valid URL.');
   }
+  if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
+    throw new Error('RESTAURANT_E2E_DATABASE_URL must use PostgreSQL.');
+  }
+  if (!parsed.port) parsed.port = '5432';
   const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
   if (!DISPOSABLE_NAME.test(database)) {
     throw new Error('Database name must explicitly identify a disposable test database.');
@@ -39,7 +47,26 @@ export function resolveRestaurantE2eDatabaseUrl(
   return parsed.href;
 }
 
-export function restaurantE2eEnvironment(env: Record<string, string | undefined> = process.env) {
+export function restaurantE2eEnvironment(
+  env: Record<string, string | undefined> = process.env
+): Record<string, string | undefined> {
+  if (env.PLAYWRIGHT_BASE_URL) {
+    throw new Error('PLAYWRIGHT_BASE_URL is forbidden for the integrated Restaurant E2E lane.');
+  }
+  for (const name of REQUIRED_INTEGRATED_ENV) {
+    if (!env[name]) throw new Error(`${name} is required.`);
+  }
   const databaseUrl = resolveRestaurantE2eDatabaseUrl(env);
-  return { ...env, DATABASE_URL: databaseUrl, TEST_DATABASE_URL: databaseUrl };
+  const result: Record<string, string | undefined> = {
+    ...env,
+    DATABASE_URL: databaseUrl,
+    TEST_DATABASE_URL: databaseUrl,
+  };
+  delete result.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL;
+  delete result.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD;
+  delete result.RESTAURANT_ACTOR_AGENCY_EMAIL;
+  delete result.RESTAURANT_ACTOR_AGENCY_PASSWORD;
+  delete result.RESTAURANT_ACTOR_OPERATOR_EMAIL;
+  delete result.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
+  return { ...result, RESTAURANT_INTEGRATED_E2E: '1' };
 }

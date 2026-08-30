@@ -10,6 +10,23 @@ async function connectKds(page: import('@playwright/test').Page) {
   await expect(page.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
 }
 
+async function createAndFireOrder(page: import('@playwright/test').Page) {
+  await page.goto('/pos');
+  await page.getByLabel('Bearer device secret').fill(fixture.pos.secret);
+  await page.getByRole('button', { name: 'Establish session' }).click();
+  await page.getByLabel('Operator profile ID').fill(fixture.operator.staffProfileId);
+  await page.getByLabel('Operator PIN').fill(fixture.operator.pin);
+  await page.getByRole('button', { name: 'Unlock terminal' }).click();
+  await page.getByRole('checkbox').first().check();
+  await page.getByRole('button', { name: 'Open order' }).click();
+  await expect(page.getByText(/Order \d+ opened\./)).toBeVisible();
+  await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
+  await page.getByLabel(new RegExp(fixture.modifier.name)).check();
+  await page.getByRole('button', { name: 'Add to order' }).click();
+  await page.getByRole('button', { name: 'Send whole order' }).click();
+  await expect(page.getByText('Order sent to kitchen.')).toBeVisible();
+}
+
 test.describe('restaurant browser resilience', () => {
   test('KDS keeps stale state offline, reconnects, and refreshes server 86 availability', async ({
     page,
@@ -54,6 +71,9 @@ test.describe('restaurant browser resilience', () => {
   test('a dropped KDS mutation retries with the same idempotency key exactly once', async ({
     page,
   }) => {
+    const pos = await page.context().newPage();
+    await createAndFireOrder(pos);
+    await pos.close();
     const keys: string[] = [];
     let dropped = false;
     await page.route('**/api/restaurant/kds/*', async (route) => {
@@ -71,7 +91,7 @@ test.describe('restaurant browser resilience', () => {
         name: new RegExp(`^(Start|Mark ready|Recall) ${fixture.menuItem.name}`),
       })
       .first();
-    test.skip((await action.count()) === 0, 'A fired E2E burger is required for replay coverage');
+    await expect(action).toBeVisible();
     await action.click();
     await expect(page.getByText('Network request failed. Retry this action.')).toBeVisible();
     await action.click();

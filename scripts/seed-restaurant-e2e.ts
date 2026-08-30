@@ -152,16 +152,24 @@ async function main() {
       // before the operator and manager below. `organizationId` is passed
       // explicitly because this transaction runs with an empty tenant GUC, so
       // the column's `current_setting` default would resolve to ''.
-      await tx.organizationDepartment.createMany({
-        data: defaultDepartmentRowsForVertical('RESTAURANT').map((department) => ({
-          ...department,
-          id: `department_restaurant_e2e_${department.key.toLowerCase()}`,
-          organizationId: RESTAURANT_E2E.organizationId,
-          createdAt: FIXED_AT,
-          updatedAt: FIXED_AT,
-        })),
-        skipDuplicates: true,
-      });
+      for (const department of defaultDepartmentRowsForVertical('RESTAURANT')) {
+        await tx.organizationDepartment.upsert({
+          where: {
+            organizationId_key: {
+              organizationId: RESTAURANT_E2E.organizationId,
+              key: department.key,
+            },
+          },
+          update: department,
+          create: {
+            ...department,
+            id: `department_restaurant_e2e_${department.key.toLowerCase()}`,
+            organizationId: RESTAURANT_E2E.organizationId,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+      }
     });
 
     await prisma.$transaction(
@@ -172,7 +180,12 @@ async function main() {
         );
         await tx.restaurantBranch.upsert({
           where: { id: RESTAURANT_E2E.branchId },
-          update: { name: 'Gulberg Café', timezone: 'Asia/Karachi', isDefault: true },
+          update: {
+            name: 'Gulberg Café',
+            timezone: 'Asia/Karachi',
+            active: true,
+            isDefault: true,
+          },
           create: {
             id: RESTAURANT_E2E.branchId,
             name: 'Gulberg Café',
@@ -187,14 +200,18 @@ async function main() {
           update: {
             name: 'DHA Café',
             timezone: 'Asia/Karachi',
-            active: true,
+            status: 'ACTIVE',
+            lastSeenAt: null,
+            revokedAt: null,
             isDefault: false,
           },
           create: {
             id: RESTAURANT_E2E.branchA2Id,
             name: 'DHA Café',
             timezone: 'Asia/Karachi',
-            active: true,
+            status: 'ACTIVE',
+            lastSeenAt: null,
+            revokedAt: null,
             isDefault: false,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
@@ -230,7 +247,23 @@ async function main() {
         });
         await tx.organizationRole.upsert({
           where: { id: IDS.operatorRole },
-          update: { name: 'Chai Chowk Operator' },
+          update: {
+            key: 'restaurant-e2e-operator',
+            name: 'Restaurant E2E Operator',
+            description: null,
+            isSystem: false,
+            permissions: {
+              deleteMany: {},
+              create: ['payments:collect', 'cash:open', 'cash:adjust', 'cash:close'].map(
+                (capability, index) => ({
+                  id: `permission_restaurant_e2e_operator_${index}`,
+                  capability,
+                  effect: 'ALLOW' as const,
+                  createdAt: FIXED_AT,
+                })
+              ),
+            },
+          },
           create: {
             id: IDS.operatorRole,
             key: 'restaurant-e2e-operator',
@@ -251,7 +284,21 @@ async function main() {
         });
         await tx.organizationRole.upsert({
           where: { id: IDS.managerRole },
-          update: { name: 'Chai Chowk Manager' },
+          update: {
+            key: 'restaurant-e2e-manager',
+            name: 'Restaurant E2E Manager',
+            description: null,
+            isSystem: false,
+            permissions: {
+              deleteMany: {},
+              create: {
+                id: 'permission_restaurant_e2e_manager_all',
+                capability: '*',
+                effect: 'ALLOW',
+                createdAt: FIXED_AT,
+              },
+            },
+          },
           create: {
             id: IDS.managerRole,
             key: 'restaurant-e2e-manager',
@@ -303,8 +350,10 @@ async function main() {
               name: user.name,
               email: user.email,
               password: user.password,
+              department: adminDepartmentKeyForVertical('RESTAURANT'),
               title: user.title,
               status: 'ACTIVE',
+              startDate: FIXED_AT,
             },
             create: {
               id: user.id,
@@ -323,7 +372,7 @@ async function main() {
           });
           await tx.restaurantBranchAssignment.upsert({
             where: { branchId_userId: { branchId: RESTAURANT_E2E.branchId, userId: user.id } },
-            update: {},
+            update: { branchId: RESTAURANT_E2E.branchId, userId: user.id },
             create: {
               id: `assignment_${user.id}`,
               branchId: RESTAURANT_E2E.branchId,
@@ -358,7 +407,13 @@ async function main() {
         ]) {
           await tx.restaurantStaffProfile.upsert({
             where: { id: staff.id },
-            update: {},
+            update: {
+              userId: staff.userId,
+              displayName: staff.name,
+              email: null,
+              primaryBranchId: RESTAURANT_E2E.branchId,
+              status: 'ACTIVE',
+            },
             create: {
               id: staff.id,
               userId: staff.userId,
@@ -371,7 +426,15 @@ async function main() {
           });
           await tx.restaurantOperatorCredential.upsert({
             where: { id: staff.credentialId },
-            update: {},
+            update: {
+              staffProfileId: staff.id,
+              deviceId: null,
+              type: 'PIN',
+              credentialHash: hashSync(staff.pin, PIN_BCRYPT_SALT),
+              failedAttempts: 0,
+              lockedUntil: null,
+              revokedAt: null,
+            },
             create: {
               id: staff.credentialId,
               staffProfileId: staff.id,
@@ -384,7 +447,12 @@ async function main() {
         }
         await tx.restaurantKitchenStation.upsert({
           where: { id: IDS.grillStation },
-          update: {},
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'Grill',
+            active: true,
+            isDefault: true,
+          },
           create: {
             id: IDS.grillStation,
             branchId: RESTAURANT_E2E.branchId,
@@ -396,7 +464,12 @@ async function main() {
         });
         await tx.restaurantKitchenStation.upsert({
           where: { id: IDS.expoStation },
-          update: {},
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'Expo',
+            active: true,
+            isDefault: false,
+          },
           create: {
             id: IDS.expoStation,
             branchId: RESTAURANT_E2E.branchId,
@@ -407,7 +480,14 @@ async function main() {
         });
         await tx.restaurantRegisteredDevice.upsert({
           where: { id: RESTAURANT_E2E.posDeviceId },
-          update: {},
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'E2E POS',
+            kind: 'POS',
+            stationId: null,
+            deviceSecretHash: deviceSecretHash(RESTAURANT_E2E.posDeviceSecret),
+            active: true,
+          },
           create: {
             id: RESTAURANT_E2E.posDeviceId,
             branchId: RESTAURANT_E2E.branchId,
@@ -420,7 +500,14 @@ async function main() {
         });
         await tx.restaurantRegisteredDevice.upsert({
           where: { id: RESTAURANT_E2E.kdsDeviceId },
-          update: {},
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'E2E KDS',
+            kind: 'KDS',
+            stationId: IDS.grillStation,
+            deviceSecretHash: deviceSecretHash(RESTAURANT_E2E.kdsDeviceSecret),
+            active: true,
+          },
           create: {
             id: RESTAURANT_E2E.kdsDeviceId,
             branchId: RESTAURANT_E2E.branchId,
@@ -473,7 +560,7 @@ async function main() {
         });
         await tx.restaurantCategory.upsert({
           where: { id: IDS.category },
-          update: {},
+          update: { name: 'Mains', sortOrder: 0, active: true },
           create: { id: IDS.category, name: 'Mains', createdAt: FIXED_AT, updatedAt: FIXED_AT },
         });
         await tx.restaurantProduct.upsert({
@@ -529,7 +616,7 @@ async function main() {
         });
         await tx.restaurantUnit.upsert({
           where: { id: IDS.unit },
-          update: {},
+          update: { name: 'Each', abbreviation: 'ea' },
           create: {
             id: IDS.unit,
             name: 'Each',
@@ -619,7 +706,14 @@ async function main() {
         });
         await tx.restaurantPriceListVersion.upsert({
           where: { id: IDS.priceVersion },
-          update: {},
+          update: {
+            priceListId: IDS.priceList,
+            versionNumber: 1,
+            effectiveFrom: FIXED_AT,
+            status: 'ACTIVE',
+            activatedAt: FIXED_AT,
+            supersededAt: null,
+          },
           create: {
             id: IDS.priceVersion,
             priceListId: IDS.priceList,
@@ -633,7 +727,11 @@ async function main() {
         });
         await tx.restaurantPriceListEntry.upsert({
           where: { id: IDS.priceEntry },
-          update: {},
+          update: {
+            priceListVersionId: IDS.priceVersion,
+            productId: IDS.product,
+            price: '12.50',
+          },
           create: {
             id: IDS.priceEntry,
             priceListVersionId: IDS.priceVersion,
@@ -656,7 +754,7 @@ async function main() {
         });
         await tx.restaurantMenuSection.upsert({
           where: { id: IDS.menuSection },
-          update: {},
+          update: { menuId: IDS.menu, name: 'Mains', sortOrder: 0 },
           create: {
             id: IDS.menuSection,
             menuId: IDS.menu,
@@ -667,7 +765,7 @@ async function main() {
         });
         await tx.restaurantMenuItem.upsert({
           where: { id: IDS.menuItem },
-          update: {},
+          update: { sectionId: IDS.menuSection, productId: IDS.product, sortOrder: 1 },
           create: {
             id: IDS.menuItem,
             sectionId: IDS.menuSection,
@@ -679,7 +777,14 @@ async function main() {
         });
         await tx.restaurantBranchMenuPublication.upsert({
           where: { id: IDS.publication },
-          update: {},
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            menuId: IDS.menu,
+            priceListId: IDS.priceList,
+            status: 'PUBLISHED',
+            channels: ['DINE_IN', 'TAKEAWAY'],
+            publishedAt: FIXED_AT,
+          },
           create: {
             id: IDS.publication,
             branchId: RESTAURANT_E2E.branchId,
@@ -694,7 +799,13 @@ async function main() {
         });
         await tx.restaurantMenuAvailabilityWindow.upsert({
           where: { id: IDS.availability },
-          update: {},
+          update: {
+            publicationId: IDS.publication,
+            label: 'Always available',
+            daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+            startMinutes: 0,
+            endMinutes: 0,
+          },
           create: {
             id: IDS.availability,
             publicationId: IDS.publication,
@@ -708,7 +819,7 @@ async function main() {
         });
         await tx.restaurantStationRoutingRule.upsert({
           where: { id: IDS.routingRule },
-          update: {},
+          update: { stationId: IDS.grillStation, productId: IDS.product, priority: 100 },
           create: {
             id: IDS.routingRule,
             stationId: IDS.grillStation,
@@ -721,7 +832,14 @@ async function main() {
 
         await tx.restaurantCustomer.upsert({
           where: { id: IDS.customer },
-          update: {},
+          update: {
+            displayName: 'E2E Guest',
+            givenName: null,
+            familyName: null,
+            birthDate: null,
+            notes: null,
+            anonymizedAt: null,
+          },
           create: {
             id: IDS.customer,
             displayName: 'E2E Guest',
@@ -731,7 +849,12 @@ async function main() {
         });
         await tx.loyaltyProgramVersion.upsert({
           where: { id: IDS.loyaltyProgram },
-          update: {},
+          update: {
+            versionNumber: 1,
+            effectiveFrom: FIXED_AT,
+            earnRate: '1.000000',
+            redemptionValue: '0.010000',
+          },
           create: {
             id: IDS.loyaltyProgram,
             versionNumber: 1,
@@ -744,7 +867,12 @@ async function main() {
         });
         await tx.loyaltyAccount.upsert({
           where: { id: IDS.loyaltyAccount },
-          update: {},
+          update: {
+            customerId: IDS.customer,
+            active: true,
+            enrolledAt: FIXED_AT,
+            deactivatedAt: null,
+          },
           create: {
             id: IDS.loyaltyAccount,
             customerId: IDS.customer,
@@ -755,7 +883,16 @@ async function main() {
         });
         await tx.loyaltyPointsEntry.upsert({
           where: { id: IDS.loyaltyEntry },
-          update: {},
+          update: {
+            accountId: IDS.loyaltyAccount,
+            programVersionId: IDS.loyaltyProgram,
+            kind: 'ADJUSTMENT',
+            points: 250,
+            actorId: RESTAURANT_E2E.managerId,
+            reason: 'Deterministic E2E opening balance',
+            occurredAt: FIXED_AT,
+            idempotencyKey: 'restaurant-e2e-opening-balance-v1',
+          },
           create: {
             id: IDS.loyaltyEntry,
             accountId: IDS.loyaltyAccount,
