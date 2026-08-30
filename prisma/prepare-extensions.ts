@@ -7,7 +7,7 @@ async function main() {
 
   if (!databaseUrl) {
     throw new Error(
-      'EXTENSION_ADMIN_DATABASE_URL is required to prepare database extensions before migrations.'
+      'EXTENSION_ADMIN_DATABASE_URL is required and must authenticate as an extension object owner, a superuser, or a role with explicit SET privilege on every extension object owner.'
     );
   }
 
