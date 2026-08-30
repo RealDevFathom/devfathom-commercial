@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 
 import { useEntitlements } from '@/components/entitlements-provider';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -112,11 +113,11 @@ function ErrorState({
       <StatusPill status={denied ? 'Permission denied' : 'Read failed'} tone="danger" />
       <div>
         <p className="font-medium text-text-strong">
-          {denied ? 'Money access denied' : 'Could not load ' + subject}
+          {denied ? 'Restaurant Finance access denied' : 'Could not load ' + subject}
         </p>
         <p className="mt-1 text-sm text-text-muted">
           {denied
-            ? 'Your role does not include money:read for this restaurant.'
+            ? 'Your role does not include access to Restaurant Finance for this restaurant.'
             : value?.message || 'The read failed without changing any ledger data.'}
         </p>
       </div>
@@ -241,6 +242,9 @@ export function MoneyConsole() {
   const entitlements = useEntitlements();
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
+  const purchasingEnabled = entitlements.enabledModules.includes('restaurant-purchasing');
+  const basicReportsEnabled = entitlements.enabledModules.includes('restaurant-sop');
+  const insightsEnabled = entitlements.enabledModules.includes('restaurant-insights');
   const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
     enabled: posEnabled,
   });
@@ -387,11 +391,45 @@ export function MoneyConsole() {
     <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
-        heading="Money"
-        description="Review immutable bills, payment events, drawer movements, and daily-close corrections."
+        heading="Restaurant Finance"
+        description="Reconcile immutable bills, payment events, drawer movements, and daily-close corrections. POS remains transaction entry; this workspace is reconciliation and history."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/restaurant/tax"
+              className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+            >
+              Tax
+            </Link>
+            {purchasingEnabled ? (
+              <Link
+                href="/restaurant/purchasing"
+                className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+              >
+                Purchasing
+              </Link>
+            ) : null}
+            {basicReportsEnabled ? (
+              <Link
+                href="/restaurant/sop/reports"
+                className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+              >
+                Basic Reports
+              </Link>
+            ) : null}
+            {insightsEnabled ? (
+              <Link
+                href="/restaurant/insights"
+                className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+              >
+                Advanced Insights
+              </Link>
+            ) : null}
+          </div>
+        }
       />
 
-      <SectionCard eyebrow="Money ledger" title="Filters">
+      <SectionCard eyebrow="Finance & reconciliation" title="Filters">
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Branch" description="Required before any money read runs.">
             <RestaurantBranchSelect
@@ -421,14 +459,14 @@ export function MoneyConsole() {
           <div className="space-y-3" role="status">
             <StatusPill status="Disabled" tone="warning" />
             <p className="max-w-2xl text-sm text-text-muted">
-              Money ledgers require the Restaurant POS entitlement. Filters and reads remain
-              disabled.
+              Restaurant Finance requires the Restaurant POS entitlement. Filters and read-only
+              ledgers remain disabled until an administrator enables it.
             </p>
           </div>
         </SectionCard>
       ) : (
         <Tabs value={tab} onValueChange={updateTab}>
-          <TabsList aria-label="Money ledgers">
+          <TabsList aria-label="Restaurant Finance ledgers">
             <TabsTrigger value="bills">Bills</TabsTrigger>
             <TabsTrigger value="payments">Payments</TabsTrigger>
             <TabsTrigger value="drawers">Drawers</TabsTrigger>

@@ -293,6 +293,7 @@ export const RESTAURANT_CAPABILITY_NAMESPACES: readonly string[] = [
   'orders',
   'payments',
   'cash',
+  'money',
   'menu',
   'inventory',
   'purchasing',
@@ -330,6 +331,7 @@ export const RESTAURANT_CAPABILITIES: readonly string[] = [
   'cash:open',
   'cash:adjust',
   'cash:close',
+  'money:read',
   'menu:read',
   'menu:write',
   'inventory:read',
@@ -404,6 +406,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'cash:open',
       'cash:adjust',
       'cash:close',
+      'money:read',
       'menu:read',
       'menu:write',
       // M3-L1 (additive, C7): the GM authors and publishes menus and sets prices.
@@ -532,7 +535,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'accountant',
     name: 'Accountant',
     isSystem: true,
-    capabilities: ['reports:financial', 'reports:operational', 'payments:refund'],
+    capabilities: ['money:read', 'reports:financial', 'reports:operational', 'payments:refund'],
   },
   {
     key: 'sop-compliance-auditor',

@@ -296,14 +296,15 @@ describeIfDatabase('M5 cross-tenant RLS probes (real PostgreSQL)', () => {
   });
 
   it.each(APPEND_ONLY_TABLES)('%s denies tenant-A UPDATE and DELETE', async (table) => {
-    expect(
-      (
-        await client!.query(
-          `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
-          [ids.rowA]
-        )
-      ).rowCount
-    ).toBe(0);
+    const update = () =>
+      client!.query(`UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`, [
+        ids.rowA,
+      ]);
+    if (table === 'restaurant_refunds') {
+      await expectDatabaseError('55000', update);
+    } else {
+      expect((await update()).rowCount).toBe(0);
+    }
     expect(
       (await client!.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ids.rowA])).rowCount
     ).toBe(0);

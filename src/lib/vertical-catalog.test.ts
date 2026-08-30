@@ -155,6 +155,17 @@ describe('role templates and capabilities (§8)', () => {
     expect(owner?.capabilities).toEqual(['*']);
   });
 
+  it('grants Restaurant Finance only to Owner, General Manager, and Accountant', () => {
+    expect(RESTAURANT_CAPABILITIES).toContain('money:read');
+    const grants = RESTAURANT_ROLE_TEMPLATES.filter(
+      (role) => role.capabilities.includes('*') || role.capabilities.includes('money:read')
+    ).map((role) => role.key);
+    expect(grants).toEqual(['owner', 'general-manager', 'accountant']);
+    for (const role of RESTAURANT_ROLE_TEMPLATES.filter((role) => !grants.includes(role.key))) {
+      expect(role.capabilities).not.toContain('money:read');
+    }
+  });
+
   it('every non-owner capability is a namespaced action drawn from the catalog', () => {
     for (const role of RESTAURANT_ROLE_TEMPLATES) {
       for (const capability of role.capabilities) {

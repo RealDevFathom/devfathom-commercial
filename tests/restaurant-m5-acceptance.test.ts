@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
+import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -254,6 +255,7 @@ beforeAll(async () => {
       await tx.restaurantBranch.create({
         data: { id: branchId, name, timezone: 'UTC', businessDayCutoff: '00:00' },
       });
+      await ensureRestaurantTaxProfile(tx, orgId, branchId);
     }
     await tx.restaurantProduct.create({ data: { id: ids.product, name: 'Acceptance item' } });
     await tx.organizationRole.create({
