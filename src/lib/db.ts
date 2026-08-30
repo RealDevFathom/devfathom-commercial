@@ -25,6 +25,23 @@ const TRANSACTION_METHODS = new Set<PropertyKey>([
   'rollback',
 ]);
 
+type PgRawQuery = Parameters<PgAdapterTransaction['queryRaw']>[0];
+type PgRawResult = Awaited<ReturnType<PgAdapterTransaction['queryRaw']>>;
+
+function isVoidAdvisoryLock(query: PgRawQuery): boolean {
+  return /^\s*SELECT\s+(?:pg_catalog\.)?pg_advisory_(?:xact_)?lock\s*\(/i.test(query.sql);
+}
+
+async function queryRawWithoutVoidDecoding(
+  transaction: PgAdapterTransaction,
+  query: PgRawQuery
+): Promise<PgRawResult> {
+  if (!isVoidAdvisoryLock(query)) return transaction.queryRaw(query);
+
+  await transaction.executeRaw(query);
+  return { columnNames: [], columnTypes: [], rows: [] };
+}
+
 /**
  * Prisma can fan a single relation query out into multiple driver-adapter
  * statements. Inside an interactive transaction every statement shares one
@@ -51,8 +68,15 @@ function serializeTransaction(transaction: PgAdapterTransaction): PgAdapterTrans
       if (typeof value !== 'function') return value;
 
       if (TRANSACTION_METHODS.has(key)) {
-        return (...args: unknown[]) =>
-          schedule(() => Reflect.apply(value as (...values: unknown[]) => unknown, target, args));
+        return (...args: unknown[]) => {
+          if (key === 'queryRaw') {
+            return schedule(() => queryRawWithoutVoidDecoding(target, args[0] as PgRawQuery));
+          }
+
+          return schedule(() =>
+            Reflect.apply(value as (...values: unknown[]) => unknown, target, args)
+          );
+        };
       }
 
       return (...args: unknown[]) =>

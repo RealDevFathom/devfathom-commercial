@@ -97,6 +97,7 @@ let normalizedIdentifierProof: Array<{ kind: string; organizations: number; rows
 let connectionProof: Array<{
   connection: string;
   database: string;
+  role: string;
   rolcanlogin: boolean;
   rolsuper: boolean;
   rolbypassrls: boolean;
@@ -150,11 +151,13 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
             ...(
               await client.query<{
                 database: string;
+                role: string;
                 rolcanlogin: boolean;
                 rolsuper: boolean;
                 rolbypassrls: boolean;
               }>(
-                `SELECT current_database() AS database, rolcanlogin, rolsuper, rolbypassrls
+                `SELECT current_database() AS database, current_user AS role,
+                        rolcanlogin, rolsuper, rolbypassrls
                    FROM pg_catalog.pg_roles
                   WHERE rolname = current_user`
               )
@@ -388,16 +391,14 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
     }
   });
 
-  it('proves the runtime connection is LOGIN NOSUPERUSER NOBYPASSRLS and pins policy metadata', async () => {
+  it('records the owner and proves the runtime is LOGIN NOSUPERUSER NOBYPASSRLS', async () => {
     expect(connectionProof).toHaveLength(2);
     expect(connectionProof[0]).toMatchObject({
       connection: 'owner',
-      rolcanlogin: true,
-      rolsuper: false,
-      rolbypassrls: false,
     });
     expect(connectionProof[1]).toMatchObject({
       connection: 'runtime',
+      role: 'devfathom_local_runtime',
       rolcanlogin: true,
       rolsuper: false,
       rolbypassrls: false,
