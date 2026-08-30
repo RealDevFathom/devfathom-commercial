@@ -53,6 +53,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   email: 'email',
   webhooks: 'webhooks',
   restaurantStaff: 'restaurant-core', // M2-L2 back-office staff & operator-credential surface
+  restaurantBranches: 'restaurant-core', // WHA-908 tenant branch administration
   // Completion wave: the branch shift roster. Rostering decides who may operate a
   // terminal, so it gates on the same mandatory Restaurant Core module as the
   // staff identity and credential surfaces it builds on.

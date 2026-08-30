@@ -292,6 +292,13 @@ export function withDeviceAuth<T extends unknown[]>(
         if (!device || !isDeviceUsable(device)) {
           return forbidden('This device has been revoked.');
         }
+        const branch = await db.restaurantBranch.findUnique({
+          where: { id: device.branchId },
+          select: { active: true },
+        });
+        if (!branch?.active) {
+          return forbidden('This branch is inactive. Contact a restaurant administrator.');
+        }
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
         if (entitlementRejection) return entitlementRejection;
         await touchDeviceLastSeen(db, device.id, now);
@@ -343,6 +350,14 @@ export function withTerminalAuth<T extends unknown[]>(
 
         const verdict = evaluateTerminalSession(session, device, now);
         if (!verdict.ok) return sessionRejection(verdict.reason);
+
+        const branch = await db.restaurantBranch.findUnique({
+          where: { id: device.branchId },
+          select: { active: true },
+        });
+        if (!branch?.active) {
+          return forbidden('This branch is inactive. Contact a restaurant administrator.');
+        }
 
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
         if (entitlementRejection) return entitlementRejection;

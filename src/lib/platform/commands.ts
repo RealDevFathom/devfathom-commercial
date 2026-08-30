@@ -590,6 +590,7 @@ async function bootstrapOrganization(
       data: {
         organizationId: organization.id,
         name: 'Main Branch',
+        code: 'MAIN',
         timezone: input.timezone,
         isDefault: true,
       },

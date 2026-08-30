@@ -45,7 +45,14 @@ function makeDb() {
     update: vi.fn(async ({ data }: { data: object }) => ({ ...branch, ...data })),
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
   };
-  const db = { restaurantBranch: delegate } as Record<string, unknown>;
+  const count = vi.fn().mockResolvedValue(0);
+  const db = {
+    restaurantBranch: delegate,
+    restaurantRegisteredDevice: { count },
+    restaurantStaffProfile: { count },
+    restaurantOrder: { count },
+  } as Record<string, unknown>;
+  db.$queryRaw = vi.fn().mockResolvedValue([{ pg_advisory_xact_lock: null }]);
   db.$transaction = vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db));
   return { db, delegate };
 }
@@ -115,6 +122,10 @@ describe('restaurant branch administration', () => {
     expect(state.delegate.create).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the location entitlement is missing or invalid', async () => {
+    await expect(caller(0).list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('rejects duplicate human name or code', async () => {
     state.delegate.count.mockResolvedValue(0);
     state.delegate.findFirst.mockResolvedValue({ id: 'existing' });
@@ -128,6 +139,18 @@ describe('restaurant branch administration', () => {
       data: expect.objectContaining({ organizationId: 'org_a', code: 'GUL-MAIN', isDefault: true }),
     });
     expect(result.code).toBe('GUL-MAIN');
+    expect(state.db.$queryRaw).toHaveBeenCalledOnce();
+  });
+
+  it('rejects invalid IANA timezones', async () => {
+    await expect(caller().create({ ...input, timezone: 'Karachi-ish' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+  });
+
+  it('keeps branch codes immutable', async () => {
+    const mutation = { id: branch.id, code: 'NEW-CODE' };
+    await expect(caller().update(mutation)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   it('prevents cross-tenant updates', async () => {
@@ -150,6 +173,26 @@ describe('restaurant branch administration', () => {
     state.delegate.findFirst.mockResolvedValue({ ...branch, isDefault: true });
     await expect(caller().setActive({ id: branch.id, active: false })).rejects.toMatchObject({
       message: expect.stringContaining('primary'),
+    });
+  });
+
+  it('enforces the active-location limit on reactivation', async () => {
+    state.delegate.findFirst.mockResolvedValue({ ...branch, active: false });
+    state.delegate.count.mockResolvedValue(1);
+    await expect(caller(1).setActive({ id: branch.id, active: true })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('makes the first reactivated branch primary when no active primary exists', async () => {
+    state.delegate.findFirst
+      .mockResolvedValueOnce({ ...branch, active: false, isDefault: false })
+      .mockResolvedValueOnce(null);
+    state.delegate.count.mockResolvedValue(0);
+    await caller(1).setActive({ id: branch.id, active: true });
+    expect(state.delegate.update).toHaveBeenCalledWith({
+      where: { id: branch.id },
+      data: { active: true, isDefault: true },
     });
   });
 });
