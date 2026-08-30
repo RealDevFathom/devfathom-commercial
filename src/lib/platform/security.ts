@@ -8,7 +8,7 @@ export class PlatformSecurityError extends Error {
     message: string,
     // 409 is the documented conflict code (docs/admin-platform/api.md); D20 uses
     // it so a duplicate email reports a conflict rather than a bad request.
-    readonly status: 400 | 401 | 403 | 409 | 429 = 403
+    readonly status: 400 | 401 | 403 | 409 | 429 | 500 = 403
   ) {
     super(message);
     this.name = 'PlatformSecurityError';
