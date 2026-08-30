@@ -117,6 +117,9 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   restaurantCustomers: 'restaurant-loyalty',
   restaurantLoyalty: 'restaurant-loyalty',
   restaurantInsights: 'restaurant-insights',
+  // Essentials reports consume each licensed source independently; the route itself
+  // belongs to mandatory Restaurant Core, not separately licensed Insights.
+  restaurantReports: 'restaurant-core',
 };
 
 export function moduleForProcedure(path: string): string | null {
@@ -177,6 +180,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/restaurant/sop', 'restaurant-sop'],
   ['/restaurant/loyalty', 'restaurant-loyalty'],
   ['/restaurant/insights', 'restaurant-insights'],
+  ['/restaurant/reports', 'restaurant-core'],
   ['/restaurant/catalog', 'restaurant-menu'],
   ['/restaurant/menus', 'restaurant-menu'],
   // Core-owned back-office surfaces, then the `/restaurant` core catch-all —

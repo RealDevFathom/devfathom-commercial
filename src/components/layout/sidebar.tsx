@@ -203,6 +203,12 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   {
+    label: 'Reports',
+    href: '/restaurant/reports',
+    icon: BarChart3,
+    group: 'Restaurant',
+  },
+  {
     label: 'Restaurant Insights',
     href: '/restaurant/insights',
     icon: BarChart3,
