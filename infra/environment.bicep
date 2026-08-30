@@ -63,6 +63,7 @@ var appEnvironmentName = 'df-${shortEnvironment}-${suffix}-cae'
 var appName = 'devfathom-${shortEnvironment}'
 var migrationJobName = 'devfathom-${shortEnvironment}-migrate'
 var databaseUrl = 'postgresql://devfathomadmin:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
+var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy'
 var migrationCommand = seedDatabase && bootstrapDatabase
   ? fail('seedDatabase and bootstrapDatabase cannot both be enabled.')
   : seedDatabase
@@ -70,14 +71,14 @@ var migrationCommand = seedDatabase && bootstrapDatabase
       ? fail('Database seeding is only supported in staging.')
       : empty(seedPassword) || empty(adminPassword) || empty(platformAdminPassword)
         ? fail('Staging database seeding requires seed, administrator, and platform administrator passwords.')
-        : 'bunx prisma migrate deploy && bun prisma/seed.ts'
+        : '${migrateDatabaseCommand} && bun prisma/seed.ts'
     : bootstrapDatabase
       ? environmentName != 'production'
         ? fail('Production bootstrap is only supported in production.')
         : length(trim(adminPassword)) < 12 || length(trim(platformAdminPassword)) < 12
           ? fail('Production bootstrap requires administrator passwords of at least 12 characters.')
-          : 'bunx prisma migrate deploy && bun prisma/bootstrap.ts'
-      : 'bunx prisma migrate deploy'
+          : '${migrateDatabaseCommand} && bun prisma/bootstrap.ts'
+      : migrateDatabaseCommand
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: registryName
@@ -409,6 +410,7 @@ var migrationEnvironment = concat(
   [
     { name: 'NODE_ENV', value: 'production' }
     { name: 'DATABASE_URL', secretRef: 'database-url' }
+    { name: 'EXTENSION_ADMIN_DATABASE_URL', secretRef: 'database-url' }
     { name: 'AUTH_URL', value: 'https://${tenantHost}' }
     { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
   ],

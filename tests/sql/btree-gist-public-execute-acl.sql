@@ -24,6 +24,7 @@ GRANT EXECUTE ON FUNCTION public.wha766_unrelated_fixture(integer) TO PUBLIC;
   GRANT EXECUTE ON FUNCTION public.int4_dist(integer, integer) TO PUBLIC;
 \endif
 
+\ir ../../prisma/prepare-extensions.sql
 \ir ../../prisma/migrations/20260830120000_btree_gist_public_execute_acl/migration.sql
 
 DO $proof$

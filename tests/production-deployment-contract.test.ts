@@ -17,7 +17,9 @@ describe('production deployment contract', () => {
       workflow.indexOf('- uses: azure/login@v3')
     );
     expect(workflow).toContain('[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]');
-    expect(workflow).toContain(`[[ "$migration_command" == 'bunx prisma migrate deploy' ]]`);
+    expect(workflow).toContain(
+      `[[ "$migration_command" == 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy' ]]`
+    );
     expect(workflow).toContain('az containerapp job secret list');
     expect(workflow).toContain('[[ -z "$initialization_secrets" ]]');
     expect(workflow).toContain('az containerapp revision show');
@@ -58,7 +60,12 @@ describe('production deployment contract', () => {
     const bootstrap = read('infra', 'production.bootstrap.bicepparam');
 
     expect(template).toContain('param bootstrapDatabase bool = false');
-    expect(template).toContain(": 'bunx prisma migrate deploy'");
+    expect(template).toContain(
+      "var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy'"
+    );
+    expect(template).toContain(
+      "{ name: 'EXTENSION_ADMIN_DATABASE_URL', secretRef: 'database-url' }"
+    );
     expect(production).toContain('param bootstrapDatabase = false');
     expect(production).toContain("param emailDeliveryMode = 'capture'");
     expect(production).toContain('param minReplicas = 1');
