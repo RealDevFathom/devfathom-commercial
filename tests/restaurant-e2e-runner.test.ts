@@ -51,6 +51,12 @@ describe('Restaurant integrated E2E safety', () => {
     expect(() => restaurantE2eEnvironment({ RESTAURANT_E2E_DATABASE_URL: target })).toThrow(
       'RESTAURANT_ACTOR_ADMIN_EMAIL is required'
     );
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        RESTAURANT_ACTOR_ADMIN_EMAIL: credentials.RESTAURANT_ACTOR_ADMIN_EMAIL,
+      })
+    ).toThrow('RESTAURANT_ACTOR_ADMIN_PASSWORD is required');
   });
 
   test('passes only the actor credentials used by the integrated matrix', () => {
@@ -59,9 +65,13 @@ describe('Restaurant integrated E2E safety', () => {
       ...credentials,
       RESTAURANT_ACTOR_AGENCY_EMAIL: 'unused@example.test',
       RESTAURANT_ACTOR_AGENCY_PASSWORD: 'unused',
+      RESTAURANT_ACTOR_FUTURE_EMAIL: 'future@example.test',
+      RESTAURANT_ACTOR_FUTURE_PASSWORD: 'unused',
     });
     expect(env.RESTAURANT_ACTOR_ADMIN_EMAIL).toBe(credentials.RESTAURANT_ACTOR_ADMIN_EMAIL);
     expect(env.RESTAURANT_ACTOR_AGENCY_EMAIL).toBeUndefined();
+    expect(env.RESTAURANT_ACTOR_FUTURE_EMAIL).toBeUndefined();
+    expect(env.RESTAURANT_ACTOR_FUTURE_PASSWORD).toBeUndefined();
   });
 
   test('has one desktop project, one worker, and no parallel fan-out', () => {
