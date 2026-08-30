@@ -1,0 +1,78 @@
+import type { PlatformRole } from '@/generated/prisma/client';
+import { canPlatformRole } from '@/lib/platform/capabilities';
+
+export type PlatformNavGroup = 'Operations' | 'Revenue' | 'Governance';
+
+export const PLATFORM_READ_ROUTES = [
+  {
+    label: 'Control room',
+    href: '/platform',
+    capability: 'platform:overview:read',
+    group: 'Operations',
+  },
+  {
+    label: 'Organizations',
+    href: '/platform/organizations',
+    capability: 'organizations:read',
+    group: 'Operations',
+  },
+  {
+    label: 'Deployments',
+    href: '/platform/deployments',
+    capability: 'deployments:read',
+    group: 'Operations',
+  },
+  { label: 'Jobs', href: '/platform/jobs', capability: 'jobs:read', group: 'Operations' },
+  { label: 'Sales CRM', href: '/platform/crm', capability: 'crm:read', group: 'Revenue' },
+  {
+    label: 'Commercial',
+    href: '/platform/commercial',
+    capability: 'commercial:read',
+    group: 'Revenue',
+  },
+  {
+    label: 'Modules & plans',
+    href: '/platform/catalog',
+    capability: 'catalog:read',
+    group: 'Revenue',
+  },
+  {
+    label: 'Operators',
+    href: '/platform/operators',
+    capability: 'operators:read',
+    group: 'Governance',
+  },
+  {
+    label: 'Audit ledger',
+    href: '/platform/audit',
+    capability: 'audit:read',
+    group: 'Governance',
+  },
+  {
+    label: 'Platform settings',
+    href: '/platform/settings',
+    capability: 'settings:read',
+    group: 'Governance',
+  },
+] as const satisfies ReadonlyArray<{
+  label: string;
+  href: string;
+  capability: string;
+  group: PlatformNavGroup;
+}>;
+
+export type PlatformReadRoute = (typeof PLATFORM_READ_ROUTES)[number];
+export type PlatformReadHref = PlatformReadRoute['href'];
+
+export function canReadPlatformRoute(role: PlatformRole, href: PlatformReadHref): boolean {
+  const route = PLATFORM_READ_ROUTES.find((candidate) => candidate.href === href);
+  return Boolean(route && canPlatformRole(role, route.capability));
+}
+
+export function platformNavigationFor(role: PlatformRole): readonly PlatformReadRoute[] {
+  return PLATFORM_READ_ROUTES.filter((route) => canPlatformRole(role, route.capability));
+}
+
+export function platformSafeFallback(role: PlatformRole): PlatformReadHref | null {
+  return platformNavigationFor(role)[0]?.href ?? null;
+}

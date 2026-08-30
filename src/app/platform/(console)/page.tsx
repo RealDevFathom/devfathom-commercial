@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowUpRight, Building2, CircleDollarSign, Clock3, ServerCog } from 'lucide-react';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { Stat } from '@/components/ui/stat';
 
@@ -13,6 +14,7 @@ function money(value: number, currency = 'USD') {
 }
 
 export default async function PlatformOverviewPage() {
+  await requirePlatformRead('/platform');
   const data = await withPlatformDb(async (db) => {
     const now = new Date();
     const renewalWindow = new Date(now);

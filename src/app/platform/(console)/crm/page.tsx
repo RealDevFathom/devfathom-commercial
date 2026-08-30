@@ -6,6 +6,7 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 
 const stages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'] as const;
 
@@ -19,6 +20,7 @@ function money(value: number | null, currency: string) {
 }
 
 export default async function CrmPage() {
+  await requirePlatformRead('/platform/crm');
   const data = await withPlatformDb(async (db) => {
     const [accounts, leads, opportunities, proposals, followUps] = await Promise.all([
       db.platformAccount.findMany({

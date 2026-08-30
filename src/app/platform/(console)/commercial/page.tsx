@@ -5,6 +5,7 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 
 function money(value: number, currency: string) {
   return new Intl.NumberFormat('en-US', {
@@ -15,6 +16,7 @@ function money(value: number, currency: string) {
 }
 
 export default async function CommercialPage() {
+  await requirePlatformRead('/platform/commercial');
   const data = await withPlatformDb(async (db) => {
     const [organizations, opportunities, modules, contracts, invoices, payments, renewals] =
       await Promise.all([

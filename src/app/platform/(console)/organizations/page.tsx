@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowUpRight, Search } from 'lucide-react';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 
 export default async function OrganizationsPage({
@@ -8,6 +9,7 @@ export default async function OrganizationsPage({
 }: {
   searchParams: Promise<{ q?: string; status?: string }>;
 }) {
+  await requirePlatformRead('/platform/organizations');
   const query = await searchParams;
   const q = query.q?.trim().slice(0, 100);
   const allowedStatuses = [

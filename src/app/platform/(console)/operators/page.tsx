@@ -5,10 +5,12 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 
 const roles = ['SUPER_ADMIN', 'OPERATIONS', 'SALES', 'FINANCE', 'SUPPORT', 'AUDITOR'];
 
 export default async function OperatorsPage() {
+  await requirePlatformRead('/platform/operators');
   const operators = await withPlatformDb((db) =>
     db.platformUser.findMany({
       orderBy: [{ active: 'desc' }, { name: 'asc' }],

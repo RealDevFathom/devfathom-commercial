@@ -1,11 +1,13 @@
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 
 export default async function PlatformAuditPage({
   searchParams,
 }: {
   searchParams: Promise<{ q?: string; outcome?: string }>;
 }) {
+  await requirePlatformRead('/platform/audit');
   const query = await searchParams;
   const q = query.q?.trim().slice(0, 100);
   const success =

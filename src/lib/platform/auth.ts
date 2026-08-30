@@ -9,49 +9,11 @@ import { parseCookie, PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { hashRecoveryCode, verifyTotp } from '@/lib/totp';
+import { canPlatformRole } from '@/lib/platform/capabilities';
 
 export const PLATFORM_SESSION_COOKIE = 'df_platform_session';
 const PLATFORM_SESSION_HOURS = 8;
 const DUMMY_PASSWORD_HASH = '$2b$10$7QJYoH3B/paYYQ5XzE5H0.u6cN6S6dJ0o.W3Xf/ObKZxrZTpTI46S';
-
-const ROLE_CAPABILITIES: Record<PlatformRole, readonly string[]> = {
-  SUPER_ADMIN: ['*'],
-  OPERATIONS: [
-    'organizations:read',
-    'organizations:write',
-    'deployments:read',
-    'deployments:write',
-    'jobs:read',
-    'jobs:write',
-    'support:write',
-    'catalog:read',
-  ],
-  SALES: [
-    'organizations:read',
-    'crm:read',
-    'crm:write',
-    'commercial:read',
-    'commercial:write',
-    'catalog:read',
-  ],
-  FINANCE: [
-    'organizations:read',
-    'commercial:read',
-    'commercial:write',
-    'crm:read',
-    'catalog:read',
-  ],
-  SUPPORT: ['organizations:read', 'deployments:read', 'jobs:read', 'support:write', 'catalog:read'],
-  AUDITOR: [
-    'organizations:read',
-    'crm:read',
-    'commercial:read',
-    'deployments:read',
-    'jobs:read',
-    'catalog:read',
-    'audit:read',
-  ],
-};
 
 export type PlatformIdentity = {
   sessionId: string;
@@ -89,8 +51,7 @@ export function platformCookieOptions(expiresAt: Date) {
 }
 
 export function canPlatform(identity: Pick<PlatformIdentity, 'role'>, capability: string): boolean {
-  const capabilities = ROLE_CAPABILITIES[identity.role];
-  return capabilities.includes('*') || capabilities.includes(capability);
+  return canPlatformRole(identity.role, capability);
 }
 
 export function assertPlatformCapability(

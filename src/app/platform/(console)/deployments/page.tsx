@@ -1,8 +1,10 @@
 import { PlatformCommandForm } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 
 export default async function DeploymentsPage() {
+  await requirePlatformRead('/platform/deployments');
   const data = await withPlatformDb(async (db) => {
     const [deployments, organizations] = await Promise.all([
       db.organizationDeployment.findMany({
