@@ -18,6 +18,8 @@ const ids = {
   legacyBill: `sc_legacy_bill_${suffix}`,
   policyOrder: `sc_policy_order_${suffix}`,
   policyBill: `sc_policy_bill_${suffix}`,
+  zeroPolicyOrder: `sc_zero_policy_order_${suffix}`,
+  zeroPolicyBill: `sc_zero_policy_bill_${suffix}`,
   policyA: `sc_policy_a_${suffix}`,
   policyB: `sc_policy_b_${suffix}`,
 };
@@ -122,8 +124,17 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
          "staffProfileId", "deviceId", "updatedAt"
        ) VALUES
          ($1, $2, $3, 1, CURRENT_DATE, 'DINE_IN', $4, $5, CURRENT_TIMESTAMP),
-         ($6, $2, $3, 2, CURRENT_DATE, 'DINE_IN', $4, $5, CURRENT_TIMESTAMP)`,
-      [ids.legacyOrder, ids.orgA, ids.branchA, ids.staffA, ids.deviceA, ids.policyOrder]
+         ($6, $2, $3, 2, CURRENT_DATE, 'DINE_IN', $4, $5, CURRENT_TIMESTAMP),
+         ($7, $2, $3, 3, CURRENT_DATE, 'DINE_IN', $4, $5, CURRENT_TIMESTAMP)`,
+      [
+        ids.legacyOrder,
+        ids.orgA,
+        ids.branchA,
+        ids.staffA,
+        ids.deviceA,
+        ids.policyOrder,
+        ids.zeroPolicyOrder,
+      ]
     );
     await owner!.query(
       `INSERT INTO "restaurant_service_charge_policy_versions" (
@@ -161,14 +172,21 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
       basis: 100,
       taxTreatment: 'NON_TAXABLE',
     });
+    await insertBill(ids.zeroPolicyBill, ids.zeroPolicyOrder, {
+      total: 0,
+      policyVersionId: ids.policyA,
+      rate: 0.1,
+      basis: 0.01,
+      taxTreatment: 'NON_TAXABLE',
+    });
 
     const evidence = await owner!.query(
       `SELECT "id", "serviceChargeTotal", "serviceChargePolicyVersionId",
               "serviceChargeRate", "serviceChargeBasis", "serviceChargeTaxTreatment"
-         FROM "restaurant_bills" WHERE "id" IN ($1, $2) ORDER BY "id"`,
-      [ids.legacyBill, ids.policyBill]
+         FROM "restaurant_bills" WHERE "id" IN ($1, $2, $3) ORDER BY "id"`,
+      [ids.legacyBill, ids.policyBill, ids.zeroPolicyBill]
     );
-    expect(evidence.rowCount).toBe(2);
+    expect(evidence.rowCount).toBe(3);
     expect(evidence.rows).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -186,6 +204,14 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
           serviceChargeBasis: '100.00',
           serviceChargeTaxTreatment: 'NON_TAXABLE',
         }),
+        expect.objectContaining({
+          id: ids.zeroPolicyBill,
+          serviceChargeTotal: '0.00',
+          serviceChargePolicyVersionId: ids.policyA,
+          serviceChargeRate: '0.100000',
+          serviceChargeBasis: '0.01',
+          serviceChargeTaxTreatment: 'NON_TAXABLE',
+        }),
       ])
     );
   });
@@ -201,16 +227,6 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
       [
         'taxable-policy',
         { total: 10, policyVersionId: ids.policyA, rate: 0.1, basis: 100, taxTreatment: 'TAXABLE' },
-      ],
-      [
-        'zero-policy',
-        {
-          total: 0,
-          policyVersionId: ids.policyA,
-          rate: 0.1,
-          basis: 100,
-          taxTreatment: 'NON_TAXABLE',
-        },
       ],
     ] as const) {
       await expectDatabaseError(owner!, '23514', () =>
