@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => ({
   platformModuleFindUnique: vi.fn(),
   platformModuleFindMany: vi.fn(),
   departmentCreateMany: vi.fn(),
+  auditCreate: vi.fn(),
+  organizationExists: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -53,6 +55,7 @@ function record() {
 }
 
 const platformDb = {
+  $queryRawUnsafe: mocks.organizationExists,
   platformPackage: {
     findUnique: mocks.pkgFindUnique,
     create: mocks.pkgCreate,
@@ -71,7 +74,7 @@ const platformDb = {
   organizationDeployment: { create: record() },
   platformJob: { create: record() },
   organizationLifecycleEvent: { create: record() },
-  platformAuditLog: { create: record() },
+  platformAuditLog: { create: mocks.auditCreate },
   restaurantBranch: {
     create: mocks.branchCreate,
     findMany: mocks.branchFindMany,
@@ -121,6 +124,22 @@ function run(action: string, payload: unknown) {
 
 function caught(promise: Promise<unknown>) {
   return promise.catch((error: unknown) => error);
+}
+
+const HOSTILE_AUDIT_INPUT = 'token_live_VERTICAL_SECRET';
+
+function expectSanitizedModuleFailureAudit() {
+  expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  expect(mocks.auditCreate).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      action: 'organization.module',
+      success: false,
+      reason: 'Platform command validation failed.',
+      error: 'Platform command validation failed.',
+      metadata: { outcomeCategory: 'validation_failed' },
+    }),
+  });
+  expect(JSON.stringify(mocks.auditCreate.mock.calls[0])).not.toContain(HOSTILE_AUDIT_INPUT);
 }
 
 // ---------------------------------------------------------------------------
@@ -223,9 +242,8 @@ describe('organization.create vertical + package compatibility', () => {
       expect(seeded.map((row) => row.key)).not.toContain(restaurantDepartment.key);
     }
     // The administrator is filed under a department that was actually seeded.
-    const adminDepartment = (
-      mocks.userCreate.mock.calls[0]![0] as { data: { department: string } }
-    ).data.department;
+    const adminDepartment = (mocks.userCreate.mock.calls[0]![0] as { data: { department: string } })
+      .data.department;
     expect(adminDepartment).toBe('LEADERSHIP');
     expect(seeded.map((row) => row.key)).toContain(adminDepartment);
     // Ordering is the FK constraint: departments must exist before the user.
@@ -257,9 +275,8 @@ describe('organization.create vertical + package compatibility', () => {
       expect(seeded.map((row) => row.key)).not.toContain(agencyDepartment.key);
     }
     // 'LEADERSHIP' does not exist for this vertical, so the admin cannot use it.
-    const adminDepartment = (
-      mocks.userCreate.mock.calls[0]![0] as { data: { department: string } }
-    ).data.department;
+    const adminDepartment = (mocks.userCreate.mock.calls[0]![0] as { data: { department: string } })
+      .data.department;
     expect(adminDepartment).toBe('FRONT_OF_HOUSE');
     expect(seeded.map((row) => row.key)).toContain(adminDepartment);
   });
@@ -442,12 +459,14 @@ describe('organization.module enablement guard', () => {
     organizationId: 'org_1',
     moduleId,
     status: 'ENABLED',
-    reason: 'operator enablement',
+    reason: HOSTILE_AUDIT_INPUT,
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.moduleUpsert.mockResolvedValue({ id: 'orgmod_1' });
+    mocks.organizationExists.mockResolvedValue([]);
+    mocks.auditCreate.mockImplementation(async ({ data }) => ({ id: 'audit_1', ...data }));
   });
 
   it('allows a restaurant module on a restaurant organization', async () => {
@@ -468,6 +487,7 @@ describe('organization.module enablement guard', () => {
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
     expect(mocks.moduleUpsert).not.toHaveBeenCalled();
+    expectSanitizedModuleFailureAudit();
   });
 
   it('rejects an agency module on a restaurant organization', async () => {
@@ -479,6 +499,7 @@ describe('organization.module enablement guard', () => {
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
     expect(mocks.moduleUpsert).not.toHaveBeenCalled();
+    expectSanitizedModuleFailureAudit();
   });
 
   it('rejects an unknown module id', async () => {
@@ -511,6 +532,7 @@ describe('organization.module enablement guard', () => {
       expect(error).toMatchObject({ status: 400 });
       expect((error as PlatformSecurityError).message).toContain('mandatory');
       expect(mocks.moduleUpsert).not.toHaveBeenCalled();
+      expectSanitizedModuleFailureAudit();
     }
   );
 });
