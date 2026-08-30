@@ -16,7 +16,7 @@ import { generateTerminalSessionToken } from './terminal-session';
 type Row = Record<string, unknown>;
 
 const h = vi.hoisted(() => ({
-  store: { devices: [] as Row[], sessions: [] as Row[], orgs: [] as Row[] },
+  store: { devices: [] as Row[], sessions: [] as Row[], orgs: [] as Row[], branches: [] as Row[] },
   rate: { ok: true },
   // WHA-138 Lane A: the EFFECTIVE entitlement snapshot the wrapper resolves per
   // request. Enabled by default so the pre-existing transport cases stay valid;
@@ -70,6 +70,10 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       findUnique: async ({ where }: { where: Record<string, unknown> }) =>
         findBy(h.store.orgs, where),
     },
+    restaurantBranch: {
+      findUnique: async ({ where }: { where: Record<string, unknown> }) =>
+        findBy(h.store.branches, where),
+    },
   };
   return {
     withPlatformDb: (fn: (d: unknown) => unknown) => fn(db),
@@ -100,6 +104,7 @@ function seedDevice(overrides: Row = {}): void {
     lastSeenAt: null,
     ...overrides,
   });
+  h.store.branches.push({ id: 'branch_1', organizationId: ORG, active: true });
 }
 
 function seedSession(overrides: Row = {}): void {
@@ -125,6 +130,7 @@ beforeEach(() => {
   h.store.devices = [];
   h.store.sessions = [];
   h.store.orgs = [];
+  h.store.branches = [];
   h.rate.ok = true;
   h.entitlements.enabled = ['restaurant-pos'];
 });
@@ -155,6 +161,16 @@ describe('withDeviceAuth', () => {
     seedDevice({ status: 'REVOKED', revokedAt: new Date() });
     const handler = withDeviceAuth(() => new Response('ok'));
     expect((await handler(req({ authorization: `Bearer ${deviceSecret}` }))).status).toBe(403);
+  });
+
+  it('rejects a trusted device when its branch is inactive', async () => {
+    seedDevice();
+    h.store.branches[0].active = false;
+    const inner = vi.fn(() => new Response('ok'));
+    const handler = withDeviceAuth(inner);
+    const response = await handler(req({ authorization: `Bearer ${deviceSecret}` }));
+    expect(response.status).toBe(403);
+    expect(inner).not.toHaveBeenCalled();
   });
 
   it('runs the handler for a trusted device and records the check-in', async () => {

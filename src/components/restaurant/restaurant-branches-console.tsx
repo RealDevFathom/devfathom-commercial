@@ -60,9 +60,15 @@ export function RestaurantBranchesConsole() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const input = { ...draft, code: draft.code.toUpperCase(), address: draft.address || null };
-    if (editingId) update.mutate({ id: editingId, ...input });
-    else create.mutate(input);
+    const editable = {
+      name: draft.name,
+      timezone: draft.timezone,
+      businessDayCutoff: draft.businessDayCutoff,
+      address: draft.address || null,
+      shiftSignInEnforced: draft.shiftSignInEnforced,
+    };
+    if (editingId) update.mutate({ id: editingId, ...editable });
+    else create.mutate({ ...editable, code: draft.code.toUpperCase() });
   };
   const pending = create.isPending || update.isPending;
   const branches = query.data?.branches ?? [];
@@ -188,11 +194,13 @@ export function RestaurantBranchesConsole() {
                   maxLength={24}
                   placeholder="DHA-PH6"
                   className="uppercase"
+                  disabled={editingId !== null}
                   onChange={(e) => setDraft({ ...draft, code: e.target.value })}
                 />
                 <p className="text-xs text-text-muted">
-                  Stable, readable code shown in branch selectors. Letters, numbers, and hyphens
-                  only.
+                  {editingId
+                    ? 'Branch codes are permanent so operational references remain stable.'
+                    : 'Stable, readable code shown in branch selectors. Letters, numbers, and hyphens only.'}
                 </p>
               </div>
               <div className="space-y-2">
