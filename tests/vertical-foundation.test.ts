@@ -60,6 +60,9 @@ function record() {
 }
 
 const platformDb = {
+  // Failed-command auditing verifies an attacker-supplied organizationId before
+  // retaining it. These contract fixtures use synthetic ids, so no FK is kept.
+  $queryRawUnsafe: vi.fn(async () => []),
   platformPackage: { findUnique: mocks.pkgFindUnique },
   organization: {
     create: mocks.orgCreate,
@@ -571,6 +574,18 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
 //   src/generated/** (Prisma-generated client — read-only)
 // ---------------------------------------------------------------------------
 describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit', () => {
+  const APPROVED_EXACT_FILES = new Set([
+    // Pakistan tax owns the authoritative RESTAURANT jurisdiction profiles and
+    // the focused fixtures/batteries that provision those schema records.
+    'src/components/restaurant/restaurant-tax-console.test.tsx',
+    'src/lib/restaurant/pakistan-tax-profiles.test.ts',
+    'src/lib/restaurant/pakistan-tax-profiles.ts',
+    'src/lib/test-support/restaurant-tax-profile.ts',
+    'src/server/restaurant-branch-scope.db.test.ts',
+    'src/server/routers/restaurant-tax.db.test.ts',
+    'src/server/routers/restaurant-tax.test.ts',
+  ]);
+
   const APPROVED_PATTERNS = [
     // Vertical catalog — the one authoritative registry
     /src\/lib\/vertical-catalog(\.test)?\.(ts|tsx)$/,
@@ -601,7 +616,10 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
   ];
 
   function isApproved(filePath: string): boolean {
-    return APPROVED_PATTERNS.some((pattern) => pattern.test(filePath));
+    return (
+      APPROVED_EXACT_FILES.has(filePath) ||
+      APPROVED_PATTERNS.some((pattern) => pattern.test(filePath))
+    );
   }
 
   it('has zero OrganizationVertical / RESTAURANT references outside the approved consumer set', () => {
