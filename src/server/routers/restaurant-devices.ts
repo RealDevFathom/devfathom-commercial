@@ -34,7 +34,9 @@ export const restaurantDevicesRouter = router({
     return devices.map((device) => ({
       id: device.id,
       name: device.name,
+      kind: device.kind,
       branch: device.branch,
+      stationId: device.stationId,
       status: device.status,
       lastSeenAt: device.lastSeenAt,
       revokedAt: device.revokedAt,
@@ -49,6 +51,8 @@ export const restaurantDevicesRouter = router({
       z.object({
         branchId: z.string().min(1),
         name: z.string().min(1).max(120),
+        kind: z.enum(['POS', 'KDS']).optional(),
+        stationId: z.string().min(1).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -59,10 +63,23 @@ export const restaurantDevicesRouter = router({
       if (!branch) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
       }
+      const kind = input.kind ?? 'POS';
+      if (kind === 'KDS') {
+        if (!input.stationId) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'KDS station is required.' });
+        }
+        const station = await ctx.db.restaurantKitchenStation.findFirst({
+          where: { id: input.stationId, branchId: input.branchId, active: true },
+          select: { id: true },
+        });
+        if (!station) throw new TRPCError({ code: 'NOT_FOUND', message: 'Station not found.' });
+      }
 
       const { device, secret } = await enrollDevice(ctx.db, {
         branchId: input.branchId,
         name: input.name,
+        kind,
+        stationId: kind === 'KDS' ? input.stationId : null,
       });
 
       annotateAudit(ctx, {
@@ -79,6 +96,8 @@ export const restaurantDevicesRouter = router({
           name: device.name,
           branchId: device.branchId,
           status: device.status,
+          kind: device.kind,
+          stationId: device.stationId,
         },
         // Delivered ONCE — the caller must surface it to the device operator now.
         enrollmentSecret: secret,

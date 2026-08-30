@@ -3,7 +3,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
-import { Copy } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -74,23 +73,16 @@ export function RestaurantDevicesConsole() {
   });
 
   const [enrollOpen, setEnrollOpen] = useState(false);
-  const [revealedEnrollment, setRevealedEnrollment] = useState<{
-    deviceName: string;
-    secret: string;
-  } | null>(null);
+  const [enrollmentKind, setEnrollmentKind] = useState<'POS' | 'KDS'>('POS');
+  const [enrollmentBranchId, setEnrollmentBranchId] = useState('');
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [coAuthError, setCoAuthError] = useState('');
 
   const refreshDevices = () => void utils.restaurantDevices.list.invalidate();
-  const enrollment = trpc.restaurantDevices.initiateEnrollment.useMutation({
-    onSuccess: (result) => {
-      setEnrollOpen(false);
-      setRevealedEnrollment({ deviceName: result.device.name, secret: result.enrollmentSecret });
-      refreshDevices();
-      toast.success('Device enrolled. Copy its secret now.');
-    },
-    onError: (error) => toast.error(error.message),
-  });
+  const stationsQuery = trpc.restaurantFloor.listStations.useQuery(
+    { branchId: enrollmentBranchId },
+    { enabled: enrollOpen && enrollmentKind === 'KDS' && Boolean(enrollmentBranchId) }
+  );
   const revokeDevice = trpc.restaurantDevices.revoke.useMutation({
     onSuccess: () => {
       setSelectedDevice(null);
@@ -110,19 +102,6 @@ export function RestaurantDevicesConsole() {
   );
 
   const permissionDenied = isPermissionError(devicesQuery.error);
-  const closeEnrollmentSecret = () => {
-    setRevealedEnrollment(null);
-    enrollment.reset();
-  };
-
-  const submitEnrollment = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    const input = { name: formText(data, 'name'), branchId: formText(data, 'branchId') };
-    enrollment.mutate(input, { onSuccess: () => form.reset() });
-  };
-
   const submitRevocation = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedDevice) return;
@@ -175,7 +154,8 @@ export function RestaurantDevicesConsole() {
               <Button
                 className="min-h-11"
                 onClick={() => {
-                  enrollment.reset();
+                  setEnrollmentKind('POS');
+                  setEnrollmentBranchId('');
                   setEnrollOpen(true);
                 }}
               >
@@ -255,6 +235,7 @@ export function RestaurantDevicesConsole() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Branch</TableHead>
+                  <TableHead>Kind</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Health</TableHead>
                   <TableHead>Last seen</TableHead>
@@ -268,6 +249,7 @@ export function RestaurantDevicesConsole() {
                       <span className="block font-medium text-text-strong">{device.name}</span>
                     </TableCell>
                     <TableCell className="text-text-strong">{device.branch.name}</TableCell>
+                    <TableCell className="text-text-strong">{device.kind}</TableCell>
                     <TableCell>
                       <StatusPill
                         status={device.status}
@@ -315,22 +297,17 @@ export function RestaurantDevicesConsole() {
       <Dialog
         open={enrollOpen}
         onOpenChange={(open) => {
-          if (!enrollment.isPending) setEnrollOpen(open);
+          setEnrollOpen(open);
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Enroll restaurant device</DialogTitle>
+            <DialogTitle>Enroll this browser</DialogTitle>
             <DialogDescription>
-              Assign a terminal to an active branch in this workspace.
+              This browser becomes a dedicated terminal and your administrator session ends.
             </DialogDescription>
           </DialogHeader>
-          <form className="space-y-4" onSubmit={submitEnrollment}>
-            {enrollment.error ? (
-              <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {enrollment.error.message}
-              </p>
-            ) : null}
+          <form className="space-y-4" method="post" action="/api/restaurant/devices/browser-enroll">
             <label className="space-y-1.5">
               <span className={labelClass}>Device name</span>
               <Input name="name" required maxLength={120} className="h-11" />
@@ -346,67 +323,72 @@ export function RestaurantDevicesConsole() {
                 branches={branchesQuery.data ?? []}
                 loading={branchesQuery.isLoading}
                 error={Boolean(branchesQuery.error)}
+                value={enrollmentBranchId}
+                onChange={setEnrollmentBranchId}
               />
             </div>
+            <label className="space-y-1.5">
+              <span className={labelClass}>Device kind</span>
+              <select
+                name="kind"
+                value={enrollmentKind}
+                onChange={(event) => setEnrollmentKind(event.target.value as 'POS' | 'KDS')}
+                className={selectClass}
+              >
+                <option value="POS">POS register</option>
+                <option value="KDS">Kitchen display</option>
+              </select>
+            </label>
+            {enrollmentKind === 'KDS' ? (
+              <label className="space-y-1.5">
+                <span className={labelClass}>KDS station</span>
+                <select
+                  name="stationId"
+                  required
+                  defaultValue=""
+                  className={selectClass}
+                  disabled={!enrollmentBranchId || stationsQuery.isLoading}
+                >
+                  <option value="" disabled>
+                    {stationsQuery.isLoading ? 'Loading stations…' : 'Select a station'}
+                  </option>
+                  {(stationsQuery.data ?? [])
+                    .filter((station) => station.active)
+                    .map((station) => (
+                      <option key={station.id} value={station.id}>
+                        {station.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
+            <label className="flex items-start gap-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-text-body">
+              <input
+                type="checkbox"
+                name="confirmation"
+                value="confirmed"
+                required
+                className="mt-0.5 size-4 accent-current"
+              />
+              <span>
+                I understand this browser will sign out of administration and open only as this
+                terminal until the device is revoked or enrollment expires.
+              </span>
+            </label>
             <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
                 className="min-h-11"
-                disabled={enrollment.isPending}
                 onClick={() => setEnrollOpen(false)}
               >
                 Cancel
               </Button>
-              <Button type="submit" className="min-h-11" disabled={enrollment.isPending}>
-                {enrollment.isPending ? 'Enrolling…' : 'Enroll'}
+              <Button type="submit" className="min-h-11">
+                Enroll this browser
               </Button>
             </DialogFooter>
           </form>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={revealedEnrollment != null}
-        disablePointerDismissal
-        onOpenChange={() => undefined}
-      >
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Save the enrollment secret</DialogTitle>
-            <DialogDescription>
-              This is the only time the secret for {revealedEnrollment?.deviceName} will be shown.
-            </DialogDescription>
-          </DialogHeader>
-          <code className="break-all rounded-md border border-border-default bg-surface-sunken p-4 font-mono text-sm text-text-strong">
-            {revealedEnrollment?.secret}
-          </code>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              className="min-h-11"
-              onClick={() => {
-                const secret = revealedEnrollment?.secret;
-                if (!secret) return;
-                void navigator.clipboard
-                  .writeText(secret)
-                  .then(() => toast.success('Enrollment secret copied.'))
-                  .catch(() => toast.error('Enrollment secret could not be copied.'));
-              }}
-            >
-              <Copy />
-              Copy
-            </Button>
-            <Button
-              type="button"
-              aria-label="Close enrollment secret"
-              className="min-h-11"
-              onClick={closeEnrollmentSecret}
-            >
-              I saved it
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 

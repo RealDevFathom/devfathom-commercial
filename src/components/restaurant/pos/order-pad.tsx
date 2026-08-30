@@ -1,6 +1,6 @@
 'use client';
 
-import { type FormEvent, type ReactNode, useCallback, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import { CheckoutPanel, type TerminalRequest, type TerminalRequestOptions } from './checkout-panel';
 import { DrawerPanel } from './drawer-panel';
@@ -18,7 +18,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 type Channel = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY';
 type Runtime = {
   deviceId: string;
-  deviceSecret: string;
+  deviceName: string;
   sessionToken: string;
   sessionId: string;
   state: 'LOCKED' | 'UNLOCKED';
@@ -39,7 +39,7 @@ type Notice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: str
 type EstablishResponse = {
   sessionToken: string;
   session: { id: string; state: 'LOCKED'; establishedAt: string };
-  device: { id: string; branchName: string };
+  device: { id: string; name: string; branchName: string };
 };
 type SessionResponse = {
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
@@ -95,7 +95,7 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     cache: 'no-store',
-    credentials: 'omit',
+    credentials: 'include',
     signal: AbortSignal.timeout(10_000),
   });
   const body: unknown = await response.json().catch(() => null);
@@ -105,7 +105,6 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
 
 function authHeaders(runtime: Runtime, json = false): HeadersInit {
   return {
-    Authorization: `Bearer ${runtime.deviceSecret}`,
     'X-Terminal-Session': runtime.sessionToken,
     ...(json ? { 'Content-Type': 'application/json' } : {}),
   };
@@ -119,7 +118,9 @@ function effectiveMenuPath(channel: Channel, publicationId?: string | null) {
 
 export function OrderPad() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
-  const [deviceSecret, setDeviceSecret] = useState('');
+  const [enrollmentState, setEnrollmentState] = useState<'checking' | 'ready' | 'missing'>(
+    'checking'
+  );
   const [operators, setOperators] = useState<OperatorOption[]>([]);
   const [operatorId, setOperatorId] = useState('');
   const [operatorDirectoryState, setOperatorDirectoryState] = useState<
@@ -248,28 +249,31 @@ export function OrderPad() {
     [clearTerminalState, runtime]
   );
 
-  function handleError(error: unknown) {
-    if (error instanceof RequestError) {
-      const revoked = error.status === 403 && /device.+revoked/i.test(error.message);
-      if (revoked) clearTerminalState();
-      if (error.status === 401 && /session|device/i.test(error.message)) {
-        clearTerminalState();
+  const handleError = useCallback(
+    (error: unknown) => {
+      if (error instanceof RequestError) {
+        const revoked = error.status === 403 && /device.+revoked/i.test(error.message);
+        if (revoked) clearTerminalState();
+        if (error.status === 401 && /session|device/i.test(error.message)) {
+          clearTerminalState();
+        }
+        setNotice({
+          tone: error.status === 403 ? 'danger' : 'warning',
+          message: revoked
+            ? `Device revoked: ${error.message}`
+            : error.status === 403
+              ? `Permission denied: ${error.message}`
+              : error.message,
+        });
+        return;
       }
       setNotice({
-        tone: error.status === 403 ? 'danger' : 'warning',
-        message: revoked
-          ? `Device revoked: ${error.message}`
-          : error.status === 403
-            ? `Permission denied: ${error.message}`
-            : error.message,
+        tone: 'warning',
+        message: 'Network request failed. Retry this action.',
       });
-      return;
-    }
-    setNotice({
-      tone: 'warning',
-      message: 'Network request failed. Retry this action.',
-    });
-  }
+    },
+    [clearTerminalState]
+  );
 
   async function loadMenu(nextChannel: Channel, activeRuntime = runtime, standalone = true) {
     if (!activeRuntime) return;
@@ -336,20 +340,17 @@ export function OrderPad() {
     }
   }
 
-  async function establish(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const secret = deviceSecret.trim();
-    if (!secret || pending) return;
+  const establish = useCallback(async () => {
+    if (pending) return;
     setPending('establish');
     setNotice(null);
     try {
       const data = await request<EstablishResponse>('/api/restaurant/terminal/establish', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${secret}` },
       });
       const established: Runtime = {
         deviceId: data.device.id,
-        deviceSecret: secret,
+        deviceName: data.device.name,
         sessionToken: data.sessionToken,
         sessionId: data.session.id,
         state: data.session.state,
@@ -357,15 +358,20 @@ export function OrderPad() {
         operator: null,
       };
       setRuntime(established);
-      setDeviceSecret('');
+      setEnrollmentState('ready');
       setNotice({ tone: 'success', message: 'Device session established. Unlock to continue.' });
       await loadOperators(established);
     } catch (error) {
+      setEnrollmentState('missing');
       handleError(error);
     } finally {
       setPending(null);
     }
-  }
+  }, [handleError, loadOperators, pending]);
+
+  useEffect(() => {
+    if (enrollmentState === 'checking') queueMicrotask(() => void establish());
+  }, [enrollmentState, establish]);
 
   async function unlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -583,32 +589,34 @@ export function OrderPad() {
         <div className="mx-auto max-w-xl space-y-6">
           <PageHeader
             eyebrow={<span className="text-text-strong">Restaurant POS</span>}
-            heading="Establish device"
+            heading={enrollmentState === 'checking' ? 'Checking enrollment' : 'Enrollment required'}
             description={
               <span className="text-text-body">
-                Start a device-authenticated session. Secret stays only in memory.
+                {enrollmentState === 'checking'
+                  ? 'Verifying this browser with the server.'
+                  : 'Ask an administrator to enroll this browser from Restaurant Devices.'}
               </span>
             }
           />
           {notice ? <Notice notice={notice} /> : null}
-          <SectionCard title="Device enrollment">
-            <form onSubmit={establish} className="space-y-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="device-secret">Bearer device secret</Label>
-                <Input
-                  id="device-secret"
-                  type="password"
-                  required
-                  autoComplete="off"
-                  value={deviceSecret}
-                  onChange={(event) => setDeviceSecret(event.target.value)}
-                  className="h-11"
-                />
-              </div>
-              <Button type="submit" disabled={busy || !deviceSecret.trim()} className="h-11 w-full">
-                {pending === 'establish' ? 'Establishing…' : 'Establish session'}
-              </Button>
-            </form>
+          <SectionCard
+            title={enrollmentState === 'checking' ? 'Verifying browser' : 'Not enrolled'}
+          >
+            <div className="space-y-4">
+              <p className="text-sm leading-6 text-text-muted">
+                {enrollmentState === 'checking'
+                  ? 'Please wait while the terminal credential is revalidated.'
+                  : 'No usable browser enrollment was found. It may be missing, expired, or revoked.'}
+              </p>
+              {enrollmentState === 'missing' ? (
+                <a
+                  href="/login?callbackUrl=%2Frestaurant%2Fdevices"
+                  className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  Return to admin-assisted enrollment
+                </a>
+              ) : null}
+            </div>
           </SectionCard>
         </div>
       </PosShell>
@@ -622,7 +630,7 @@ export function OrderPad() {
           <PageHeader
             eyebrow="Restaurant POS"
             heading="Terminal locked"
-            description={`Device session active for ${runtime.branchName}.`}
+            description={`${runtime.deviceName} · ${runtime.branchName}`}
           />
           {notice ? <Notice notice={notice} /> : null}
           <SectionCard

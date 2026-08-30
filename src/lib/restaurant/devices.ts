@@ -100,11 +100,17 @@ export function deviceHealth(
  */
 export async function enrollDevice(
   db: ScopedDb,
-  input: { branchId: string; name: string }
+  input: { branchId: string; name: string; kind?: 'POS' | 'KDS'; stationId?: string | null }
 ): Promise<{ device: RestaurantRegisteredDevice; secret: string }> {
   const { secret, secretHash } = generateDeviceSecret();
   const device = await db.restaurantRegisteredDevice.create({
-    data: { branchId: input.branchId, name: input.name, deviceSecretHash: secretHash },
+    data: {
+      branchId: input.branchId,
+      name: input.name,
+      deviceSecretHash: secretHash,
+      kind: input.kind ?? 'POS',
+      stationId: input.stationId ?? null,
+    },
   });
   return { device, secret };
 }

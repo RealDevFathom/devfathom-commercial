@@ -13,7 +13,12 @@ import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
 type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
 type ItemDisplayStatus = 'HELD' | TicketDisplayStatus | 'SERVED' | 'VOIDED';
-type Runtime = { deviceSecret: string; operatorStaffProfileId: string };
+type Runtime = {
+  sessionToken: string;
+  operatorStaffProfileId: string;
+  deviceName: string;
+  branchName: string;
+};
 type OperatorOption = { staffProfileId: string; displayName: string; role: string };
 type QueueItem = {
   orderItemId: string;
@@ -93,7 +98,7 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     cache: 'no-store',
-    credentials: 'omit',
+    credentials: 'include',
     signal: AbortSignal.timeout(10_000),
   });
   const body: unknown = await response.json().catch(() => null);
@@ -117,8 +122,8 @@ function formatAge(createdAt: string) {
 
 export function KdsBoard() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
-  const [deviceSecret, setDeviceSecret] = useState('');
   const [operatorStaffProfileId, setOperatorStaffProfileId] = useState('');
+  const [operatorPin, setOperatorPin] = useState('');
   const [operators, setOperators] = useState<OperatorOption[]>([]);
   const [operatorsState, setOperatorsState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     'idle'
@@ -155,7 +160,7 @@ export function KdsBoard() {
       const requestEpoch = epoch.current;
       const flight = (async () => {
         try {
-          const headers = { Authorization: `Bearer ${activeRuntime.deviceSecret}` };
+          const headers = { 'X-Terminal-Session': activeRuntime.sessionToken };
           let next = await request<QueuePayload>(queuePath(sinceCursor), { headers });
           if (sinceCursor !== undefined && (next.gap || next.cursor < sinceCursor)) {
             next = await request<QueuePayload>(queuePath(), { headers });
@@ -193,7 +198,7 @@ export function KdsBoard() {
   );
 
   useEffect(() => {
-    if (!runtime) return;
+    if (!runtime?.operatorStaffProfileId) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
@@ -224,11 +229,26 @@ export function KdsBoard() {
     };
   }, [loadQueue, runtime]);
 
-  function connect(event: FormEvent<HTMLFormElement>) {
+  async function connect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const secret = deviceSecret.trim();
     const operatorId = operatorStaffProfileId.trim();
-    if (!secret || !operatorId) return;
+    if (!runtime || !operatorId || !/^\d{4,8}$/.test(operatorPin)) return;
+    setPending('unlock');
+    try {
+      await request('/api/restaurant/terminal/unlock', {
+        method: 'POST',
+        headers: { 'X-Terminal-Session': runtime.sessionToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ staffProfileId: operatorId, type: 'PIN', secret: operatorPin }),
+      });
+    } catch (error) {
+      setOperatorPin('');
+      setPending(null);
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : 'Operator unlock failed.',
+      });
+      return;
+    }
     epoch.current += 1;
     cursor.current = null;
     setQueue(null);
@@ -236,27 +256,45 @@ export function KdsBoard() {
     setLastSync(null);
     setNotice(null);
     setLoading(true);
-    setRuntime({ deviceSecret: secret, operatorStaffProfileId: operatorId });
-    setDeviceSecret('');
+    setRuntime({ ...runtime, operatorStaffProfileId: operatorId });
     setOperatorStaffProfileId('');
+    setOperatorPin('');
+    setPending(null);
   }
 
-  async function loadOperators() {
-    const secret = deviceSecret.trim();
-    if (!secret || operatorsState === 'loading') return;
+  const establish = useCallback(async () => {
     setOperatorsState('loading');
-    setOperatorStaffProfileId('');
     try {
-      const data = await request<{ operators: OperatorOption[] }>('/api/restaurant/kds/operators', {
-        headers: { Authorization: `Bearer ${secret}` },
-      });
+      const established = await request<{
+        sessionToken: string;
+        device: { name: string; branchName: string; kind: string };
+      }>('/api/restaurant/terminal/establish', { method: 'POST' });
+      if (established.device.kind !== 'KDS')
+        throw new RequestError(403, 'This browser is not enrolled as a KDS.');
+      const lockedRuntime: Runtime = {
+        sessionToken: established.sessionToken,
+        operatorStaffProfileId: '',
+        deviceName: established.device.name,
+        branchName: established.device.branchName,
+      };
+      setRuntime(lockedRuntime);
+      const data = await request<{ operators: OperatorOption[] }>(
+        '/api/restaurant/terminal/operators',
+        {
+          headers: { 'X-Terminal-Session': established.sessionToken },
+        }
+      );
       setOperators(data.operators);
       setOperatorsState('ready');
     } catch {
       setOperators([]);
       setOperatorsState('error');
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void establish());
+  }, [establish]);
 
   function keyFor(intent: string) {
     const existing = idempotencyKeys.current.get(intent);
@@ -278,7 +316,7 @@ export function KdsBoard() {
       await request(`/api/restaurant/kds/${action.path}`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${runtime.deviceSecret}`,
+          'X-Terminal-Session': runtime.sessionToken,
           'Content-Type': 'application/json',
           'Idempotency-Key': keyFor(intent),
         },
@@ -325,39 +363,35 @@ export function KdsBoard() {
       ? 'warning'
       : 'success';
 
-  if (!runtime) {
+  if (!runtime || !runtime.operatorStaffProfileId) {
     return (
       <KdsShell status={shellStatus} tone={shellTone} busy={busy}>
         <div className="mx-auto max-w-xl space-y-6">
           <PageHeader
             eyebrow="Restaurant KDS"
-            heading="Connect kitchen display"
-            description="Enter this display's device secret and the acting operator. Credentials stay in memory only."
+            heading={runtime ? 'Unlock kitchen display' : 'Checking enrollment'}
+            description={
+              runtime
+                ? `${runtime.deviceName} · ${runtime.branchName}`
+                : 'Verifying this browser with the server.'
+            }
           />
           {notice ? <Notice notice={notice} /> : null}
-          <SectionCard title="Display connection">
+          <SectionCard title={runtime ? 'Operator unlock' : 'Browser enrollment'}>
             <form onSubmit={connect} className="space-y-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="kds-device-secret">Bearer device secret</Label>
-                <Input
-                  id="kds-device-secret"
-                  type="password"
-                  required
-                  autoComplete="off"
-                  value={deviceSecret}
-                  onChange={(event) => setDeviceSecret(event.target.value)}
-                  className="h-11"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="mt-2 h-11"
-                  disabled={!deviceSecret.trim() || operatorsState === 'loading'}
-                  onClick={() => void loadOperators()}
-                >
-                  {operatorsState === 'loading' ? 'Loading operators…' : 'Load branch operators'}
-                </Button>
-              </div>
+              {!runtime && operatorsState === 'error' ? (
+                <div className="space-y-3">
+                  <p role="alert" className="text-sm text-destructive">
+                    This browser is not enrolled, the enrollment expired, or the device was revoked.
+                  </p>
+                  <a
+                    href="/login?callbackUrl=%2Frestaurant%2Fdevices"
+                    className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
+                  >
+                    Return to admin-assisted enrollment
+                  </a>
+                </div>
+              ) : null}
               <div className="space-y-1.5">
                 <Label htmlFor="kds-operator-id">Acting operator</Label>
                 <select
@@ -370,7 +404,7 @@ export function KdsBoard() {
                 >
                   <option value="" disabled>
                     {operatorsState === 'idle'
-                      ? 'Authenticate the device first'
+                      ? 'Loading eligible operators…'
                       : operatorsState === 'loading'
                         ? 'Loading eligible operators…'
                         : operatorsState === 'error'
@@ -386,12 +420,34 @@ export function KdsBoard() {
                   ))}
                 </select>
               </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="kds-operator-pin">Operator PIN</Label>
+                <Input
+                  id="kds-operator-pin"
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]{4,8}"
+                  minLength={4}
+                  maxLength={8}
+                  value={operatorPin}
+                  onChange={(event) =>
+                    setOperatorPin(event.target.value.replace(/\D/g, '').slice(0, 8))
+                  }
+                  className="h-11"
+                  disabled={!runtime}
+                />
+              </div>
               <Button
                 type="submit"
-                disabled={!deviceSecret.trim() || !operatorStaffProfileId.trim()}
+                disabled={
+                  !runtime ||
+                  !operatorStaffProfileId.trim() ||
+                  !/^\d{4,8}$/.test(operatorPin) ||
+                  pending !== null
+                }
                 className="h-11 w-full"
               >
-                Connect display
+                Verify PIN and unlock
               </Button>
             </form>
           </SectionCard>
@@ -408,8 +464,8 @@ export function KdsBoard() {
           heading="Kitchen floor"
           description={
             queue
-              ? `Station ${queue.stationId} · business date ${queue.businessDate}`
-              : 'Loading the station queue.'
+              ? `${runtime.deviceName} · ${runtime.branchName} · station ${queue.stationId} · business date ${queue.businessDate}`
+              : `${runtime.deviceName} · ${runtime.branchName} · loading the station queue.`
           }
           actions={
             <div className="flex flex-wrap items-center justify-end gap-2">

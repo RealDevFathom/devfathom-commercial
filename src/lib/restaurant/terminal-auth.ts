@@ -8,6 +8,7 @@ import type {
   RestaurantTerminalSession,
 } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { publicRequestOrigin } from '@/lib/http-origin';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
   isDeviceSecretFormat,
@@ -78,6 +79,7 @@ export type TerminalContext = TerminalDeviceContext & {
 
 const BEARER_PREFIX = 'Bearer ';
 const SESSION_HEADER = 'x-terminal-session';
+export const TERMINAL_DEVICE_COOKIE = 'devfathom-terminal';
 
 /**
  * Shape a domain error thrown by a terminal handler into its public HTTP response, or
@@ -125,11 +127,35 @@ function tooManyRequests(retryAfter: number): NextResponse {
 }
 
 /** Extract the raw device secret from the Authorization header, if well-formed. */
-function deviceSecretFromRequest(request: Request): string | null {
+function cookieValue(request: Request, name: string): string | null {
+  const cookie = request.headers.get('cookie');
+  if (!cookie) return null;
+  for (const part of cookie.split(';')) {
+    const [key, ...value] = part.trim().split('=');
+    if (key === name) return decodeURIComponent(value.join('='));
+  }
+  return null;
+}
+
+function deviceSecretFromRequest(request: Request): { secret: string; cookie: boolean } | null {
   const header = request.headers.get('authorization');
-  if (!header || !header.startsWith(BEARER_PREFIX)) return null;
-  const secret = header.slice(BEARER_PREFIX.length).trim();
-  return isDeviceSecretFormat(secret) ? secret : null;
+  if (header?.startsWith(BEARER_PREFIX)) {
+    const secret = header.slice(BEARER_PREFIX.length).trim();
+    return isDeviceSecretFormat(secret) ? { secret, cookie: false } : null;
+  }
+  const secret = cookieValue(request, TERMINAL_DEVICE_COOKIE);
+  return secret && isDeviceSecretFormat(secret) ? { secret, cookie: true } : null;
+}
+
+function cookieOriginAllowed(request: Request): boolean {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(request.method.toUpperCase())) return true;
+  const origin = request.headers.get('origin');
+  if (!origin) return false;
+  try {
+    return new URL(origin).origin.toLowerCase() === publicRequestOrigin(request);
+  } catch {
+    return false;
+  }
 }
 
 /** Map a C5 revalidation failure to an HTTP status + message. */
@@ -214,10 +240,13 @@ async function authenticateDevice(request: Request): Promise<DeviceDiscovery | N
   const ipGate = rateLimit(`terminal:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
   if (!ipGate.ok) return tooManyRequests(ipGate.retryAfter);
 
-  const secret = deviceSecretFromRequest(request);
-  if (!secret) return unauthorized('Missing or malformed device credential.');
+  const credential = deviceSecretFromRequest(request);
+  if (!credential) return unauthorized('Terminal browser is not enrolled.');
+  if (credential.cookie && !cookieOriginAllowed(request)) {
+    return forbidden('Terminal request origin was not accepted.');
+  }
 
-  const discovery = await discoverDevice(secret);
+  const discovery = await discoverDevice(credential.secret);
   if (!discovery) return unauthorized('Unknown or unauthorized device.');
 
   const deviceGate = rateLimit(
