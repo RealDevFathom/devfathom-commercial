@@ -57,6 +57,21 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  async function setPanelOpen(next: boolean) {
+    if (busy) return;
+    setOpen(next);
+    if (!next) return;
+    setPending('load');
+    setError(null);
+    try {
+      setDrawer(await request<OpenResult | null>('/api/restaurant/cash/drawer/current'));
+    } catch (requestError) {
+      setError(message(requestError));
+    } finally {
+      setPending(null);
+    }
+  }
+
   async function openDrawer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending || !MONEY.test(openingFloat)) {
@@ -145,7 +160,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   const busy = pending !== null;
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !busy && setOpen(next)}>
+    <Dialog open={open} onOpenChange={(next) => void setPanelOpen(next)}>
       <DialogTrigger
         render={<Button type="button" variant="outline" className="h-11" />}
         disabled={disabled}
@@ -163,10 +178,11 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <p className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-text-body">
-          Drawer state exists only in this page memory. Reloading or locking loses the reference
-          because L5 has no current-drawer lookup; verify drawer state before another action.
-        </p>
+        {pending === 'load' ? (
+          <p role="status" className="text-sm text-text-muted">
+            Recovering this register’s drawer…
+          </p>
+        ) : null}
 
         {notice ? (
           <p role="status" className="text-sm text-success">
@@ -182,7 +198,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
         {!drawer ? (
           <SectionCard
             eyebrow="Drawer state"
-            title={closed ? 'Closed drawer' : 'No drawer in memory'}
+            title={closed ? 'Closed drawer' : 'No open drawer'}
             actions={
               <StatusPill
                 status={closed ? 'closed' : 'not open'}

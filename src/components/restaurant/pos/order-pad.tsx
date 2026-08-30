@@ -4,6 +4,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useStat
 
 import { CheckoutPanel, type TerminalRequest, type TerminalRequestOptions } from './checkout-panel';
 import { DrawerPanel } from './drawer-panel';
+import { DayClosePanel } from './day-close-panel';
 import { MenuGrid, type AddMenuItemInput, type EffectiveMenu } from './menu-grid';
 import { OperatorSwitch, type OperatorSwitchInput } from './operator-switch';
 import { OrderTicketPanel, type OrderDetail, type VoidItemInput } from './order-ticket-panel';
@@ -734,6 +735,7 @@ export function OrderPad() {
                 onSwitch={switchOperator}
               />
               <DrawerPanel request={checkoutRequest} disabled={busy} />
+              <DayClosePanel request={checkoutRequest} disabled={busy} />
               <Button
                 type="button"
                 variant="outline"

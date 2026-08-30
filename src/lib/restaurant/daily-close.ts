@@ -397,6 +397,7 @@ export type CutCloseResult = {
 export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
+    await lockDailyClose(tx, input.branchId, input.businessDate);
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close');
     if (idem.replay) return replayClose(tx, idem.resultRef);
 
@@ -472,6 +473,7 @@ export async function correctClose(
   }
 
   return runMoneyTransaction(db, async (tx) => {
+    await lockDailyClose(tx, input.branchId, input.businessDate);
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_correct');
     if (idem.replay) {
       const result = await replayClose(tx, idem.resultRef);
@@ -535,6 +537,18 @@ export async function correctClose(
       replayed: false,
     };
   });
+}
+
+/** Serialize a close chain at the organization + branch + business-date grain.
+ * The transaction-scoped advisory lock releases automatically on commit/rollback. */
+async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: string): Promise<void> {
+  const branch = await tx.restaurantBranch.findUnique({
+    where: { id: branchId },
+    select: { organizationId: true },
+  });
+  if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
+  const key = `${branch.organizationId}:${branchId}:${businessDate}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
