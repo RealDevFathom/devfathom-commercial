@@ -2,7 +2,9 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { router, capabilityProcedure } from '../trpc';
+import type { TRPCContext } from '../trpc';
 import {
   InventoryError,
   createStockCount,
@@ -66,6 +68,73 @@ const readProc = capabilityProcedure('inventory:read');
 const countProc = capabilityProcedure('inventory:count');
 const adjustProc = capabilityProcedure('inventory:adjust');
 const wasteProc = capabilityProcedure('inventory:waste');
+
+const ACTOR_DENIED = new TRPCError({
+  code: 'FORBIDDEN',
+  message: 'Your account is not linked to an active staff profile authorized for this branch.',
+});
+
+async function resolveInventoryActor(ctx: TRPCContext, branchIds: string[]) {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+
+  const actor = await ctx.db.restaurantStaffProfile.findFirst({
+    where: { userId: user.id, status: 'ACTIVE' },
+    select: { id: true, primaryBranchId: true },
+  });
+  if (!actor) throw ACTOR_DENIED;
+
+  const requiredBranchIds = [...new Set(branchIds)];
+  const assigned = await ctx.db.restaurantBranchAssignment.findMany({
+    where: { userId: user.id, branchId: { in: requiredBranchIds } },
+    select: { branchId: true },
+  });
+  const authorizedBranchIds = new Set(assigned.map(({ branchId }) => branchId));
+  if (actor.primaryBranchId) authorizedBranchIds.add(actor.primaryBranchId);
+
+  if (requiredBranchIds.every((branchId) => authorizedBranchIds.has(branchId))) {
+    return { staffProfileId: actor.id };
+  }
+
+  const configuresAllBranches = await can(
+    subjectFromSession(user),
+    'restaurant:configure',
+    undefined,
+    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+  );
+  if (!configuresAllBranches) throw ACTOR_DENIED;
+  return { staffProfileId: actor.id };
+}
+
+async function requireLocationBranch(ctx: TRPCContext, locationId: string): Promise<string> {
+  const location = await ctx.db.restaurantStockLocation.findUnique({
+    where: { id: locationId },
+    select: { branchId: true },
+  });
+  if (!location) throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock location not found.' });
+  return location.branchId;
+}
+
+async function requireCountBranch(ctx: TRPCContext, stockCountId: string): Promise<string> {
+  const count = await ctx.db.restaurantStockCount.findUnique({
+    where: { id: stockCountId },
+    select: { location: { select: { branchId: true } } },
+  });
+  if (!count) throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock count not found.' });
+  return count.location.branchId;
+}
+
+async function requireTransferBranches(ctx: TRPCContext, stockTransferId: string) {
+  const transfer = await ctx.db.restaurantStockTransfer.findUnique({
+    where: { id: stockTransferId },
+    select: {
+      sourceLocation: { select: { branchId: true } },
+      destinationLocation: { select: { branchId: true } },
+    },
+  });
+  if (!transfer) throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock transfer not found.' });
+  return [transfer.sourceLocation.branchId, transfer.destinationLocation.branchId];
+}
 
 function mapInventoryError(err: unknown): never {
   if (err instanceof InventoryError || err instanceof StockLedgerError) {
@@ -143,7 +212,9 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const actor = { staffProfileId: ctx.session.user.id };
+      const actor = await resolveInventoryActor(ctx, [
+        await requireLocationBranch(ctx, input.locationId),
+      ]);
       return createStockCount(ctx.db, { ...input, actor }).catch(mapInventoryError);
     }),
 
@@ -164,7 +235,9 @@ export const restaurantInventoryRouter = router({
   submitStockCount: countProc
     .input(z.object({ stockCountId: ID }).strict())
     .mutation(async ({ ctx, input }) => {
-      const actor = { staffProfileId: ctx.session.user.id };
+      const actor = await resolveInventoryActor(ctx, [
+        await requireCountBranch(ctx, input.stockCountId),
+      ]);
       return submitStockCount(ctx.db, { stockCountId: input.stockCountId, actor }).catch(
         mapInventoryError
       );
@@ -173,7 +246,9 @@ export const restaurantInventoryRouter = router({
   postStockCount: countProc
     .input(z.object({ stockCountId: ID }).strict())
     .mutation(async ({ ctx, input }) => {
-      const actor = { staffProfileId: ctx.session.user.id };
+      const actor = await resolveInventoryActor(ctx, [
+        await requireCountBranch(ctx, input.stockCountId),
+      ]);
       return postStockCount(ctx.db, { stockCountId: input.stockCountId, actor }).catch(
         mapInventoryError
       );
@@ -208,7 +283,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const actor = { staffProfileId: ctx.session.user.id };
+      const actor = await resolveInventoryActor(ctx, [
+        await requireLocationBranch(ctx, input.sourceLocationId),
+        await requireLocationBranch(ctx, input.destinationLocationId),
+      ]);
       return createStockTransfer(ctx.db, { ...input, actor }).catch(mapInventoryError);
     }),
 
@@ -230,7 +308,10 @@ export const restaurantInventoryRouter = router({
   completeStockTransfer: adjustProc
     .input(z.object({ stockTransferId: ID }).strict())
     .mutation(async ({ ctx, input }) => {
-      const actor = { staffProfileId: ctx.session.user.id };
+      const actor = await resolveInventoryActor(
+        ctx,
+        await requireTransferBranches(ctx, input.stockTransferId)
+      );
       return completeStockTransfer(ctx.db, { stockTransferId: input.stockTransferId, actor }).catch(
         mapInventoryError
       );
@@ -269,7 +350,9 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const actor = { staffProfileId: ctx.session.user.id };
+      const actor = await resolveInventoryActor(ctx, [
+        await requireLocationBranch(ctx, input.locationId),
+      ]);
       const movement = await postWastage(ctx.db, { ...input, actor }).catch(mapInventoryError);
       return { id: movement.id, quantity: qty(movement.quantity) };
     }),
@@ -290,7 +373,9 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const actor = { staffProfileId: ctx.session.user.id };
+      const actor = await resolveInventoryActor(ctx, [
+        await requireLocationBranch(ctx, input.locationId),
+      ]);
       const movement = await postSaleReversal(ctx.db, { ...input, actor }).catch(mapInventoryError);
       return { id: movement.id, quantity: qty(movement.quantity) };
     }),
