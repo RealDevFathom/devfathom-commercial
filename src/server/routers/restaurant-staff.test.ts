@@ -265,11 +265,14 @@ describe('credential mutations suppress the plaintext secret (C4)', () => {
 describe('credential device branch authorization', () => {
   function branchManager(...authorizedBranchIds: string[]) {
     mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
-    mocks.staffFindFirst.mockResolvedValue({
-      id: 'manager',
-      jobRoles: authorizedBranchIds.map((branchId) => ({ branchId })),
-      directCapabilityGrants: [],
-    });
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'manager',
+        primaryBranchId: authorizedBranchIds[0] ?? null,
+        jobRoles: authorizedBranchIds.map((branchId) => ({ branchId })),
+        directCapabilityGrants: [],
+      },
+    ]);
     mocks.staffFindUnique.mockResolvedValue({
       primaryBranchId: 'branch_1',
       jobRoles: [],
