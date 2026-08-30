@@ -23,6 +23,23 @@ function limitDb(counts: number[]) {
   };
 }
 
+type FailClosedCase = {
+  limits: Readonly<Record<string, number>>;
+  reason: 'LIMIT_UNAVAILABLE' | 'LIMIT_REACHED';
+};
+
+const monthlyFailClosedCases: FailClosedCase[] = [
+  { limits: {}, reason: 'LIMIT_UNAVAILABLE' },
+  { limits: { 'pos.orders.monthly': -1 }, reason: 'LIMIT_UNAVAILABLE' },
+  { limits: { 'pos.orders.monthly': 0 }, reason: 'LIMIT_REACHED' },
+];
+
+const registerFailClosedCases: FailClosedCase[] = [
+  { limits: {}, reason: 'LIMIT_UNAVAILABLE' },
+  { limits: { 'pos.concurrentRegisters.max': 1.5 }, reason: 'LIMIT_UNAVAILABLE' },
+  { limits: { 'pos.concurrentRegisters.max': 0 }, reason: 'LIMIT_REACHED' },
+];
+
 describe('restaurant consuming entitlement limits', () => {
   it.each([
     { used: 1, max: 2, denied: false, label: 'below' },
@@ -50,22 +67,21 @@ describe('restaurant consuming entitlement limits', () => {
     });
   });
 
-  it.each([
-    { limits: {}, reason: 'LIMIT_UNAVAILABLE' },
-    { limits: { 'pos.orders.monthly': -1 }, reason: 'LIMIT_UNAVAILABLE' },
-    { limits: { 'pos.orders.monthly': 0 }, reason: 'LIMIT_REACHED' },
-  ])('fails closed for missing, invalid, and zero monthly limits', async ({ limits, reason }) => {
-    const { db, queryRaw, orderCount } = limitDb([0]);
-    await expect(
-      enforceMonthlyOrderLimit(
-        db,
-        { organizationId: 'org-a', entitlementLimits: limits },
-        new Date('2026-10-01T00:00:00.000Z')
-      )
-    ).rejects.toMatchObject({ reason });
-    expect(queryRaw).not.toHaveBeenCalled();
-    expect(orderCount).not.toHaveBeenCalled();
-  });
+  it.each(monthlyFailClosedCases)(
+    'fails closed for missing, invalid, and zero monthly limits',
+    async ({ limits, reason }) => {
+      const { db, queryRaw, orderCount } = limitDb([0]);
+      await expect(
+        enforceMonthlyOrderLimit(
+          db,
+          { organizationId: 'org-a', entitlementLimits: limits },
+          new Date('2026-10-01T00:00:00.000Z')
+        )
+      ).rejects.toMatchObject({ reason });
+      expect(queryRaw).not.toHaveBeenCalled();
+      expect(orderCount).not.toHaveBeenCalled();
+    }
+  );
 
   it('counts cancelled orders and every branch by organization and persisted business date', async () => {
     const { db, orderCount } = limitDb([0]);
@@ -102,19 +118,18 @@ describe('restaurant consuming entitlement limits', () => {
     });
   });
 
-  it.each([
-    { limits: {}, reason: 'LIMIT_UNAVAILABLE' },
-    { limits: { 'pos.concurrentRegisters.max': 1.5 }, reason: 'LIMIT_UNAVAILABLE' },
-    { limits: { 'pos.concurrentRegisters.max': 0 }, reason: 'LIMIT_REACHED' },
-  ])('fails closed before any register-session write', async ({ limits, reason }) => {
-    const { db, queryRaw, drawerCount } = limitDb([0]);
-    await expect(
-      enforceConcurrentRegisterLimit(db, {
-        organizationId: 'org-a',
-        entitlementLimits: limits,
-      })
-    ).rejects.toMatchObject({ reason });
-    expect(queryRaw).not.toHaveBeenCalled();
-    expect(drawerCount).not.toHaveBeenCalled();
-  });
+  it.each(registerFailClosedCases)(
+    'fails closed before any register-session write',
+    async ({ limits, reason }) => {
+      const { db, queryRaw, drawerCount } = limitDb([0]);
+      await expect(
+        enforceConcurrentRegisterLimit(db, {
+          organizationId: 'org-a',
+          entitlementLimits: limits,
+        })
+      ).rejects.toMatchObject({ reason });
+      expect(queryRaw).not.toHaveBeenCalled();
+      expect(drawerCount).not.toHaveBeenCalled();
+    }
+  );
 });

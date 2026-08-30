@@ -44,7 +44,26 @@ function configuredLimit(
   return resolution.value;
 }
 
-async function lockOrganization(tx: ScopedDb): Promise<void> {
+function transactionScopedDb(db: ScopedDb, tx: Prisma.TransactionClient): ScopedDb {
+  return new Proxy(db, {
+    get(target, property, receiver) {
+      switch (property) {
+        case 'restaurantRegisteredDevice':
+          return tx.restaurantRegisteredDevice;
+        case 'restaurantStaffProfile':
+          return tx.restaurantStaffProfile;
+        case 'restaurantBranch':
+          return tx.restaurantBranch;
+        case 'user':
+          return tx.user;
+        default:
+          return Reflect.get(target, property, receiver);
+      }
+    },
+  });
+}
+
+async function lockOrganization(tx: Prisma.TransactionClient): Promise<void> {
   await tx.$queryRaw(
     Prisma.sql`SELECT id FROM organizations WHERE id = current_setting('app.current_organization_id', true) FOR UPDATE`
   );
@@ -74,6 +93,7 @@ export async function enrollDeviceWithinCommercialLimits(
   const terminalsMax = kind === 'POS' ? configuredLimit(limits, POS_TERMINALS_LIMIT) : undefined;
 
   return db.$transaction(async (tx) => {
+    const scopedTx = transactionScopedDb(db, tx);
     await lockOrganization(tx);
     const registeredDevices = await tx.restaurantRegisteredDevice.count({
       where: { status: 'ACTIVE' },
@@ -87,7 +107,7 @@ export async function enrollDeviceWithinCommercialLimits(
       });
       if (terminals >= terminalsMax) limitReached('POS terminal', terminalsMax);
     }
-    return enrollDevice(tx, input);
+    return enrollDevice(scopedTx, input);
   });
 }
 
@@ -106,9 +126,10 @@ export async function createStaffProfileWithinCommercialLimit(
   }
   const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
   return db.$transaction(async (tx) => {
+    const scopedTx = transactionScopedDb(db, tx);
     await lockOrganization(tx);
-    await assertOperatorCapacity(tx, operatorsMax);
-    return createStaffProfile(tx, input);
+    await assertOperatorCapacity(scopedTx, operatorsMax);
+    return createStaffProfile(scopedTx, input);
   });
 }
 
@@ -121,13 +142,14 @@ export async function updateStaffProfileWithinCommercialLimit(
   if (patch.status !== 'ACTIVE') return updateStaffProfile(db, id, patch);
   const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
   return db.$transaction(async (tx) => {
+    const scopedTx = transactionScopedDb(db, tx);
     await lockOrganization(tx);
     const current = await tx.restaurantStaffProfile.findUnique({
       where: { id },
       select: { status: true },
     });
-    if (current?.status !== 'ACTIVE') await assertOperatorCapacity(tx, operatorsMax);
-    return updateStaffProfile(tx, id, patch);
+    if (current?.status !== 'ACTIVE') await assertOperatorCapacity(scopedTx, operatorsMax);
+    return updateStaffProfile(scopedTx, id, patch);
   });
 }
 
@@ -140,12 +162,13 @@ export async function setStaffProfileStatusWithinCommercialLimit(
   if (status !== 'ACTIVE') return setStaffProfileStatus(db, id, status);
   const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
   return db.$transaction(async (tx) => {
+    const scopedTx = transactionScopedDb(db, tx);
     await lockOrganization(tx);
     const current = await tx.restaurantStaffProfile.findUnique({
       where: { id },
       select: { status: true },
     });
-    if (current?.status !== 'ACTIVE') await assertOperatorCapacity(tx, operatorsMax);
-    return setStaffProfileStatus(tx, id, status);
+    if (current?.status !== 'ACTIVE') await assertOperatorCapacity(scopedTx, operatorsMax);
+    return setStaffProfileStatus(scopedTx, id, status);
   });
 }
