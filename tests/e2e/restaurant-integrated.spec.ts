@@ -42,10 +42,10 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
     ['/restaurant/loyalty', 'Customers & Loyalty'],
     ['/restaurant/insights', 'Insights'],
   ];
+  const origin = await signInAs(page, 'restaurantAdmin');
 
   for (const width of [375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    const origin = await signInAs(page, 'restaurantAdmin');
     const response = await page.goto(new URL(routes[0][0], origin).href);
     expect(response?.ok(), `dashboard at ${width}px`).toBe(true);
     await expect(page).toHaveURL(new RegExp(`${routes[0][0]}(?:\\?|$)`));
@@ -55,14 +55,12 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
   }
 
   for (const [route, heading] of routes.slice(1)) {
-    const origin = await signInAs(page, 'restaurantAdmin');
     const response = await page.goto(new URL(route, origin).href);
     expect(response?.ok(), route).toBe(true);
     await expect(page).toHaveURL(new RegExp(`${route}(?:\\?|$)`));
     await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
 
-  const origin = await signInAs(page, 'restaurantAdmin');
   const forbidden = await page.goto(
     new URL(
       `/dashboard?organizationId=org_restaurant_b_forbidden&branchId=${fixture.branchA2Id}`,
