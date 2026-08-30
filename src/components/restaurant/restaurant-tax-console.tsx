@@ -21,6 +21,9 @@ export function RestaurantTaxConsole() {
   const utils = trpc.useUtils();
   const configuration = trpc.restaurantTax.configuration.useQuery();
   const [selectedId, setSelectedId] = useState('');
+  const [customMode, setCustomMode] = useState<'EXCLUSIVE' | 'INCLUSIVE'>('EXCLUSIVE');
+  const [previewAmount, setPreviewAmount] = useState('1000.00');
+  const [previewRate, setPreviewRate] = useState('0.00');
   const idempotencyKey = useRef(crypto.randomUUID());
   const selected = useMemo(
     () => configuration.data?.profiles.find((profile) => profile.id === selectedId),
@@ -38,6 +41,44 @@ export function RestaurantTaxConsole() {
     },
     onError: (error) => toast.error(error.message),
   });
+  const customPublication = trpc.restaurantTax.publishCustom.useMutation({
+    onSuccess: () => {
+      toast.success('Customer-supplied tax profile published.');
+      idempotencyKey.current = crypto.randomUUID();
+      void utils.restaurantTax.configuration.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const submitCustom = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    if (data.get('accountantConfirmation') !== 'on') return;
+    customPublication.mutate({
+      branchId: String(data.get('customBranchId') ?? ''),
+      profileName: String(data.get('profileName') ?? ''),
+      jurisdictionCode: String(data.get('jurisdictionCode')) as
+        'PK-PB' | 'PK-SD' | 'PK-KP' | 'PK-ICT' | 'PK-BA',
+      effectiveFrom: String(data.get('customEffectiveFrom') ?? ''),
+      effectiveTo: String(data.get('customEffectiveTo') ?? '') || undefined,
+      priceMode: customMode,
+      rates: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+        paymentCategory,
+        rate: String(data.get(`rate${paymentCategory}`) ?? ''),
+      })),
+      approvalReference: String(data.get('customApprovalReference') ?? ''),
+      accountantConfirmation: true,
+      replaceOpenProfile: data.get('replaceOpenProfile') === 'on',
+      idempotencyKey: idempotencyKey.current,
+    });
+  };
+
+  const amount = Number(previewAmount) || 0;
+  const rate = Number(previewRate) || 0;
+  const preview = trpc.restaurantTax.previewCustom.useQuery(
+    { amount: previewAmount, rate: previewRate, priceMode: customMode },
+    { enabled: amount >= 0 && rate >= 0 && rate <= 1 }
+  );
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -86,7 +127,7 @@ export function RestaurantTaxConsole() {
             <form className="space-y-5" onSubmit={submit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className={labelClass}>
-                  Branch
+                  Preset branch
                   <select className={selectClass} name="branchId" required defaultValue="">
                     <option value="" disabled>
                       Select a branch
@@ -146,7 +187,7 @@ export function RestaurantTaxConsole() {
                   />
                 </label>
                 <label className={labelClass}>
-                  Accountant approval reference
+                  Preset accountant approval reference
                   <Input
                     className="mt-1 min-h-11"
                     name="approvalReference"
@@ -216,6 +257,144 @@ export function RestaurantTaxConsole() {
               </label>
               <Button type="submit" disabled={!selected?.enabled || activation.isPending}>
                 {activation.isPending ? 'Activating…' : 'Activate tax profile'}
+              </Button>
+            </form>
+          </SectionCard>
+
+          <SectionCard
+            eyebrow="Customer supplied · Not verified by DevFathom"
+            title="Custom tax profile"
+          >
+            <p className="mb-5 text-sm text-text-muted">
+              Enter rates supplied and reviewed by your accountant. DevFathom does not verify these
+              rates and this configuration is not legal or tax advice.
+            </p>
+            <form className="space-y-5" onSubmit={submitCustom}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className={labelClass}>
+                  Profile name
+                  <Input className="mt-1 min-h-11" name="profileName" required maxLength={120} />
+                </label>
+                <label className={labelClass}>
+                  Branch
+                  <select className={selectClass} name="customBranchId" required defaultValue="">
+                    <option value="" disabled>
+                      Select a branch
+                    </option>
+                    {configuration.data?.branches.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className={labelClass}>
+                  Pakistan jurisdiction
+                  <select className={selectClass} name="jurisdictionCode" required defaultValue="">
+                    <option value="" disabled>
+                      Select jurisdiction
+                    </option>
+                    <option value="PK-PB">Punjab</option>
+                    <option value="PK-SD">Sindh</option>
+                    <option value="PK-KP">Khyber Pakhtunkhwa</option>
+                    <option value="PK-ICT">Islamabad Capital Territory</option>
+                    <option value="PK-BA">Balochistan</option>
+                  </select>
+                </label>
+                <label className={labelClass}>
+                  Price mode
+                  <select
+                    className={selectClass}
+                    name="priceMode"
+                    value={customMode}
+                    onChange={(event) =>
+                      setCustomMode(event.target.value as 'EXCLUSIVE' | 'INCLUSIVE')
+                    }
+                  >
+                    <option value="EXCLUSIVE">Exclusive — add tax</option>
+                    <option value="INCLUSIVE">Inclusive — extract tax</option>
+                  </select>
+                </label>
+                <label className={labelClass}>
+                  Effective date (branch local)
+                  <Input
+                    className="mt-1 min-h-11"
+                    name="customEffectiveFrom"
+                    type="date"
+                    required
+                  />
+                </label>
+                <label className={labelClass}>
+                  Optional end date (branch local)
+                  <Input className="mt-1 min-h-11" name="customEffectiveTo" type="date" />
+                </label>
+                {(['CASH', 'CARD', 'OTHER'] as const).map((category) => (
+                  <label key={category} className={labelClass}>
+                    {category} rate (decimal 0..1)
+                    <Input
+                      className="mt-1 min-h-11"
+                      name={`rate${category}`}
+                      inputMode="decimal"
+                      pattern="(?:0(?:\\.\\d{1,6})?|1(?:\\.0{1,6})?)"
+                      required
+                      onChange={
+                        category === 'CASH'
+                          ? (event) => setPreviewRate(event.target.value)
+                          : undefined
+                      }
+                      placeholder="0.150000"
+                    />
+                  </label>
+                ))}
+                <label className={labelClass}>
+                  Accountant approval reference
+                  <Input
+                    className="mt-1 min-h-11"
+                    name="customApprovalReference"
+                    required
+                    maxLength={240}
+                  />
+                </label>
+              </div>
+              <div
+                aria-live="polite"
+                className="rounded-md border border-border-default bg-surface-sunken p-4 text-sm text-text-strong"
+              >
+                <p className="font-mono text-xs uppercase text-text-muted">
+                  Live calculation preview · Cash
+                </p>
+                <label className={`${labelClass} mt-3`}>
+                  Sample amount
+                  <Input
+                    className="mt-1 min-h-11"
+                    value={previewAmount}
+                    onChange={(event) => setPreviewAmount(event.target.value)}
+                    inputMode="decimal"
+                  />
+                </label>
+                <p className="mt-3 font-mono tabular-nums">
+                  {preview.data
+                    ? `Net ${preview.data.net} · Tax ${preview.data.tax} · Total ${preview.data.gross} · settled once`
+                    : 'Enter a valid sample amount and Cash rate to preview settlement.'}
+                </p>
+              </div>
+              <label className="flex items-start gap-3 text-sm text-text-strong">
+                <input
+                  className="mt-1 size-4"
+                  type="checkbox"
+                  name="accountantConfirmation"
+                  required
+                />
+                I confirm these exact rates were supplied/reviewed by my accountant; DevFathom has
+                not verified them.
+              </label>
+              <label className="flex items-start gap-3 text-sm text-text-strong">
+                <input className="mt-1 size-4" type="checkbox" name="replaceOpenProfile" />
+                Atomically close the current open profile at this profile’s start time and replace
+                it.
+              </label>
+              <Button type="submit" disabled={customPublication.isPending}>
+                {customPublication.isPending ? 'Publishing…' : 'Publish custom profile'}
               </Button>
             </form>
           </SectionCard>

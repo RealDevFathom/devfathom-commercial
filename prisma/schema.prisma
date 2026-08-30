@@ -2440,6 +2440,10 @@ model RestaurantTaxProfileVersion {
   activationIdempotencyKey String?
   activationPayloadHash String?
   eligibilityEvidence Json?
+  profileName         String?
+  jurisdictionCode    String?
+  priceMode           RestaurantTaxPriceMode?
+  evidenceKind        String?
   createdAt         DateTime                   @default(now())
   updatedAt         DateTime                   @updatedAt
 

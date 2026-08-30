@@ -22,7 +22,11 @@ vi.mock('@/lib/trpc', () => ({
           refetch: vi.fn(),
         }),
       },
+      previewCustom: {
+        useQuery: () => ({ data: { net: '1000.00', tax: '0.00', gross: '1000.00' } }),
+      },
       activate: { useMutation: () => ({ mutate: mocks.mutate, isPending: false }) },
+      publishCustom: { useMutation: () => ({ mutate: mocks.mutate, isPending: false }) },
     },
   },
 }));
@@ -65,12 +69,12 @@ describe('restaurant tax configuration UI', () => {
 
   it('submits explicit branch, profile, date, approval, and eligibility evidence', () => {
     render(<RestaurantTaxConsole />);
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Preset branch'), { target: { value: 'branch_1' } });
     fireEvent.change(screen.getByLabelText('Jurisdiction and profile'), {
       target: { value: 'PK-ICT-RESTAURANT' },
     });
     fireEvent.change(screen.getByLabelText('Effective date'), { target: { value: '2026-07-01' } });
-    fireEvent.change(screen.getByLabelText('Accountant approval reference'), {
+    fireEvent.change(screen.getByLabelText('Preset accountant approval reference'), {
       target: { value: 'Memo 42' },
     });
     for (const label of [
@@ -89,5 +93,21 @@ describe('restaurant tax configuration UI', () => {
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
       idempotencyKey: expect.any(String),
     });
+  });
+
+  it('offers all five Pakistan jurisdictions and clearly labels custom evidence', () => {
+    render(<RestaurantTaxConsole />);
+    expect(screen.getByText('Custom tax profile')).toBeInTheDocument();
+    expect(screen.getByText(/customer supplied · not verified by devfathom/i)).toBeInTheDocument();
+    const jurisdiction = screen.getByLabelText('Pakistan jurisdiction');
+    for (const name of [
+      'Punjab',
+      'Sindh',
+      'Khyber Pakhtunkhwa',
+      'Islamabad Capital Territory',
+      'Balochistan',
+    ])
+      expect(jurisdiction).toHaveTextContent(name);
+    expect(screen.getByText(/live calculation preview/i)).toBeInTheDocument();
   });
 });
