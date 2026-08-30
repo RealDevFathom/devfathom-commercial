@@ -29,16 +29,27 @@ function parsePercentage(value: string): { decimal?: string; error?: string } {
   const trimmed = value.trim();
   if (!trimmed) return { error: 'Enter a tax rate percentage.' };
   if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) {
-    const numericValue = Number(trimmed);
-    if (Number.isFinite(numericValue) && numericValue < 0) {
+    if (/^-(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) {
       return { error: 'Tax rate percentage cannot be negative.' };
     }
     return { error: 'Enter a valid number.' };
   }
 
-  const percentage = Number(trimmed);
-  if (percentage > 100) return { error: 'Tax rate percentage cannot exceed 100.' };
-  return { decimal: String(percentage / 100) };
+  const [rawWhole = '0', fraction = ''] = trimmed.split('.');
+  const whole = (rawWhole || '0').replace(/^0+(?=\d)/, '');
+  if (
+    whole.length > 3 ||
+    (whole.length === 3 && (whole > '100' || (whole === '100' && /[1-9]/.test(fraction))))
+  ) {
+    return { error: 'Tax rate percentage cannot exceed 100.' };
+  }
+
+  const decimalPlaces = fraction.length + 2;
+  const coefficient = `${whole}${fraction}`.replace(/^0+/, '') || '0';
+  const shifted = coefficient.padStart(decimalPlaces + 1, '0');
+  const decimalFraction = shifted.slice(-decimalPlaces).replace(/0+$/, '');
+  const decimalWhole = shifted.slice(0, -decimalPlaces);
+  return { decimal: decimalFraction ? `${decimalWhole}.${decimalFraction}` : decimalWhole };
 }
 
 export function RestaurantTaxConsole() {
@@ -434,7 +445,7 @@ export function RestaurantTaxConsole() {
                   />
                 </label>
                 <p className="mt-3 font-mono tabular-nums">
-                  {preview.data
+                  {rate !== undefined && preview.data
                     ? `Net ${preview.data.net} · Tax ${preview.data.tax} · Total ${preview.data.gross} · settled once`
                     : 'Enter a valid sample amount and Cash rate to preview settlement.'}
                 </p>
