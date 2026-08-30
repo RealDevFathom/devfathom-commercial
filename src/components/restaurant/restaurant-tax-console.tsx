@@ -26,6 +26,10 @@ export function RestaurantTaxConsole() {
     () => configuration.data?.profiles.find((profile) => profile.id === selectedId),
     [configuration.data, selectedId]
   );
+  const unavailableProfiles = useMemo(
+    () => configuration.data?.profiles.filter((profile) => !profile.enabled) ?? [],
+    [configuration.data]
+  );
   const activation = trpc.restaurantTax.activate.useMutation({
     onSuccess: () => {
       toast.success('Tax profile activated.');
@@ -37,7 +41,7 @@ export function RestaurantTaxConsole() {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected?.enabled) return;
     const data = new FormData(event.currentTarget);
     activation.mutate({
       branchId: String(data.get('branchId') ?? ''),
@@ -98,6 +102,7 @@ export function RestaurantTaxConsole() {
                   Jurisdiction and profile
                   <select
                     aria-label="Jurisdiction and profile"
+                    aria-describedby="unavailable-tax-profiles"
                     className={selectClass}
                     name="profileId"
                     required
@@ -114,6 +119,21 @@ export function RestaurantTaxConsole() {
                       </option>
                     ))}
                   </select>
+                  {unavailableProfiles.length ? (
+                    <span
+                      id="unavailable-tax-profiles"
+                      className="mt-2 block space-y-1 font-sans text-xs font-normal normal-case tracking-normal text-text-muted"
+                    >
+                      <span className="block font-medium text-text-strong">
+                        Unavailable profiles
+                      </span>
+                      {unavailableProfiles.map((profile) => (
+                        <span key={profile.id} className="block">
+                          {profile.name}: {profile.disabledReason}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
                 </label>
                 <label className={labelClass}>
                   Effective date

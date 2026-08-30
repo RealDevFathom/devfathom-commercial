@@ -46,6 +46,23 @@ describe('restaurant tax configuration UI', () => {
     expect(screen.getByRole('button', { name: 'Activate tax profile' })).toBeDisabled();
   });
 
+  it('explains why a disabled profile is unavailable and prevents submission', () => {
+    render(<RestaurantTaxConsole />);
+    const profileSelect = screen.getByLabelText('Jurisdiction and profile');
+    const punjab = screen.getByRole('option', { name: /Punjab restaurant \(unavailable\)/i });
+
+    expect(punjab).toBeDisabled();
+    expect(profileSelect).toHaveAccessibleDescription(
+      expect.stringContaining(
+        'Punjab restaurant: A current official PRA rate instrument and accountant approval are required.'
+      )
+    );
+
+    fireEvent.change(profileSelect, { target: { value: 'PK-PB-RESTAURANT' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Activate tax profile' }).closest('form')!);
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
   it('submits explicit branch, profile, date, approval, and eligibility evidence', () => {
     render(<RestaurantTaxConsole />);
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
