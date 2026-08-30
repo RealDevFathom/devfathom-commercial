@@ -3,7 +3,7 @@
 | Field                         | Value                                                                                                                               |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Document version              | `1.4`                                                                                                                               |
-| Document status               | `FINAL PLANNING BASELINE — READY FOR PHASE 0`                                                                                       |
+| Document status               | `RECONCILED REPOSITORY-EVIDENCE BASELINE — PRODUCTION READINESS NOT CLAIMED`                                                        |
 | Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                      |
 | Product                       | DevFathom Commercial                                                                                                                |
 | Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                     |
