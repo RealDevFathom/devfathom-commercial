@@ -14,6 +14,7 @@ import {
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
+import { resolveRestaurantE2eDatabaseUrl } from './restaurant-e2e-database.js';
 
 export const RESTAURANT_E2E = {
   organizationId: 'org_chai_chowk',
@@ -85,8 +86,7 @@ function deviceSecretHash(secret: string): string {
 }
 
 async function main() {
-  const databaseUrl = process.env.TEST_DATABASE_URL;
-  if (!databaseUrl) throw new Error('TEST_DATABASE_URL is required; refusing DATABASE_URL.');
+  const databaseUrl = resolveRestaurantE2eDatabaseUrl();
 
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
@@ -184,7 +184,12 @@ async function main() {
         });
         await tx.restaurantBranch.upsert({
           where: { id: RESTAURANT_E2E.branchA2Id },
-          update: { name: 'DHA Café', active: true },
+          update: {
+            name: 'DHA Café',
+            timezone: 'Asia/Karachi',
+            active: true,
+            isDefault: false,
+          },
           create: {
             id: RESTAURANT_E2E.branchA2Id,
             name: 'DHA Café',
@@ -197,7 +202,12 @@ async function main() {
         });
         await tx.restaurantFloor.upsert({
           where: { id: IDS.floor },
-          update: { name: 'Main dining' },
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'Main dining',
+            sortOrder: 0,
+            active: true,
+          },
           create: {
             id: IDS.floor,
             branchId: RESTAURANT_E2E.branchId,
@@ -208,7 +218,7 @@ async function main() {
         });
         await tx.restaurantTable.upsert({
           where: { id: IDS.table },
-          update: { code: 'Table 12', capacity: 4 },
+          update: { floorId: IDS.floor, code: 'Table 12', capacity: 4, active: true },
           create: {
             id: IDS.table,
             floorId: IDS.floor,
@@ -424,7 +434,19 @@ async function main() {
         });
         await tx.restaurantDrawerSession.upsert({
           where: { id: IDS.drawer },
-          update: {},
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            deviceId: RESTAURANT_E2E.posDeviceId,
+            staffProfileId: RESTAURANT_E2E.operatorId,
+            businessDate: BUSINESS_DATE,
+            status: 'OPEN',
+            openedAt: FIXED_AT,
+            closedAt: null,
+            openingFloat: '100.00',
+            expectedCash: null,
+            countedCash: null,
+            variance: null,
+          },
           create: {
             id: IDS.drawer,
             branchId: RESTAURANT_E2E.branchId,
@@ -467,7 +489,7 @@ async function main() {
         });
         await tx.restaurantModifierGroup.upsert({
           where: { id: IDS.modifierGroup },
-          update: { minSelect: 1, maxSelect: 1 },
+          update: { name: 'Heat', minSelect: 1, maxSelect: 1 },
           create: {
             id: IDS.modifierGroup,
             name: 'Heat',
@@ -479,7 +501,12 @@ async function main() {
         });
         await tx.restaurantModifierOption.upsert({
           where: { id: IDS.modifierOption },
-          update: { name: 'Spicy', priceDelta: '1.50' },
+          update: {
+            modifierGroupId: IDS.modifierGroup,
+            name: 'Spicy',
+            priceDelta: '1.50',
+            sortOrder: 0,
+          },
           create: {
             id: IDS.modifierOption,
             modifierGroupId: IDS.modifierGroup,
@@ -491,7 +518,7 @@ async function main() {
         });
         await tx.restaurantProductModifierGroup.upsert({
           where: { id: IDS.productModifier },
-          update: {},
+          update: { productId: IDS.product, modifierGroupId: IDS.modifierGroup, sortOrder: 0 },
           create: {
             id: IDS.productModifier,
             productId: IDS.product,
@@ -513,7 +540,7 @@ async function main() {
         });
         await tx.restaurantIngredient.upsert({
           where: { id: IDS.ingredient },
-          update: {},
+          update: { name: 'Tikka bun', baseUnitId: IDS.unit, referenceCost: '3.0000' },
           create: {
             id: IDS.ingredient,
             name: 'Tikka bun',
@@ -525,7 +552,11 @@ async function main() {
         });
         await tx.restaurantRecipe.upsert({
           where: { id: IDS.recipe },
-          update: {},
+          update: {
+            productId: IDS.product,
+            variantId: null,
+            name: 'Chicken Tikka Bun BOM',
+          },
           create: {
             id: IDS.recipe,
             productId: IDS.product,
@@ -536,7 +567,14 @@ async function main() {
         });
         await tx.restaurantRecipeVersion.upsert({
           where: { id: IDS.recipeVersion },
-          update: {},
+          update: {
+            recipeId: IDS.recipe,
+            versionNumber: 1,
+            status: 'ACTIVE',
+            portionCount: 1,
+            activatedAt: FIXED_AT,
+            supersededAt: null,
+          },
           create: {
             id: IDS.recipeVersion,
             recipeId: IDS.recipe,
@@ -550,7 +588,14 @@ async function main() {
         });
         await tx.restaurantRecipeLine.upsert({
           where: { id: IDS.recipeLine },
-          update: {},
+          update: {
+            recipeVersionId: IDS.recipeVersion,
+            ingredientId: IDS.ingredient,
+            subRecipeId: null,
+            quantity: '1.0000',
+            unitId: IDS.unit,
+            sortOrder: 0,
+          },
           create: {
             id: IDS.recipeLine,
             recipeVersionId: IDS.recipeVersion,
@@ -726,7 +771,11 @@ async function main() {
         });
         await tx.restaurantSopTemplate.upsert({
           where: { id: IDS.sopTemplate },
-          update: {},
+          update: {
+            name: 'Opening food-safety check',
+            category: 'OPENING',
+            isActive: true,
+          },
           create: {
             id: IDS.sopTemplate,
             name: 'Opening food-safety check',
@@ -737,7 +786,13 @@ async function main() {
         });
         await tx.restaurantSopTemplateVersion.upsert({
           where: { id: IDS.sopVersion },
-          update: {},
+          update: {
+            templateId: IDS.sopTemplate,
+            versionNumber: 1,
+            status: 'PUBLISHED',
+            publishedAt: FIXED_AT,
+            retiredAt: null,
+          },
           create: {
             id: IDS.sopVersion,
             templateId: IDS.sopTemplate,
@@ -750,7 +805,14 @@ async function main() {
         });
         await tx.restaurantSopTemplateStep.upsert({
           where: { id: IDS.sopStep },
-          update: {},
+          update: {
+            templateVersionId: IDS.sopVersion,
+            stepOrder: 1,
+            title: 'Record cold-storage temperature',
+            requiresPhoto: false,
+            requiresSignature: false,
+            requiresNote: true,
+          },
           create: {
             id: IDS.sopStep,
             templateVersionId: IDS.sopVersion,
@@ -763,7 +825,22 @@ async function main() {
         });
         await tx.restaurantSopAssignment.upsert({
           where: { id: IDS.sopAssignment },
-          update: {},
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            templateId: IDS.sopTemplate,
+            frequency: 'DAILY',
+            interval: 1,
+            daysOfWeek: [],
+            startDate: BUSINESS_DATE,
+            endDate: null,
+            dueTimeMinutes: 480,
+            windowMinutes: 1440,
+            graceMinutes: 0,
+            active: true,
+            assigneeTargetType: 'PERSON',
+            assigneeStaffProfileId: RESTAURANT_E2E.operatorId,
+            assigneeJobRoleId: null,
+          },
           create: {
             id: IDS.sopAssignment,
             branchId: RESTAURANT_E2E.branchId,
@@ -781,7 +858,22 @@ async function main() {
         });
         await tx.restaurantSopOccurrence.upsert({
           where: { id: IDS.sopOccurrence },
-          update: {},
+          update: {
+            assignmentId: IDS.sopAssignment,
+            templateVersionId: IDS.sopVersion,
+            branchId: RESTAURANT_E2E.branchId,
+            businessDate: BUSINESS_DATE,
+            status: 'SCHEDULED',
+            dueAt: new Date('2026-08-27T03:00:00.000Z'),
+            windowEndsAt: new Date('2026-08-28T03:00:00.000Z'),
+            startedAt: null,
+            submittedAt: null,
+            resolvedAt: null,
+            assignedStaffProfileId: RESTAURANT_E2E.operatorId,
+            poolJobRoleId: null,
+            claimedByStaffProfileId: null,
+            claimedAt: null,
+          },
           create: {
             id: IDS.sopOccurrence,
             assignmentId: IDS.sopAssignment,
@@ -804,31 +896,62 @@ async function main() {
       await tx.$executeRawUnsafe(
         `SELECT set_config('app.current_organization_id', '', true), set_config('app.is_platform_admin', 'true', true)`
       );
-      const [alexMemberships, ownedRows, leakedRows] = await Promise.all([
+      const [alexMemberships, ownedRows] = await Promise.all([
         tx.user.findMany({
           where: { email: ALEX_EMAIL },
           select: { organizationId: true },
           orderBy: { organizationId: 'asc' },
         }),
-        tx.$queryRaw<Array<{ roles: bigint; staff: bigint; products: bigint }>>`
+        tx.$queryRaw<
+          Array<{
+            roles: bigint;
+            staff: bigint;
+            products: bigint;
+            fixtureRows: bigint;
+            leakedRows: bigint;
+          }>
+        >`
           SELECT
             (SELECT count(*) FROM organization_roles WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS roles,
             (SELECT count(*) FROM restaurant_staff_profiles WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS staff,
-            (SELECT count(*) FROM restaurant_products WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS products
-        `,
-        tx.$queryRaw<Array<{ count: bigint }>>`
-          SELECT count(*) AS count
-          FROM (
-            SELECT "organizationId" FROM organization_roles WHERE id IN (${IDS.operatorRole}, ${IDS.managerRole})
-            UNION ALL
-            SELECT "organizationId" FROM restaurant_staff_profiles WHERE id IN (${IDS.alexStaff}, ${RESTAURANT_E2E.operatorId}, ${RESTAURANT_E2E.managerId})
-            UNION ALL
-            SELECT "organizationId" FROM restaurant_products WHERE id = ${IDS.product}
-          ) fixture_rows
-          WHERE "organizationId" <> ${RESTAURANT_E2E.organizationId}
+            (SELECT count(*) FROM restaurant_products WHERE "organizationId" = ${RESTAURANT_E2E.organizationId}) AS products,
+            (SELECT count(*) FROM (
+              SELECT "organizationId" FROM restaurant_branches WHERE id IN (${RESTAURANT_E2E.branchId}, ${RESTAURANT_E2E.branchA2Id})
+              UNION ALL SELECT "organizationId" FROM restaurant_floors WHERE id = ${IDS.floor}
+              UNION ALL SELECT "organizationId" FROM restaurant_tables WHERE id = ${IDS.table}
+              UNION ALL SELECT "organizationId" FROM restaurant_modifier_groups WHERE id = ${IDS.modifierGroup}
+              UNION ALL SELECT "organizationId" FROM restaurant_modifier_options WHERE id = ${IDS.modifierOption}
+              UNION ALL SELECT "organizationId" FROM restaurant_product_modifier_groups WHERE id = ${IDS.productModifier}
+              UNION ALL SELECT "organizationId" FROM restaurant_ingredients WHERE id = ${IDS.ingredient}
+              UNION ALL SELECT "organizationId" FROM restaurant_recipes WHERE id = ${IDS.recipe}
+              UNION ALL SELECT "organizationId" FROM restaurant_recipe_versions WHERE id = ${IDS.recipeVersion}
+              UNION ALL SELECT "organizationId" FROM restaurant_recipe_lines WHERE id = ${IDS.recipeLine}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_templates WHERE id = ${IDS.sopTemplate}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_versions WHERE id = ${IDS.sopVersion}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_steps WHERE id = ${IDS.sopStep}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_assignments WHERE id = ${IDS.sopAssignment}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_occurrences WHERE id = ${IDS.sopOccurrence}
+            ) fixture_rows) AS "fixtureRows",
+            (SELECT count(*) FROM (
+              SELECT "organizationId" FROM restaurant_branches WHERE id IN (${RESTAURANT_E2E.branchId}, ${RESTAURANT_E2E.branchA2Id})
+              UNION ALL SELECT "organizationId" FROM restaurant_floors WHERE id = ${IDS.floor}
+              UNION ALL SELECT "organizationId" FROM restaurant_tables WHERE id = ${IDS.table}
+              UNION ALL SELECT "organizationId" FROM restaurant_modifier_groups WHERE id = ${IDS.modifierGroup}
+              UNION ALL SELECT "organizationId" FROM restaurant_modifier_options WHERE id = ${IDS.modifierOption}
+              UNION ALL SELECT "organizationId" FROM restaurant_product_modifier_groups WHERE id = ${IDS.productModifier}
+              UNION ALL SELECT "organizationId" FROM restaurant_ingredients WHERE id = ${IDS.ingredient}
+              UNION ALL SELECT "organizationId" FROM restaurant_recipes WHERE id = ${IDS.recipe}
+              UNION ALL SELECT "organizationId" FROM restaurant_recipe_versions WHERE id = ${IDS.recipeVersion}
+              UNION ALL SELECT "organizationId" FROM restaurant_recipe_lines WHERE id = ${IDS.recipeLine}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_templates WHERE id = ${IDS.sopTemplate}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_versions WHERE id = ${IDS.sopVersion}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_template_steps WHERE id = ${IDS.sopStep}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_assignments WHERE id = ${IDS.sopAssignment}
+              UNION ALL SELECT "organizationId" FROM restaurant_sop_occurrences WHERE id = ${IDS.sopOccurrence}
+            ) fixture_rows WHERE "organizationId" <> ${RESTAURANT_E2E.organizationId}) AS "leakedRows"
         `,
       ]);
-      return { alexMemberships, ownedRows: ownedRows[0], leakedRows: leakedRows[0] };
+      return { alexMemberships, ownedRows: ownedRows[0] };
     });
 
     const alexOrganizations = new Set(
@@ -842,14 +965,14 @@ async function main() {
       Number(verification.ownedRows.roles) < 2 ||
       Number(verification.ownedRows.staff) < 3 ||
       Number(verification.ownedRows.products) < 1 ||
-      !verification.leakedRows ||
-      Number(verification.leakedRows.count) !== 0
+      Number(verification.ownedRows.fixtureRows) !== 16 ||
+      Number(verification.ownedRows.leakedRows) !== 0
     ) {
       throw new Error('Chai Chowk tenant-separation verification failed.');
     }
 
     console.log(
-      `Seeded and verified Chai Chowk (${RESTAURANT_E2E.organizationId}): Alex belongs to ${[...alexOrganizations].join(', ')}; roles=${verification.ownedRows.roles}, staff=${verification.ownedRows.staff}, products=${verification.ownedRows.products}, leaked fixture rows=${verification.leakedRows.count}.`
+      `Seeded and verified Chai Chowk (${RESTAURANT_E2E.organizationId}): Alex belongs to ${[...alexOrganizations].join(', ')}; roles=${verification.ownedRows.roles}, staff=${verification.ownedRows.staff}, products=${verification.ownedRows.products}, owned fixture rows=${verification.ownedRows.fixtureRows}, leaked fixture rows=${verification.ownedRows.leakedRows}.`
     );
 
     // Showcase layer (SEED DATA ONLY, WHA-223). Skipped unless asked for, so CI

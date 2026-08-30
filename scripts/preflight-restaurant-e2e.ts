@@ -1,14 +1,8 @@
 import 'dotenv/config';
 import pg from 'pg';
+import { resolveRestaurantE2eDatabaseUrl } from './restaurant-e2e-database.js';
 
-const value = process.env.RESTAURANT_E2E_DATABASE_URL;
-if (!value) throw new Error('RESTAURANT_E2E_DATABASE_URL is required.');
-
-const parsed = new URL(value);
-const forbidden = /(?:preview|staging|production|prod|dev)/i;
-if (forbidden.test(`${parsed.hostname}${parsed.pathname}`)) {
-  throw new Error('Refusing a preview, development, staging, or production database URL.');
-}
+const value = resolveRestaurantE2eDatabaseUrl();
 
 const pool = new pg.Pool({ connectionString: value, max: 1 });
 try {
@@ -23,9 +17,8 @@ try {
   if (!role?.rolcanlogin || role.rolsuper || role.rolbypassrls) {
     throw new Error('Runtime role must be LOGIN NOSUPERUSER NOBYPASSRLS.');
   }
-  if (!/(?:test|e2e|tmp|disposable)/i.test(role.database)) {
-    throw new Error('Database name must explicitly identify a disposable test database.');
-  }
+  if (role.database !== decodeURIComponent(new URL(value).pathname.slice(1)))
+    throw new Error('Connected database does not match the canonical disposable target.');
   console.log('Restaurant E2E database preflight passed.');
 } finally {
   await pool.end();

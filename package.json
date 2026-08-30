@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:restaurant-integrated": "tsx scripts/run-restaurant-e2e.ts",
     "test:rls": "tsx scripts/verify-tenant-isolation.ts",
     "report:email-collisions": "tsx scripts/report-email-collisions.ts",
     "db:generate": "bunx prisma generate",
