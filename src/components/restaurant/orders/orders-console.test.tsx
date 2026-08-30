@@ -200,6 +200,15 @@ describe('OrdersConsole', () => {
     });
   });
 
+  it('offers only supported order-channel filters', () => {
+    renderConsole();
+
+    const channel = screen.getByLabelText('Channel');
+    expect(within(channel).getByRole('option', { name: 'DINE IN' })).toBeInTheDocument();
+    expect(within(channel).getByRole('option', { name: 'TAKEAWAY' })).toBeInTheDocument();
+    expect(within(channel).queryByRole('option', { name: 'DELIVERY' })).not.toBeInTheDocument();
+  });
+
   it('cancels with exact attribution and a native idempotency key', () => {
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
       '00000000-0000-4000-8000-000000000045'

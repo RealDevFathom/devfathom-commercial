@@ -810,7 +810,6 @@ export function OrderPad() {
                   >
                     <option value="DINE_IN">Dine in</option>
                     <option value="TAKEAWAY">Takeaway</option>
-                    <option value="DELIVERY">Delivery</option>
                   </select>
                 </div>
                 {channel === 'DINE_IN' ? (

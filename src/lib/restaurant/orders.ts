@@ -70,6 +70,7 @@ export type OrderCommandErrorReason =
   | 'BRANCH_NOT_FOUND'
   | 'TABLE_NOT_FOUND'
   | 'TABLE_LINK_NOT_FOUND'
+  | 'CHANNEL_UNSUPPORTED'
   | 'CHANNEL_TABLE'
   | 'NOT_CLOSABLE'
   | 'NOT_SETTLED';
@@ -349,6 +350,12 @@ export type OpenOrderResult = {
 };
 
 export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<OpenOrderResult> {
+  if (input.channel === 'DELIVERY') {
+    throw new OrderCommandError(
+      'Delivery orders are not available until delivery details and fulfilment are configured.',
+      'CHANNEL_UNSUPPORTED'
+    );
+  }
   const at = input.now ?? new Date();
   return runInTransaction(db, async (tx) => {
     const idem = await beginIdempotent(tx, input.actor, 'order.open');

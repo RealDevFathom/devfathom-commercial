@@ -263,6 +263,24 @@ describe('mutation wiring', () => {
     expect(mocks.annotateAudit).toHaveBeenCalled();
   });
 
+  it('returns the stable delivery error without an audit annotation', async () => {
+    mocks.openOrder.mockRejectedValue(
+      new OrderCommandError(
+        'Delivery orders are not available until delivery details and fulfilment are configured.',
+        'CHANNEL_UNSUPPORTED'
+      )
+    );
+
+    await expect(
+      caller().open({ branchId: 'b1', channel: 'DELIVERY', actor: ACTOR })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message:
+        'Delivery orders are not available until delivery details and fulfilment are configured.',
+    });
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
   it('serializes fired-ticket results', async () => {
     mocks.sendOrder.mockResolvedValue({
       orderId: 'o1',

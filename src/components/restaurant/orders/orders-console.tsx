@@ -55,7 +55,7 @@ const statuses: OrderStatus[] = [
   'CLOSED',
   'CANCELLED',
 ];
-const channels: Channel[] = ['DINE_IN', 'TAKEAWAY', 'DELIVERY'];
+const channels: Channel[] = ['DINE_IN', 'TAKEAWAY'];
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 const selectClass =
