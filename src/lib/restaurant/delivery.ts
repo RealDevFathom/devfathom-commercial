@@ -1,10 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import type {
-  RestaurantDeliveryFulfillmentStatus,
-  RestaurantDeliveryPaymentMode,
-} from '@/generated/prisma/client';
+import type { RestaurantDeliveryFulfillmentStatus } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type DeliveryErrorReason =
@@ -380,7 +377,6 @@ export function createDeliveryFulfillment(
     orderId: string;
     addressId: string;
     zoneId: string;
-    paymentMode: RestaurantDeliveryPaymentMode;
     instructions?: string | null;
     now?: Date;
   }
@@ -399,6 +395,13 @@ export function createDeliveryFulfillment(
         items: {
           where: { status: { not: 'VOIDED' } },
           select: { unitPrice: true, quantity: true, modifiers: { select: { priceDelta: true } } },
+        },
+        bills: {
+          select: {
+            status: true,
+            grandTotal: true,
+            tenders: { select: { amount: true } },
+          },
         },
       },
     });
@@ -429,6 +432,17 @@ export function createDeliveryFulfillment(
       zoneId: input.zoneId,
       subtotal,
     });
+    const paymentMode =
+      order.bills.length > 0 &&
+      order.bills.every(
+        (bill) =>
+          bill.status === 'SETTLED' &&
+          bill.tenders
+            .reduce((sum, tender) => sum.plus(tender.amount), new Prisma.Decimal(0))
+            .equals(bill.grandTotal)
+      )
+        ? 'PREPAID'
+        : 'COD';
     const now = input.now ?? new Date();
     try {
       return await tx.restaurantDeliveryFulfillment.create({
@@ -437,7 +451,7 @@ export function createDeliveryFulfillment(
           branchId: input.branchId,
           customerId: input.customerId,
           orderId: input.orderId,
-          paymentMode: input.paymentMode,
+          paymentMode,
           recipientNameSnapshot: address.recipientName,
           normalizedPhoneSnapshot: address.normalizedPhone,
           addressLine1Snapshot: address.addressLine1,

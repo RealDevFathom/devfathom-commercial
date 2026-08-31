@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+import { Prisma } from '@/generated/prisma/client';
+
 import {
   DeliveryError,
+  createDeliveryFulfillment,
   createDeliveryZone,
   normalizeDeliveryPhone,
   quoteDeliveryZone,
@@ -79,6 +82,84 @@ describe('delivery domain validation', () => {
       where: { id: 'zone-1', organizationId: 'org-1', branchId: 'branch-1', active: true },
     });
   });
+});
+
+describe('delivery payment authority', () => {
+  it.each([
+    {
+      suppliedMode: 'COD',
+      bills: [
+        {
+          status: 'SETTLED',
+          grandTotal: new Prisma.Decimal('1250.00'),
+          tenders: [{ amount: new Prisma.Decimal('1250.00') }],
+        },
+      ],
+      expectedMode: 'PREPAID',
+    },
+    { suppliedMode: 'PREPAID', bills: [], expectedMode: 'COD' },
+  ] as const)(
+    'ignores caller-supplied $suppliedMode and derives $expectedMode from bills and tenders',
+    async ({ suppliedMode, bills, expectedMode }) => {
+      const create = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
+      const tx = {
+        restaurantOrder: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'order-1',
+            items: [
+              {
+                unitPrice: new Prisma.Decimal('1250.00'),
+                quantity: 1,
+                modifiers: [],
+              },
+            ],
+            bills,
+          }),
+        },
+        restaurantCustomerAddress: {
+          findFirst: vi.fn().mockResolvedValue({
+            recipientName: 'Customer',
+            normalizedPhone: '+923001234567',
+            addressLine1: '1 Main Street',
+            addressLine2: null,
+            locality: 'Karachi',
+            administrativeArea: null,
+            postalCode: null,
+            countryCode: 'PK',
+            latitude: null,
+            longitude: null,
+          }),
+        },
+        restaurantDeliveryZone: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'zone-1',
+            name: 'Central',
+            areaPostalLabel: null,
+            fixedFee: new Prisma.Decimal('250.00'),
+            minimumSubtotal: new Prisma.Decimal('1000.00'),
+            promisedMinutes: 45,
+          }),
+        },
+        restaurantDeliveryFulfillment: { create },
+      };
+      const db = { $transaction: (work: (value: typeof tx) => unknown) => work(tx) } as never;
+
+      await createDeliveryFulfillment(db, {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        customerId: 'customer-1',
+        orderId: 'order-1',
+        addressId: 'address-1',
+        zoneId: 'zone-1',
+        paymentMode: suppliedMode,
+        now: new Date('2026-08-31T12:00:00.000Z'),
+      } as Parameters<typeof createDeliveryFulfillment>[1] & { paymentMode: string });
+
+      expect(create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ paymentMode: expectedMode }),
+      });
+    }
+  );
 });
 
 describe('delivery fulfillment transitions', () => {
