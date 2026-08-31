@@ -28,6 +28,8 @@ export const POST = withDeviceAuth(async (ctx) => {
       },
       device: {
         id: ctx.device.id,
+        organizationId: ctx.organizationId,
+        branchId: ctx.device.branchId,
         name: ctx.device.name,
         kind: ctx.device.kind,
         stationId: ctx.device.stationId,

@@ -17,9 +17,19 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { OPERATIONAL_ORDER_CHANNELS, type OrderChannel } from '@/lib/restaurant/order-channels';
+import {
+  createIndexedDbDriver,
+  createMemoryDriver,
+  isPosStoreSupported,
+  type PosCatalogSnapshot,
+} from '@/lib/restaurant/pos-client-store';
+import { countQueuedCommands, type PosQueueSnapshot } from '@/lib/restaurant/pos-command-queue';
+import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 
 type Channel = OrderChannel;
 type Runtime = {
+  organizationId: string;
+  branchId: string;
   deviceId: string;
   deviceName: string;
   sessionToken: string;
@@ -47,7 +57,13 @@ type Notice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: str
 type EstablishResponse = {
   sessionToken: string;
   session: { id: string; state: 'LOCKED'; establishedAt: string };
-  device: { id: string; name: string; branchName: string };
+  device: {
+    id: string;
+    organizationId: string;
+    branchId: string;
+    name: string;
+    branchName: string;
+  };
 };
 type SessionResponse = {
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
@@ -124,6 +140,26 @@ function effectiveMenuPath(channel: Channel, publicationId?: string | null) {
   return `/api/restaurant/orders/effective-menu?${query}`;
 }
 
+function cachedMenu(catalog: PosCatalogSnapshot): EffectiveMenu {
+  return {
+    version: catalog.version,
+    publicationId: catalog.publicationId,
+    channelOpen: catalog.channelOpen,
+    menu: { id: catalog.menuId, name: catalog.menuName },
+    sections: catalog.sections.map((section) => ({
+      id: section.sectionId,
+      name: section.name,
+      items: section.items.map((item) => ({
+        id: item.menuItemId,
+        displayName: item.name,
+        product: { name: item.name },
+        price: item.price,
+        available: item.available,
+      })),
+    })),
+  };
+}
+
 export function OrderPad() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [enrollmentState, setEnrollmentState] = useState<'checking' | 'ready' | 'missing'>(
@@ -153,6 +189,16 @@ export function OrderPad() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
   const stateEpoch = useRef(0);
+  const offlineRuntime = useRef<PosOfflineRuntime | null>(null);
+  const [online, setOnline] = useState(true);
+  const [queue, setQueue] = useState<PosQueueSnapshot | null>(null);
+  const [discardedCount, setDiscardedCount] = useState(0);
+  const [revoked, setRevoked] = useState(false);
+  const queuedCount = queue ? countQueuedCommands(queue) : 0;
+  const reviewDrafts =
+    queue?.drafts.filter(
+      (draft) => draft.status === 'NEEDS_REVIEW' || draft.status === 'QUARANTINED'
+    ) ?? [];
 
   const loadOperators = useCallback(async (activeRuntime: Runtime) => {
     setOperatorDirectoryState('loading');
@@ -205,6 +251,54 @@ export function OrderPad() {
     setLayoutState('idle');
     idempotencyKeys.current.clear();
   }, []);
+
+  const syncQueue = useCallback(() => {
+    setQueue(offlineRuntime.current?.snapshot().queue ?? null);
+  }, []);
+
+  const replayQueue = useCallback(
+    async (activeRuntime: Runtime) => {
+      const local = offlineRuntime.current;
+      if (!local || !navigator.onLine || activeRuntime.state !== 'UNLOCKED') return;
+      const result = await local.replay(async (queued) => {
+        try {
+          const response = await fetch(queued.path, {
+            method: queued.method,
+            cache: 'no-store',
+            credentials: 'include',
+            headers: { ...authHeaders(activeRuntime, true), ...queued.headers },
+            body: JSON.stringify(queued.body),
+            signal: AbortSignal.timeout(10_000),
+          });
+          const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+          return {
+            status: response.status,
+            serverMessage: body ? messageFrom(body) : undefined,
+            retryAfter: response.headers.get('retry-after'),
+            serverRef:
+              typeof body?.orderId === 'string'
+                ? body.orderId
+                : typeof body?.itemId === 'string'
+                  ? body.itemId
+                  : null,
+          };
+        } catch {
+          return { status: 0 };
+        }
+      });
+      syncQueue();
+      if (result.discarded) {
+        setDiscardedCount(result.discarded.drafts);
+        setRevoked(true);
+        clearTerminalState();
+        setNotice({
+          tone: 'danger',
+          message: `Device revoked. ${result.discarded.drafts} queued order(s) were discarded.`,
+        });
+      }
+    },
+    [clearTerminalState, syncQueue]
+  );
 
   function keyFor(intent: string) {
     const existing = idempotencyKeys.current.get(intent);
@@ -293,11 +387,19 @@ export function OrderPad() {
       });
       if (epoch !== stateEpoch.current) return;
       setDraftMenu(data);
+      await offlineRuntime.current?.cacheCatalog(data, new Date().toISOString());
+      syncQueue();
       setNotice({ tone: 'success', message: `${data.menu.name} loaded.` });
     } catch (error) {
       if (epoch !== stateEpoch.current) return;
-      setDraftMenu(null);
-      handleError(error);
+      const catalog = offlineRuntime.current?.snapshot().catalog;
+      if (catalog?.channel === nextChannel) {
+        setDraftMenu(cachedMenu(catalog));
+        setNotice({ tone: 'warning', message: 'Using the cached catalog while offline.' });
+      } else {
+        setDraftMenu(null);
+        handleError(error);
+      }
     } finally {
       if (standalone) setPending(null);
     }
@@ -357,6 +459,8 @@ export function OrderPad() {
         method: 'POST',
       });
       const established: Runtime = {
+        organizationId: data.device.organizationId,
+        branchId: data.device.branchId,
         deviceId: data.device.id,
         deviceName: data.device.name,
         sessionToken: data.sessionToken,
@@ -365,6 +469,25 @@ export function OrderPad() {
         branchName: data.device.branchName,
         operator: null,
       };
+      offlineRuntime.current?.close();
+      const local = new PosOfflineRuntime(
+        {
+          organizationId: established.organizationId,
+          branchId: established.branchId,
+          deviceId: established.deviceId,
+        },
+        isPosStoreSupported() ? createIndexedDbDriver() : createMemoryDriver()
+      );
+      offlineRuntime.current = local;
+      const hydration = await local.hydrate();
+      if (hydration === 'unrecoverable') {
+        setNotice({
+          tone: 'danger',
+          message:
+            'Local POS data could not be recovered. Re-enroll or clear site data to continue.',
+        });
+      }
+      syncQueue();
       setRuntime(established);
       setEnrollmentState('ready');
       setNotice({ tone: 'success', message: 'Device session established. Unlock to continue.' });
@@ -375,7 +498,7 @@ export function OrderPad() {
     } finally {
       setPending(null);
     }
-  }, [handleError, loadOperators, pending]);
+  }, [handleError, loadOperators, pending, syncQueue]);
 
   useEffect(() => {
     if (enrollmentState === 'checking') queueMicrotask(() => void establish());
@@ -405,6 +528,7 @@ export function OrderPad() {
           ) ?? null,
       };
       setRuntime(unlocked);
+      await offlineRuntime.current?.resume();
       setOperatorPin('');
       setNotice({ tone: 'success', message: 'Terminal unlocked.' });
       await Promise.all([
@@ -412,6 +536,7 @@ export function OrderPad() {
         loadOpenOrders(unlocked, false),
         loadLayout(unlocked),
       ]);
+      await replayQueue(unlocked);
     } catch (error) {
       setOperatorPin('');
       handleError(error);
@@ -419,6 +544,25 @@ export function OrderPad() {
       setPending(null);
     }
   }
+
+  useEffect(() => {
+    const update = () => {
+      setOnline(navigator.onLine);
+      if (navigator.onLine && runtime?.state === 'UNLOCKED') void replayQueue(runtime);
+    };
+    const visible = () => {
+      if (document.visibilityState === 'visible') update();
+    };
+    update();
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+      document.removeEventListener('visibilitychange', visible);
+    };
+  }, [replayQueue, runtime]);
 
   async function lock() {
     if (!runtime || pending) return;
@@ -528,49 +672,55 @@ export function OrderPad() {
       ...(covers ? { coverCount: Number.parseInt(covers, 10) } : {}),
       ...(channel === 'DINE_IN' && sectionId ? { sectionId } : {}),
     };
-    const intent = `open:${JSON.stringify(body)}`;
     setPending('open');
     setNotice(null);
     try {
-      const data = await request<{ orderId: string; orderNumber: number }>(
-        '/api/restaurant/orders/open',
-        {
-          method: 'POST',
-          headers: {
-            ...authHeaders(runtime, true),
-            'Idempotency-Key': keyFor(intent),
-          },
-          body: JSON.stringify(body),
-        }
-      );
-      idempotencyKeys.current.delete(intent);
-      for (const line of draftLines) {
-        await request('/api/restaurant/orders/add-item', {
-          method: 'POST',
-          headers: {
-            ...authHeaders(runtime, true),
-            'Idempotency-Key': keyFor(`draft-line:${line.lineId}`),
-          },
-          body: JSON.stringify({
-            orderId: data.orderId,
-            menuItemId: line.menuItemId,
-            quantity: line.quantity,
-            course: line.course,
-            seatNumber: line.seatNumber,
-            modifierOptionIds: line.modifierOptionIds,
-          }),
-        });
-        idempotencyKeys.current.delete(`draft-line:${line.lineId}`);
+      if (draftLines.length === 0 && navigator.onLine) {
+        const intent = `open:${JSON.stringify(body)}`;
+        const data = await request<{ orderId: string; orderNumber: number }>(
+          '/api/restaurant/orders/open',
+          {
+            method: 'POST',
+            headers: {
+              ...authHeaders(runtime, true),
+              'Idempotency-Key': keyFor(intent),
+            },
+            body: JSON.stringify(body),
+          }
+        );
+        idempotencyKeys.current.delete(intent);
+        setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
+        await Promise.all([
+          loadDetail(data.orderId, runtime, false),
+          loadOpenOrders(runtime, false),
+          loadLayout(runtime),
+        ]);
+        return;
       }
+      const local = offlineRuntime.current;
+      if (!local) throw new Error('Local POS storage is unavailable.');
+      const enqueued = await local.enqueue({
+        deviceId: runtime.deviceId,
+        catalogVersion: draftMenu.version ?? '',
+        clientOriginAt: new Date().toISOString(),
+        open: body,
+        lines: draftLines.map((line) => ({
+          menuItemId: line.menuItemId,
+          quantity: line.quantity,
+          course: line.course,
+          seatNumber: line.seatNumber,
+          modifierOptionIds: line.modifierOptionIds,
+          quotedUnitPrice: line.quotedUnitPrice,
+        })),
+      });
+      if (!enqueued.ok) throw new Error(enqueued.message);
       setDraftLines([]);
-      setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
-      await Promise.all([
-        loadDetail(data.orderId, runtime, false),
-        loadOpenOrders(runtime, false),
-        loadLayout(runtime),
-      ]);
+      syncQueue();
+      setNotice({ tone: 'success', message: 'Order saved to the queue.' });
+      await replayQueue(runtime);
+      if (navigator.onLine)
+        await Promise.all([loadOpenOrders(runtime, false), loadLayout(runtime)]);
     } catch (error) {
-      if (isDefinitiveMutationFailure(error)) idempotencyKeys.current.delete(intent);
       handleError(error);
     } finally {
       setPending(null);
@@ -593,7 +743,11 @@ export function OrderPad() {
 
   if (!runtime) {
     return (
-      <PosShell status="not enrolled" tone="neutral" busy={busy}>
+      <PosShell
+        status={revoked ? 'Revoked' : 'not enrolled'}
+        tone={revoked ? 'warning' : 'neutral'}
+        busy={busy}
+      >
         <div className="mx-auto max-w-xl space-y-6">
           <PageHeader
             eyebrow={<span className="text-text-strong">Restaurant POS</span>}
@@ -719,7 +873,11 @@ export function OrderPad() {
   }
 
   return (
-    <PosShell status="active" tone="success" busy={busy}>
+    <PosShell
+      status={online ? 'Online' : 'Offline'}
+      tone={online ? 'success' : 'warning'}
+      busy={busy}
+    >
       <div className="mx-auto max-w-[1600px] space-y-4">
         <PageHeader
           eyebrow="Restaurant POS"
@@ -735,13 +893,37 @@ export function OrderPad() {
                     : 'Operator active'
                 }
               />
+              <StatusPill
+                status={online ? 'online' : 'offline'}
+                tone={online ? 'success' : 'warning'}
+                label={online ? 'Online' : 'Offline'}
+              />
+              <StatusPill
+                status={
+                  queue?.replay === 'PAUSED_REAUTH'
+                    ? 'reauth'
+                    : reviewDrafts.length
+                      ? 'needs-review'
+                      : queuedCount
+                        ? 'queued'
+                        : 'queue-empty'
+                }
+                tone={reviewDrafts.length || queuedCount ? 'warning' : 'neutral'}
+                label={
+                  queue?.replay === 'PAUSED_REAUTH'
+                    ? `Reauth · ${queuedCount} queued`
+                    : reviewDrafts.length
+                      ? 'Needs review'
+                      : `Queued ${queuedCount}`
+                }
+              />
               <OperatorSwitch
                 activeOperatorId={runtime.operator?.staffProfileId ?? ''}
                 operators={operators}
                 pending={busy}
                 onSwitch={switchOperator}
               />
-              <DrawerPanel request={checkoutRequest} disabled={busy} />
+              <DrawerPanel request={checkoutRequest} disabled={busy || !online} />
               <DayClosePanel
                 request={checkoutRequest}
                 actingOperatorId={runtime.operator?.staffProfileId ?? ''}
@@ -756,7 +938,7 @@ export function OrderPad() {
                       (source) => source.staffProfileId === operator.id && source.canApprove
                     )
                   )}
-                disabled={busy}
+                disabled={busy || !online}
               />
               <RefundPanel
                 request={checkoutRequest}
@@ -768,7 +950,7 @@ export function OrderPad() {
                     displayName: operator.displayName,
                     role: operator.role,
                   }))}
-                disabled={busy}
+                disabled={busy || !online}
               />
               <Button
                 type="button"
@@ -786,6 +968,62 @@ export function OrderPad() {
           <Notice notice={{ tone: 'warning', message: 'Request pending. Controls are paused.' }} />
         ) : notice ? (
           <Notice notice={notice} />
+        ) : null}
+
+        {!online || queuedCount > 0 || reviewDrafts.length > 0 || discardedCount > 0 ? (
+          <SectionCard eyebrow="Offline queue" title="Saved new orders">
+            <div className="space-y-3 text-sm text-text-body">
+              <p>
+                {online
+                  ? `${queuedCount} command(s) are waiting to replay.`
+                  : 'New-order composition remains available from the cached catalog. Checkout, tenders, refunds, drawers, close, loyalty, customers, and existing-order edits require a connection.'}
+              </p>
+              {discardedCount > 0 ? (
+                <p role="alert">Revoked · {discardedCount} queued order(s) discarded.</p>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!online || busy || queuedCount === 0}
+                onClick={() => void replayQueue(runtime)}
+              >
+                Retry queued orders
+              </Button>
+              {reviewDrafts.map((draft) => (
+                <div
+                  key={draft.draftId}
+                  className="rounded-md border border-warning/30 bg-warning/10 p-3"
+                >
+                  <p className="font-medium">Needs review · {draft.review?.message}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={!online || busy}
+                      onClick={async () => {
+                        await offlineRuntime.current?.resolveReview(draft.draftId, 'REPLAY');
+                        syncQueue();
+                        await replayQueue(runtime);
+                      }}
+                    >
+                      Send deliberately
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={busy}
+                      onClick={async () => {
+                        await offlineRuntime.current?.resolveReview(draft.draftId, 'DISCARD');
+                        syncQueue();
+                      }}
+                    >
+                      Discard queued order
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
         ) : null}
 
         <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(18rem,0.8fr)_minmax(0,2.2fr)]">
@@ -1014,7 +1252,7 @@ export function OrderPad() {
           <div className="grid min-w-0 gap-4 lg:grid-cols-2 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <MenuGrid
               menu={order ? orderMenu : draftMenu}
-              pending={busy}
+              pending={order ? busy || !online : busy}
               onAdd={(input: AddMenuItemInput) => {
                 if (!order) {
                   const item = draftMenu?.sections
@@ -1048,7 +1286,7 @@ export function OrderPad() {
                 displayName: operator.displayName,
                 role: operator.role,
               }))}
-              pending={busy}
+              pending={busy || !online}
               tables={layout?.floors.flatMap((floor) =>
                 floor.tables.map((table) => ({
                   id: table.id,

@@ -24,6 +24,9 @@ const detail = {
 
 function menu(publicationId: string, itemName: string) {
   return {
+    version: `version-${publicationId}`,
+    branchId: 'branch-1',
+    channel: publicationId.includes('TAKEAWAY') ? 'TAKEAWAY' : 'DINE_IN',
     publicationId,
     channelOpen: true,
     menu: { id: 'menu-1', name: 'Dinner' },
@@ -31,12 +34,17 @@ function menu(publicationId: string, itemName: string) {
       {
         id: 'section-1',
         name: 'Drinks',
+        sortOrder: 1,
         items: [
           {
             id: 'menu-item-1',
+            productId: 'product-1',
+            variantId: null,
             displayName: itemName,
             product: { name: itemName },
             price: '4.00',
+            priceSource: 'BASE_LIST',
+            sortOrder: 1,
             available: true,
             modifierGroups: [
               {
@@ -87,7 +95,13 @@ function transport({
         {
           sessionToken: 'session-token',
           session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-19T00:00:00Z' },
-          device: { id: 'device-1', name: 'Front register', branchName: 'Clifton Flagship' },
+          device: {
+            id: 'device-1',
+            organizationId: 'organization-1',
+            branchId: 'branch-1',
+            name: 'Front register',
+            branchName: 'Clifton Flagship',
+          },
         },
         201
       );
@@ -238,6 +252,25 @@ describe('OrderPad transport', () => {
     expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
     expect(screen.getByText('1 × Coffee')).toBeVisible();
     expect(screen.getByText('Coffee added locally. No request was sent.')).toBeVisible();
+  });
+
+  it('queues a composed new order offline and disables connected-only operations', async () => {
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+    const fetch = transport();
+    await unlock(fetch);
+
+    expect(screen.getAllByText('Offline').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Cash drawer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refund' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    const callsBeforeQueue = fetch.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+
+    await screen.findByText('Queued 2');
+    expect(fetch).toHaveBeenCalledTimes(callsBeforeQueue);
+    expect(screen.getByText(/Checkout, tenders, refunds, drawers/)).toBeVisible();
   });
 
   it('keeps internal profile IDs out of the UI and sends the selected hidden ID', async () => {
