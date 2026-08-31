@@ -1,9 +1,11 @@
 import { cleanup, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
 import { TopNavigation } from './sidebar';
+
+const useSessionMock = vi.hoisted(() => vi.fn(() => ({ data: { user: { role: 'ADMIN' } } })));
 
 vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: React.ComponentProps<'a'>) => (
@@ -14,7 +16,7 @@ vi.mock('next/link', () => ({
 }));
 vi.mock('next/navigation', () => ({ usePathname: () => '/dashboard' }));
 vi.mock('next-auth/react', () => ({
-  useSession: () => ({ data: { user: { role: 'ADMIN' } } }),
+  useSession: useSessionMock,
 }));
 vi.mock('motion/react', () => ({
   m: {
@@ -40,6 +42,26 @@ const enabledModules = [
   'audit',
 ];
 
+function restaurantLinks(role = 'ADMIN') {
+  vi.mocked(useSessionMock).mockReturnValue({ data: { user: { role } } });
+  render(
+    <EntitlementsProvider
+      value={{
+        organizationId: 'org-1',
+        vertical: 'RESTAURANT',
+        seatLimit: 10,
+        activeSeats: 1,
+        enabledModules: ['restaurant-core'],
+        modules: [],
+        limits: {},
+      }}
+    >
+      <TopNavigation />
+    </EntitlementsProvider>
+  );
+  return screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+}
+
 function links(vertical?: EntitlementView['vertical']) {
   render(
     <EntitlementsProvider
@@ -60,6 +82,16 @@ function links(vertical?: EntitlementView['vertical']) {
 }
 
 describe('TopNavigation vertical visibility', () => {
+  beforeEach(() => {
+    useSessionMock.mockReturnValue({ data: { user: { role: 'ADMIN' } } });
+  });
+
+  it('shows Delivery only to Restaurant administrators', () => {
+    expect(restaurantLinks()).toContain('/restaurant/delivery');
+    cleanup();
+    expect(restaurantLinks('MEMBER')).not.toContain('/restaurant/delivery');
+  });
+
   it('uses accessible body text for inactive navigation numbers', () => {
     links('AGENCY');
     expect(screen.getByText('02')).toHaveClass('text-text-body');

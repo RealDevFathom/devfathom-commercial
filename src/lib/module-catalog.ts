@@ -116,6 +116,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   restaurantSopExecution: 'restaurant-sop',
   restaurantNotifications: 'restaurant-core',
   restaurantCustomers: 'restaurant-loyalty',
+  restaurantDelivery: 'restaurant-core',
   restaurantLoyalty: 'restaurant-loyalty',
   restaurantInsights: 'restaurant-insights',
   restaurantDashboard: 'restaurant-core',
@@ -173,6 +174,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // procedure map above so hiding a nav entry and rejecting the direct route
   // can never disagree.
   ['/restaurant/floor', 'restaurant-pos'],
+  ['/restaurant/delivery', 'restaurant-core'],
   ['/restaurant/orders', 'restaurant-pos'],
   ['/restaurant/money', 'restaurant-pos'],
   ['/restaurant/tax', 'restaurant-pos'],

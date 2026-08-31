@@ -1,0 +1,198 @@
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { EntitlementView } from '@/lib/module-catalog';
+
+const mocks = vi.hoisted(() => ({
+  zoneCalls: [] as Array<{ input: unknown; enabled: boolean }>,
+  addressCalls: [] as Array<{ input: unknown; enabled: boolean }>,
+  createZone: vi.fn(),
+  createAddress: vi.fn(),
+  mutate: vi.fn(),
+  invalidate: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    useUtils: () => ({
+      restaurantDelivery: {
+        listZones: { invalidate: mocks.invalidate },
+        listAddresses: { invalidate: mocks.invalidate },
+      },
+    }),
+    restaurantStaff: {
+      listBranches: {
+        useQuery: (_input: unknown, options: { enabled: boolean }) => ({
+          data: options.enabled
+            ? [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }]
+            : undefined,
+          error: null,
+          isLoading: false,
+          refetch: vi.fn(),
+        }),
+      },
+    },
+    restaurantCustomers: {
+      list: {
+        useQuery: (_input: unknown, options: { enabled: boolean }) => ({
+          data: options.enabled
+            ? {
+                customers: [
+                  {
+                    id: 'customer_1',
+                    displayName: 'Ayesha Khan',
+                    givenName: null,
+                    familyName: null,
+                  },
+                ],
+              }
+            : undefined,
+          error: null,
+          isLoading: false,
+          refetch: vi.fn(),
+        }),
+      },
+    },
+    restaurantDelivery: new Proxy(
+      {
+        listZones: {
+          useQuery: (input: unknown, options: { enabled: boolean }) => {
+            mocks.zoneCalls.push({ input, enabled: options.enabled });
+            return { data: [], error: null, isLoading: false, refetch: vi.fn() };
+          },
+        },
+        listAddresses: {
+          useQuery: (input: unknown, options: { enabled: boolean }) => {
+            mocks.addressCalls.push({ input, enabled: options.enabled });
+            return { data: [], error: null, isLoading: false, refetch: vi.fn() };
+          },
+        },
+      },
+      {
+        get: (target, procedure: string) =>
+          procedure in target
+            ? target[procedure as keyof typeof target]
+            : {
+                useMutation: () => ({
+                  mutate:
+                    procedure === 'createZone'
+                      ? mocks.createZone
+                      : procedure === 'createAddress'
+                        ? mocks.createAddress
+                        : mocks.mutate,
+                  isPending: false,
+                }),
+              },
+      }
+    ),
+  },
+}));
+
+import { EntitlementsProvider } from '@/components/entitlements-provider';
+import { DeliveryConsole } from './delivery-console';
+
+function entitlements(enabled: boolean): EntitlementView {
+  return {
+    organizationId: 'org_1',
+    vertical: 'RESTAURANT',
+    seatLimit: 10,
+    activeSeats: 1,
+    enabledModules: enabled ? ['restaurant-core'] : [],
+    modules: [],
+    limits: {},
+  };
+}
+
+function renderConsole(enabled = true) {
+  return render(
+    <EntitlementsProvider value={entitlements(enabled)}>
+      <DeliveryConsole />
+    </EntitlementsProvider>
+  );
+}
+
+describe('DeliveryConsole', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.zoneCalls.length = 0;
+    mocks.addressCalls.length = 0;
+  });
+
+  it('gates reads and uses friendly selectors instead of raw identifiers', () => {
+    const disabled = renderConsole(false);
+    expect(screen.getByText('Restaurant Core module disabled')).toBeInTheDocument();
+    expect(mocks.zoneCalls.at(-1)?.enabled).toBe(false);
+    expect(mocks.addressCalls.at(-1)?.enabled).toBe(false);
+    disabled.unmount();
+
+    renderConsole();
+    expect(screen.getByRole('option', { name: 'Downtown' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Ayesha Khan' })).toBeInTheDocument();
+    expect(screen.queryByText('customer_1')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    expect(mocks.zoneCalls.at(-1)).toEqual({ input: { branchId: 'branch_1' }, enabled: true });
+    expect(mocks.addressCalls.at(-1)).toEqual({
+      input: { customerId: 'customer_1' },
+      enabled: true,
+    });
+  });
+
+  it('creates a branch-scoped zone with the exact router payload', () => {
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add zone' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add delivery zone' });
+    fireEvent.change(within(dialog).getByLabelText('Zone name'), {
+      target: { value: 'Central' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Fixed fee'), { target: { value: '3.50' } });
+    fireEvent.change(within(dialog).getByLabelText('Minimum subtotal'), {
+      target: { value: '20.00' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Promised minutes'), {
+      target: { value: '35' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add zone' }));
+
+    expect(mocks.createZone).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      name: 'Central',
+      fixedFee: '3.50',
+      minimumSubtotal: '20.00',
+      promisedMinutes: 35,
+      sortOrder: 0,
+      areaPostalLabel: null,
+    });
+  });
+
+  it('submits address PII only in the selected customer mutation payload', () => {
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add saved address' });
+    const fields: Record<string, string> = {
+      'Address label': 'Home',
+      'Recipient name': 'Ayesha Khan',
+      Phone: '+923001234567',
+      'Country code': 'pk',
+      'Address line 1': '42 Canal Road',
+      'City or locality': 'Lahore',
+    };
+    for (const [label, fieldValue] of Object.entries(fields)) {
+      fireEvent.change(within(dialog).getByLabelText(label), { target: { value: fieldValue } });
+    }
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add address' }));
+
+    expect(mocks.createAddress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerId: 'customer_1',
+        phone: '+923001234567',
+        addressLine1: '42 Canal Road',
+        countryCode: 'PK',
+      })
+    );
+    expect(window.location.href).not.toContain('Canal');
+  });
+});
