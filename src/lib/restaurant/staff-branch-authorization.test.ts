@@ -81,6 +81,7 @@ describe('staff branch authorization', () => {
 
   it('selects the lowest active profile id deterministically when more than one exists', async () => {
     const db = database();
+    mocks.resolve.mockResolvedValue(new Set(['devices:manage']));
     db.restaurantStaffProfile.findMany.mockResolvedValueOnce([
       {
         id: 'actor-a',

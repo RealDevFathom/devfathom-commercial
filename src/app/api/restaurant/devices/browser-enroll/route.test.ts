@@ -98,6 +98,7 @@ beforeEach(() => {
   });
   mocks.recordAudit.mockClear();
   mocks.support = null;
+  mocks.branchFindUnique.mockClear();
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1', name: 'Downtown' });
   mocks.stationFindFirst.mockResolvedValue({ id: 'station_1', name: 'Expo' });
   mocks.resolveCapabilityBranchAuthorization.mockResolvedValue({
