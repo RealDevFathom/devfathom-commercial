@@ -21,7 +21,9 @@ const ids = {
   operatorA: `staff_a_${suffix}`,
   operatorAUser: `user_a_${suffix}`,
   managerAUser: `user_manager_a_${suffix}`,
+  operatorBUser: `user_b_${suffix}`,
   settleRole: `role_settle_${suffix}`,
+  orderRoleB: `role_orders_b_${suffix}`,
   managerA: `manager_a_${suffix}`,
   operatorB: `staff_b_${suffix}`,
   category: `category_${suffix}`,
@@ -382,6 +384,7 @@ beforeAll(async () => {
           create: [
             { capability: 'payments:collect', effect: 'ALLOW' },
             { capability: 'coauth:approve', effect: 'ALLOW' },
+            { capability: 'orders:take', effect: 'ALLOW' },
           ],
         },
       },
@@ -485,6 +488,24 @@ beforeAll(async () => {
   });
 
   await deps.withTenantDb(ids.orgB, async (tx) => {
+    await tx.organizationRole.create({
+      data: {
+        id: ids.orderRoleB,
+        key: `wha49_orders_b_${suffix}`,
+        name: 'WHA-49 Order Taking',
+        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+      },
+    });
+    await tx.user.create({
+      data: {
+        id: ids.operatorBUser,
+        name: 'Operator B',
+        email: `operator_b_${suffix}@test.local`,
+        department: 'LEADERSHIP',
+        title: 'Operator',
+        organizationRoleId: ids.orderRoleB,
+      },
+    });
     await tx.restaurantBranch.create({ data: { id: ids.branchB, name: 'Tenant B' } });
     await tx.restaurantStaffProfile.create({
       data: {
@@ -492,6 +513,7 @@ beforeAll(async () => {
         displayName: 'Operator B',
         primaryBranchId: ids.branchB,
         status: 'ACTIVE',
+        userId: ids.operatorBUser,
       },
     });
     await tx.restaurantOperatorCredential.create({

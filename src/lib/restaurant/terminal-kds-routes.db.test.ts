@@ -18,7 +18,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ensurePlatformModule } from '@/lib/test-support/departments';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -58,6 +58,11 @@ const ctx = {
   staffA: `staff_a_${suffix}`,
   staffReplay: `staff_replay_${suffix}`,
   staffB: `staff_b_${suffix}`,
+  userA: `user_a_${suffix}`,
+  userReplay: `user_replay_${suffix}`,
+  userB: `user_b_${suffix}`,
+  orderRoleA: `role_orders_a_${suffix}`,
+  orderRoleB: `role_orders_b_${suffix}`,
   productA: `prod_a_${suffix}`,
   productB: `prod_b_${suffix}`,
   station1A: `stn1_a_${suffix}`,
@@ -286,6 +291,7 @@ beforeAll(async () => {
           status: 'ACTIVE',
         },
       });
+      await seedDepartments(tx, [orgId], ['LEADERSHIP']);
       const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
         name: 'POS',
         category: 'Operations',
@@ -300,6 +306,29 @@ beforeAll(async () => {
   }
 
   await deps.withTenantDb(orgA, async (tx) => {
+    await tx.organizationRole.create({
+      data: {
+        id: ctx.orderRoleA,
+        key: `wha44_orders_a_${suffix}`,
+        name: 'WHA-44 Order Taking A',
+        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+      },
+    });
+    for (const [id, name, email] of [
+      [ctx.userA, 'Operator A', `operator_a_${suffix}@test.local`],
+      [ctx.userReplay, 'Replay Operator', `replay_operator_${suffix}@test.local`],
+    ] as const) {
+      await tx.user.create({
+        data: {
+          id,
+          name,
+          email,
+          department: 'LEADERSHIP',
+          title: 'Operator',
+          organizationRoleId: ctx.orderRoleA,
+        },
+      });
+    }
     await tx.restaurantBranch.create({ data: { id: ctx.branchA, name: 'A' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchReplay, name: 'Replay' } });
     await tx.restaurantStaffProfile.create({
@@ -308,6 +337,7 @@ beforeAll(async () => {
         displayName: 'Operator A',
         primaryBranchId: ctx.branchA,
         status: 'ACTIVE',
+        userId: ctx.userA,
       },
     });
     await tx.restaurantOperatorCredential.create({
@@ -323,6 +353,7 @@ beforeAll(async () => {
         displayName: 'Replay Operator',
         primaryBranchId: ctx.branchReplay,
         status: 'ACTIVE',
+        userId: ctx.userReplay,
       },
     });
     await tx.restaurantOperatorCredential.create({
@@ -342,6 +373,24 @@ beforeAll(async () => {
   });
 
   await deps.withTenantDb(orgB, async (tx) => {
+    await tx.organizationRole.create({
+      data: {
+        id: ctx.orderRoleB,
+        key: `wha44_orders_b_${suffix}`,
+        name: 'WHA-44 Order Taking B',
+        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+      },
+    });
+    await tx.user.create({
+      data: {
+        id: ctx.userB,
+        name: 'Operator B',
+        email: `operator_b_${suffix}@test.local`,
+        department: 'LEADERSHIP',
+        title: 'Operator',
+        organizationRoleId: ctx.orderRoleB,
+      },
+    });
     await tx.restaurantBranch.create({ data: { id: ctx.branchB, name: 'B' } });
     await tx.restaurantStaffProfile.create({
       data: {
@@ -349,6 +398,7 @@ beforeAll(async () => {
         displayName: 'Operator B',
         primaryBranchId: ctx.branchB,
         status: 'ACTIVE',
+        userId: ctx.userB,
       },
     });
     await tx.restaurantOperatorCredential.create({

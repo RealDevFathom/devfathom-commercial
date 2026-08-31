@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ensurePlatformModule } from '@/lib/test-support/departments';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -16,6 +16,8 @@ const ids = {
   org: `org_wha49_kds_${suffix}`,
   branch: `branch_${suffix}`,
   operator: `staff_${suffix}`,
+  operatorUser: `user_${suffix}`,
+  orderRole: `role_orders_${suffix}`,
   category: `category_${suffix}`,
   productDefault: `product_default_${suffix}`,
   productBar: `product_bar_${suffix}`,
@@ -213,6 +215,7 @@ beforeAll(async () => {
         status: 'ACTIVE',
       },
     });
+    await seedDepartments(tx, [ids.org], ['LEADERSHIP']);
     const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
       name: 'POS and Fulfilment',
       category: 'Operations',
@@ -231,6 +234,24 @@ beforeAll(async () => {
     });
   });
   await deps.withTenantDb(ids.org, async (tx) => {
+    await tx.organizationRole.create({
+      data: {
+        id: ids.orderRole,
+        key: `wha49_kds_orders_${suffix}`,
+        name: 'WHA-49 Kitchen Order Taking',
+        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+      },
+    });
+    await tx.user.create({
+      data: {
+        id: ids.operatorUser,
+        name: 'Kitchen Operator',
+        email: `kitchen_operator_${suffix}@test.local`,
+        department: 'LEADERSHIP',
+        title: 'Operator',
+        organizationRoleId: ids.orderRole,
+      },
+    });
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Kitchen', timezone: 'UTC', businessDayCutoff: '00:00' },
     });
@@ -240,6 +261,7 @@ beforeAll(async () => {
         displayName: 'Kitchen Operator',
         primaryBranchId: ids.branch,
         status: 'ACTIVE',
+        userId: ids.operatorUser,
       },
     });
     await tx.restaurantOperatorCredential.create({
