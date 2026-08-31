@@ -18,9 +18,8 @@ WORKDIR /app
 # Bun has no V8 heap cap; Node sizes one from host memory and lands on 2GB in a
 # container this size, which `tsc` exhausts outright (`Ineffective mark-compacts
 # near heap limit`, exit 134). `.github/workflows/deploy-staging.yml` already
-# raises this for `tsc` on the runner. 4096 rather than that job's 8192, because
-# this ceiling is also inherited by the workers `next build` forks.
-ENV NODE_OPTIONS=--max-old-space-size=4096
+# raises this for `tsc` on the runner. Match that job's 8192 ceiling here.
+ENV NODE_OPTIONS=--max-old-space-size=8192
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 # `tsconfig.json` includes `.next/types`, and `PageProps`/`LayoutProps`/`RouteContext`
