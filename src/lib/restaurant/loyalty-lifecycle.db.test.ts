@@ -530,9 +530,12 @@ describeIfDatabase('M8/B3 — comp against a loyalty-discounted bill', () => {
     });
     const billId = cut.billIds[0]!;
     // Simulate a deduction this lane cannot release (grandTotal already at zero with
-    // no loyalty discount behind it) — the comp must refuse, not record −10.00.
+    // no releasable loyalty ledger entry behind it) — the comp must refuse, not record −10.00.
     await deps.withTenantDb(orgId, (tx) =>
-      tx.restaurantBill.update({ where: { id: billId }, data: { grandTotal: '0.00' } })
+      tx.restaurantBill.update({
+        where: { id: billId },
+        data: { grandTotal: '0.00', discountTotal: '10.00' },
+      })
     );
     const lines = await billLines(billId);
 
@@ -835,7 +838,10 @@ describeIfDatabase('M8 grandTotal guard migration — fails closed', () => {
       // a negative grand total, then put the migration back in front of it.
       await client.query(`ALTER TABLE "restaurant_bills" DROP CONSTRAINT "${constraint}"`);
       const corrupted = await client.query(
-        'UPDATE "restaurant_bills" SET "grandTotal" = -1 WHERE id = $1',
+        `UPDATE "restaurant_bills"
+            SET "grandTotal" = -1,
+                "discountTotal" = "subtotal" + "roundingAdjustment" - "compTotal" - (-1)
+          WHERE id = $1`,
         [billId]
       );
       expect(corrupted.rowCount).toBe(1);

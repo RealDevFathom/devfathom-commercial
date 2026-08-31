@@ -7,6 +7,9 @@ const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.en
 const M8_TEST_OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
 const describeIfDatabase =
   TEST_DATABASE_URL && M8_TEST_OWNER_DATABASE_URL ? describe : describe.skip;
+const runtimeRole = TEST_DATABASE_URL
+  ? decodeURIComponent(new URL(TEST_DATABASE_URL).username)
+  : null;
 const runtimeClient = TEST_DATABASE_URL
   ? new pg.Client({ connectionString: TEST_DATABASE_URL })
   : null;
@@ -398,7 +401,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
     });
     expect(connectionProof[1]).toMatchObject({
       connection: 'runtime',
-      role: 'devfathom_local_runtime',
+      role: runtimeRole,
       rolcanlogin: true,
       rolsuper: false,
       rolbypassrls: false,

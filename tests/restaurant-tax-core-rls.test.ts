@@ -646,6 +646,7 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
 
   it('uses a database exclusion constraint across two concurrent connections', async () => {
     await client.query('RESET ROLE');
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     const concurrentOrg = `tax_concurrent_${suffix}`;
     const concurrentBranch = `branch_concurrent_${suffix}`;
     await client.query(

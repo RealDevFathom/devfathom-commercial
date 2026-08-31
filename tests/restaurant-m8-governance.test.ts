@@ -118,6 +118,8 @@ const M8_COLUMNS = {
     'createdAt',
     'updatedAt',
     'projectionVersion',
+    'deliveryFeeSales',
+    'deliveryFeeRefunds',
   ],
   restaurant_insight_loyalty_liabilities: [
     'id',
@@ -351,6 +353,8 @@ const CHECK_CONSTRAINTS = {
   restaurant_loyalty_points_entries_reference_ck:
     /REVERSAL.*refundId.*IS NOT NULL.*reversesEntryId.*IS NOT NULL.*EXPIRY.*reversesEntryId.*IS NOT NULL.*ADJUSTMENT.*actorId.*reason.*idempotencyKey/,
   restaurant_insight_daily_rollups_counts_ck: /orderCount.*>= 0.*coverCount.*>= 0/,
+  restaurant_insight_daily_rollups_delivery_fees_nonneg_ck:
+    /deliveryFeeSales.*>= \(0\)::numeric.*deliveryFeeRefunds.*>= \(0\)::numeric/,
   restaurant_insight_item_mix_rollups_quantity_ck: /quantity.*>= 0/,
   restaurant_labour_cost_facts_values_ck:
     /labourHours.*>= \(0\)::numeric.*labourCost.*>= \(0\)::numeric.*source.*idempotencyKey/,
