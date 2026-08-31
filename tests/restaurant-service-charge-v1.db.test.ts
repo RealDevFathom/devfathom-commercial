@@ -64,8 +64,8 @@ async function insertBill(
        "id", "organizationId", "orderId", "branchId", "businessDate",
        "serviceChargeTotal", "serviceChargePolicyVersionId", "serviceChargeRate",
        "serviceChargeBasis", "serviceChargeTaxTreatment", "openerStaffProfileId",
-       "deviceId", "updatedAt"
-     ) VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)`,
+       "deviceId", "grandTotal", "updatedAt"
+     ) VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9, $10, $11, $5, CURRENT_TIMESTAMP)`,
     [
       id,
       ids.orgA,
@@ -136,26 +136,23 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
         ids.zeroPolicyOrder,
       ]
     );
+    await owner!.query(`SELECT set_config('app.current_organization_id', $1, false)`, [ids.orgA]);
     await owner!.query(
       `INSERT INTO "restaurant_service_charge_policy_versions" (
          "id", "organizationId", "branchId", "rate", "effectiveFrom", "effectiveTo",
          "acknowledgedAt", "acknowledgementRef", "idempotencyKey", "payloadHash"
-       ) VALUES
-         ($1, $2, $3, 0.10, '2026-01-01', NULL, CURRENT_TIMESTAMP, 'approved-a', $4, $5),
-         ($6, $7, $8, 0.12, '2026-01-01', NULL, CURRENT_TIMESTAMP, 'approved-b', $9, $10)`,
-      [
-        ids.policyA,
-        ids.orgA,
-        ids.branchA,
-        `policy_a_${suffix}`,
-        `hash_a_${suffix}`,
-        ids.policyB,
-        ids.orgB,
-        ids.branchB,
-        `policy_b_${suffix}`,
-        `hash_b_${suffix}`,
-      ]
+       ) VALUES ($1, $2, $3, 0.10, '2026-01-01', NULL, CURRENT_TIMESTAMP, 'approved-a', $4, $5)`,
+      [ids.policyA, ids.orgA, ids.branchA, `policy_a_${suffix}`, `hash_a_${suffix}`]
     );
+    await owner!.query(`SELECT set_config('app.current_organization_id', $1, false)`, [ids.orgB]);
+    await owner!.query(
+      `INSERT INTO "restaurant_service_charge_policy_versions" (
+         "id", "organizationId", "branchId", "rate", "effectiveFrom", "effectiveTo",
+         "acknowledgedAt", "acknowledgementRef", "idempotencyKey", "payloadHash"
+       ) VALUES ($1, $2, $3, 0.12, '2026-01-01', NULL, CURRENT_TIMESTAMP, 'approved-b', $4, $5)`,
+      [ids.policyB, ids.orgB, ids.branchB, `policy_b_${suffix}`, `hash_b_${suffix}`]
+    );
+    await owner!.query(`SELECT set_config('app.current_organization_id', $1, false)`, [ids.orgA]);
   });
 
   afterAll(async () => {
@@ -286,11 +283,20 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
         [ids.policyA]
       )
     );
-    await expectDatabaseError(owner!, 'P0001', () =>
-      owner!.query(`DELETE FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`, [
-        ids.policyA,
-      ])
-    );
+    expect(
+      (
+        await owner!.query(
+          `DELETE FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`,
+          [ids.policyA]
+        )
+      ).rowCount
+    ).toBe(0);
+    expect(
+      await owner!.query(
+        `SELECT "id" FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`,
+        [ids.policyA]
+      )
+    ).toMatchObject({ rows: [{ id: ids.policyA }] });
     await owner!.query('ROLLBACK');
   });
 
