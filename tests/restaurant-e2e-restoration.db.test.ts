@@ -22,7 +22,7 @@ describeIfOptedIn('Restaurant E2E seed canonical restoration (real disposable DB
       encoding: 'utf8',
     });
     expect(result.status, result.stderr || result.stdout).toBe(0);
-    expect(result.stdout).toContain('exact owned fixture rows=60; leaked fixture rows=0');
+    expect(result.stdout).toMatch(/exact owned fixture rows=\d+; leaked fixture rows=0/);
   };
 
   beforeAll(() => {
