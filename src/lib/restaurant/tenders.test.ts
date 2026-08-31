@@ -459,6 +459,35 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
 });
 
 describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
+  it('quotes and settles an exact fee-inclusive tender without taxing or dropping the fee', async () => {
+    const { billId } = await openBill(1);
+    await read((tx) =>
+      tx.restaurantBill.update({
+        where: { id: billId },
+        data: { deliveryFeeTotal: '2.50', grandTotal: '15.00' },
+      })
+    );
+
+    const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '15.00' },
+      actor: actor(),
+      now: AT,
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.remainingDue.toString()).toBe('0');
+    const bill = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { grandTotal: true, deliveryFeeTotal: true, taxTotal: true },
+      })
+    );
+    expect(bill.grandTotal.toString()).toBe('15');
+    expect(bill.deliveryFeeTotal.toString()).toBe('2.5');
+    expect(bill.taxTotal.toString()).toBe('0');
+  });
+
   it('accepts partial tenders and settles once Σ tenders ≡ the grand total', async () => {
     const { billId, grandTotal } = await openBill(2); // 25.00
     const drawerId = await openDrawer(await newDevice('POS-split'));

@@ -6,12 +6,25 @@ ALTER TABLE "restaurant_refunds"
 ALTER TABLE "restaurant_delivery_fulfillments"
   ALTER COLUMN "paymentMode" DROP NOT NULL;
 
+-- Foundation rows were created with a client-supplied mode while still PENDING.
+-- Normalize them before enforcing server-only dispatch-time freezing.
+ALTER TABLE "restaurant_delivery_fulfillments"
+  DISABLE TRIGGER "restaurant_delivery_fulfillment_snapshot_immutable";
+UPDATE "restaurant_delivery_fulfillments"
+SET "paymentMode" = NULL
+WHERE "status" = 'PENDING' AND "paymentMode" IS NOT NULL;
+ALTER TABLE "restaurant_delivery_fulfillments"
+  ENABLE TRIGGER "restaurant_delivery_fulfillment_snapshot_immutable";
+
 ALTER TABLE "restaurant_bills" ADD CONSTRAINT "restaurant_bills_delivery_fee_nonneg_ck"
   CHECK ("deliveryFeeTotal" >= 0);
 ALTER TABLE "restaurant_bills" ADD CONSTRAINT "restaurant_bills_grand_total_ck"
   CHECK ("grandTotal" = "subtotal" + "taxTotal" + "serviceChargeTotal" + "deliveryFeeTotal" - "compTotal" - "discountTotal" + "roundingAdjustment");
 ALTER TABLE "restaurant_refunds" ADD CONSTRAINT "restaurant_refunds_delivery_fee_nonneg_ck"
   CHECK ("deliveryFeeRefundAmount" >= 0);
+ALTER TABLE "restaurant_refunds" DROP CONSTRAINT "restaurant_refunds_frozen_refund_amounts_check";
+ALTER TABLE "restaurant_refunds" ADD CONSTRAINT "restaurant_refunds_frozen_refund_amounts_check"
+  CHECK ("serviceChargeRefundAmount" >= 0 AND "deliveryFeeRefundAmount" >= 0 AND "taxRefundAmount" >= 0 AND "serviceChargeRefundAmount" + "deliveryFeeRefundAmount" + "taxRefundAmount" <= "amount");
 
 -- The foundation immutability trigger included paymentMode. Permit exactly the
 -- unresolved -> frozen transition; every other snapshot remains immutable.

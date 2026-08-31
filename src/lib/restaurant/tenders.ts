@@ -153,6 +153,7 @@ type BillForTender = {
   compTotal: Prisma.Decimal;
   discountTotal: Prisma.Decimal;
   serviceChargeTotal: Prisma.Decimal;
+  deliveryFeeTotal: Prisma.Decimal;
   roundingAdjustment: Prisma.Decimal;
   branchId: string;
   businessDate: Date;
@@ -281,6 +282,7 @@ export async function applyTenderInTransaction(
       compTotal: true,
       discountTotal: true,
       serviceChargeTotal: true,
+      deliveryFeeTotal: true,
       roundingAdjustment: true,
       branchId: true,
       businessDate: true,
@@ -485,7 +487,7 @@ async function loadSettlementContext(
       };
     });
   });
-  const quote = quoteTaxSettlement({
+  const quoteWithoutDelivery = quoteTaxSettlement({
     lines: quoteLines,
     profiles: profiles.map((profile) => ({
       id: profile.id,
@@ -503,14 +505,45 @@ async function loadSettlementContext(
     ),
     at,
     proposedTenderType,
-    priorTenders: priorTenders.map((tender) => ({
-      tenderType: tender.type,
-      principal: tender.amount,
-    })),
+    priorTenders: [],
     afterTaxDiscount,
     serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
   });
+  let remainingMerchandise = quoteWithoutDelivery.grandTotal;
+  const taxablePriorTenders = priorTenders.map((tender) => {
+    const principal = Prisma.Decimal.min(tender.amount, remainingMerchandise);
+    remainingMerchandise = Prisma.Decimal.max(ZERO, sub(remainingMerchandise, principal));
+    return { tenderType: tender.type, principal };
+  });
+  const taxableQuote = quoteTaxSettlement({
+    lines: quoteLines,
+    profiles: profiles.map((profile) => ({
+      id: profile.id,
+      effectiveFrom: profile.effectiveFrom,
+      effectiveTo: profile.effectiveTo,
+      status: profile.status,
+      approvalReference: profile.approvalReference,
+      approvedAt: profile.approvedAt,
+    })),
+    rules: profiles.flatMap((profile) =>
+      profile.rules.map((rule) => ({ ...rule, sourceExpiresAt: rule.officialSource.expiresAt }))
+    ),
+    at,
+    proposedTenderType,
+    priorTenders: taxablePriorTenders,
+    afterTaxDiscount,
+    serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
+    roundingAdjustment: bill.roundingAdjustment,
+  });
+  const acceptedPrincipal = sum(priorTenders.map((tender) => tender.amount));
+  const grandTotal = add(taxableQuote.grandTotal, bill.deliveryFeeTotal);
+  const quote: TaxQuoteResult = {
+    ...taxableQuote,
+    acceptedPrincipal,
+    grandTotal,
+    remainingDue: sub(grandTotal, acceptedPrincipal),
+  };
   const profile = profiles.find(
     (candidate) =>
       candidate.effectiveFrom <= at && (!candidate.effectiveTo || at < candidate.effectiveTo)
@@ -633,6 +666,7 @@ async function finalizeTaxSettlement(
       settlement.quote.afterTaxDiscount
     ),
     serviceChargeTotal: settlement.quote.serviceChargePayable,
+    deliveryFeeTotal: bill.deliveryFeeTotal,
     taxTotal: settlement.quote.tax,
     roundingAdjustment: settlement.quote.roundingAdjustment,
     grandTotal: settlement.quote.grandTotal,

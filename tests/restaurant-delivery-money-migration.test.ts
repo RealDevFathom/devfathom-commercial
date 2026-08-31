@@ -26,6 +26,9 @@ describe('restaurant delivery money migration', () => {
   });
 
   it('replaces the function used by the existing immutable-snapshot trigger', () => {
+    expect(sql).toContain('WHERE "status" = \'PENDING\' AND "paymentMode" IS NOT NULL');
+    expect(sql).toContain('DISABLE TRIGGER "restaurant_delivery_fulfillment_snapshot_immutable"');
+    expect(sql).toContain('ENABLE TRIGGER "restaurant_delivery_fulfillment_snapshot_immutable"');
     expect(sql).toContain(
       'CREATE OR REPLACE FUNCTION prevent_restaurant_delivery_snapshot_mutation()'
     );
@@ -37,6 +40,13 @@ describe('restaurant delivery money migration', () => {
     );
     expect(sql).toContain(
       "CHECK ((\"status\" IN ('PENDING', 'CANCELLED', 'FAILED')) OR \"paymentMode\" IS NOT NULL)"
+    );
+  });
+
+  it('replaces the refund component constraint with all three frozen components', () => {
+    expect(sql).toContain('DROP CONSTRAINT "restaurant_refunds_frozen_refund_amounts_check"');
+    expect(sql).toContain(
+      '"serviceChargeRefundAmount" + "deliveryFeeRefundAmount" + "taxRefundAmount" <= "amount"'
     );
   });
 });
