@@ -20,7 +20,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 const mocks = vi.hoisted(() => ({
   annotateAudit: vi.fn(),
-  can: vi.fn(async (..._args: unknown[]) => true),
+  can: vi.fn(async () => true),
 }));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
