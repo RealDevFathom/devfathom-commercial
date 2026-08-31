@@ -74,6 +74,8 @@ function transport({
   failedAddAttempts = 0,
   refreshGate,
   checkoutBillErrors = [],
+  customerSearchGates = [],
+  deliveryZoneGates = [],
 }: {
   failedOpenAttempts?: number;
   openErrors?: { status: number; error: string }[];
@@ -82,6 +84,8 @@ function transport({
   failedAddAttempts?: number;
   refreshGate?: Promise<void>;
   checkoutBillErrors?: ({ status: number; error: string } | Error)[];
+  customerSearchGates?: Promise<void>[];
+  deliveryZoneGates?: Promise<void>[];
 } = {}) {
   let openAttempts = 0;
   let addAttempts = 0;
@@ -89,6 +93,8 @@ function transport({
   let closed = false;
   let billCut = false;
   let checkoutBillAttempts = 0;
+  let customerSearchAttempts = 0;
+  let deliveryZoneAttempts = 0;
   const fetch: typeof globalThis.fetch = async (input) => {
     const path = String(input);
     if (path.endsWith('/terminal/establish')) {
@@ -109,7 +115,10 @@ function transport({
     }
     if (path.endsWith('/terminal/operators')) {
       return json({
-        operators: [{ staffProfileId: 'staff-1', displayName: 'Amina Rahman', role: 'Shift lead' }],
+        operators: [
+          { staffProfileId: 'staff-1', displayName: 'Amina Rahman', role: 'Shift lead' },
+          { staffProfileId: 'staff-2', displayName: 'Bilal Khan', role: 'Cashier' },
+        ],
       });
     }
     if (path.endsWith('/terminal/layout')) {
@@ -135,8 +144,41 @@ function transport({
     if (path.endsWith('/terminal/lock')) {
       return json({ session: { id: 'session-1', state: 'LOCKED' } });
     }
+    if (path.endsWith('/terminal/switch')) {
+      return json({
+        session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-2' },
+      });
+    }
     if (path.endsWith('/orders/delivery/zones')) {
-      return json({ zones: [] });
+      await deliveryZoneGates[deliveryZoneAttempts++];
+      return json({
+        zones: [
+          {
+            id: 'zone-1',
+            name: 'Central',
+            minimumSubtotal: '0.00',
+            fee: '2.00',
+            promisedMinutes: 30,
+          },
+        ],
+      });
+    }
+    if (path.includes('/orders/customer/search')) {
+      const gate = customerSearchGates[customerSearchAttempts++];
+      await gate;
+      return json({
+        customers: [{ customerId: 'customer-1', displayName: 'Private Guest', identifiers: [] }],
+      });
+    }
+    if (path.includes('/orders/delivery/addresses')) {
+      return json({
+        addresses: [
+          { id: 'address-1', label: 'Home', recipientName: 'Private Guest', isDefault: true },
+        ],
+      });
+    }
+    if (path.endsWith('/orders/delivery/attach')) {
+      return json({ fulfillmentId: 'fulfillment-1' }, 201);
     }
     if (path.includes('/orders/effective-menu')) {
       const publicationId = new URL(path, 'http://localhost').searchParams.get('publicationId');
@@ -248,6 +290,125 @@ describe('OrderPad transport', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Unlock terminal' }));
     await screen.findByRole('heading', { name: 'Order pad' });
     expect(await screen.findByLabelText('Delivery instructions')).toHaveValue('');
+  });
+
+  it('ignores a deferred customer response after lock', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetch = transport({ customerSearchGates: [gate] });
+    await unlock(fetch);
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
+      target: { value: 'Private' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lock terminal' }));
+    await screen.findByRole('heading', { name: 'Terminal locked' });
+    release();
+    await Promise.resolve();
+    expect(screen.queryByText('Private Guest')).not.toBeInTheDocument();
+  });
+
+  it('ignores a deferred customer response after operator switch', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetch = transport({ customerSearchGates: [gate] });
+    await unlock(fetch);
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
+      target: { value: 'Private' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
+    fireEvent.change(screen.getByLabelText('Operator', { selector: '#switch-operator-id' }), {
+      target: { value: 'staff-2' },
+    });
+    fireEvent.change(screen.getByLabelText('Operator PIN', { selector: '#switch-operator-pin' }), {
+      target: { value: '1234' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
+    await screen.findByText('Operator switched. New actions use the incoming identity.');
+    release();
+    await Promise.resolve();
+    expect(screen.queryByText('Private Guest')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customer name')).toHaveValue('');
+  });
+
+  it('ignores a deferred customer response after device revocation', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetch = transport({
+      customerSearchGates: [Promise.resolve(), gate],
+      openErrors: [{ status: 403, error: 'This device has been revoked.' }],
+    });
+    await unlock(fetch);
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    const customerName = await screen.findByLabelText('Customer name');
+    fireEvent.change(customerName, { target: { value: 'Private' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
+    await waitFor(() => expect(screen.getByLabelText('Saved address')).toHaveValue('address-1'));
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByRole('heading', { name: 'Not enrolled' });
+    release();
+    await Promise.resolve();
+    expect(screen.queryByText('Private Guest')).not.toBeInTheDocument();
+  });
+
+  it('ignores a deferred customer response after successful delivery handoff', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetch = transport({ customerSearchGates: [Promise.resolve(), gate] });
+    await unlock(fetch);
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    const customerName = await screen.findByLabelText('Customer name');
+    fireEvent.change(customerName, { target: { value: 'Private' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
+    await waitFor(() => expect(screen.getByLabelText('Saved address')).toHaveValue('address-1'));
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.some(([input]) => String(input).endsWith('/orders/delivery/attach'))
+      ).toBe(true)
+    );
+    await waitFor(() => expect(screen.getByLabelText('Customer name')).toHaveValue(''));
+    release();
+    await Promise.resolve();
+    expect(screen.queryByText('Private Guest')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customer name')).toHaveValue('');
+  });
+
+  it('refetches zones when customer selection invalidates an in-flight zone response', async () => {
+    let releaseZones = () => {};
+    const zoneGate = new Promise<void>((resolve) => (releaseZones = resolve));
+    const fetch = transport({
+      customerSearchGates: [Promise.resolve()],
+      deliveryZoneGates: [zoneGate, Promise.resolve()],
+    });
+    await unlock(fetch);
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
+      target: { value: 'Private' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
+
+    await waitFor(() => expect(screen.getByLabelText('Delivery zone')).toHaveValue('zone-1'));
+    releaseZones();
+    await Promise.resolve();
+    expect(
+      fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/delivery/zones'))
+    ).toHaveLength(2);
+    expect(screen.getByLabelText('Delivery zone')).toHaveValue('zone-1');
   });
 
   it('uses AA semantic text tokens on the initial POS screen', () => {

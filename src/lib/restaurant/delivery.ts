@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { RestaurantDeliveryFulfillmentStatus } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -384,13 +386,16 @@ export function createDeliveryFulfillment(
   }
 ) {
   return transaction(db, async (tx) => {
-    const commandType = `delivery.attach:${JSON.stringify({
+    const canonicalPayload = JSON.stringify({
       orderId: input.orderId,
       customerId: input.customerId,
       addressId: input.addressId,
       zoneId: input.zoneId,
       instructions: input.instructions?.trim() || null,
-    })}`;
+    });
+    const commandType = `delivery.attach:v1:${createHash('sha256')
+      .update(canonicalPayload, 'utf8')
+      .digest('hex')}`;
     const replay = await tx.restaurantOrderIdempotencyKey.findUnique({
       where: { deviceId_key: { deviceId: input.deviceId, key: input.idempotencyKey } },
       select: { commandType: true, resultRef: true },

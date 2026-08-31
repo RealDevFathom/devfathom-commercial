@@ -10,6 +10,7 @@ import { readJson } from '@/lib/api-json';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { CoAuthorizationError } from './co-authorization';
+import { operatorHasCapability } from './checkout-routes';
 import { KitchenTicketError } from './kitchen-tickets';
 import { DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE, orderChannelSchema } from './order-channels';
 import {
@@ -217,6 +218,24 @@ export function requireActingOperator(
   return { ok: true, staffProfileId: ctx.session.activeStaffProfileId };
 }
 
+export async function requireOrderTakingCapability(
+  ctx: TerminalContext,
+  staffProfileId: string,
+  requireCustomerRead = false
+): Promise<NextResponse | null> {
+  const now = new Date();
+  if (!(await operatorHasCapability(ctx.db, staffProfileId, 'orders:take', now))) {
+    return json({ error: 'This operator lacks the "orders:take" capability.' }, 403);
+  }
+  if (
+    requireCustomerRead &&
+    !(await operatorHasCapability(ctx.db, staffProfileId, 'customers:read', now))
+  ) {
+    return json({ error: 'This operator lacks the "customers:read" capability.' }, 403);
+  }
+  return null;
+}
+
 /**
  * Authenticate an inline manager co-authorization for a post-prep void / cancel.
  * Mirrors the `/terminal/co-authorize` credential check: a locked credential is a
@@ -290,6 +309,15 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
       if (!parsed.ok) return parsed.response;
 
       const data = parsed.data as unknown;
+      const capabilityError = await requireOrderTakingCapability(
+        ctx,
+        operator.staffProfileId,
+        typeof data === 'object' &&
+          data !== null &&
+          'channel' in data &&
+          data.channel === 'DELIVERY'
+      );
+      if (capabilityError) return capabilityError;
       if (
         typeof data === 'object' &&
         data !== null &&

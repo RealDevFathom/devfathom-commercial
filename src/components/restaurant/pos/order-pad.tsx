@@ -211,6 +211,8 @@ export function OrderPad() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
   const stateEpoch = useRef(0);
+  const runtimeBoundary = useRef<Runtime | null>(null);
+  const deliveryCustomerBoundary = useRef<DeliveryCustomer | null>(null);
   const offlineRuntime = useRef<PosOfflineRuntime | null>(null);
   const [online, setOnline] = useState(true);
   const [queue, setQueue] = useState<PosQueueSnapshot | null>(null);
@@ -257,8 +259,22 @@ export function OrderPad() {
     }
   }, []);
 
+  const clearDeliveryState = useCallback((advanceEpoch = true) => {
+    if (advanceEpoch) stateEpoch.current += 1;
+    setCustomerQuery('');
+    setDeliveryCustomers([]);
+    setDeliveryCustomer(null);
+    deliveryCustomerBoundary.current = null;
+    setDeliveryAddresses([]);
+    setDeliveryAddressId('');
+    setDeliveryZones([]);
+    setDeliveryZoneId('');
+    setDeliveryInstructions('');
+  }, []);
+
   const clearTerminalState = useCallback(() => {
     stateEpoch.current += 1;
+    runtimeBoundary.current = null;
     setRuntime(null);
     setDraftMenu(null);
     setOrderMenu(null);
@@ -271,15 +287,38 @@ export function OrderPad() {
     setOperatorDirectoryState('idle');
     setLayout(null);
     setLayoutState('idle');
-    setDeliveryCustomers([]);
-    setDeliveryCustomer(null);
-    setDeliveryAddresses([]);
-    setDeliveryAddressId('');
-    setDeliveryZones([]);
-    setDeliveryZoneId('');
-    setDeliveryInstructions('');
+    clearDeliveryState(false);
     idempotencyKeys.current.clear();
-  }, []);
+  }, [clearDeliveryState]);
+
+  const captureDeliveryBoundary = useCallback(
+    (activeRuntime: Runtime, customerId: string | null) => ({
+      epoch: stateEpoch.current,
+      organizationId: activeRuntime.organizationId,
+      branchId: activeRuntime.branchId,
+      deviceId: activeRuntime.deviceId,
+      sessionId: activeRuntime.sessionId,
+      operatorId: activeRuntime.operator?.staffProfileId ?? null,
+      customerId,
+    }),
+    []
+  );
+
+  const deliveryBoundaryIsCurrent = useCallback(
+    (boundary: ReturnType<typeof captureDeliveryBoundary>) => {
+      const current = runtimeBoundary.current;
+      return (
+        boundary.epoch === stateEpoch.current &&
+        current?.organizationId === boundary.organizationId &&
+        current.branchId === boundary.branchId &&
+        current.deviceId === boundary.deviceId &&
+        current.sessionId === boundary.sessionId &&
+        (current.operator?.staffProfileId ?? null) === boundary.operatorId &&
+        (deliveryCustomerBoundary.current?.customerId ?? null) === boundary.customerId
+      );
+    },
+    []
+  );
 
   const syncQueue = useCallback(() => {
     setQueue(offlineRuntime.current?.snapshot().queue ?? null);
@@ -317,7 +356,10 @@ export function OrderPad() {
       });
       syncQueue();
       if (result.state === 'PAUSED' && local.snapshot().queue?.replay === 'PAUSED_REAUTH') {
-        setRuntime({ ...activeRuntime, state: 'LOCKED', operator: null });
+        const locked = { ...activeRuntime, state: 'LOCKED' as const, operator: null };
+        setRuntime(locked);
+        runtimeBoundary.current = locked;
+        clearDeliveryState();
         setOperatorPin('');
         setNotice({
           tone: 'warning',
@@ -334,7 +376,7 @@ export function OrderPad() {
         });
       }
     },
-    [clearTerminalState, syncQueue]
+    [clearDeliveryState, clearTerminalState, syncQueue]
   );
 
   function keyFor(intent: string) {
@@ -530,6 +572,7 @@ export function OrderPad() {
       }
       syncQueue();
       setRuntime(established);
+      runtimeBoundary.current = established;
       setEnrollmentState('ready');
       setNotice({ tone: 'success', message: 'Device session established. Unlock to continue.' });
       await loadOperators(established);
@@ -569,6 +612,7 @@ export function OrderPad() {
           ) ?? null,
       };
       setRuntime(unlocked);
+      runtimeBoundary.current = unlocked;
       await offlineRuntime.current?.resume();
       setOperatorPin('');
       setNotice({ tone: 'success', message: 'Terminal unlocked.' });
@@ -615,7 +659,7 @@ export function OrderPad() {
       });
       const locked: Runtime = { ...runtime, state: data.session.state, operator: null };
       setRuntime(locked);
-      stateEpoch.current += 1;
+      runtimeBoundary.current = locked;
       setOperatorId('');
       setOperators([]);
       setOperatorPin('');
@@ -626,13 +670,7 @@ export function OrderPad() {
       setOpenOrders([]);
       setLayout(null);
       setLayoutState('idle');
-      setDeliveryCustomers([]);
-      setDeliveryCustomer(null);
-      setDeliveryAddresses([]);
-      setDeliveryAddressId('');
-      setDeliveryZones([]);
-      setDeliveryZoneId('');
-      setDeliveryInstructions('');
+      clearDeliveryState();
       idempotencyKeys.current.clear();
       setNotice({ tone: 'success', message: 'Terminal locked.' });
       await loadOperators(locked);
@@ -653,20 +691,16 @@ export function OrderPad() {
         headers: authHeaders(runtime, true),
         body: JSON.stringify(input),
       });
-      setRuntime({
+      const switched: Runtime = {
         ...runtime,
         operator:
           operators.find(
             (operator) => operator.staffProfileId === data.session.activeStaffProfileId
           ) ?? null,
-      });
-      setDeliveryCustomers([]);
-      setDeliveryCustomer(null);
-      setDeliveryAddresses([]);
-      setDeliveryAddressId('');
-      setDeliveryZones([]);
-      setDeliveryZoneId('');
-      setDeliveryInstructions('');
+      };
+      setRuntime(switched);
+      runtimeBoundary.current = switched;
+      clearDeliveryState();
       setNotice({
         tone: 'success',
         message: 'Operator switched. New actions use the incoming identity.',
@@ -783,13 +817,7 @@ export function OrderPad() {
         });
         idempotencyKeys.current.delete(intent);
         setDraftLines([]);
-        setDeliveryCustomers([]);
-        setDeliveryCustomer(null);
-        setDeliveryAddresses([]);
-        setDeliveryAddressId('');
-        setDeliveryZones([]);
-        setDeliveryZoneId('');
-        setDeliveryInstructions('');
+        clearDeliveryState();
         setNotice({
           tone: 'success',
           message: `Delivery order ${opened.orderNumber} opened and fulfillment attached.`,
@@ -1186,15 +1214,22 @@ export function OrderPad() {
                       }
                       if (next === 'DELIVERY' && runtime) {
                         setDeliveryCustomers([]);
+                        const boundary = captureDeliveryBoundary(
+                          runtime,
+                          deliveryCustomerBoundary.current?.customerId ?? null
+                        );
                         void request<{ zones: DeliveryZone[] }>(
                           '/api/restaurant/orders/delivery/zones',
                           { headers: authHeaders(runtime) }
                         )
                           .then(({ zones }) => {
+                            if (!deliveryBoundaryIsCurrent(boundary)) return;
                             setDeliveryZones(zones);
                             setDeliveryZoneId(zones[0]?.id ?? '');
                           })
-                          .catch(handleError);
+                          .catch((error) => {
+                            if (deliveryBoundaryIsCurrent(boundary)) handleError(error);
+                          });
                       }
                       void loadMenu(next);
                     }}
@@ -1246,12 +1281,22 @@ export function OrderPad() {
                           }
                           onClick={() => {
                             const query = customerQuery.trim();
+                            const boundary = captureDeliveryBoundary(
+                              runtime,
+                              deliveryCustomerBoundary.current?.customerId ?? null
+                            );
                             void request<{ customers: DeliveryCustomer[] }>(
                               `/api/restaurant/orders/customer/search?query=${encodeURIComponent(query)}`,
                               { headers: authHeaders(runtime) }
                             )
-                              .then(({ customers }) => setDeliveryCustomers(customers))
-                              .catch(handleError);
+                              .then(({ customers }) => {
+                                if (deliveryBoundaryIsCurrent(boundary)) {
+                                  setDeliveryCustomers(customers);
+                                }
+                              })
+                              .catch((error) => {
+                                if (deliveryBoundaryIsCurrent(boundary)) handleError(error);
+                              });
                           }}
                         >
                           Search
@@ -1268,12 +1313,30 @@ export function OrderPad() {
                           }
                           className="h-11 w-full justify-start"
                           onClick={() => {
+                            stateEpoch.current += 1;
                             setDeliveryCustomer(customer);
+                            deliveryCustomerBoundary.current = customer;
+                            setDeliveryAddresses([]);
+                            setDeliveryAddressId('');
+                            const boundary = captureDeliveryBoundary(runtime, customer.customerId);
+                            void request<{ zones: DeliveryZone[] }>(
+                              '/api/restaurant/orders/delivery/zones',
+                              { headers: authHeaders(runtime) }
+                            )
+                              .then(({ zones }) => {
+                                if (!deliveryBoundaryIsCurrent(boundary)) return;
+                                setDeliveryZones(zones);
+                                setDeliveryZoneId(zones[0]?.id ?? '');
+                              })
+                              .catch((error) => {
+                                if (deliveryBoundaryIsCurrent(boundary)) handleError(error);
+                              });
                             void request<{ addresses: DeliveryAddress[] }>(
                               `/api/restaurant/orders/delivery/addresses?customerId=${encodeURIComponent(customer.customerId)}`,
                               { headers: authHeaders(runtime) }
                             )
                               .then(({ addresses }) => {
+                                if (!deliveryBoundaryIsCurrent(boundary)) return;
                                 setDeliveryAddresses(addresses);
                                 setDeliveryAddressId(
                                   addresses.find((address) => address.isDefault)?.id ??
@@ -1281,7 +1344,9 @@ export function OrderPad() {
                                     ''
                                 );
                               })
-                              .catch(handleError);
+                              .catch((error) => {
+                                if (deliveryBoundaryIsCurrent(boundary)) handleError(error);
+                              });
                           }}
                         >
                           {customer.displayName ?? 'Unnamed customer'}
