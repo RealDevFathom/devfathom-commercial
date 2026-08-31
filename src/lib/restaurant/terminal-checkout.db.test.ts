@@ -43,6 +43,7 @@ const suffix = randomBytes(6).toString('hex');
 const PIN = '424242';
 
 const orgA = `org_wha59_${suffix}`;
+const orgB = `org_wha977_b_${suffix}`;
 
 type RouteModule = {
   GET?: (request: Request) => Promise<Response>;
@@ -64,6 +65,8 @@ let deps: Deps;
 /** Seeded once per run. */
 const ctx = {
   branchA: `branch_a_${suffix}`,
+  branchB: `branch_b_${suffix}`,
+  orgBBranch: `branch_org_b_${suffix}`,
   branchDay: `branch_d_${suffix}`,
   branchReplay: `branch_r_${suffix}`,
   roleFull: `role_full_${suffix}`,
@@ -78,6 +81,7 @@ const ctx = {
   staffNoCap: `staff_n_${suffix}`,
   productA: `prod_a_${suffix}`,
   posA: { deviceId: '', secret: '' },
+  posB: { deviceId: '', secret: '' },
   posDay: { deviceId: '', secret: '' },
   posReplay: { deviceId: '', secret: '' },
 };
@@ -196,6 +200,11 @@ async function moneyCounts() {
     refunds: await tx.restaurantRefund.count(),
     movements: await tx.restaurantDrawerMovement.count(),
     closes: await tx.restaurantDailyClose.count(),
+    orderEvents: await tx.restaurantOrderEvent.count(),
+    outbox: await tx.restaurantEventOutbox.count(),
+    loyaltyEntries: await tx.loyaltyPointsEntry.count(),
+    coAuthorizations: await tx.restaurantCoAuthorization.count(),
+    idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
   }));
 }
 
@@ -277,6 +286,15 @@ beforeAll(async () => {
         status: 'ACTIVE',
       },
     });
+    await tx.organization.create({
+      data: {
+        id: orgB,
+        slug: `wha977-b-${suffix}`,
+        legalName: 'WHA-977 Isolation Co',
+        displayName: 'WHA-977 Isolation',
+        status: 'ACTIVE',
+      },
+    });
     await seedDepartments(tx, [orgA], ['LEADERSHIP']);
     const posModule = await ensurePlatformModule(tx, 'restaurant-pos', {
       name: 'POS',
@@ -285,14 +303,24 @@ beforeAll(async () => {
     await tx.organizationModule.create({
       data: { organizationId: orgA, moduleId: posModule.id },
     });
+    await tx.organizationLimit.create({
+      data: {
+        organizationId: orgA,
+        key: 'pos.concurrentRegisters.max',
+        value: 4,
+        source: 'WHA-977_TEST',
+      },
+    });
   });
 
   await deps.withTenantDb(orgA, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchA, name: 'A' } });
+    await tx.restaurantBranch.create({ data: { id: ctx.branchB, name: 'B' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchDay, name: 'Day' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchReplay, name: 'Replay' } });
     await Promise.all([
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchA),
+      ensureRestaurantTaxProfile(tx, orgA, ctx.branchB),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchDay),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchReplay),
     ]);
@@ -352,7 +380,10 @@ beforeAll(async () => {
         },
       });
       await tx.restaurantBranchAssignment.createMany({
-        data: [ctx.branchDay, ctx.branchReplay].map((branchId) => ({ branchId, userId })),
+        data: [ctx.branchB, ctx.branchDay, ctx.branchReplay].map((branchId) => ({
+          branchId,
+          userId,
+        })),
       });
     }
     await tx.restaurantStaffProfile.update({
@@ -360,8 +391,12 @@ beforeAll(async () => {
       data: { primaryBranchId: ctx.branchDay },
     });
   });
+  await deps.withTenantDb(orgB, (tx) =>
+    tx.restaurantBranch.create({ data: { id: ctx.orgBBranch, name: 'Other tenant' } })
+  );
 
   ctx.posA = await enroll(ctx.branchA, 'posA');
+  ctx.posB = await enroll(ctx.branchB, 'posB');
   ctx.posDay = await enroll(ctx.branchDay, 'posDay');
   ctx.posReplay = await enroll(ctx.branchReplay, 'posReplay');
 });
@@ -646,6 +681,165 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(res.status).toBe(200);
       eqMoney(res.json.expectedCash, '130.01');
       eqMoney(res.json.variance, '0.00');
+    });
+  });
+
+  describe('WHA-977 terminal bill branch boundary', () => {
+    it('runs as a restricted PostgreSQL role with two tenant and two-branch fixtures', async () => {
+      const role = await deps.withTenantDb(
+        orgA,
+        (tx) =>
+          tx.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>`
+          SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user
+        `
+      );
+      expect(role).toEqual([{ rolsuper: false, rolbypassrls: false }]);
+      expect(
+        await deps.withTenantDb(orgA, (tx) => tx.restaurantBranch.count())
+      ).toBeGreaterThanOrEqual(2);
+      expect(
+        await deps.withTenantDb(orgA, (tx) =>
+          tx.restaurantBranch.count({ where: { id: ctx.orgBBranch } })
+        )
+      ).toBe(0);
+      expect(
+        await deps.withTenantDb(orgB, (tx) =>
+          tx.restaurantBranch.count({ where: { id: ctx.orgBBranch } })
+        )
+      ).toBe(1);
+    });
+
+    it('allows same-branch cut and comp, but denies cross-branch cut, recut, and comp with zero side effects', async () => {
+      const tokenB = await establishUnlock(ctx.posB.secret, ctx.staffA, ctx.branchB);
+      const branchBOrder = await seedOrder(ctx.branchB, ctx.posB.deviceId, TODAY, ['6.00']);
+      const branchBCutKey = uniqueKey('wha977-same-branch-cut');
+      const branchBCut = await call(deps.routes.bill, {
+        secret: ctx.posB.secret,
+        session: tokenB,
+        key: branchBCutKey,
+        body: { orderId: branchBOrder.orderId, split: { kind: 'NONE' } },
+      });
+      expect(branchBCut.status, JSON.stringify(branchBCut.json)).toBe(200);
+      const branchBBillId = (branchBCut.json.billIds as string[])[0]!;
+      const branchBLineId = await deps.withTenantDb(
+        orgA,
+        async (tx) =>
+          (
+            await tx.restaurantBillLine.findFirstOrThrow({
+              where: { billId: branchBBillId },
+              select: { id: true },
+            })
+          ).id
+      );
+
+      const branchBCompKey = uniqueKey('wha977-same-branch-comp');
+      const branchBCompBody = {
+        billId: branchBBillId,
+        billLineId: branchBLineId,
+        reason: 'same branch regression',
+        approving: { staffProfileId: ctx.managerA, type: 'PIN' as const, secret: PIN },
+      };
+      const sameBranchComp = await call(deps.routes.comp, {
+        secret: ctx.posB.secret,
+        session: tokenB,
+        key: branchBCompKey,
+        body: branchBCompBody,
+      });
+      expect(sameBranchComp.status, JSON.stringify(sameBranchComp.json)).toBe(200);
+
+      const sameBranchCutReplay = await call(deps.routes.bill, {
+        secret: ctx.posB.secret,
+        session: tokenB,
+        key: branchBCutKey,
+        body: { orderId: branchBOrder.orderId, split: { kind: 'NONE' } },
+      });
+      expect(sameBranchCutReplay.json).toEqual({ ...branchBCut.json, replayed: true });
+      const sameBranchCompReplay = await call(deps.routes.comp, {
+        secret: ctx.posB.secret,
+        session: tokenB,
+        key: branchBCompKey,
+        body: branchBCompBody,
+      });
+      expect(sameBranchCompReplay.json).toEqual({ ...sameBranchComp.json, replayed: true });
+
+      const recutOrder = await seedOrder(ctx.branchB, ctx.posB.deviceId, TODAY, ['4.00']);
+      const initialCut = await call(deps.routes.bill, {
+        secret: ctx.posB.secret,
+        session: tokenB,
+        key: uniqueKey('wha977-recut-fixture'),
+        body: { orderId: recutOrder.orderId, split: { kind: 'NONE' } },
+      });
+      expect(initialCut.status, JSON.stringify(initialCut.json)).toBe(200);
+
+      const uncutOrder = await seedOrder(ctx.branchB, ctx.posB.deviceId, TODAY, ['3.00']);
+      const tokenA = await establishUnlock(ctx.posA.secret, ctx.staffA, ctx.branchA);
+      const before = await moneyCounts();
+
+      const deniedCut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('wha977-cross-branch-cut'),
+        body: { orderId: uncutOrder.orderId, split: { kind: 'NONE' } },
+      });
+      expect(deniedCut.status).toBe(404);
+
+      const deniedRecut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('wha977-cross-branch-recut'),
+        body: {
+          orderId: recutOrder.orderId,
+          split: { kind: 'NONE' },
+          recut: {
+            reason: 'must not cross branch',
+            approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
+          },
+        },
+      });
+      expect(deniedRecut.status).toBe(404);
+
+      const deniedComp = await call(deps.routes.comp, {
+        secret: ctx.posA.secret,
+        session: tokenA,
+        key: uniqueKey('wha977-cross-branch-comp'),
+        body: {
+          billId: branchBBillId,
+          billLineId: branchBLineId,
+          reason: 'must not cross branch',
+          approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(deniedComp.status).toBe(404);
+
+      await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantRegisteredDevice.update({
+          where: { id: ctx.posB.deviceId },
+          data: { branchId: ctx.branchA },
+        })
+      );
+      const beforeReassignedReplays = await moneyCounts();
+      const deniedCutReplay = await call(deps.routes.bill, {
+        secret: ctx.posB.secret,
+        session: tokenB,
+        key: branchBCutKey,
+        body: { orderId: branchBOrder.orderId, split: { kind: 'NONE' } },
+      });
+      expect(deniedCutReplay).toEqual({
+        status: 404,
+        json: { error: 'The order does not exist.' },
+      });
+      const deniedCompReplay = await call(deps.routes.comp, {
+        secret: ctx.posB.secret,
+        session: tokenB,
+        key: branchBCompKey,
+        body: branchBCompBody,
+      });
+      expect(deniedCompReplay).toEqual({
+        status: 404,
+        json: { error: 'The bill does not exist.' },
+      });
+      expect(await moneyCounts()).toEqual(beforeReassignedReplays);
+      expect(await moneyCounts()).toEqual(before);
     });
   });
 

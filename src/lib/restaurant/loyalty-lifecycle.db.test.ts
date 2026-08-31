@@ -448,6 +448,7 @@ describeIfDatabase('M8/B3 — comp against a loyalty-discounted bill', () => {
     const { orderId } = await seedOrder(guest.customerId, ['10.00', '10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut'),
     });
@@ -474,6 +475,7 @@ describeIfDatabase('M8/B3 — comp against a loyalty-discounted bill', () => {
     // (160 points), the guest keeps the other 200.
     const firstComp = await deps.bills.compLine(db, {
       billId,
+      branchId: ctx.branch,
       billLineId: lines[0]!.id,
       reason: 'kitchen error',
       approvingStaffProfileId: ctx.manager,
@@ -490,6 +492,7 @@ describeIfDatabase('M8/B3 — comp against a loyalty-discounted bill', () => {
     // FULL: the second comp needs the whole remaining 10.00 discount back.
     const secondComp = await deps.bills.compLine(db, {
       billId,
+      branchId: ctx.branch,
       billLineId: lines[1]!.id,
       reason: 'kitchen error',
       approvingStaffProfileId: ctx.manager,
@@ -521,6 +524,7 @@ describeIfDatabase('M8/B3 — comp against a loyalty-discounted bill', () => {
     const { orderId } = await seedOrder(null, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-guard'),
     });
@@ -535,6 +539,7 @@ describeIfDatabase('M8/B3 — comp against a loyalty-discounted bill', () => {
     await expect(
       deps.bills.compLine(db, {
         billId,
+        branchId: ctx.branch,
         billLineId: lines[0]!.id,
         reason: 'kitchen error',
         approvingStaffProfileId: ctx.manager,
@@ -551,6 +556,7 @@ describeIfDatabase('M8/B3 — comp against a loyalty-discounted bill', () => {
     const { orderId } = await seedOrder(null, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-check'),
     });
@@ -571,6 +577,7 @@ describeIfDatabase('M8/B4 — void-and-recut of a discounted bill', () => {
     const { orderId, itemIds } = await seedOrder(guest.customerId, ['12.00', '8.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-recut'),
     });
@@ -587,6 +594,7 @@ describeIfDatabase('M8/B4 — void-and-recut of a discounted bill', () => {
 
     const recut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'BY_ITEM', groups: [[itemIds[0]!], [itemIds[1]!]] },
       recut: { reason: 'guest asked to split the check', approvingStaffProfileId: ctx.manager },
       actor: actor('recut'),
@@ -626,6 +634,7 @@ describeIfDatabase('M8/M2 — refunds around the order close', () => {
     const { orderId } = await seedOrder(guest.customerId, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-refund'),
     });
@@ -708,6 +717,7 @@ describeIfDatabase('M8/M2 — close ↔ refund serialization under real concurre
     const { orderId } = await seedOrder(guest.customerId, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor(`cut-${ordering}`),
     });
@@ -809,6 +819,7 @@ describeIfDatabase('M8 grandTotal guard migration — fails closed', () => {
     const { orderId } = await seedOrder(null, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor(`cut-mig-${visible}`),
     });
@@ -888,6 +899,7 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     const { orderId } = await seedOrder(guest.customerId, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-rollback'),
     });
@@ -910,6 +922,7 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     await expect(
       deps.bills.compLine(failing, {
         billId,
+        branchId: ctx.branch,
         billLineId: lines[0]!.id,
         reason: 'kitchen error',
         approvingStaffProfileId: ctx.manager,
@@ -930,6 +943,7 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     const retryActor = actor('comp-retry');
     const comped = await deps.bills.compLine(db, {
       billId,
+      branchId: ctx.branch,
       billLineId: lines[0]!.id,
       reason: 'kitchen error',
       approvingStaffProfileId: ctx.manager,
@@ -949,6 +963,7 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     const afterEntries = await ledger(guest.accountId);
     const replay = await deps.bills.compLine(db, {
       billId,
+      branchId: ctx.branch,
       billLineId: lines[0]!.id,
       reason: 'kitchen error',
       approvingStaffProfileId: ctx.manager,
@@ -967,6 +982,7 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     const { orderId } = await seedOrder(null, ['10.00', '10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-plain'),
     });
@@ -975,6 +991,7 @@ describeIfDatabase('M8/B3 — atomicity and replay', () => {
     const plainActor = actor('comp-plain');
     const args = {
       billId,
+      branchId: ctx.branch,
       billLineId: lines[0]!.id,
       reason: 'kitchen error',
       approvingStaffProfileId: ctx.manager,
@@ -1001,6 +1018,7 @@ describeIfDatabase('M8/B3 — the comped bill survives a real settle and close',
     const { orderId } = await seedOrder(guest.customerId, ['10.00', '10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-comp-close'),
     });
@@ -1019,6 +1037,7 @@ describeIfDatabase('M8/B3 — the comped bill survives a real settle and close',
     for (const [index, line] of lines.entries()) {
       await deps.bills.compLine(db, {
         billId,
+        branchId: ctx.branch,
         billLineId: line.id,
         reason: 'kitchen error',
         approvingStaffProfileId: ctx.manager,
@@ -1072,6 +1091,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     const { orderId, itemIds } = await seedOrder(guest.customerId, ['12.00', '8.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-recut-life'),
     });
@@ -1096,6 +1116,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     await expect(
       deps.bills.cutBills(failAfterWrites(db), {
         orderId,
+        branchId: ctx.branch,
         split,
         recut: recutOf(ctx.manager),
         actor: failedActor,
@@ -1111,6 +1132,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     const recutActor = actor('recut-retry');
     const recut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split,
       recut: recutOf(ctx.manager),
       actor: recutActor,
@@ -1136,6 +1158,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     const afterBills = await liveBills(orderId);
     const replay = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split,
       recut: recutOf(ctx.manager),
       actor: recutActor,
@@ -1150,6 +1173,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     await expect(
       deps.bills.cutBills(db, {
         orderId,
+        branchId: ctx.branch,
         split: { kind: 'NONE' },
         recut: recutOf(ctx.manager),
         actor: recutActor,
@@ -1162,6 +1186,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     // command's key means. Replaying the first key still returns ITS now-void bill IDs.
     const laterRecut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       recut: recutOf(ctx.manager),
       actor: actor('later-recut'),
@@ -1171,6 +1196,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     const afterLaterBills = await liveBills(orderId);
     const delayedReplay = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split,
       recut: recutOf(ctx.manager),
       actor: recutActor,
@@ -1186,6 +1212,7 @@ describeIfDatabase('M8/B4 — re-cut lifecycle: rollback, retry, exact replay', 
     await expect(
       deps.bills.cutBills(db, {
         orderId: other.orderId,
+        branchId: ctx.branch,
         split: { kind: 'NONE' },
         actor: recutActor,
       })
@@ -1233,6 +1260,7 @@ describeIfDatabase('M8/B4 — a cut serializes on the order, not only on bills i
     const held = heldOpen(db);
     const first = deps.bills.cutBills(held.db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-race-a'),
     });
@@ -1243,6 +1271,7 @@ describeIfDatabase('M8/B4 — a cut serializes on the order, not only on bills i
     const second = settle(
       deps.bills.cutBills(db, {
         orderId,
+        branchId: ctx.branch,
         split: { kind: 'NONE' },
         actor: actor('cut-race-b'),
       })
@@ -1264,6 +1293,7 @@ describeIfDatabase('M8/B4 — a cut serializes on the order, not only on bills i
     const { orderId, itemIds } = await seedOrder(guest.customerId, ['12.00', '8.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-recut-race'),
     });
@@ -1286,6 +1316,7 @@ describeIfDatabase('M8/B4 — a cut serializes on the order, not only on bills i
     // ones — all uncommitted, all held.
     const recutA = deps.bills.cutBills(held.db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'BY_ITEM', groups: [[itemIds[0]!], [itemIds[1]!]] },
       recut: recutArgs,
       actor: actor('recut-race-a'),
@@ -1297,6 +1328,7 @@ describeIfDatabase('M8/B4 — a cut serializes on the order, not only on bills i
     const recutB = settle(
       deps.bills.cutBills(db, {
         orderId,
+        branchId: ctx.branch,
         split: { kind: 'NONE' },
         recut: recutArgs,
         actor: actor('recut-race-b'),
@@ -1360,6 +1392,7 @@ describeIfDatabase('M8/B3 — a comp replay reports the money ITS OWN call relea
     const { orderId } = await seedOrder(guest.customerId, ['0.03', '0.04'], ctxB);
     const cut = await deps.bills.cutBills(ctxB.db, {
       orderId,
+      branchId: ctxB.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-fractional', ctxB),
     });
@@ -1379,6 +1412,7 @@ describeIfDatabase('M8/B3 — a comp replay reports the money ITS OWN call relea
     const lines = await billLines(billId, ctxB);
     const compArgs = (billLineId: string, label: string) => ({
       billId,
+      branchId: ctxB.branch,
       billLineId,
       reason: 'kitchen error',
       approvingStaffProfileId: ctxB.manager,
@@ -1450,6 +1484,7 @@ describeIfDatabase('M8 correction B — the role and the tenancy this battery ra
     const { orderId } = await seedOrder(guest.customerId, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-isolation'),
     });
@@ -1488,6 +1523,7 @@ describeIfDatabase('M8 correction B — the role and the tenancy this battery ra
     const { orderId } = await seedOrder(guest.customerId, ['10.00']);
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ctx.branch,
       split: { kind: 'NONE' },
       actor: actor('cut-cross'),
     });

@@ -128,6 +128,7 @@ async function openBill(
   }
   const cut = await deps.bills.cutBills(db, {
     orderId: opened.orderId,
+    branchId: ids.branch,
     split: { kind: 'NONE' },
     actor: actor(),
   });
