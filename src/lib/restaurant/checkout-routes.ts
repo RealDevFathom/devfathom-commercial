@@ -26,6 +26,7 @@ import {
 import { PaymentAdapterError } from './payment-adapter';
 import { RefundError, type RefundTenderResult } from './refunds';
 import { TenderError, type ApplyTenderResult } from './tenders';
+import { OrderCommandError } from './orders';
 import {
   authenticateApprover,
   buildActor,
@@ -311,6 +312,9 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof MoneyIdempotencyError) {
     return json({ error: err.message }, 409);
   }
+  if (err instanceof OrderCommandError) {
+    return json({ error: err.message }, err.reason === 'ORDER_NOT_FOUND' ? 404 : 400);
+  }
   if (err instanceof BillCommandError) {
     const notFound =
       err.reason === 'ORDER_NOT_FOUND' ||
@@ -390,6 +394,19 @@ export type MoneyCommandArgs<S extends z.ZodTypeAny> = {
   actor: MoneyCommandActor;
   now: Date;
 };
+
+/** Reject a bill outside the authenticated terminal branch before approval work. */
+export async function requireBillInDeviceBranch(
+  db: ScopedDb,
+  billId: string,
+  branchId: string
+): Promise<void> {
+  const bill = await db.restaurantBill.findFirst({
+    where: { id: billId, branchId },
+    select: { id: true },
+  });
+  if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+}
 
 /**
  * The shared shape of a money MUTATION route: `withTerminalAuth` (device + live

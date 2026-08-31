@@ -247,6 +247,7 @@ async function newBillWithPayment(): Promise<{ billId: string; paymentId: string
   });
   const cut = await deps.bills.cutBills(scoped, {
     orderId: opened.orderId,
+    branchId: ids.branch,
     split: { kind: 'NONE' },
     actor: { ...actor, idempotencyKey: `k_${key}_c` },
   });

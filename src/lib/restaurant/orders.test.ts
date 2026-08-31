@@ -106,7 +106,12 @@ async function openWithItem(over?: { course?: number }) {
  * L4's tender flow calls; here we settle directly (no tender) to exercise the
  * order-close path without pulling in the not-yet-built tender lane. */
 async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
-  const cut = await deps.bills.cutBills(db, { orderId, split: { kind: 'NONE' }, actor: actor() });
+  const cut = await deps.bills.cutBills(db, {
+    orderId,
+    branchId: ids.branch,
+    split: { kind: 'NONE' },
+    actor: actor(),
+  });
   await deps.withTenantDb(orgId, (tx) =>
     deps.bills.settleBill(tx, {
       billId: cut.billIds[0]!,

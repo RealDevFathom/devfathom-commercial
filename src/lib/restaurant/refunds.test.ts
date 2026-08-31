@@ -105,6 +105,7 @@ async function openBill(count: number): Promise<string> {
   }
   const cut = await deps.bills.cutBills(db, {
     orderId: opened.orderId,
+    branchId: ids.branch,
     split: { kind: 'NONE' },
     actor: actor(),
   });
@@ -129,6 +130,7 @@ async function cardTenderAtBranchTwo(): Promise<{ billId: string; tenderId: stri
   });
   const cut = await deps.bills.cutBills(db, {
     orderId: opened.orderId,
+    branchId: ids.branchTwo,
     split: { kind: 'NONE' },
     actor: actor(branchTwoDeviceId),
   });

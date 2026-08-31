@@ -208,9 +208,14 @@ export function deriveOrderTotal(items: readonly LoadedBillItem[]): Prisma.Decim
   return sum(items.map((item) => itemLineSubtotal(item)));
 }
 
-async function loadBillOrder(tx: ScopedDb, orderId: string): Promise<LoadedBillOrder> {
-  const order = await tx.restaurantOrder.findUnique({
-    where: { id: orderId },
+async function loadBillOrder(
+  tx: ScopedDb,
+  orderId: string,
+  // Optional only for non-terminal settlement reads; mutation callers must supply branch scope.
+  branchId?: string
+): Promise<LoadedBillOrder> {
+  const order = await tx.restaurantOrder.findFirst({
+    where: { id: orderId, ...(branchId ? { branchId } : {}) },
     select: {
       id: true,
       branchId: true,
@@ -328,32 +333,37 @@ export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill
       'INVALID_SPLIT'
     );
   }
-  const planned = (() => { switch (split.kind) {
-    case 'NONE':
-      return [itemBill('NONE', items)];
+  const planned = (() => {
+    switch (split.kind) {
+      case 'NONE':
+        return [itemBill('NONE', items)];
 
-    case 'BY_ITEM':
-      return planByItem(items, split.groups);
+      case 'BY_ITEM':
+        return planByItem(items, split.groups);
 
-    case 'BY_SEAT':
-      return planBySeat(items);
+      case 'BY_SEAT':
+        return planBySeat(items);
 
-    case 'FRACTIONAL':
-      return planFractional(items, split.weights);
+      case 'FRACTIONAL':
+        return planFractional(items, split.weights);
 
-    default: {
-      const exhaustive: never = split;
-      throw new BillCommandError(
-        `Unknown split kind: ${JSON.stringify(exhaustive)}`,
-        'INVALID_SPLIT'
-      );
+      default: {
+        const exhaustive: never = split;
+        throw new BillCommandError(
+          `Unknown split kind: ${JSON.stringify(exhaustive)}`,
+          'INVALID_SPLIT'
+        );
+      }
     }
-  } })();
+  })();
   const policy = order.serviceChargePolicyVersion;
   if (!policy) return planned;
   const totalBasis = sum(planned.map((bill) => bill.subtotal));
   const totalCharge = roundMoney(multiply(totalBasis, policy.rate));
-  const billCharges = allocate(totalCharge, planned.map((bill) => bill.subtotal.mul(100).toNumber()));
+  const billCharges = allocate(
+    totalCharge,
+    planned.map((bill) => bill.subtotal.mul(100).toNumber())
+  );
   return planned.map((bill, index) => {
     const serviceChargeTotal = billCharges[index]!;
     const lineCharges = allocate(
@@ -500,6 +510,8 @@ function planFractional(
 
 export type CutBillsInput = {
   orderId: string;
+  /** Trusted authenticated terminal branch. */
+  branchId: string;
   split: SplitSpec;
   /** Present when re-cutting an order that already has live bills: the reason and
    * the co-authorizing manager for the void-and-recut (C4). */
@@ -515,6 +527,7 @@ export type CutBillsResult = {
 
 type CutBillsCommand = {
   orderId: string;
+  branchId: string;
   split: SplitSpec;
   recut: CutBillsInput['recut'] | null;
   staffProfileId: string;
@@ -544,6 +557,7 @@ function cutBillsCommand(input: CutBillsInput): CutBillsCommand {
   })();
   return {
     orderId: input.orderId,
+    branchId: input.branchId,
     split,
     recut: input.recut
       ? {
@@ -604,6 +618,12 @@ function decodeCutResult(
  */
 export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutBillsResult> {
   return runInTransaction(db, async (tx) => {
+    // Authorize the referenced order against the terminal's current branch before
+    // consulting idempotency. A device reassigned after the original command must
+    // not recover its former branch's order or bill IDs through a replay.
+    await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${input.orderId} AND "branchId" = ${input.branchId} FOR UPDATE`;
+    const order = await loadBillOrder(tx, input.orderId, input.branchId);
+
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.cut');
     if (idem.replay) {
       const recorded = decodeCutResult(idem.resultRef, cutBillsCommand(input));
@@ -620,7 +640,7 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
           'IDEMPOTENCY_CONFLICT'
         );
       }
-      const billIds = await liveBillIds(tx, input.orderId);
+      const billIds = await liveBillIds(tx, input.orderId, input.branchId);
       return { orderId: input.orderId, billIds, replayed: true };
     }
 
@@ -636,9 +656,6 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
     // LOCK ORDER, repo-wide: the order row first, then bill rows ascending by id.
     // `orders.closeOrder` takes this same order row (by UPDATE) before its loyalty earn
     // locks the bills, so a cut and a close of the same order queue instead of deadlock.
-    await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${input.orderId} FOR UPDATE`;
-
-    const order = await loadBillOrder(tx, input.orderId);
     if (!BILLABLE_STATUSES.has(order.status)) {
       throw new BillCommandError(
         `An order in status ${order.status} cannot be billed.`,
@@ -793,9 +810,9 @@ async function handleExistingBills(
   });
 }
 
-async function liveBillIds(tx: ScopedDb, orderId: string): Promise<string[]> {
+async function liveBillIds(tx: ScopedDb, orderId: string, branchId: string): Promise<string[]> {
   const rows = await tx.restaurantBill.findMany({
-    where: { orderId, status: { not: 'VOID' } },
+    where: { orderId, branchId, status: { not: 'VOID' } },
     orderBy: { createdAt: 'asc' },
     select: { id: true },
   });
@@ -806,6 +823,8 @@ async function liveBillIds(tx: ScopedDb, orderId: string): Promise<string[]> {
 
 export type CompLineInput = {
   billId: string;
+  /** Trusted authenticated terminal branch. */
+  branchId: string;
   billLineId: string;
   reason: string;
   approvingStaffProfileId: string;
@@ -877,6 +896,17 @@ export type CompLineResult = {
  */
 export async function compLine(db: ScopedDb, input: CompLineInput): Promise<CompLineResult> {
   return runInTransaction(db, async (tx) => {
+    // Resolve the bill through the terminal's current branch before replay lookup,
+    // so reassignment cannot turn an old idempotency key into a cross-branch read.
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
+    const bill = await tx.restaurantBill.findFirst({
+      where: { id: input.billId, branchId: input.branchId },
+      select: { id: true, status: true, compTotal: true, discountTotal: true, grandTotal: true },
+    });
+    if (!bill) {
+      throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+    }
+
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp');
     if (idem.replay) {
       // A replay writes nothing, but it must not report a DIFFERENT comp than the call
@@ -895,14 +925,6 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     const reason = requireReason(input.reason);
     // Serialize against a concurrent redemption on this bill (which takes the same
     // lock): the clamp below is only sound on a grand total nobody can move under it.
-    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} FOR UPDATE`;
-    const bill = await tx.restaurantBill.findUnique({
-      where: { id: input.billId },
-      select: { id: true, status: true, compTotal: true, discountTotal: true, grandTotal: true },
-    });
-    if (!bill) {
-      throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
-    }
     if (bill.status !== 'OPEN') {
       throw new BillCommandError('Only an OPEN bill can be comped.', 'BILL_NOT_OPEN');
     }

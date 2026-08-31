@@ -663,6 +663,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     const { orderId, db } = await openWithItems([{}, { modifier: true }]);
     const result = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ids.branch,
       split: { kind: 'NONE' },
       actor: actor(),
     });
@@ -687,11 +688,13 @@ describeIfDatabase('bills command layer (real DB)', () => {
     const sameActor = actor();
     const first = await deps.bills.cutBills(fresh.db, {
       orderId: fresh.orderId,
+      branchId: ids.branch,
       split: { kind: 'FRACTIONAL', weights: [1, 1] },
       actor: sameActor,
     });
     const replay = await deps.bills.cutBills(fresh.db, {
       orderId: fresh.orderId,
+      branchId: ids.branch,
       split: { kind: 'FRACTIONAL', weights: [1, 1] },
       actor: sameActor,
     });
@@ -707,6 +710,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     const { orderId, db } = await openWithItems([{ seat: 1 }, { seat: 2 }, { seat: 2 }]);
     const result = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ids.branch,
       split: { kind: 'BY_SEAT' },
       actor: actor(),
     });
@@ -722,6 +726,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     const { orderId, db } = await openWithItems([{}, {}]);
     const { billIds } = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ids.branch,
       split: { kind: 'NONE' },
       actor: actor(),
     });
@@ -733,6 +738,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     );
     await deps.bills.compLine(db, {
       billId: billIds[0]!,
+      branchId: ids.branch,
       billLineId: line!.id,
       reason: 'guest complaint',
       approvingStaffProfileId: ids.manager,
@@ -769,6 +775,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     await expect(
       deps.bills.compLine(db, {
         billId: billIds[0]!,
+        branchId: ids.branch,
         billLineId: line!.id,
         reason: 'again',
         approvingStaffProfileId: ids.manager,
@@ -781,6 +788,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     const { orderId, db } = await openWithItems([{}, {}]);
     const firstCut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ids.branch,
       split: { kind: 'NONE' },
       actor: actor(),
     });
@@ -789,6 +797,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     await expect(
       deps.bills.cutBills(db, {
         orderId,
+        branchId: ids.branch,
         split: { kind: 'FRACTIONAL', weights: [1, 1] },
         actor: actor(),
       })
@@ -797,6 +806,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     // With recut (reason + co-auth) the old bills go VOID and a new set is created.
     const recut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ids.branch,
       split: { kind: 'FRACTIONAL', weights: [1, 1] },
       recut: { reason: 'guest wants separate checks', approvingStaffProfileId: ids.manager },
       actor: actor(),
@@ -824,6 +834,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     await expect(
       deps.bills.cutBills(db, {
         orderId,
+        branchId: ids.branch,
         split: { kind: 'NONE' },
         recut: { reason: 'too late', approvingStaffProfileId: ids.manager },
         actor: actor(),
@@ -836,11 +847,13 @@ describeIfDatabase('bills command layer (real DB)', () => {
     const b = await openWithItems([{}]);
     const cutA = await deps.bills.cutBills(a.db, {
       orderId: a.orderId,
+      branchId: ids.branch,
       split: { kind: 'NONE' },
       actor: actor(),
     });
     const cutB = await deps.bills.cutBills(b.db, {
       orderId: b.orderId,
+      branchId: ids.branch,
       split: { kind: 'NONE' },
       actor: actor(),
     });
@@ -882,6 +895,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
       const opened = await openWithItems([{}]);
       const cut = await deps.bills.cutBills(opened.db, {
         orderId: opened.orderId,
+        branchId: ids.branch,
         split: { kind: 'NONE' },
         actor: actor(),
       });
@@ -1221,6 +1235,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
 
     const cut = await deps.bills.cutBills(db, {
       orderId,
+      branchId: ids.branch,
       split: { kind: 'FRACTIONAL', weights: [1, 1, 1] },
       actor: actor(),
     });

@@ -1,5 +1,10 @@
 import { compLine } from '@/lib/restaurant/bills';
-import { compBody, moneyMutationRoute, resolveApprover } from '@/lib/restaurant/checkout-routes';
+import {
+  compBody,
+  moneyMutationRoute,
+  requireBillInDeviceBranch,
+  resolveApprover,
+} from '@/lib/restaurant/checkout-routes';
 
 /**
  * POST /api/restaurant/checkout/comp
@@ -13,10 +18,12 @@ export const POST = moneyMutationRoute({
   schema: compBody,
   capability: 'payments:collect',
   run: async ({ ctx, data, actor, now }) => {
+    await requireBillInDeviceBranch(ctx.db, data.billId, ctx.device.branchId);
     const approver = await resolveApprover(ctx, data.approving, now);
     if (!approver.ok) return approver.response;
     return compLine(ctx.db, {
       billId: data.billId,
+      branchId: ctx.device.branchId,
       billLineId: data.billLineId,
       reason: data.reason,
       approvingStaffProfileId: approver.staffProfileId,
