@@ -18,11 +18,14 @@ import { annotateAudit } from '../audit';
 import { capabilityProcedure, publicProcedure, router } from '../trpc';
 
 const id = z.string().trim().min(1).max(200);
-const decimal = z.string().trim().min(1).max(100);
 const money = z
   .string()
   .trim()
-  .regex(/^\d{1,12}(?:\.\d{1,2})?$/);
+  .regex(/^\d{1,10}(?:\.\d{1,2})?$/);
+const coordinate = z
+  .string()
+  .trim()
+  .regex(/^-?\d{1,3}(?:\.\d{1,6})?$/);
 const zoneValues = {
   name: z.string().trim().min(1).max(200),
   fixedFee: money,
@@ -41,8 +44,8 @@ const addressValues = {
   administrativeArea: z.string().trim().max(200).nullable().optional(),
   postalCode: z.string().trim().max(50).nullable().optional(),
   countryCode: z.string().trim().length(2),
-  latitude: decimal.nullable().optional(),
-  longitude: decimal.nullable().optional(),
+  latitude: coordinate.nullable().optional(),
+  longitude: coordinate.nullable().optional(),
   isDefault: z.boolean().optional(),
 };
 
