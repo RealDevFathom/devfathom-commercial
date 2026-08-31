@@ -139,6 +139,8 @@ describe('restaurant corrected-close backbone', () => {
         { tenderType: 'CARD', amount: money(netSales), tipAmount: money(0), count: 1 },
       ],
       grossSales: money(netSales),
+      deliveryFeeSales: money(6),
+      deliveryFeeRefunds: money(2),
       netSales: money(netSales),
       taxTotal: money(0),
       serviceChargeTotal: money(0),
@@ -190,7 +192,12 @@ describe('restaurant corrected-close backbone', () => {
       coverCount: 3,
       freshness: { closedDayCount: 1 },
     });
-    expect(payments).toMatchObject({ netSales: '20', averageCheck: '10' });
+    expect(payments).toMatchObject({
+      netSales: '20',
+      averageCheck: '10',
+      deliveryFeeSales: '6',
+      deliveryFeeRefunds: '2',
+    });
     expect(payments.tenders).toEqual([
       expect.objectContaining({ tenderType: 'CARD', amount: '20', count: 1 }),
     ]);
@@ -201,7 +208,9 @@ describe('restaurant corrected-close backbone', () => {
       includeLabourCosts: false,
     });
     expect(overviewCsv.content).toContain('\n2026-01-01,2026-01-01,CURRENT,2,3,1,1');
-    expect(paymentsCsv.content).toContain('\n2026-01-01,2026-01-01,20,20,10,0,0,0,0,0,0,0,0,0,0');
+    expect(paymentsCsv.content).toContain(
+      '\n2026-01-01,2026-01-01,20,20,10,6,2,0,0,0,0,0,0,0,0,0,0'
+    );
   });
 });
 

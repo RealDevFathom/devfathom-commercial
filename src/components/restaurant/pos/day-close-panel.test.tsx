@@ -22,6 +22,8 @@ describe('DayClosePanel', () => {
           existingCloseId: 'close-1',
           totals: {
             grossSales: '10.00',
+            deliveryFeeSales: '2.00',
+            deliveryFeeRefunds: '0.50',
             netSales: '10.00',
             cashExpected: '10.00',
             cashVariance: '0.00',
@@ -39,6 +41,8 @@ describe('DayClosePanel', () => {
     );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
     await within(dialog).findByText('Closed day');
+    expect(within(dialog).getByText('Delivery fee sales')).toBeVisible();
+    expect(within(dialog).getByText('Delivery fee refunds')).toBeVisible();
 
     const manager = within(dialog).getByLabelText('Approving manager');
     expect(within(manager).queryByRole('option', { name: /Ari Cashier/ })).not.toBeInTheDocument();

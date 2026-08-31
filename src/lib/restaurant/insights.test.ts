@@ -17,6 +17,8 @@ const dailyRow = {
   orderCount: 4,
   coverCount: 11,
   grossSales: D('125.50'),
+  deliveryFeeSales: D('12.00'),
+  deliveryFeeRefunds: D('3.00'),
   netSales: D('120.25'),
   compTotal: D('5.25'),
   refundTotal: D('10.00'),
@@ -52,6 +54,8 @@ describe('insight report serialization', () => {
     });
     expect(row).toMatchObject({
       grossSales: '125.5',
+      deliveryFeeSales: '12',
+      deliveryFeeRefunds: '3',
       drawerVariance: '-0.5',
       loyaltyLiability: '18.75',
       freshness: {

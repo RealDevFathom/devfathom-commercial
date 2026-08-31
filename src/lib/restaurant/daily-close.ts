@@ -33,6 +33,8 @@ import { enqueueInsightRollup } from './insight-rollups';
  * recomputation agree to the cent (both code to the C4–C9 pins, not to each
  * other — see BUILD-ASSUMPTIONS "M5 daily-close aggregation"):
  *   - grossSales   = Σ SETTLED bill.subtotal (menu prices, pre-comp/pre-discount)
+ *   - deliveryFeeSales = Σ SETTLED bill.deliveryFeeTotal (non-taxable v1)
+ *   - deliveryFeeRefunds = Σ refund.deliveryFeeRefundAmount for processing date
  *   - compTotal    = Σ SETTLED bill.compTotal
  *   - taxTotal / serviceChargeTotal = Σ SETTLED bill.{taxTotal,serviceChargeTotal}
  *                    (structurally zero in M5)
@@ -83,6 +85,7 @@ const TENDER_TYPES: readonly TenderType[] = ['CASH', 'CARD', 'OTHER'];
 export type AggregateBill = {
   status: BillStatus;
   subtotal: Prisma.Decimal;
+  deliveryFeeTotal: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
   serviceChargeTotal: Prisma.Decimal;
   compTotal: Prisma.Decimal;
@@ -94,7 +97,10 @@ export type AggregateTender = {
   amount: Prisma.Decimal;
   tipAmount: Prisma.Decimal;
 };
-export type AggregateRefund = { amount: Prisma.Decimal };
+export type AggregateRefund = {
+  amount: Prisma.Decimal;
+  deliveryFeeRefundAmount: Prisma.Decimal;
+};
 export type AggregateDrawer = {
   status: DrawerStatus;
   expectedCash: Prisma.Decimal;
@@ -111,6 +117,8 @@ export type TenderTypeTotal = {
 export type CloseTotals = {
   grossSales: Prisma.Decimal;
   netSales: Prisma.Decimal;
+  deliveryFeeSales: Prisma.Decimal;
+  deliveryFeeRefunds: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
   serviceChargeTotal: Prisma.Decimal;
   tipTotal: Prisma.Decimal;
@@ -142,6 +150,7 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   const voided = inputs.bills.filter((b) => b.status === 'VOID');
 
   const grossSales = sum(settled.map((b) => b.subtotal));
+  const deliveryFeeSales = sum(settled.map((b) => b.deliveryFeeTotal));
   const compTotal = sum(settled.map((b) => b.compTotal));
   const taxTotal = sum(settled.map((b) => b.taxTotal));
   const serviceChargeTotal = sum(settled.map((b) => b.serviceChargeTotal));
@@ -151,6 +160,7 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
 
   const tipTotal = sum(inputs.tenders.map((t) => t.tipAmount));
   const refundTotal = sum(inputs.refunds.map((r) => r.amount));
+  const deliveryFeeRefunds = sum(inputs.refunds.map((r) => r.deliveryFeeRefundAmount));
 
   const cashExpected = sum(inputs.drawers.map((d) => d.expectedCash));
   const cashCounted = sum(inputs.drawers.map((d) => d.countedCash ?? ZERO));
@@ -171,6 +181,8 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   return {
     grossSales,
     netSales,
+    deliveryFeeSales,
+    deliveryFeeRefunds,
     taxTotal,
     serviceChargeTotal,
     tipTotal,
@@ -224,6 +236,7 @@ async function loadCloseInputs(
     select: {
       status: true,
       subtotal: true,
+      deliveryFeeTotal: true,
       taxTotal: true,
       serviceChargeTotal: true,
       compTotal: true,
@@ -237,7 +250,7 @@ async function loadCloseInputs(
   });
   const refunds = await db.restaurantRefund.findMany({
     where: { businessDate, bill: { branchId } },
-    select: { amount: true },
+    select: { amount: true, deliveryFeeRefundAmount: true },
   });
   const drawers = await db.restaurantDrawerSession.findMany({
     where: { branchId, businessDate },
@@ -334,6 +347,8 @@ async function persistClose(
       deviceId: args.deviceId,
       grossSales: aggregate.grossSales,
       netSales: aggregate.netSales,
+      deliveryFeeSales: aggregate.deliveryFeeSales,
+      deliveryFeeRefunds: aggregate.deliveryFeeRefunds,
       taxTotal: aggregate.taxTotal,
       serviceChargeTotal: aggregate.serviceChargeTotal,
       tipTotal: aggregate.tipTotal,
@@ -581,11 +596,18 @@ function decodeFrozenCloseResult(payload: Prisma.JsonValue | null | undefined): 
   const value = payload as Record<string, unknown>;
   const totals = value.totals as Record<string, string>;
   const tenderTotals = value.tenderTotals as Array<Record<string, unknown>>;
+  const decodedTotals = Object.fromEntries(
+    Object.entries(totals).map(([key, amount]) => [key, new Prisma.Decimal(amount)])
+  ) as Partial<CloseTotals>;
   return {
     dailyCloseId: String(value.dailyCloseId),
-    totals: Object.fromEntries(
-      Object.entries(totals).map(([key, amount]) => [key, new Prisma.Decimal(amount)])
-    ) as CloseTotals,
+    totals: {
+      ...decodedTotals,
+      // Money command receipts created before WHA-1040 remain replayable. Their
+      // immutable close rows also carry migration-default zero snapshots.
+      deliveryFeeSales: decodedTotals.deliveryFeeSales ?? ZERO,
+      deliveryFeeRefunds: decodedTotals.deliveryFeeRefunds ?? ZERO,
+    } as CloseTotals,
     tenderTotals: tenderTotals.map((total) => ({
       tenderType: String(total.tenderType) as RestaurantTenderType,
       amount: new Prisma.Decimal(String(total.amount)),

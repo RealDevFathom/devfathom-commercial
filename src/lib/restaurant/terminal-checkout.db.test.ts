@@ -498,6 +498,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(receipt.status).toBe(200);
       expect(receipt.json.receiptNumber).toBe(tender.json.receiptNumber);
       eqMoney((receipt.json.totals as Record<string, string>).grandTotal, '10.00');
+      eqMoney((receipt.json.totals as Record<string, string>).deliveryFeeTotal, '0.00');
       expect((receipt.json.tenders as unknown[]).length).toBe(1);
     });
 
@@ -567,6 +568,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       expect(res.status).toBe(200);
       eqMoney(res.json.amount, '10.00');
+      eqMoney(res.json.deliveryFeeRefundAmount, '0.00');
       expect(res.json.kind).toBe('REFUND');
     });
 

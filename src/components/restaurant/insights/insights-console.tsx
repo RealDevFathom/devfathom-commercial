@@ -450,6 +450,8 @@ function ReportsPanel({
                     <>
                       <TableHead numeric>Gross</TableHead>
                       <TableHead numeric>Net</TableHead>
+                      <TableHead numeric>Delivery fees</TableHead>
+                      <TableHead numeric>Delivery fee refunds</TableHead>
                       <TableHead numeric>Comps</TableHead>
                       <TableHead numeric>Refunds</TableHead>
                       <TableHead numeric>Voids</TableHead>
@@ -481,6 +483,8 @@ function ReportsPanel({
                         <>
                           <TableCell numeric>{money.grossSales}</TableCell>
                           <TableCell numeric>{money.netSales}</TableCell>
+                          <TableCell numeric>{money.deliveryFeeSales}</TableCell>
+                          <TableCell numeric>{money.deliveryFeeRefunds}</TableCell>
                           <TableCell numeric>{money.compTotal}</TableCell>
                           <TableCell numeric>{money.refundTotal}</TableCell>
                           <TableCell numeric>{money.voidTotal}</TableCell>
@@ -551,6 +555,8 @@ function ReportDetailPanel({ kind, detail }: { kind: ReportKind; detail: ReportD
           <>
             <Stat label="Gross sales" value={money.grossSales} />
             <Stat label="Net sales" value={money.netSales} />
+            <Stat label="Delivery fee sales" value={money.deliveryFeeSales} />
+            <Stat label="Delivery fee refunds" value={money.deliveryFeeRefunds} />
             <Stat label="Comps" value={money.compTotal} />
             <Stat label="Refunds" value={money.refundTotal} />
             <Stat label="Voids" value={money.voidTotal} />

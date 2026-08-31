@@ -94,6 +94,8 @@ async function loadReportBackbone(db: ScopedDb, range: RestaurantReportRange) {
         supersedesCloseId: true,
         grossSales: true,
         netSales: true,
+        deliveryFeeSales: true,
+        deliveryFeeRefunds: true,
         taxTotal: true,
         serviceChargeTotal: true,
         tipTotal: true,
@@ -270,6 +272,8 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
     key:
       | 'grossSales'
       | 'netSales'
+      | 'deliveryFeeSales'
+      | 'deliveryFeeRefunds'
       | 'taxTotal'
       | 'serviceChargeTotal'
       | 'tipTotal'
@@ -288,6 +292,8 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
     grossSales: serializeDecimal(total('grossSales')),
     netSales: serializeDecimal(netSales),
     averageCheck: serializeDecimal(orderCount > 0 ? netSales.dividedBy(orderCount) : ZERO),
+    deliveryFeeSales: serializeDecimal(total('deliveryFeeSales')),
+    deliveryFeeRefunds: serializeDecimal(total('deliveryFeeRefunds')),
     taxTotal: serializeDecimal(total('taxTotal')),
     serviceChargeTotal: serializeDecimal(total('serviceChargeTotal')),
     tipTotal: serializeDecimal(total('tipTotal')),
@@ -967,6 +973,8 @@ export async function exportRestaurantReportCsv(
       'grossSales',
       'netSales',
       'averageCheck',
+      'deliveryFeeSales',
+      'deliveryFeeRefunds',
       'tax',
       'service',
       'tips',
@@ -985,6 +993,8 @@ export async function exportRestaurantReportCsv(
         grossSales: report.grossSales,
         netSales: report.netSales,
         averageCheck: report.averageCheck,
+        deliveryFeeSales: report.deliveryFeeSales,
+        deliveryFeeRefunds: report.deliveryFeeRefunds,
         tax: report.taxTotal,
         service: report.serviceChargeTotal,
         tips: report.tipTotal,

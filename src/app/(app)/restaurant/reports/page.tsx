@@ -9,10 +9,7 @@ import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
-import {
-  MAX_EXPORT_ROWS,
-  MAX_INTERACTIVE_ROWS,
-} from '@/lib/restaurant/reports';
+import { MAX_EXPORT_ROWS, MAX_INTERACTIVE_ROWS } from '@/lib/restaurant/reports';
 import { hasModule } from '@/lib/entitlements';
 import { restaurantReportsRouter } from '@/server/routers/restaurant-reports';
 import { createTRPCContext } from '@/server/trpc';
@@ -415,6 +412,14 @@ export default async function RestaurantReportsPage({
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
               <Stat label="Tax" value={displayNumber(payments.data.taxTotal)} />
               <Stat label="Service" value={displayNumber(payments.data.serviceChargeTotal)} />
+              <Stat
+                label="Delivery fee sales"
+                value={displayNumber(payments.data.deliveryFeeSales)}
+              />
+              <Stat
+                label="Delivery fee refunds"
+                value={displayNumber(payments.data.deliveryFeeRefunds)}
+              />
               <Stat label="Tips" value={displayNumber(payments.data.tipTotal)} />
               <Stat label="Discounts" value={displayNumber(payments.data.discountTotal)} />
               <Stat label="Cash expected" value={displayNumber(payments.data.cashExpected)} />

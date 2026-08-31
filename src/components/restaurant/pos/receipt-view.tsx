@@ -34,6 +34,9 @@ type Receipt = {
   }[];
   totals: {
     subtotal: string;
+    taxTotal: string;
+    serviceChargeTotal: string;
+    deliveryFeeTotal: string;
     compTotal: string;
     roundingAdjustment: string;
     grandTotal: string;
@@ -147,6 +150,9 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
       <dl className="space-y-1 border-y border-border-subtle py-3 text-sm">
         {[
           ['Subtotal', receipt.totals.subtotal],
+          ['Delivery fee', receipt.totals.deliveryFeeTotal],
+          ['Service charge', receipt.totals.serviceChargeTotal],
+          ['Tax', receipt.totals.taxTotal],
           ['Comp', receipt.totals.compTotal],
           ['Rounding', receipt.totals.roundingAdjustment],
           ['Total', receipt.totals.grandTotal],

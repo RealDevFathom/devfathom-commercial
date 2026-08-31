@@ -45,6 +45,8 @@ const DAILY_SELECT = {
   coverCount: true,
   grossSales: true,
   netSales: true,
+  deliveryFeeSales: true,
+  deliveryFeeRefunds: true,
   compTotal: true,
   refundTotal: true,
   voidTotal: true,
@@ -87,6 +89,8 @@ type DailyRow = {
   coverCount: number;
   grossSales: Prisma.Decimal;
   netSales: Prisma.Decimal;
+  deliveryFeeSales: Prisma.Decimal;
+  deliveryFeeRefunds: Prisma.Decimal;
   compTotal: Prisma.Decimal;
   refundTotal: Prisma.Decimal;
   voidTotal: Prisma.Decimal;
@@ -171,6 +175,8 @@ function serializeDaily(
       ? {
           grossSales: row.grossSales.toString(),
           netSales: row.netSales.toString(),
+          deliveryFeeSales: row.deliveryFeeSales.toString(),
+          deliveryFeeRefunds: row.deliveryFeeRefunds.toString(),
           compTotal: row.compTotal.toString(),
           refundTotal: row.refundTotal.toString(),
           voidTotal: row.voidTotal.toString(),
@@ -291,6 +297,8 @@ export async function exportInsightReports(
           'coverCount',
           'grossSales',
           'netSales',
+          'deliveryFeeSales',
+          'deliveryFeeRefunds',
           'compTotal',
           'refundTotal',
           'voidTotal',
