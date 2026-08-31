@@ -11,7 +11,7 @@ import {
  * POST /api/restaurant/orders/customer/attach
  *
  * Attach a guest to an OPEN order so the bill can earn and redeem loyalty. Gated on
- * `customers:read`; the organization comes from the device (RLS) and the branch from
+ * `customers:manage`; the organization comes from the device (RLS) and the branch from
  * `ctx.device.branchId` — the body carries only the two object ids, never a scope.
  *
  * An order outside the device's own branch answers 404, indistinguishable from one that does
@@ -21,7 +21,7 @@ import {
  */
 export const POST = connectedMutationRoute({
   schema: customerAttachBody,
-  capability: 'customers:read',
+  capability: 'customers:manage',
   mapError: customerErrorResponse,
   run: async ({ ctx, data }) => {
     const attached = await attachCustomerForBranch(ctx.db, {
