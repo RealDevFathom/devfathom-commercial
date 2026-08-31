@@ -48,12 +48,14 @@ let orderNumber = 0;
 const ids = {
   branch: `branch_${suffix}`,
   operator: `staff_operator_${suffix}`,
+  operatorUser: `user_operator_${suffix}`,
   approver: `staff_approver_${suffix}`,
   unauthorizedApprover: `staff_unauthorized_${suffix}`,
   foreignApprover: `staff_foreign_${suffix}`,
   approverUser: `user_approver_${suffix}`,
   unauthorizedUser: `user_unauthorized_${suffix}`,
   approverRole: `role_approver_${suffix}`,
+  operatorRole: `role_operator_${suffix}`,
   unauthorizedRole: `role_unauthorized_${suffix}`,
   plainProduct: `product_plain_${suffix}`,
   recipeProduct: `product_recipe_${suffix}`,
@@ -261,6 +263,14 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: ids.branch, name: 'Rollback' } });
     await tx.organizationRole.create({
       data: {
+        id: ids.operatorRole,
+        key: `operator_${suffix}`,
+        name: 'Operator',
+        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+      },
+    });
+    await tx.organizationRole.create({
+      data: {
         id: ids.approverRole,
         key: `approver_${suffix}`,
         name: 'Approver',
@@ -276,6 +286,7 @@ beforeAll(async () => {
       },
     });
     for (const [id, roleId, label] of [
+      [ids.operatorUser, ids.operatorRole, 'operator'],
       [ids.approverUser, ids.approverRole, 'approver'],
       [ids.unauthorizedUser, ids.unauthorizedRole, 'unauthorized'],
     ] as const) {
@@ -309,6 +320,8 @@ beforeAll(async () => {
           status: 'ACTIVE',
           ...(staffProfileId === ids.approver
             ? { userId: ids.approverUser }
+            : staffProfileId === ids.operator
+              ? { userId: ids.operatorUser }
             : staffProfileId === ids.unauthorizedApprover
               ? { userId: ids.unauthorizedUser }
               : {}),
