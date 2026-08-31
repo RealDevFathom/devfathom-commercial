@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   payments: vi.fn(),
   workforce: vi.fn(),
   exportCsv: vi.fn(),
+  recordTrpcAudit: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -18,8 +19,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: mocks.recordTrpcAudit,
 }));
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
@@ -92,6 +93,55 @@ beforeEach(() => {
 });
 
 describe('restaurant report capability and branch matrix', () => {
+  it('audits an allowed CSV export once with actor, organization, branch, and filters', async () => {
+    mocks.grants.add('reports:operational');
+
+    await expect(caller().exportCsv({ ...input, section: 'overview' })).resolves.toMatchObject({
+      contentType: 'text/csv; charset=utf-8',
+    });
+
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledTimes(1);
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'exportCsv',
+        type: 'query',
+        outcome: 'SUCCESS',
+        input: { ...input, section: 'overview' },
+        ctx: expect.objectContaining({
+          session: expect.objectContaining({
+            user: expect.objectContaining({ id: 'u1', organizationId: 'org1' }),
+          }),
+        }),
+      })
+    );
+    expect(mocks.exportCsv).toHaveBeenCalledWith(
+      db,
+      'overview',
+      { branchIds: ['b1'], from: input.from, to: input.to },
+      { includeLabourCosts: false }
+    );
+  });
+
+  it('audits a denied CSV export once without invoking the export service', async () => {
+    mocks.grants.add('reports:operational');
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ primaryBranchId: null });
+    db.restaurantBranch.findMany.mockResolvedValue([]);
+
+    const result = caller().exportCsv({ ...input, section: 'overview' });
+
+    await expect(result).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.exportCsv).not.toHaveBeenCalled();
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledTimes(1);
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'exportCsv',
+        type: 'query',
+        outcome: 'FAILURE',
+        input: { ...input, section: 'overview' },
+      })
+    );
+  });
+
   it('requires operational capability before any report query', async () => {
     await expect(caller().overview(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.overview).not.toHaveBeenCalled();

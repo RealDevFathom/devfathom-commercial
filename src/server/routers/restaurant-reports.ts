@@ -13,7 +13,13 @@ import {
   readWorkforceReport,
   RestaurantReportError,
 } from '@/lib/restaurant/reports';
-import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
+import {
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+  type TRPCContext,
+} from '../trpc';
 
 const range = z
   .object({
@@ -152,24 +158,26 @@ export const restaurantReportsRouter = router({
     requireModule(ctx, 'restaurant-sop');
     return guarded(ctx, input, (resolved) => readSopReport(ctx.db, resolved));
   }),
-  exportCsv: protectedProcedure.input(range.extend({ section })).query(async ({ ctx, input }) => {
-    const needsFinancial = input.section === 'payments';
-    if (needsFinancial && !(await allowed(ctx, 'reports:financial')))
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    if (!needsFinancial && !(await allowed(ctx, 'reports:operational')))
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    if (input.section === 'overview' || input.section === 'payments')
-      requireModule(ctx, 'restaurant-pos');
-    if (input.section === 'inventory') requireModule(ctx, 'restaurant-inventory');
-    if (input.section === 'purchasing') requireModule(ctx, 'restaurant-purchasing');
-    if (input.section === 'workforce') requireModule(ctx, 'restaurant-workforce');
-    if (input.section === 'sop') requireModule(ctx, 'restaurant-sop');
-    const includeLabourCosts =
-      input.section === 'workforce' &&
-      (await allowed(ctx, 'reports:financial')) &&
-      (await allowed(ctx, 'workforce:rates'));
-    return guarded(ctx, input, (resolved) =>
-      exportRestaurantReportCsv(ctx.db, input.section, resolved, { includeLabourCosts })
-    );
-  }),
+  exportCsv: auditedProtectedProcedure
+    .input(range.extend({ section }))
+    .query(async ({ ctx, input }) => {
+      const needsFinancial = input.section === 'payments';
+      if (needsFinancial && !(await allowed(ctx, 'reports:financial')))
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      if (!needsFinancial && !(await allowed(ctx, 'reports:operational')))
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      if (input.section === 'overview' || input.section === 'payments')
+        requireModule(ctx, 'restaurant-pos');
+      if (input.section === 'inventory') requireModule(ctx, 'restaurant-inventory');
+      if (input.section === 'purchasing') requireModule(ctx, 'restaurant-purchasing');
+      if (input.section === 'workforce') requireModule(ctx, 'restaurant-workforce');
+      if (input.section === 'sop') requireModule(ctx, 'restaurant-sop');
+      const includeLabourCosts =
+        input.section === 'workforce' &&
+        (await allowed(ctx, 'reports:financial')) &&
+        (await allowed(ctx, 'workforce:rates'));
+      return guarded(ctx, input, (resolved) =>
+        exportRestaurantReportCsv(ctx.db, input.section, resolved, { includeLabourCosts })
+      );
+    }),
 });

@@ -231,6 +231,12 @@ export const protectedProcedure = t.procedure
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
+/** Authenticated, module-aware procedure for sensitive tenant reads. */
+export const auditedProtectedProcedure = t.procedure
+  .use(auditAll)
+  .use(requireActiveUser)
+  .use(requireLicensedModule);
+
 /** Authenticated, audited tenant access to retained history after entitlement removal. */
 export const entitlementIndependentHistoryProcedure = t.procedure
   .use(auditAll)
