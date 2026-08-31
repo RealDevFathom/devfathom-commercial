@@ -34,7 +34,7 @@ BEGIN
       OLD."promisedMinutesSnapshot", OLD."promisedAt")
      OR (OLD."paymentMode" IS NOT NULL AND NEW."paymentMode" IS DISTINCT FROM OLD."paymentMode")
      OR (OLD."paymentMode" IS NULL AND NEW."paymentMode" IS NOT NULL AND NEW."status" <> 'DISPATCHED')
-  THEN RAISE EXCEPTION 'delivery fulfillment snapshots are immutable';
+  THEN RAISE EXCEPTION 'delivery fulfillment snapshots are immutable' USING ERRCODE = '55000';
   END IF;
   RETURN NEW;
 END $$;
