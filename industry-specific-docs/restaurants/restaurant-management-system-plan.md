@@ -9,7 +9,7 @@
 | Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                                                                                     |
 | Last updated                  | 2026-08-31                                                                                                                                                                                          |
 | Current implementation status | Restaurant source is repository-implemented in whole or in part by area; this does not establish deployment, physical hardware, or production readiness                                             |
-| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against Delivery source commit `c021370c3fddb38aedcb8cc02ad6dd5c75cbfba1`; exact-candidate browser/release evidence pending |
+| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against Delivery source commit `42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`; exact-candidate browser/release evidence pending |
 
 ## 1. Purpose
 
@@ -1308,7 +1308,7 @@ The following existing files provide patterns to reuse. They do not imply that r
 
 ## 20. Status summary
 
-This table is reconciled against Delivery source commit `c021370c3fddb38aedcb8cc02ad6dd5c75cbfba1`; exact-candidate browser and release evidence remains pending. `SOURCE
+This table is reconciled against Delivery source commit `42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`; exact-candidate browser and release evidence remains pending. `SOURCE
 IMPLEMENTED` means committed source plus focused evidence; it does not assert deployment, browser,
 hardware, external-service acceptance, or production readiness. Use the
 [restaurant administrator guide](../../docs/product/restaurant-administrator-guide.md) for safe

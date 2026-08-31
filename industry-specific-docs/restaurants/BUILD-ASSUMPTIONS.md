@@ -1,6 +1,6 @@
 # Restaurant vertical — Build Assumptions (`restaurant/v1`)
 
-Delivery source evidence is pinned to `c021370c3fddb38aedcb8cc02ad6dd5c75cbfba1`;
+Delivery source evidence is pinned to `42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`;
 exact-candidate browser and release evidence remains pending.
 
 **Direct Delivery v1 — connected own-delivery handoff (WHA-1048)** · Delivery requires

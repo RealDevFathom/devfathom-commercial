@@ -3,7 +3,7 @@
 Last reconciled: 2026-08-31 (PKT)
 
 Repository evidence is not release evidence. This checkpoint records source truth at exact code SHA
-`c021370c3fddb38aedcb8cc02ad6dd5c75cbfba1`; no deployment or production availability is claimed.
+`42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`; no deployment or production availability is claimed.
 Exact-candidate browser and release evidence remains pending.
 
 ## Restaurant checkpoint
