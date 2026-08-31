@@ -284,14 +284,11 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
         [ids.policyA]
       )
     );
-    expect(
-      (
-        await owner!.query(
-          `DELETE FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`,
-          [ids.policyA]
-        )
-      ).rowCount
-    ).toBe(0);
+    await expectDatabaseError(owner!, 'P0001', () =>
+      owner!.query(`DELETE FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`, [
+        ids.policyA,
+      ])
+    );
     expect(
       await owner!.query(
         `SELECT "id" FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`,
