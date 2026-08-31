@@ -16,7 +16,7 @@ const value = (name: string) => process.env[name] ?? '';
 function actorBaseUrl(host?: Actor['host']) {
   const url = new URL(
     process.env.PLAYWRIGHT_BASE_URL ??
-      `http://localhost:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
+      `http://127.0.0.1:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
   );
   if (host) url.hostname = host;
   return url;
@@ -40,14 +40,12 @@ export const actorFixture: Record<ActorKey, Actor> = {
     email: value('RESTAURANT_ACTOR_ADMIN_EMAIL'),
     password: value('RESTAURANT_ACTOR_ADMIN_PASSWORD'),
     loginPath: '/login',
-    host: 'app.localhost',
     workspace: /Chai Chowk Café|chai-chowk/i,
   },
   restaurantOperator: {
     email: value('RESTAURANT_ACTOR_OPERATOR_EMAIL'),
     password: value('RESTAURANT_ACTOR_OPERATOR_PASSWORD'),
     loginPath: '/login',
-    host: 'app.localhost',
     workspace: /Chai Chowk Café|chai-chowk/i,
   },
 };
