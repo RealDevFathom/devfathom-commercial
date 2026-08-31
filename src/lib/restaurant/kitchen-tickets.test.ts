@@ -10,7 +10,12 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { generateKitchenTickets, KitchenTicketError, type FiredItem } from './kitchen-tickets';
+import {
+  generateKitchenTickets,
+  kitchenTicketPrintJob,
+  KitchenTicketError,
+  type FiredItem,
+} from './kitchen-tickets';
 
 const BUSINESS_DATE = new Date('2026-08-19T00:00:00.000Z');
 
@@ -96,6 +101,31 @@ const fired = (over: Partial<FiredItem> & Pick<FiredItem, 'orderItemId'>): Fired
 });
 
 describe('generateKitchenTickets', () => {
+  it('builds a deterministic post-transaction print hand-off', () => {
+    expect(
+      kitchenTicketPrintJob(
+        {
+          ticketId: 'ticket_7',
+          stationId: 'bar',
+          ticketNumber: 7,
+          matchedBy: 'product',
+          items: [{ orderItemId: 'lime', quantity: 2 }],
+        },
+        {
+          branchId: 'branch_1',
+          orderReference: 'Order 42',
+          createdAt: '2026-08-29T08:00:00.000Z',
+          documentType: 'BAR_TICKET',
+          labelsByOrderItemId: { lime: 'Lime soda' },
+        }
+      )
+    ).toMatchObject({
+      idempotencyKey: 'kitchen-ticket:ticket_7:v1',
+      stationId: 'bar',
+      document: { type: 'BAR_TICKET', title: 'BAR', lines: [{ quantity: 2, label: 'Lime soda' }] },
+    });
+  });
+
   it('returns nothing when there is nothing to fire', async () => {
     const { tx } = makeTx([{ id: 'grill', isDefault: true, active: true }], []);
     const result = await generateKitchenTickets(tx, {
