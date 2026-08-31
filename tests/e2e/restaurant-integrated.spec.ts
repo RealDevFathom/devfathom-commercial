@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Request } from '@playwright/test';
 
 import {
   assertTerminalSecretIsBrowserIsolated,
@@ -14,18 +14,66 @@ if (process.env.RESTAURANT_INTEGRATED_E2E !== '1') {
   throw new Error('RESTAURANT_INTEGRATED_E2E=1 is required.');
 }
 
+function isAbortedSuccessfulRscFetch({
+  errorText,
+  resourceType,
+  responseStatus,
+  url,
+}: {
+  errorText: string | undefined;
+  resourceType: string;
+  responseStatus: number | undefined;
+  url: string;
+}) {
+  return (
+    responseStatus === 200 &&
+    resourceType === 'fetch' &&
+    new URL(url).searchParams.has('_rsc') &&
+    errorText === 'net::ERR_ABORTED'
+  );
+}
+
 function observeRuntimeFailures(page: Page) {
   const failures: string[] = [];
+  const responseStatuses = new WeakMap<Request, number>();
   page.on('console', (message) => {
     if (message.type() === 'error' && !/favicon/i.test(message.text()))
       failures.push(message.text());
   });
   page.on('pageerror', (error) => failures.push(error.message));
-  page.on('requestfailed', (request) =>
-    failures.push(`${request.method()} ${new URL(request.url()).pathname}`)
-  );
+  page.on('response', (response) => {
+    responseStatuses.set(response.request(), response.status());
+  });
+  page.on('requestfailed', (request) => {
+    if (
+      !isAbortedSuccessfulRscFetch({
+        errorText: request.failure()?.errorText,
+        resourceType: request.resourceType(),
+        responseStatus: responseStatuses.get(request),
+        url: request.url(),
+      })
+    )
+      failures.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
   return failures;
 }
+
+test('runtime observer ignores only aborted successful RSC fetches', () => {
+  const expected = {
+    errorText: 'net::ERR_ABORTED',
+    resourceType: 'fetch',
+    responseStatus: 200,
+    url: 'http://localhost/dashboard?_rsc=abc',
+  };
+
+  expect(isAbortedSuccessfulRscFetch(expected)).toBe(true);
+  expect(isAbortedSuccessfulRscFetch({ ...expected, errorText: 'net::ERR_FAILED' })).toBe(false);
+  expect(isAbortedSuccessfulRscFetch({ ...expected, resourceType: 'document' })).toBe(false);
+  expect(isAbortedSuccessfulRscFetch({ ...expected, responseStatus: 204 })).toBe(false);
+  expect(isAbortedSuccessfulRscFetch({ ...expected, url: 'http://localhost/dashboard' })).toBe(
+    false
+  );
+});
 
 test('integrated restaurant route matrix remains tenant-safe and browser-clean', async ({
   page,
