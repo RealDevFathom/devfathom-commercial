@@ -98,7 +98,7 @@ export type RestaurantTerminalFixture = {
 async function establishTerminal(
   request: APIRequestContext,
   device: { deviceId: string; secret: string },
-  staff = restaurantE2eCredentials.operator
+  staff: { staffProfileId: string; pin: string } = restaurantE2eCredentials.operator
 ): Promise<RestaurantTerminalFixture> {
   const authorization = `Bearer ${device.secret}`;
   const established = await request.post('/api/restaurant/terminal/establish', {
