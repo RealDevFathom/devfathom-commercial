@@ -202,6 +202,14 @@ const TERMINAL_PAYMENT_TABLES = [
   'restaurant_terminal_reconciliations',
 ] as const;
 
+const DELIVERY_AND_PRINT_TABLES = [
+  'restaurant_customer_addresses',
+  'restaurant_delivery_fulfillments',
+  'restaurant_delivery_zones',
+  'restaurant_print_jobs',
+  'restaurant_print_routes',
+] as const;
+
 // WHA-288 promotions: the promotion record and its immutable versions, the rule
 // components, the deterministic evaluation/candidate/application snapshots, the
 // per-unit allocations, and the cap counters plus their reservations.
@@ -565,6 +573,7 @@ describe('M3 schema governance (real PostgreSQL)', () => {
 
         ...CAMERA_TABLES,
         ...TERMINAL_PAYMENT_TABLES,
+        ...DELIVERY_AND_PRINT_TABLES,
         ...PROMOTION_TABLES,
         ...COMPLETION_WAVE_TABLES,
         ...FINAL_CORRECTION_TABLES,

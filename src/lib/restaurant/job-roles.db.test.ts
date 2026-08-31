@@ -136,6 +136,7 @@ describeIfDatabase('SOP-1 job roles — the many-to-many holding', () => {
     expect(cashier.capabilities.map((row) => row.capability).sort()).toEqual([
       'cash:close',
       'cash:open',
+      'customers:read',
       'menu:read',
       'orders:read',
       'orders:take',

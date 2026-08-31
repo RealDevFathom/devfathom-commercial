@@ -41,6 +41,7 @@ const M5_COLUMNS = {
     'serviceChargeRate',
     'serviceChargeBasis',
     'serviceChargeTaxTreatment',
+    'deliveryFeeTotal',
   ],
   restaurant_bill_lines: [
     'id',
@@ -121,6 +122,7 @@ const M5_COLUMNS = {
     'fullReversalSnapshotId',
     'serviceChargeRefundAmount',
     'taxRefundAmount',
+    'deliveryFeeRefundAmount',
   ],
   restaurant_drawer_sessions: [
     'id',
@@ -175,6 +177,8 @@ const M5_COLUMNS = {
     'cashCounted',
     'cashVariance',
     'createdAt',
+    'deliveryFeeSales',
+    'deliveryFeeRefunds',
   ],
   restaurant_daily_close_tender_totals: [
     'id',
@@ -317,6 +321,8 @@ const M8_COLUMNS = {
     'createdAt',
     'updatedAt',
     'projectionVersion',
+    'deliveryFeeSales',
+    'deliveryFeeRefunds',
   ],
   restaurant_insight_item_mix_rollups: [
     'id',
@@ -708,6 +714,7 @@ describe('M5 schema governance (real PostgreSQL)', () => {
       'createdAt',
       'updatedAt',
       'customerId',
+      'serviceChargePolicyVersionId',
     ]);
   });
 });
