@@ -284,10 +284,14 @@ export const coverageMatrix = [
   {
     id: 'physical-printing',
     requirement: 'Physical printing',
-    status: 'Unbuilt',
-    evidence: [],
+    status: 'Partial',
+    evidence: [
+      route('print-bridge-api', 'src/app/api/restaurant/print-bridge/route.ts'),
+      source('printing-runtime', 'src/lib/restaurant/printing/runtime.ts'),
+      test('printing-tests', 'src/lib/restaurant/printing/printing.test.ts'),
+    ],
     boundary:
-      'Durable print routing/simulation exists, but no physical printer delivery or golden-byte fixture acceptance exists; physical lane remains WHA-228.',
+      'Durable print routing/simulation bridge exists, but physical printer, network, and operating-system delivery remain external/unproven; golden-byte fixture acceptance stays with WHA-228.',
   },
   {
     id: 'offline-pos-kds',
