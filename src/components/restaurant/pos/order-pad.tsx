@@ -16,7 +16,7 @@ import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { OPERATIONAL_ORDER_CHANNELS, type OrderChannel } from '@/lib/restaurant/order-channels';
+import { ORDER_CHANNELS, type OrderChannel } from '@/lib/restaurant/order-channels';
 import {
   createIndexedDbDriver,
   createMemoryDriver,
@@ -69,6 +69,20 @@ type SessionResponse = {
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
 };
 type LocalDraftLine = AddMenuItemInput & { lineId: string; name: string; quotedUnitPrice: string };
+type DeliveryCustomer = {
+  customerId: string;
+  displayName: string | null;
+  identifiers: { masked: string }[];
+};
+type DeliveryAddress = { id: string; label: string; recipientName: string; isDefault: boolean };
+type DeliveryZone = {
+  id: string;
+  name: string;
+  areaPostalLabel: string | null;
+  fee: string;
+  minimumSubtotal: string;
+  promisedMinutes: number;
+};
 type TerminalLayout = {
   floors: Array<{
     id: string;
@@ -175,6 +189,14 @@ export function OrderPad() {
   const [tableIds, setTableIds] = useState<string[]>([]);
   const [covers, setCovers] = useState('');
   const [sectionId, setSectionId] = useState('');
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [deliveryCustomers, setDeliveryCustomers] = useState<DeliveryCustomer[]>([]);
+  const [deliveryCustomer, setDeliveryCustomer] = useState<DeliveryCustomer | null>(null);
+  const [deliveryAddresses, setDeliveryAddresses] = useState<DeliveryAddress[]>([]);
+  const [deliveryAddressId, setDeliveryAddressId] = useState('');
+  const [deliveryZones, setDeliveryZones] = useState<DeliveryZone[]>([]);
+  const [deliveryZoneId, setDeliveryZoneId] = useState('');
+  const [deliveryInstructions, setDeliveryInstructions] = useState('');
   const [layout, setLayout] = useState<TerminalLayout | null>(null);
   const [layoutState, setLayoutState] = useState<'idle' | 'loading' | 'ready' | 'error' | 'denied'>(
     'idle'
@@ -680,6 +702,9 @@ export function OrderPad() {
     const body = {
       channel,
       publicationId: draftMenu.publicationId,
+      ...(channel === 'DELIVERY' && deliveryCustomer
+        ? { customerId: deliveryCustomer.customerId }
+        : {}),
       ...(channel === 'DINE_IN' && tableIds.length ? { tableIds } : {}),
       ...(covers ? { coverCount: Number.parseInt(covers, 10) } : {}),
       ...(channel === 'DINE_IN' && sectionId ? { sectionId } : {}),
@@ -687,6 +712,64 @@ export function OrderPad() {
     setPending('open');
     setNotice(null);
     try {
+      if (channel === 'DELIVERY') {
+        if (!navigator.onLine)
+          throw new Error('Delivery orders require a connection and cannot be saved offline.');
+        if (!deliveryCustomer || !deliveryAddressId || !deliveryZoneId)
+          throw new Error('Select a customer, saved address, and active delivery zone.');
+        if (draftLines.length === 0)
+          throw new Error('Add at least one item before sending delivery.');
+        const intent = `delivery-open:${JSON.stringify(body)}`;
+        const opened = await request<{ orderId: string; orderNumber: number }>(
+          '/api/restaurant/orders/open',
+          {
+            method: 'POST',
+            headers: { ...authHeaders(runtime, true), 'Idempotency-Key': keyFor(intent) },
+            body: JSON.stringify(body),
+          }
+        );
+        for (const line of draftLines) {
+          const lineBody = {
+            orderId: opened.orderId,
+            menuItemId: line.menuItemId,
+            quantity: line.quantity,
+            course: line.course,
+            seatNumber: line.seatNumber,
+            modifierOptionIds: line.modifierOptionIds,
+          };
+          await request('/api/restaurant/orders/add-item', {
+            method: 'POST',
+            headers: {
+              ...authHeaders(runtime, true),
+              'Idempotency-Key': keyFor(`delivery-line:${opened.orderId}:${line.lineId}`),
+            },
+            body: JSON.stringify(lineBody),
+          });
+        }
+        await request('/api/restaurant/orders/delivery/attach', {
+          method: 'POST',
+          headers: authHeaders(runtime, true),
+          body: JSON.stringify({
+            orderId: opened.orderId,
+            customerId: deliveryCustomer.customerId,
+            addressId: deliveryAddressId,
+            zoneId: deliveryZoneId,
+            ...(deliveryInstructions.trim() ? { instructions: deliveryInstructions.trim() } : {}),
+          }),
+        });
+        idempotencyKeys.current.delete(intent);
+        setDraftLines([]);
+        setDeliveryInstructions('');
+        setNotice({
+          tone: 'success',
+          message: `Delivery order ${opened.orderNumber} opened and fulfillment attached.`,
+        });
+        await Promise.all([
+          loadDetail(opened.orderId, runtime, false),
+          loadOpenOrders(runtime, false),
+        ]);
+        return;
+      }
       if (draftLines.length === 0 && navigator.onLine) {
         const intent = `open:${JSON.stringify(body)}`;
         const data = await request<{ orderId: string; orderNumber: number }>(
@@ -1071,20 +1154,174 @@ export function OrderPad() {
                         setTableIds([]);
                         setSectionId('');
                       }
+                      if (next === 'DELIVERY' && runtime) {
+                        setDeliveryCustomers([]);
+                        void request<{ zones: DeliveryZone[] }>(
+                          '/api/restaurant/orders/delivery/zones',
+                          { headers: authHeaders(runtime) }
+                        )
+                          .then(({ zones }) => {
+                            setDeliveryZones(zones);
+                            setDeliveryZoneId(zones[0]?.id ?? '');
+                          })
+                          .catch(handleError);
+                      }
                       void loadMenu(next);
                     }}
                     className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                   >
-                    {OPERATIONAL_ORDER_CHANNELS.map((value) => (
+                    {ORDER_CHANNELS.map((value) => (
                       <option key={value} value={value}>
-                        {value === 'DINE_IN' ? 'Dine in' : 'Takeaway'}
+                        {value === 'DINE_IN'
+                          ? 'Dine in'
+                          : value === 'TAKEAWAY'
+                            ? 'Takeaway'
+                            : 'Delivery'}
                       </option>
                     ))}
-                    <option value="DELIVERY" disabled>
-                      Delivery — not configured
-                    </option>
                   </select>
                 </div>
+                {channel === 'DELIVERY' ? (
+                  <fieldset
+                    className="space-y-3 rounded-lg border border-border-subtle p-3"
+                    disabled={busy || !online}
+                  >
+                    <legend className="px-1 text-sm font-semibold text-text-strong">
+                      Delivery details
+                    </legend>
+                    {!online ? (
+                      <p role="alert" className="text-sm text-warning">
+                        Delivery is connected-only. Reconnect to continue; no delivery details are
+                        stored locally.
+                      </p>
+                    ) : null}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="delivery-customer-search">Customer name</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="delivery-customer-search"
+                          value={customerQuery}
+                          onChange={(event) => setCustomerQuery(event.target.value)}
+                          placeholder="Search by name"
+                          autoComplete="off"
+                          className="h-11"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={
+                            !online ||
+                            customerQuery.trim().length < 2 ||
+                            /[@+\d]{3}/.test(customerQuery)
+                          }
+                          onClick={() => {
+                            const query = customerQuery.trim();
+                            void request<{ customers: DeliveryCustomer[] }>(
+                              `/api/restaurant/orders/customer/search?query=${encodeURIComponent(query)}`,
+                              { headers: authHeaders(runtime) }
+                            )
+                              .then(({ customers }) => setDeliveryCustomers(customers))
+                              .catch(handleError);
+                          }}
+                        >
+                          Search
+                        </Button>
+                      </div>
+                      {deliveryCustomers.map((customer) => (
+                        <Button
+                          key={customer.customerId}
+                          type="button"
+                          variant={
+                            deliveryCustomer?.customerId === customer.customerId
+                              ? 'default'
+                              : 'outline'
+                          }
+                          className="h-11 w-full justify-start"
+                          onClick={() => {
+                            setDeliveryCustomer(customer);
+                            void request<{ addresses: DeliveryAddress[] }>(
+                              `/api/restaurant/orders/delivery/addresses?customerId=${encodeURIComponent(customer.customerId)}`,
+                              { headers: authHeaders(runtime) }
+                            )
+                              .then(({ addresses }) => {
+                                setDeliveryAddresses(addresses);
+                                setDeliveryAddressId(
+                                  addresses.find((address) => address.isDefault)?.id ??
+                                    addresses[0]?.id ??
+                                    ''
+                                );
+                              })
+                              .catch(handleError);
+                          }}
+                        >
+                          {customer.displayName ?? 'Unnamed customer'}
+                          {customer.identifiers[0]?.masked
+                            ? ` · ${customer.identifiers[0].masked}`
+                            : ''}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="delivery-address">Saved address</Label>
+                      <select
+                        id="delivery-address"
+                        value={deliveryAddressId}
+                        onChange={(event) => setDeliveryAddressId(event.target.value)}
+                        className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        <option value="">Select saved address</option>
+                        {deliveryAddresses.map((address) => (
+                          <option key={address.id} value={address.id}>
+                            {address.label} · {address.recipientName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="delivery-zone">Delivery zone</Label>
+                      <select
+                        id="delivery-zone"
+                        value={deliveryZoneId}
+                        onChange={(event) => setDeliveryZoneId(event.target.value)}
+                        className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        <option value="">Select active zone</option>
+                        {deliveryZones.map((zone) => (
+                          <option key={zone.id} value={zone.id}>
+                            {zone.name}
+                          </option>
+                        ))}
+                      </select>
+                      {deliveryZones.find((zone) => zone.id === deliveryZoneId) ? (
+                        <p className="text-sm text-text-muted">
+                          Minimum{' '}
+                          {
+                            deliveryZones.find((zone) => zone.id === deliveryZoneId)!
+                              .minimumSubtotal
+                          }{' '}
+                          · Fee {deliveryZones.find((zone) => zone.id === deliveryZoneId)!.fee}{' '}
+                          (non-taxable) · Promise{' '}
+                          {
+                            deliveryZones.find((zone) => zone.id === deliveryZoneId)!
+                              .promisedMinutes
+                          }{' '}
+                          min
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="delivery-instructions">Delivery instructions</Label>
+                      <Input
+                        id="delivery-instructions"
+                        value={deliveryInstructions}
+                        onChange={(event) => setDeliveryInstructions(event.target.value)}
+                        maxLength={500}
+                        autoComplete="off"
+                        className="h-11"
+                      />
+                    </div>
+                  </fieldset>
+                ) : null}
                 {channel === 'DINE_IN' ? (
                   <div className="space-y-3">
                     {layoutState === 'loading' ? (
@@ -1184,7 +1421,16 @@ export function OrderPad() {
                 <Button
                   type="submit"
                   aria-label={pending === 'open' ? 'Opening…' : 'Open order'}
-                  disabled={busy || !draftMenu?.channelOpen}
+                  disabled={
+                    busy ||
+                    !draftMenu?.channelOpen ||
+                    (channel === 'DELIVERY' &&
+                      (!online ||
+                        !deliveryCustomer ||
+                        !deliveryAddressId ||
+                        !deliveryZoneId ||
+                        draftLines.length === 0))
+                  }
                   className="h-11 w-full"
                 >
                   {pending === 'open'

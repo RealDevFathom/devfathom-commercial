@@ -360,7 +360,7 @@ describe('OrderPad transport', () => {
 
     const channel = screen.getByLabelText('Channel');
     expect(channel).toHaveValue('DINE_IN');
-    expect(screen.getByRole('option', { name: 'Delivery — not configured' })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Delivery' })).toBeEnabled();
     expect(screen.getByRole('option', { name: 'Takeaway' })).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());

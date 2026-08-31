@@ -78,6 +78,22 @@ function seeded(inputs: PosDraftInput[], newId = ids()): PosQueueSnapshot {
   }, createQueueSnapshot(DEVICE));
 }
 
+it('rejects delivery before creating any offline command', () => {
+  const result = enqueueDraft(
+    createQueueSnapshot(DEVICE),
+    draftInput({
+      open: { channel: 'DELIVERY', customerId: 'customer-1' },
+    }),
+    ids()
+  );
+  expect(result).toEqual(
+    expect.objectContaining({
+      ok: false,
+      reason: 'DELIVERY_CONNECTED_ONLY',
+    })
+  );
+});
+
 const catalog = (overrides: Partial<PosCatalogSnapshot> = {}): PosCatalogSnapshot => ({
   version: 'v1:aaaa',
   branchId: 'branch-1',

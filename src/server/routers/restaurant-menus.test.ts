@@ -230,22 +230,6 @@ describe('console read models (menu:read)', () => {
 });
 
 describe('createPublication — cross-org reference validation (C1/C2)', () => {
-  it('rejects delivery publication create/update before database or audit work', async () => {
-    await expect(
-      caller().createPublication({
-        branchId: 'branch_1',
-        menuId: 'menu_1',
-        channels: ['DELIVERY'] as never[],
-      })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(
-      caller().setPublicationChannels({ id: 'pub_1', channels: ['DELIVERY'] as never[] })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.pubCreate).not.toHaveBeenCalled();
-    expect(mocks.pubUpdate).not.toHaveBeenCalled();
-    expect(mocks.annotateAudit).not.toHaveBeenCalled();
-  });
-
   it('rejects a publication naming a branch outside the organization', async () => {
     mocks.branchFindUnique.mockResolvedValue(null); // RLS makes a foreign branch invisible
     await expect(
@@ -290,7 +274,7 @@ describe('publication lifecycle (menu:publish)', () => {
     });
   });
 
-  it('rejects a legacy delivery draft before publication or audit mutation', async () => {
+  it('publishes a delivery draft as an operational channel', async () => {
     mocks.pubFindUnique.mockResolvedValue({
       id: 'pub_legacy',
       status: 'DRAFT',
@@ -299,13 +283,12 @@ describe('publication lifecycle (menu:publish)', () => {
       channels: ['DELIVERY'],
     });
 
-    await expect(caller().publishPublication({ id: 'pub_legacy' })).rejects.toMatchObject({
-      code: 'CONFLICT',
-      message:
-        'Delivery is not configured. Set this publication to dine-in and/or takeaway before publishing.',
+    await expect(caller().publishPublication({ id: 'pub_legacy' })).resolves.toMatchObject({
+      id: 'pub_legacy',
+      status: 'PUBLISHED',
     });
-    expect(mocks.pubUpdate).not.toHaveBeenCalled();
-    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.pubUpdate).toHaveBeenCalled();
+    expect(mocks.annotateAudit).toHaveBeenCalled();
   });
 
   it('allows channel remediation and retirement for legacy records', async () => {
@@ -492,13 +475,6 @@ function withPriceLists(config: {
 }
 
 describe('effectiveMenu — winning-price precedence (override > pub list > base list)', () => {
-  it('rejects delivery before loading a publication', async () => {
-    await expect(
-      caller().effectiveMenu({ publicationId: 'pub_1', channel: 'DELIVERY' as never })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.pubFindUnique).not.toHaveBeenCalled();
-  });
-
   beforeEach(() => {
     withPriceLists({
       defaultListId: 'pl_base',

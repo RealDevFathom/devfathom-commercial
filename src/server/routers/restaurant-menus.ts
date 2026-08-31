@@ -4,10 +4,7 @@ import { TRPCError } from '@trpc/server';
 import type { Prisma } from '@/generated/prisma/client';
 import type { Action } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import {
-  isOperationalOrderChannel,
-  operationalOrderChannelSchema,
-} from '@/lib/restaurant/order-channels';
+import { orderChannelSchema } from '@/lib/restaurant/order-channels';
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
@@ -579,7 +576,7 @@ export const restaurantMenusRouter = router({
         branchId: z.string().min(1),
         menuId: z.string().min(1),
         priceListId: z.string().nullable().optional(),
-        channels: z.array(operationalOrderChannelSchema).optional(),
+        channels: z.array(orderChannelSchema).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -630,12 +627,6 @@ export const restaurantMenusRouter = router({
       if (publication.status === 'PUBLISHED') {
         publicationError('INVALID_STATE', 'The publication is already published.');
       }
-      if (publication.channels.some((channel) => !isOperationalOrderChannel(channel))) {
-        publicationError(
-          'INVALID_STATE',
-          'Delivery is not configured. Set this publication to dine-in and/or takeaway before publishing.'
-        );
-      }
       const updated = await ctx.db.restaurantBranchMenuPublication.update({
         where: { id: input.id },
         data: { status: 'PUBLISHED', publishedAt: new Date(), retiredAt: null },
@@ -669,7 +660,7 @@ export const restaurantMenusRouter = router({
     }),
 
   setPublicationChannels: publishProcedure
-    .input(z.object({ id: z.string().min(1), channels: z.array(operationalOrderChannelSchema) }))
+    .input(z.object({ id: z.string().min(1), channels: z.array(orderChannelSchema) }))
     .mutation(async ({ ctx, input }) => {
       await loadPublication(ctx.db, input.id);
       const updated = await ctx.db.restaurantBranchMenuPublication.update({
@@ -861,7 +852,7 @@ export const restaurantMenusRouter = router({
     .input(
       z.object({
         publicationId: z.string().min(1),
-        channel: operationalOrderChannelSchema,
+        channel: orderChannelSchema,
         // Optional evaluation instant (preview / historical). Absent = server now;
         // client time is never trusted for availability, only for an explicit query.
         at: z.date().optional(),

@@ -156,7 +156,9 @@ describe('Restaurant menus console', () => {
     renderConsole();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Effective preview' }));
-    expect(screen.getByRole('option', { name: 'DELIVERY — not configured' })).toBeDisabled();
+    expect(screen.getAllByRole('option', { name: 'DELIVERY' })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ disabled: false })])
+    );
     fireEvent.change(screen.getByLabelText('Preview channel'), {
       target: { value: 'TAKEAWAY' },
     });
@@ -173,14 +175,16 @@ describe('Restaurant menus console', () => {
     });
   });
 
-  it('shows delivery as not configured in publication channel controls', () => {
+  it('allows delivery in publication channel controls', () => {
     renderConsole();
 
     fireEvent.click(screen.getByRole('tab', { name: /Publications/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
     fireEvent.click(screen.getByRole('button', { name: 'Channels' }));
 
-    expect(screen.getByLabelText('DELIVERY — not configured')).toBeDisabled();
+    expect(
+      screen.getAllByLabelText('DELIVERY').every((control) => !control.hasAttribute('disabled'))
+    ).toBe(true);
     expect(screen.getByLabelText('DINE IN')).toBeEnabled();
     expect(screen.getByLabelText('TAKEAWAY')).toBeEnabled();
   });

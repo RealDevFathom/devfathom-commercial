@@ -1609,9 +1609,7 @@ export function RestaurantMenusConsole({
                             {channel.replace('_', ' ')}
                           </option>
                         ))}
-                        <option value="DELIVERY" disabled>
-                          DELIVERY — not configured
-                        </option>
+                        <option value="DELIVERY">DELIVERY</option>
                       </select>
                     </Field>
                     <Field label="Preview instant">
@@ -1978,8 +1976,8 @@ export function RestaurantMenusConsole({
                       </label>
                     ))}
                     <label className="flex min-h-11 items-center gap-2 rounded-md border border-border-default px-3 text-sm text-text-muted">
-                      <input name="channels" type="checkbox" value="DELIVERY" disabled />
-                      DELIVERY — not configured
+                      <input name="channels" type="checkbox" value="DELIVERY" />
+                      DELIVERY
                     </label>
                   </div>
                 </fieldset>
