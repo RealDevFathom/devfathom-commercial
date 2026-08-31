@@ -79,6 +79,7 @@ describe('restaurant tax activation replay against PostgreSQL', () => {
     ({ withTenantDb } = await import('@/lib/tenancy/scoped-db'));
     ({ restaurantTaxRouter } = await import('./restaurant-tax'));
     await owner.connect();
+    await owner.query(`SET app.is_platform_admin = 'true'`);
     await owner.query(
       `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "deploymentMode", "createdAt", "updatedAt")
        VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',now(),now())`,
