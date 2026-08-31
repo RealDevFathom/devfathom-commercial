@@ -225,6 +225,52 @@ describe('strict public contract and serialization', () => {
     expect(mocks.createDeliveryZone).not.toHaveBeenCalled();
   });
 
+  it('accepts Decimal(12,2) money boundaries', async () => {
+    await caller().createZone({
+      ...zoneInput,
+      fixedFee: '9999999999.99',
+      minimumSubtotal: '0',
+    });
+
+    expect(mocks.createDeliveryZone).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ fixedFee: '9999999999.99', minimumSubtotal: '0' })
+    );
+  });
+
+  it.each(['NaN', 'Infinity', '1e2', '0.001', '10000000000', '99999999999.99'])(
+    'rejects invalid or unrepresentable money %s before delegation',
+    async (fixedFee) => {
+      await expect(caller().createZone({ ...zoneInput, fixedFee })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.createDeliveryZone).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts Decimal(9,6) coordinate boundaries within domain ranges', async () => {
+    await caller().createAddress({
+      ...addressInput,
+      latitude: '-90.000000',
+      longitude: '180.000000',
+    });
+
+    expect(mocks.createDeliveryAddress).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ latitude: '-90.000000', longitude: '180.000000' })
+    );
+  });
+
+  it.each(['NaN', 'Infinity', '-Infinity', '1e2', '1.0000001', '1000', '-1000.000000'])(
+    'rejects invalid or unrepresentable coordinate %s before delegation',
+    async (latitude) => {
+      await expect(caller().createAddress({ ...addressInput, latitude })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.createDeliveryAddress).not.toHaveBeenCalled();
+    }
+  );
+
   it('serializes all Decimal money and coordinates as strings', async () => {
     const api = caller();
     const zones = await api.listZones({ branchId: 'branch_1' });
