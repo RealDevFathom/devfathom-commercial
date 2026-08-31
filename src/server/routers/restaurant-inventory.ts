@@ -303,6 +303,7 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [await requireCountBranch(ctx, input.stockCountId)]);
       return addStockCountLine(ctx.db, input).catch(mapInventoryError);
     }),
 
@@ -376,6 +377,7 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, await requireTransferBranches(ctx, input.stockTransferId));
       return addStockTransferLine(ctx.db, input).catch(mapInventoryError);
     }),
 

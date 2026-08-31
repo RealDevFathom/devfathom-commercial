@@ -356,9 +356,11 @@ describe('restaurantInventoryRouter', () => {
 
   it('resolves the distinct active staff profile for every actor-bearing mutation family', async () => {
     mocks.createStockCount.mockResolvedValue({ id: 'count_1', status: 'DRAFT' });
+    mocks.addStockCountLine.mockResolvedValue({ id: 'count_line_1' });
     mocks.submitStockCount.mockResolvedValue({ stockCountId: 'count_1' });
     mocks.postStockCount.mockResolvedValue({ stockCountId: 'count_1', movementsPosted: 0 });
     mocks.createStockTransfer.mockResolvedValue({ id: 'transfer_1', status: 'DRAFT' });
+    mocks.addStockTransferLine.mockResolvedValue({ id: 'transfer_line_1' });
     mocks.completeStockTransfer.mockResolvedValue({
       stockTransferId: 'transfer_1',
       movementsPosted: 0,
@@ -368,9 +370,19 @@ describe('restaurantInventoryRouter', () => {
 
     const api = caller();
     await api.createStockCount({ locationId: 'loc_1' });
+    await api.addStockCountLine({
+      stockCountId: 'count_1',
+      stockItemId: 'item_1',
+      countedQuantity: '1',
+    });
     await api.submitStockCount({ stockCountId: 'count_1' });
     await api.postStockCount({ stockCountId: 'count_1' });
     await api.createStockTransfer({ sourceLocationId: 'loc_1', destinationLocationId: 'loc_1' });
+    await api.addStockTransferLine({
+      stockTransferId: 'transfer_1',
+      stockItemId: 'item_1',
+      quantity: '1',
+    });
     await api.completeStockTransfer({ stockTransferId: 'transfer_1' });
     await api.postWastage({
       stockItemId: 'item_1',
@@ -410,10 +422,22 @@ describe('restaurantInventoryRouter', () => {
       const api = caller();
       const attempts = [
         () => api.createStockCount({ locationId: 'loc_1' }),
+        () =>
+          api.addStockCountLine({
+            stockCountId: 'count_1',
+            stockItemId: 'item_1',
+            countedQuantity: '1',
+          }),
         () => api.submitStockCount({ stockCountId: 'count_1' }),
         () => api.postStockCount({ stockCountId: 'count_1' }),
         () =>
           api.createStockTransfer({ sourceLocationId: 'loc_1', destinationLocationId: 'loc_1' }),
+        () =>
+          api.addStockTransferLine({
+            stockTransferId: 'transfer_1',
+            stockItemId: 'item_1',
+            quantity: '1',
+          }),
         () => api.completeStockTransfer({ stockTransferId: 'transfer_1' }),
         () =>
           api.postWastage({
@@ -429,9 +453,11 @@ describe('restaurantInventoryRouter', () => {
       }
       for (const mutation of [
         mocks.createStockCount,
+        mocks.addStockCountLine,
         mocks.submitStockCount,
         mocks.postStockCount,
         mocks.createStockTransfer,
+        mocks.addStockTransferLine,
         mocks.completeStockTransfer,
         mocks.postWastage,
         mocks.postSaleReversal,
@@ -453,6 +479,32 @@ describe('restaurantInventoryRouter', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.postWastage).not.toHaveBeenCalled();
+  });
+
+  it('denies line injection into unauthorized count and transfer branches before mutation', async () => {
+    mocks.findStockCount.mockResolvedValue({ location: { branchId: 'branch_2' } });
+    mocks.findStockTransfer.mockResolvedValue({
+      sourceLocation: { branchId: 'branch_1' },
+      destinationLocation: { branchId: 'branch_2' },
+    });
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().addStockCountLine({
+        stockCountId: 'count_2',
+        stockItemId: 'item_1',
+        countedQuantity: '1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().addStockTransferLine({
+        stockTransferId: 'transfer_2',
+        stockItemId: 'item_1',
+        quantity: '1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.addStockCountLine).not.toHaveBeenCalled();
+    expect(mocks.addStockTransferLine).not.toHaveBeenCalled();
   });
 
   it('allows an active staff profile through an explicit branch assignment', async () => {
