@@ -37,6 +37,7 @@ export async function resolveCapabilityBranchAuthorization(
       jobRoles: { select: { branchId: true } },
       directCapabilityGrants: { select: { branchId: true } },
     },
+    orderBy: { id: 'asc' },
     take: 2,
   });
   if (options.requireExactlyOneActiveActor && actors.length !== 1) denyStaffBranchAccess();

@@ -207,7 +207,8 @@ export const restaurantDevicesRouter = router({
     .input(
       z.object({
         deviceId: z.string().min(1),
-        actingStaffProfileId: z.string().min(1),
+        // Accepted temporarily for existing clients, but never trusted as actor identity.
+        actingStaffProfileId: z.string().min(1).optional(),
         approvingStaffProfileId: z.string().min(1),
         approvingType: z.enum(['PIN', 'BADGE']),
         approvingSecret: z.string().min(1),
@@ -220,8 +221,11 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { requireExactlyOneActiveActor: true }
       );
+      const actingStaffProfileId = authorization.actorStaffProfileId;
+      if (!actingStaffProfileId) denyStaffBranchAccess();
 
       const device = await ctx.db.restaurantRegisteredDevice.findUnique({
         where: { id: input.deviceId },
@@ -230,27 +234,16 @@ export const restaurantDevicesRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Device not found.' });
       }
       assertAuthorizedBranch(authorization, device.branchId);
+      assertActorEligibleForBranch(authorization, device.branchId);
       if (device.status === 'REVOKED') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Device is already revoked.' });
       }
 
-      // Both identities must exist and be ACTIVE in this organization.
-      const [acting, approving] = await Promise.all([
-        ctx.db.restaurantStaffProfile.findUnique({
-          where: { id: input.actingStaffProfileId },
-          select: { id: true, status: true },
-        }),
-        ctx.db.restaurantStaffProfile.findUnique({
-          where: { id: input.approvingStaffProfileId },
-          select: { id: true, status: true },
-        }),
-      ]);
-      if (!acting || acting.status !== 'ACTIVE') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Acting staff profile is not active.',
-        });
-      }
+      // The approving identity must exist and be ACTIVE in this organization.
+      const approving = await ctx.db.restaurantStaffProfile.findUnique({
+        where: { id: input.approvingStaffProfileId },
+        select: { id: true, status: true },
+      });
       if (!approving || approving.status !== 'ACTIVE') {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -262,7 +255,7 @@ export const restaurantDevicesRouter = router({
       let record;
       try {
         record = buildCoAuthorizationRecord({
-          actingStaffProfileId: input.actingStaffProfileId,
+          actingStaffProfileId,
           approvingStaffProfileId: input.approvingStaffProfileId,
           capability: 'devices:revoke',
           reason: input.reason,
@@ -320,7 +313,7 @@ export const restaurantDevicesRouter = router({
         description: `Revoked terminal device "${device.name}" with manager co-authorization`,
         metadata: {
           coAuthorizationId: coAuthorization.id,
-          actingStaffProfileId: input.actingStaffProfileId,
+          actingStaffProfileId,
           approvingStaffProfileId: input.approvingStaffProfileId,
         },
       });

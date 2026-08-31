@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   recordAudit: vi.fn(),
   branchFindUnique: vi.fn(),
   stationFindFirst: vi.fn(),
+  resolveCapabilityBranchAuthorization: vi.fn(),
   support: null as null | { platformUserId: string },
 }));
 
@@ -31,6 +32,15 @@ vi.mock('@/lib/restaurant/commercial-limits', () => ({
 vi.mock('@/lib/restaurant/terminal-auth', () => ({
   TERMINAL_DEVICE_COOKIE: 'devfathom-terminal',
 }));
+vi.mock('@/lib/restaurant/staff-branch-authorization', async () => {
+  const actual = await vi.importActual<
+    typeof import('@/lib/restaurant/staff-branch-authorization')
+  >('@/lib/restaurant/staff-branch-authorization');
+  return {
+    ...actual,
+    resolveCapabilityBranchAuthorization: mocks.resolveCapabilityBranchAuthorization,
+  };
+});
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: (_organizationId: string, callback: (db: unknown) => unknown) =>
     callback({
@@ -90,6 +100,12 @@ beforeEach(() => {
   mocks.support = null;
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1', name: 'Downtown' });
   mocks.stationFindFirst.mockResolvedValue({ id: 'station_1', name: 'Expo' });
+  mocks.resolveCapabilityBranchAuthorization.mockResolvedValue({
+    actorStaffProfileId: 'staff_manager_a',
+    actorBranchIds: ['branch_1'],
+    organizationWide: false,
+    branchIds: ['branch_1'],
+  });
   mocks.enrollDevice.mockResolvedValue({
     secret: rawSecret,
     device: {
@@ -159,6 +175,31 @@ describe('POST browser enrollment', () => {
     expect(mocks.enrollDevice).not.toHaveBeenCalled();
     expect(mocks.recordAudit).not.toHaveBeenCalled();
     expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('denies a Branch A manager attempting to enroll a device at Branch B', async () => {
+    mocks.resolveCapabilityBranchAuthorization.mockResolvedValue({
+      actorStaffProfileId: 'staff_manager_a',
+      actorBranchIds: ['branch_a'],
+      organizationWide: false,
+      branchIds: ['branch_a'],
+    });
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Device-management permission is required.',
+    });
+
+    expect(mocks.resolveCapabilityBranchAuthorization).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'user_admin' }),
+      'devices:manage'
+    );
+    expect(mocks.branchFindUnique).not.toHaveBeenCalled();
+    expect(mocks.enrollDevice).not.toHaveBeenCalled();
+    expect(mocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it('keeps local terminal and normal Auth.js cookies non-Secure', async () => {
