@@ -285,12 +285,12 @@ describe('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
       table_name: string;
       rls_enabled: boolean;
       rls_forced: boolean;
-      has_tenant_policy: boolean;
+      policy_names: string[];
     }>(
       `SELECT table_row.relname AS table_name,
               table_row.relrowsecurity AS rls_enabled,
               table_row.relforcerowsecurity AS rls_forced,
-              bool_or(policy_row.polname = 'tenant_isolation') AS has_tenant_policy
+              array_agg(policy_row.polname::text ORDER BY policy_row.polname) AS policy_names
          FROM pg_catalog.pg_class table_row
          JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
          LEFT JOIN pg_catalog.pg_policy policy_row ON policy_row.polrelid = table_row.oid
@@ -305,12 +305,15 @@ describe('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
         table_name,
         rls_enabled: true,
         rls_forced: true,
-        has_tenant_policy: true,
+        policy_names:
+          table_name === 'restaurant_order_events'
+            ? ['tenant_isolation_insert', 'tenant_isolation_select']
+            : ['tenant_isolation'],
       }))
     );
   });
 
-  it.each(M4_TABLES)(
+  it.each(M4_TABLES.filter((table) => table !== 'restaurant_order_events'))(
     '%s permits tenant A reads, inserts, updates, and deletes and hides tenant B',
     async (table) => {
       const visible = await client!.query<{ id: string; organizationId: string }>(
@@ -345,15 +348,41 @@ describe('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
     }
   );
 
-  it.each(M4_TABLES)('%s rejects INSERT and UPDATE tenant escape via WITH CHECK', async (table) => {
-    await expectDatabaseError('42501', () =>
-      insertFixture(client!, table, ids.orgB, `deny_${table}_${suffix}`, ids.rowB)
+  it('permits tenant reads and inserts but denies updates and deletes for restaurant_order_events', async () => {
+    const visible = await client!.query<{ id: string; organizationId: string }>(
+      `SELECT "id", "organizationId" FROM "restaurant_order_events" WHERE "id" IN ($1, $2)`,
+      [ids.rowA, ids.rowB]
     );
-    await expectDatabaseError('42501', () =>
-      client!.query(`UPDATE "${table}" SET "organizationId" = $1 WHERE "id" = $2`, [
-        ids.orgB,
-        ids.rowA,
-      ])
-    );
+    expect(visible.rows).toEqual([{ id: ids.rowA, organizationId: ids.orgA }]);
+
+    const allowedId = `allow_restaurant_order_events_${suffix}`;
+    await insertFixture(client!, 'restaurant_order_events', ids.orgA, allowedId, ids.rowA);
+    expect(
+      (
+        await client!.query(
+          `UPDATE "restaurant_order_events" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+          [allowedId]
+        )
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (await client!.query(`DELETE FROM "restaurant_order_events" WHERE "id" = $1`, [allowedId]))
+        .rowCount
+    ).toBe(0);
   });
+
+  it.each(M4_TABLES.filter((table) => table !== 'restaurant_order_events'))(
+    '%s rejects INSERT and UPDATE tenant escape via WITH CHECK',
+    async (table) => {
+      await expectDatabaseError('42501', () =>
+        insertFixture(client!, table, ids.orgB, `deny_${table}_${suffix}`, ids.rowB)
+      );
+      await expectDatabaseError('42501', () =>
+        client!.query(`UPDATE "${table}" SET "organizationId" = $1 WHERE "id" = $2`, [
+          ids.orgB,
+          ids.rowA,
+        ])
+      );
+    }
+  );
 });

@@ -578,6 +578,7 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // Pakistan tax owns the authoritative RESTAURANT jurisdiction profiles and
     // the focused fixtures/batteries that provision those schema records.
     'src/components/restaurant/restaurant-tax-console.test.tsx',
+    'src/components/restaurant/delivery/delivery-console.test.tsx',
     'src/lib/restaurant/pakistan-tax-profiles.test.ts',
     'src/lib/restaurant/pakistan-tax-profiles.ts',
     'src/lib/test-support/restaurant-tax-profile.ts',
