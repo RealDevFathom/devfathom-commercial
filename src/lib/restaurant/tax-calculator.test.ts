@@ -94,7 +94,8 @@ describe('tax calculator G2 cent arithmetic', () => {
       profiles,
       rules,
       at,
-      priorTenders: [{ tenderType: 'CASH', principal: '40' }],
+      priorTenderWeights: [{ tenderType: 'CASH', principal: '40' }],
+      acceptedPrincipal: '40',
       proposedTenderType: 'CARD',
     });
     expect([quote.weights.CASH.toFixed(2), quote.weights.CARD.toFixed(2)]).toEqual([
@@ -120,7 +121,7 @@ describe('tax calculator G2 cent arithmetic', () => {
       profiles,
       rules,
       at,
-      priorTenders: [
+      priorTenderWeights: [
         { tenderType: 'CASH', principal: '1' },
         { tenderType: 'CARD', principal: '1' },
       ],
@@ -150,7 +151,7 @@ describe('tax calculator G2 cent arithmetic', () => {
       profiles,
       rules,
       at,
-      priorTenders: [
+      priorTenderWeights: [
         { tenderType: 'CASH', principal: '0.01' },
         { tenderType: 'CARD', principal: '0.01' },
       ],
@@ -180,7 +181,8 @@ describe('tax calculator G2 cent arithmetic', () => {
       profiles,
       rules: inclusiveRules,
       at,
-      priorTenders: [{ tenderType: 'CASH', principal: '55' }],
+      priorTenderWeights: [{ tenderType: 'CASH', principal: '55' }],
+      acceptedPrincipal: '55',
       proposedTenderType: 'CARD',
     });
     expect(
@@ -251,16 +253,25 @@ describe('tax calculator G2 cent arithmetic', () => {
         serviceCharge: { amount: '1', taxable: false },
       })
     ).toThrow('After-tax discount exceeds merchandise payable');
-    expect(() =>
-      quoteTaxSettlement({
-        lines: [{ id: 'meal', unitPrice: '10', quantity: 1 }],
-        profiles,
-        rules: [rule('CARD', '0')],
-        at,
-        proposedTenderType: 'CARD',
-        priorTenders: [{ tenderType: 'CARD', principal: '10.01' }],
-      })
-    ).toThrow('Accepted principal exceeds payable');
+  });
+
+  it('keeps tender category weights separate from accepted bill principal', () => {
+    const quote = quoteTaxSettlement({
+      lines: [{ id: 'meal', unitPrice: '100', quantity: 1 }],
+      profiles,
+      rules: [rule('CASH', '0'), rule('CARD', '0')],
+      at,
+      proposedTenderType: 'CASH',
+      priorTenderWeights: [{ tenderType: 'CARD', principal: '50' }],
+      acceptedPrincipal: '60',
+      afterTaxDiscount: '50',
+      serviceCharge: { amount: '20', taxable: false },
+    });
+
+    expect(quote.weights.CARD.toFixed(2)).toBe('50.00');
+    expect(quote.acceptedPrincipal.toFixed(2)).toBe('60.00');
+    expect(quote.grandTotal.toFixed(2)).toBe('70.00');
+    expect(quote.remainingDue.toFixed(2)).toBe('10.00');
   });
 
   it('tax_rejects_binary_number_money_inputs', () => {

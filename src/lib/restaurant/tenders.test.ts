@@ -592,6 +592,150 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     return opened;
   }
 
+  async function installFiftyDollarDiscount(
+    billId: string,
+    orderId: string,
+    taxTreatment: 'BEFORE_TAX' | 'AFTER_TAX'
+  ) {
+    const fixture = `discount_${taxTreatment.toLowerCase()}_${key()}`;
+    await read(async (tx) => {
+      const line = await tx.restaurantBillLine.findFirstOrThrow({
+        where: { billId },
+        select: { orderItemId: true },
+      });
+      const promotion = await tx.restaurantPromotion.create({
+        data: { code: fixture, name: fixture },
+      });
+      const version = await tx.restaurantPromotionVersion.create({
+        data: {
+          promotionId: promotion.id,
+          versionNumber: 1,
+          status: 'PUBLISHED',
+          effectiveFrom: AT,
+          timezone: 'UTC',
+          targetKind: 'ORDER',
+          benefitKind: 'AMOUNT_OFF',
+          benefitAmount: '50.00',
+          currency: 'USD',
+          approvalReference: fixture,
+          publishedAt: AT,
+          ruleSnapshot: {},
+          ruleHash: fixture,
+        },
+      });
+      const evaluation = await tx.restaurantPromotionEvaluationSnapshot.create({
+        data: {
+          orderId,
+          branchId: ids.branch,
+          channel: 'DINE_IN',
+          currency: 'USD',
+          idempotencyKey: fixture,
+          evaluatedAt: AT,
+          timezone: 'UTC',
+          localDate: '2026-08-19',
+          localMinute: 1080,
+          utcOffsetMinutes: 0,
+          engineVersion: 'test',
+          moneyVersion: 'test',
+          setRevisionId: fixture,
+          setRevisionHash: fixture,
+          inputLines: [],
+          evaluationContext: {},
+          inputHash: fixture,
+          outputHash: fixture,
+          discountTotal: '50.00',
+        },
+      });
+      const application = await tx.restaurantPromotionApplicationSnapshot.create({
+        data: {
+          evaluationId: evaluation.id,
+          applicationOrdinal: 0,
+          promotionId: promotion.id,
+          promotionVersionId: version.id,
+          ruleHash: fixture,
+          benefitKind: 'AMOUNT_OFF',
+          unroundedBenefit: '50.00',
+          roundedBenefit: '50.00',
+          qualifyingAmount: '100.00',
+          discountedQuantity: 1,
+          allocations: {
+            create: { orderItemId: line.orderItemId, unitOrdinal: 0, allocatedAmount: '50.00' },
+          },
+        },
+      });
+      await tx.restaurantPromotionBillApplicationSnapshot.create({
+        data: {
+          billId,
+          orderId,
+          evaluationId: evaluation.id,
+          applicationId: application.id,
+          promotionId: promotion.id,
+          promotionVersionId: version.id,
+          ruleHash: fixture,
+          applicationOrdinal: 0,
+          subtotalBasis: '100.00',
+          computedAmount: '50.00',
+          taxTreatment,
+        },
+      });
+      await tx.restaurantBill.update({
+        where: { id: billId },
+        data: { discountTotal: '50.00', grandTotal: '70.00' },
+      });
+    });
+  }
+
+  it.each([
+    ['AFTER_TAX', 'CARD', 'CASH'],
+    ['AFTER_TAX', 'CASH', 'CARD'],
+    ['BEFORE_TAX', 'CARD', 'CASH'],
+    ['BEFORE_TAX', 'CASH', 'CARD'],
+  ] as const)(
+    'settles discounted delivery after a fee-inclusive partial: %s %s -> %s',
+    async (taxTreatment, firstType, finalType) => {
+      const { billId, orderId } = await openMixedRateBill();
+      await installFiftyDollarDiscount(billId, orderId, taxTreatment);
+      const cashDevice = await newDevice(`POS-discount-${taxTreatment}-${firstType}`);
+      await openDrawer(cashDevice);
+      const db = deps.createTenantDb(orgId);
+
+      const first = await deps.tenders.applyTender(db, {
+        billId,
+        tender:
+          firstType === 'CASH'
+            ? { type: 'CASH', amount: '60.00', cashReceived: '60.00' }
+            : { type: 'CARD', amount: '60.00' },
+        actor: actor(firstType === 'CASH' ? cashDevice : deviceId),
+        now: AT,
+      });
+      expect(first.remainingDue.toString()).toBe('10');
+
+      await expect(
+        deps.tenders.applyTender(db, {
+          billId,
+          tender:
+            finalType === 'CASH'
+              ? { type: 'CASH', amount: '10.01', cashReceived: '10.01' }
+              : { type: 'CARD', amount: '10.01' },
+          actor: actor(finalType === 'CASH' ? cashDevice : deviceId),
+          now: AT,
+        })
+      ).rejects.toMatchObject({ reason: 'OVER_TENDER' });
+
+      await expect(
+        deps.tenders.applyTender(db, {
+          billId,
+          tender:
+            finalType === 'CASH'
+              ? { type: 'CASH', amount: '10.00', cashReceived: '10.00' }
+              : { type: 'CARD', amount: '10.00' },
+          actor: actor(finalType === 'CASH' ? cashDevice : deviceId),
+          now: AT,
+        })
+      ).resolves.toMatchObject({ settled: true });
+    }
+  );
+
   it('settles CARD 108 then CASH 17 against merchandise 100 plus delivery 20', async () => {
     const at = await installMixedRateProfile();
     const { billId } = await openMixedRateBill();
