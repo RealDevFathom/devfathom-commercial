@@ -33,6 +33,9 @@ describe('restaurant delivery money migration', () => {
       'OLD."paymentMode" IS NULL AND NEW."paymentMode" IS NOT NULL AND NEW."status" <> \'DISPATCHED\''
     );
     expect(sql).toContain(
+      "RAISE EXCEPTION 'delivery fulfillment snapshots are immutable' USING ERRCODE = '55000'"
+    );
+    expect(sql).toContain(
       "CHECK ((\"status\" IN ('PENDING', 'CANCELLED', 'FAILED')) OR \"paymentMode\" IS NOT NULL)"
     );
   });
