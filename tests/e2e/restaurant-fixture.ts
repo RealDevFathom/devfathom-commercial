@@ -22,6 +22,15 @@ export function e2eIdempotencyKey(operation: string, discriminator: string | num
   return `restaurant-integrated-${operation}-${discriminator}`;
 }
 
+export function terminalBrowserBaseUrl(
+  baseUrl = process.env.PLAYWRIGHT_BASE_URL ??
+    `http://localhost:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
+) {
+  const url = new URL(baseUrl);
+  url.hostname = 'localhost';
+  return url.origin;
+}
+
 export async function installSeededTerminalCookie(
   context: BrowserContext,
   device: typeof restaurantE2eCredentials.pos | typeof restaurantE2eCredentials.kds,

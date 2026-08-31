@@ -7,6 +7,7 @@ import {
   assertTerminalSecretIsBrowserIsolated,
   installSeededTerminalCookie,
   restaurantE2eCredentials as fixture,
+  terminalBrowserBaseUrl,
   type RestaurantTerminalFixture,
 } from './restaurant-fixture';
 
@@ -26,12 +27,25 @@ async function post(
 }
 
 async function unlockPos(page: Page) {
-  await installSeededTerminalCookie(page.context(), fixture.pos);
-  await page.goto('/pos');
+  const terminalBaseUrl = terminalBrowserBaseUrl();
+  await installSeededTerminalCookie(page.context(), fixture.pos, terminalBaseUrl);
+  const establishedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/terminal/establish') &&
+      response.request().method() === 'POST'
+  );
+  await page.goto(new URL('/pos', terminalBaseUrl).href);
+  expect((await establishedResponse).status()).toBe(201);
   await expect(page.getByRole('heading', { name: 'Terminal locked' })).toBeVisible();
   await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
+  const unlockedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/terminal/unlock') &&
+      response.request().method() === 'POST'
+  );
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
+  expect((await unlockedResponse).status()).toBe(200);
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await expect(page.getByRole('button', { name: new RegExp(fixture.menuItem.name) })).toBeVisible();
   await assertTerminalSecretIsBrowserIsolated(page, fixture.pos.secret);
@@ -122,13 +136,26 @@ test.describe('restaurant POS and KDS core flow', () => {
     const orderButton = page.getByRole('button', { name: /#\d+ · 2 items/ });
     const orderNumber = String(opened.orderNumber);
 
-    const kdsContext = await browser.newContext({ baseURL });
-    await installSeededTerminalCookie(kdsContext, fixture.kds);
+    const terminalBaseUrl = terminalBrowserBaseUrl(baseURL);
+    const kdsContext = await browser.newContext({ baseURL: terminalBaseUrl });
+    await installSeededTerminalCookie(kdsContext, fixture.kds, terminalBaseUrl);
     const kdsPage = await kdsContext.newPage();
-    await kdsPage.goto('/kds');
+    const establishedResponse = kdsPage.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/terminal/establish') &&
+        response.request().method() === 'POST'
+    );
+    await kdsPage.goto(new URL('/kds', terminalBaseUrl).href);
+    expect((await establishedResponse).status()).toBe(201);
     await kdsPage.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
     await kdsPage.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
+    const unlockedResponse = kdsPage.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/terminal/unlock') &&
+        response.request().method() === 'POST'
+    );
     await kdsPage.getByRole('button', { name: 'Verify PIN and unlock' }).click();
+    expect((await unlockedResponse).status()).toBe(200);
     await expect(kdsPage.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
     await assertTerminalSecretIsBrowserIsolated(kdsPage, fixture.kds.secret);
     await expect(kdsPage.getByText(`Order #${orderNumber}`)).toBeVisible();
