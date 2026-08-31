@@ -11,8 +11,9 @@ Repository evidence is not release evidence. This checkpoint records source trut
   settlement, tax, inventory/purchasing, workforce, SOP, loyalty, reports, devices, and cameras.
 - Printing now has a durable job/routing/idempotency bridge and ESC/POS rendering, but its only
   adapter is simulation-only. It performs no physical printer, network, or operating-system I/O.
-- Delivery is missing/disabled for new operations. Delivery choices are disabled and rejected;
-  historical data remains readable. Full Delivery remains optional pending D06 approval.
+- Delivery is owner-required but currently unavailable for new operations. Delivery choices are
+  disabled and rejected; historical data remains readable while direct Delivery implementation
+  remains pending.
 - Offline order capture is under active correction. It is not claimed until the corrected work is
   composed and exact-head disconnect/reconnect acceptance passes.
 - Card acquiring is provider-dependent. OPay New 9220 is a candidate device, not an integrated or
@@ -31,9 +32,9 @@ Repository evidence is not release evidence. This checkpoint records source trut
 
 ## Optional or deferred scope
 
-- Full Delivery, physical hardware integrations, native mobile, reservations/waitlist, stored value,
-  payroll execution, tip payout, production batches, and full driver logistics remain optional or
-  deferred unless explicitly approved.
+- Marketplace APIs, live rider tracking, route optimization, physical hardware integrations, native
+  mobile, reservations/waitlist, stored value, payroll execution, tip payout, production batches,
+  and full driver logistics remain optional or deferred unless explicitly approved.
 - Saad alone authorizes push, shared-ref merge, deployment, or production smoke.
 
 Detailed decisions and implemented-module evidence remain in the
