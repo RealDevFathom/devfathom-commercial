@@ -357,6 +357,15 @@ describe('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
 
     const allowedId = `allow_restaurant_order_events_${suffix}`;
     await insertFixture(client!, 'restaurant_order_events', ids.orgA, allowedId, ids.rowA);
+    await expectDatabaseError('42501', () =>
+      insertFixture(
+        client!,
+        'restaurant_order_events',
+        ids.orgB,
+        `deny_restaurant_order_events_${suffix}`,
+        ids.rowB
+      )
+    );
     expect(
       (
         await client!.query(
