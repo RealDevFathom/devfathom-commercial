@@ -34,12 +34,14 @@ type CheckoutSummary = {
   blocker: 'NO_BILLS' | 'ITEMS_UNBILLED' | 'BILLS_OPEN' | 'TOTAL_MISMATCH' | null;
   derivedOrderTotal: string;
   accountedTotal: string;
+  deliveryFeeTotal: string | null;
   unbilledItemIds: string[];
   bills: {
     id: string;
     status: string;
     splitKind: string;
     grandTotal: string;
+    deliveryFeeTotal: string;
     compTotal: string;
     receiptNumber: number | null;
   }[];
@@ -654,6 +656,14 @@ export function CheckoutPanel({
                     {summary.derivedOrderTotal}
                   </dd>
                 </div>
+                {summary.deliveryFeeTotal !== null ? (
+                  <div>
+                    <dt className="text-xs text-text-muted">Delivery fee</dt>
+                    <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
+                      {summary.deliveryFeeTotal}
+                    </dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt className="text-xs text-text-muted">Accounted on bills</dt>
                   <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
@@ -726,6 +736,14 @@ export function CheckoutPanel({
                       {bill.grandTotal}
                     </dd>
                   </div>
+                  {summary.deliveryFeeTotal !== null ? (
+                    <div>
+                      <dt className="text-xs text-text-muted">Delivery fee</dt>
+                      <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
+                        {bill.deliveryFeeTotal}
+                      </dd>
+                    </div>
+                  ) : null}
                   <div>
                     <dt className="text-xs text-text-muted">Comp total</dt>
                     <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">

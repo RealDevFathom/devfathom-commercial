@@ -480,6 +480,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'cash:open',
       'cash:close',
       'menu:read',
+      'customers:read',
     ],
   },
   {
@@ -487,7 +488,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     name: 'Server',
     isSystem: true,
     // M4-L1 (additive): a server takes orders on the floor.
-    capabilities: ['pos:operate', 'orders:read', 'orders:take', 'menu:read'],
+    capabilities: ['pos:operate', 'orders:read', 'orders:take', 'menu:read', 'customers:read'],
   },
   {
     key: 'kitchen',
@@ -647,7 +648,7 @@ export const RESTAURANT_JOB_ROLE_TEMPLATES: readonly JobRoleTemplate[] = [
     key: 'cashier',
     name: 'Cashier',
     description: 'Operates the register and handles guest checkout.',
-    capabilities: [...FLOOR_BASELINE, ...RUNS_A_REGISTER],
+    capabilities: [...FLOOR_BASELINE, ...RUNS_A_REGISTER, 'customers:read'],
   },
   {
     key: 'server',

@@ -271,6 +271,13 @@ export function OrderPad() {
     setOperatorDirectoryState('idle');
     setLayout(null);
     setLayoutState('idle');
+    setDeliveryCustomers([]);
+    setDeliveryCustomer(null);
+    setDeliveryAddresses([]);
+    setDeliveryAddressId('');
+    setDeliveryZones([]);
+    setDeliveryZoneId('');
+    setDeliveryInstructions('');
     idempotencyKeys.current.clear();
   }, []);
 
@@ -619,6 +626,13 @@ export function OrderPad() {
       setOpenOrders([]);
       setLayout(null);
       setLayoutState('idle');
+      setDeliveryCustomers([]);
+      setDeliveryCustomer(null);
+      setDeliveryAddresses([]);
+      setDeliveryAddressId('');
+      setDeliveryZones([]);
+      setDeliveryZoneId('');
+      setDeliveryInstructions('');
       idempotencyKeys.current.clear();
       setNotice({ tone: 'success', message: 'Terminal locked.' });
       await loadOperators(locked);
@@ -646,6 +660,13 @@ export function OrderPad() {
             (operator) => operator.staffProfileId === data.session.activeStaffProfileId
           ) ?? null,
       });
+      setDeliveryCustomers([]);
+      setDeliveryCustomer(null);
+      setDeliveryAddresses([]);
+      setDeliveryAddressId('');
+      setDeliveryZones([]);
+      setDeliveryZoneId('');
+      setDeliveryInstructions('');
       setNotice({
         tone: 'success',
         message: 'Operator switched. New actions use the incoming identity.',
@@ -748,7 +769,10 @@ export function OrderPad() {
         }
         await request('/api/restaurant/orders/delivery/attach', {
           method: 'POST',
-          headers: authHeaders(runtime, true),
+          headers: {
+            ...authHeaders(runtime, true),
+            'Idempotency-Key': keyFor(`delivery-attach:${opened.orderId}`),
+          },
           body: JSON.stringify({
             orderId: opened.orderId,
             customerId: deliveryCustomer.customerId,
@@ -759,6 +783,12 @@ export function OrderPad() {
         });
         idempotencyKeys.current.delete(intent);
         setDraftLines([]);
+        setDeliveryCustomers([]);
+        setDeliveryCustomer(null);
+        setDeliveryAddresses([]);
+        setDeliveryAddressId('');
+        setDeliveryZones([]);
+        setDeliveryZoneId('');
         setDeliveryInstructions('');
         setNotice({
           tone: 'success',
