@@ -907,6 +907,25 @@ export async function requestRemake(
     const reason = requireReason(input.reason);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
+    if (order.channel === 'DELIVERY') {
+      const [fulfillment, tenderCount] = await Promise.all([
+        tx.restaurantDeliveryFulfillment.findFirst({
+          where: { orderId: order.id },
+          select: { status: true },
+        }),
+        tx.restaurantTender.count({ where: { bill: { orderId: order.id } } }),
+      ]);
+      if (
+        tenderCount > 0 ||
+        fulfillment?.status === 'DISPATCHED' ||
+        fulfillment?.status === 'DELIVERED'
+      ) {
+        throw new OrderCommandError(
+          'A tendered, dispatched, or delivered delivery order cannot be cancelled.',
+          'NOT_CLOSABLE'
+        );
+      }
+    }
     const item = findItem(order, input.itemId);
     assertItemTransition(item.status, 'REMAKE_REQUESTED');
 
