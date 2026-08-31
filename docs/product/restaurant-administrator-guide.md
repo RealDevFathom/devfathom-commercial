@@ -2,7 +2,7 @@
 
 This is the canonical operator guide for the current DevFathom restaurant workspace. Product PRDs
 explain design and evidence; this guide explains what administrators and service teams can safely do.
-Delivery source claims are pinned to `3a49b696d2bb6000da6d084247274012f4fad90c`; exact-candidate
+Delivery source claims are pinned to `e3a5de4c3d358149319f185bbf9d60c177023005`; exact-candidate
 browser and release evidence remains pending.
 
 ## Read this first

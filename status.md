@@ -3,7 +3,7 @@
 Last reconciled: 2026-08-31 (PKT)
 
 Repository evidence is not release evidence. This checkpoint records source truth at exact code SHA
-`3a49b696d2bb6000da6d084247274012f4fad90c`; no deployment or production availability is claimed.
+`e3a5de4c3d358149319f185bbf9d60c177023005`; no deployment or production availability is claimed.
 Exact-candidate browser and release evidence remains pending.
 
 ## Restaurant checkpoint
@@ -12,7 +12,7 @@ Exact-candidate browser and release evidence remains pending.
   settlement, tax, inventory/purchasing, workforce, SOP, loyalty, reports, devices, and cameras.
 - Printing now has a durable job/routing/idempotency bridge and ESC/POS rendering, but its only
   adapter is simulation-only. It performs no physical printer, network, or operating-system I/O.
-- Direct, connected Delivery is operational: Delivery publications, saved customer addresses,
+- Direct, connected Delivery source is implemented: Delivery publications, saved customer addresses,
   branch zones, frozen snapshots, PREPAID/COD kitchen handoff, settlement, daily close, Reports,
   and Insights are implemented. Offline, missing-customer, and capability-denied attempts are
   rejected before mutation. Marketplace providers and full driver logistics remain deferred.

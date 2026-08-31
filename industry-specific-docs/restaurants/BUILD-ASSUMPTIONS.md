@@ -1,6 +1,6 @@
 # Restaurant vertical — Build Assumptions (`restaurant/v1`)
 
-Delivery source evidence is pinned to `3a49b696d2bb6000da6d084247274012f4fad90c`;
+Delivery source evidence is pinned to `e3a5de4c3d358149319f185bbf9d60c177023005`;
 exact-candidate browser and release evidence remains pending.
 
 **Direct Delivery v1 — connected own-delivery handoff (WHA-1048)** · Delivery requires
@@ -375,9 +375,9 @@ price list (in force at T) → organization default (base) price list (in force 
 variant falling back to its product's base (null-variant) entry inside a version; and an
 availability boolean = channel published AND override-available AND branch-timezone daypart open.
 Daypart rules (documented + tested in `menu-availability.ts`): an empty publication `channels`
-set = every operational channel (`DINE_IN` and `TAKEAWAY`); `DELIVERY` is retained only for
-storage/read compatibility and always fails closed operationally; an empty `daysOfWeek` = every
-day; windows are half-open `[start, end)`; a
+set = the non-delivery operational channels (`DINE_IN` and `TAKEAWAY`); `DELIVERY` requires an
+explicit published channel plus the connected customer/address/zone flow; an empty `daysOfWeek` =
+every day; windows are half-open `[start, end)`; a
 cross-midnight window (`end <= start`) attributes its early-morning tail to the previous day; an
 exception overrides windows for its branch-local date (`isClosed` closed, else forced open);
 publication-level and item-level window layers are ANDed. A menu delete is refused while a
