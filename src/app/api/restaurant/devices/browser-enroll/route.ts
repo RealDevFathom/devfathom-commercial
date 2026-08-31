@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
@@ -9,6 +10,10 @@ import {
   CommercialLimitError,
   enrollDeviceWithinCommercialLimits,
 } from '@/lib/restaurant/commercial-limits';
+import {
+  assertAuthorizedBranch,
+  resolveCapabilityBranchAuthorization,
+} from '@/lib/restaurant/staff-branch-authorization';
 import { TERMINAL_DEVICE_COOKIE } from '@/lib/restaurant/terminal-auth';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -57,6 +62,12 @@ export async function POST(request: Request) {
       source: 'REST',
     });
     if (!allowed) return { denied: true } as const;
+    const authorization = await resolveCapabilityBranchAuthorization(
+      db,
+      actor.session.user,
+      'devices:manage'
+    );
+    assertAuthorizedBranch(authorization, input.branchId);
     const branch = await db.restaurantBranch.findUnique({ where: { id: input.branchId } });
     if (!branch) return null;
     if (input.kind === 'KDS') {
@@ -74,6 +85,7 @@ export async function POST(request: Request) {
     });
   }).catch((error: unknown) => {
     if (error instanceof CommercialLimitError) return { commercialLimit: error.message } as const;
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') return { denied: true } as const;
     throw error;
   });
   if (result && 'denied' in result) {

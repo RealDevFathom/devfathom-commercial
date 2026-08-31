@@ -79,6 +79,31 @@ describe('staff branch authorization', () => {
     ).resolves.toMatchObject({ actorStaffProfileId: 'actor', branchIds: ['b'] });
   });
 
+  it('selects the lowest active profile id deterministically when more than one exists', async () => {
+    const db = database();
+    db.restaurantStaffProfile.findMany.mockResolvedValueOnce([
+      {
+        id: 'actor-a',
+        primaryBranchId: null,
+        jobRoles: [{ branchId: 'a' }],
+        directCapabilityGrants: [],
+      },
+      {
+        id: 'actor-b',
+        primaryBranchId: null,
+        jobRoles: [{ branchId: 'b' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+
+    await expect(
+      resolveCapabilityBranchAuthorization(db as never, user, 'devices:manage')
+    ).resolves.toMatchObject({ actorStaffProfileId: 'actor-a' });
+    expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { id: 'asc' }, take: 2 })
+    );
+  });
+
   it('does not treat organization-wide authority as an unlinked actor branch assignment', async () => {
     mocks.can.mockResolvedValue(true);
     const authorization = await resolveCapabilityBranchAuthorization(

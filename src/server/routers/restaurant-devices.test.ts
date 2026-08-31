@@ -414,7 +414,7 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
       api.revoke({
         deviceId: device.id,
         actingStaffProfileId: approvingStaffId,
-        approvingStaffProfileId: approvingStaffId,
+        approvingStaffProfileId: actingStaffId,
         approvingType: 'PIN',
         approvingSecret: APPROVING_PIN,
         reason: 'test',
@@ -518,6 +518,26 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         reason: 'again',
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('ignores a forged acting profile and records the authenticated session actor', async () => {
+    const api = caller();
+    const { device } = await api.initiateEnrollment({ branchId, name: 'POS-forged-actor' });
+
+    const result = await api.revoke({
+      deviceId: device.id,
+      actingStaffProfileId: unprivilegedStaffId,
+      approvingStaffProfileId: approvingStaffId,
+      approvingType: 'PIN',
+      approvingSecret: APPROVING_PIN,
+      reason: 'forged actor probe',
+    });
+
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantCoAuthorization.findUnique({ where: { id: result.coAuthorizationId } })
+      )
+    ).resolves.toMatchObject({ actingStaffProfileId: actingStaffId });
   });
 
   it('rotates once, immediately rejects the old secret, and records redacted co-authorization audit', async () => {
