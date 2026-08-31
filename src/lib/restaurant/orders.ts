@@ -339,6 +339,8 @@ export type OpenOrderInput = {
   entitlementLimits: Readonly<Record<string, number>>;
   branchId: string;
   channel: OrderChannel;
+  /** Trusted customer identity. Required for DELIVERY orders. */
+  customerId?: string | null;
   /** The effective-menu publication the order is taken from (required to add menu
    * items later; C4). */
   publicationId?: string | null;
@@ -397,8 +399,14 @@ export async function enforceMonthlyOrderLimit(
 }
 
 export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<OpenOrderResult> {
-  if (!isOperationalOrderChannel(input.channel)) {
+  if (!isOperationalOrderChannel(input.channel) && input.channel !== 'DELIVERY') {
     throw new OrderCommandError(DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE, 'CHANNEL_UNAVAILABLE');
+  }
+  if (input.channel === 'DELIVERY' && !input.customerId) {
+    throw new OrderCommandError(
+      'Delivery orders require a trusted customer.',
+      'CHANNEL_UNAVAILABLE'
+    );
   }
   const at = input.now ?? new Date();
   return runInTransaction(db, async (tx) => {
@@ -466,6 +474,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
         businessDate,
         status: 'OPEN',
         channel: input.channel,
+        customerId: input.customerId ?? null,
         coverCount: input.coverCount ?? null,
         sectionId: input.sectionId ?? null,
         serverStaffProfileId: input.serverStaffProfileId ?? null,

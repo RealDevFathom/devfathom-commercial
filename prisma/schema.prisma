@@ -4566,6 +4566,7 @@ model RestaurantBill {
   subtotal                     Decimal                 @default(0) @db.Decimal(12, 2)
   taxTotal                     Decimal                 @default(0) @db.Decimal(12, 2)
   serviceChargeTotal           Decimal                 @default(0) @db.Decimal(12, 2)
+  deliveryFeeTotal             Decimal                 @default(0) @db.Decimal(12, 2)
   serviceChargePolicyVersionId String?
   serviceChargeRate            Decimal?                @db.Decimal(9, 6)
   serviceChargeBasis           Decimal                 @default(0) @db.Decimal(12, 2)
@@ -4758,6 +4759,7 @@ model RestaurantRefund {
   amount                    Decimal              @db.Decimal(12, 2)
   tipRefundAmount           Decimal              @default(0) @db.Decimal(12, 2)
   serviceChargeRefundAmount Decimal              @default(0) @db.Decimal(12, 2)
+  deliveryFeeRefundAmount   Decimal              @default(0) @db.Decimal(12, 2)
   taxRefundAmount           Decimal              @default(0) @db.Decimal(12, 2)
   kind                      RestaurantRefundKind
   businessDate              DateTime             @db.Date
@@ -6551,7 +6553,7 @@ model RestaurantDeliveryFulfillment {
   branchId                    String
   customerId                  String
   orderId                     String
-  paymentMode                 RestaurantDeliveryPaymentMode
+  paymentMode                 RestaurantDeliveryPaymentMode?
   status                      RestaurantDeliveryFulfillmentStatus @default(PENDING)
   recipientNameSnapshot       String
   normalizedPhoneSnapshot     String
