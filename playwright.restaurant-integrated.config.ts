@@ -14,6 +14,7 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,
   workers: 1,
+  outputDir: 'test-results/restaurant-integrated',
   use: { ...base.use, baseURL },
   webServer: {
     command: process.env.CI ? `bunx next start --port ${port}` : `bun run dev --port ${port}`,

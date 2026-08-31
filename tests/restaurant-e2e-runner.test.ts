@@ -104,6 +104,7 @@ describe('Restaurant integrated E2E safety', () => {
   });
 
   test('has one desktop project, one worker, and no parallel fan-out', () => {
+    expect(config.outputDir).toBe('test-results/restaurant-integrated');
     expect(config.fullyParallel).toBe(false);
     expect(config.retries).toBe(0);
     expect(config.workers).toBe(1);
