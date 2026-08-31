@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import pg from 'pg';
 
 import { resolveRestaurantE2eDatabaseUrl } from '../scripts/restaurant-e2e-database';
+import { RESTAURANT_E2E_OWNED_ROW_COUNT } from '../scripts/seed-restaurant-e2e';
 
 const optedIn = process.env.RESTAURANT_E2E_RESTORATION_DB === '1';
 if (optedIn && !process.env.RESTAURANT_E2E_DATABASE_URL) {
@@ -22,7 +23,9 @@ describeIfOptedIn('Restaurant E2E seed canonical restoration (real disposable DB
       encoding: 'utf8',
     });
     expect(result.status, result.stderr || result.stdout).toBe(0);
-    expect(result.stdout).toContain('exact owned fixture rows=60; leaked fixture rows=0');
+    expect(result.stdout).toContain(
+      `exact owned fixture rows=${RESTAURANT_E2E_OWNED_ROW_COUNT}; leaked fixture rows=0`
+    );
   };
 
   beforeAll(() => {
