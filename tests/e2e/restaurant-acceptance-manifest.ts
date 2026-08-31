@@ -198,13 +198,21 @@ export const coverageMatrix = [
   {
     id: 'workforce',
     requirement: 'Workforce scheduling and attendance',
-    status: 'Partial',
+    status: 'Needs browser acceptance',
     evidence: [
+      source('workforce-source', 'src/lib/restaurant/workforce.ts'),
       source('shifts-router', 'src/server/routers/restaurant-shifts.ts'),
+      source(
+        'workforce-migration',
+        'prisma/migrations/20260830180000_restaurant_workforce_v1/migration.sql'
+      ),
+      test('workforce-unit', 'src/lib/restaurant/workforce.test.ts'),
+      test('workforce-routing', 'tests/restaurant-workforce-routing.test.ts'),
+      test('workforce-migration-test', 'tests/restaurant-workforce-migration.test.ts'),
       test('shifts-rls', 'tests/restaurant-shifts-rls.test.ts'),
     ],
     boundary:
-      'No swaps, breaks, clock-in/out, late-arrival workflows, or labour export; payroll/tip payout excluded.',
+      'Clock in/out, breaks, swap request/review, late attendance, append-only corrections, and CSV export are implemented; browser/release acceptance remains, while payroll and tip payout are deferred.',
   },
   {
     id: 'sop-jobs-notifications',
