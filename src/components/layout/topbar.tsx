@@ -27,6 +27,7 @@ import {
   Repeat2,
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
+import { useEntitlements } from '@/components/entitlements-provider';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
@@ -438,8 +439,21 @@ export function Topbar({
   );
 }
 
-function NotificationBell() {
-  const [open, setOpen] = useState(false);
+type BellNotification = {
+  id: string;
+  title: string;
+  message: string | null;
+  createdAt: Date | string;
+  isRead: boolean;
+};
+
+export function NotificationBell() {
+  const { vertical } = useEntitlements();
+
+  return vertical === 'RESTAURANT' ? <RestaurantNotificationBell /> : <AgencyNotificationBell />;
+}
+
+function AgencyNotificationBell() {
   const utils = trpc.useUtils();
   const { data: notifications } = trpc.team.getNotifications.useQuery();
   const markRead = trpc.team.markNotificationRead.useMutation({
@@ -461,7 +475,55 @@ function NotificationBell() {
     onSuccess: () => utils.team.getNotifications.invalidate(),
   });
 
-  const unreadCount = notifications?.filter((n) => !n.isRead).length ?? 0;
+  return (
+    <NotificationBellView
+      notifications={notifications ?? []}
+      onMarkRead={(id) => markRead.mutate({ id })}
+      onMarkAllRead={() => markAllRead.mutate()}
+    />
+  );
+}
+
+const restaurantNotificationInput = { limit: 50, unreadOnly: false } as const;
+
+function RestaurantNotificationBell() {
+  const utils = trpc.useUtils();
+  const { data } = trpc.restaurantNotifications.list.useQuery(restaurantNotificationInput);
+  const markRead = trpc.restaurantNotifications.markRead.useMutation({
+    onSuccess: () => utils.restaurantNotifications.list.invalidate(restaurantNotificationInput),
+  });
+  const markAllRead = trpc.restaurantNotifications.markAllRead.useMutation({
+    onSuccess: () => utils.restaurantNotifications.list.invalidate(restaurantNotificationInput),
+  });
+  const notifications =
+    data?.items.map((notification) => ({
+      id: notification.id,
+      title: notification.title,
+      message: notification.body,
+      createdAt: notification.createdAt,
+      isRead: notification.isRead,
+    })) ?? [];
+
+  return (
+    <NotificationBellView
+      notifications={notifications}
+      onMarkRead={(id) => markRead.mutate({ id })}
+      onMarkAllRead={() => markAllRead.mutate({})}
+    />
+  );
+}
+
+function NotificationBellView({
+  notifications,
+  onMarkRead,
+  onMarkAllRead,
+}: {
+  notifications: BellNotification[];
+  onMarkRead: (id: string) => void;
+  onMarkAllRead: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const unreadCount = notifications.filter((notification) => !notification.isRead).length;
 
   return (
     <div className="relative">
@@ -487,7 +549,7 @@ function NotificationBell() {
               <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
               {unreadCount > 0 && (
                 <button
-                  onClick={() => markAllRead.mutate()}
+                  onClick={onMarkAllRead}
                   className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
                 >
                   <CheckCheck className="h-3 w-3" />
@@ -506,7 +568,7 @@ function NotificationBell() {
                   <button
                     key={n.id}
                     onClick={() => {
-                      if (!n.isRead) markRead.mutate({ id: n.id });
+                      if (!n.isRead) onMarkRead(n.id);
                     }}
                     className={cn(
                       'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50 border-b border-border/40 last:border-0',
