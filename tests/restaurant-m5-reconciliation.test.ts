@@ -203,6 +203,14 @@ beforeAll(async () => {
         startsAt: new Date(0),
       },
     });
+    await tx.organizationLimit.create({
+      data: {
+        organizationId: orgId,
+        key: 'pos.concurrentRegisters.max',
+        value: 2,
+        source: 'WHA-1044_TEST',
+      },
+    });
   });
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
