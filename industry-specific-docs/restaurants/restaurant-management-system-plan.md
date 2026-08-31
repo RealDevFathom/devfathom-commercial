@@ -1,15 +1,15 @@
 # DevFathom Restaurant Management System
 
-| Field                         | Value                                                                                                                                                   |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Document version              | `1.5`                                                                                                                                                   |
-| Document status               | `RECONCILED REPOSITORY-EVIDENCE BASELINE — PRODUCTION READINESS NOT CLAIMED`                                                                            |
-| Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                                          |
-| Product                       | DevFathom Commercial                                                                                                                                    |
-| Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                                         |
-| Last updated                  | 2026-08-31                                                                                                                                              |
-| Current implementation status | Restaurant source is repository-implemented in whole or in part by area; this does not establish deployment, physical hardware, or production readiness |
-| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against commit `6bc322a3ce67ddf6d6e5a488ac21754df03b0062`                       |
+| Field                         | Value                                                                                                                                                                                               |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Document version              | `1.5`                                                                                                                                                                                               |
+| Document status               | `RECONCILED REPOSITORY-EVIDENCE BASELINE — PRODUCTION READINESS NOT CLAIMED`                                                                                                                        |
+| Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                                                                                      |
+| Product                       | DevFathom Commercial                                                                                                                                                                                |
+| Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                                                                                     |
+| Last updated                  | 2026-08-31                                                                                                                                                                                          |
+| Current implementation status | Restaurant source is repository-implemented in whole or in part by area; this does not establish deployment, physical hardware, or production readiness                                             |
+| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against Delivery source commit `3a49b696d2bb6000da6d084247274012f4fad90c`; exact-candidate browser/release evidence pending |
 
 ## 1. Purpose
 
@@ -1308,7 +1308,7 @@ The following existing files provide patterns to reuse. They do not imply that r
 
 ## 20. Status summary
 
-This table is reconciled against commit `6bc322a3ce67ddf6d6e5a488ac21754df03b0062`. `SOURCE
+This table is reconciled against Delivery source commit `3a49b696d2bb6000da6d084247274012f4fad90c`; exact-candidate browser and release evidence remains pending. `SOURCE
 IMPLEMENTED` means committed source plus focused evidence; it does not assert deployment, browser,
 hardware, external-service acceptance, or production readiness. Use the
 [restaurant administrator guide](../../docs/product/restaurant-administrator-guide.md) for safe

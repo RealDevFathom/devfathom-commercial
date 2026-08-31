@@ -1,8 +1,15 @@
-import { expect, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from '@playwright/test';
 import pg from 'pg';
 
 import {
-  establishPosFixture,
+  establishDeliveryPosFixture,
   e2eIdempotencyKey,
   installSeededTerminalCookie,
   restaurantE2eCredentials as fixture,
@@ -10,6 +17,7 @@ import {
   type RestaurantTerminalFixture,
 } from './restaurant-fixture';
 import { signInAs } from './fixtures/restaurant-actor-accessibility';
+import { runRestaurantWorkerTick } from '@/lib/restaurant/job-runner';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -33,11 +41,11 @@ async function unlockAs(
   staff: { staffProfileId: string; pin: string }
 ) {
   const established = await request.post('/api/restaurant/terminal/establish', {
-    headers: { authorization: `Bearer ${fixture.pos.secret}` },
+    headers: { authorization: `Bearer ${fixture.delivery.pos.secret}` },
   });
   const { sessionToken } = (await established.json()) as { sessionToken: string };
   const headers = {
-    authorization: `Bearer ${fixture.pos.secret}`,
+    authorization: `Bearer ${fixture.delivery.pos.secret}`,
     'x-terminal-session': sessionToken,
   };
   const unlocked = await request.post('/api/restaurant/terminal/unlock', {
@@ -46,8 +54,8 @@ async function unlockAs(
   });
   expect(unlocked.status()).toBe(200);
   return {
-    deviceId: fixture.pos.deviceId,
-    deviceSecret: fixture.pos.secret,
+    deviceId: fixture.delivery.pos.deviceId,
+    deviceSecret: fixture.delivery.pos.secret,
     sessionToken,
     headers,
   };
@@ -69,6 +77,9 @@ async function tenantQuery<T extends pg.QueryResultRow>(
     const result = await client.query<T>(text, values);
     await client.query('ROLLBACK');
     return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
   } finally {
     client.release();
   }
@@ -96,7 +107,7 @@ async function tenantMutation(pool: pg.Pool, text: string, values: unknown[] = [
 
 async function unlockPos(page: Page) {
   const origin = terminalBrowserBaseUrl();
-  await installSeededTerminalCookie(page.context(), fixture.pos, origin);
+  await installSeededTerminalCookie(page.context(), fixture.delivery.pos, origin);
   await page.goto(new URL('/pos', origin).href);
   await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
@@ -122,6 +133,7 @@ async function openVisibleDelivery(page: Page) {
   const opened = (await (await openedResponse).json()) as {
     orderId: string;
     orderNumber: number;
+    businessDate: string;
   };
   await expect(
     page.getByText(`Delivery order ${opened.orderNumber} opened and fulfillment attached.`)
@@ -131,10 +143,11 @@ async function openVisibleDelivery(page: Page) {
   return opened;
 }
 
-async function readyVisible(browser: Browser, orderNumber: number) {
+async function readyVisible(browser: Browser, contexts: BrowserContext[], orderNumber: number) {
   const origin = terminalBrowserBaseUrl();
   const context = await browser.newContext({ baseURL: origin });
-  await installSeededTerminalCookie(context, fixture.kds, origin);
+  contexts.push(context);
+  await installSeededTerminalCookie(context, fixture.delivery.kds, origin);
   const page = await context.newPage();
   await page.goto(new URL('/kds', origin).href);
   await page.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
@@ -169,11 +182,18 @@ async function handoffVisible(
   await kds.context.close();
 }
 
-async function settleVisible(page: Page, orderNumber: number, tender: 'CASH' | 'CARD') {
+async function settleVisible(
+  page: Page,
+  orderNumber: number,
+  tender: 'CASH' | 'CARD',
+  amount: string
+) {
   await unlockPos(page);
   await page.getByRole('button', { name: new RegExp(`^#${orderNumber} ·`) }).click();
-  await page.getByRole('button', { name: 'Close order' }).click();
+  await page.getByRole('button', { name: 'Collect payment' }).click();
   await expect(page.getByRole('dialog', { name: 'Collect payment' })).toBeVisible();
+  await page.getByLabel('Amount').fill(amount);
+  if (tender === 'CASH') await page.getByLabel('Cash received').fill(amount);
   if (tender === 'CARD') await page.getByLabel('Tender type').selectOption('CARD');
   await page.getByRole('button', { name: 'Apply tender' }).click();
   await expect(page.getByText('Bill settled')).toBeVisible();
@@ -186,184 +206,265 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
 }) => {
   test.slow();
   const key = e2eIdempotencyKey('delivery-auth', Date.now());
-  const denied = await unlockAs(request, fixture.deniedOperator);
-  const rejected = await request.post('/api/restaurant/orders/open', {
-    headers: { ...denied.headers, 'Idempotency-Key': key },
-    data: { channel: 'DELIVERY', customerId: fixture.customer.id },
-  });
-  expect(rejected.status()).toBe(403);
-
   const databaseUrl = process.env.DATABASE_URL;
   expect(databaseUrl, 'integrated lane requires DATABASE_URL').toBeTruthy();
   const pool = new pg.Pool({ connectionString: databaseUrl });
-  const before = await tenantQuery<{ orders: string; keys: string; events: string }>(
-    pool,
-    `SELECT
+  const transientContexts: BrowserContext[] = [];
+  try {
+    await tenantMutation(
+      pool,
+      `UPDATE restaurant_delivery_zones SET "fixedFee" = 3.50 WHERE id = $1`,
+      [fixture.delivery.zoneId]
+    );
+    const before = await tenantQuery<{ orders: string; keys: string; events: string }>(
+      pool,
+      `SELECT
        (SELECT count(*)::text FROM restaurant_orders WHERE "deviceId" = $1 AND channel = 'DELIVERY') orders,
        (SELECT count(*)::text FROM restaurant_order_idempotency_keys WHERE "deviceId" = $1 AND key = $2) keys,
-       (SELECT count(*)::text FROM restaurant_order_events WHERE metadata->>'idempotencyKey' = $2) events`,
-    [fixture.pos.deviceId, key]
-  );
-  expect(before.rows[0]).toEqual({ orders: '0', keys: '0', events: '0' });
+       (SELECT count(*)::text FROM restaurant_order_events WHERE "actorDeviceId" = $1) events`,
+      [fixture.delivery.pos.deviceId, key]
+    );
+    expect(before.rows[0]!.keys).toBe('0');
 
-  const pos = await establishPosFixture(request);
-  const reused = await post(
-    request,
-    pos,
-    '/api/restaurant/orders/open',
-    { channel: 'DELIVERY', customerId: fixture.customer.id },
-    key
-  );
-  expect(reused.status()).toBe(201);
-  const reusedOrder = (await reused.json()) as { orderId: string; orderNumber: number };
-  await post(
-    request,
-    pos,
-    '/api/restaurant/orders/cancel',
-    { orderId: reusedOrder.orderId, reason: 'Authorization same-key reuse proof complete' },
-    e2eIdempotencyKey('delivery-auth-probe-cancel', reusedOrder.orderNumber)
-  );
+    const denied = await unlockAs(request, fixture.deniedOperator);
+    const rejected = await request.post('/api/restaurant/orders/open', {
+      headers: { ...denied.headers, 'Idempotency-Key': key },
+      data: { channel: 'DELIVERY', customerId: fixture.customer.id },
+    });
+    expect(rejected.status()).toBe(403);
 
-  await unlockPos(page);
-  const cod = await openVisibleDelivery(page);
-  const fulfillmentResult = await tenantQuery<{ id: string; fee: string }>(
-    pool,
-    `SELECT id, "deliveryFeeSnapshot"::text fee
+    const afterDenied = await tenantQuery<{ orders: string; keys: string; events: string }>(
+      pool,
+      `SELECT
+       (SELECT count(*)::text FROM restaurant_orders WHERE "deviceId" = $1 AND channel = 'DELIVERY') orders,
+       (SELECT count(*)::text FROM restaurant_order_idempotency_keys WHERE "deviceId" = $1 AND key = $2) keys,
+       (SELECT count(*)::text FROM restaurant_order_events WHERE "actorDeviceId" = $1) events`,
+      [fixture.delivery.pos.deviceId, key]
+    );
+    expect(afterDenied.rows[0]).toEqual(before.rows[0]);
+
+    const pos = await establishDeliveryPosFixture(request);
+    const reused = await post(
+      request,
+      pos,
+      '/api/restaurant/orders/open',
+      { channel: 'DELIVERY', customerId: fixture.customer.id },
+      key
+    );
+    expect(reused.status()).toBe(201);
+    const reusedOrder = (await reused.json()) as { orderId: string; orderNumber: number };
+    const afterReuse = await tenantQuery<{ orders: string; keys: string; events: string }>(
+      pool,
+      `SELECT
+       (SELECT count(*)::text FROM restaurant_orders WHERE "deviceId" = $1 AND channel = 'DELIVERY') orders,
+       (SELECT count(*)::text FROM restaurant_order_idempotency_keys WHERE "deviceId" = $1 AND key = $2) keys,
+       (SELECT count(*)::text FROM restaurant_order_events WHERE "actorDeviceId" = $1) events`,
+      [fixture.delivery.pos.deviceId, key]
+    );
+    expect(Number(afterReuse.rows[0]!.orders)).toBe(Number(before.rows[0]!.orders) + 1);
+    expect(afterReuse.rows[0]!.keys).toBe('1');
+    expect(Number(afterReuse.rows[0]!.events)).toBe(Number(before.rows[0]!.events) + 1);
+    await post(
+      request,
+      pos,
+      '/api/restaurant/orders/cancel',
+      { orderId: reusedOrder.orderId, reason: 'Authorization same-key reuse proof complete' },
+      e2eIdempotencyKey('delivery-auth-probe-cancel', reusedOrder.orderNumber)
+    );
+
+    const drawer = await post(
+      request,
+      pos,
+      '/api/restaurant/cash/drawer/open',
+      { openingFloat: '100.00' },
+      e2eIdempotencyKey('delivery-drawer-open', key)
+    );
+    const drawerState = (await drawer.json()) as {
+      drawerSessionId: string;
+      businessDate: string;
+    };
+
+    await unlockPos(page);
+    const cod = await openVisibleDelivery(page);
+    expect(cod.businessDate).toBe(drawerState.businessDate);
+    const fulfillmentResult = await tenantQuery<{ id: string; fee: string }>(
+      pool,
+      `SELECT id, "deliveryFeeSnapshot"::text fee
        FROM restaurant_delivery_fulfillments WHERE "orderId" = $1`,
-    [cod.orderId]
-  );
-  const fulfillment = fulfillmentResult.rows[0]!;
-  expect(fulfillment.fee).toBe(fixture.delivery.fee);
-  await tenantMutation(
-    pool,
-    `UPDATE restaurant_delivery_zones SET "fixedFee" = 9.75 WHERE id = $1`,
-    [fixture.delivery.zoneId]
-  );
-  const frozen = await tenantQuery<{ fee: string }>(
-    pool,
-    `SELECT "deliveryFeeSnapshot"::text fee
+      [cod.orderId]
+    );
+    const fulfillment = fulfillmentResult.rows[0]!;
+    expect(fulfillment.fee).toBe(fixture.delivery.fee);
+    await tenantMutation(
+      pool,
+      `UPDATE restaurant_delivery_zones SET "fixedFee" = 9.75 WHERE id = $1`,
+      [fixture.delivery.zoneId]
+    );
+    const frozen = await tenantQuery<{ fee: string }>(
+      pool,
+      `SELECT "deliveryFeeSnapshot"::text fee
        FROM restaurant_delivery_fulfillments WHERE id = $1`,
-    [fulfillment.id]
-  );
-  expect(frozen.rows[0]!.fee).toBe(fixture.delivery.fee);
+      [fulfillment.id]
+    );
+    expect(frozen.rows[0]!.fee).toBe(fixture.delivery.fee);
 
-  const bill = await post(
-    request,
-    pos,
-    '/api/restaurant/checkout/bill',
-    { orderId: cod.orderId, split: { kind: 'NONE' } },
-    e2eIdempotencyKey('delivery-bill', cod.orderNumber)
-  );
-  const billId = ((await bill.json()) as { billIds: string[] }).billIds[0]!;
-  const summaryResponse = await request.get(
-    `/api/restaurant/checkout/summary?orderId=${cod.orderId}`,
-    { headers: pos.headers }
-  );
-  const summary = await summaryResponse.json();
-  expect(summary.deliveryFeeTotal).toBe(fixture.delivery.fee);
-  expect(Number(summary.accountedTotal)).toBe(
-    Number(summary.derivedOrderTotal) + Number(fixture.delivery.fee)
-  );
+    const bill = await post(
+      request,
+      pos,
+      '/api/restaurant/checkout/bill',
+      { orderId: cod.orderId, split: { kind: 'NONE' } },
+      e2eIdempotencyKey('delivery-bill', cod.orderNumber)
+    );
+    const billId = ((await bill.json()) as { billIds: string[] }).billIds[0]!;
+    const summaryResponse = await request.get(
+      `/api/restaurant/checkout/summary?orderId=${cod.orderId}`,
+      { headers: pos.headers }
+    );
+    const summary = await summaryResponse.json();
+    expect(summary.deliveryFeeTotal).toBe(fixture.delivery.fee);
+    expect(Number(summary.accountedTotal)).toBe(
+      Number(summary.derivedOrderTotal) + Number(fixture.delivery.fee)
+    );
 
-  const codKds = await readyVisible(browser, cod.orderNumber);
-  await handoffVisible(codKds, cod.orderNumber, 'COD');
-  await settleVisible(page, cod.orderNumber, 'CASH');
-  const receiptResponse = await request.get(`/api/restaurant/checkout/receipt?billId=${billId}`, {
-    headers: pos.headers,
-  });
-  const receipt = await receiptResponse.json();
-  expect(receipt.totals.deliveryFeeTotal).toBe(fixture.delivery.fee);
-  expect(JSON.stringify(receipt)).not.toContain('+923001234567');
-  expect(JSON.stringify(receipt)).not.toContain('12 Delivery Street');
+    const codKds = await readyVisible(browser, transientContexts, cod.orderNumber);
+    await handoffVisible(codKds, cod.orderNumber, 'COD');
+    await settleVisible(page, cod.orderNumber, 'CASH', summary.accountedTotal);
+    const receiptResponse = await request.get(`/api/restaurant/checkout/receipt?billId=${billId}`, {
+      headers: pos.headers,
+    });
+    const receipt = await receiptResponse.json();
+    expect(receipt.totals.deliveryFeeTotal).toBe(fixture.delivery.fee);
+    expect(JSON.stringify(receipt)).not.toContain('+923001234567');
+    expect(JSON.stringify(receipt)).not.toContain('12 Delivery Street');
 
-  const snapshot = await tenantQuery<{ fee: string; phone: string; address: string; mode: string }>(
-    pool,
-    `SELECT "deliveryFeeSnapshot"::text fee, "normalizedPhoneSnapshot" phone,
+    const snapshot = await tenantQuery<{
+      fee: string;
+      phone: string;
+      address: string;
+      mode: string;
+    }>(
+      pool,
+      `SELECT "deliveryFeeSnapshot"::text fee, "normalizedPhoneSnapshot" phone,
             "addressLine1Snapshot" address, "paymentMode"::text mode
        FROM restaurant_delivery_fulfillments WHERE id = $1`,
-    [fulfillment.id]
-  );
-  expect(snapshot.rows[0]).toMatchObject({ fee: '3.50', mode: 'COD' });
+      [fulfillment.id]
+    );
+    expect(snapshot.rows[0]).toMatchObject({ fee: '3.50', mode: 'COD' });
 
-  await unlockPos(page);
-  const prepaid = await openVisibleDelivery(page);
-  const prepaidFulfillment = await tenantQuery<{ fee: string }>(
-    pool,
-    `SELECT "deliveryFeeSnapshot"::text fee
+    await unlockPos(page);
+    const prepaid = await openVisibleDelivery(page);
+    const prepaidFulfillment = await tenantQuery<{ fee: string }>(
+      pool,
+      `SELECT "deliveryFeeSnapshot"::text fee
        FROM restaurant_delivery_fulfillments WHERE "orderId" = $1`,
-    [prepaid.orderId]
-  );
-  expect(prepaidFulfillment.rows[0]!.fee).toBe('9.75');
-  const prepaidBill = await post(
-    request,
-    pos,
-    '/api/restaurant/checkout/bill',
-    { orderId: prepaid.orderId, split: { kind: 'NONE' } },
-    e2eIdempotencyKey('delivery-prepaid-bill', prepaid.orderNumber)
-  );
-  expect(((await prepaidBill.json()) as { billIds: string[] }).billIds).toHaveLength(1);
-  const prepaidSummaryResponse = await request.get(
-    `/api/restaurant/checkout/summary?orderId=${prepaid.orderId}`,
-    { headers: pos.headers }
-  );
-  const prepaidSummary = await prepaidSummaryResponse.json();
-  expect(prepaidSummary.deliveryFeeTotal).toBe('9.75');
-  const prepaidKds = await readyVisible(browser, prepaid.orderNumber);
-  await settleVisible(page, prepaid.orderNumber, 'CARD');
-  await handoffVisible(prepaidKds, prepaid.orderNumber, 'PREPAID');
+      [prepaid.orderId]
+    );
+    expect(prepaidFulfillment.rows[0]!.fee).toBe('9.75');
+    const prepaidBill = await post(
+      request,
+      pos,
+      '/api/restaurant/checkout/bill',
+      { orderId: prepaid.orderId, split: { kind: 'NONE' } },
+      e2eIdempotencyKey('delivery-prepaid-bill', prepaid.orderNumber)
+    );
+    expect(((await prepaidBill.json()) as { billIds: string[] }).billIds).toHaveLength(1);
+    const prepaidSummaryResponse = await request.get(
+      `/api/restaurant/checkout/summary?orderId=${prepaid.orderId}`,
+      { headers: pos.headers }
+    );
+    const prepaidSummary = await prepaidSummaryResponse.json();
+    expect(prepaidSummary.deliveryFeeTotal).toBe('9.75');
+    const prepaidKds = await readyVisible(browser, transientContexts, prepaid.orderNumber);
+    const prepaidRefresh = prepaidKds.page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/kds/delivery/queue') &&
+        response.request().method() === 'GET',
+      { timeout: 15_000 }
+    );
+    await settleVisible(page, prepaid.orderNumber, 'CARD', prepaidSummary.accountedTotal);
+    await prepaidRefresh;
+    await handoffVisible(prepaidKds, prepaid.orderNumber, 'PREPAID');
 
-  const businessDate = new Date().toISOString().slice(0, 10);
-  const preview = await request.get(
-    `/api/restaurant/cash/day/preview?businessDate=${businessDate}`,
-    { headers: pos.headers }
-  );
-  expect(preview.status()).toBe(200);
-  const previewBody = await preview.json();
-  expect(previewBody.totals).toMatchObject({
-    deliveryFeeSales: '13.25',
-    deliveryFeeRefunds: '0.00',
-  });
-  await post(
-    request,
-    pos,
-    '/api/restaurant/cash/drawer/close',
-    {
-      drawerSessionId: 'drawer_restaurant_e2e',
-      countedCash: previewBody.totals.cashExpected,
-    },
-    e2eIdempotencyKey('delivery-drawer-close', cod.orderNumber)
-  );
-  const closed = await post(
-    request,
-    pos,
-    '/api/restaurant/cash/day/close',
-    { businessDate },
-    e2eIdempotencyKey('delivery-day-close', cod.orderNumber)
-  );
-  expect((await closed.json()).totals).toMatchObject({
-    deliveryFeeSales: '13.25',
-    deliveryFeeRefunds: '0.00',
-  });
+    const businessDate = cod.businessDate;
+    const preview = await request.get(
+      `/api/restaurant/cash/day/preview?businessDate=${businessDate}`,
+      { headers: pos.headers }
+    );
+    expect(preview.status()).toBe(200);
+    const previewBody = await preview.json();
+    expect(previewBody.totals).toMatchObject({
+      deliveryFeeSales: '13.25',
+      deliveryFeeRefunds: '0.00',
+    });
+    await post(
+      request,
+      pos,
+      '/api/restaurant/cash/drawer/close',
+      {
+        drawerSessionId: drawerState.drawerSessionId,
+        countedCash: previewBody.totals.cashExpected,
+      },
+      e2eIdempotencyKey('delivery-drawer-close', cod.orderNumber)
+    );
+    const closed = await post(
+      request,
+      pos,
+      '/api/restaurant/cash/day/close',
+      { businessDate },
+      e2eIdempotencyKey('delivery-day-close', cod.orderNumber)
+    );
+    expect((await closed.json()).totals).toMatchObject({
+      deliveryFeeSales: '13.25',
+      deliveryFeeRefunds: '0.00',
+    });
+    const worker = await runRestaurantWorkerTick({
+      workerId: `restaurant-delivery-e2e-${key}`,
+      maxJobsPerOrg: 25,
+      maxOutboxPerOrg: 25,
+    });
+    expect(worker.jobs.succeeded).toBeGreaterThan(0);
+    const rollup = await tenantQuery<{ sales: string; refunds: string }>(
+      pool,
+      `SELECT "deliveryFeeSales"::text sales, "deliveryFeeRefunds"::text refunds
+       FROM restaurant_insight_daily_rollups
+      WHERE "branchId" = $1 AND "businessDate" = $2::date`,
+      [fixture.delivery.branchId, businessDate]
+    );
+    expect(rollup.rows[0]).toEqual({ sales: '13.25', refunds: '0.00' });
 
-  await page.goto(new URL('/pos', terminalBrowserBaseUrl()).href);
-  await expect(page.locator('body')).not.toContainText(snapshot.rows[0]!.phone);
-  await expect(page.locator('body')).not.toContainText(snapshot.rows[0]!.address);
+    await page.goto(new URL('/pos', terminalBrowserBaseUrl()).href);
+    await expect(page.locator('body')).not.toContainText(snapshot.rows[0]!.phone);
+    await expect(page.locator('body')).not.toContainText(snapshot.rows[0]!.address);
 
-  const admin = await browser.newPage();
-  const adminOrigin = await signInAs(admin, 'restaurantAdmin');
-  await admin.goto(
-    new URL(`/restaurant/reports?from=${businessDate}&to=${businessDate}`, adminOrigin).href
-  );
-  await expect(admin.getByText('Delivery fee sales').locator('..')).toContainText('13.25');
-  await expect(admin.getByText('Delivery fee refunds').locator('..')).toContainText('0.00');
-  await admin.goto(
-    new URL(`/restaurant/insights?from=${businessDate}&to=${businessDate}`, adminOrigin).href
-  );
-  const financialRow = admin.getByRole('row').filter({ hasText: businessDate });
-  await expect(financialRow).toContainText('13.25');
-  await expect(financialRow).toContainText('0.00');
-  await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.phone);
-  await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.address);
-  await admin.close();
-  await pool.end();
+    const admin = await browser.newPage();
+    const adminOrigin = await signInAs(admin, 'restaurantAdmin');
+    await admin.goto(
+      new URL(
+        `/restaurant/reports?branch=${fixture.delivery.branchId}&from=${businessDate}&to=${businessDate}`,
+        adminOrigin
+      ).href
+    );
+    await expect(admin.getByText('Delivery fee sales').locator('..')).toContainText('13.25');
+    await expect(admin.getByText('Delivery fee refunds').locator('..')).toContainText(
+      /\b0(?:\.00)?\b/
+    );
+    await admin.goto(new URL('/restaurant/insights', adminOrigin).href);
+    await admin.getByLabel('Branch').selectOption(fixture.delivery.branchId);
+    await admin.getByLabel('From date').fill(businessDate);
+    await admin.getByLabel('To date').fill(businessDate);
+    const financialRow = admin.getByRole('row').filter({ hasText: businessDate });
+    await expect(financialRow).toContainText('13.25');
+    await expect(financialRow).toContainText(/\b0(?:\.00)?\b/);
+    await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.phone);
+    await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.address);
+    await admin.close();
+  } finally {
+    await Promise.allSettled(transientContexts.map((context) => context.close()));
+    await tenantMutation(
+      pool,
+      `UPDATE restaurant_delivery_zones SET "fixedFee" = 3.50 WHERE id = $1`,
+      [fixture.delivery.zoneId]
+    ).catch(() => undefined);
+    await pool.end();
+  }
 });

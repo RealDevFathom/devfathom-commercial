@@ -1,5 +1,8 @@
 # Restaurant vertical — Build Assumptions (`restaurant/v1`)
 
+Delivery source evidence is pinned to `3a49b696d2bb6000da6d084247274012f4fad90c`;
+exact-candidate browser and release evidence remains pending.
+
 **Direct Delivery v1 — connected own-delivery handoff (WHA-1048)** · Delivery requires
 `orders:take` plus `customers:read`, a customer, saved address, active same-branch zone, and a
 DELIVERY publication. Address, phone, zone, fee, tax, and promise facts are frozen on fulfillment;

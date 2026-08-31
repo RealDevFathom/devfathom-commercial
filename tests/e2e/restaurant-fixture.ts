@@ -12,9 +12,19 @@ export const restaurantE2eCredentials = {
   table: { id: 'table_restaurant_e2e_a1_12', name: 'Table 12' },
   customer: { id: 'customer_restaurant_e2e', name: 'E2E Guest' },
   delivery: {
+    branchId: 'branch_restaurant_e2e_a2',
+    branchName: 'DHA Café',
+    pos: {
+      deviceId: 'device_restaurant_e2e_delivery_pos',
+      secret: 'rdk_restaurant_e2e_delivery_pos_local_ci_only',
+    },
+    kds: {
+      deviceId: 'device_restaurant_e2e_delivery_kds',
+      secret: 'rdk_restaurant_e2e_delivery_kds_local_ci_only',
+    },
     addressId: 'customer_address_restaurant_e2e',
-    zoneId: 'delivery_zone_restaurant_e2e',
-    zoneName: 'Gulberg Central',
+    zoneId: 'delivery_zone_restaurant_e2e_isolated',
+    zoneName: 'DHA Delivery Lane',
     fee: '3.50',
   },
   modifier: { optionId: 'modifier_option_restaurant_e2e_spicy', name: 'Spicy', delta: '1.50' },
@@ -41,7 +51,7 @@ export function terminalBrowserBaseUrl(
 
 export async function installSeededTerminalCookie(
   context: BrowserContext,
-  device: typeof restaurantE2eCredentials.pos | typeof restaurantE2eCredentials.kds,
+  device: { deviceId: string; secret: string },
   baseUrl = process.env.PLAYWRIGHT_BASE_URL ??
     `http://127.0.0.1:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
 ) {
@@ -82,7 +92,7 @@ export type RestaurantTerminalFixture = {
 
 async function establishTerminal(
   request: APIRequestContext,
-  device: typeof restaurantE2eCredentials.pos | typeof restaurantE2eCredentials.kds
+  device: { deviceId: string; secret: string }
 ): Promise<RestaurantTerminalFixture> {
   const authorization = `Bearer ${device.secret}`;
   const established = await request.post('/api/restaurant/terminal/establish', {
@@ -116,4 +126,12 @@ export function establishPosFixture(request: APIRequestContext) {
 
 export function establishKdsFixture(request: APIRequestContext) {
   return establishTerminal(request, restaurantE2eCredentials.kds);
+}
+
+export function establishDeliveryPosFixture(request: APIRequestContext) {
+  return establishTerminal(request, restaurantE2eCredentials.delivery.pos);
+}
+
+export function establishDeliveryKdsFixture(request: APIRequestContext) {
+  return establishTerminal(request, restaurantE2eCredentials.delivery.kds);
 }

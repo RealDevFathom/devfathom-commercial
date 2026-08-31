@@ -14,6 +14,7 @@ import {
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
+import { businessDateToUtcDate, resolveBusinessDate } from '../src/lib/restaurant/business-date.js';
 import { resolveRestaurantE2eDatabaseUrl } from './restaurant-e2e-database.js';
 
 export const RESTAURANT_E2E = {
@@ -22,6 +23,8 @@ export const RESTAURANT_E2E = {
   branchA2Id: 'branch_restaurant_e2e_a2',
   posDeviceId: 'device_restaurant_e2e_pos',
   kdsDeviceId: 'device_restaurant_e2e_kds',
+  deliveryPosDeviceId: 'device_restaurant_e2e_delivery_pos',
+  deliveryKdsDeviceId: 'device_restaurant_e2e_delivery_kds',
   operatorId: 'staff_restaurant_e2e_operator',
   deniedOperatorId: 'staff_restaurant_e2e_delivery_denied',
   managerId: 'staff_restaurant_e2e_manager',
@@ -30,6 +33,8 @@ export const RESTAURANT_E2E = {
   managerPin: '848484',
   posDeviceSecret: 'rdk_restaurant_e2e_pos_local_ci_only',
   kdsDeviceSecret: 'rdk_restaurant_e2e_kds_local_ci_only',
+  deliveryPosDeviceSecret: 'rdk_restaurant_e2e_delivery_pos_local_ci_only',
+  deliveryKdsDeviceSecret: 'rdk_restaurant_e2e_delivery_kds_local_ci_only',
 } as const;
 
 const IDS = {
@@ -47,6 +52,7 @@ const IDS = {
   drawer: 'drawer_restaurant_e2e',
   grillStation: 'station_restaurant_e2e_grill',
   expoStation: 'station_restaurant_e2e_expo',
+  deliveryStation: 'station_restaurant_e2e_delivery',
   brand: 'brand_restaurant_e2e',
   category: 'category_restaurant_e2e_mains',
   product: 'product_restaurant_e2e_burger',
@@ -57,11 +63,15 @@ const IDS = {
   menuSection: 'menu_section_restaurant_e2e_mains',
   menuItem: 'menu_item_restaurant_e2e_burger',
   publication: 'menu_publication_restaurant_e2e',
+  deliveryPublication: 'menu_publication_restaurant_e2e_delivery',
   availability: 'availability_restaurant_e2e_always',
+  deliveryAvailability: 'availability_restaurant_e2e_delivery_always',
   routingRule: 'routing_restaurant_e2e_burger',
+  deliveryRoutingRule: 'routing_restaurant_e2e_delivery_burger',
   customer: 'customer_restaurant_e2e',
   customerAddress: 'customer_address_restaurant_e2e',
   deliveryZone: 'delivery_zone_restaurant_e2e',
+  isolatedDeliveryZone: 'delivery_zone_restaurant_e2e_isolated',
   loyaltyProgram: 'loyalty_program_restaurant_e2e_v1',
   loyaltyAccount: 'loyalty_account_restaurant_e2e',
   loyaltyEntry: 'loyalty_entry_restaurant_e2e_opening',
@@ -110,6 +120,10 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       `assignment_${IDS.operatorUser}`,
       `assignment_${IDS.deniedOperatorUser}`,
       `assignment_${IDS.managerUser}`,
+      `assignment_delivery_${IDS.alexUser}`,
+      `assignment_delivery_${IDS.operatorUser}`,
+      `assignment_delivery_${IDS.deniedOperatorUser}`,
+      `assignment_delivery_${IDS.managerUser}`,
     ],
   ],
   [
@@ -133,8 +147,16 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['restaurant_branches', [RESTAURANT_E2E.branchId, RESTAURANT_E2E.branchA2Id]],
   ['restaurant_floors', [IDS.floor]],
   ['restaurant_tables', [IDS.table]],
-  ['restaurant_kitchen_stations', [IDS.grillStation, IDS.expoStation]],
-  ['restaurant_registered_devices', [RESTAURANT_E2E.posDeviceId, RESTAURANT_E2E.kdsDeviceId]],
+  ['restaurant_kitchen_stations', [IDS.grillStation, IDS.expoStation, IDS.deliveryStation]],
+  [
+    'restaurant_registered_devices',
+    [
+      RESTAURANT_E2E.posDeviceId,
+      RESTAURANT_E2E.kdsDeviceId,
+      RESTAURANT_E2E.deliveryPosDeviceId,
+      RESTAURANT_E2E.deliveryKdsDeviceId,
+    ],
+  ],
   ['restaurant_drawer_sessions', [IDS.drawer]],
   ['restaurant_brands', [IDS.brand]],
   ['restaurant_categories', [IDS.category]],
@@ -153,12 +175,12 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['restaurant_menus', [IDS.menu]],
   ['restaurant_menu_sections', [IDS.menuSection]],
   ['restaurant_menu_items', [IDS.menuItem]],
-  ['restaurant_branch_menu_publications', [IDS.publication]],
-  ['restaurant_menu_availability_windows', [IDS.availability]],
-  ['restaurant_station_routing_rules', [IDS.routingRule]],
+  ['restaurant_branch_menu_publications', [IDS.publication, IDS.deliveryPublication]],
+  ['restaurant_menu_availability_windows', [IDS.availability, IDS.deliveryAvailability]],
+  ['restaurant_station_routing_rules', [IDS.routingRule, IDS.deliveryRoutingRule]],
   ['restaurant_customers', [IDS.customer]],
   ['restaurant_customer_addresses', [IDS.customerAddress]],
-  ['restaurant_delivery_zones', [IDS.deliveryZone]],
+  ['restaurant_delivery_zones', [IDS.deliveryZone, IDS.isolatedDeliveryZone]],
   ['restaurant_loyalty_program_versions', [IDS.loyaltyProgram]],
   ['restaurant_loyalty_accounts', [IDS.loyaltyAccount]],
   ['restaurant_loyalty_points_entries', [IDS.loyaltyEntry]],
@@ -176,6 +198,9 @@ export const RESTAURANT_E2E_OWNED_ROW_COUNT = RESTAURANT_E2E_OWNED_FIXTURES.redu
 
 const FIXED_AT = new Date('2026-08-27T00:00:00.000Z');
 const BUSINESS_DATE = new Date('2026-08-27T00:00:00.000Z');
+const CURRENT_BUSINESS_DATE = businessDateToUtcDate(
+  resolveBusinessDate(new Date(), 'Asia/Karachi', '00:00')
+);
 const PIN_BCRYPT_SALT = '$2b$12$abcdefghijklmnopqrstuu';
 const DEVFATHOM_ORGANIZATION_ID = 'org_devfathom';
 const ALEX_EMAIL = 'alex@company.com';
@@ -559,6 +584,17 @@ async function main() {
               updatedAt: FIXED_AT,
             },
           });
+          await tx.restaurantBranchAssignment.upsert({
+            where: { branchId_userId: { branchId: RESTAURANT_E2E.branchA2Id, userId: user.id } },
+            update: { branchId: RESTAURANT_E2E.branchA2Id, userId: user.id },
+            create: {
+              id: `assignment_delivery_${user.id}`,
+              branchId: RESTAURANT_E2E.branchA2Id,
+              userId: user.id,
+              createdAt: FIXED_AT,
+              updatedAt: FIXED_AT,
+            },
+          });
         }
         for (const staff of [
           {
@@ -663,6 +699,23 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await tx.restaurantKitchenStation.upsert({
+          where: { id: IDS.deliveryStation },
+          update: {
+            branchId: RESTAURANT_E2E.branchA2Id,
+            name: 'Delivery kitchen',
+            active: true,
+            isDefault: true,
+          },
+          create: {
+            id: IDS.deliveryStation,
+            branchId: RESTAURANT_E2E.branchA2Id,
+            name: 'Delivery kitchen',
+            isDefault: true,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         await tx.restaurantRegisteredDevice.upsert({
           where: { id: RESTAURANT_E2E.posDeviceId },
           update: {
@@ -708,13 +761,53 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        for (const device of [
+          {
+            id: RESTAURANT_E2E.deliveryPosDeviceId,
+            name: 'E2E Delivery POS',
+            kind: 'POS' as const,
+            stationId: null,
+            secret: RESTAURANT_E2E.deliveryPosDeviceSecret,
+          },
+          {
+            id: RESTAURANT_E2E.deliveryKdsDeviceId,
+            name: 'E2E Delivery KDS',
+            kind: 'KDS' as const,
+            stationId: IDS.deliveryStation,
+            secret: RESTAURANT_E2E.deliveryKdsDeviceSecret,
+          },
+        ]) {
+          await tx.restaurantRegisteredDevice.upsert({
+            where: { id: device.id },
+            update: {
+              branchId: RESTAURANT_E2E.branchA2Id,
+              name: device.name,
+              kind: device.kind,
+              stationId: device.stationId,
+              deviceSecretHash: deviceSecretHash(device.secret),
+              status: 'ACTIVE',
+              lastSeenAt: null,
+              revokedAt: null,
+            },
+            create: {
+              id: device.id,
+              branchId: RESTAURANT_E2E.branchA2Id,
+              name: device.name,
+              kind: device.kind,
+              stationId: device.stationId,
+              deviceSecretHash: deviceSecretHash(device.secret),
+              createdAt: FIXED_AT,
+              updatedAt: FIXED_AT,
+            },
+          });
+        }
         await tx.restaurantDrawerSession.upsert({
           where: { id: IDS.drawer },
           update: {
             branchId: RESTAURANT_E2E.branchId,
             deviceId: RESTAURANT_E2E.posDeviceId,
             staffProfileId: RESTAURANT_E2E.operatorId,
-            businessDate: BUSINESS_DATE,
+            businessDate: CURRENT_BUSINESS_DATE,
             status: 'OPEN',
             openedAt: FIXED_AT,
             closedAt: null,
@@ -728,7 +821,7 @@ async function main() {
             branchId: RESTAURANT_E2E.branchId,
             deviceId: RESTAURANT_E2E.posDeviceId,
             staffProfileId: RESTAURANT_E2E.operatorId,
-            businessDate: BUSINESS_DATE,
+            businessDate: CURRENT_BUSINESS_DATE,
             openingFloat: '100.00',
             openedAt: FIXED_AT,
             createdAt: FIXED_AT,
@@ -1025,6 +1118,29 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await tx.restaurantBranchMenuPublication.upsert({
+          where: { id: IDS.deliveryPublication },
+          update: {
+            branchId: RESTAURANT_E2E.branchA2Id,
+            menuId: IDS.menu,
+            priceListId: IDS.priceList,
+            status: 'PUBLISHED',
+            channels: ['DELIVERY'],
+            publishedAt: FIXED_AT,
+            retiredAt: null,
+          },
+          create: {
+            id: IDS.deliveryPublication,
+            branchId: RESTAURANT_E2E.branchA2Id,
+            menuId: IDS.menu,
+            priceListId: IDS.priceList,
+            status: 'PUBLISHED',
+            channels: ['DELIVERY'],
+            publishedAt: FIXED_AT,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         await tx.restaurantMenuAvailabilityWindow.upsert({
           where: { id: IDS.availability },
           update: {
@@ -1046,6 +1162,27 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await tx.restaurantMenuAvailabilityWindow.upsert({
+          where: { id: IDS.deliveryAvailability },
+          update: {
+            publicationId: IDS.deliveryPublication,
+            menuItemId: null,
+            label: 'Delivery always available',
+            daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+            startMinutes: 0,
+            endMinutes: 0,
+          },
+          create: {
+            id: IDS.deliveryAvailability,
+            publicationId: IDS.deliveryPublication,
+            label: 'Delivery always available',
+            daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+            startMinutes: 0,
+            endMinutes: 0,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         await tx.restaurantStationRoutingRule.upsert({
           where: { id: IDS.routingRule },
           update: {
@@ -1057,6 +1194,23 @@ async function main() {
           create: {
             id: IDS.routingRule,
             stationId: IDS.grillStation,
+            productId: IDS.product,
+            priority: 100,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantStationRoutingRule.upsert({
+          where: { id: IDS.deliveryRoutingRule },
+          update: {
+            stationId: IDS.deliveryStation,
+            productId: IDS.product,
+            categoryId: null,
+            priority: 100,
+          },
+          create: {
+            id: IDS.deliveryRoutingRule,
+            stationId: IDS.deliveryStation,
             productId: IDS.product,
             priority: 100,
             createdAt: FIXED_AT,
@@ -1135,6 +1289,30 @@ async function main() {
             minimumSubtotal: '10.00',
             promisedMinutes: 35,
             areaPostalLabel: 'Gulberg 54660',
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantDeliveryZone.upsert({
+          where: { id: IDS.isolatedDeliveryZone },
+          update: {
+            branchId: RESTAURANT_E2E.branchA2Id,
+            name: 'DHA Delivery Lane',
+            active: true,
+            fixedFee: '3.50',
+            minimumSubtotal: '10.00',
+            promisedMinutes: 35,
+            sortOrder: 0,
+            areaPostalLabel: 'DHA 54792',
+          },
+          create: {
+            id: IDS.isolatedDeliveryZone,
+            branchId: RESTAURANT_E2E.branchA2Id,
+            name: 'DHA Delivery Lane',
+            fixedFee: '3.50',
+            minimumSubtotal: '10.00',
+            promisedMinutes: 35,
+            areaPostalLabel: 'DHA 54792',
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },

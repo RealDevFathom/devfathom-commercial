@@ -3,7 +3,8 @@
 Operator workflow: [Restaurant administrator guide](../restaurant-administrator-guide.md#opening-and-daily-service).
 
 Status: evidence-linked product requirements document reconciled against commit
-`03731baab29b29278165c7a169078d4fec897a10`.
+`3a49b696d2bb6000da6d084247274012f4fad90c`. Exact-candidate browser and release
+evidence remains pending.
 
 ## Status vocabulary
 
