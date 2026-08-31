@@ -289,7 +289,7 @@ describe('withTerminalAuth', () => {
     expect(h.store.sessions[0].lastActivityAt).toBeNull();
   });
 
-  it('rejects REST delivery before auth touches or order command work', async () => {
+  it('rejects REST delivery without a customer before auth touches or order command work', async () => {
     seedDevice();
     seedSession({ activeStaffProfileId: 'staff_1', lastActivityAt: null });
     const run = vi.fn();
@@ -309,7 +309,13 @@ describe('withTerminalAuth', () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: 'Delivery is not configured. Use dine-in or takeaway.',
+      error: 'Invalid input',
+      details: [
+        expect.objectContaining({
+          path: ['customerId'],
+          message: 'Select a customer for delivery.',
+        }),
+      ],
     });
     expect(run).not.toHaveBeenCalled();
     expect(h.store.devices[0].lastSeenAt).toBeNull();
