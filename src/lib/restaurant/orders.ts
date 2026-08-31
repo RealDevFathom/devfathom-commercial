@@ -907,25 +907,6 @@ export async function requestRemake(
     const reason = requireReason(input.reason);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
-    if (order.channel === 'DELIVERY') {
-      const [fulfillment, tenderCount] = await Promise.all([
-        tx.restaurantDeliveryFulfillment.findFirst({
-          where: { orderId: order.id },
-          select: { status: true },
-        }),
-        tx.restaurantTender.count({ where: { bill: { orderId: order.id } } }),
-      ]);
-      if (
-        tenderCount > 0 ||
-        fulfillment?.status === 'DISPATCHED' ||
-        fulfillment?.status === 'DELIVERED'
-      ) {
-        throw new OrderCommandError(
-          'A tendered, dispatched, or delivered delivery order cannot be cancelled.',
-          'NOT_CLOSABLE'
-        );
-      }
-    }
     const item = findItem(order, input.itemId);
     assertItemTransition(item.status, 'REMAKE_REQUESTED');
 
@@ -999,6 +980,7 @@ export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<Item
     const reason = requireReason(input.reason);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
+
     const item = findItem(order, input.itemId);
     assertItemTransition(item.status, 'VOIDED');
 
@@ -1086,8 +1068,34 @@ export async function cancelOrder(
     if (idem.replay) return { orderId: input.orderId, replayed: true };
 
     const reason = requireReason(input.reason);
+    await tx.$queryRaw`SELECT "id" FROM "restaurant_orders" WHERE "id" = ${input.orderId} FOR UPDATE`;
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
+
+    if (order.channel === 'DELIVERY') {
+      const fulfillments = await tx.$queryRaw<Array<{ id: string; status: string }>>(
+        Prisma.sql`SELECT "id", "status" FROM "restaurant_delivery_fulfillments" WHERE "orderId" = ${order.id} ORDER BY "id" FOR UPDATE`
+      );
+      await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "restaurant_bills" WHERE "orderId" = ${order.id} ORDER BY "id" FOR UPDATE`
+      );
+      const tenders = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT t."id" FROM "restaurant_tenders" t JOIN "restaurant_bills" b ON b."id" = t."billId" WHERE b."orderId" = ${order.id} ORDER BY t."id" FOR UPDATE OF t`
+      );
+      if (
+        tenders.length > 0 ||
+        fulfillments.some((fulfillment) => ['DISPATCHED', 'DELIVERED'].includes(fulfillment.status))
+      ) {
+        throw new OrderCommandError(
+          'A tendered, dispatched, or delivered delivery order cannot be cancelled.',
+          'NOT_CLOSABLE'
+        );
+      }
+      await tx.restaurantDeliveryFulfillment.updateMany({
+        where: { orderId: order.id, status: 'PENDING' },
+        data: { status: 'CANCELLED', cancelledAt: new Date() },
+      });
+    }
 
     const active = order.items.filter((i) => !isResolvedItem(i.status));
     const anyPostPrep = active.some((i) => isPostPrep(i.status));
@@ -1167,9 +1175,21 @@ export async function closeOrder(
     const idem = await beginIdempotent(tx, input.actor, 'order.close');
     if (idem.replay) return { orderId: input.orderId, replayed: true };
 
+    await tx.$queryRaw`SELECT "id" FROM "restaurant_orders" WHERE "id" = ${input.orderId} FOR UPDATE`;
     const order = await loadOrder(tx, input.orderId);
     if (order.status === 'CANCELLED') {
       throw new OrderCommandError('A cancelled order cannot be closed.', 'ORDER_TERMINAL');
+    }
+    if (order.channel === 'DELIVERY') {
+      const [fulfillment] = await tx.$queryRaw<Array<{ status: string }>>(
+        Prisma.sql`SELECT "status" FROM "restaurant_delivery_fulfillments" WHERE "orderId" = ${order.id} FOR UPDATE`
+      );
+      if (fulfillment?.status !== 'DELIVERED') {
+        throw new OrderCommandError(
+          'A delivery order cannot close before fulfillment is delivered.',
+          'NOT_CLOSABLE'
+        );
+      }
     }
     const itemStatuses = order.items.map((i) => i.status);
 

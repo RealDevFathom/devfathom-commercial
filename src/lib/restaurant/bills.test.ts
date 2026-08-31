@@ -622,6 +622,7 @@ function settlementInput(billId: string, billLineId: string, evaluationId: strin
     subtotal: D('12.50'),
     discountTotal: D('0.50'),
     serviceChargeTotal: D('1.00'),
+    deliveryFeeTotal: D('0.00'),
     taxTotal: D('1.30'),
     roundingAdjustment: D('0.00'),
     grandTotal: D('14.30'),
@@ -1005,6 +1006,12 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(rejectedWrites.bill).toMatchObject({ status: 'OPEN', taxTotal: D('0') });
 
     const committed = await makeBill('commit');
+    await read((tx) =>
+      tx.restaurantBill.update({
+        where: { id: committed.billId },
+        data: { deliveryFeeTotal: D('2.00'), grandTotal: D('14.50') },
+      })
+    );
     const [tenderA, tenderB] = await deps.withTenantDb(orgId, (tx) =>
       Promise.all([
         tx.restaurantTender.create({
@@ -1022,7 +1029,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
           data: {
             billId: committed.billId,
             type: 'CARD',
-            amount: D('6.30'),
+            amount: D('8.30'),
             businessDate: new Date('2026-08-29T00:00:00.000Z'),
             staffProfileId: ids.operator,
             deviceId,
@@ -1037,6 +1044,8 @@ describeIfDatabase('bills command layer (real DB)', () => {
       committed.evaluationId,
       'commit'
     );
+    committedInput.deliveryFeeTotal = D('2.00');
+    committedInput.grandTotal = D('16.30');
     committedInput.tenderTaxAllocations = [
       {
         originalTenderId: tenderA.id,
@@ -1134,7 +1143,8 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(frozen.bill.taxTotal.toString()).toBe('1.3');
     expect(frozen.bill.serviceChargeTotal.toString()).toBe('1');
     expect(frozen.bill.discountTotal.toString()).toBe('0.5');
-    expect(frozen.bill.grandTotal.toString()).toBe('14.3');
+    expect(frozen.bill.deliveryFeeTotal.toString()).toBe('2');
+    expect(frozen.bill.grandTotal.toString()).toBe('16.3');
     expect(frozen.line.taxAmount.toString()).toBe('1.3');
     expect(frozen.line.serviceChargeAmount.toString()).toBe('1');
     expect(frozen.line.lineTotal.toString()).toBe('14.3');

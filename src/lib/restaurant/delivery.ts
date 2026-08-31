@@ -525,6 +525,9 @@ export function transitionDeliveryFulfillment(
     const now = input.now ?? new Date();
     let paymentMode = current.paymentMode;
     if (input.status === 'DISPATCHED') {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "restaurant_bills" WHERE "orderId" = ${current.orderId} AND "status" <> 'VOID' ORDER BY "id" FOR UPDATE`
+      );
       const bills = await tx.restaurantBill.findMany({
         where: { orderId: current.orderId, status: { not: 'VOID' } },
         orderBy: { id: 'asc' },

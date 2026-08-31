@@ -163,14 +163,18 @@ describe('delivery fulfillment transitions', () => {
   ) => {
     const update = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
     const findFirstOrThrow = vi.fn().mockResolvedValue({ status: currentStatus });
-    const tx = {
-      $queryRaw: vi.fn().mockResolvedValue([
+    const queryRaw = vi
+      .fn()
+      .mockResolvedValueOnce([
         {
           status: currentStatus,
           orderId: 'order-1',
           paymentMode: currentStatus === 'PENDING' ? null : 'PREPAID',
         },
-      ]),
+      ])
+      .mockResolvedValueOnce([]);
+    const tx = {
+      $queryRaw: queryRaw,
       restaurantBill: { findMany: vi.fn().mockResolvedValue(bills) },
       restaurantDeliveryFulfillment: { update, findFirstOrThrow },
     };
@@ -178,6 +182,7 @@ describe('delivery fulfillment transitions', () => {
       db: { $transaction: (work: (value: typeof tx) => unknown) => work(tx) } as never,
       update,
       findFirstOrThrow,
+      queryRaw,
     };
   };
 
@@ -191,6 +196,7 @@ describe('delivery fulfillment transitions', () => {
       status: 'DISPATCHED',
       now: at,
     });
+    expect(pending.queryRaw).toHaveBeenCalledTimes(2);
     expect(pending.update).toHaveBeenCalledWith({
       where: { id: 'ful-1' },
       data: { status: 'DISPATCHED', paymentMode: 'PREPAID', dispatchedAt: at },

@@ -1115,6 +1115,7 @@ export type FinalizeBillSettlementInput = SettleBillInput & {
   subtotal: Prisma.Decimal;
   discountTotal: Prisma.Decimal;
   serviceChargeTotal: Prisma.Decimal;
+  deliveryFeeTotal: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
   roundingAdjustment: Prisma.Decimal;
   grandTotal: Prisma.Decimal;
@@ -1247,6 +1248,7 @@ export async function finalizeBillSettlement(
       branchId: true,
       compTotal: true,
       serviceChargeTotal: true,
+      deliveryFeeTotal: true,
       serviceChargePolicyVersionId: true,
       serviceChargeRate: true,
       serviceChargeBasis: true,
@@ -1282,13 +1284,23 @@ export async function finalizeBillSettlement(
     )
   );
   const componentTotal = add(
-    sub(add(add(input.subtotal, input.taxTotal), input.serviceChargeTotal), bill.compTotal),
+    sub(
+      add(
+        add(add(input.subtotal, input.taxTotal), input.serviceChargeTotal),
+        input.deliveryFeeTotal
+      ),
+      bill.compTotal
+    ),
     sub(input.roundingAdjustment, input.discountTotal)
   );
   if (
-    !equals(lineTotal, sub(input.grandTotal, input.roundingAdjustment)) ||
+    !equals(
+      lineTotal,
+      sub(sub(input.grandTotal, input.roundingAdjustment), input.deliveryFeeTotal)
+    ) ||
     !equals(lineTaxTotal, input.taxTotal) ||
     !equals(lineServiceTotal, input.serviceChargeTotal) ||
+    !equals(bill.deliveryFeeTotal, input.deliveryFeeTotal) ||
     !equals(add(merchandiseBucketTax, serviceBucketTax), input.taxTotal) ||
     !(input.serviceChargeBuckets.length === 0
       ? equals(bill.serviceChargeTotal, input.serviceChargeTotal) &&
@@ -1487,6 +1499,7 @@ export async function finalizeBillSettlement(
       subtotal: input.subtotal,
       taxTotal: input.taxTotal,
       serviceChargeTotal: input.serviceChargeTotal,
+      deliveryFeeTotal: input.deliveryFeeTotal,
       discountTotal: input.discountTotal,
       roundingAdjustment: input.roundingAdjustment,
       grandTotal: input.grandTotal,
@@ -1557,10 +1570,13 @@ export async function evaluateOrderSettlement(
   const order = await loadBillOrder(tx, orderId);
   const items = nonVoidedItems(order);
   const derivedOrderTotal = add(
-    deriveOrderTotal(items),
-    order.serviceChargePolicyVersion
-      ? roundMoney(multiply(deriveOrderTotal(items), order.serviceChargePolicyVersion.rate))
-      : ZERO
+    add(
+      deriveOrderTotal(items),
+      order.serviceChargePolicyVersion
+        ? roundMoney(multiply(deriveOrderTotal(items), order.serviceChargePolicyVersion.rate))
+        : ZERO
+    ),
+    order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO
   );
 
   const allBills = await tx.restaurantBill.findMany({
