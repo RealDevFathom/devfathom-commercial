@@ -25,6 +25,8 @@ export const RESTAURANT_E2E = {
   kdsDeviceId: 'device_restaurant_e2e_kds',
   deliveryPosDeviceId: 'device_restaurant_e2e_delivery_pos',
   deliveryKdsDeviceId: 'device_restaurant_e2e_delivery_kds',
+  deliveryOperatorId: 'staff_restaurant_e2e_delivery_operator',
+  deliveryDeniedOperatorId: 'staff_restaurant_e2e_delivery_capability_denied',
   operatorId: 'staff_restaurant_e2e_operator',
   deniedOperatorId: 'staff_restaurant_e2e_delivery_denied',
   managerId: 'staff_restaurant_e2e_manager',
@@ -35,6 +37,8 @@ export const RESTAURANT_E2E = {
   kdsDeviceSecret: 'rdk_restaurant_e2e_kds_local_ci_only',
   deliveryPosDeviceSecret: 'rdk_restaurant_e2e_delivery_pos_local_ci_only',
   deliveryKdsDeviceSecret: 'rdk_restaurant_e2e_delivery_kds_local_ci_only',
+  deliveryOperatorPin: '737373',
+  deliveryDeniedOperatorPin: '515151',
 } as const;
 
 const IDS = {
@@ -43,12 +47,16 @@ const IDS = {
   operatorUser: 'user_restaurant_e2e_operator',
   deniedOperatorUser: 'user_restaurant_e2e_delivery_denied',
   managerUser: 'user_restaurant_e2e_manager',
+  deliveryOperatorUser: 'user_restaurant_e2e_delivery_operator',
+  deliveryDeniedOperatorUser: 'user_restaurant_e2e_delivery_capability_denied',
   operatorRole: 'role_restaurant_e2e_operator',
   deniedOperatorRole: 'role_restaurant_e2e_delivery_denied',
   managerRole: 'role_restaurant_e2e_manager',
   operatorCredential: 'credential_restaurant_e2e_operator',
   deniedOperatorCredential: 'credential_restaurant_e2e_delivery_denied',
   managerCredential: 'credential_restaurant_e2e_manager',
+  deliveryOperatorCredential: 'credential_restaurant_e2e_delivery_operator',
+  deliveryDeniedOperatorCredential: 'credential_restaurant_e2e_delivery_capability_denied',
   drawer: 'drawer_restaurant_e2e',
   grillStation: 'station_restaurant_e2e_grill',
   expoStation: 'station_restaurant_e2e_expo',
@@ -112,7 +120,17 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       'permission_restaurant_e2e_manager_all',
     ],
   ],
-  ['users', [IDS.alexUser, IDS.operatorUser, IDS.deniedOperatorUser, IDS.managerUser]],
+  [
+    'users',
+    [
+      IDS.alexUser,
+      IDS.operatorUser,
+      IDS.deniedOperatorUser,
+      IDS.managerUser,
+      IDS.deliveryOperatorUser,
+      IDS.deliveryDeniedOperatorUser,
+    ],
+  ],
   [
     'restaurant_branch_assignments',
     [
@@ -121,9 +139,8 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       `assignment_${IDS.deniedOperatorUser}`,
       `assignment_${IDS.managerUser}`,
       `assignment_delivery_${IDS.alexUser}`,
-      `assignment_delivery_${IDS.operatorUser}`,
-      `assignment_delivery_${IDS.deniedOperatorUser}`,
-      `assignment_delivery_${IDS.managerUser}`,
+      `assignment_${IDS.deliveryOperatorUser}`,
+      `assignment_${IDS.deliveryDeniedOperatorUser}`,
     ],
   ],
   [
@@ -133,6 +150,8 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       RESTAURANT_E2E.operatorId,
       RESTAURANT_E2E.deniedOperatorId,
       RESTAURANT_E2E.managerId,
+      RESTAURANT_E2E.deliveryOperatorId,
+      RESTAURANT_E2E.deliveryDeniedOperatorId,
     ],
   ],
   [
@@ -142,6 +161,8 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       IDS.operatorCredential,
       IDS.deniedOperatorCredential,
       IDS.managerCredential,
+      IDS.deliveryOperatorCredential,
+      IDS.deliveryDeniedOperatorCredential,
     ],
   ],
   ['restaurant_branches', [RESTAURANT_E2E.branchId, RESTAURANT_E2E.branchA2Id]],
@@ -207,6 +228,22 @@ const ALEX_EMAIL = 'alex@company.com';
 
 function deviceSecretHash(secret: string): string {
   return createHash('sha256').update(secret).digest('hex');
+}
+
+async function requirePristineDeliveryLane(tx: Prisma.TransactionClient) {
+  const [state] = await tx.$queryRaw<Array<{ rows: bigint }>>(Prisma.sql`
+    SELECT (
+      (SELECT count(*) FROM restaurant_orders WHERE "branchId" = ${RESTAURANT_E2E.branchA2Id}) +
+      (SELECT count(*) FROM restaurant_drawer_sessions WHERE "branchId" = ${RESTAURANT_E2E.branchA2Id}) +
+      (SELECT count(*) FROM restaurant_daily_closes WHERE "branchId" = ${RESTAURANT_E2E.branchA2Id}) +
+      (SELECT count(*) FROM restaurant_insight_daily_rollups WHERE "branchId" = ${RESTAURANT_E2E.branchA2Id})
+    )::bigint AS rows
+  `);
+  if ((state?.rows ?? 0n) !== 0n) {
+    throw new Error(
+      'Restaurant Delivery E2E requires a fresh disposable database; isolated A2 runtime state already exists.'
+    );
+  }
 }
 
 async function main() {
@@ -357,6 +394,7 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await requirePristineDeliveryLane(tx);
         await tx.restaurantFloor.upsert({
           where: { id: IDS.floor },
           update: {
@@ -508,6 +546,7 @@ async function main() {
             email: ALEX_EMAIL,
             title: 'Owner',
             password: devFathomAlexPassword,
+            branchId: RESTAURANT_E2E.branchId,
           },
           {
             id: IDS.operatorUser,
@@ -516,6 +555,7 @@ async function main() {
             email: 'operator@restaurant-e2e.test',
             title: 'Operator',
             password: null,
+            branchId: RESTAURANT_E2E.branchId,
           },
           {
             id: IDS.deniedOperatorUser,
@@ -524,6 +564,7 @@ async function main() {
             email: 'delivery-denied@restaurant-e2e.test',
             title: 'Operator',
             password: null,
+            branchId: RESTAURANT_E2E.branchId,
           },
           {
             id: IDS.managerUser,
@@ -532,6 +573,25 @@ async function main() {
             email: 'manager@restaurant-e2e.test',
             title: 'Manager',
             password: null,
+            branchId: RESTAURANT_E2E.branchId,
+          },
+          {
+            id: IDS.deliveryOperatorUser,
+            roleId: IDS.operatorRole,
+            name: 'E2E Delivery Operator',
+            email: 'delivery-operator@restaurant-e2e.test',
+            title: 'Operator',
+            password: null,
+            branchId: RESTAURANT_E2E.branchA2Id,
+          },
+          {
+            id: IDS.deliveryDeniedOperatorUser,
+            roleId: IDS.deniedOperatorRole,
+            name: 'E2E Delivery Capability Denied',
+            email: 'delivery-capability-denied@restaurant-e2e.test',
+            title: 'Operator',
+            password: null,
+            branchId: RESTAURANT_E2E.branchA2Id,
           },
         ]) {
           await tx.user.upsert({
@@ -574,28 +634,30 @@ async function main() {
             },
           });
           await tx.restaurantBranchAssignment.upsert({
-            where: { branchId_userId: { branchId: RESTAURANT_E2E.branchId, userId: user.id } },
-            update: { branchId: RESTAURANT_E2E.branchId, userId: user.id },
+            where: { branchId_userId: { branchId: user.branchId, userId: user.id } },
+            update: { branchId: user.branchId, userId: user.id },
             create: {
               id: `assignment_${user.id}`,
-              branchId: RESTAURANT_E2E.branchId,
-              userId: user.id,
-              createdAt: FIXED_AT,
-              updatedAt: FIXED_AT,
-            },
-          });
-          await tx.restaurantBranchAssignment.upsert({
-            where: { branchId_userId: { branchId: RESTAURANT_E2E.branchA2Id, userId: user.id } },
-            update: { branchId: RESTAURANT_E2E.branchA2Id, userId: user.id },
-            create: {
-              id: `assignment_delivery_${user.id}`,
-              branchId: RESTAURANT_E2E.branchA2Id,
+              branchId: user.branchId,
               userId: user.id,
               createdAt: FIXED_AT,
               updatedAt: FIXED_AT,
             },
           });
         }
+        await tx.restaurantBranchAssignment.upsert({
+          where: {
+            branchId_userId: { branchId: RESTAURANT_E2E.branchA2Id, userId: IDS.alexUser },
+          },
+          update: { branchId: RESTAURANT_E2E.branchA2Id, userId: IDS.alexUser },
+          create: {
+            id: `assignment_delivery_${IDS.alexUser}`,
+            branchId: RESTAURANT_E2E.branchA2Id,
+            userId: IDS.alexUser,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         for (const staff of [
           {
             id: IDS.alexStaff,
@@ -603,6 +665,7 @@ async function main() {
             name: 'Alex Carter',
             pin: RESTAURANT_E2E.managerPin,
             credentialId: 'credential_chai_chowk_alex',
+            primaryBranchId: RESTAURANT_E2E.branchId,
           },
           {
             id: RESTAURANT_E2E.operatorId,
@@ -610,6 +673,7 @@ async function main() {
             name: 'E2E Operator',
             pin: RESTAURANT_E2E.operatorPin,
             credentialId: IDS.operatorCredential,
+            primaryBranchId: RESTAURANT_E2E.branchId,
           },
           {
             id: RESTAURANT_E2E.deniedOperatorId,
@@ -617,6 +681,7 @@ async function main() {
             name: 'E2E Delivery Denied',
             pin: RESTAURANT_E2E.deniedOperatorPin,
             credentialId: IDS.deniedOperatorCredential,
+            primaryBranchId: RESTAURANT_E2E.branchId,
           },
           {
             id: RESTAURANT_E2E.managerId,
@@ -624,6 +689,23 @@ async function main() {
             name: 'E2E Manager',
             pin: RESTAURANT_E2E.managerPin,
             credentialId: IDS.managerCredential,
+            primaryBranchId: RESTAURANT_E2E.branchId,
+          },
+          {
+            id: RESTAURANT_E2E.deliveryOperatorId,
+            userId: IDS.deliveryOperatorUser,
+            name: 'E2E Delivery Operator',
+            pin: RESTAURANT_E2E.deliveryOperatorPin,
+            credentialId: IDS.deliveryOperatorCredential,
+            primaryBranchId: RESTAURANT_E2E.branchA2Id,
+          },
+          {
+            id: RESTAURANT_E2E.deliveryDeniedOperatorId,
+            userId: IDS.deliveryDeniedOperatorUser,
+            name: 'E2E Delivery Capability Denied',
+            pin: RESTAURANT_E2E.deliveryDeniedOperatorPin,
+            credentialId: IDS.deliveryDeniedOperatorCredential,
+            primaryBranchId: RESTAURANT_E2E.branchA2Id,
           },
         ]) {
           await tx.restaurantStaffProfile.upsert({
@@ -632,14 +714,14 @@ async function main() {
               userId: staff.userId,
               displayName: staff.name,
               email: null,
-              primaryBranchId: RESTAURANT_E2E.branchId,
+              primaryBranchId: staff.primaryBranchId,
               status: 'ACTIVE',
             },
             create: {
               id: staff.id,
               userId: staff.userId,
               displayName: staff.name,
-              primaryBranchId: RESTAURANT_E2E.branchId,
+              primaryBranchId: staff.primaryBranchId,
               status: 'ACTIVE',
               createdAt: FIXED_AT,
               updatedAt: FIXED_AT,

@@ -5,6 +5,11 @@ export const restaurantE2eCredentials = {
   branchId: 'branch_restaurant_e2e',
   operator: { staffProfileId: 'staff_restaurant_e2e_operator', pin: '424242' },
   deniedOperator: { staffProfileId: 'staff_restaurant_e2e_delivery_denied', pin: '626262' },
+  deliveryOperator: { staffProfileId: 'staff_restaurant_e2e_delivery_operator', pin: '737373' },
+  deliveryDeniedOperator: {
+    staffProfileId: 'staff_restaurant_e2e_delivery_capability_denied',
+    pin: '515151',
+  },
   manager: { staffProfileId: 'staff_restaurant_e2e_manager', pin: '848484' },
   pos: { deviceId: 'device_restaurant_e2e_pos', secret: 'rdk_restaurant_e2e_pos_local_ci_only' },
   kds: { deviceId: 'device_restaurant_e2e_kds', secret: 'rdk_restaurant_e2e_kds_local_ci_only' },
@@ -92,7 +97,8 @@ export type RestaurantTerminalFixture = {
 
 async function establishTerminal(
   request: APIRequestContext,
-  device: { deviceId: string; secret: string }
+  device: { deviceId: string; secret: string },
+  staff = restaurantE2eCredentials.operator
 ): Promise<RestaurantTerminalFixture> {
   const authorization = `Bearer ${device.secret}`;
   const established = await request.post('/api/restaurant/terminal/establish', {
@@ -105,9 +111,9 @@ async function establishTerminal(
   const unlocked = await request.post('/api/restaurant/terminal/unlock', {
     headers: { authorization, 'x-terminal-session': body.sessionToken },
     data: {
-      staffProfileId: restaurantE2eCredentials.operator.staffProfileId,
+      staffProfileId: staff.staffProfileId,
       type: 'PIN',
-      secret: restaurantE2eCredentials.operator.pin,
+      secret: staff.pin,
     },
   });
   expect(unlocked.status()).toBe(200);
@@ -129,9 +135,17 @@ export function establishKdsFixture(request: APIRequestContext) {
 }
 
 export function establishDeliveryPosFixture(request: APIRequestContext) {
-  return establishTerminal(request, restaurantE2eCredentials.delivery.pos);
+  return establishTerminal(
+    request,
+    restaurantE2eCredentials.delivery.pos,
+    restaurantE2eCredentials.deliveryOperator
+  );
 }
 
 export function establishDeliveryKdsFixture(request: APIRequestContext) {
-  return establishTerminal(request, restaurantE2eCredentials.delivery.kds);
+  return establishTerminal(
+    request,
+    restaurantE2eCredentials.delivery.kds,
+    restaurantE2eCredentials.deliveryOperator
+  );
 }

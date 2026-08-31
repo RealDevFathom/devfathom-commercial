@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+
 import {
   expect,
   test,
@@ -17,7 +19,6 @@ import {
   type RestaurantTerminalFixture,
 } from './restaurant-fixture';
 import { signInAs } from './fixtures/restaurant-actor-accessibility';
-import { runRestaurantWorkerTick } from '@/lib/restaurant/job-runner';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -109,8 +110,10 @@ async function unlockPos(page: Page) {
   const origin = terminalBrowserBaseUrl();
   await installSeededTerminalCookie(page.context(), fixture.delivery.pos, origin);
   await page.goto(new URL('/pos', origin).href);
-  await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
-  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
+  await page
+    .getByLabel('Operator', { exact: true })
+    .selectOption(fixture.deliveryOperator.staffProfileId);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.deliveryOperator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
 }
@@ -150,8 +153,8 @@ async function readyVisible(browser: Browser, contexts: BrowserContext[], orderN
   await installSeededTerminalCookie(context, fixture.delivery.kds, origin);
   const page = await context.newPage();
   await page.goto(new URL('/kds', origin).href);
-  await page.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
-  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
+  await page.getByLabel('Acting operator').selectOption(fixture.deliveryOperator.staffProfileId);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.deliveryOperator.pin);
   await page.getByRole('button', { name: 'Verify PIN and unlock' }).click();
   await page
     .getByRole('button', {
@@ -182,6 +185,37 @@ async function handoffVisible(
   await kds.context.close();
 }
 
+async function refreshDeliveryBoard(
+  kds: Awaited<ReturnType<typeof readyVisible>>,
+  orderNumber: number,
+  expectedMode: 'COD' | 'PREPAID'
+) {
+  const responsePromise = kds.page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/kds/delivery/queue') &&
+      response.request().method() === 'GET',
+    { timeout: 15_000 }
+  );
+  await kds.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  const response = await responsePromise;
+  expect(response.status()).toBe(200);
+  const queue = (await response.json()) as {
+    deliveries: Array<{ orderNumber: number; paymentMode: string | null; dispatchable: boolean }>;
+  };
+  expect(queue.deliveries).toContainEqual(
+    expect.objectContaining({
+      orderNumber,
+      paymentMode: expectedMode,
+      dispatchable: true,
+    })
+  );
+  const delivery = kds.page.getByRole('article').filter({ hasText: `Order #${orderNumber}` });
+  await expect(delivery.getByText(expectedMode, { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(
+    delivery.getByRole('button', { name: `Dispatch order ${orderNumber}` })
+  ).toBeEnabled();
+}
+
 async function settleVisible(
   page: Page,
   orderNumber: number,
@@ -197,6 +231,31 @@ async function settleVisible(
   if (tender === 'CARD') await page.getByLabel('Tender type').selectOption('CARD');
   await page.getByRole('button', { name: 'Apply tender' }).click();
   await expect(page.getByText('Bill settled')).toBeVisible();
+}
+
+function drainRestaurantJobs(workerId: string) {
+  const conditions = [process.env.NODE_OPTIONS, '--conditions=react-server']
+    .filter(Boolean)
+    .join(' ');
+  const result = spawnSync(
+    'bunx',
+    [
+      'tsx',
+      'scripts/run-restaurant-jobs.ts',
+      '--once',
+      `--worker-id=${workerId}`,
+      '--max-jobs-per-org=100',
+      '--max-outbox-per-org=100',
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: conditions },
+      encoding: 'utf8',
+      timeout: 60_000,
+    }
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr || result.stdout).toBe(0);
 }
 
 test('direct delivery authorization, COD/PREPAID handoff and fee reporting remain integrated', async ({
@@ -226,7 +285,7 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     );
     expect(before.rows[0]!.keys).toBe('0');
 
-    const denied = await unlockAs(request, fixture.deniedOperator);
+    const denied = await unlockAs(request, fixture.deliveryDeniedOperator);
     const rejected = await request.post('/api/restaurant/orders/open', {
       headers: { ...denied.headers, 'Idempotency-Key': key },
       data: { channel: 'DELIVERY', customerId: fixture.customer.id },
@@ -327,6 +386,7 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     );
 
     const codKds = await readyVisible(browser, transientContexts, cod.orderNumber);
+    await refreshDeliveryBoard(codKds, cod.orderNumber, 'COD');
     await handoffVisible(codKds, cod.orderNumber, 'COD');
     await settleVisible(page, cod.orderNumber, 'CASH', summary.accountedTotal);
     const receiptResponse = await request.get(`/api/restaurant/checkout/receipt?billId=${billId}`, {
@@ -375,14 +435,8 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     const prepaidSummary = await prepaidSummaryResponse.json();
     expect(prepaidSummary.deliveryFeeTotal).toBe('9.75');
     const prepaidKds = await readyVisible(browser, transientContexts, prepaid.orderNumber);
-    const prepaidRefresh = prepaidKds.page.waitForResponse(
-      (response) =>
-        response.url().endsWith('/api/restaurant/kds/delivery/queue') &&
-        response.request().method() === 'GET',
-      { timeout: 15_000 }
-    );
     await settleVisible(page, prepaid.orderNumber, 'CARD', prepaidSummary.accountedTotal);
-    await prepaidRefresh;
+    await refreshDeliveryBoard(prepaidKds, prepaid.orderNumber, 'PREPAID');
     await handoffVisible(prepaidKds, prepaid.orderNumber, 'PREPAID');
 
     const businessDate = cod.businessDate;
@@ -417,12 +471,7 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
       deliveryFeeSales: '13.25',
       deliveryFeeRefunds: '0.00',
     });
-    const worker = await runRestaurantWorkerTick({
-      workerId: `restaurant-delivery-e2e-${key}`,
-      maxJobsPerOrg: 25,
-      maxOutboxPerOrg: 25,
-    });
-    expect(worker.jobs.succeeded).toBeGreaterThan(0);
+    drainRestaurantJobs(`restaurant-delivery-e2e-${key}`);
     const rollup = await tenantQuery<{ sales: string; refunds: string }>(
       pool,
       `SELECT "deliveryFeeSales"::text sales, "deliveryFeeRefunds"::text refunds
