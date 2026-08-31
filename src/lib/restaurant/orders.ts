@@ -1076,14 +1076,15 @@ export async function cancelOrder(
       const fulfillments = await tx.$queryRaw<Array<{ id: string; status: string }>>(
         Prisma.sql`SELECT "id", "status" FROM "restaurant_delivery_fulfillments" WHERE "orderId" = ${order.id} ORDER BY "id" FOR UPDATE`
       );
-      await tx.$queryRaw<Array<{ id: string }>>(
-        Prisma.sql`SELECT "id" FROM "restaurant_bills" WHERE "orderId" = ${order.id} ORDER BY "id" FOR UPDATE`
+      const bills = await tx.$queryRaw<Array<{ id: string; status: string }>>(
+        Prisma.sql`SELECT "id", "status" FROM "restaurant_bills" WHERE "orderId" = ${order.id} ORDER BY "id" FOR UPDATE`
       );
       const tenders = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT t."id" FROM "restaurant_tenders" t JOIN "restaurant_bills" b ON b."id" = t."billId" WHERE b."orderId" = ${order.id} ORDER BY t."id" FOR UPDATE OF t`
       );
       if (
         tenders.length > 0 ||
+        bills.some((bill) => bill.status !== 'OPEN' && bill.status !== 'VOID') ||
         fulfillments.some((fulfillment) => ['DISPATCHED', 'DELIVERED'].includes(fulfillment.status))
       ) {
         throw new OrderCommandError(
@@ -1091,6 +1092,10 @@ export async function cancelOrder(
           'NOT_CLOSABLE'
         );
       }
+      await tx.restaurantBill.updateMany({
+        where: { orderId: order.id, status: 'OPEN' },
+        data: { status: 'VOID', voidReason: reason },
+      });
       await tx.restaurantDeliveryFulfillment.updateMany({
         where: { orderId: order.id, status: 'PENDING' },
         data: { status: 'CANCELLED', cancelledAt: new Date() },
