@@ -250,7 +250,7 @@ async function requirePristineDeliveryLane(tx: Prisma.TransactionClient) {
       (SELECT count(*) FROM restaurant_insight_daily_rollups WHERE "branchId" = ${RESTAURANT_E2E.branchA2Id})
     )::bigint AS rows
   `);
-  if ((state?.rows ?? BigInt(0)) !== BigInt(0)) {
+  if ((state?.rows ?? 0n) !== 0n) {
     throw new Error(
       'Restaurant Delivery E2E requires a fresh disposable database; isolated A2 runtime state already exists.'
     );
