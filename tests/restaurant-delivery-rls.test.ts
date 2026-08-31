@@ -134,36 +134,34 @@ describe('restaurant direct-delivery schema and forced RLS', () => {
         id('device_b'),
       ]
     );
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [id('org_a')]);
     await client.query(
       `INSERT INTO restaurant_delivery_zones
        (id,"organizationId","branchId",name,"fixedFee","minimumSubtotal","promisedMinutes","areaPostalLabel","updatedAt") VALUES
        ($1,$2,$3,'Central',4.50,10,35,'1000-1999',now()),
-       ($4,$2,$5,'Other branch',5,0,45,NULL,now()),
-       ($6,$7,$8,'Tenant B',6,0,50,NULL,now())`,
-      [
-        id('zone_a'),
-        id('org_a'),
-        id('branch_a'),
-        id('zone_a_other'),
-        id('branch_a_other'),
-        id('zone_b'),
-        id('org_b'),
-        id('branch_b'),
-      ]
+       ($4,$2,$5,'Other branch',5,0,45,NULL,now())`,
+      [id('zone_a'), id('org_a'), id('branch_a'), id('zone_a_other'), id('branch_a_other')]
     );
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [id('org_b')]);
+    await client.query(
+      `INSERT INTO restaurant_delivery_zones
+       (id,"organizationId","branchId",name,"fixedFee","minimumSubtotal","promisedMinutes","areaPostalLabel","updatedAt") VALUES
+       ($1,$2,$3,'Tenant B',6,0,50,NULL,now())`,
+      [id('zone_b'), id('org_b'), id('branch_b')]
+    );
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [id('org_a')]);
     await client.query(
       `INSERT INTO restaurant_customer_addresses
        (id,"organizationId","customerId",label,"recipientName","normalizedPhone","addressLine1",locality,"countryCode","isDefault","updatedAt") VALUES
-       ($1,$2,$3,'Home','A Recipient','+12025550123','1 Main St','Metro','US',true,now()),
-       ($4,$5,$6,'Home','B Recipient','+12025550124','2 Main St','Metro','US',true,now())`,
-      [
-        id('address_a'),
-        id('org_a'),
-        id('customer_a'),
-        id('address_b'),
-        id('org_b'),
-        id('customer_b'),
-      ]
+       ($1,$2,$3,'Home','A Recipient','+12025550123','1 Main St','Metro','US',true,now())`,
+      [id('address_a'), id('org_a'), id('customer_a')]
+    );
+    await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [id('org_b')]);
+    await client.query(
+      `INSERT INTO restaurant_customer_addresses
+       (id,"organizationId","customerId",label,"recipientName","normalizedPhone","addressLine1",locality,"countryCode","isDefault","updatedAt") VALUES
+       ($1,$2,$3,'Home','B Recipient','+12025550124','2 Main St','Metro','US',true,now())`,
+      [id('address_b'), id('org_b'), id('customer_b')]
     );
     await client.query(`SET LOCAL ROLE "${role}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
