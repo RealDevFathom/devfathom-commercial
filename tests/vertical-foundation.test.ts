@@ -575,6 +575,10 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
 // ---------------------------------------------------------------------------
 describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit', () => {
   const APPROVED_EXACT_FILES = new Set([
+    // The bell selects vertical-specific routers; their hooks remain isolated
+    // in separate child components.
+    'src/components/layout/topbar.notifications.test.tsx',
+    'src/components/layout/topbar.tsx',
     // Pakistan tax owns the authoritative RESTAURANT jurisdiction profiles and
     // the focused fixtures/batteries that provision those schema records.
     'src/components/restaurant/restaurant-tax-console.test.tsx',
