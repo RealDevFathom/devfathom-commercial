@@ -37,7 +37,7 @@ export type OrderDetail = {
   coverCount: number | null;
   items: OrderItem[];
   tables: { id: string; tableId: string; active: boolean }[];
-  totals: { subtotal: string; tax: string; serviceCharge: string };
+  totals: { subtotal: string; tax: string; serviceCharge: string; deliveryFee?: string };
 };
 
 export type VoidItemInput = {
@@ -393,15 +393,28 @@ export function OrderTicketPanel({
           <div className="font-mono text-sm tabular-nums text-text-muted">
             Subtotal {order.totals.subtotal} · Tax {order.totals.tax} · Service{' '}
             {order.totals.serviceCharge}
+            {order.channel === 'DELIVERY'
+              ? ` · Delivery fee ${order.totals.deliveryFee ?? '0'}`
+              : ''}
           </div>
           <Button
             type="button"
-            variant={order.status === 'PAYMENT_PENDING' ? 'default' : 'outline'}
-            onClick={order.status === 'PAYMENT_PENDING' ? onCollectPayment : onClose}
+            variant={
+              order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
+                ? 'default'
+                : 'outline'
+            }
+            onClick={
+              order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
+                ? onCollectPayment
+                : onClose
+            }
             disabled={pending}
             className="h-11"
           >
-            {order.status === 'PAYMENT_PENDING' ? 'Collect payment' : 'Close order'}
+            {order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
+              ? 'Collect payment'
+              : 'Close order'}
           </Button>
         </div>
       </SectionCard>

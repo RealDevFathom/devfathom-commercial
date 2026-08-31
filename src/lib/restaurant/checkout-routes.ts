@@ -501,7 +501,10 @@ const money = (value: Prisma.Decimal): string => value.toString();
 export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string, branchId: string) {
   const order = await db.restaurantOrder.findFirst({
     where: { id: orderId, branchId },
-    select: { id: true },
+    select: {
+      id: true,
+      deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
+    },
   });
   if (!order) return null;
 
@@ -512,12 +515,16 @@ export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string,
     blocker: settlement.blocker,
     derivedOrderTotal: money(settlement.derivedOrderTotal),
     accountedTotal: money(settlement.accountedTotal),
+    deliveryFeeTotal: order.deliveryFulfillment
+      ? money(order.deliveryFulfillment.deliveryFeeSnapshot)
+      : null,
     unbilledItemIds: settlement.unbilledItemIds,
     bills: settlement.bills.map((b) => ({
       id: b.id,
       status: b.status,
       splitKind: b.splitKind,
       grandTotal: money(b.grandTotal),
+      deliveryFeeTotal: money(b.deliveryFeeTotal),
       compTotal: money(b.compTotal),
       receiptNumber: b.receiptNumber,
     })),

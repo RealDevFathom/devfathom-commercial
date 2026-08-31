@@ -132,6 +132,12 @@ function transport({
         session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-1' },
       });
     }
+    if (path.endsWith('/terminal/lock')) {
+      return json({ session: { id: 'session-1', state: 'LOCKED' } });
+    }
+    if (path.endsWith('/orders/delivery/zones')) {
+      return json({ zones: [] });
+    }
     if (path.includes('/orders/effective-menu')) {
       const publicationId = new URL(path, 'http://localhost').searchParams.get('publicationId');
       return json(
@@ -226,6 +232,24 @@ afterEach(() => {
 });
 
 describe('OrderPad transport', () => {
+  it('clears delivery instructions when the terminal locks before another operator can unlock', async () => {
+    const fetch = transport();
+    await unlock(fetch);
+
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    const instructions = await screen.findByLabelText('Delivery instructions');
+    fireEvent.change(instructions, { target: { value: 'Private gate code 9876' } });
+    expect(instructions).toHaveValue('Private gate code 9876');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lock terminal' }));
+    await screen.findByRole('heading', { name: 'Terminal locked' });
+    fireEvent.change(screen.getByLabelText('Operator'), { target: { value: 'staff-1' } });
+    fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock terminal' }));
+    await screen.findByRole('heading', { name: 'Order pad' });
+    expect(await screen.findByLabelText('Delivery instructions')).toHaveValue('');
+  });
+
   it('uses AA semantic text tokens on the initial POS screen', () => {
     render(<OrderPad />);
 

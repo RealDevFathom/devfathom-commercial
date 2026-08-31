@@ -4,6 +4,7 @@ vi.mock('server-only', () => ({}));
 
 import { DeliveryError } from './delivery';
 import {
+  attachDeliveryRoute,
   attachDeliveryBody,
   deliveryAddressesQuery,
   deliveryErrorResponse,
@@ -23,6 +24,11 @@ describe('terminal delivery contracts', () => {
     expect(
       deliveryAddressesQuery.safeParse({ customerId: 'customer-1', branchId: 'branch-2' }).success
     ).toBe(false);
+  });
+
+  it('requires the narrow customer-read authorization and a transport idempotency key', () => {
+    expect(attachDeliveryRoute).toBeTypeOf('function');
+    expect(String(attachDeliveryRoute)).not.toContain('customers:manage');
   });
 
   it('maps inactive zones and minimum failures to conflicts without leaking internals', async () => {

@@ -116,6 +116,13 @@ describe('B1 job-role profiles — deliberate capabilities', () => {
     expect(capabilitiesOf('shift-supervisor')).toContain('payments:refund');
   });
 
+  it('lets default cashier and server roles read delivery customers without managing them', () => {
+    for (const key of ['cashier', 'server']) {
+      expect(capabilitiesOf(key)).toContain('customers:read');
+      expect(capabilitiesOf(key)).not.toContain('customers:manage');
+    }
+  });
+
   it('keeps the back-office roles off the floor and the floor roles out of the books', () => {
     // An accountant reconciles; they never take an order or open a drawer.
     expect(capabilitiesOf('accountant')).not.toContain('pos:operate');
