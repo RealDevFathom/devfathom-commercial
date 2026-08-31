@@ -151,30 +151,27 @@ describe('delivery payment authority', () => {
 });
 
 describe('delivery fulfillment transitions', () => {
-  const dbFor = (currentStatus: string) => {
+  const dbFor = (
+    currentStatus: string,
+    bills = [
+      {
+        status: 'SETTLED',
+        grandTotal: new Prisma.Decimal('12.00'),
+        tenders: [{ amount: new Prisma.Decimal('12.00') }],
+      },
+    ]
+  ) => {
     const update = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
     const findFirstOrThrow = vi.fn().mockResolvedValue({ status: currentStatus });
     const tx = {
-      $queryRaw: vi
-        .fn()
-        .mockResolvedValue([
-          {
-            status: currentStatus,
-            orderId: 'order-1',
-            paymentMode: currentStatus === 'PENDING' ? null : 'PREPAID',
-          },
-        ]),
-      restaurantBill: {
-        findMany: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              status: 'SETTLED',
-              grandTotal: new Prisma.Decimal('12.00'),
-              tenders: [{ amount: new Prisma.Decimal('12.00') }],
-            },
-          ]),
-      },
+      $queryRaw: vi.fn().mockResolvedValue([
+        {
+          status: currentStatus,
+          orderId: 'order-1',
+          paymentMode: currentStatus === 'PENDING' ? null : 'PREPAID',
+        },
+      ]),
+      restaurantBill: { findMany: vi.fn().mockResolvedValue(bills) },
       restaurantDeliveryFulfillment: { update, findFirstOrThrow },
     };
     return {
@@ -209,6 +206,68 @@ describe('delivery fulfillment transitions', () => {
     });
     expect(replay.update).not.toHaveBeenCalled();
     expect(replay.findFirstOrThrow).toHaveBeenCalledOnce();
+  });
+
+  it('derives COD only for all-open zero-tender bills', async () => {
+    const at = new Date('2026-08-31T12:00:00.000Z');
+    const pending = dbFor('PENDING', [
+      { status: 'OPEN', grandTotal: new Prisma.Decimal('5.00'), tenders: [] },
+      { status: 'OPEN', grandTotal: new Prisma.Decimal('7.00'), tenders: [] },
+    ]);
+    await transitionDeliveryFulfillment(pending.db, {
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      fulfillmentId: 'ful-1',
+      status: 'DISPATCHED',
+      now: at,
+    });
+    expect(pending.update).toHaveBeenCalledWith({
+      where: { id: 'ful-1' },
+      data: { status: 'DISPATCHED', paymentMode: 'COD', dispatchedAt: at },
+    });
+  });
+
+  it.each([
+    { bills: [] },
+    {
+      bills: [
+        {
+          status: 'OPEN',
+          grandTotal: new Prisma.Decimal('12.00'),
+          tenders: [{ amount: new Prisma.Decimal('1.00') }],
+        },
+      ],
+    },
+    {
+      bills: [
+        {
+          status: 'SETTLED',
+          grandTotal: new Prisma.Decimal('5.00'),
+          tenders: [{ amount: new Prisma.Decimal('5.00') }],
+        },
+        { status: 'OPEN', grandTotal: new Prisma.Decimal('7.00'), tenders: [] },
+      ],
+    },
+    {
+      bills: [
+        {
+          status: 'SETTLED',
+          grandTotal: new Prisma.Decimal('12.00'),
+          tenders: [{ amount: new Prisma.Decimal('13.00') }],
+        },
+      ],
+    },
+  ])('rejects zero, partial, mixed, and over-covered live bill states', async ({ bills }) => {
+    const pending = dbFor('PENDING', bills);
+    await expect(
+      transitionDeliveryFulfillment(pending.db, {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        fulfillmentId: 'ful-1',
+        status: 'DISPATCHED',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
+    expect(pending.update).not.toHaveBeenCalled();
   });
 
   it.each([

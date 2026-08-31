@@ -15,7 +15,7 @@ ALTER TABLE "restaurant_refunds" ADD CONSTRAINT "restaurant_refunds_delivery_fee
 
 -- The foundation immutability trigger included paymentMode. Permit exactly the
 -- unresolved -> frozen transition; every other snapshot remains immutable.
-CREATE OR REPLACE FUNCTION restaurant_delivery_fulfillment_snapshot_immutable()
+CREATE OR REPLACE FUNCTION prevent_restaurant_delivery_snapshot_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF (NEW."organizationId", NEW."branchId", NEW."customerId", NEW."orderId",
@@ -33,12 +33,11 @@ BEGIN
       OLD."zoneAreaPostalLabelSnapshot", OLD."deliveryFeeSnapshot", OLD."deliveryTaxSnapshot",
       OLD."promisedMinutesSnapshot", OLD."promisedAt")
      OR (OLD."paymentMode" IS NOT NULL AND NEW."paymentMode" IS DISTINCT FROM OLD."paymentMode")
-     OR (OLD."paymentMode" IS NULL AND NEW."paymentMode" IS NULL AND NEW."status" = 'DISPATCHED')
+     OR (OLD."paymentMode" IS NULL AND NEW."paymentMode" IS NOT NULL AND NEW."status" <> 'DISPATCHED')
   THEN RAISE EXCEPTION 'delivery fulfillment snapshots are immutable';
   END IF;
   RETURN NEW;
 END $$;
 
 ALTER TABLE "restaurant_delivery_fulfillments" ADD CONSTRAINT "restaurant_delivery_payment_mode_state_ck"
-  CHECK (("status" = 'PENDING' AND "paymentMode" IS NULL) OR
-         ("status" <> 'PENDING' AND "paymentMode" IS NOT NULL));
+  CHECK (("status" IN ('PENDING', 'CANCELLED', 'FAILED')) OR "paymentMode" IS NOT NULL);
