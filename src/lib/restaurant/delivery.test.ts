@@ -85,24 +85,12 @@ describe('delivery domain validation', () => {
 });
 
 describe('delivery payment authority', () => {
-  it.each([
-    {
-      suppliedMode: 'COD',
-      bills: [
-        {
-          status: 'SETTLED',
-          grandTotal: new Prisma.Decimal('1250.00'),
-          tenders: [{ amount: new Prisma.Decimal('1250.00') }],
-        },
-      ],
-      expectedMode: 'PREPAID',
-    },
-    { suppliedMode: 'PREPAID', bills: [], expectedMode: 'COD' },
-  ] as const)(
-    'ignores caller-supplied $suppliedMode and derives $expectedMode from bills and tenders',
-    async ({ suppliedMode, bills, expectedMode }) => {
+  it.each(['COD', 'PREPAID'] as const)(
+    'ignores malicious caller-supplied %s and persists unresolved mode at attach',
+    async (suppliedMode) => {
       const create = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
       const tx = {
+        $queryRaw: vi.fn().mockResolvedValue([{ id: 'order-1' }]),
         restaurantOrder: {
           findFirst: vi.fn().mockResolvedValue({
             id: 'order-1',
@@ -113,7 +101,7 @@ describe('delivery payment authority', () => {
                 modifiers: [],
               },
             ],
-            bills,
+            bills: [],
           }),
         },
         restaurantCustomerAddress: {
@@ -156,7 +144,7 @@ describe('delivery payment authority', () => {
       } as Parameters<typeof createDeliveryFulfillment>[1] & { paymentMode: string });
 
       expect(create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ paymentMode: expectedMode }),
+        data: expect.objectContaining({ paymentMode: null }),
       });
     }
   );
@@ -167,7 +155,26 @@ describe('delivery fulfillment transitions', () => {
     const update = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
     const findFirstOrThrow = vi.fn().mockResolvedValue({ status: currentStatus });
     const tx = {
-      $queryRaw: vi.fn().mockResolvedValue([{ status: currentStatus }]),
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValue([
+          {
+            status: currentStatus,
+            orderId: 'order-1',
+            paymentMode: currentStatus === 'PENDING' ? null : 'PREPAID',
+          },
+        ]),
+      restaurantBill: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            {
+              status: 'SETTLED',
+              grandTotal: new Prisma.Decimal('12.00'),
+              tenders: [{ amount: new Prisma.Decimal('12.00') }],
+            },
+          ]),
+      },
       restaurantDeliveryFulfillment: { update, findFirstOrThrow },
     };
     return {
@@ -189,7 +196,7 @@ describe('delivery fulfillment transitions', () => {
     });
     expect(pending.update).toHaveBeenCalledWith({
       where: { id: 'ful-1' },
-      data: { status: 'DISPATCHED', dispatchedAt: at },
+      data: { status: 'DISPATCHED', paymentMode: 'PREPAID', dispatchedAt: at },
     });
 
     const replay = dbFor('DISPATCHED');

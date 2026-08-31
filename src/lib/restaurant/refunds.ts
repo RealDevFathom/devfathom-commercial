@@ -106,6 +106,7 @@ export type RefundTenderResult = {
   amount: Prisma.Decimal;
   tipRefundAmount: Prisma.Decimal;
   serviceChargeRefundAmount: Prisma.Decimal;
+  deliveryFeeRefundAmount: Prisma.Decimal;
   taxRefundAmount: Prisma.Decimal;
   /** Processing business date (UTC-midnight Date for the `@db.Date` column). */
   businessDate: Date;
@@ -127,6 +128,7 @@ type LoadedTender = {
   bill: {
     branchId: string;
     serviceChargeTotal: Prisma.Decimal;
+    deliveryFeeTotal: Prisma.Decimal;
     tenders: { id: string; amount: Prisma.Decimal }[];
   };
 };
@@ -223,6 +225,23 @@ export async function refundTender(
       ? tenderServiceTotal
       : roundMoney(tenderServiceTotal.mul(cumulativePrincipal).div(tender.amount));
     const serviceChargeRefundAmount = sub(cumulativeService, priorServiceRefund);
+    const deliveryShares = allocate(
+      tender.bill.deliveryFeeTotal,
+      tender.bill.tenders.map((row) => row.amount.mul(100).toNumber())
+    );
+    const tenderDeliveryTotal = deliveryShares[tenderIndex] ?? ZERO;
+    const priorDeliveryRefund = money(
+      (
+        await tx.restaurantRefund.aggregate({
+          where: { originalTenderId: tender.id },
+          _sum: { deliveryFeeRefundAmount: true },
+        })
+      )._sum.deliveryFeeRefundAmount ?? ZERO
+    );
+    const cumulativeDelivery = equals(cumulativePrincipal, tender.amount)
+      ? tenderDeliveryTotal
+      : roundMoney(tenderDeliveryTotal.mul(cumulativePrincipal).div(tender.amount));
+    const deliveryFeeRefundAmount = sub(cumulativeDelivery, priorDeliveryRefund);
 
     const frozenTaxAllocations = await tx.restaurantTaxTenderAllocationSnapshot.findMany({
       where: { originalTenderId: tender.id },
@@ -312,6 +331,7 @@ export async function refundTender(
         amount,
         tipRefundAmount,
         serviceChargeRefundAmount,
+        deliveryFeeRefundAmount,
         taxRefundAmount,
         kind,
         businessDate,
@@ -377,6 +397,7 @@ export async function refundTender(
       amount,
       tipRefundAmount,
       serviceChargeRefundAmount,
+      deliveryFeeRefundAmount,
       taxRefundAmount,
       businessDate,
       paymentId,
@@ -419,6 +440,7 @@ async function loadTender(tx: ScopedDb, tenderId: string, branchId: string): Pro
         select: {
           branchId: true,
           serviceChargeTotal: true,
+          deliveryFeeTotal: true,
           tenders: {
             orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
             select: { id: true, amount: true },
@@ -528,6 +550,7 @@ async function replayRefundResult(
       amount: true,
       tipRefundAmount: true,
       serviceChargeRefundAmount: true,
+      deliveryFeeRefundAmount: true,
       taxRefundAmount: true,
       businessDate: true,
       paymentId: true,
@@ -546,6 +569,7 @@ async function replayRefundResult(
     amount: refund.amount,
     tipRefundAmount: refund.tipRefundAmount,
     serviceChargeRefundAmount: refund.serviceChargeRefundAmount,
+    deliveryFeeRefundAmount: refund.deliveryFeeRefundAmount,
     taxRefundAmount: refund.taxRefundAmount,
     businessDate: refund.businessDate,
     paymentId: refund.paymentId,
@@ -563,6 +587,7 @@ type FrozenRefundResult = {
   amount: string;
   tipRefundAmount: string;
   serviceChargeRefundAmount: string;
+  deliveryFeeRefundAmount: string;
   taxRefundAmount: string;
   businessDate: string;
   paymentId: string | null;
@@ -579,6 +604,7 @@ function freezeRefundResult(result: RefundTenderResult): Prisma.InputJsonValue {
     amount: result.amount.toString(),
     tipRefundAmount: result.tipRefundAmount.toString(),
     serviceChargeRefundAmount: result.serviceChargeRefundAmount.toString(),
+    deliveryFeeRefundAmount: result.deliveryFeeRefundAmount.toString(),
     taxRefundAmount: result.taxRefundAmount.toString(),
     businessDate: result.businessDate.toISOString(),
     paymentId: result.paymentId,
@@ -598,6 +624,7 @@ function thawRefundResult(payload: Prisma.JsonValue | null | undefined): RefundT
     typeof row.amount !== 'string' ||
     typeof row.tipRefundAmount !== 'string' ||
     typeof row.serviceChargeRefundAmount !== 'string' ||
+    typeof row.deliveryFeeRefundAmount !== 'string' ||
     typeof row.taxRefundAmount !== 'string' ||
     typeof row.businessDate !== 'string'
   ) {
@@ -611,6 +638,7 @@ function thawRefundResult(payload: Prisma.JsonValue | null | undefined): RefundT
     amount: money(row.amount),
     tipRefundAmount: money(row.tipRefundAmount),
     serviceChargeRefundAmount: money(row.serviceChargeRefundAmount),
+    deliveryFeeRefundAmount: money(row.deliveryFeeRefundAmount),
     taxRefundAmount: money(row.taxRefundAmount),
     businessDate: new Date(row.businessDate),
     paymentId: row.paymentId ?? null,

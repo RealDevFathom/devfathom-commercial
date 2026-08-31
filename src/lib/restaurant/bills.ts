@@ -184,6 +184,7 @@ type LoadedBillOrder = {
   businessDate: Date;
   serviceChargePolicyVersion?: { id: string; rate: Prisma.Decimal } | null;
   items: LoadedBillItem[];
+  deliveryFulfillment?: { deliveryFeeSnapshot: Prisma.Decimal } | null;
 };
 
 /** The per-unit charge of an item = its snapshot unit price plus the sum of its
@@ -222,6 +223,7 @@ async function loadBillOrder(
       status: true,
       businessDate: true,
       serviceChargePolicyVersion: { select: { id: true, rate: true } },
+      deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
       items: {
         orderBy: [{ seatNumber: 'asc' }, { course: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
         select: {
@@ -665,9 +667,25 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
 
     await handleExistingBills(tx, order, input);
 
+    if (
+      !order.deliveryFulfillment &&
+      (await tx.restaurantOrder.findUnique({ where: { id: order.id }, select: { channel: true } }))
+        ?.channel === 'DELIVERY'
+    ) {
+      throw new BillCommandError(
+        'A delivery fulfillment must be attached before bill cut.',
+        'ORDER_NOT_BILLABLE'
+      );
+    }
     const planned = planBills(order, input.split);
+    const feeWeights = planned.map((bill) => bill.grandTotal.mul(100).toNumber());
+    const deliveryShares = allocate(
+      order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO,
+      feeWeights.some((weight) => weight > 0) ? feeWeights : planned.map(() => 1)
+    );
     const billIds: string[] = [];
-    for (const bill of planned) {
+    for (const [billIndex, bill] of planned.entries()) {
+      const deliveryFeeTotal = deliveryShares[billIndex] ?? ZERO;
       const created = await tx.restaurantBill.create({
         data: {
           orderId: order.id,
@@ -680,13 +698,14 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
           subtotal: bill.subtotal,
           taxTotal: ZERO,
           serviceChargeTotal: bill.serviceChargeTotal,
+          deliveryFeeTotal,
           serviceChargePolicyVersionId: bill.serviceChargePolicyVersionId,
           serviceChargeRate: bill.serviceChargeRate,
           serviceChargeBasis: bill.serviceChargeBasis,
           serviceChargeTaxTreatment: bill.serviceChargePolicyVersionId ? 'NON_TAXABLE' : null,
           compTotal: ZERO,
           roundingAdjustment: bill.roundingAdjustment,
-          grandTotal: bill.grandTotal,
+          grandTotal: add(bill.grandTotal, deliveryFeeTotal),
           openerStaffProfileId: input.actor.staffProfileId,
           deviceId: input.actor.deviceId,
           lines: {

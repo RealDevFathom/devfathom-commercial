@@ -4,8 +4,8 @@ vi.mock('server-only', () => ({}));
 
 import { openOrder } from './orders';
 
-describe('openOrder delivery fail-closed guard', () => {
-  it('rejects delivery before opening a transaction or writing idempotency/order rows', async () => {
+describe('openOrder delivery customer guard', () => {
+  it('rejects delivery without a trusted customer before opening a transaction', async () => {
     const transaction = vi.fn();
     const db = { $transaction: transaction } as never;
 
@@ -23,7 +23,7 @@ describe('openOrder delivery fail-closed guard', () => {
       })
     ).rejects.toMatchObject({
       reason: 'CHANNEL_UNAVAILABLE',
-      message: 'Delivery is not configured. Use dine-in or takeaway.',
+      message: 'Delivery orders require a trusted customer.',
     });
 
     expect(transaction).not.toHaveBeenCalled();

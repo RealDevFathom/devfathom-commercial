@@ -382,6 +382,9 @@ export function createDeliveryFulfillment(
   }
 ) {
   return transaction(db, async (tx) => {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "restaurant_orders" WHERE "id" = ${input.orderId} AND "organizationId" = ${input.organizationId} AND "branchId" = ${input.branchId} FOR UPDATE`
+    );
     const order = await tx.restaurantOrder.findFirst({
       where: {
         id: input.orderId,
@@ -389,24 +392,30 @@ export function createDeliveryFulfillment(
         branchId: input.branchId,
         customerId: input.customerId,
         channel: 'DELIVERY',
+        status: 'OPEN',
       },
       select: {
         id: true,
+        status: true,
         items: {
           where: { status: { not: 'VOIDED' } },
           select: { unitPrice: true, quantity: true, modifiers: { select: { priceDelta: true } } },
         },
         bills: {
-          select: {
-            status: true,
-            grandTotal: true,
-            tenders: { select: { amount: true } },
-          },
+          where: { status: { not: 'VOID' } },
+          select: { id: true, tenders: { select: { id: true } } },
         },
       },
     });
     if (!order)
       throw new DeliveryError('Delivery order scope is inconsistent.', 'INCONSISTENT_SCOPE');
+    if (order.items.length === 0)
+      throw new DeliveryError('Delivery order must contain items before attach.', 'INVALID_INPUT');
+    if (order.bills.length > 0 || order.bills.some((bill) => bill.tenders.length > 0))
+      throw new DeliveryError(
+        'Delivery must be attached before any bill or tender.',
+        'INVALID_TRANSITION'
+      );
     const address = await tx.restaurantCustomerAddress.findFirst({
       where: {
         id: input.addressId,
@@ -432,17 +441,6 @@ export function createDeliveryFulfillment(
       zoneId: input.zoneId,
       subtotal,
     });
-    const paymentMode =
-      order.bills.length > 0 &&
-      order.bills.every(
-        (bill) =>
-          bill.status === 'SETTLED' &&
-          bill.tenders
-            .reduce((sum, tender) => sum.plus(tender.amount), new Prisma.Decimal(0))
-            .equals(bill.grandTotal)
-      )
-        ? 'PREPAID'
-        : 'COD';
     const now = input.now ?? new Date();
     try {
       return await tx.restaurantDeliveryFulfillment.create({
@@ -451,7 +449,7 @@ export function createDeliveryFulfillment(
           branchId: input.branchId,
           customerId: input.customerId,
           orderId: input.orderId,
-          paymentMode,
+          paymentMode: null,
           recipientNameSnapshot: address.recipientName,
           normalizedPhoneSnapshot: address.normalizedPhone,
           addressLine1Snapshot: address.addressLine1,
@@ -501,8 +499,14 @@ export function transitionDeliveryFulfillment(
   }
 ) {
   return transaction(db, async (tx) => {
-    const [current] = await tx.$queryRaw<Array<{ status: RestaurantDeliveryFulfillmentStatus }>>(
-      Prisma.sql`SELECT "status" FROM "restaurant_delivery_fulfillments" WHERE "id" = ${input.fulfillmentId} AND "organizationId" = ${input.organizationId} AND "branchId" = ${input.branchId} FOR UPDATE`
+    const [current] = await tx.$queryRaw<
+      Array<{
+        status: RestaurantDeliveryFulfillmentStatus;
+        orderId: string;
+        paymentMode: 'PREPAID' | 'COD' | null;
+      }>
+    >(
+      Prisma.sql`SELECT "status", "orderId", "paymentMode" FROM "restaurant_delivery_fulfillments" WHERE "id" = ${input.fulfillmentId} AND "organizationId" = ${input.organizationId} AND "branchId" = ${input.branchId} FOR UPDATE`
     );
     if (!current) throw new DeliveryError('Delivery fulfillment does not exist.', 'NOT_FOUND');
     if (current.status === input.status)
@@ -519,6 +523,38 @@ export function transitionDeliveryFulfillment(
         'INVALID_TRANSITION'
       );
     const now = input.now ?? new Date();
+    let paymentMode = current.paymentMode;
+    if (input.status === 'DISPATCHED') {
+      const bills = await tx.restaurantBill.findMany({
+        where: { orderId: current.orderId, status: { not: 'VOID' } },
+        orderBy: { id: 'asc' },
+        select: {
+          status: true,
+          grandTotal: true,
+          tenders: { orderBy: { id: 'asc' }, select: { amount: true } },
+        },
+      });
+      if (bills.length === 0)
+        throw new DeliveryError(
+          'Delivery requires at least one live bill before dispatch.',
+          'INVALID_TRANSITION'
+        );
+      const prepaid = bills.every(
+        (bill) =>
+          bill.status === 'SETTLED' &&
+          bill.tenders.length > 0 &&
+          bill.tenders
+            .reduce((sum, tender) => sum.plus(tender.amount), new Prisma.Decimal(0))
+            .equals(bill.grandTotal)
+      );
+      const cod = bills.every((bill) => bill.status === 'OPEN' && bill.tenders.length === 0);
+      if (!prepaid && !cod)
+        throw new DeliveryError(
+          'Delivery bills are partial, mixed, or have untrusted tender coverage.',
+          'INVALID_TRANSITION'
+        );
+      paymentMode = prepaid ? 'PREPAID' : 'COD';
+    }
     const timestamps =
       input.status === 'DISPATCHED'
         ? { dispatchedAt: now }
@@ -529,7 +565,7 @@ export function transitionDeliveryFulfillment(
             : { failedAt: now };
     return tx.restaurantDeliveryFulfillment.update({
       where: { id: input.fulfillmentId },
-      data: { status: input.status, ...timestamps },
+      data: { status: input.status, paymentMode, ...timestamps },
     });
   });
 }
