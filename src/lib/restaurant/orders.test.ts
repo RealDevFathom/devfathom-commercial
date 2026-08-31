@@ -62,6 +62,7 @@ type Deps = {
   bills: typeof import('@/lib/restaurant/bills');
   stateMachine: typeof import('@/lib/restaurant/order-state-machine');
   coAuth: typeof import('@/lib/restaurant/co-authorization');
+  deliveryDispatch: typeof import('@/lib/restaurant/terminal-delivery-dispatch');
 };
 
 let deps: Deps;
@@ -124,14 +125,16 @@ async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, bills, stateMachine, coAuth] = await Promise.all([
-    import('@/lib/tenancy/scoped-db'),
-    import('@/lib/restaurant/devices'),
-    import('@/lib/restaurant/orders'),
-    import('@/lib/restaurant/bills'),
-    import('@/lib/restaurant/order-state-machine'),
-    import('@/lib/restaurant/co-authorization'),
-  ]);
+  const [scopedDb, devices, orders, bills, stateMachine, coAuth, deliveryDispatch] =
+    await Promise.all([
+      import('@/lib/tenancy/scoped-db'),
+      import('@/lib/restaurant/devices'),
+      import('@/lib/restaurant/orders'),
+      import('@/lib/restaurant/bills'),
+      import('@/lib/restaurant/order-state-machine'),
+      import('@/lib/restaurant/co-authorization'),
+      import('@/lib/restaurant/terminal-delivery-dispatch'),
+    ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
@@ -141,7 +144,16 @@ beforeAll(async () => {
     bills,
     stateMachine,
     coAuth,
+    deliveryDispatch,
   };
+
+  const [runtimeRole] = await deps.withPlatformDb(
+    (tx) =>
+      tx.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>`
+      SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user
+    `
+  );
+  expect(runtimeRole).toEqual({ rolsuper: false, rolbypassrls: false });
 
   await deps.withPlatformDb((tx) =>
     tx.organization.create({
@@ -263,6 +275,67 @@ beforeAll(async () => {
     });
   });
 });
+
+async function readyDeliveryOrder() {
+  const db = deps.createTenantDb(orgId);
+  const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
+    branchId: ids.branch,
+    channel: 'TAKEAWAY',
+    publicationId: ids.publication,
+    actor: actor(),
+    now: AT,
+  });
+  const added = await deps.orders.addItem(db, {
+    orderId: opened.orderId,
+    menuItemId: ids.menuItem,
+    actor: actor(),
+  });
+  await read(async (tx) => {
+    await tx.restaurantOrder.update({
+      where: { id: opened.orderId },
+      data: { channel: 'DELIVERY', customerId: ids.customer },
+    });
+    await tx.restaurantOrderItem.update({
+      where: { id: added.itemId },
+      data: { status: 'PREPARED' },
+    });
+    await tx.restaurantBill.create({
+      data: {
+        orderId: opened.orderId,
+        branchId: ids.branch,
+        businessDate: AT,
+        subtotal: '12.50',
+        taxTotal: '0',
+        serviceChargeTotal: '0',
+        discountTotal: '0',
+        grandTotal: '12.50',
+        openerStaffProfileId: ids.operator,
+        deviceId,
+      },
+    });
+    await tx.restaurantDeliveryFulfillment.create({
+      data: {
+        branchId: ids.branch,
+        customerId: ids.customer,
+        orderId: opened.orderId,
+        recipientNameSnapshot: 'Delivery Guest',
+        normalizedPhoneSnapshot: '+923001234567',
+        addressLine1Snapshot: '1 Test Street',
+        localitySnapshot: 'Karachi',
+        countryCodeSnapshot: 'PK',
+        deliveryFeeSnapshot: '0',
+        promisedMinutesSnapshot: 30,
+        promisedAt: new Date(AT.getTime() + 30 * 60_000),
+      },
+    });
+  });
+  const fulfillment = await read((tx) =>
+    tx.restaurantDeliveryFulfillment.findFirstOrThrow({ where: { orderId: opened.orderId } })
+  );
+  return { db, orderId: opened.orderId, fulfillmentId: fulfillment.id };
+}
 
 describeIfDatabase('orders command layer (real DB)', () => {
   it('opens an order: stamps business date, allocates a number, appends event + outbox', async () => {
@@ -706,5 +779,106 @@ describeIfDatabase('orders command layer (real DB)', () => {
     const sequences = events.map((e) => e.sequence);
     expect(sequences).toEqual(sequences.map((_, i) => i + 1)); // 1..N, gap-free per order
     expect(outboxCount).toBe(events.length); // one outbox row per event
+  });
+
+  it('dispatches one concurrent duplicate and replays the immutable device-scoped result', async () => {
+    const delivery = await readyDeliveryOrder();
+    const idempotencyKey = key();
+    const command = () =>
+      deps.deliveryDispatch.transitionDeliveryFromKds(delivery.db, {
+        organizationId: orgId,
+        branchId: ids.branch,
+        deviceId,
+        idempotencyKey,
+        fulfillmentId: delivery.fulfillmentId,
+        status: 'DISPATCHED',
+      });
+
+    const [first, duplicate] = await Promise.all([command(), command()]);
+    expect(duplicate).toEqual(first);
+    expect(first).toMatchObject({ status: 'DISPATCHED', paymentMode: 'COD' });
+    expect(
+      await read((tx) =>
+        tx.restaurantOrderIdempotencyKey.count({ where: { deviceId, key: idempotencyKey } })
+      )
+    ).toBe(1);
+    await expect(
+      deps.deliveryDispatch.transitionDeliveryFromKds(delivery.db, {
+        organizationId: orgId,
+        branchId: ids.branch,
+        deviceId,
+        idempotencyKey,
+        fulfillmentId: delivery.fulfillmentId,
+        status: 'DELIVERED',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
+  });
+
+  it('rejects an all-VOIDED delivery in the dispatch command', async () => {
+    const delivery = await readyDeliveryOrder();
+    await read((tx) =>
+      tx.restaurantOrderItem.updateMany({
+        where: { orderId: delivery.orderId },
+        data: { status: 'VOIDED' },
+      })
+    );
+    await expect(
+      deps.deliveryDispatch.transitionDeliveryFromKds(delivery.db, {
+        organizationId: orgId,
+        branchId: ids.branch,
+        deviceId,
+        idempotencyKey: key(),
+        fulfillmentId: delivery.fulfillmentId,
+        status: 'DISPATCHED',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
+  });
+
+  it('serializes dispatch against HELD insertion and rejects every post-dispatch add', async () => {
+    const delivery = await readyDeliveryOrder();
+    let releaseParentLock!: () => void;
+    const holdParentLock = new Promise<void>((resolve) => {
+      releaseParentLock = resolve;
+    });
+    let parentLocked!: () => void;
+    const parentIsLocked = new Promise<void>((resolve) => {
+      parentLocked = resolve;
+    });
+    const blocker = read(async (tx) => {
+      await deps.orders.lockRestaurantOrder(tx, delivery.orderId);
+      parentLocked();
+      await holdParentLock;
+    });
+    await parentIsLocked;
+
+    const dispatch = deps.deliveryDispatch.transitionDeliveryFromKds(delivery.db, {
+      organizationId: orgId,
+      branchId: ids.branch,
+      deviceId,
+      idempotencyKey: key(),
+      fulfillmentId: delivery.fulfillmentId,
+      status: 'DISPATCHED',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const concurrentAdd = deps.orders.addItem(delivery.db, {
+      orderId: delivery.orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(),
+    });
+    releaseParentLock();
+    await blocker;
+
+    await expect(dispatch).resolves.toMatchObject({ status: 'DISPATCHED' });
+    await expect(concurrentAdd).rejects.toMatchObject({ reason: 'ITEM_STATE' });
+    await expect(
+      deps.orders.addItem(delivery.db, {
+        orderId: delivery.orderId,
+        menuItemId: ids.menuItem,
+        actor: actor(),
+      })
+    ).rejects.toMatchObject({ reason: 'ITEM_STATE' });
+    expect(
+      await read((tx) => tx.restaurantOrderItem.count({ where: { orderId: delivery.orderId } }))
+    ).toBe(1);
   });
 });

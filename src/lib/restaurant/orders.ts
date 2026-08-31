@@ -146,6 +146,11 @@ function runInTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): 
   return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
 }
 
+/** Serialize mutations whose validity depends on the order's child-row set. */
+export async function lockRestaurantOrder(tx: ScopedDb, orderId: string): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "restaurant_orders" WHERE "id" = ${orderId} FOR UPDATE`;
+}
+
 // ── Idempotency (C7) ───────────────────────────────────────────────────────────
 
 type IdempotencyOutcome = { replay: false } | { replay: true; resultRef: string | null };
@@ -546,8 +551,21 @@ export async function addItem(db: ScopedDb, input: AddItemInput): Promise<ItemRe
     const idem = await beginIdempotent(tx, input.actor, 'item.add');
     if (idem.replay) return { itemId: idem.resultRef ?? '', replayed: true };
 
+    await lockRestaurantOrder(tx, input.orderId);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
+    if (order.channel === 'DELIVERY') {
+      const fulfillment = await tx.restaurantDeliveryFulfillment.findFirst({
+        where: { orderId: order.id },
+        select: { status: true },
+      });
+      if (fulfillment && fulfillment.status !== 'PENDING') {
+        throw new OrderCommandError(
+          'Items cannot be added after a delivery has left pending fulfillment.',
+          'ITEM_STATE'
+        );
+      }
+    }
     if (!order.publicationId) {
       throw new OrderCommandError(
         'The order has no menu publication; items cannot be resolved.',
