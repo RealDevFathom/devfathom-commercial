@@ -2413,6 +2413,8 @@ model RestaurantBranch {
   terminalReconciliations     RestaurantTerminalReconciliation[]
   printRoutes                 RestaurantPrintRoute[]
   printJobs                   RestaurantPrintJob[]
+  deliveryZones               RestaurantDeliveryZone[]
+  deliveryFulfillments        RestaurantDeliveryFulfillment[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -3058,6 +3060,19 @@ enum RestaurantOrderChannel {
   DINE_IN
   TAKEAWAY
   DELIVERY
+}
+
+enum RestaurantDeliveryPaymentMode {
+  PREPAID
+  COD
+}
+
+enum RestaurantDeliveryFulfillmentStatus {
+  PENDING
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+  FAILED
 }
 
 /// M3/C6: a customer-facing restaurant/virtual brand. A brand owns menus (§6.3);
@@ -4126,8 +4141,10 @@ model RestaurantOrder {
   // for post-close corrections reference the originating order (nullable, SetNull).
   stockMovements             RestaurantStockMovement[]
   customerInteractions       CustomerInteraction[]
+  deliveryFulfillment        RestaurantDeliveryFulfillment?
 
   @@unique([branchId, businessDate, orderNumber])
+  @@unique([organizationId, branchId, id])
   @@index([organizationId])
   @@index([branchId])
   @@index([status])
@@ -6458,16 +6475,118 @@ model RestaurantCustomer {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  identifiers    CustomerIdentifier[]
-  interactions   CustomerInteraction[]
-  tagAssignments CustomerTagAssignment[]
-  consentEvents  CustomerConsent[]
-  loyaltyAccount LoyaltyAccount?
-  orders         RestaurantOrder[]
+  identifiers          CustomerIdentifier[]
+  interactions         CustomerInteraction[]
+  tagAssignments       CustomerTagAssignment[]
+  consentEvents        CustomerConsent[]
+  loyaltyAccount       LoyaltyAccount?
+  orders               RestaurantOrder[]
+  addresses            RestaurantCustomerAddress[]
+  deliveryFulfillments RestaurantDeliveryFulfillment[]
 
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([anonymizedAt])
   @@map("restaurant_customers")
+}
+
+/// Direct-delivery configuration owned by one branch. The fee is authoritative
+/// server data; clients may identify a zone, but fulfillment creation validates
+/// the active zone and copies these values into historical snapshots.
+model RestaurantDeliveryZone {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  name            String
+  active          Boolean  @default(true)
+  fixedFee        Decimal  @db.Decimal(12, 2)
+  minimumSubtotal Decimal  @default(0) @db.Decimal(12, 2)
+  promisedMinutes Int
+  sortOrder       Int      @default(0)
+  areaPostalLabel String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, active, sortOrder])
+  @@map("restaurant_delivery_zones")
+}
+
+/// Reusable restaurant-customer address. Soft deletion preserves prior records;
+/// completed deliveries retain independent snapshots rather than referring here.
+model RestaurantCustomerAddress {
+  id                 String    @id @default(cuid())
+  organizationId     String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId         String
+  label              String
+  recipientName      String
+  normalizedPhone    String
+  addressLine1       String
+  addressLine2       String?
+  locality           String
+  administrativeArea String?
+  postalCode         String?
+  countryCode        String
+  latitude           Decimal?  @db.Decimal(9, 6)
+  longitude          Decimal?  @db.Decimal(9, 6)
+  isDefault          Boolean   @default(false)
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  customer RestaurantCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, customerId, id])
+  @@index([organizationId, customerId, deletedAt])
+  @@map("restaurant_customer_addresses")
+}
+
+/// One direct-delivery record per DELIVERY order. All address, contact, zone,
+/// price, tax and promise fields are immutable snapshots after insertion.
+model RestaurantDeliveryFulfillment {
+  id                          String                              @id @default(cuid())
+  organizationId              String                              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                    String
+  customerId                  String
+  orderId                     String
+  paymentMode                 RestaurantDeliveryPaymentMode
+  status                      RestaurantDeliveryFulfillmentStatus @default(PENDING)
+  recipientNameSnapshot       String
+  normalizedPhoneSnapshot     String
+  addressLine1Snapshot        String
+  addressLine2Snapshot        String?
+  localitySnapshot            String
+  administrativeAreaSnapshot  String?
+  postalCodeSnapshot          String?
+  countryCodeSnapshot         String
+  latitudeSnapshot            Decimal?                            @db.Decimal(9, 6)
+  longitudeSnapshot           Decimal?                            @db.Decimal(9, 6)
+  zoneIdSnapshot              String?
+  zoneNameSnapshot            String?
+  zoneAreaPostalLabelSnapshot String?
+  deliveryFeeSnapshot         Decimal                             @db.Decimal(12, 2)
+  deliveryTaxSnapshot         Decimal                             @default(0) @db.Decimal(12, 2)
+  promisedMinutesSnapshot     Int
+  promisedAt                  DateTime
+  instructions                String?
+  dispatchedAt                DateTime?
+  deliveredAt                 DateTime?
+  cancelledAt                 DateTime?
+  failedAt                    DateTime?
+  createdAt                   DateTime                            @default(now())
+  updatedAt                   DateTime                            @updatedAt
+
+  branch   RestaurantBranch   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  customer RestaurantCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  order    RestaurantOrder    @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, orderId])
+  @@unique([organizationId, branchId, orderId])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, customerId, createdAt])
+  @@map("restaurant_delivery_fulfillments")
 }
 
 /// D08: normalized EMAIL/PHONE identity. EMAIL normalization is also pinned by
