@@ -75,7 +75,8 @@ export interface TaxQuoteInput {
   rules: TaxRule[];
   at: Date;
   proposedTenderType: RestaurantTenderType;
-  priorTenders?: PriorTender[];
+  priorTenderWeights?: PriorTender[];
+  acceptedPrincipal?: DecimalInput;
   afterTaxDiscount?: DecimalInput;
   serviceCharge?: ServiceCharge;
   roundingAdjustment?: DecimalInput;
@@ -307,11 +308,9 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
   const merchandiseCents = Decimal.sum(...considerations.map((value) => cents(value)));
   const weights = zeroWeights();
   let unallocated = merchandiseCents;
-  let acceptedPrincipal = new Decimal(0);
-  for (const tender of input.priorTenders ?? []) {
+  for (const tender of input.priorTenderWeights ?? []) {
     const category = mapTenderTypeToPaymentCategory(tender.tenderType);
     const principalCents = cents(tender.principal, 'Prior tender principal');
-    acceptedPrincipal = acceptedPrincipal.plus(principalCents.div(HUNDRED));
     const weight = Decimal.min(principalCents, unallocated);
     weights[category] = weights[category].plus(weight);
     unallocated = unallocated.minus(weight);
@@ -360,13 +359,13 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
   if (afterTaxDiscount.greaterThan(merchandisePayable))
     throw new RangeError('After-tax discount exceeds merchandise payable');
   const roundingAdjustment = money(input.roundingAdjustment ?? ZERO, 'Rounding adjustment');
+  const acceptedPrincipal = money(input.acceptedPrincipal ?? ZERO, 'Accepted principal');
+  if (acceptedPrincipal.isNegative()) throw new RangeError('Accepted principal cannot be negative');
   const grandTotal = merchandisePayable
     .minus(afterTaxDiscount)
     .plus(serviceChargePayable)
     .plus(roundingAdjustment);
   if (grandTotal.isNegative()) throw new RangeError('Discounts exceed payable');
-  if (acceptedPrincipal.greaterThan(grandTotal))
-    throw new RangeError('Accepted principal exceeds payable');
   return {
     proposedCategory,
     weights: {

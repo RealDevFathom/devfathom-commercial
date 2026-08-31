@@ -518,12 +518,13 @@ async function loadSettlementContext(
     ),
     at,
     proposedTenderType,
-    priorTenders: taxablePriorTenders,
+    priorTenderWeights: taxablePriorTenders,
+    acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
     afterTaxDiscount,
     serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
   });
-  const acceptedPrincipal = sum(priorTenders.map((tender) => tender.amount));
+  const acceptedPrincipal = taxableQuote.acceptedPrincipal;
   const grandTotal = add(taxableQuote.grandTotal, bill.deliveryFeeTotal);
   const quote: TaxQuoteResult = {
     ...taxableQuote,
@@ -606,6 +607,11 @@ async function finalizeTaxSettlement(
       .filter((unit) => unit.identity.billLineId === billLineId);
     const merchandiseTax = sum(units.map((unit) => unit.line.tax));
     const merchandiseGross = sum(units.map((unit) => unit.line.gross));
+    const bucketDiscounts = allocateAcross(
+      afterTaxByLine[lineIndex] ?? ZERO,
+      units.flatMap((unit) => unit.line.buckets.map((bucket) => bucket.gross))
+    );
+    let bucketIndex = 0;
     return {
       billLineId,
       taxAmount: merchandiseTax,
@@ -629,7 +635,7 @@ async function finalizeTaxSettlement(
             unit.identity.beforeTaxDiscount
           ),
           beforeTaxDiscountAmount: unit.identity.beforeTaxDiscount,
-          afterTaxDiscountAmount: ZERO,
+          afterTaxDiscountAmount: bucketDiscounts[bucketIndex++] ?? ZERO,
         }))
       ),
     };
