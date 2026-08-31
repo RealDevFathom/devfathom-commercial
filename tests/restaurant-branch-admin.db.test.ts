@@ -21,6 +21,7 @@ describe('WHA-910 PostgreSQL branch administration', () => {
 
   beforeAll(async () => {
     await owner.connect();
+    await owner.query(`SET app.is_platform_admin = 'true'`);
     await owner.query(`CREATE SCHEMA ${quoted(schema)}`);
     await owner.query(`SET search_path TO ${quoted(schema)}, public`);
     await owner.query(`
@@ -56,8 +57,14 @@ describe('WHA-910 PostgreSQL branch administration', () => {
       ALTER TABLE restaurant_branches ENABLE ROW LEVEL SECURITY;
       ALTER TABLE restaurant_branches FORCE ROW LEVEL SECURITY;
       CREATE POLICY tenant_isolation ON restaurant_branches
-        USING ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
-        WITH CHECK ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
+        USING (
+          current_setting('app.is_platform_admin', true) = 'true'
+          OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+        )
+        WITH CHECK (
+          current_setting('app.is_platform_admin', true) = 'true'
+          OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+        );
       GRANT USAGE ON SCHEMA ${quoted(schema)} TO ${quoted(runtimeRole)};
       GRANT SELECT, INSERT, UPDATE ON restaurant_branches TO ${quoted(runtimeRole)};
       GRANT USAGE, SELECT ON SEQUENCE restaurant_branch_code_seq TO ${quoted(runtimeRole)};
@@ -136,6 +143,7 @@ describe('WHA-910 PostgreSQL branch administration', () => {
     const connection = new pg.Client({ connectionString: runtimeUrl });
     await connection.connect();
     await connection.query(`SET search_path TO ${quoted(schema)}, public`);
+    await connection.query(`SET app.is_platform_admin = 'false'`);
     return connection;
   }
 

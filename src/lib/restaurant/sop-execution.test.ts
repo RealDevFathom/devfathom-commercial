@@ -388,6 +388,7 @@ describeIfDatabase('attachEvidence PostgreSQL retry identity', () => {
     const owner = new Client({ connectionString: OWNER_DATABASE_URL });
     await owner.connect();
     try {
+      await owner.query(`SET app.is_platform_admin = 'true'`);
       await owner.query(
         `INSERT INTO "organizations"
           ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
@@ -465,6 +466,7 @@ describeIfDatabase('attachEvidence PostgreSQL retry identity', () => {
     const owner = new Client({ connectionString: OWNER_DATABASE_URL });
     await owner.connect();
     try {
+      await owner.query(`SET app.is_platform_admin = 'true'`);
       await owner.query(`DELETE FROM "organizations" WHERE "id" = $1`, [dbIds.organization]);
     } finally {
       await owner.end();
