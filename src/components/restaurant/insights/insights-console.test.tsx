@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => {
         orderCount: 42,
         coverCount: 108,
         grossSales: '4210.50',
+        deliveryFeeSales: '120.00',
+        deliveryFeeRefunds: '8.00',
         netSales: '3990.25',
         compTotal: '35.00',
         refundTotal: '18.00',
@@ -58,6 +60,8 @@ const mocks = vi.hoisted(() => {
       orderCount: 42,
       coverCount: 108,
       grossSales: '4210.50',
+      deliveryFeeSales: '120.00',
+      deliveryFeeRefunds: '8.00',
       netSales: '3990.25',
       compTotal: '35.00',
       refundTotal: '18.00',
@@ -272,6 +276,8 @@ describe('InsightsConsole', () => {
     renderConsole();
     setBranch();
     expect(screen.getByText('4210.50')).toBeInTheDocument();
+    expect(screen.getByText('120.00')).toBeInTheDocument();
+    expect(screen.getByText('8.00')).toBeInTheDocument();
     expect(screen.getByText('210.75')).toBeInTheDocument();
     expect(screen.getByText('-1.50')).toBeInTheDocument();
     const region = screen.getByRole('region', { name: 'financial reports table' });

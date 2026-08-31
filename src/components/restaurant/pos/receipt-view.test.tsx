@@ -45,6 +45,9 @@ describe('ReceiptView', () => {
         ],
         totals: {
           subtotal: '24.00',
+          taxTotal: '0.00',
+          serviceChargeTotal: '0.00',
+          deliveryFeeTotal: '4.00',
           compTotal: '0.00',
           roundingAdjustment: '0.00',
           grandTotal: '24.00',
@@ -58,7 +61,8 @@ describe('ReceiptView', () => {
     expect(screen.getByText('Tip')).toBeVisible();
     expect(screen.getByText('2.00')).toBeVisible();
     expect(screen.getByText('Change')).toBeVisible();
-    expect(screen.getByText('4.00')).toBeVisible();
+    expect(screen.getByText('Delivery fee')).toBeVisible();
+    expect(screen.getAllByText('4.00')).toHaveLength(2);
     expect(screen.getAllByText('24.00').length).toBeGreaterThan(0);
   });
 });

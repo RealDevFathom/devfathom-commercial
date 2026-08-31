@@ -30,6 +30,7 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
         {
           status: 'SETTLED',
           subtotal: D('100.00'),
+          deliveryFeeTotal: D('12.00'),
           taxTotal: D('0'),
           serviceChargeTotal: D('0'),
           compTotal: D('20.00'),
@@ -39,6 +40,7 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
         {
           status: 'VOID',
           subtotal: D('12.50'),
+          deliveryFeeTotal: D('4.00'),
           taxTotal: D('0'),
           serviceChargeTotal: D('0'),
           compTotal: D('0'),
@@ -48,6 +50,7 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
         {
           status: 'OPEN',
           subtotal: D('999.99'),
+          deliveryFeeTotal: D('99.00'),
           taxTotal: D('0'),
           serviceChargeTotal: D('0'),
           compTotal: D('0'),
@@ -60,10 +63,12 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
         { type: 'CARD', amount: D('30.00'), tipAmount: D('10.00') },
         { type: 'CASH', amount: D('20.00'), tipAmount: D('0') },
       ],
-      refunds: [{ amount: D('15.00') }],
+      refunds: [{ amount: D('15.00'), deliveryFeeRefundAmount: D('3.00') }],
       drawers: [{ status: 'CLOSED', expectedCash: D('180.00'), countedCash: D('178.00') }],
     });
     expect(aggregate.grossSales.toString()).toBe('100'); // OPEN bill excluded
+    expect(aggregate.deliveryFeeSales.toString()).toBe('12');
+    expect(aggregate.deliveryFeeRefunds.toString()).toBe('3');
     expect(aggregate.compTotal.toString()).toBe('20');
     expect(aggregate.discountTotal.toString()).toBe('5');
     expect(aggregate.netSales.toString()).toBe('75'); // 100 - 20 - 5
@@ -154,6 +159,7 @@ async function seedBillWithTender(input: {
   businessDate: string;
   status: 'OPEN' | 'SETTLED' | 'VOID';
   subtotal: string;
+  deliveryFeeTotal?: string;
   compTotal?: string;
   discountTotal?: string;
   grandTotal: string;
@@ -180,6 +186,7 @@ async function seedBillWithTender(input: {
         businessDate,
         status: input.status,
         subtotal: input.subtotal,
+        deliveryFeeTotal: input.deliveryFeeTotal ?? '0',
         compTotal: input.compTotal ?? '0',
         discountTotal: input.discountTotal ?? '0',
         grandTotal: input.grandTotal,
@@ -215,6 +222,7 @@ async function seedRefund(input: {
   originalTenderId: string;
   businessDate: string;
   amount: string;
+  deliveryFeeRefundAmount?: string;
 }): Promise<string> {
   return deps.withTenantDb(orgId, async (tx) => {
     const coAuth = await tx.restaurantCoAuthorization.create({
@@ -231,6 +239,7 @@ async function seedRefund(input: {
         originalTenderId: input.originalTenderId,
         billId: input.billId,
         amount: input.amount,
+        deliveryFeeRefundAmount: input.deliveryFeeRefundAmount ?? '0',
         kind: 'REFUND',
         businessDate: utcDate(input.businessDate),
         reason: 'seed refund',
@@ -409,8 +418,9 @@ describeIfDatabase('daily close (real DB)', () => {
       businessDate: date,
       status: 'SETTLED',
       subtotal: '100.00',
+      deliveryFeeTotal: '5.00',
       compTotal: '20.00',
-      grandTotal: '80.00',
+      grandTotal: '85.00',
       tender: { type: 'CASH', amount: '80.00', tip: '5.00' },
     });
     // A second (card) tender + a void bill on the same date.
@@ -449,6 +459,7 @@ describeIfDatabase('daily close (real DB)', () => {
     });
     expect(cut.totals.grossSales.toString()).toBe('100');
     expect(cut.totals.netSales.toString()).toBe('80');
+    expect(cut.totals.deliveryFeeSales.toString()).toBe('5');
     expect(cut.totals.compTotal.toString()).toBe('20');
     expect(cut.totals.voidTotal.toString()).toBe('12.5');
     expect(cut.totals.tipTotal.toString()).toBe('15');
@@ -460,6 +471,7 @@ describeIfDatabase('daily close (real DB)', () => {
         where: { id: cut.dailyCloseId },
         select: {
           grossSales: true,
+          deliveryFeeSales: true,
           voidTotal: true,
           tenderTotals: {
             orderBy: { tenderType: 'asc' },
@@ -469,6 +481,7 @@ describeIfDatabase('daily close (real DB)', () => {
       })
     );
     expect(persisted?.grossSales.toString()).toBe('100');
+    expect(persisted?.deliveryFeeSales.toString()).toBe('5');
     // Postgres orders the tenderType enum by DEFINITION order (CASH, CARD, OTHER).
     expect(persisted?.tenderTotals).toEqual([
       { tenderType: 'CASH', amount: expect.anything(), count: 1 },
@@ -660,6 +673,7 @@ describeIfDatabase('daily close (real DB)', () => {
       originalTenderId: seeded.tenderId!,
       businessDate: D2,
       amount: '15.00',
+      deliveryFeeRefundAmount: '3.00',
     });
 
     const cutD2 = await deps.close.cutClose(db, {
@@ -670,10 +684,11 @@ describeIfDatabase('daily close (real DB)', () => {
     const d2 = await read((tx) =>
       tx.restaurantDailyClose.findUnique({
         where: { id: cutD2.dailyCloseId },
-        select: { refundTotal: true, grossSales: true },
+        select: { refundTotal: true, deliveryFeeRefunds: true, grossSales: true },
       })
     );
     expect(d2?.refundTotal.toString()).toBe('15');
+    expect(d2?.deliveryFeeRefunds.toString()).toBe('3');
     expect(d2?.grossSales.toString()).toBe('0');
 
     const d1After = await read((tx) =>

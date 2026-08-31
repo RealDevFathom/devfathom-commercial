@@ -4918,6 +4918,8 @@ model RestaurantDailyClose {
   deviceId            String?
   grossSales          Decimal  @default(0) @db.Decimal(12, 2)
   netSales            Decimal  @default(0) @db.Decimal(12, 2)
+  deliveryFeeSales    Decimal  @default(0) @db.Decimal(12, 2)
+  deliveryFeeRefunds  Decimal  @default(0) @db.Decimal(12, 2)
   taxTotal            Decimal  @default(0) @db.Decimal(12, 2)
   serviceChargeTotal  Decimal  @default(0) @db.Decimal(12, 2)
   tipTotal            Decimal  @default(0) @db.Decimal(12, 2)
@@ -6790,6 +6792,8 @@ model InsightDailyRollup {
   coverCount         Int      @default(0)
   grossSales         Decimal  @default(0) @db.Decimal(12, 2)
   netSales           Decimal  @default(0) @db.Decimal(12, 2)
+  deliveryFeeSales   Decimal  @default(0) @db.Decimal(12, 2)
+  deliveryFeeRefunds Decimal  @default(0) @db.Decimal(12, 2)
   compTotal          Decimal  @default(0) @db.Decimal(12, 2)
   refundTotal        Decimal  @default(0) @db.Decimal(12, 2)
   voidTotal          Decimal  @default(0) @db.Decimal(12, 2)

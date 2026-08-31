@@ -12,7 +12,7 @@ import type { RestaurantJobHandler } from './job-handlers';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
-export const INSIGHT_PROJECTION_VERSION = 2;
+export const INSIGHT_PROJECTION_VERSION = 3;
 
 export type RollupErrorReason = 'CLOSE_NOT_FOUND' | 'RECONCILIATION_FAILED' | 'INVALID';
 
@@ -29,6 +29,7 @@ export class RollupError extends Error {
 type RawBill = {
   status: 'OPEN' | 'SETTLED' | 'VOID';
   subtotal: Prisma.Decimal;
+  deliveryFeeTotal: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
   serviceChargeTotal: Prisma.Decimal;
   compTotal: Prisma.Decimal;
@@ -44,6 +45,8 @@ type RawDrawer = {
 export type ReconciledFinancials = {
   grossSales: Prisma.Decimal;
   netSales: Prisma.Decimal;
+  deliveryFeeSales: Prisma.Decimal;
+  deliveryFeeRefunds: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
   serviceChargeTotal: Prisma.Decimal;
   tipTotal: Prisma.Decimal;
@@ -59,7 +62,7 @@ export type ReconciledFinancials = {
 export function computeReconciledFinancials(input: {
   bills: readonly RawBill[];
   tenders: readonly { tipAmount: Prisma.Decimal }[];
-  refunds: readonly { amount: Prisma.Decimal }[];
+  refunds: readonly { amount: Prisma.Decimal; deliveryFeeRefundAmount: Prisma.Decimal }[];
   drawers: readonly RawDrawer[];
 }): ReconciledFinancials {
   const settled = input.bills.filter((bill) => bill.status === 'SETTLED');
@@ -71,6 +74,8 @@ export function computeReconciledFinancials(input: {
   return {
     grossSales,
     netSales: sub(sub(grossSales, compTotal), discountTotal),
+    deliveryFeeSales: sum(settled.map((bill) => bill.deliveryFeeTotal)),
+    deliveryFeeRefunds: sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount)),
     taxTotal: sum(settled.map((bill) => bill.taxTotal)),
     serviceChargeTotal: sum(settled.map((bill) => bill.serviceChargeTotal)),
     tipTotal: sum(input.tenders.map((tender) => tender.tipAmount)),
@@ -263,6 +268,8 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         supersedesCloseId: true,
         grossSales: true,
         netSales: true,
+        deliveryFeeSales: true,
+        deliveryFeeRefunds: true,
         taxTotal: true,
         serviceChargeTotal: true,
         tipTotal: true,
@@ -284,6 +291,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       select: {
         status: true,
         subtotal: true,
+        deliveryFeeTotal: true,
         taxTotal: true,
         serviceChargeTotal: true,
         compTotal: true,
@@ -297,7 +305,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
     });
     const refunds = await tx.restaurantRefund.findMany({
       where: { businessDate, bill: { branchId: input.branchId } },
-      select: { amount: true },
+      select: { amount: true, deliveryFeeRefundAmount: true },
     });
     const drawers = await tx.restaurantDrawerSession.findMany({
       where: { branchId: input.branchId, businessDate },
@@ -443,6 +451,8 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         coverCount: orders.reduce((total, order) => total + (order.coverCount ?? 0), 0),
         grossSales: close.grossSales,
         netSales: close.netSales,
+        deliveryFeeSales: close.deliveryFeeSales,
+        deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,
         refundTotal: close.refundTotal,
         voidTotal: close.voidTotal,
@@ -457,6 +467,8 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         coverCount: orders.reduce((total, order) => total + (order.coverCount ?? 0), 0),
         grossSales: close.grossSales,
         netSales: close.netSales,
+        deliveryFeeSales: close.deliveryFeeSales,
+        deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,
         refundTotal: close.refundTotal,
         voidTotal: close.voidTotal,

@@ -28,7 +28,14 @@ type Preview = {
   businessDate: string;
   readiness: { openBillCount: number; openDrawerCount: number };
   existingCloseId: string | null;
-  totals: { grossSales: string; netSales: string; cashExpected: string; cashVariance: string };
+  totals: {
+    grossSales: string;
+    netSales: string;
+    deliveryFeeSales: string;
+    deliveryFeeRefunds: string;
+    cashExpected: string;
+    cashVariance: string;
+  };
 };
 
 function errorMessage(error: unknown) {
@@ -206,6 +213,14 @@ export function DayClosePanel({
               <div>
                 <dt className="text-text-muted">Gross sales</dt>
                 <dd className="font-mono tabular-nums">{preview.totals.grossSales}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Delivery fee sales</dt>
+                <dd className="font-mono tabular-nums">{preview.totals.deliveryFeeSales}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Delivery fee refunds</dt>
+                <dd className="font-mono tabular-nums">{preview.totals.deliveryFeeRefunds}</dd>
               </div>
               <div>
                 <dt className="text-text-muted">Cash expected</dt>
