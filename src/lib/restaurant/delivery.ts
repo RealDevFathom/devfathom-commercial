@@ -28,6 +28,7 @@ export class DeliveryError extends Error {
 
 const PHONE = /^\+[1-9]\d{6,14}$/;
 const COUNTRY = /^[A-Z]{2}$/;
+type DecimalInput = Prisma.Decimal | string;
 const required = (value: string, field: string) => {
   const result = value.trim();
   if (!result) throw new DeliveryError(`${field} is required.`, 'INVALID_INPUT');
@@ -42,7 +43,7 @@ export function normalizeDeliveryPhone(value: string): string {
   return normalized;
 }
 
-function nonNegativeMoney(value: Prisma.Decimal.Value, field: string) {
+function nonNegativeMoney(value: DecimalInput, field: string) {
   const decimal = new Prisma.Decimal(value);
   if (!decimal.isFinite() || decimal.isNegative() || decimal.decimalPlaces() > 2) {
     throw new DeliveryError(`${field} must be non-negative money.`, 'INVALID_INPUT');
@@ -76,8 +77,8 @@ export function listDeliveryZones(db: ScopedDb, organizationId: string, branchId
 
 export type DeliveryZoneInput = {
   name: string;
-  fixedFee: Prisma.Decimal.Value;
-  minimumSubtotal?: Prisma.Decimal.Value;
+  fixedFee: DecimalInput;
+  minimumSubtotal?: DecimalInput;
   promisedMinutes: number;
   sortOrder?: number;
   areaPostalLabel?: string | null;
@@ -87,7 +88,7 @@ function zoneData(input: DeliveryZoneInput) {
   return {
     name: required(input.name, 'Zone name'),
     fixedFee: nonNegativeMoney(input.fixedFee, 'Fixed fee'),
-    minimumSubtotal: nonNegativeMoney(input.minimumSubtotal ?? 0, 'Minimum subtotal'),
+    minimumSubtotal: nonNegativeMoney(input.minimumSubtotal ?? '0', 'Minimum subtotal'),
     promisedMinutes: nonNegativeInteger(input.promisedMinutes, 'Promised minutes'),
     sortOrder: nonNegativeInteger(input.sortOrder ?? 0, 'Sort order'),
     areaPostalLabel: input.areaPostalLabel?.trim() || null,
@@ -136,7 +137,7 @@ export async function quoteDeliveryZone(
     organizationId: string;
     branchId: string;
     zoneId: string;
-    subtotal: Prisma.Decimal.Value;
+    subtotal: DecimalInput;
   }
 ) {
   const zone = await db.restaurantDeliveryZone.findFirst({
@@ -175,8 +176,8 @@ export type DeliveryAddressInput = {
   administrativeArea?: string | null;
   postalCode?: string | null;
   countryCode: string;
-  latitude?: Prisma.Decimal.Value | null;
-  longitude?: Prisma.Decimal.Value | null;
+  latitude?: DecimalInput | null;
+  longitude?: DecimalInput | null;
   isDefault?: boolean;
 };
 
