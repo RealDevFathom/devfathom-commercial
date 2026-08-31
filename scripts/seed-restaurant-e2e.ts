@@ -250,7 +250,7 @@ async function requirePristineDeliveryLane(tx: Prisma.TransactionClient) {
       (SELECT count(*) FROM restaurant_insight_daily_rollups WHERE "branchId" = ${RESTAURANT_E2E.branchA2Id})
     )::bigint AS rows
   `);
-  if ((state?.rows ?? 0n) !== 0n) {
+  if ((state?.rows ?? BigInt(0)) !== BigInt(0)) {
     throw new Error(
       'Restaurant Delivery E2E requires a fresh disposable database; isolated A2 runtime state already exists.'
     );
@@ -1838,25 +1838,23 @@ async function main() {
 
     const verification = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
-        `SELECT set_config('app.current_organization_id', '', true), set_config('app.is_platform_admin', 'true', true)`
+        `SELECT set_config('app.current_organization_id', $1, true), set_config('app.is_platform_admin', 'true', true)`,
+        RESTAURANT_E2E.organizationId
       );
-      const [alexMemberships, ownedRows] = await Promise.all([
-        tx.user.findMany({
-          where: { email: ALEX_EMAIL },
-          select: { organizationId: true },
-          orderBy: { organizationId: 'asc' },
-        }),
-        Promise.all(
-          RESTAURANT_E2E_OWNED_FIXTURES.map(async ([table, ids]) => {
-            const rows = await tx.$queryRaw<Array<{ id: string; organizationId: string }>>(
-              Prisma.sql`SELECT id, ${
-                table === 'organizations' ? Prisma.sql`id` : Prisma.sql`"organizationId"`
-              } AS "organizationId" FROM ${Prisma.raw(table)} WHERE id IN (${Prisma.join([...ids])})`
-            );
-            return { table, expected: ids.length, rows };
-          })
-        ),
-      ]);
+      const alexMemberships = await tx.user.findMany({
+        where: { email: ALEX_EMAIL },
+        select: { organizationId: true },
+        orderBy: { organizationId: 'asc' },
+      });
+      const ownedRows = [];
+      for (const [table, ids] of RESTAURANT_E2E_OWNED_FIXTURES) {
+        const rows = await tx.$queryRaw<Array<{ id: string; organizationId: string }>>(
+          Prisma.sql`SELECT id, ${
+            table === 'organizations' ? Prisma.sql`id` : Prisma.sql`"organizationId"`
+          } AS "organizationId" FROM ${Prisma.raw(table)} WHERE id IN (${Prisma.join([...ids])})`
+        );
+        ownedRows.push({ table, expected: ids.length, rows });
+      }
       return { alexMemberships, ownedRows };
     });
 
