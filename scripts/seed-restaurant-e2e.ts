@@ -15,7 +15,6 @@ import {
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
 import { businessDateToUtcDate, resolveBusinessDate } from '../src/lib/restaurant/business-date.js';
-import { findPakistanTaxProfile } from '../src/lib/restaurant/pakistan-tax-profiles.js';
 import { resolveRestaurantE2eDatabaseUrl } from './restaurant-e2e-database.js';
 
 export const RESTAURANT_E2E = {
@@ -259,34 +258,156 @@ async function requirePristineDeliveryLane(tx: Prisma.TransactionClient) {
 }
 
 async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
-  const existing = await tx.restaurantTaxProfileVersion.findUnique({
-    where: { id: IDS.deliveryTaxProfile },
-    select: { id: true },
-  });
-  if (existing) return;
-
-  const preset = findPakistanTaxProfile('PK-SD-RESTAURANT');
-  if (!preset?.enabled || !preset.sourceContentHash || preset.rules.length !== 3) {
-    throw new Error('Restaurant Delivery E2E requires the source-pinned Sindh tax fixture.');
+  const sourceContent = 'restaurant-e2e synthetic zero-rate tax fixture v1';
+  const sourceContentHash = createHash('sha256').update(sourceContent).digest('hex');
+  const approvalReference = 'TEST_ONLY · SYNTHETIC_ZERO_RATE';
+  const activationIdempotencyKey = `restaurant-e2e-delivery-tax:${CURRENT_BUSINESS_DATE.toISOString()}`;
+  const activationPayloadHash = createHash('sha256').update(activationIdempotencyKey).digest('hex');
+  const eligibilityEvidence = { fixture: true, synthetic: true, productionTaxAdvice: false };
+  const rules = [
+    { id: IDS.deliveryTaxRuleCash, paymentCategory: 'CASH', ruleCode: 'TEST_ZERO_CASH' },
+    { id: IDS.deliveryTaxRuleCard, paymentCategory: 'CARD', ruleCode: 'TEST_ZERO_CARD' },
+    { id: IDS.deliveryTaxRuleOther, paymentCategory: 'OTHER', ruleCode: 'TEST_ZERO_OTHER' },
+  ] as const;
+  const [existingSource, existingProfile, existingRules] = await Promise.all([
+    tx.restaurantTaxOfficialSource.findUnique({ where: { id: IDS.deliveryTaxSource } }),
+    tx.restaurantTaxProfileVersion.findUnique({ where: { id: IDS.deliveryTaxProfile } }),
+    tx.restaurantTaxRuleVersion.findMany({
+      where: { id: { in: rules.map(({ id }) => id) } },
+      orderBy: { id: 'asc' },
+    }),
+  ]);
+  const existingCount =
+    Number(Boolean(existingSource)) + Number(Boolean(existingProfile)) + existingRules.length;
+  if (existingCount > 0) {
+    const actual = {
+      source: existingSource && {
+        id: existingSource.id,
+        organizationId: existingSource.organizationId,
+        authorityCode: existingSource.authorityCode,
+        documentTitle: existingSource.documentTitle,
+        sourceUrl: existingSource.sourceUrl,
+        contentHash: existingSource.contentHash,
+        retrievedAt: existingSource.retrievedAt.toISOString(),
+        expiresAt: existingSource.expiresAt?.toISOString() ?? null,
+        createdAt: existingSource.createdAt.toISOString(),
+      },
+      profile: existingProfile && {
+        id: existingProfile.id,
+        organizationId: existingProfile.organizationId,
+        branchId: existingProfile.branchId,
+        versionNumber: existingProfile.versionNumber,
+        status: existingProfile.status,
+        effectiveFrom: existingProfile.effectiveFrom.toISOString(),
+        effectiveTo: existingProfile.effectiveTo?.toISOString() ?? null,
+        approvalReference: existingProfile.approvalReference,
+        approvedAt: existingProfile.approvedAt?.toISOString() ?? null,
+        publishedAt: existingProfile.publishedAt?.toISOString() ?? null,
+        presetId: existingProfile.presetId,
+        activationIdempotencyKey: existingProfile.activationIdempotencyKey,
+        activationPayloadHash: existingProfile.activationPayloadHash,
+        eligibilityEvidence: existingProfile.eligibilityEvidence,
+        profileName: existingProfile.profileName,
+        jurisdictionCode: existingProfile.jurisdictionCode,
+        priceMode: existingProfile.priceMode,
+        evidenceKind: existingProfile.evidenceKind,
+        createdAt: existingProfile.createdAt.toISOString(),
+        updatedAt: existingProfile.updatedAt.toISOString(),
+      },
+      rules: existingRules.map((rule) => ({
+        id: rule.id,
+        organizationId: rule.organizationId,
+        profileVersionId: rule.profileVersionId,
+        officialSourceId: rule.officialSourceId,
+        ruleCode: rule.ruleCode,
+        paymentCategory: rule.paymentCategory,
+        priceMode: rule.priceMode,
+        discountTreatment: rule.discountTreatment,
+        rate: rule.rate.toString(),
+        status: rule.status,
+        effectiveFrom: rule.effectiveFrom.toISOString(),
+        effectiveTo: rule.effectiveTo?.toISOString() ?? null,
+        approvalReference: rule.approvalReference,
+        approvedAt: rule.approvedAt?.toISOString() ?? null,
+        publishedAt: rule.publishedAt?.toISOString() ?? null,
+        createdAt: rule.createdAt.toISOString(),
+        updatedAt: rule.updatedAt.toISOString(),
+      })),
+    };
+    const at = CURRENT_BUSINESS_DATE.toISOString();
+    const expected = {
+      source: {
+        id: IDS.deliveryTaxSource,
+        organizationId: RESTAURANT_E2E.organizationId,
+        authorityCode: 'TEST-E2E',
+        documentTitle: 'Synthetic zero-rate Restaurant Delivery fixture',
+        sourceUrl: 'https://example.invalid/restaurant-e2e/synthetic-zero-rate-tax',
+        contentHash: sourceContentHash,
+        retrievedAt: at,
+        expiresAt: null,
+        createdAt: at,
+      },
+      profile: {
+        id: IDS.deliveryTaxProfile,
+        organizationId: RESTAURANT_E2E.organizationId,
+        branchId: RESTAURANT_E2E.branchA2Id,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom: at,
+        effectiveTo: null,
+        approvalReference,
+        approvedAt: at,
+        publishedAt: at,
+        presetId: 'TEST-ONLY-ZERO-RATE',
+        activationIdempotencyKey,
+        activationPayloadHash,
+        eligibilityEvidence,
+        profileName: 'Synthetic zero-rate Delivery fixture',
+        jurisdictionCode: null,
+        priceMode: 'INCLUSIVE',
+        evidenceKind: null,
+        createdAt: at,
+        updatedAt: at,
+      },
+      rules: rules
+        .map((rule) => ({
+          id: rule.id,
+          organizationId: RESTAURANT_E2E.organizationId,
+          profileVersionId: IDS.deliveryTaxProfile,
+          officialSourceId: IDS.deliveryTaxSource,
+          ruleCode: rule.ruleCode,
+          paymentCategory: rule.paymentCategory,
+          priceMode: 'INCLUSIVE',
+          discountTreatment: 'BEFORE_TAX',
+          rate: '0',
+          status: 'PUBLISHED',
+          effectiveFrom: at,
+          effectiveTo: null,
+          approvalReference,
+          approvedAt: at,
+          publishedAt: at,
+          createdAt: at,
+          updatedAt: at,
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    };
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error('Existing Restaurant Delivery E2E synthetic tax fixture does not match.');
+    }
+    return;
   }
+
   await tx.restaurantTaxOfficialSource.create({
     data: {
       id: IDS.deliveryTaxSource,
-      authorityCode: preset.authorityCode,
-      documentTitle: preset.sourceTitle,
-      sourceUrl: preset.sourceUrl,
-      contentHash: preset.sourceContentHash,
+      authorityCode: 'TEST-E2E',
+      documentTitle: 'Synthetic zero-rate Restaurant Delivery fixture',
+      sourceUrl: 'https://example.invalid/restaurant-e2e/synthetic-zero-rate-tax',
+      contentHash: sourceContentHash,
       retrievedAt: CURRENT_BUSINESS_DATE,
       createdAt: CURRENT_BUSINESS_DATE,
     },
   });
-  const ruleIds = {
-    CASH: IDS.deliveryTaxRuleCash,
-    CARD: IDS.deliveryTaxRuleCard,
-    OTHER: IDS.deliveryTaxRuleOther,
-  } as const;
-  const approvalReference = 'TEST_FIXTURE · PK-SD-RESTAURANT';
-  const activationIdempotencyKey = `restaurant-e2e-delivery-tax:${CURRENT_BUSINESS_DATE.toISOString()}`;
   await tx.restaurantTaxProfileVersion.create({
     data: {
       id: IDS.deliveryTaxProfile,
@@ -297,24 +418,30 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
       approvalReference,
       approvedAt: CURRENT_BUSINESS_DATE,
       publishedAt: CURRENT_BUSINESS_DATE,
-      presetId: preset.id,
+      presetId: 'TEST-ONLY-ZERO-RATE',
       activationIdempotencyKey,
-      activationPayloadHash: createHash('sha256').update(activationIdempotencyKey).digest('hex'),
-      eligibilityEvidence: { accountantReviewed: true, fixture: true },
+      activationPayloadHash,
+      eligibilityEvidence,
+      profileName: 'Synthetic zero-rate Delivery fixture',
+      priceMode: 'INCLUSIVE',
+      createdAt: CURRENT_BUSINESS_DATE,
+      updatedAt: CURRENT_BUSINESS_DATE,
       rules: {
-        create: preset.rules.map((rule) => ({
-          id: ruleIds[rule.paymentCategory],
+        create: rules.map((rule) => ({
+          id: rule.id,
           officialSourceId: IDS.deliveryTaxSource,
           ruleCode: rule.ruleCode,
           paymentCategory: rule.paymentCategory,
           priceMode: 'INCLUSIVE',
           discountTreatment: 'BEFORE_TAX',
-          rate: rule.rate,
+          rate: '0',
           status: 'PUBLISHED',
           effectiveFrom: CURRENT_BUSINESS_DATE,
           approvalReference,
           approvedAt: CURRENT_BUSINESS_DATE,
           publishedAt: CURRENT_BUSINESS_DATE,
+          createdAt: CURRENT_BUSINESS_DATE,
+          updatedAt: CURRENT_BUSINESS_DATE,
         })),
       },
     },
