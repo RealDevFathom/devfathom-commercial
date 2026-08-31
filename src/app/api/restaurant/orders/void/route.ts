@@ -12,6 +12,7 @@ import {
   missingIdempotencyKey,
   orderErrorResponse,
   requireActingOperator,
+  requireOrderTakingCapability,
   requireOrderInDeviceBranch,
   voidBody,
 } from '@/lib/restaurant/terminal-orders';
@@ -29,6 +30,8 @@ import {
 export const POST = withTerminalAuth(async (ctx, request) => {
   const operator = requireActingOperator(ctx);
   if (!operator.ok) return operator.response;
+  const capabilityError = await requireOrderTakingCapability(ctx, operator.staffProfileId);
+  if (capabilityError) return capabilityError;
 
   const key = idempotencyKeyFromRequest(request);
   if (!key) return missingIdempotencyKey();
