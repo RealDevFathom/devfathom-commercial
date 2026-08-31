@@ -1022,6 +1022,7 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
 
     const cut = await deps.cutBills(deps.createTenantDb(orgId), {
       orderId: ids.recipeOrder,
+      branchId: ids.recipeBranch,
       split: { kind: 'NONE' },
       actor: {
         staffProfileId: ids.staff,
