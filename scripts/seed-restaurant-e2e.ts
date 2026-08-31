@@ -15,6 +15,7 @@ import {
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
 import { businessDateToUtcDate, resolveBusinessDate } from '../src/lib/restaurant/business-date.js';
+import { findPakistanTaxProfile } from '../src/lib/restaurant/pakistan-tax-profiles.js';
 import { resolveRestaurantE2eDatabaseUrl } from './restaurant-e2e-database.js';
 
 export const RESTAURANT_E2E = {
@@ -80,6 +81,11 @@ const IDS = {
   customerAddress: 'customer_address_restaurant_e2e',
   deliveryZone: 'delivery_zone_restaurant_e2e',
   isolatedDeliveryZone: 'delivery_zone_restaurant_e2e_isolated',
+  deliveryTaxSource: 'tax_source_restaurant_e2e_delivery',
+  deliveryTaxProfile: 'tax_profile_restaurant_e2e_delivery',
+  deliveryTaxRuleCash: 'tax_rule_restaurant_e2e_delivery_cash',
+  deliveryTaxRuleCard: 'tax_rule_restaurant_e2e_delivery_card',
+  deliveryTaxRuleOther: 'tax_rule_restaurant_e2e_delivery_other',
   loyaltyProgram: 'loyalty_program_restaurant_e2e_v1',
   loyaltyAccount: 'loyalty_account_restaurant_e2e',
   loyaltyEntry: 'loyalty_entry_restaurant_e2e_opening',
@@ -202,6 +208,12 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['restaurant_customers', [IDS.customer]],
   ['restaurant_customer_addresses', [IDS.customerAddress]],
   ['restaurant_delivery_zones', [IDS.deliveryZone, IDS.isolatedDeliveryZone]],
+  ['restaurant_tax_official_sources', [IDS.deliveryTaxSource]],
+  ['restaurant_tax_profile_versions', [IDS.deliveryTaxProfile]],
+  [
+    'restaurant_tax_rule_versions',
+    [IDS.deliveryTaxRuleCash, IDS.deliveryTaxRuleCard, IDS.deliveryTaxRuleOther],
+  ],
   ['restaurant_loyalty_program_versions', [IDS.loyaltyProgram]],
   ['restaurant_loyalty_accounts', [IDS.loyaltyAccount]],
   ['restaurant_loyalty_points_entries', [IDS.loyaltyEntry]],
@@ -244,6 +256,69 @@ async function requirePristineDeliveryLane(tx: Prisma.TransactionClient) {
       'Restaurant Delivery E2E requires a fresh disposable database; isolated A2 runtime state already exists.'
     );
   }
+}
+
+async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
+  const existing = await tx.restaurantTaxProfileVersion.findUnique({
+    where: { id: IDS.deliveryTaxProfile },
+    select: { id: true },
+  });
+  if (existing) return;
+
+  const preset = findPakistanTaxProfile('PK-SD-RESTAURANT');
+  if (!preset?.enabled || !preset.sourceContentHash || preset.rules.length !== 3) {
+    throw new Error('Restaurant Delivery E2E requires the source-pinned Sindh tax fixture.');
+  }
+  await tx.restaurantTaxOfficialSource.create({
+    data: {
+      id: IDS.deliveryTaxSource,
+      authorityCode: preset.authorityCode,
+      documentTitle: preset.sourceTitle,
+      sourceUrl: preset.sourceUrl,
+      contentHash: preset.sourceContentHash,
+      retrievedAt: CURRENT_BUSINESS_DATE,
+      createdAt: CURRENT_BUSINESS_DATE,
+    },
+  });
+  const ruleIds = {
+    CASH: IDS.deliveryTaxRuleCash,
+    CARD: IDS.deliveryTaxRuleCard,
+    OTHER: IDS.deliveryTaxRuleOther,
+  } as const;
+  const approvalReference = 'TEST_FIXTURE · PK-SD-RESTAURANT';
+  const activationIdempotencyKey = `restaurant-e2e-delivery-tax:${CURRENT_BUSINESS_DATE.toISOString()}`;
+  await tx.restaurantTaxProfileVersion.create({
+    data: {
+      id: IDS.deliveryTaxProfile,
+      branchId: RESTAURANT_E2E.branchA2Id,
+      versionNumber: 1,
+      status: 'PUBLISHED',
+      effectiveFrom: CURRENT_BUSINESS_DATE,
+      approvalReference,
+      approvedAt: CURRENT_BUSINESS_DATE,
+      publishedAt: CURRENT_BUSINESS_DATE,
+      presetId: preset.id,
+      activationIdempotencyKey,
+      activationPayloadHash: createHash('sha256').update(activationIdempotencyKey).digest('hex'),
+      eligibilityEvidence: { accountantReviewed: true, fixture: true },
+      rules: {
+        create: preset.rules.map((rule) => ({
+          id: ruleIds[rule.paymentCategory],
+          officialSourceId: IDS.deliveryTaxSource,
+          ruleCode: rule.ruleCode,
+          paymentCategory: rule.paymentCategory,
+          priceMode: 'INCLUSIVE',
+          discountTreatment: 'BEFORE_TAX',
+          rate: rule.rate,
+          status: 'PUBLISHED',
+          effectiveFrom: CURRENT_BUSINESS_DATE,
+          approvalReference,
+          approvedAt: CURRENT_BUSINESS_DATE,
+          publishedAt: CURRENT_BUSINESS_DATE,
+        })),
+      },
+    },
+  });
 }
 
 async function main() {
@@ -395,6 +470,7 @@ async function main() {
           },
         });
         await requirePristineDeliveryLane(tx);
+        await seedDeliveryTaxProfile(tx);
         await tx.restaurantFloor.upsert({
           where: { id: IDS.floor },
           update: {

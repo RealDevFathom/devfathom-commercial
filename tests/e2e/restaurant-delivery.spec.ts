@@ -161,11 +161,17 @@ async function readyVisible(browser: Browser, contexts: BrowserContext[], orderN
       name: new RegExp(`Start ${fixture.menuItem.name} for order ${orderNumber}`),
     })
     .click();
+  const readyResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/kds/bump') && response.request().method() === 'POST'
+  );
   await page
     .getByRole('button', {
       name: new RegExp(`Mark ready ${fixture.menuItem.name} for order ${orderNumber}`),
     })
     .click();
+  expect((await readyResponse).status()).toBe(200);
+  await expect(page.getByText('Item marked ready.')).toBeVisible();
   return { context, page };
 }
 
@@ -191,24 +197,37 @@ async function refreshDeliveryBoard(
   expectedMode: 'COD' | 'PREPAID'
 ) {
   const responsePromise = kds.page.waitForResponse(
-    (response) =>
-      response.url().endsWith('/api/restaurant/kds/delivery/queue') &&
-      response.request().method() === 'GET',
+    async (response) => {
+      if (
+        !response.url().endsWith('/api/restaurant/kds/delivery/queue') ||
+        response.request().method() !== 'GET' ||
+        response.status() !== 200
+      ) {
+        return false;
+      }
+      const queue = (await response.json()) as {
+        deliveries: Array<{
+          orderNumber: number;
+          status: string;
+          paymentMode: string | null;
+          dispatchable: boolean;
+          rejection: string | null;
+        }>;
+      };
+      return queue.deliveries.some(
+        (delivery) =>
+          delivery.orderNumber === orderNumber &&
+          delivery.status === 'PENDING' &&
+          delivery.paymentMode === expectedMode &&
+          delivery.dispatchable === true &&
+          delivery.rejection === null
+      );
+    },
     { timeout: 15_000 }
   );
   await kds.page.evaluate(() => window.dispatchEvent(new Event('online')));
   const response = await responsePromise;
   expect(response.status()).toBe(200);
-  const queue = (await response.json()) as {
-    deliveries: Array<{ orderNumber: number; paymentMode: string | null; dispatchable: boolean }>;
-  };
-  expect(queue.deliveries).toContainEqual(
-    expect.objectContaining({
-      orderNumber,
-      paymentMode: expectedMode,
-      dispatchable: true,
-    })
-  );
   const delivery = kds.page.getByRole('article').filter({ hasText: `Order #${orderNumber}` });
   await expect(delivery.getByText(expectedMode, { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(
