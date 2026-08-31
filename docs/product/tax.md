@@ -39,7 +39,7 @@ rather than recalculating against the current profile.
 
 - Overlapping effective profiles/rules are rejected at the database boundary; see `uses a database exclusion constraint across two concurrent connections` in `tests/restaurant-tax-core-rls.test.ts`.
 - Cross-tenant profile/rule/snapshot relations and invalid reversal shapes are rejected under the restricted runtime role; see `rejects every crafted cross-tenant tax relation under the restricted role` and the exact reversal test in `tests/restaurant-tax-core-rls.test.ts`.
-- Missing effective configuration and unsupported payment-category/rate combinations must fail closed in the caller; a complete checkout integration acceptance test: **NOT IMPLEMENTED**.
+- Terminal-checkout API acceptance proves Pakistan inclusive odd-cent tax settlement for TAKEAWAY with Cash and DELIVERY with Card, including receipt totals and frozen settlement tax snapshots. Settlement also freezes per-tender tax evidence, and refunds allocate tax from that frozen evidence rather than current rates. This is application and database integration evidence, not physical terminal or live payment-provider integration.
 
 ## Gaps
 
