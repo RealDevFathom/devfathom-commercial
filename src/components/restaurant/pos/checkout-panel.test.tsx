@@ -10,6 +10,7 @@ const unbilled = {
   blocker: 'ITEMS_UNBILLED',
   derivedOrderTotal: '24.00',
   accountedTotal: '0.00',
+  deliveryFeeTotal: '4.00',
   unbilledItemIds: ['item-1'],
   bills: [],
 };
@@ -25,6 +26,7 @@ const billed = {
       status: 'OPEN',
       splitKind: 'NONE',
       grandTotal: '24.00',
+      deliveryFeeTotal: '4.00',
       compTotal: '0.00',
       receiptNumber: null,
     },
@@ -32,6 +34,16 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
+  it('shows the frozen delivery fee separately from order and bill totals', async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Order balance')).toBeVisible();
+    expect(screen.getAllByText('Delivery fee')).toHaveLength(2);
+    expect(screen.getAllByText('4.00')).toHaveLength(2);
+    expect(screen.getAllByText('24.00')).toHaveLength(3);
+  });
+
   it('loads summary and cuts one bill through the L5 endpoint', async () => {
     const calls: { path: string; options?: TerminalRequestOptions }[] = [];
     let reads = 0;
@@ -79,10 +91,11 @@ describe('CheckoutPanel', () => {
 
   it('renders an empty checkout without inventing payment actions', async () => {
     const request: TerminalRequest = async <T,>() =>
-      ({ ...unbilled, blocker: null, unbilledItemIds: [] }) as T;
+      ({ ...unbilled, deliveryFeeTotal: null, blocker: null, unbilledItemIds: [] }) as T;
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
     expect(await screen.findByText('Nothing to collect')).toBeVisible();
+    expect(screen.queryByText('Delivery fee')).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Apply tender' })).not.toBeInTheDocument()
     );

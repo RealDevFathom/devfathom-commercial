@@ -201,4 +201,27 @@ describe('OrderTicketPanel', () => {
     expect(actions.onClose).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Close order' })).not.toBeInTheDocument();
   });
+
+  it('opens delivery checkout before dispatch without calling close and shows its fee separately', () => {
+    const actions = handlers();
+    render(
+      <OrderTicketPanel
+        order={{
+          ...order,
+          channel: 'DELIVERY',
+          status: 'OPEN',
+          tables: [],
+          totals: { ...order.totals, deliveryFee: '4.00' },
+        }}
+        actingOperatorId="staff-1"
+        pending={false}
+        {...actions}
+      />
+    );
+
+    expect(screen.getByText(/Delivery fee 4.00/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Collect payment' }));
+    expect(actions.onCollectPayment).toHaveBeenCalledOnce();
+    expect(actions.onClose).not.toHaveBeenCalled();
+  });
 });

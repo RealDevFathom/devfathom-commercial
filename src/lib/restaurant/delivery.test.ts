@@ -90,6 +90,11 @@ describe('delivery payment authority', () => {
     async (suppliedMode) => {
       const create = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
       const tx = {
+        restaurantOrderIdempotencyKey: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue({}),
+          update: vi.fn().mockResolvedValue({}),
+        },
         $queryRaw: vi.fn().mockResolvedValue([{ id: 'order-1' }]),
         restaurantOrder: {
           findFirst: vi.fn().mockResolvedValue({
@@ -139,6 +144,8 @@ describe('delivery payment authority', () => {
         orderId: 'order-1',
         addressId: 'address-1',
         zoneId: 'zone-1',
+        deviceId: 'device-1',
+        idempotencyKey: 'attach-1',
         paymentMode: suppliedMode,
         now: new Date('2026-08-31T12:00:00.000Z'),
       } as Parameters<typeof createDeliveryFulfillment>[1] & { paymentMode: string });
@@ -148,6 +155,49 @@ describe('delivery payment authority', () => {
       });
     }
   );
+
+  it('returns the committed fulfillment on an exact lost-response retry without creating again', async () => {
+    const committed = {
+      id: 'fulfillment-1',
+      orderId: 'order-1',
+      deliveryFeeSnapshot: new Prisma.Decimal('250.00'),
+    };
+    const findUnique = vi.fn().mockResolvedValue({
+      commandType:
+        'delivery.attach:{"orderId":"order-1","customerId":"customer-1","addressId":"address-1","zoneId":"zone-1","instructions":"Gate 2"}',
+      resultRef: 'fulfillment-1',
+    });
+    const findFirst = vi.fn().mockResolvedValue(committed);
+    const create = vi.fn();
+    const tx = {
+      restaurantOrderIdempotencyKey: { findUnique, create },
+      restaurantDeliveryFulfillment: { findFirst },
+    };
+    const db = { $transaction: (work: (value: typeof tx) => unknown) => work(tx) } as never;
+
+    await expect(
+      createDeliveryFulfillment(db, {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        customerId: 'customer-1',
+        orderId: 'order-1',
+        addressId: 'address-1',
+        zoneId: 'zone-1',
+        instructions: ' Gate 2 ',
+        deviceId: 'device-1',
+        idempotencyKey: 'attach-1',
+      })
+    ).resolves.toBe(committed);
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'fulfillment-1',
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        orderId: 'order-1',
+      },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
 });
 
 describe('delivery fulfillment transitions', () => {

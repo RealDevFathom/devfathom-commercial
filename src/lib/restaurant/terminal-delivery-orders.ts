@@ -85,9 +85,11 @@ export const deliveryAddressesRoute = connectedReadRoute({
 
 export const attachDeliveryRoute = connectedMutationRoute({
   schema: attachDeliveryBody,
-  capability: 'customers:manage',
+  capability: 'customers:read',
+  additionalCapabilities: ['orders:take'],
+  requireIdempotencyKey: true,
   mapError: deliveryErrorResponse,
-  run: async ({ ctx, data, now }) => {
+  run: async ({ ctx, data, idempotencyKey, now }) => {
     const fulfillment = await createDeliveryFulfillment(ctx.db, {
       organizationId: ctx.organizationId,
       branchId: ctx.device.branchId,
@@ -96,6 +98,8 @@ export const attachDeliveryRoute = connectedMutationRoute({
       addressId: data.addressId,
       zoneId: data.zoneId,
       instructions: data.instructions,
+      deviceId: ctx.device.id,
+      idempotencyKey,
       now,
     });
     return {

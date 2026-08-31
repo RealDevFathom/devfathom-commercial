@@ -69,7 +69,8 @@ export const customerAttachBody = z.object({ orderId: ID, customerId: ID }).stri
 // ── Capability gate + route factories (shared with `terminal-loyalty.ts`) ─────
 
 /** The vertical capabilities this lane's connected routes gate on. */
-export type ConnectedCapability = 'customers:read' | 'customers:manage' | 'loyalty:redeem';
+export type ConnectedCapability =
+  'customers:read' | 'customers:manage' | 'loyalty:redeem' | 'orders:take';
 
 const json = (body: unknown, status: number): NextResponse => NextResponse.json(body, { status });
 
@@ -146,6 +147,7 @@ export type ConnectedMutationArgs<S extends z.ZodTypeAny, K extends string | nul
 export function connectedMutationRoute<S extends z.ZodTypeAny, R extends boolean = false>(opts: {
   schema: S;
   capability: ConnectedCapability;
+  additionalCapabilities?: readonly ConnectedCapability[];
   requireIdempotencyKey?: R;
   mapError?: (err: unknown) => NextResponse | null;
   run: (
@@ -161,6 +163,11 @@ export function connectedMutationRoute<S extends z.ZodTypeAny, R extends boolean
       const now = new Date();
       if (!(await operatorHasCapability(ctx.db, operator.staffProfileId, opts.capability, now))) {
         return forbidden(opts.capability);
+      }
+      for (const capability of opts.additionalCapabilities ?? []) {
+        if (!(await operatorHasCapability(ctx.db, operator.staffProfileId, capability, now))) {
+          return forbidden(capability);
+        }
       }
 
       const idempotencyKey = idempotencyKeyFromRequest(request);

@@ -497,6 +497,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
           items: { select: { orderItemId: true, quantity: true } },
         },
       },
+      deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
     },
   });
   if (!order) return null;
@@ -553,6 +554,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       subtotal: money(deriveSubtotal(activeItems)),
       tax: money(new Prisma.Decimal(0)),
       serviceCharge: money(new Prisma.Decimal(0)),
+      deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
     },
   };
 }

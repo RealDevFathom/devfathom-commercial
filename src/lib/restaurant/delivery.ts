@@ -378,10 +378,52 @@ export function createDeliveryFulfillment(
     addressId: string;
     zoneId: string;
     instructions?: string | null;
+    deviceId: string;
+    idempotencyKey: string;
     now?: Date;
   }
 ) {
   return transaction(db, async (tx) => {
+    const commandType = `delivery.attach:${JSON.stringify({
+      orderId: input.orderId,
+      customerId: input.customerId,
+      addressId: input.addressId,
+      zoneId: input.zoneId,
+      instructions: input.instructions?.trim() || null,
+    })}`;
+    const replay = await tx.restaurantOrderIdempotencyKey.findUnique({
+      where: { deviceId_key: { deviceId: input.deviceId, key: input.idempotencyKey } },
+      select: { commandType: true, resultRef: true },
+    });
+    if (replay) {
+      if (replay.commandType !== commandType || !replay.resultRef) {
+        throw new DeliveryError(
+          'Idempotency key was already used for another command.',
+          'INVALID_INPUT'
+        );
+      }
+      const fulfillment = await tx.restaurantDeliveryFulfillment.findFirst({
+        where: {
+          id: replay.resultRef,
+          organizationId: input.organizationId,
+          branchId: input.branchId,
+          orderId: input.orderId,
+        },
+      });
+      if (!fulfillment)
+        throw new DeliveryError(
+          'Delivery fulfillment replay is unavailable.',
+          'INCONSISTENT_SCOPE'
+        );
+      return fulfillment;
+    }
+    await tx.restaurantOrderIdempotencyKey.create({
+      data: {
+        deviceId: input.deviceId,
+        key: input.idempotencyKey,
+        commandType,
+      },
+    });
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "restaurant_orders" WHERE "id" = ${input.orderId} AND "organizationId" = ${input.organizationId} AND "branchId" = ${input.branchId} FOR UPDATE`
     );
@@ -443,7 +485,7 @@ export function createDeliveryFulfillment(
     });
     const now = input.now ?? new Date();
     try {
-      return await tx.restaurantDeliveryFulfillment.create({
+      const fulfillment = await tx.restaurantDeliveryFulfillment.create({
         data: {
           organizationId: input.organizationId,
           branchId: input.branchId,
@@ -470,6 +512,11 @@ export function createDeliveryFulfillment(
           instructions: input.instructions?.trim() || null,
         },
       });
+      await tx.restaurantOrderIdempotencyKey.update({
+        where: { deviceId_key: { deviceId: input.deviceId, key: input.idempotencyKey } },
+        data: { resultRef: fulfillment.id },
+      });
+      return fulfillment;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
         throw new DeliveryError('Order already has a delivery fulfillment.', 'ALREADY_EXISTS');

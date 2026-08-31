@@ -1545,6 +1545,7 @@ export type OrderSettlement = {
     status: string;
     splitKind: string;
     grandTotal: Prisma.Decimal;
+    deliveryFeeTotal: Prisma.Decimal;
     compTotal: Prisma.Decimal;
     discountTotal: Prisma.Decimal;
     receiptNumber: number | null;
@@ -1587,6 +1588,7 @@ export async function evaluateOrderSettlement(
       status: true,
       splitKind: true,
       grandTotal: true,
+      deliveryFeeTotal: true,
       compTotal: true,
       discountTotal: true,
       receiptNumber: true,
@@ -1612,6 +1614,7 @@ export async function evaluateOrderSettlement(
     status: b.status,
     splitKind: b.splitKind,
     grandTotal: b.grandTotal,
+    deliveryFeeTotal: b.deliveryFeeTotal,
     compTotal: b.compTotal,
     discountTotal: b.discountTotal,
     receiptNumber: b.receiptNumber,
