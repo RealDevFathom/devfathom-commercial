@@ -124,11 +124,7 @@ async function makeKds(
   );
   return {
     ...device,
-    session: await establishUnlock(
-      device,
-      orgId === ids.orgA ? ids.operatorA : ids.operatorB,
-      PIN
-    ),
+    session: await establishUnlock(device, orgId === ids.orgA ? ids.operatorA : ids.operatorB, PIN),
   };
 }
 
