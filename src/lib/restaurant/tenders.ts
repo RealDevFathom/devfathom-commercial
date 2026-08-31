@@ -265,9 +265,17 @@ export async function applyTenderInTransaction(
     return replayTenderResult(tx, idem.resultRef);
   }
 
-  // Serialize concurrent tenders on this bill so a receipt is allocated exactly
-  // once (C4/C10): the row lock blocks a second final tender until the first
-  // commits, after which the loser sees the SETTLED status below and is rejected.
+  // Match cancellation's deterministic order → bill lock order. Besides serializing
+  // final tenders, the order lock prevents a cancellation waiting on this bill from
+  // deadlocking with settlement work that must subsequently touch the order.
+  const billOwner = await tx.restaurantBill.findUnique({
+    where: { id: input.billId },
+    select: { orderId: true },
+  });
+  if (!billOwner) {
+    throw new TenderError('The bill does not exist.', 'BILL_NOT_FOUND');
+  }
+  await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${billOwner.orderId} FOR UPDATE`;
   await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} FOR UPDATE`;
 
   const bill = await tx.restaurantBill.findUnique({
@@ -487,35 +495,14 @@ async function loadSettlementContext(
       };
     });
   });
-  const quoteWithoutDelivery = quoteTaxSettlement({
-    lines: quoteLines,
-    profiles: profiles.map((profile) => ({
-      id: profile.id,
-      effectiveFrom: profile.effectiveFrom,
-      effectiveTo: profile.effectiveTo,
-      status: profile.status,
-      approvalReference: profile.approvalReference,
-      approvedAt: profile.approvedAt,
-    })),
-    rules: profiles.flatMap((profile) =>
-      profile.rules.map((rule) => ({
-        ...rule,
-        sourceExpiresAt: rule.officialSource.expiresAt,
-      }))
-    ),
-    at,
-    proposedTenderType,
-    priorTenders: [],
-    afterTaxDiscount,
-    serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
-    roundingAdjustment: bill.roundingAdjustment,
-  });
-  let remainingMerchandise = quoteWithoutDelivery.grandTotal;
-  const taxablePriorTenders = priorTenders.map((tender) => {
-    const principal = Prisma.Decimal.min(tender.amount, remainingMerchandise);
-    remainingMerchandise = Prisma.Decimal.max(ZERO, sub(remainingMerchandise, principal));
-    return { tenderType: tender.type, principal };
-  });
+  const taxablePriorTenders = allocateTaxableTenderPrincipals(
+    priorTenders,
+    sum(
+      quoteLines.map((line) =>
+        line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
+      )
+    )
+  );
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
     profiles: profiles.map((profile) => ({
@@ -564,6 +551,22 @@ async function loadSettlementContext(
     promotionEvaluationId: evaluationIds[0] ?? null,
     promotionEvaluationHash: applications[0]?.evaluation.outputHash ?? null,
   };
+}
+
+/** Limit tax-allocation weights to category-neutral merchandise consideration.
+ * A prior tender may also cover non-taxable delivery/service amounts, so its full
+ * accepted principal remains part of the bill balance but must not be reinterpreted
+ * using the newly proposed tender category's gross merchandise total. */
+export function allocateTaxableTenderPrincipals(
+  priorTenders: ReadonlyArray<Pick<TenderRow, 'type' | 'amount'>>,
+  merchandiseConsideration: Prisma.Decimal
+): Array<{ tenderType: TenderType; principal: Prisma.Decimal }> {
+  let remainingMerchandise = merchandiseConsideration;
+  return priorTenders.map((tender) => {
+    const principal = Prisma.Decimal.min(tender.amount, remainingMerchandise);
+    remainingMerchandise = Prisma.Decimal.max(ZERO, sub(remainingMerchandise, principal));
+    return { tenderType: tender.type, principal };
+  });
 }
 
 async function finalizeTaxSettlement(

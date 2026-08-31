@@ -17,7 +17,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { allocateTenderTaxCents, classifyTenderAmount } from './tenders';
+import {
+  allocateTaxableTenderPrincipals,
+  allocateTenderTaxCents,
+  classifyTenderAmount,
+} from './tenders';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -26,6 +30,15 @@ process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 describe('bill-bound tender tax allocation', () => {
+  it('caps tax weights at merchandise without changing prior tender categories', () => {
+    expect(
+      allocateTaxableTenderPrincipals(
+        [{ type: 'CARD', amount: new Prisma.Decimal('108.00') }],
+        new Prisma.Decimal('100.00')
+      )
+    ).toEqual([{ tenderType: 'CARD', principal: new Prisma.Decimal('100.00') }]);
+  });
+
   it('reconciles a frozen bucket exactly across multiple original tenders', () => {
     const rows = allocateTenderTaxCents(new Prisma.Decimal('1.01'), [
       { tenderId: 'tender-a', principal: new Prisma.Decimal('1.00') },
@@ -69,6 +82,7 @@ const ids = {
   taxProfile: `tax_profile_${suffix}`,
   taxedProfile: `tax_profile_taxed_${suffix}`,
   taxedSource: `tax_source_taxed_${suffix}`,
+  customer: `customer_${suffix}`,
 };
 const AT = new Date('2026-08-19T18:00:00.000Z');
 
@@ -140,6 +154,57 @@ async function openBill(
     billId: cut.billIds[0]!,
     grandTotal: bill!.grandTotal.toString(),
   };
+}
+
+async function openDeliveryBill() {
+  const db = deps.createTenantDb(orgId);
+  const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
+    branchId: ids.branch,
+    channel: 'DINE_IN',
+    publicationId: ids.publication,
+    actor: actor(),
+    now: AT,
+  });
+  await deps.orders.addItem(db, {
+    orderId: opened.orderId,
+    menuItemId: ids.menuItem,
+    actor: actor(),
+  });
+  const cut = await deps.bills.cutBills(db, {
+    orderId: opened.orderId,
+    branchId: ids.branch,
+    split: { kind: 'NONE' },
+    actor: actor(),
+  });
+  await read((tx) =>
+    tx.restaurantOrder.update({
+      where: { id: opened.orderId },
+      data: { channel: 'DELIVERY', customerId: ids.customer },
+    })
+  );
+  return { db, orderId: opened.orderId, billId: cut.billIds[0]! };
+}
+
+async function waitForLockWaiters(
+  table: 'restaurant_bills' | 'restaurant_orders',
+  minimum: number
+) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [row] = await deps.withPlatformDb(
+      (tx) =>
+        tx.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*)::bigint AS count
+        FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock'
+          AND query LIKE ${`%${table}%`}
+      `
+    );
+    if (Number(row?.count ?? 0) >= minimum) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${minimum} ${table} lock waiter(s).`);
 }
 
 async function openDrawer(device = deviceId): Promise<string> {
@@ -243,6 +308,9 @@ beforeAll(async () => {
     });
     await tx.restaurantStaffProfile.create({
       data: { id: ids.manager, displayName: 'Manager', status: 'ACTIVE' },
+    });
+    await tx.restaurantCustomer.create({
+      data: { id: ids.customer, displayName: 'Delivery Guest' },
     });
     const enrolled = await deps.enrollDevice(tx, { branchId: ids.branch, name: 'POS-1' });
     deviceId = enrolled.device.id;
@@ -459,6 +527,137 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
 });
 
 describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
+  async function installMixedRateProfile() {
+    const at = new Date('2026-09-15T18:00:00.000Z');
+    await read(async (tx) => {
+      await tx.restaurantTaxProfileVersion.update({
+        where: { id: ids.taxProfile },
+        data: { effectiveTo: new Date('2026-09-01T00:00:00.000Z') },
+      });
+      const source = await tx.restaurantTaxOfficialSource.create({
+        data: {
+          authorityCode: `MIXED_RATE_${suffix}`,
+          documentTitle: 'Synthetic mixed-rate regression fixture',
+          sourceUrl: 'https://example.invalid/mixed-rate',
+          contentHash: `mixed-rate-${suffix}`,
+          retrievedAt: new Date('2026-09-01T00:00:00.000Z'),
+          expiresAt: new Date('2027-09-01T00:00:00.000Z'),
+        },
+      });
+      await tx.restaurantTaxProfileVersion.create({
+        data: {
+          branchId: ids.branch,
+          versionNumber: 3,
+          status: 'PUBLISHED',
+          effectiveFrom: new Date('2026-09-01T00:00:00.000Z'),
+          approvalReference: 'MIXED_RATE_APPROVAL',
+          approvedAt: new Date('2026-09-01T00:00:00.000Z'),
+          publishedAt: new Date('2026-09-01T00:00:00.000Z'),
+          rules: {
+            create: [
+              { paymentCategory: 'CARD' as const, rate: '0.050000' },
+              { paymentCategory: 'CASH' as const, rate: '0.160000' },
+              { paymentCategory: 'OTHER' as const, rate: '0.000000' },
+            ].map(({ paymentCategory, rate }) => ({
+              officialSourceId: source.id,
+              ruleCode: `MIXED_RATE_${paymentCategory}_${suffix}`,
+              paymentCategory,
+              priceMode: 'EXCLUSIVE' as const,
+              rate,
+              status: 'PUBLISHED' as const,
+              effectiveFrom: new Date('2026-09-01T00:00:00.000Z'),
+              approvalReference: 'MIXED_RATE_APPROVAL',
+              approvedAt: new Date('2026-09-01T00:00:00.000Z'),
+              publishedAt: new Date('2026-09-01T00:00:00.000Z'),
+            })),
+          },
+        },
+      });
+    });
+    return at;
+  }
+
+  async function openMixedRateBill() {
+    const opened = await openBill(1);
+    await read(async (tx) => {
+      await tx.restaurantBillLine.updateMany({
+        where: { billId: opened.billId },
+        data: { unitPrice: '100.00' },
+      });
+      await tx.restaurantBill.update({
+        where: { id: opened.billId },
+        data: { subtotal: '100.00', deliveryFeeTotal: '20.00', grandTotal: '120.00' },
+      });
+    });
+    return opened;
+  }
+
+  it('settles CARD 108 then CASH 17 against merchandise 100 plus delivery 20', async () => {
+    const at = await installMixedRateProfile();
+    const { billId } = await openMixedRateBill();
+    const cashDevice = await newDevice('POS-mixed-card-cash');
+    await openDrawer(cashDevice);
+    const db = deps.createTenantDb(orgId);
+
+    const partial = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CARD', amount: '108.00' },
+      actor: actor(),
+      now: at,
+    });
+    const final = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CASH', amount: '17.00', cashReceived: '17.00' },
+      actor: actor(cashDevice),
+      now: at,
+    });
+
+    expect(partial.remainingDue.toString()).toBe('17');
+    expect(final).toMatchObject({ settled: true });
+    const bill = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { grandTotal: true, taxTotal: true, deliveryFeeTotal: true },
+      })
+    );
+    expect([
+      bill.grandTotal.toString(),
+      bill.taxTotal.toString(),
+      bill.deliveryFeeTotal.toString(),
+    ]).toEqual(['125', '5', '20']);
+  });
+
+  it('preserves reverse CASH then CARD category ordering and rejects over-tender', async () => {
+    const at = new Date('2026-09-15T18:00:00.000Z');
+    const { billId } = await openMixedRateBill();
+    const cashDevice = await newDevice('POS-mixed-cash-card');
+    await openDrawer(cashDevice);
+    const db = deps.createTenantDb(orgId);
+    const partial = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CASH', amount: '118.00', cashReceived: '118.00' },
+      actor: actor(cashDevice),
+      now: at,
+    });
+    expect(partial.remainingDue.toString()).toBe('18');
+    await expect(
+      deps.tenders.applyTender(db, {
+        billId,
+        tender: { type: 'CARD', amount: '18.01' },
+        actor: actor(),
+        now: at,
+      })
+    ).rejects.toMatchObject({ reason: 'OVER_TENDER' });
+    await expect(
+      deps.tenders.applyTender(db, {
+        billId,
+        tender: { type: 'CARD', amount: '18.00' },
+        actor: actor(),
+        now: at,
+      })
+    ).resolves.toMatchObject({ settled: true });
+  });
+
   it('quotes and settles an exact fee-inclusive tender without taxing or dropping the fee', async () => {
     const { billId } = await openBill(1);
     await read((tx) =>
@@ -738,6 +937,100 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
       })
     ).rejects.toMatchObject({ reason: 'MISSING' });
     expect(await read((tx) => tx.restaurantTender.count({ where: { billId } }))).toBe(0);
+  });
+});
+
+describeIfDatabase('delivery cancellation and tender lock ordering (real DB)', () => {
+  async function holdBillLock(billId: string) {
+    let release!: () => void;
+    let locked!: () => void;
+    const releasePromise = new Promise<void>((resolve) => (release = resolve));
+    const lockedPromise = new Promise<void>((resolve) => (locked = resolve));
+    const blocker = read(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${billId} FOR UPDATE`;
+      locked();
+      await releasePromise;
+    });
+    await lockedPromise;
+    return { release, blocker };
+  }
+
+  it('voids the bill when cancellation queues first, so the blocked tender is rejected', async () => {
+    const { db, orderId, billId } = await openDeliveryBill();
+    const lock = await holdBillLock(billId);
+    const cancellation = deps.orders.cancelOrder(db, {
+      orderId,
+      reason: 'customer cancelled',
+      actor: actor(),
+    });
+    await waitForLockWaiters('restaurant_bills', 1);
+    const tender = deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: actor(),
+      now: AT,
+    });
+    await waitForLockWaiters('restaurant_orders', 1);
+    lock.release();
+
+    await expect(cancellation).resolves.toMatchObject({ orderId });
+    await expect(tender).rejects.toMatchObject({ reason: 'BILL_NOT_OPEN' });
+    await lock.blocker;
+    const state = await read(async (tx) => ({
+      order: await tx.restaurantOrder.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { status: true },
+      }),
+      bill: await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { status: true, voidReason: true },
+      }),
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+    }));
+    expect(state).toEqual({
+      order: { status: 'CANCELLED' },
+      bill: { status: 'VOID', voidReason: 'customer cancelled' },
+      tenders: 0,
+    });
+  });
+
+  it('rejects cancellation when tendering queues first, leaving no cancelled tenderable order', async () => {
+    const { db, orderId, billId } = await openDeliveryBill();
+    const lock = await holdBillLock(billId);
+    const tender = deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: actor(),
+      now: AT,
+    });
+    await waitForLockWaiters('restaurant_bills', 1);
+    const cancellation = deps.orders.cancelOrder(db, {
+      orderId,
+      reason: 'too late',
+      actor: actor(),
+    });
+    await waitForLockWaiters('restaurant_orders', 1);
+    lock.release();
+
+    await expect(tender).resolves.toMatchObject({ settled: true });
+    await expect(cancellation).rejects.toMatchObject({ reason: 'NOT_CLOSABLE' });
+    await lock.blocker;
+    const state = await read(async (tx) => ({
+      order: await tx.restaurantOrder.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { status: true },
+      }),
+      bill: await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { status: true },
+      }),
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+    }));
+    expect(state).toEqual({
+      order: { status: 'OPEN' },
+      bill: { status: 'SETTLED' },
+      tenders: 1,
+    });
   });
 });
 
