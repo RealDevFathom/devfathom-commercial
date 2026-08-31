@@ -81,9 +81,10 @@ describe('custom ABAC decisions', () => {
     });
   });
 
-  it('pins all five M8 capabilities as typed static default-deny actions', async () => {
+  it('pins customer management and the M8 capabilities as typed default-deny actions', async () => {
     const actions = [
       'customers:read',
+      'customers:manage',
       'loyalty:redeem',
       'reports:financial',
       'workforce:rates',
@@ -96,7 +97,7 @@ describe('custom ABAC decisions', () => {
       'devices:manage',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS).toHaveLength(34);
+    expect(ALL_ACTIONS).toHaveLength(35);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

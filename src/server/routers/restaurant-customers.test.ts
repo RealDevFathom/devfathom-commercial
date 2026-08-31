@@ -126,7 +126,7 @@ beforeEach(() => {
 });
 
 describe('capabilities and delegation', () => {
-  it('gates every ordinary operation with customers:read and anonymize with restaurant:configure', async () => {
+  it('gates reads separately from management, export, and anonymization', async () => {
     const api = caller();
     await api.list({});
     await api.detail({ customerId: 'customer_1' });
@@ -155,7 +155,11 @@ describe('capabilities and delegation', () => {
     await api.anonymize({ customerId: 'customer_1' });
 
     expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
-      ...Array(12).fill('customers:read'),
+      'customers:read',
+      'customers:read',
+      ...Array(9).fill('customers:manage'),
+      'customers:read',
+      'customers:manage',
       'restaurant:configure',
     ]);
     expect(mocks.attachCustomerToOrder).toHaveBeenCalledWith(db, {
@@ -178,6 +182,30 @@ describe('capabilities and delegation', () => {
       idempotencyKey: 'consent_1',
     });
     expect(mocks.anonymizeCustomer).toHaveBeenCalledWith(db, { customerId: 'customer_1' });
+  });
+
+  it('allows read-only access while denying writes and full-profile export', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'customers:read');
+    const api = caller();
+
+    await expect(api.list({})).resolves.toEqual({ ok: true });
+    await expect(api.detail({ customerId: 'customer_1' })).resolves.toEqual({ ok: true });
+    await expect(api.listTags({})).resolves.toEqual({ ok: true });
+    await expect(api.create({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.export({ customerId: 'customer_1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+
+    expect(mocks.createCustomer).not.toHaveBeenCalled();
+    expect(mocks.exportCustomerData).not.toHaveBeenCalled();
+  });
+
+  it('allows customer managers to mutate and export', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'customers:manage');
+    const api = caller();
+
+    await expect(api.create({})).resolves.toEqual({ ok: true });
+    await expect(api.export({ customerId: 'customer_1' })).resolves.toEqual({ ok: true });
   });
 
   it('fails closed before domain delegation', async () => {
