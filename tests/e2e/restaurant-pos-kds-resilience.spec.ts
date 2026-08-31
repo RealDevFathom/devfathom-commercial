@@ -22,7 +22,7 @@ async function createAndFireOrder(page: import('@playwright/test').Page) {
   await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
-  await expect(page.getByRole('option', { name: 'Delivery — not configured' })).toBeDisabled();
+  await expect(page.getByRole('option', { name: 'Delivery' })).toBeEnabled();
   await page.getByLabel('Channel').selectOption('TAKEAWAY');
   const openedResponse = page.waitForResponse(
     (response) =>

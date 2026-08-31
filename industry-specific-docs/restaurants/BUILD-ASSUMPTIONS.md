@@ -1,5 +1,12 @@
 # Restaurant vertical — Build Assumptions (`restaurant/v1`)
 
+**Direct Delivery v1 — connected own-delivery handoff (WHA-1048)** · Delivery requires
+`orders:take` plus `customers:read`, a customer, saved address, active same-branch zone, and a
+DELIVERY publication. Address, phone, zone, fee, tax, and promise facts are frozen on fulfillment;
+terminal projections are masked/minimized. The non-taxable fee stays separate in bills, receipts,
+daily close, Reports, and Insights. PREPAID and COD dispatch only after kitchen readiness.
+Marketplace/provider dispatch, tracking, route optimization, and full rider logistics are excluded.
+
 Conservative build-time assumptions for the restaurant vertical. An entry is
 recorded only when an **OPEN** decision in the planning D-register would
 otherwise block an implementation choice: apply the conservative default that

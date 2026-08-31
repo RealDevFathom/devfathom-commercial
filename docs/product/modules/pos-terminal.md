@@ -38,7 +38,7 @@ This PRD covers POS/register, terminal identity and session, order entry, kitche
 
 ### 2. Build and fulfil an order
 
-The operator opens a `DINE_IN` or `TAKEAWAY` order, adds menu items/modifiers, optionally assigns tables/seats/courses, holds or fires a course, and marks items served. `DELIVERY` remains readable for historical records but is unavailable for operational menu/publication/order inputs until D06 defines the required delivery address, zone, fee, instructions, courier, and COD custody contract. Remake, void, cancel, table movement, and table merge are explicit commands with strict bodies ([`src/lib/restaurant/terminal-orders.ts:54-128`](../../../src/lib/restaurant/terminal-orders.ts#L54-L128)). Fire sends work to the KDS, and the acceptance flow verifies open → add → fire → prepare/ack → bump → serve → close ([`tests/restaurant-m4-acceptance.test.ts:440-510`](../../../tests/restaurant-m4-acceptance.test.ts#L440-L510)).
+The operator opens `DINE_IN`, `TAKEAWAY`, or connected-only `DELIVERY` orders and sends work to the kitchen. Delivery requires a customer, saved address, active same-branch zone, and a menu publication that includes `DELIVERY`; attachment freezes the zone fee, address, and promise snapshots. Kitchen handoff supports PREPAID and COD dispatch followed by delivery completion. The delivery fee remains a separate non-taxable checkout and receipt amount. Offline delivery creation is rejected and customer delivery details are not cached on the terminal.
 
 The terminal effective-menu read composes the same menu resolution primitives as the back office, and exposes a version/ETag seam for refreshes (**IMPLEMENTED**, [`src/lib/restaurant/terminal-orders.ts:538-735`](../../../src/lib/restaurant/terminal-orders.ts#L538-L735)).
 
@@ -72,7 +72,7 @@ Physical receipt printing is **NOT BUILT** at this commit. The receipt payload i
 ## User stories
 
 1. As a cashier, I can sign into a registered branch terminal and see only the branch's effective menu and open orders.
-2. As a server, I can create a dine-in or takeaway order, hold/fire courses, and send work to the kitchen; Delivery is visibly unavailable until D06 is resolved.
+2. As a server, I can create dine-in, takeaway, or connected direct-delivery orders, hold/fire courses, and send work to the kitchen.
 3. As a manager, I can co-authorize sensitive corrections with my own credential and leave attributable evidence.
 4. As a cashier, I can split a bill, confirm cash/card/other tender, see change and remaining due, and view the settled receipt data.
 5. As a cash owner, I can open/count/close a drawer and preview or correct a business-day close.

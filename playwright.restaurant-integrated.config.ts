@@ -31,6 +31,7 @@ export default defineConfig({
     'restaurant-integrated.spec.ts',
     'restaurant-pos-kds.spec.ts',
     'restaurant-pos-kds-resilience.spec.ts',
+    'restaurant-delivery.spec.ts',
   ],
   projects: [
     {

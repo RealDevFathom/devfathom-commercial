@@ -11,9 +11,10 @@ Repository evidence is not release evidence. This checkpoint records source trut
   settlement, tax, inventory/purchasing, workforce, SOP, loyalty, reports, devices, and cameras.
 - Printing now has a durable job/routing/idempotency bridge and ESC/POS rendering, but its only
   adapter is simulation-only. It performs no physical printer, network, or operating-system I/O.
-- Delivery is owner-required but currently unavailable for new operations. Delivery choices are
-  disabled and rejected; historical data remains readable while direct Delivery implementation
-  remains pending.
+- Direct, connected Delivery is operational: Delivery publications, saved customer addresses,
+  branch zones, frozen snapshots, PREPAID/COD kitchen handoff, settlement, daily close, Reports,
+  and Insights are implemented. Offline, missing-customer, and capability-denied attempts are
+  rejected before mutation. Marketplace providers and full driver logistics remain deferred.
 - Offline order capture is under active correction. It is not claimed until the corrected work is
   composed and exact-head disconnect/reconnect acceptance passes.
 - Card acquiring is provider-dependent. OPay New 9220 is a candidate device, not an integrated or

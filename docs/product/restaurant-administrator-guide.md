@@ -17,9 +17,9 @@ explain design and evidence; this guide explains what administrators and service
 - **PRINT BRIDGE LIMIT:** Receipt/kitchen print routing persists durable simulation jobs and ESC/POS
   bytes only. DevFathom does not connect to physical printers, drawers, or operating-system print
   services.
-- **DELIVERY UNAVAILABLE:** Delivery is part of restaurant target scope, but it is currently
-  unavailable. New Delivery operations are disabled and rejected; only historical Delivery records
-  remain readable.
+- **DIRECT DELIVERY:** Configure active branch zones and publish a menu to Delivery. POS delivery
+  requires a customer and saved address and stays connected-only. KDS provides the kitchen-ready
+  PREPAID/COD handoff; marketplace providers and full rider logistics remain outside this release.
 - **NOT OPERATOR READY** means a live screen requires a typed internal identifier instead of an
   operator-safe choice. Stop and use another supported flow pending product correction. Never look
   up an identifier in a database.
@@ -144,9 +144,9 @@ require a distinct manager credential.
   offered safeguarded cancel/void actions. POS dine-in fields requiring typed **Table IDs** or
   **Section ID**, table moves requiring **From/To table IDs**, and table merges requiring
   **Additional table IDs** are **NOT OPERATOR READY** pending product correction. Never query a
-  database; use takeaway or another supported floor flow until selectors exist. Delivery is
-  currently unavailable: the UI shows it as not configured and rejects it before any order or
-  audit mutation.
+  database; use takeaway or another supported floor flow until selectors exist. Delivery requires
+  a Delivery publication, customer, saved address, active zone, and a live connection. Missing or
+  unauthorized inputs are rejected before order, idempotency, or audit mutation.
 
 ### 9. Split, tender, void, refund, and receipt
 
