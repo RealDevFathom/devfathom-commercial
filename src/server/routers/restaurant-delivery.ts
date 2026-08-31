@@ -13,6 +13,7 @@ import {
   updateDeliveryAddress,
   updateDeliveryZone,
 } from '@/lib/restaurant/delivery';
+import { listCustomers } from '@/lib/restaurant/customers';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 import { annotateAudit } from '../audit';
 import { capabilityProcedure, publicProcedure, router } from '../trpc';
@@ -98,6 +99,29 @@ function serializeAddress<
 }
 
 export const restaurantDeliveryRouter = router({
+  listCustomers: addressReadProcedure
+    .input(
+      z
+        .object({
+          query: z.string().trim().min(1).max(200).optional(),
+          limit: z.number().int().min(1).max(100).optional(),
+          cursor: id.optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const page = await listCustomers(ctx.db, input);
+      return {
+        customers: page.customers.map(({ id, displayName, givenName, familyName }) => ({
+          id,
+          displayName,
+          givenName,
+          familyName,
+        })),
+        nextCursor: page.nextCursor,
+      };
+    }),
+
   listZones: configureProcedure
     .input(z.object({ branchId: id }).strict())
     .query(async ({ ctx, input }) => {
