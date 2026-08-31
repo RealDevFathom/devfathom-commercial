@@ -17,6 +17,10 @@ describe('Agency E2E owned fixture restoration', () => {
   });
 
   test('runs the database safety checks from a caught async entry point', () => {
+    expect(seed).toContain('async function main()');
+    expect(seed).toMatch(/main\(\)\.catch\(\(error: unknown\) => \{/);
+    expect(seed).toContain('console.error(error)');
+    expect(seed).toContain('process.exitCode = 1');
     expect(preflight).toContain('async function main()');
     expect(preflight).toMatch(/main\(\)\.catch\(\(error: unknown\) => \{/);
     expect(preflight).toContain('process.exitCode = 1');

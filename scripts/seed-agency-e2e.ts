@@ -131,297 +131,308 @@ async function seedOrganization(
   });
 }
 
-try {
-  const [role] = await prisma.$queryRaw<
-    Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>
-  >`SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
-  if (!role?.rolcanlogin || role.rolsuper || role.rolbypassrls) {
-    throw new Error('Agency E2E seed requires LOGIN NOSUPERUSER NOBYPASSRLS.');
-  }
+async function main() {
+  try {
+    const [role] = await prisma.$queryRaw<
+      Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>
+    >`SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+    if (!role?.rolcanlogin || role.rolsuper || role.rolbypassrls) {
+      throw new Error('Agency E2E seed requires LOGIN NOSUPERUSER NOBYPASSRLS.');
+    }
 
-  const email = process.env.AGENCY_E2E_ADMIN_EMAIL!.trim().toLowerCase();
-  const passwordHash = hashSync(process.env.AGENCY_E2E_ADMIN_PASSWORD!, 10);
-  let packageId = 'package_agency_e2e_owned';
-  await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe(
-      `SELECT set_config('app.is_platform_admin', 'true', true), set_config('app.current_organization_id', '', true)`
-    );
-    const suite = await tx.platformPackage.upsert({
-      where: { id: packageId },
-      update: {
-        key: 'agency-e2e-owned',
-        name: 'Agency E2E Owned',
-        vertical: 'AGENCY',
-        active: true,
-      },
-      create: {
-        id: packageId,
-        key: 'agency-e2e-owned',
-        name: 'Agency E2E Owned',
-        vertical: 'AGENCY',
-        active: true,
-        defaultSeats: 10,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    packageId = suite.id;
-    for (const [key, name, category, routePrefix] of MODULES) {
-      const catalogModule = await tx.platformModule.upsert({
-        where: { key },
-        update: { name, category, routePrefix, active: true },
-        create: {
-          id: `module_agency_e2e_${key}`,
-          key,
-          name,
-          category,
-          routePrefix,
+    const email = process.env.AGENCY_E2E_ADMIN_EMAIL!.trim().toLowerCase();
+    const passwordHash = hashSync(process.env.AGENCY_E2E_ADMIN_PASSWORD!, 10);
+    let packageId = 'package_agency_e2e_owned';
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `SELECT set_config('app.is_platform_admin', 'true', true), set_config('app.current_organization_id', '', true)`
+      );
+      const suite = await tx.platformPackage.upsert({
+        where: { id: packageId },
+        update: {
+          key: 'agency-e2e-owned',
+          name: 'Agency E2E Owned',
+          vertical: 'AGENCY',
           active: true,
+        },
+        create: {
+          id: packageId,
+          key: 'agency-e2e-owned',
+          name: 'Agency E2E Owned',
+          vertical: 'AGENCY',
+          active: true,
+          defaultSeats: 10,
           createdAt: FIXED_AT,
           updatedAt: FIXED_AT,
         },
       });
-      await tx.platformPackageModule.upsert({
-        where: { packageId_moduleId: { packageId, moduleId: catalogModule.id } },
-        update: { enabled: key !== 'api' && key !== 'webhooks' },
+      packageId = suite.id;
+      for (const [key, name, category, routePrefix] of MODULES) {
+        const catalogModule = await tx.platformModule.upsert({
+          where: { key },
+          update: { name, category, routePrefix, active: true },
+          create: {
+            id: `module_agency_e2e_${key}`,
+            key,
+            name,
+            category,
+            routePrefix,
+            active: true,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.platformPackageModule.upsert({
+          where: { packageId_moduleId: { packageId, moduleId: catalogModule.id } },
+          update: { enabled: key !== 'api' && key !== 'webhooks' },
+          create: {
+            id: `package_module_agency_e2e_${key}`,
+            packageId,
+            moduleId: catalogModule.id,
+            enabled: key !== 'api' && key !== 'webhooks',
+          },
+        });
+      }
+    });
+
+    await seedOrganization(
+      AGENCY_E2E.organizationId,
+      'agency-e2e-owned',
+      'Northstar Agency E2E',
+      AGENCY_E2E.adminId,
+      email,
+      passwordHash,
+      packageId
+    );
+    await seedOrganization(
+      AGENCY_E2E.alternateOrganizationId,
+      'agency-e2e-alternate-owned',
+      'Alternate Agency E2E',
+      AGENCY_E2E.alternateAdminId,
+      email,
+      passwordHash,
+      packageId
+    );
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `SELECT set_config('app.is_platform_admin', 'false', true), set_config('app.current_organization_id', $1, true)`,
+        AGENCY_E2E.organizationId
+      );
+      await tx.organizationRole.upsert({
+        where: { id: AGENCY_E2E.customRoleId },
+        update: {
+          key: 'delivery-lead',
+          name: 'Delivery Lead',
+          description: 'Owns client delivery.',
+          isSystem: false,
+        },
         create: {
-          id: `package_module_agency_e2e_${key}`,
-          packageId,
-          moduleId: catalogModule.id,
-          enabled: key !== 'api' && key !== 'webhooks',
+          id: AGENCY_E2E.customRoleId,
+          organizationId: AGENCY_E2E.organizationId,
+          key: 'delivery-lead',
+          name: 'Delivery Lead',
+          description: 'Owns client delivery.',
+          isSystem: false,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
         },
       });
-    }
-  });
-
-  await seedOrganization(
-    AGENCY_E2E.organizationId,
-    'agency-e2e-owned',
-    'Northstar Agency E2E',
-    AGENCY_E2E.adminId,
-    email,
-    passwordHash,
-    packageId
-  );
-  await seedOrganization(
-    AGENCY_E2E.alternateOrganizationId,
-    'agency-e2e-alternate-owned',
-    'Alternate Agency E2E',
-    AGENCY_E2E.alternateAdminId,
-    email,
-    passwordHash,
-    packageId
-  );
-
-  await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe(
-      `SELECT set_config('app.is_platform_admin', 'false', true), set_config('app.current_organization_id', $1, true)`,
-      AGENCY_E2E.organizationId
-    );
-    await tx.organizationRole.upsert({
-      where: { id: AGENCY_E2E.customRoleId },
-      update: {
-        key: 'delivery-lead',
-        name: 'Delivery Lead',
-        description: 'Owns client delivery.',
-        isSystem: false,
-      },
-      create: {
-        id: AGENCY_E2E.customRoleId,
-        organizationId: AGENCY_E2E.organizationId,
-        key: 'delivery-lead',
-        name: 'Delivery Lead',
-        description: 'Owns client delivery.',
-        isSystem: false,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
+      await tx.client.upsert({
+        where: { id: AGENCY_E2E.clientId },
+        update: {
+          name: 'Atlas Labs E2E',
+          industry: 'Technology',
+          location: 'Remote',
+          status: 'ACTIVE',
+        },
+        create: {
+          id: AGENCY_E2E.clientId,
+          name: 'Atlas Labs E2E',
+          industry: 'Technology',
+          location: 'Remote',
+          status: 'ACTIVE',
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.project.upsert({
+        where: { id: AGENCY_E2E.projectId },
+        update: {
+          name: 'Atlas Launch E2E',
+          status: 'ACTIVE',
+          type: 'CLIENT',
+          clientId: AGENCY_E2E.clientId,
+        },
+        create: {
+          id: AGENCY_E2E.projectId,
+          name: 'Atlas Launch E2E',
+          description: 'Owned acceptance project',
+          status: 'ACTIVE',
+          type: 'CLIENT',
+          clientId: AGENCY_E2E.clientId,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.projectMember.upsert({
+        where: {
+          projectId_userId: { projectId: AGENCY_E2E.projectId, userId: AGENCY_E2E.adminId },
+        },
+        update: { role: 'LEAD' },
+        create: {
+          id: 'project_member_agency_e2e_owned',
+          projectId: AGENCY_E2E.projectId,
+          userId: AGENCY_E2E.adminId,
+          role: 'LEAD',
+        },
+      });
+      await tx.board.upsert({
+        where: { id: AGENCY_E2E.boardId },
+        update: { name: 'Delivery Board', projectId: AGENCY_E2E.projectId },
+        create: {
+          id: AGENCY_E2E.boardId,
+          name: 'Delivery Board',
+          projectId: AGENCY_E2E.projectId,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.column.upsert({
+        where: { id: AGENCY_E2E.columnId },
+        update: { name: 'In Progress', boardId: AGENCY_E2E.boardId, order: 0 },
+        create: {
+          id: AGENCY_E2E.columnId,
+          name: 'In Progress',
+          boardId: AGENCY_E2E.boardId,
+          order: 0,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.task.upsert({
+        where: { id: AGENCY_E2E.taskId },
+        update: {
+          title: 'Ship Agency acceptance gate',
+          columnId: AGENCY_E2E.columnId,
+          order: 0,
+          priority: 'HIGH',
+          createdById: AGENCY_E2E.adminId,
+        },
+        create: {
+          id: AGENCY_E2E.taskId,
+          title: 'Ship Agency acceptance gate',
+          columnId: AGENCY_E2E.columnId,
+          order: 0,
+          priority: 'HIGH',
+          createdById: AGENCY_E2E.adminId,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.taskAssignee.upsert({
+        where: { taskId_userId: { taskId: AGENCY_E2E.taskId, userId: AGENCY_E2E.adminId } },
+        update: { organizationId: AGENCY_E2E.organizationId },
+        create: {
+          id: 'task_assignee_agency_e2e_owned',
+          taskId: AGENCY_E2E.taskId,
+          userId: AGENCY_E2E.adminId,
+        },
+      });
+      await tx.meeting.upsert({
+        where: { id: AGENCY_E2E.meetingId },
+        update: {
+          title: 'Atlas launch review E2E',
+          startTime: MEETING_START,
+          endTime: MEETING_END,
+          timezone: 'UTC',
+          createdById: AGENCY_E2E.adminId,
+        },
+        create: {
+          id: AGENCY_E2E.meetingId,
+          title: 'Atlas launch review E2E',
+          startTime: MEETING_START,
+          endTime: MEETING_END,
+          timezone: 'UTC',
+          createdById: AGENCY_E2E.adminId,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.meetingAttendee.upsert({
+        where: {
+          meetingId_userId: { meetingId: AGENCY_E2E.meetingId, userId: AGENCY_E2E.adminId },
+        },
+        update: { joinedAt: null },
+        create: {
+          id: 'meeting_attendee_agency_e2e_owned',
+          meetingId: AGENCY_E2E.meetingId,
+          userId: AGENCY_E2E.adminId,
+        },
+      });
+      await tx.invoice.upsert({
+        where: { id: AGENCY_E2E.invoiceId },
+        update: {
+          invoiceNumber: 'AGENCY-E2E-001',
+          clientId: AGENCY_E2E.clientId,
+          projectId: AGENCY_E2E.projectId,
+          items: [{ description: 'Launch delivery', quantity: 1, rate: 2500, amount: 2500 }],
+          subtotal: 2500,
+          tax: 0,
+          total: 2500,
+          currency: 'USD',
+          status: 'SENT',
+          dueDate: MEETING_START,
+        },
+        create: {
+          id: AGENCY_E2E.invoiceId,
+          invoiceNumber: 'AGENCY-E2E-001',
+          clientId: AGENCY_E2E.clientId,
+          projectId: AGENCY_E2E.projectId,
+          items: [{ description: 'Launch delivery', quantity: 1, rate: 2500, amount: 2500 }],
+          subtotal: 2500,
+          tax: 0,
+          total: 2500,
+          currency: 'USD',
+          status: 'SENT',
+          dueDate: MEETING_START,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.transaction.upsert({
+        where: { id: AGENCY_E2E.transactionId },
+        update: {
+          type: 'INCOME',
+          amount: 2500,
+          currency: 'USD',
+          description: 'Atlas launch deposit E2E',
+          projectId: AGENCY_E2E.projectId,
+          clientId: AGENCY_E2E.clientId,
+          date: FIXED_AT,
+        },
+        create: {
+          id: AGENCY_E2E.transactionId,
+          type: 'INCOME',
+          amount: 2500,
+          currency: 'USD',
+          description: 'Atlas launch deposit E2E',
+          projectId: AGENCY_E2E.projectId,
+          clientId: AGENCY_E2E.clientId,
+          date: FIXED_AT,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
     });
-    await tx.client.upsert({
-      where: { id: AGENCY_E2E.clientId },
-      update: {
-        name: 'Atlas Labs E2E',
-        industry: 'Technology',
-        location: 'Remote',
-        status: 'ACTIVE',
-      },
-      create: {
-        id: AGENCY_E2E.clientId,
-        name: 'Atlas Labs E2E',
-        industry: 'Technology',
-        location: 'Remote',
-        status: 'ACTIVE',
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    await tx.project.upsert({
-      where: { id: AGENCY_E2E.projectId },
-      update: {
-        name: 'Atlas Launch E2E',
-        status: 'ACTIVE',
-        type: 'CLIENT',
-        clientId: AGENCY_E2E.clientId,
-      },
-      create: {
-        id: AGENCY_E2E.projectId,
-        name: 'Atlas Launch E2E',
-        description: 'Owned acceptance project',
-        status: 'ACTIVE',
-        type: 'CLIENT',
-        clientId: AGENCY_E2E.clientId,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    await tx.projectMember.upsert({
-      where: { projectId_userId: { projectId: AGENCY_E2E.projectId, userId: AGENCY_E2E.adminId } },
-      update: { role: 'LEAD' },
-      create: {
-        id: 'project_member_agency_e2e_owned',
-        projectId: AGENCY_E2E.projectId,
-        userId: AGENCY_E2E.adminId,
-        role: 'LEAD',
-      },
-    });
-    await tx.board.upsert({
-      where: { id: AGENCY_E2E.boardId },
-      update: { name: 'Delivery Board', projectId: AGENCY_E2E.projectId },
-      create: {
-        id: AGENCY_E2E.boardId,
-        name: 'Delivery Board',
-        projectId: AGENCY_E2E.projectId,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    await tx.column.upsert({
-      where: { id: AGENCY_E2E.columnId },
-      update: { name: 'In Progress', boardId: AGENCY_E2E.boardId, order: 0 },
-      create: {
-        id: AGENCY_E2E.columnId,
-        name: 'In Progress',
-        boardId: AGENCY_E2E.boardId,
-        order: 0,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    await tx.task.upsert({
-      where: { id: AGENCY_E2E.taskId },
-      update: {
-        title: 'Ship Agency acceptance gate',
-        columnId: AGENCY_E2E.columnId,
-        order: 0,
-        priority: 'HIGH',
-        createdById: AGENCY_E2E.adminId,
-      },
-      create: {
-        id: AGENCY_E2E.taskId,
-        title: 'Ship Agency acceptance gate',
-        columnId: AGENCY_E2E.columnId,
-        order: 0,
-        priority: 'HIGH',
-        createdById: AGENCY_E2E.adminId,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    await tx.taskAssignee.upsert({
-      where: { taskId_userId: { taskId: AGENCY_E2E.taskId, userId: AGENCY_E2E.adminId } },
-      update: { organizationId: AGENCY_E2E.organizationId },
-      create: {
-        id: 'task_assignee_agency_e2e_owned',
-        taskId: AGENCY_E2E.taskId,
-        userId: AGENCY_E2E.adminId,
-      },
-    });
-    await tx.meeting.upsert({
-      where: { id: AGENCY_E2E.meetingId },
-      update: {
-        title: 'Atlas launch review E2E',
-        startTime: MEETING_START,
-        endTime: MEETING_END,
-        timezone: 'UTC',
-        createdById: AGENCY_E2E.adminId,
-      },
-      create: {
-        id: AGENCY_E2E.meetingId,
-        title: 'Atlas launch review E2E',
-        startTime: MEETING_START,
-        endTime: MEETING_END,
-        timezone: 'UTC',
-        createdById: AGENCY_E2E.adminId,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    await tx.meetingAttendee.upsert({
-      where: { meetingId_userId: { meetingId: AGENCY_E2E.meetingId, userId: AGENCY_E2E.adminId } },
-      update: { joinedAt: null },
-      create: {
-        id: 'meeting_attendee_agency_e2e_owned',
-        meetingId: AGENCY_E2E.meetingId,
-        userId: AGENCY_E2E.adminId,
-      },
-    });
-    await tx.invoice.upsert({
-      where: { id: AGENCY_E2E.invoiceId },
-      update: {
-        invoiceNumber: 'AGENCY-E2E-001',
-        clientId: AGENCY_E2E.clientId,
-        projectId: AGENCY_E2E.projectId,
-        items: [{ description: 'Launch delivery', quantity: 1, rate: 2500, amount: 2500 }],
-        subtotal: 2500,
-        tax: 0,
-        total: 2500,
-        currency: 'USD',
-        status: 'SENT',
-        dueDate: MEETING_START,
-      },
-      create: {
-        id: AGENCY_E2E.invoiceId,
-        invoiceNumber: 'AGENCY-E2E-001',
-        clientId: AGENCY_E2E.clientId,
-        projectId: AGENCY_E2E.projectId,
-        items: [{ description: 'Launch delivery', quantity: 1, rate: 2500, amount: 2500 }],
-        subtotal: 2500,
-        tax: 0,
-        total: 2500,
-        currency: 'USD',
-        status: 'SENT',
-        dueDate: MEETING_START,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-    await tx.transaction.upsert({
-      where: { id: AGENCY_E2E.transactionId },
-      update: {
-        type: 'INCOME',
-        amount: 2500,
-        currency: 'USD',
-        description: 'Atlas launch deposit E2E',
-        projectId: AGENCY_E2E.projectId,
-        clientId: AGENCY_E2E.clientId,
-        date: FIXED_AT,
-      },
-      create: {
-        id: AGENCY_E2E.transactionId,
-        type: 'INCOME',
-        amount: 2500,
-        currency: 'USD',
-        description: 'Atlas launch deposit E2E',
-        projectId: AGENCY_E2E.projectId,
-        clientId: AGENCY_E2E.clientId,
-        date: FIXED_AT,
-        createdAt: FIXED_AT,
-        updatedAt: FIXED_AT,
-      },
-    });
-  });
-  console.log(`Agency E2E fixture restored for ${AGENCY_E2E.organizationId}.`);
-} finally {
-  await prisma.$disconnect();
-  await pool.end();
+    console.log(`Agency E2E fixture restored for ${AGENCY_E2E.organizationId}.`);
+  } finally {
+    await prisma.$disconnect();
+    await pool.end();
+  }
 }
+
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});
