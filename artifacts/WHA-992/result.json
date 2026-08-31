@@ -1,0 +1,54 @@
+{
+  "issue": "WHA-992",
+  "runDate": "2026-08-31",
+  "expectedCanonical": "2e36eae35e68d3a9c5e7f182684dd25aff924469",
+  "executionCheckout": {
+    "branch": "WHA-992-run-read-only-restaurant-and-superadmin-preview-smoke",
+    "initialHead": "2e36eae35e68d3a9c5e7f182684dd25aff924469",
+    "status": "PASS"
+  },
+  "preview": {
+    "port": 3105,
+    "listenerPid": 84775,
+    "workingDirectory": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-953-compose-approved-restaurant-corrections-into-one-private-lineage",
+    "checkoutHead": "541862adc5f479e677a21e54f8715f1a43b63458",
+    "canonicalStatus": "FAIL",
+    "classification": "preview_configuration_blocker"
+  },
+  "health": {
+    "tenant": {
+      "url": "http://chai-chowk.localhost:3105/api/health",
+      "httpStatus": 200,
+      "status": "PASS"
+    },
+    "platformLogin": {
+      "url": "http://admin.localhost:3105/platform/login",
+      "httpStatus": 200,
+      "status": "PASS"
+    }
+  },
+  "codexCliNetworkCheck": {
+    "status": "BLOCK",
+    "detail": "The required CLI profile could see the listener but its inner workspace sandbox could not connect to local port 3105. Outer approved curl returned HTTP 200; HTTP 000 from the inner sandbox is not a preview defect."
+  },
+  "browserSmoke": {
+    "status": "BLOCK",
+    "reason": "The running preview checkout does not match the required canonical commit.",
+    "browserLaunched": false,
+    "screenshots": [],
+    "trace": null
+  },
+  "credentialAvailability": {
+    "restaurantDemo": "available but unused after canonical mismatch",
+    "platformAdmin": "unavailable in environment",
+    "agencyFixture": "unavailable in environment"
+  },
+  "mutations": {
+    "evidenceFilesOnly": true,
+    "sourceEdits": false,
+    "businessData": false,
+    "processActions": false,
+    "dependencyInstalls": false,
+    "remoteGitActions": false
+  }
+}

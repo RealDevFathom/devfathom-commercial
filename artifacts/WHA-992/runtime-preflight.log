@@ -1,0 +1,28 @@
+WHA-992 bounded read-only preflight — 2026-08-31 Asia/Karachi
+
+ASSIGNED CHECKOUT
+branch=WHA-992-run-read-only-restaurant-and-superadmin-preview-smoke
+initial_head=2e36eae35e68d3a9c5e7f182684dd25aff924469
+status=PASS
+
+OUTER APPROVED HTTP CHECKS
+GET http://chai-chowk.localhost:3105/api/health HTTP 200
+GET http://admin.localhost:3105/platform/login HTTP 200
+
+LISTENER
+command=node
+pid=84775
+address=TCP *:3105 LISTEN
+cwd=/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-953-compose-approved-restaurant-corrections-into-one-private-lineage
+cwd_head=541862adc5f479e677a21e54f8715f1a43b63458
+expected_head=2e36eae35e68d3a9c5e7f182684dd25aff924469
+canonical_status=FAIL
+
+CODEX CLI NETWORK DIAGNOSTIC
+The devfathom-commercial CLI session returned HTTP 000 from its inner workspace sandbox while lsof still saw the listener. Outer approved curl returned HTTP 200. Classified runner-sandbox isolation, not product outage.
+
+BROWSER
+No browser launched. Direct runner command failed before launch because this worktree has no local node_modules/.bin/tsx. No dependency install attempted. Canonical preview mismatch then became the terminal precondition blocker.
+
+STOP
+Browser smoke skipped because the running preview was not the assigned canonical build.
