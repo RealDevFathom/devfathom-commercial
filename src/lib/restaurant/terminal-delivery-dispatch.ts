@@ -9,6 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { DeliveryError, transitionDeliveryFulfillment } from './delivery';
 import { requireKdsStation } from './kds';
+import { lockRestaurantOrder } from './orders';
 import { withTerminalAuth } from './terminal-auth';
 import {
   idempotencyKeyFromRequest,
@@ -42,8 +43,9 @@ export function assessDeliveryDispatch(
     return { paymentMode: storedPaymentMode, dispatchable: false, rejection: null };
   }
 
-  const unready = items.some((item) => !['PREPARED', 'SERVED', 'VOIDED'].includes(item.status));
-  if (items.length === 0 || unready) {
+  const liveItems = items.filter((item) => item.status !== 'VOIDED');
+  const unready = liveItems.some((item) => !['PREPARED', 'SERVED'].includes(item.status));
+  if (liveItems.length === 0 || unready) {
     return {
       paymentMode: null,
       dispatchable: false,
@@ -139,6 +141,94 @@ export function deliveryErrorResponse(error: unknown): NextResponse | null {
   return NextResponse.json({ error: error.message }, { status });
 }
 
+type DeliveryTransitionResult = {
+  fulfillmentId: string;
+  status: 'DISPATCHED' | 'DELIVERED';
+  paymentMode: 'PREPAID' | 'COD' | null;
+};
+
+function transaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {
+  return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
+}
+
+/** Device-scoped, payload-bound KDS transition with an immutable replay result. */
+export function transitionDeliveryFromKds(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    branchId: string;
+    deviceId: string;
+    idempotencyKey: string;
+    fulfillmentId: string;
+    status: 'DISPATCHED' | 'DELIVERED';
+  }
+): Promise<DeliveryTransitionResult> {
+  return transaction(db, async (tx) => {
+    const commandType = `delivery.transition:${input.fulfillmentId}:${input.status}`;
+    await tx.restaurantOrderIdempotencyKey.createMany({
+      data: [{ deviceId: input.deviceId, key: input.idempotencyKey, commandType }],
+      skipDuplicates: true,
+    });
+    const [claim] = await tx.$queryRaw<Array<{ commandType: string; resultRef: string | null }>>(
+      Prisma.sql`SELECT "commandType", "resultRef" FROM "restaurant_order_idempotency_keys" WHERE "deviceId" = ${input.deviceId} AND "key" = ${input.idempotencyKey} FOR UPDATE`
+    );
+    if (!claim || claim.commandType !== commandType) {
+      throw new DeliveryError(
+        'This idempotency key is already bound to a different delivery transition.',
+        'INVALID_TRANSITION'
+      );
+    }
+    if (claim.resultRef) return JSON.parse(claim.resultRef) as DeliveryTransitionResult;
+
+    const fulfillment = await tx.restaurantDeliveryFulfillment.findFirst({
+      where: { id: input.fulfillmentId, branchId: input.branchId },
+      select: { orderId: true },
+    });
+    if (!fulfillment) throw new DeliveryError('Delivery fulfillment does not exist.', 'NOT_FOUND');
+
+    await lockRestaurantOrder(tx, fulfillment.orderId);
+    const current = await tx.restaurantDeliveryFulfillment.findFirst({
+      where: { id: input.fulfillmentId, branchId: input.branchId },
+      select: { status: true, orderId: true },
+    });
+    if (!current) throw new DeliveryError('Delivery fulfillment does not exist.', 'NOT_FOUND');
+
+    if (input.status === 'DISPATCHED' && current.status === 'PENDING') {
+      const items = await tx.restaurantOrderItem.findMany({
+        where: { orderId: current.orderId, status: { not: 'VOIDED' } },
+        orderBy: { id: 'asc' },
+        select: { status: true },
+      });
+      if (
+        items.length === 0 ||
+        items.some((item) => !['PREPARED', 'SERVED'].includes(item.status))
+      ) {
+        throw new DeliveryError(
+          'Kitchen handoff is not ready. Prepare every live item before dispatch.',
+          'INVALID_TRANSITION'
+        );
+      }
+    }
+
+    const delivery = await transitionDeliveryFulfillment(tx, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      fulfillmentId: input.fulfillmentId,
+      status: input.status,
+    });
+    const result: DeliveryTransitionResult = {
+      fulfillmentId: delivery.id,
+      status: delivery.status as DeliveryTransitionResult['status'],
+      paymentMode: delivery.paymentMode,
+    };
+    await tx.restaurantOrderIdempotencyKey.update({
+      where: { deviceId_key: { deviceId: input.deviceId, key: input.idempotencyKey } },
+      data: { resultRef: JSON.stringify(result) },
+    });
+    return result;
+  });
+}
+
 export const deliveryQueueRoute = withTerminalAuth(async (ctx) => {
   const station = requireKdsStation(ctx.device);
   if (!station.ok) return station.response;
@@ -169,44 +259,15 @@ export const deliveryTransitionRoute = withTerminalAuth(
       );
     }
 
-    if (parsed.data.status === 'DISPATCHED') {
-      const fulfillment = await ctx.db.restaurantDeliveryFulfillment.findFirst({
-        where: { id: parsed.data.fulfillmentId, branchId: ctx.device.branchId },
-        select: { status: true, orderId: true },
-      });
-      if (!fulfillment) {
-        throw new DeliveryError('Delivery fulfillment does not exist.', 'NOT_FOUND');
-      }
-      if (fulfillment.status === 'PENDING') {
-        // Hold share locks until the surrounding terminal transaction commits, so a
-        // concurrent kitchen mutation cannot regress readiness between this gate and
-        // the fulfillment row transition.
-        const items = await ctx.db.$queryRaw<Array<{ status: string }>>(
-          Prisma.sql`SELECT "status" FROM "restaurant_order_items" WHERE "orderId" = ${fulfillment.orderId} ORDER BY "id" FOR SHARE`
-        );
-        if (
-          items.length === 0 ||
-          items.some((item) => !['PREPARED', 'SERVED', 'VOIDED'].includes(item.status))
-        ) {
-          throw new DeliveryError(
-            'Kitchen handoff is not ready. Prepare every live item before dispatch.',
-            'INVALID_TRANSITION'
-          );
-        }
-      }
-    }
-
-    const delivery = await transitionDeliveryFulfillment(ctx.db, {
+    const delivery = await transitionDeliveryFromKds(ctx.db, {
       organizationId: ctx.organizationId,
       branchId: ctx.device.branchId,
+      deviceId: ctx.device.id,
+      idempotencyKey: key,
       fulfillmentId: parsed.data.fulfillmentId,
       status: parsed.data.status,
     });
-    return NextResponse.json({
-      fulfillmentId: delivery.id,
-      status: delivery.status,
-      paymentMode: delivery.paymentMode,
-    });
+    return NextResponse.json(delivery);
   },
   { mapError: deliveryErrorResponse }
 );

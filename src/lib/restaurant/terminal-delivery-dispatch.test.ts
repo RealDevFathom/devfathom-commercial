@@ -70,6 +70,16 @@ describe('KDS delivery dispatch projection', () => {
     });
   });
 
+  it('rejects zero-live and all-VOIDED orders', () => {
+    const bill = [{ status: 'OPEN' as const, grandTotal: money('12.00'), tenders: [] }];
+    for (const items of [[], [{ status: 'VOIDED' }]]) {
+      expect(assessDeliveryDispatch('PENDING', null, items, bill)).toMatchObject({
+        dispatchable: false,
+        rejection: expect.stringContaining('Kitchen handoff is not ready'),
+      });
+    }
+  });
+
   it('rejects caller-supplied paymentMode', () => {
     expect(
       deliveryTransitionBody.safeParse({
