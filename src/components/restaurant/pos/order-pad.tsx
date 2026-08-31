@@ -520,7 +520,7 @@ export function OrderPad() {
       );
       if (epoch !== stateEpoch.current) return;
       setOrderMenu(activeMenu);
-      setNotice({ tone: 'success', message: `Order ${data.orderNumber} active.` });
+      if (standalone) setNotice({ tone: 'success', message: `Order ${data.orderNumber} active.` });
     } catch (error) {
       if (epoch !== stateEpoch.current) return;
       handleError(error);
