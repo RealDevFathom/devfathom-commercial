@@ -162,9 +162,9 @@ function cachedMenu(catalog: PosCatalogSnapshot): EffectiveMenu {
 
 export function OrderPad() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
-  const [enrollmentState, setEnrollmentState] = useState<'checking' | 'ready' | 'missing'>(
-    'checking'
-  );
+  const [enrollmentState, setEnrollmentState] = useState<
+    'checking' | 'ready' | 'missing' | 'unrecoverable'
+  >('checking');
   const [operators, setOperators] = useState<OperatorOption[]>([]);
   const [operatorId, setOperatorId] = useState('');
   const [operatorDirectoryState, setOperatorDirectoryState] = useState<
@@ -287,6 +287,14 @@ export function OrderPad() {
         }
       });
       syncQueue();
+      if (result.state === 'PAUSED' && local.snapshot().queue?.replay === 'PAUSED_REAUTH') {
+        setRuntime({ ...activeRuntime, state: 'LOCKED', operator: null });
+        setOperatorPin('');
+        setNotice({
+          tone: 'warning',
+          message: 'Queued orders are paused. Reauthenticate to resume replay.',
+        });
+      }
       if (result.discarded) {
         setDiscardedCount(result.discarded.drafts);
         setRevoked(true);
@@ -481,11 +489,15 @@ export function OrderPad() {
       offlineRuntime.current = local;
       const hydration = await local.hydrate();
       if (hydration === 'unrecoverable') {
+        local.close();
+        offlineRuntime.current = null;
+        setEnrollmentState('unrecoverable');
         setNotice({
           tone: 'danger',
           message:
             'Local POS data could not be recovered. Re-enroll or clear site data to continue.',
         });
+        return;
       }
       syncQueue();
       setRuntime(established);
@@ -751,26 +763,42 @@ export function OrderPad() {
         <div className="mx-auto max-w-xl space-y-6">
           <PageHeader
             eyebrow={<span className="text-text-strong">Restaurant POS</span>}
-            heading={enrollmentState === 'checking' ? 'Checking enrollment' : 'Enrollment required'}
+            heading={
+              enrollmentState === 'checking'
+                ? 'Checking enrollment'
+                : enrollmentState === 'unrecoverable'
+                  ? 'Local POS recovery required'
+                  : 'Enrollment required'
+            }
             description={
               <span className="text-text-body">
                 {enrollmentState === 'checking'
                   ? 'Verifying this browser with the server.'
-                  : 'Ask an administrator to enroll this browser from Restaurant Devices.'}
+                  : enrollmentState === 'unrecoverable'
+                    ? 'Local POS data could not be safely recovered.'
+                    : 'Ask an administrator to enroll this browser from Restaurant Devices.'}
               </span>
             }
           />
           {notice ? <Notice notice={notice} /> : null}
           <SectionCard
-            title={enrollmentState === 'checking' ? 'Verifying browser' : 'Not enrolled'}
+            title={
+              enrollmentState === 'checking'
+                ? 'Verifying browser'
+                : enrollmentState === 'unrecoverable'
+                  ? 'Recovery required'
+                  : 'Not enrolled'
+            }
           >
             <div className="space-y-4">
               <p className="text-sm leading-6 text-text-muted">
                 {enrollmentState === 'checking'
                   ? 'Please wait while the terminal credential is revalidated.'
-                  : 'No usable browser enrollment was found. It may be missing, expired, or revoked.'}
+                  : enrollmentState === 'unrecoverable'
+                    ? 'The saved offline queue was not opened. Clear site data or re-enroll this browser before continuing.'
+                    : 'No usable browser enrollment was found. It may be missing, expired, or revoked.'}
               </p>
-              {enrollmentState === 'missing' ? (
+              {enrollmentState === 'missing' || enrollmentState === 'unrecoverable' ? (
                 <a
                   href="/login?callbackUrl=%2Frestaurant%2Fdevices"
                   className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
@@ -1345,6 +1373,7 @@ export function OrderPad() {
         open={checkoutOrderId !== null}
         orderId={checkoutOrderId}
         request={checkoutRequest}
+        connected={online}
         onClose={() => setCheckoutOrderId(null)}
       />
     </PosShell>

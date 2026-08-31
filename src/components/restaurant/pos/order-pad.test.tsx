@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
+import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -271,6 +272,45 @@ describe('OrderPad transport', () => {
     await screen.findByText('Queued 2');
     expect(fetch).toHaveBeenCalledTimes(callsBeforeQueue);
     expect(screen.getByText(/Checkout, tenders, refunds, drawers/)).toBeVisible();
+  });
+
+  it('requires reauthentication after replay pauses and resumes the preserved queue on unlock', async () => {
+    let connected = false;
+    vi.spyOn(window.navigator, 'onLine', 'get').mockImplementation(() => connected);
+    const fetch = transport({ openErrors: [{ status: 401, error: 'Terminal session expired.' }] });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Queued 2');
+
+    connected = true;
+    window.dispatchEvent(new Event('online'));
+    expect(await screen.findByRole('heading', { name: 'Terminal locked' })).toBeVisible();
+    expect(
+      screen.getByText('Queued orders are paused. Reauthenticate to resume replay.')
+    ).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock terminal' }));
+    await screen.findByRole('heading', { name: 'Order pad' });
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'))
+      ).toHaveLength(2)
+    );
+  });
+
+  it('fails closed when IndexedDB hydration is unrecoverable', async () => {
+    vi.spyOn(PosOfflineRuntime.prototype, 'hydrate').mockResolvedValue('unrecoverable');
+    const fetch = transport();
+    vi.stubGlobal('fetch', fetch);
+    render(<OrderPad />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Local POS recovery required' })
+    ).toBeVisible();
+    expect(screen.getByText(/Local POS data could not be recovered/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Unlock terminal' })).not.toBeInTheDocument();
   });
 
   it('keeps internal profile IDs out of the UI and sends the selected hidden ID', async () => {
