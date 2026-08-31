@@ -286,19 +286,20 @@ export const coverageMatrix = [
     requirement: 'Physical printing',
     status: 'Unbuilt',
     evidence: [],
-    boundary: 'No canonical implementation or golden-byte fixtures; entire lane is WHA-228.',
+    boundary:
+      'Durable print routing/simulation exists, but no physical printer delivery or golden-byte fixture acceptance exists; physical lane remains WHA-228.',
   },
   {
     id: 'offline-pos-kds',
     requirement: 'Offline POS/KDS',
-    status: 'Needs browser acceptance',
+    status: 'Partial',
     evidence: [
       source('pos-client-store', 'src/lib/restaurant/pos-client-store.ts'),
       source('pos-command-queue', 'src/lib/restaurant/pos-command-queue.ts'),
       test('pos-kds-resilience', 'tests/e2e/restaurant-pos-kds-resilience.spec.ts'),
     ],
     boundary:
-      'Accepted offline promise/latency target is External under D04; promotion parity is WHA-282.',
+      'Accepted offline promise/latency target is External under D04; disconnect/reconnect order capture is under active correction and must not be claimed until exact-head composition and browser acceptance pass; promotion parity is WHA-282.',
   },
   {
     id: 'localization-accessibility',
@@ -388,7 +389,7 @@ export const finalActorMatrix = [
 
 export const restaurantAcceptanceManifest = {
   planObject: '96377eb58282232683f28a3a355cd1baa4f955b8:claude/restaurant-completion-plan.md',
-  baseCommit: '27b4e51165428e00248edc12d1b6e175f31933a6',
+  baseCommit: '6bc322a3ce67ddf6d6e5a488ac21754df03b0062',
   coverageMatrix,
   externalBoundaries,
   finalActorMatrix,

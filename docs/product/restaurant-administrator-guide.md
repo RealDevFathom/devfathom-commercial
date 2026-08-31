@@ -11,10 +11,12 @@ explain design and evidence; this guide explains what administrators and service
   owner to correct the role or the platform operator to correct the module. Never share accounts.
 - A shared POS/KDS is a registered device, not a shared web user. PINs/badges are individual
   terminal credentials, never web passwords.
-- **MOCK CARD LIMIT:** Card tender is an operator-confirmed mock/local record. It does not prove
-  processor authorization, capture, settlement, tokenization, or refund.
-- **NO PRINTER LIMIT:** Receipt data is display-only. Physical receipt/kitchen printing and printer
-  fleet management are not built.
+- **MOCK CARD LIMIT:** Card tender is an operator-confirmed mock/local record. OPay New 9220 is a
+  candidate device only; DevFathom does not prove processor authorization, capture, settlement,
+  tokenization, or refund until a provider-specific integration is accepted.
+- **PRINT BRIDGE LIMIT:** Receipt/kitchen print routing persists durable simulation jobs and ESC/POS
+  bytes only. DevFathom does not connect to physical printers, drawers, or operating-system print
+  services.
 - **NOT OPERATOR READY** means a live screen requires a typed internal identifier instead of an
   operator-safe choice. Stop and use another supported flow pending product correction. Never look
   up an identifier in a database.
@@ -122,8 +124,9 @@ require a distinct manager credential.
   the server-resolved business date. KDS offers Start, Mark ready, and Recall when valid.
 - **Common failure/recovery:** On 401/403, verify entitlement, device status/kind/branch/station,
   operator status, credential, and lockout. Re-enroll only if the secret is lost. KDS gap/overflow
-  triggers full reconciliation. There is no KDS push channel, offline queue, bump-bar integration,
-  or kitchen printing.
+  triggers full reconciliation. There is no KDS push channel, bump-bar integration, or physical
+  kitchen-print delivery. Offline/disconnect behavior is under active correction and is not an
+  accepted operator promise yet.
 
 ### 8. Run dine-in and takeaway
 
@@ -152,7 +155,8 @@ require a distinct manager credential.
   display-only receipt with attributable history.
 - **Common failure/recovery:** Correct insufficient/over-tender or refund-cap errors and retry once.
   Card is only a mock/operator-confirmed record. Money workflows requiring typed **Terminal ID** are
-  **NOT OPERATOR READY** pending product correction; never look it up. Physical printing is absent.
+  **NOT OPERATOR READY** pending product correction; never look it up. Print routing is simulation-
+  only and does not prove physical receipt delivery.
 
 ### 10. Customers and loyalty
 

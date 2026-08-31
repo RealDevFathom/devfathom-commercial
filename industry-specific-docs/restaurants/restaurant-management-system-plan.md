@@ -1,15 +1,15 @@
 # DevFathom Restaurant Management System
 
-| Field                         | Value                                                                                                                               |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Document version              | `1.4`                                                                                                                               |
-| Document status               | `RECONCILED REPOSITORY-EVIDENCE BASELINE — PRODUCTION READINESS NOT CLAIMED`                                                        |
-| Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                      |
-| Product                       | DevFathom Commercial                                                                                                                |
-| Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                     |
-| Last updated                  | 2026-08-30                                                                                                                          |
-| Current implementation status | Restaurant source is repository-implemented in whole or in part by area; this does not establish deployment or production readiness |
-| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against commit `03731baab29b29278165c7a169078d4fec897a10`   |
+| Field                         | Value                                                                                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Document version              | `1.5`                                                                                                                                                   |
+| Document status               | `RECONCILED REPOSITORY-EVIDENCE BASELINE — PRODUCTION READINESS NOT CLAIMED`                                                                            |
+| Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                                          |
+| Product                       | DevFathom Commercial                                                                                                                                    |
+| Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                                         |
+| Last updated                  | 2026-08-31                                                                                                                                              |
+| Current implementation status | Restaurant source is repository-implemented in whole or in part by area; this does not establish deployment, physical hardware, or production readiness |
+| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against commit `6bc322a3ce67ddf6d6e5a488ac21754df03b0062`                       |
 
 ## 1. Purpose
 
@@ -784,6 +784,13 @@ The kitchen ledger remains authoritative. Phase 0 must select how a KDS receives
 
 A browser-only application cannot assume reliable support for every printer, kitchen printer, and cash drawer.
 
+Current repository evidence is narrower than physical hardware support: commit
+`5b9bc7de8f6d274f40890b8e6f6a6704a928f045` adds a durable tenant-scoped print
+route/job bridge plus ESC/POS simulation, but it does not perform physical
+printer, network, operating-system, or cash-drawer I/O. Physical print agents,
+printer certification, hardware support matrices, and production acceptance
+remain open under D05.
+
 Supported options must be selected deliberately:
 
 - network-capable printers;
@@ -1301,21 +1308,21 @@ The following existing files provide patterns to reuse. They do not imply that r
 
 ## 20. Status summary
 
-This table is reconciled against commit `03731baab29b29278165c7a169078d4fec897a10`. `SOURCE
+This table is reconciled against commit `6bc322a3ce67ddf6d6e5a488ac21754df03b0062`. `SOURCE
 IMPLEMENTED` means committed source plus focused evidence; it does not assert deployment, browser,
 hardware, external-service acceptance, or production readiness. Use the
 [restaurant administrator guide](../../docs/product/restaurant-administrator-guide.md) for safe
 operator workflows and current limits.
 
-| Area                                                                          | Evidence status                                                                                                                                        |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Planning baseline and decision register                                       | `FINAL FOR PHASE 0`; unresolved decisions remain `OPEN — SEE SECTION 17.2`                                                                             |
-| Onboarding, packages, modules, roles, staff, and registered devices           | `SOURCE IMPLEMENTED / PARTIAL` — onboarding, entitlement gates, staff, and device consoles exist; complete branch administration is not operator-ready |
-| Catalog, menus, pricing, modifiers, recipes, OCR import, and publication      | `SOURCE IMPLEMENTED` — catalog/menu/import consoles and focused tests exist; OCR publication remains manual                                            |
-| POS, KDS, orders, bills, tenders, drawer, business date, and numbering        | `SOURCE IMPLEMENTED / MOCKED` — terminal flows and focused tests exist; card processing is mocked and printing is not built                            |
-| Tax                                                                           | `SOURCE IMPLEMENTED / CONFIGURATION-BOUND` — branch activation and Pakistan profiles exist; applicability requires qualified adviser confirmation      |
-| Inventory, purchasing, workforce, SOP, customers/loyalty, and insights        | `SOURCE IMPLEMENTED / PARTIAL` — routes, domain logic, and focused tests exist; operator limits remain documented                                      |
-| Browser, hardware, external payment, native mobile, and production deployment | `NOT CLAIMED`                                                                                                                                          |
+| Area                                                                          | Evidence status                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Planning baseline and decision register                                       | `FINAL FOR PHASE 0`; unresolved decisions remain `OPEN — SEE SECTION 17.2`                                                                                                                                |
+| Onboarding, packages, modules, roles, staff, and registered devices           | `SOURCE IMPLEMENTED / PARTIAL` — onboarding, entitlement gates, staff, and device consoles exist; complete branch administration is not operator-ready                                                    |
+| Catalog, menus, pricing, modifiers, recipes, OCR import, and publication      | `SOURCE IMPLEMENTED` — catalog/menu/import consoles and focused tests exist; OCR publication remains manual                                                                                               |
+| POS, KDS, orders, bills, tenders, drawer, business date, and numbering        | `SOURCE IMPLEMENTED / MOCKED` — terminal flows and focused tests exist; card processing remains provider-dependent/mock, and printing has only a durable simulation bridge with no physical hardware path |
+| Tax                                                                           | `SOURCE IMPLEMENTED / CONFIGURATION-BOUND` — branch activation and Pakistan profiles exist; applicability requires qualified adviser confirmation                                                         |
+| Inventory, purchasing, workforce, SOP, customers/loyalty, and insights        | `SOURCE IMPLEMENTED / PARTIAL` — routes, domain logic, and focused tests exist; offline order capture remains under active correction and operator limits remain documented                               |
+| Browser, hardware, external payment, native mobile, and production deployment | `NOT CLAIMED`                                                                                                                                                                                             |
 
 Repository evidence must not be presented as production availability. Market a restaurant-specific
 capability as production-ready only after its code, migrations, authorization, tenant isolation,
