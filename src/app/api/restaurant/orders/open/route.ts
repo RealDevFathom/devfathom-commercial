@@ -17,6 +17,7 @@ export const POST = terminalCommandRoute(
       entitlementLimits: entitlements.limits,
       branchId: ctx.device.branchId,
       channel: data.channel,
+      customerId: data.customerId ?? null,
       publicationId: data.publicationId ?? null,
       tableIds: data.tableIds,
       coverCount: data.coverCount ?? null,

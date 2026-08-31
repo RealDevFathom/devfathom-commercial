@@ -45,6 +45,7 @@ export type PosCommandKind = 'OPEN_ORDER' | 'ADD_ITEM' | 'FIRE';
 
 export type PosOpenOrderBody = {
   channel: PosOrderChannel;
+  customerId?: string;
   publicationId?: string | null;
   tableIds?: string[];
   coverCount?: number | null;
@@ -159,7 +160,12 @@ export type EnqueueResult =
   | { ok: true; snapshot: PosQueueSnapshot; draft: PosQueuedDraft }
   | {
       ok: false;
-      reason: 'QUEUE_FULL' | 'DEVICE_MISMATCH' | 'EMPTY_DRAFT' | 'DEVICE_REVOKED';
+      reason:
+        | 'QUEUE_FULL'
+        | 'DEVICE_MISMATCH'
+        | 'EMPTY_DRAFT'
+        | 'DEVICE_REVOKED'
+        | 'DELIVERY_CONNECTED_ONLY';
       message: string;
     };
 
@@ -179,6 +185,13 @@ export function enqueueDraft(
   input: PosDraftInput,
   newId: () => string = defaultId
 ): EnqueueResult {
+  if (input.open.channel === 'DELIVERY') {
+    return {
+      ok: false,
+      reason: 'DELIVERY_CONNECTED_ONLY',
+      message: 'Delivery orders require a connection and cannot be saved to the offline queue.',
+    };
+  }
   if (input.deviceId !== snapshot.deviceId) {
     return {
       ok: false,

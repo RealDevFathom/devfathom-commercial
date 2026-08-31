@@ -11,10 +11,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { CoAuthorizationError } from './co-authorization';
 import { KitchenTicketError } from './kitchen-tickets';
-import {
-  DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE,
-  operationalOrderChannelSchema,
-} from './order-channels';
+import { DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE, orderChannelSchema } from './order-channels';
 import {
   channelPublished,
   isItemAvailableAt,
@@ -74,13 +71,30 @@ const APPROVING = z
 export const openOrderBody = z
   .object({
     // branchId is the terminal's bound branch (from the device), never the body.
-    channel: operationalOrderChannelSchema,
+    channel: orderChannelSchema,
+    customerId: ID.optional(),
     publicationId: ID.nullish(),
     tableIds: z.array(ID).optional(),
     coverCount: z.number().int().min(0).nullish(),
     sectionId: ID.nullish(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.channel === 'DELIVERY' && !value.customerId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['customerId'],
+        message: 'Select a customer for delivery.',
+      });
+    }
+    if (value.channel === 'DELIVERY' && value.tableIds?.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tableIds'],
+        message: 'Delivery orders cannot have tables.',
+      });
+    }
+  });
 
 export const addItemBody = z
   .object({
@@ -715,7 +729,7 @@ export async function resolveTerminalEffectiveMenu(
  */
 export const effectiveMenuQuery = z
   .object({
-    channel: operationalOrderChannelSchema,
+    channel: orderChannelSchema,
     publicationId: ID.optional(),
     at: z.string().datetime().optional(),
   })

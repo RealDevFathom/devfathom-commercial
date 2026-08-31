@@ -27,7 +27,7 @@
  * - An empty publication `channels` set means "published on every operational channel".
  */
 
-import { isOperationalOrderChannel, type OrderChannel } from './order-channels';
+import type { OrderChannel } from './order-channels';
 
 export type { OrderChannel } from './order-channels';
 
@@ -172,14 +172,13 @@ export function isItemAvailableAt(input: AvailabilityInput): boolean {
 }
 
 /**
- * Channel filter (D06). DELIVERY always fails closed. An empty `channels` set
+ * Channel filter. An empty `channels` set
  * means every operational channel; otherwise the requested channel must be listed.
  */
 export function channelPublished(
   channels: readonly OrderChannel[],
   channel: OrderChannel
 ): boolean {
-  if (!isOperationalOrderChannel(channel)) return false;
   return channels.length === 0 || channels.includes(channel);
 }
 

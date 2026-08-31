@@ -236,11 +236,11 @@ describe('channelPublished', () => {
     expect(channelPublished(['DINE_IN', 'TAKEAWAY'], 'DELIVERY')).toBe(false);
   });
 
-  it('treats an empty set as operational channels only and always closes delivery', () => {
+  it('treats an empty set as every operational channel, including delivery', () => {
     expect(channelPublished([], 'DINE_IN')).toBe(true);
     expect(channelPublished([], 'TAKEAWAY')).toBe(true);
-    expect(channelPublished([], 'DELIVERY')).toBe(false);
-    expect(channelPublished(['DELIVERY'], 'DELIVERY')).toBe(false);
+    expect(channelPublished([], 'DELIVERY')).toBe(true);
+    expect(channelPublished(['DELIVERY'], 'DELIVERY')).toBe(true);
   });
 });
 

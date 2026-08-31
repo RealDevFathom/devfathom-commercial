@@ -24,7 +24,6 @@ import {
   fireBody,
   idempotencyKeyFromRequest,
   ifNoneMatchSatisfied,
-  invalidBody,
   openOrderBody,
   orderErrorResponse,
   requireActingOperator,
@@ -48,19 +47,22 @@ describe('strict input schemas (C7)', () => {
     ).toBe(false); // server defaults to the authenticated operator; reassignment is unsupported
   });
 
-  it('accepts operational open channels and rejects delivery with a stable REST error', async () => {
+  it('requires a trusted customer and no table for delivery', () => {
     expect(openOrderBody.safeParse({ channel: 'DINE_IN' }).success).toBe(true);
     expect(openOrderBody.safeParse({ channel: 'TAKEAWAY' }).success).toBe(true);
     expect(openOrderBody.safeParse({}).success).toBe(false);
     expect(openOrderBody.safeParse({ channel: 'EAT_IN' }).success).toBe(false);
-    const delivery = openOrderBody.safeParse({ channel: 'DELIVERY' });
-    expect(delivery.success).toBe(false);
-    if (delivery.success) throw new Error('DELIVERY must fail closed');
-    const response = invalidBody(delivery.error.issues);
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: 'Delivery is not configured. Use dine-in or takeaway.',
-    });
+    expect(openOrderBody.safeParse({ channel: 'DELIVERY' }).success).toBe(false);
+    expect(openOrderBody.safeParse({ channel: 'DELIVERY', customerId: 'customer_1' }).success).toBe(
+      true
+    );
+    expect(
+      openOrderBody.safeParse({
+        channel: 'DELIVERY',
+        customerId: 'customer_1',
+        tableIds: ['table_1'],
+      }).success
+    ).toBe(false);
   });
 
   it('treats fire course as optional (whole-order vs single-course fire)', () => {
@@ -217,7 +219,7 @@ describe('effectiveMenuQuery — STRICT device-authed query (C7)', () => {
     );
     expect(effectiveMenuQuery.safeParse({ channel: 'DRIVE_THRU' }).success).toBe(false);
     expect(effectiveMenuQuery.safeParse({}).success).toBe(false);
-    expect(effectiveMenuQuery.safeParse({ channel: 'DELIVERY' }).success).toBe(false);
+    expect(effectiveMenuQuery.safeParse({ channel: 'DELIVERY' }).success).toBe(true);
   });
 });
 
