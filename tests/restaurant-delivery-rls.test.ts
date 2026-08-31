@@ -113,7 +113,8 @@ describe('restaurant direct-delivery schema and forced RLS', () => {
        ($1,$2,$3,7001,current_date,'DELIVERY',$4,$5,$6,now()),
        ($7,$2,$8,7002,current_date,'DELIVERY',$4,$5,$6,now()),
        ($9,$2,$3,7003,current_date,'DINE_IN',$4,$5,$6,now()),
-       ($10,$11,$12,7001,current_date,'DELIVERY',$13,$14,$15,now())`,
+       ($10,$2,$3,7004,current_date,'DELIVERY',$4,$5,$6,now()),
+       ($11,$12,$13,7001,current_date,'DELIVERY',$14,$15,$16,now())`,
       [
         id('order_a'),
         id('org_a'),
@@ -124,6 +125,7 @@ describe('restaurant direct-delivery schema and forced RLS', () => {
         id('order_a_other'),
         id('branch_a_other'),
         id('order_dine_in'),
+        id('order_wrong_customer'),
         id('order_b'),
         id('org_b'),
         id('branch_b'),
@@ -228,7 +230,11 @@ describe('restaurant direct-delivery schema and forced RLS', () => {
 
   it('enforces composite customer/order tenancy and money/contact constraints', async () => {
     await expectPgCode('23503', () =>
-      insertFulfillment({ rowId: id('wrong_customer'), customerId: id('customer_b') })
+      insertFulfillment({
+        rowId: id('wrong_customer'),
+        orderId: id('order_wrong_customer'),
+        customerId: id('customer_b'),
+      })
     );
     await expectPgCode('23514', () =>
       client.query(
