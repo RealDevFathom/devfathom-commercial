@@ -73,6 +73,7 @@ function transport({
   detailGate,
   failedAddAttempts = 0,
   refreshGate,
+  openOrders = [],
   checkoutBillErrors = [],
   customerSearchGates = [],
   deliveryZoneGates = [],
@@ -83,6 +84,15 @@ function transport({
   detailGate?: Promise<void>;
   failedAddAttempts?: number;
   refreshGate?: Promise<void>;
+  openOrders?: {
+    id: string;
+    orderNumber: number;
+    status: string;
+    channel: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY';
+    activeTableIds: string[];
+    itemCount: number;
+    subtotal: string;
+  }[];
   checkoutBillErrors?: ({ status: number; error: string } | Error)[];
   customerSearchGates?: Promise<void>[];
   deliveryZoneGates?: Promise<void>[];
@@ -191,7 +201,7 @@ function transport({
     if (path.endsWith('/orders/open-orders')) {
       openOrderReads += 1;
       if (openOrderReads > 1) await refreshGate;
-      return json({ orders: [] });
+      return json({ orders: openOrders });
     }
     if (path.includes('/orders/detail')) {
       await detailGate;
@@ -385,6 +395,47 @@ describe('OrderPad transport', () => {
     await Promise.resolve();
     expect(screen.queryByText('Private Guest')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Customer name')).toHaveValue('');
+  });
+
+  it('preserves the delivery success notice while reconciling the opened order', async () => {
+    const fetch = transport({ customerSearchGates: [Promise.resolve()] });
+    await unlock(fetch);
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'DELIVERY' } });
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
+      target: { value: 'Private' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
+    await waitFor(() => expect(screen.getByLabelText('Saved address')).toHaveValue('address-1'));
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+
+    expect(
+      await screen.findByText('Delivery order 42 opened and fulfillment attached.')
+    ).toBeVisible();
+    expect(screen.queryByText('Order 42 active.')).not.toBeInTheDocument();
+  });
+
+  it('announces the active order when its detail is selected directly', async () => {
+    const fetch = transport({
+      openOrders: [
+        {
+          id: 'order-1',
+          orderNumber: 42,
+          status: 'OPEN',
+          channel: 'DINE_IN',
+          activeTableIds: ['table-1'],
+          itemCount: 0,
+          subtotal: '0.00',
+        },
+      ],
+    });
+    await unlock(fetch);
+
+    fireEvent.click(await screen.findByRole('button', { name: /#42/ }));
+
+    expect(await screen.findByText('Order 42 active.')).toBeVisible();
   });
 
   it('refetches zones when customer selection invalidates an in-flight zone response', async () => {
