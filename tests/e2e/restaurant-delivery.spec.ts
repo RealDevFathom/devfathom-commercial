@@ -74,6 +74,26 @@ async function tenantQuery<T extends pg.QueryResultRow>(
   }
 }
 
+async function tenantMutation(pool: pg.Pool, text: string, values: unknown[] = []) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `SELECT set_config('app.current_organization_id', $1, true),
+              set_config('app.is_platform_admin', 'false', true)`,
+      [fixture.organizationId]
+    );
+    const result = await client.query(text, values);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function unlockPos(page: Page) {
   const origin = terminalBrowserBaseUrl();
   await installSeededTerminalCookie(page.context(), fixture.pos, origin);
@@ -195,6 +215,14 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     key
   );
   expect(reused.status()).toBe(201);
+  const reusedOrder = (await reused.json()) as { orderId: string; orderNumber: number };
+  await post(
+    request,
+    pos,
+    '/api/restaurant/orders/cancel',
+    { orderId: reusedOrder.orderId, reason: 'Authorization same-key reuse proof complete' },
+    e2eIdempotencyKey('delivery-auth-probe-cancel', reusedOrder.orderNumber)
+  );
 
   await unlockPos(page);
   const cod = await openVisibleDelivery(page);
@@ -206,9 +234,11 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
   );
   const fulfillment = fulfillmentResult.rows[0]!;
   expect(fulfillment.fee).toBe(fixture.delivery.fee);
-  await tenantQuery(pool, `UPDATE restaurant_delivery_zones SET "fixedFee" = 9.75 WHERE id = $1`, [
-    fixture.delivery.zoneId,
-  ]);
+  await tenantMutation(
+    pool,
+    `UPDATE restaurant_delivery_zones SET "fixedFee" = 9.75 WHERE id = $1`,
+    [fixture.delivery.zoneId]
+  );
   const frozen = await tenantQuery<{ fee: string }>(
     pool,
     `SELECT "deliveryFeeSnapshot"::text fee
@@ -257,6 +287,13 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
 
   await unlockPos(page);
   const prepaid = await openVisibleDelivery(page);
+  const prepaidFulfillment = await tenantQuery<{ fee: string }>(
+    pool,
+    `SELECT "deliveryFeeSnapshot"::text fee
+       FROM restaurant_delivery_fulfillments WHERE "orderId" = $1`,
+    [prepaid.orderId]
+  );
+  expect(prepaidFulfillment.rows[0]!.fee).toBe('9.75');
   const prepaidBill = await post(
     request,
     pos,
@@ -308,7 +345,7 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     deliveryFeeRefunds: '0.00',
   });
 
-  await page.goto('/pos');
+  await page.goto(new URL('/pos', terminalBrowserBaseUrl()).href);
   await expect(page.locator('body')).not.toContainText(snapshot.rows[0]!.phone);
   await expect(page.locator('body')).not.toContainText(snapshot.rows[0]!.address);
 
