@@ -80,6 +80,7 @@ function customerSensitiveProcedure(action: Parameters<typeof capabilityProcedur
 }
 
 const readProcedure = customerSensitiveProcedure('customers:read');
+const manageProcedure = customerSensitiveProcedure('customers:manage');
 const configureProcedure = customerSensitiveProcedure('restaurant:configure');
 
 function mapCustomerError(error: unknown): never {
@@ -124,7 +125,7 @@ export const restaurantCustomersRouter = router({
       }
     }),
 
-  create: readProcedure
+  create: manageProcedure
     .input(z.object({ ...profile, identifiers: z.array(identifier).max(20).optional() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -134,7 +135,7 @@ export const restaurantCustomersRouter = router({
       }
     }),
 
-  correct: readProcedure
+  correct: manageProcedure
     .input(
       z
         .object({
@@ -152,7 +153,7 @@ export const restaurantCustomersRouter = router({
       }
     }),
 
-  attachToOrder: readProcedure
+  attachToOrder: manageProcedure
     .input(z.object({ customerId: id, orderId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -162,7 +163,7 @@ export const restaurantCustomersRouter = router({
       }
     }),
 
-  appendInteraction: readProcedure
+  appendInteraction: manageProcedure
     .input(
       z
         .object({
@@ -182,7 +183,7 @@ export const restaurantCustomersRouter = router({
       }
     }),
 
-  appendConsent: readProcedure
+  appendConsent: manageProcedure
     .input(
       z
         .object({
@@ -206,7 +207,7 @@ export const restaurantCustomersRouter = router({
       }
     }),
 
-  createTag: readProcedure
+  createTag: manageProcedure
     .input(
       z
         .object({
@@ -231,7 +232,7 @@ export const restaurantCustomersRouter = router({
     }
   }),
 
-  assignTag: readProcedure.input(pair).mutation(async ({ ctx, input }) => {
+  assignTag: manageProcedure.input(pair).mutation(async ({ ctx, input }) => {
     try {
       return await assignCustomerTag(ctx.db, input);
     } catch (error) {
@@ -239,7 +240,7 @@ export const restaurantCustomersRouter = router({
     }
   }),
 
-  unassignTag: readProcedure.input(pair).mutation(async ({ ctx, input }) => {
+  unassignTag: manageProcedure.input(pair).mutation(async ({ ctx, input }) => {
     try {
       return await unassignCustomerTag(ctx.db, input);
     } catch (error) {
@@ -247,7 +248,7 @@ export const restaurantCustomersRouter = router({
     }
   }),
 
-  export: readProcedure
+  export: manageProcedure
     .input(z.object({ customerId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, {

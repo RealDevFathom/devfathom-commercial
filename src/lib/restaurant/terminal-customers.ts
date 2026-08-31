@@ -30,13 +30,13 @@ import { idempotencyKeyFromRequest, invalidBody, requireActingOperator } from '.
  * the search read model returns MASKED identifiers only, so a POS pad never holds a raw
  * email or phone number, and no PIN or payment instrument is read or returned on any path.
  *
- * Capability gate. These routes gate on the pre-existing `customers:read` / `loyalty:redeem`
- * vertical capabilities, resolved through the SAME `operatorHasCapability` seam the M5 money
- * routes use (org-role permissions + non-expired per-user overrides, default-DENY). The
- * resolution rule is not forked; only the capability strings differ. `MoneyCapability` in
- * `checkout-routes.ts` deliberately stays the five money capabilities — widening that union
- * would let a customer/loyalty capability be passed to a money route — so this lane declares
- * its own `ConnectedCapability` union over the same resolver.
+ * Capability gate. These routes gate on the customer read/manage or loyalty redemption
+ * capability appropriate to the operation, resolved through the SAME `operatorHasCapability`
+ * seam the M5 money routes use (org-role permissions + non-expired per-user overrides,
+ * default-DENY). The resolution rule is not forked; only the capability strings differ.
+ * `MoneyCapability` in `checkout-routes.ts` deliberately stays the five money capabilities —
+ * widening that union would let a customer/loyalty capability be passed to a money route — so
+ * this lane declares its own `ConnectedCapability` union over the same resolver.
  *
  * Error mapping runs OUTSIDE the request transaction (M8 correction E): `withTerminalAuth`
  * owns the PostgreSQL transaction and a nested `$transaction` opens no savepoint, so an error
@@ -68,9 +68,8 @@ export const customerAttachBody = z.object({ orderId: ID, customerId: ID }).stri
 
 // ── Capability gate + route factories (shared with `terminal-loyalty.ts`) ─────
 
-/** The two vertical capabilities this lane's connected routes gate on. Both are
- * pre-existing entries in `vertical-catalog.ts`; no capability is added. */
-export type ConnectedCapability = 'customers:read' | 'loyalty:redeem';
+/** The vertical capabilities this lane's connected routes gate on. */
+export type ConnectedCapability = 'customers:read' | 'customers:manage' | 'loyalty:redeem';
 
 const json = (body: unknown, status: number): NextResponse => NextResponse.json(body, { status });
 

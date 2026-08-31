@@ -61,6 +61,7 @@ export const ALL_ACTIONS = [
   'sop:complete', // restaurant M7-L4: SOP occurrence execution (start/complete-step/submit) — org-role driven
   'sop:verify', // restaurant M7-L4: SOP verification decisions (VERIFY/REJECT/WAIVE) — org-role driven
   'customers:read', // restaurant M8: customer profile/interaction/consent reads — org-role driven
+  'customers:manage', // restaurant customer mutations and full-profile export — org-role driven
   'loyalty:redeem', // restaurant M8: loyalty redemption — org-role driven
   'reports:financial', // restaurant M8: financial reports and exports — org-role driven
   'workforce:rates', // restaurant M8: restricted labour-cost facts — org-role driven, default deny
@@ -179,10 +180,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   // restaurant M7-L4: SOP verification decisions — org-role-driven, no static agency-role
   // policy (default-deny without an explicit grant via customDecision path).
   'sop:verify': [],
-  // Restaurant M8: all five capabilities use the existing organization-role
+  // Restaurant M8 capabilities use the existing organization-role
   // customDecision path. Empty static policies preserve default deny; labour
   // cost requires BOTH reports:financial and workforce:rates at the report gate.
   'customers:read': [],
+  'customers:manage': [],
   'loyalty:redeem': [],
   'reports:financial': [],
   'workforce:rates': [],

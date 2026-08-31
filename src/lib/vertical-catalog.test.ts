@@ -177,6 +177,19 @@ describe('role templates and capabilities (§8)', () => {
     }
   });
 
+  it('grants customer management only to intended administrative roles', () => {
+    const roleFor = (key: string) => RESTAURANT_ROLE_TEMPLATES.find((role) => role.key === key)!;
+
+    expect(roleFor('owner').capabilities).toContain('*');
+    expect(roleFor('general-manager').capabilities).toContain('customers:manage');
+    expect(roleFor('branch-manager').capabilities).toContain('customers:manage');
+    for (const role of RESTAURANT_ROLE_TEMPLATES.filter(
+      (candidate) => !['owner', 'general-manager', 'branch-manager'].includes(candidate.key)
+    )) {
+      expect(role.capabilities).not.toContain('customers:manage');
+    }
+  });
+
   it('roleTemplatesForVertical is restaurant-only', () => {
     expect(roleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_ROLE_TEMPLATES);
     expect(roleTemplatesForVertical('AGENCY')).toEqual([]);
