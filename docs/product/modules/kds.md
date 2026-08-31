@@ -213,7 +213,7 @@ Source: `src/components/restaurant/kds/kds-board.tsx`
 
 Source: `src/components/restaurant/kds/kds-board.tsx`, `loadQueue`
 
-### 6.4 Disconnect
+### 6.5 Disconnect
 
 The board's disconnect button increments an epoch counter, clears all state, and returns to the
 credential form. A 401/403 on any poll or mutation triggers an automatic disconnect with an error
