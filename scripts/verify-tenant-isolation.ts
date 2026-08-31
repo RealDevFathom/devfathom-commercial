@@ -1320,10 +1320,11 @@ async function main() {
     }
 
     // M5-L1 / C3: the six append-only ledgers are DB-enforced append-only — with
-    // forced RLS and SELECT+INSERT policies ONLY (no UPDATE/DELETE policy), the
-    // unprivileged app role cannot mutate or delete ANY row, not even its OWN.
+    // forced RLS and SELECT+INSERT policies (plus the guarded refund reversal-link
+    // UPDATE), the unprivileged app role cannot mutate or delete ANY row, not even its OWN.
     // (Read isolation for these tables is covered by the loop above; here we prove
-    // the mutation denial on tenant A's own rows — the operation matches zero rows.
+    // the mutation denial on tenant A's own rows — updates either match zero rows or
+    // fail through the guarded refund trigger.
     // A correction is observable only as a NEW record referencing the original.)
     for (const [table, ownId] of [
       ['restaurant_tenders', tenderA],
@@ -1352,15 +1353,18 @@ async function main() {
         1,
         `tenant A must see its own append-only "${table}" row`
       );
-      const updated = await client.query(
-        `UPDATE "${table}" SET "createdAt" = "createdAt" WHERE "id" = $1`,
-        [ownId]
-      );
-      assertEqual(
-        updated.rowCount,
-        0,
-        `append-only "${table}" must deny UPDATE even on the owner's own row`
-      );
+      const updateOwnRow = () =>
+        client.query(`UPDATE "${table}" SET "createdAt" = "createdAt" WHERE "id" = $1`, [ownId]);
+      if (table === 'restaurant_refunds') {
+        await expectDatabaseError('55000', updateOwnRow);
+      } else {
+        const updated = await updateOwnRow();
+        assertEqual(
+          updated.rowCount,
+          0,
+          `append-only "${table}" must deny UPDATE even on the owner's own row`
+        );
+      }
       const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [ownId]);
       assertEqual(
         deleted.rowCount,
