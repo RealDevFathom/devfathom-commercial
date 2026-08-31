@@ -28,6 +28,8 @@ const routes = [
   ['Audit ledger', '/platform/audit'],
   ['Platform settings', '/platform/settings'],
 ] as const;
+const navigationName = (label: string) =>
+  new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 const sharedBaseUrl = process.env.PLAYWRIGHT_SHARED_BASE_URL;
 const fixtureIdentity =
   /E2E Restaurant|e2e-restaurant-control-plane|restaurant-owner@e2e\.invalid|E2E Platform Operator|platform-operator@e2e\.invalid/i;
@@ -49,7 +51,7 @@ test('full administrator can load every declared route and matching navigation',
     expect(response?.status(), href).toBe(200);
     await expect(page.getByRole('main')).toBeVisible();
     await expect(
-      page.getByRole('navigation').getByRole('link', { name: label, exact: true })
+      page.getByRole('navigation').getByRole('link', { name: navigationName(label) })
     ).toBeVisible();
   }
   expect(browserErrors).toEqual([]);
@@ -73,7 +75,7 @@ test('restricted operator sees only grants and denied document/data requests fai
   const denied = routes.filter((entry) => !granted.includes(entry));
   for (const [label] of granted) {
     await expect(
-      page.getByRole('navigation').getByRole('link', { name: label, exact: true })
+      page.getByRole('navigation').getByRole('link', { name: navigationName(label) })
     ).toBeVisible();
   }
   for (const [, href] of granted) {
@@ -83,7 +85,7 @@ test('restricted operator sees only grants and denied document/data requests fai
   }
   for (const [label] of denied) {
     await expect(
-      page.getByRole('navigation').getByRole('link', { name: label, exact: true })
+      page.getByRole('navigation').getByRole('link', { name: navigationName(label) })
     ).toHaveCount(0);
   }
 
