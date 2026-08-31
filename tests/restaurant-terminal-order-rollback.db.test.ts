@@ -322,9 +322,9 @@ beforeAll(async () => {
             ? { userId: ids.approverUser }
             : staffProfileId === ids.operator
               ? { userId: ids.operatorUser }
-            : staffProfileId === ids.unauthorizedApprover
-              ? { userId: ids.unauthorizedUser }
-              : {}),
+              : staffProfileId === ids.unauthorizedApprover
+                ? { userId: ids.unauthorizedUser }
+                : {}),
         },
       });
       await tx.restaurantOperatorCredential.create({
