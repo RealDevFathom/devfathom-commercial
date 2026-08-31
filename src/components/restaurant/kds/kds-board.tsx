@@ -11,6 +11,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 
+import { DeliveryBoard } from './delivery-board';
+
 type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
 type ItemDisplayStatus = 'HELD' | TicketDisplayStatus | 'SERVED' | 'VOIDED';
 type Runtime = {
@@ -539,6 +541,14 @@ export function KdsBoard() {
             }}
           />
         ) : null}
+
+        <DeliveryBoard
+          sessionToken={runtime.sessionToken}
+          operatorStaffProfileId={runtime.operatorStaffProfileId}
+          onAuthorizationFailure={() =>
+            disconnect('Device authorization failed. Reconnect with valid KDS credentials.')
+          }
+        />
 
         {loading ? (
           <LoadingBoard />

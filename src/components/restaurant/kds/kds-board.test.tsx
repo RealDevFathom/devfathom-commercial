@@ -75,6 +75,10 @@ function operatorDirectory() {
   return { operators: [{ staffProfileId: 'staff-1', displayName: 'Amina Rahman', role: 'Cook' }] };
 }
 
+function deliveryQueue() {
+  return { serverTime: '2026-08-19T08:00:00.000Z', deliveries: [] };
+}
+
 async function flush() {
   await act(async () => {
     for (let index = 0; index < 8; index += 1) await Promise.resolve();
@@ -132,8 +136,12 @@ describe('KdsBoard transport', () => {
       queue([ticket(2, 'Gap response', 'COOKING')], { cursor: 9, gap: true, hasMore: true }),
       queue([ticket(3, 'Fresh risotto', 'READY')], { cursor: 9 }),
     ];
-    const fetchImplementation: typeof globalThis.fetch = async (input) =>
-      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(payloads.shift());
+    const fetchImplementation: typeof globalThis.fetch = async (input) => {
+      const path = String(input);
+      if (path.endsWith('/operators')) return json(operatorDirectory());
+      if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+      return json(payloads.shift());
+    };
     const fetch = vi.fn(fetchImplementation);
     vi.stubGlobal('fetch', fetch);
 
@@ -164,9 +172,12 @@ describe('KdsBoard transport', () => {
       queue([ticket(2, 'Regressed ticket', 'COOKING')], { cursor: 6 }),
       queue([ticket(3, 'Replacement ticket', 'READY')], { cursor: 8 }),
     ];
-    const fetch = vi.fn<typeof globalThis.fetch>(async (input) =>
-      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(payloads.shift())
-    );
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const path = String(input);
+      if (path.endsWith('/operators')) return json(operatorDirectory());
+      if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+      return json(payloads.shift());
+    });
     vi.stubGlobal('fetch', fetch);
 
     render(<KdsBoard />);
@@ -189,7 +200,11 @@ describe('KdsBoard transport', () => {
   it('refreshes immediately on online and visible events', async () => {
     vi.useFakeTimers();
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) =>
-      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(queue([]))
+      String(input).endsWith('/operators')
+        ? json(operatorDirectory())
+        : String(input).endsWith('/delivery/queue')
+          ? json(deliveryQueue())
+          : json(queue([]))
     );
     vi.stubGlobal('fetch', fetch);
 
@@ -222,6 +237,7 @@ describe('KdsBoard transport', () => {
     ];
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       if (String(input).endsWith('/operators')) return json(operatorDirectory());
+      if (String(input).endsWith('/delivery/queue')) return json(deliveryQueue());
       const response = responses.shift();
       if (response instanceof Error) throw response;
       return response ?? json(queue([]));
@@ -253,6 +269,7 @@ describe('KdsBoard transport', () => {
     const fetchImplementation: typeof globalThis.fetch = async (input) => {
       const path = String(input);
       if (path.endsWith('/operators')) return json(operatorDirectory());
+      if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
       if (path.includes('/queue?')) return json(activeQueue);
       if (path.endsWith('/bump')) {
         bumpAttempts += 1;
@@ -350,7 +367,11 @@ describe('KdsBoard transport', () => {
       displayStatus: 'HELD',
     });
     const fetchImplementation: typeof globalThis.fetch = async (input) =>
-      String(input).endsWith('/operators') ? json(operatorDirectory()) : json(queue([mixedTicket]));
+      String(input).endsWith('/operators')
+        ? json(operatorDirectory())
+        : String(input).endsWith('/delivery/queue')
+          ? json(deliveryQueue())
+          : json(queue([mixedTicket]));
     vi.stubGlobal('fetch', vi.fn(fetchImplementation));
 
     render(<KdsBoard />);
