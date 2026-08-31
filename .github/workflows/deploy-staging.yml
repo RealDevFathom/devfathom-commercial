@@ -160,6 +160,8 @@ jobs:
         # than guessing, so this prints what an operator would need to resolve.
         run: bun run report:email-collisions
       - run: bun run test:rls
+        env:
+          TEST_DATABASE_URL: ${{ env.OWNER_DATABASE_URL }}
       - run: bun run build
       - name: Playwright end-to-end
         run: |
