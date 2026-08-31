@@ -17,8 +17,8 @@ browser and release evidence remains pending.
   candidate device only; DevFathom does not prove processor authorization, capture, settlement,
   tokenization, or refund until a provider-specific integration is accepted.
 - **PRINT BRIDGE LIMIT:** Receipt/kitchen print routing persists durable simulation jobs and ESC/POS
-  bytes only. DevFathom does not connect to physical printers, drawers, or operating-system print
-  services.
+  bytes, queues offline simulation jobs for retry, and deduplicates a repeated print intent. It does
+  not connect to physical or network printers, drawers, or operating-system print services.
 - **DIRECT DELIVERY:** Configure active branch zones and publish a menu to Delivery. POS delivery
   requires a customer and saved address and stays connected-only. KDS provides the kitchen-ready
   PREPAID/COD handoff; marketplace providers and full rider logistics remain outside this release.
@@ -51,28 +51,32 @@ require a distinct manager credential.
 
 ### 2. Review branches
 
-- **Navigate:** Workspace Settings (`/settings`) for context; branch choices appear in Menus,
-  Devices, Tax, Inventory, Purchasing, SOP, and Reports.
-- **Required:** Owner/Administrator or the domain’s manager capability, plus branch access.
-- **Expected result:** Work attaches to the intended active branch, timezone, and business date.
-- **Common failure/recovery:** A complete standalone branch-administration workflow is not evidenced.
-  Creating, renaming, re-zoning, or reactivating a branch is **NOT OPERATOR READY** pending product
-  correction. Never type or look up a branch ID; escalate to the product owner/platform operator.
+- **Navigate:** Restaurant → Settings → Branches (`/restaurant/settings/branches`). Use Create branch
+  for a new location; use Edit, Make primary, Activate, or Deactivate on the named location for
+  later changes.
+- **Required:** `restaurant:configure`; the active-branch commercial limit still applies.
+- **Expected result:** Operators choose locations by readable name/code. The first branch becomes
+  primary; the current active primary cannot be deactivated until another branch is made primary.
+- **Common failure/recovery:** If saving fails, correct the displayed fields or plan limit and retry.
+  Preserve historical locations by deactivating them; do not use internal identifiers.
 
 ### 3. Set up staff, roles, PINs, devices, and roster
 
 - **Navigate:** Restaurant → Staff (`/restaurant/staff`) for profiles, roles, credentials, status,
-  and branch assignment; Staff roster (`/restaurant/staff/roster`) for shifts; Devices
-  (`/restaurant/devices`) → Enroll for POS/KDS. Open `/pos` or `/kds` on the intended device.
+  organization-user selection, and branch assignment; Staff roster (`/restaurant/staff/roster`) for
+  shifts. On the browser that will become the terminal, open Restaurant → Devices
+  (`/restaurant/devices`) → Enroll device.
 - **Required:** Staff/role/credential management capabilities; `devices:manage` for enrollment and
   revocation. Revocation requires a distinct active approver and their PIN/badge.
 - **Expected result:** Active, branch-scoped staff have least-privileged roles and individual
-  credentials; each device is branch-bound. Save the one-time enrollment secret when shown.
+  credentials. The administrator chooses the device name, branch, POS/KDS kind, and KDS station
+  when applicable; Enroll this browser ends the administrator session and opens the dedicated
+  terminal. The browser establishes its device session automatically.
 - **Common failure/recovery:** If staff are missing at POS/KDS, verify active profile, credential,
   and device branch. Reset the individual credential; never disclose another PIN. If a device
   secret is lost, revoke and re-enroll. Revoke lost/compromised devices immediately. No specialized
-  hardware or peripheral compatibility is promised. Creating a profile by typing a **Linked user
-  ID** is **NOT OPERATOR READY** pending product correction; stop and do not query the database.
+  hardware or peripheral compatibility is promised. Link a staff profile with the Organization
+  user selector; inactive or already-linked users remain unavailable. Never enter internal IDs.
 
 ### 4. Build catalog, menu, pricing, modifiers, and recipes/BOM
 
@@ -83,11 +87,10 @@ require a distinct manager credential.
 - **Required:** `menu:read`; `menu:write` to author; `menu:price` to price; `menu:publish` to publish.
 - **Expected result:** Canonical products/modifiers and active recipe/BOM versions feed a reviewed,
   effective menu and price list published to the intended branch.
-- **Common failure/recovery:** Keep changes draft until reviewed. If POS misses a change, verify
+- **Common failure/recovery:** Keep changes draft until reviewed. POS presents each item's available
+  modifier options by name; choose them while composing the line. If POS misses a change, verify
   product status, active price version, branch publication, channel/daypart, exception, and device
-  branch. Retire/supersede through the UI; do not rewrite historical versions. A POS flow asking for
-  typed **Modifier option IDs**, or Floor routing asking for a **Product or category ID**, is **NOT
-  OPERATOR READY** pending product correction; stop and do not query the database.
+  branch. Retire/supersede through the UI; do not rewrite historical versions or enter internal IDs.
 
 ### 5. Import with OCR, review/correct, then publish manually
 
@@ -102,15 +105,17 @@ require a distinct manager credential.
   no source evidence. Retry/discard in the console or create manually in Catalog. OCR output is not
   authoritative.
 
-### 6. Activate Pakistan tax
+### 6. Configure Pakistan tax
 
-- **Navigate:** Restaurant → Tax (`/restaurant/tax`) → branch → available Pakistan profile →
-  effective date → approval reference → eligibility confirmations → accountant confirmation →
-  Activate.
+- **Navigate:** Restaurant → Tax (`/restaurant/tax`). Either activate an available Pakistan preset,
+  or create a Custom tax profile: choose branch and jurisdiction, set inclusive or exclusive
+  pricing, effective start/end dates, enter accountant-supplied Cash/Card/Other rates and approval
+  reference, inspect the live calculation preview, confirm accountant review, then publish.
 - **Required:** Authorized restaurant tax administrator; the surface enforces tenant, entitlement,
   and authorization rules.
-- **Expected result:** An effective-dated profile is published for one branch with source and
-  approval evidence.
+- **Expected result:** An effective-dated profile is published for one branch with approval evidence.
+  If Atomically close and replace is selected, the current open profile closes at the new start
+  time. Settlement and later refund/reversal calculations retain the historical tax snapshots.
 - **Common failure/recovery:** Unavailable profiles fail closed. Never guess rate, eligibility,
   payment treatment, or date. Obtain current advice from a qualified Pakistani accountant and,
   where needed, legal counsel; DevFathom is not tax/legal advice. Filing, fiscal-device
@@ -120,18 +125,20 @@ require a distinct manager credential.
 
 ### 7. Open the terminal, drawer, and KDS
 
-- **Navigate:** `/pos` → device secret → Load operators → operator → individual PIN → unlock →
-  Drawer → opening float. On the kitchen device, `/kds` → device secret → Load operators → kitchen
-  operator → Connect.
+- **Navigate:** After an administrator enrolls this browser in Restaurant → Devices, it opens `/pos`
+  or `/kds` and establishes the terminal automatically. Choose the named operator and enter their
+  individual PIN to unlock/connect. At POS, open Drawer and record the opening float. Use Lock when
+  leaving the register and Switch operator for a handoff; the incoming operator selects their name
+  and enters their own PIN.
 - **Required:** Registered branch device; active staff; `pos:operate` and relevant cash capability
   for POS, or `kitchen:operate` for KDS.
 - **Expected result:** An attributable terminal session/open drawer and a station-bound KDS polling
   the server-resolved business date. KDS offers Start, Mark ready, and Recall when valid.
-- **Common failure/recovery:** On 401/403, verify entitlement, device status/kind/branch/station,
-  operator status, credential, and lockout. Re-enroll only if the secret is lost. KDS gap/overflow
+- **Common failure/recovery:** On 401/403, verify entitlement, browser enrollment, device
+  status/kind/branch/station, operator status, credential, and lockout. Re-enroll the browser only
+  after revocation or expired enrollment. KDS gap/overflow
   triggers full reconciliation. There is no KDS push channel, bump-bar integration, or physical
-  kitchen-print delivery. Offline/disconnect behavior is under active correction and is not an
-  accepted operator promise yet.
+  kitchen-print delivery.
 
 ### 8. Run dine-in and takeaway
 
@@ -142,15 +149,29 @@ require a distinct manager credential.
   applicable manager capability.
 - **Expected result:** A branch-scoped order uses the effective menu, routes fired items to KDS, and
   progresses through preparation/service.
-- **Common failure/recovery:** Refresh menu/open orders after publication or stale session. Use only
-  offered safeguarded cancel/void actions. POS dine-in fields requiring typed **Table IDs** or
-  **Section ID**, table moves requiring **From/To table IDs**, and table merges requiring
-  **Additional table IDs** are **NOT OPERATOR READY** pending product correction. Never query a
-  database; use takeaway or another supported floor flow until selectors exist. Delivery requires
-  a Delivery publication, customer, saved address, active zone, and a live connection. Missing or
-  unauthorized inputs are rejected before order, idempotency, or audit mutation.
+- **Common failure/recovery:** Refresh menu/open orders after publication or stale session. For
+  dine-in, select available tables grouped under the named floor and optionally select a named floor
+  section. On the open ticket, Move table uses Current table and Destination table selectors; Merge
+  tables uses available named tables. Use only offered safeguarded cancel/void actions and never
+  enter internal identifiers. Delivery requires a Delivery publication, customer, saved address,
+  active zone, and a live connection. Missing or unauthorized inputs are rejected before order,
+  idempotency, or audit mutation.
 
-### 9. Split, tender, void, refund, and receipt
+### 9. Dispatch and complete direct delivery
+
+- **Navigate:** At POS create the connected Delivery order, attach the customer and saved address,
+  send it to the kitchen, and settle it as PREPAID or leave it for COD. On the enrolled KDS open the
+  Delivery handoff board; after kitchen work is ready, choose Dispatch order, confirm the handoff,
+  then choose Mark delivered and confirm completion.
+- **Required:** Active POS/KDS sessions for the same branch and the applicable order, kitchen, and
+  payment capabilities.
+- **Expected result:** Only dispatchable deliveries advance from pending to dispatched and then
+  delivered. PREPAID requires completed payment before dispatch; COD retains collection due for the
+  handoff.
+- **Common failure/recovery:** Delivery stays connected-only. Resolve the displayed readiness,
+  payment, permission, or connection failure and reload before retrying a transition.
+
+### 10. Split, tender, void, refund, and receipt
 
 - **Navigate:** `/pos` → order → close/collect → no split, item, seat, or fractional split → Cash,
   Card, or Other tender. Use offered void/refund actions; managers inspect Money
@@ -164,7 +185,7 @@ require a distinct manager credential.
   **NOT OPERATOR READY** pending product correction; never look it up. Print routing is simulation-
   only and does not prove physical receipt delivery.
 
-### 10. Customers and loyalty
+### 11. Customers and loyalty
 
 - **Navigate:** Loyalty (`/restaurant/loyalty`) to administer programs/accounts; `/pos` checkout to
   search/attach a customer and view/redeem eligible points.
@@ -177,7 +198,7 @@ require a distinct manager credential.
   policy is not built. A loyalty interaction asking for a typed **Order ID** is **NOT OPERATOR
   READY** pending product correction; stop and do not query the database.
 
-### 11. Inventory, counts, wastage, and purchasing
+### 12. Inventory, counts, wastage, and purchasing
 
 - **Navigate:** Catalog (`/restaurant/catalog`) for ingredients/units/BOM; Inventory
   (`/restaurant/inventory`) for on-hand, movements, counts, transfers, low stock, adjustments, and
@@ -190,7 +211,7 @@ require a distinct manager credential.
   selected order before posting. Record wastage as wastage—never edit a balance/history. After an
   uncertain response, reload the order before retrying a receipt.
 
-### 12. Execute SOPs and evidence
+### 13. Execute SOPs and evidence
 
 - **Navigate:** SOP (`/restaurant/sop`) → assigned occurrence → start → complete steps → attach
   requested evidence → submit.
@@ -202,7 +223,7 @@ require a distinct manager credential.
 
 ## Back office, oversight, reports, and close
 
-### 13. SOP administration and oversight
+### 14. SOP administration and oversight
 
 - **Navigate:** `/restaurant/sop/admin` to author/publish/schedule; `/restaurant/sop/oversight` for
   verification, rejection, waiver, escalation, scores, and audit; `/restaurant/sop/reports` for
@@ -216,20 +237,25 @@ require a distinct manager credential.
   result is “No data,” not 0%. Oversight actions asking for a typed **Occurrence ID** are **NOT OPERATOR READY** pending
   product correction; stop and do not query the database.
 
-### 14. Operational, financial, and multi-branch reporting
+### 15. Customize the dashboard and run Restaurant reports
 
-- **Navigate:** Insights (`/restaurant/insights`); SOP reports (`/restaurant/sop/reports`) with
-  branch/date/department filters; Money (`/restaurant/money`) for financial oversight.
-- **Required:** `reports:operational` or `reports:financial`, plus branch access.
-- **Expected result:** Authorized users inspect one required branch and one period at a time without
-  mixing tenants; report filters/freshness remain visible. Consolidated branch comparison is not
-  verified or built.
-- **Common failure/recovery:** Check branch/date/business-date cutoff, module, and permission.
-  Reconcile against orders, tenders, drawer/stock movements, and SOP evidence. Empty/no-data is not
-  zero activity. Any report action requiring a typed internal ID is **NOT OPERATOR READY** pending
-  product correction.
+- **Navigate:** Dashboard (`/dashboard`) → Management overview. Choose an active branch and the last
+  7 or 30 closed dates. Select Edit dashboard to show/hide, reorder, or resize widgets and change the
+  saved default branch/date range; Save dashboard persists the layout and Restore default resets it.
+  Open Restaurant → Reports (`/restaurant/reports`) for branch/from/to filters and CSV exports.
+- **Required:** `restaurant-insights` for reconciled dashboard rollups; `reports:operational` or
+  `reports:financial` for Reports, plus source-module and branch authorization. Workforce rate data
+  also requires `workforce:rates`.
+- **Expected result:** Reports separates financial, operational, inventory, purchasing, workforce,
+  and SOP sections and shows freshness/partial status. Authorized users may choose one named branch
+  or All active branches; the latter aggregates only branches they may read. CSV uses the same
+  filters and authorization.
+- **Common failure/recovery:** Treat Permission required, Source module not enabled, Section could
+  not load, and No matching data as distinct states. Check branch/date/business-date cutoff, module,
+  and permission; empty/no-data is not zero activity. Dashboard figures are reconciled closed-day
+  rollups, not current-shift data.
 
-### 15. Drawer and daily close
+### 16. Drawer and daily close
 
 - **Navigate:** `/pos` → Drawer → record paid-in, paid-out, or drop as they occur → preview close →
   counted cash → close drawer/day. Use manager-corrected close only through the offered action.

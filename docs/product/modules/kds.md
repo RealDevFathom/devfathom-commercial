@@ -166,16 +166,28 @@ DB test: `src/lib/restaurant/terminal-kds-routes.db.test.ts` (idempotent replay 
 
 ### 6.1 Connect flow
 
-1. Operator navigates to `/kds` on the enrolled device browser.
-2. The KDS board renders a credential form (device secret + operator selector populated after the
-   secret is authorized). Credentials
-   are held in component state only — never persisted to `localStorage` or cookies.
-3. On submit, the board begins polling `GET /api/restaurant/kds/queue`. A 401/403 response
+1. An administrator opens `/restaurant/devices` on the intended browser, chooses the branch, KDS
+   kind, and named station, then confirms **Enroll this browser**. Administration signs out and the
+   dedicated browser opens `/kds`.
+2. KDS establishes the enrolled device automatically, loads eligible operators, and asks the
+   operator to select their name and enter their individual PIN. The PIN is held only for unlock.
+3. On unlock, the board begins polling `GET /api/restaurant/kds/queue`. A 401/403 response
    disconnects and clears credentials.
 
 Source: `src/components/restaurant/kds/kds-board.tsx`, `connect` / `KdsBoard`
 
-### 6.2 Normal queue display
+### 6.2 Direct-delivery handoff
+
+The Delivery handoff board lists same-branch orders eligible for PREPAID or COD handoff. Once
+kitchen work is ready, the operator confirms **Dispatch order**, then confirms **Mark delivered**
+after completion. PREPAID must be paid before dispatch; COD retains collection due. Both transitions
+are connected, authenticated, and idempotent, and rejected readiness/payment states remain visible.
+
+Source: `src/components/restaurant/kds/delivery-board.tsx`,
+`src/app/api/restaurant/kds/delivery/queue/route.ts`, and
+`src/app/api/restaurant/kds/delivery/transition/route.ts`
+
+### 6.3 Normal queue display
 
 - The board renders four swimlane columns: **NEW**, **COOKING**, **READY**, **RECALLED**.
 - Each ticket card shows: ticket number, order number, ticket age (minutes), line items with
@@ -188,7 +200,7 @@ Source: `src/components/restaurant/kds/kds-board.tsx`, `connect` / `KdsBoard`
 
 Source: `src/components/restaurant/kds/kds-board.tsx`
 
-### 6.3 Gap and overflow recovery
+### 6.4 Gap and overflow recovery
 
 - **Cursor gap** — when the server returns `gap: true` (sequence regression or overflow), the
   client immediately performs a full reconcile poll (no `sinceCursor`). This makes the display

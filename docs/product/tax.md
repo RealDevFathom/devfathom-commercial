@@ -1,6 +1,6 @@
 # Tax PRD
 
-Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#6-activate-pakistan-tax).
+Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#6-configure-pakistan-tax).
 
 ## Problem
 
@@ -25,6 +25,15 @@ Official source, tax profile/version, rule/version, transaction snapshot, and ra
 ## API surface
 
 Tax calculation contracts and effective interval input validation are in `src/lib/restaurant/tax-contracts.ts`; calculation is in `src/lib/restaurant/tax-calculator.ts`. The operator surface is `/restaurant/tax`, backed by the registered `restaurantTax` router. It lists branch/profile choices and activates an effective-dated profile only after approval-reference, eligibility, and accountant confirmations.
+
+The same surface publishes customer-supplied custom Pakistan profiles. The administrator selects a
+branch and jurisdiction, inclusive or exclusive price mode, effective start/end dates, and distinct
+Cash, Card, and Other rates supplied or reviewed by an accountant. A live sample preview shows net,
+tax, and total before publication. An approval reference and accountant confirmation are mandatory;
+DevFathom does not supply or verify the legal rates. When explicitly selected, replacement closes
+the current open profile at the new profile's start in the same transaction. Checkout settlement
+freezes the applied profile/rate buckets, and refunds/reversals refer to those historical snapshots
+rather than recalculating against the current profile.
 
 ## Edge cases and failure modes
 
