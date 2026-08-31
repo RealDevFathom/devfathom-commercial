@@ -79,6 +79,7 @@ const ctx = {
   managerA: `staff_m_${suffix}`,
   managerForeign: `staff_fm_${suffix}`,
   staffNoCap: `staff_n_${suffix}`,
+  customerA: `customer_a_${suffix}`,
   productA: `prod_a_${suffix}`,
   posA: { deviceId: '', secret: '' },
   posB: { deviceId: '', secret: '' },
@@ -168,6 +169,7 @@ async function seedOrder(
         channel,
         staffProfileId: ctx.staffA,
         deviceId,
+        customerId: channel === 'DELIVERY' ? ctx.customerA : null,
       },
       select: { id: true },
     });
@@ -185,6 +187,27 @@ async function seedOrder(
         select: { id: true },
       });
       itemIds.push(item.id);
+    }
+    if (channel === 'DELIVERY') {
+      await tx.restaurantDeliveryFulfillment.create({
+        data: {
+          organizationId: orgA,
+          branchId,
+          customerId: ctx.customerA,
+          orderId: order.id,
+          paymentMode: null,
+          status: 'PENDING',
+          recipientNameSnapshot: 'Delivery Guest',
+          normalizedPhoneSnapshot: '+923001234567',
+          addressLine1Snapshot: '1 Test Street',
+          localitySnapshot: 'Karachi',
+          countryCodeSnapshot: 'PK',
+          deliveryFeeSnapshot: 0,
+          deliveryTaxSnapshot: 0,
+          promisedMinutesSnapshot: 30,
+          promisedAt: new Date(Date.now() + 30 * 60_000),
+        },
+      });
     }
     return { orderId: order.id, itemIds };
   });
@@ -325,6 +348,9 @@ beforeAll(async () => {
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchReplay),
     ]);
     await tx.restaurantProduct.create({ data: { id: ctx.productA, name: 'Widget' } });
+    await tx.restaurantCustomer.create({
+      data: { id: ctx.customerA, displayName: 'Delivery Guest' },
+    });
 
     // A role granting every capability (money routes + coauth:approve via `*`) and a role
     // with a non-money capability only (proves denial is capability-specific, not "no role").
@@ -521,6 +547,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
           key: uniqueKey(`channel-${channel}-cut`),
           body: { orderId, split: { kind: 'NONE' } },
         });
+        expect(cut.status).toBe(200);
         const billId = (cut.json.billIds as string[])[0]!;
         const tender = await call(deps.routes.tender, {
           secret: ctx.posA.secret,
