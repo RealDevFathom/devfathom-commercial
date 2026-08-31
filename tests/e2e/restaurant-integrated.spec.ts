@@ -4,6 +4,7 @@ import {
   assertTerminalSecretIsBrowserIsolated,
   installSeededTerminalCookie,
   restaurantE2eCredentials as fixture,
+  terminalBrowserBaseUrl,
 } from './restaurant-fixture';
 import { signInAs } from './fixtures/restaurant-actor-accessibility';
 
@@ -76,11 +77,24 @@ test('integrated restaurant route matrix remains tenant-safe and browser-clean',
 });
 
 test('fixture publishes named order inputs and explicit pending UI seams', async ({ page }) => {
-  await installSeededTerminalCookie(page.context(), fixture.pos);
-  await page.goto('/pos');
+  const terminalBaseUrl = terminalBrowserBaseUrl();
+  await installSeededTerminalCookie(page.context(), fixture.pos, terminalBaseUrl);
+  const establishedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/terminal/establish') &&
+      response.request().method() === 'POST'
+  );
+  await page.goto(new URL('/pos', terminalBaseUrl).href);
+  expect((await establishedResponse).status()).toBe(201);
   await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
+  const unlockedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/terminal/unlock') &&
+      response.request().method() === 'POST'
+  );
   await page.getByRole('button', { name: 'Unlock terminal' }).click();
+  expect((await unlockedResponse).status()).toBe(200);
   await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
   await expect(page.getByText(fixture.menuItem.name)).toBeVisible();
   await assertTerminalSecretIsBrowserIsolated(page, fixture.pos.secret);

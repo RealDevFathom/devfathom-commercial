@@ -7,7 +7,7 @@ type Actor = {
   email: string;
   password: string;
   loginPath: '/login' | '/platform/login';
-  host?: 'admin.localhost' | 'app.localhost';
+  host?: 'admin.localhost' | 'app.localhost' | 'chai-chowk.localhost';
   workspace?: RegExp;
 };
 
@@ -40,14 +40,14 @@ export const actorFixture: Record<ActorKey, Actor> = {
     email: value('RESTAURANT_ACTOR_ADMIN_EMAIL'),
     password: value('RESTAURANT_ACTOR_ADMIN_PASSWORD'),
     loginPath: '/login',
-    host: 'app.localhost',
+    host: 'chai-chowk.localhost',
     workspace: /Chai Chowk Café|chai-chowk/i,
   },
   restaurantOperator: {
     email: value('RESTAURANT_ACTOR_OPERATOR_EMAIL'),
     password: value('RESTAURANT_ACTOR_OPERATOR_PASSWORD'),
     loginPath: '/login',
-    host: 'app.localhost',
+    host: 'chai-chowk.localhost',
     workspace: /Chai Chowk Café|chai-chowk/i,
   },
 };
