@@ -88,6 +88,29 @@ describe('CheckoutPanel', () => {
     );
   });
 
+  it('fails closed for an already-open checkout while offline, then restores connected actions', async () => {
+    const request: TerminalRequest = async <T,>(path: string) => {
+      if (path.includes('/summary')) return billed as T;
+      throw new Error(`Unexpected request: ${path}`);
+    };
+    const view = render(
+      <CheckoutPanel open orderId="order-1" request={request} connected onClose={vi.fn()} />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Apply tender' })).toBeEnabled();
+    view.rerender(
+      <CheckoutPanel open orderId="order-1" request={request} connected={false} onClose={vi.fn()} />
+    );
+    expect(screen.getByText('Checkout unavailable offline')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Apply tender' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Checkout, tenders, customer and loyalty actions/)).toBeVisible();
+
+    view.rerender(
+      <CheckoutPanel open orderId="order-1" request={request} connected onClose={vi.fn()} />
+    );
+    expect(await screen.findByRole('button', { name: 'Apply tender' })).toBeEnabled();
+  });
+
   it('keeps a verified partial balance through close and reopen without an unsafe prefill', async () => {
     const calls: { path: string; options?: TerminalRequestOptions }[] = [];
     let resolveTender!: (result: TenderResult) => void;

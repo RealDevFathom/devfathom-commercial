@@ -49,6 +49,8 @@ type CheckoutPanelProps = {
   open: boolean;
   orderId: string | null;
   request: TerminalRequest;
+  /** Checkout is server-authoritative: an already-open panel must also fail closed offline. */
+  connected?: boolean;
   onClose: () => void;
 };
 
@@ -449,7 +451,13 @@ function GuestLoyaltySection({
   );
 }
 
-export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanelProps) {
+export function CheckoutPanel({
+  open,
+  orderId,
+  request,
+  connected = true,
+  onClose,
+}: CheckoutPanelProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -460,12 +468,14 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
 
   const fetchSummary = useCallback(
     () =>
-      orderId
-        ? request<CheckoutSummary>(
-            `/api/restaurant/checkout/summary?orderId=${encodeURIComponent(orderId)}`
-          )
-        : Promise.reject(new Error('An order is required for checkout.')),
-    [orderId, request]
+      !connected
+        ? Promise.reject(new Error('Checkout is connected-only. Reconnect to continue.'))
+        : orderId
+          ? request<CheckoutSummary>(
+              `/api/restaurant/checkout/summary?orderId=${encodeURIComponent(orderId)}`
+            )
+          : Promise.reject(new Error('An order is required for checkout.')),
+    [connected, orderId, request]
   );
 
   const loadSummary = useCallback(async () => {
@@ -486,7 +496,7 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
   }, [fetchSummary, open, orderId]);
 
   useEffect(() => {
-    if (!open || !orderId) return;
+    if (!open || !orderId || !connected) return;
     let active = true;
     void fetchSummary()
       .then((next) => {
@@ -508,7 +518,7 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
     return () => {
       active = false;
     };
-  }, [fetchSummary, open, orderId]);
+  }, [connected, fetchSummary, open, orderId]);
 
   async function cut(split: { kind: 'NONE' } | BillSplit) {
     if (!orderId || busy) return false;
@@ -584,13 +594,26 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
           </DialogDescription>
         </DialogHeader>
 
-        {loading ? (
+        {!connected ? (
+          <SectionCard
+            eyebrow="Checkout"
+            title="Checkout unavailable offline"
+            actions={<StatusPill status="offline" tone="warning" />}
+          >
+            <p role="status" className="text-sm text-text-muted">
+              Checkout, tenders, customer and loyalty actions, receipts, refunds, drawers, and close
+              are connected-only. Reconnect to continue.
+            </p>
+          </SectionCard>
+        ) : null}
+
+        {connected && loading ? (
           <SectionCard eyebrow="Checkout" title="Loading settlement">
             <p className="text-sm text-text-muted">Loading bill and settlement state…</p>
           </SectionCard>
         ) : null}
 
-        {!loading && error && !summary ? (
+        {connected && !loading && error && !summary ? (
           <SectionCard
             eyebrow="Checkout"
             title={permissionDenied ? 'Payment access denied' : 'Checkout unavailable'}
@@ -612,7 +635,7 @@ export function CheckoutPanel({ open, orderId, request, onClose }: CheckoutPanel
           </SectionCard>
         ) : null}
 
-        {!loading && summary ? (
+        {connected && !loading && summary ? (
           <div className="space-y-4">
             <SectionCard
               eyebrow="Settlement"
