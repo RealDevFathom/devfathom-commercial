@@ -13,9 +13,25 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
+
+vi.mock('server-only', () => ({}));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+vi.mock('@/lib/abac', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+  return {
+    ...actual,
+    can: vi.fn(async (_subject: unknown, action: string) => action !== 'restaurant:configure'),
+  };
+});
+vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
+  ipFromHeaders: vi.fn(() => null),
+  isAuditExcludedPath: vi.fn(() => true),
+  recordTrpcAudit: vi.fn(),
+}));
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -42,12 +58,16 @@ type Deps = {
   evaluateLowStockRules: (typeof import('./inventory'))['evaluateLowStockRules'];
   listStockOnHand: (typeof import('./inventory'))['listStockOnHand'];
   InventoryError: (typeof import('./inventory'))['InventoryError'];
+  restaurantInventoryRouter: (typeof import('@/server/routers/restaurant-inventory'))['restaurantInventoryRouter'];
 };
 
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha69_inv_${suffix}`;
 const ids = {
+  user: `user_inv_${suffix}`,
+  staff: `staff_inv_${suffix}`,
   branch: `branch_inv_${suffix}`,
+  branchB: `branch_b_inv_${suffix}`,
   unit: `unit_inv_${suffix}`,
   ingredient: `ingr_inv_${suffix}`,
   ingredient2: `ingr2_inv_${suffix}`,
@@ -55,16 +75,18 @@ const ids = {
   stockItem2: `si2_inv_${suffix}`,
   locationA: `locA_inv_${suffix}`,
   locationB: `locB_inv_${suffix}`,
+  locationBranchB: `loc_branch_b_inv_${suffix}`,
 };
 
 let deps: Deps;
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, ledger, inv] = await Promise.all([
+  const [scopedDb, ledger, inv, router] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./inventory-ledger'),
     import('./inventory'),
+    import('@/server/routers/restaurant-inventory'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -82,6 +104,7 @@ beforeAll(async () => {
     evaluateLowStockRules: inv.evaluateLowStockRules,
     listStockOnHand: inv.listStockOnHand,
     InventoryError: inv.InventoryError,
+    restaurantInventoryRouter: router.restaurantInventoryRouter,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -96,8 +119,31 @@ beforeAll(async () => {
     })
   );
   await deps.withTenantDb(orgId, async (tx) => {
+    await tx.organizationDepartment.create({
+      data: { id: `dept_inv_${suffix}`, key: 'ops', name: 'Operations' },
+    });
+    await tx.user.create({
+      data: {
+        id: ids.user,
+        name: 'Branch A inventory actor',
+        email: `${ids.user}@test.invalid`,
+        department: 'ops',
+        title: 'Inventory operator',
+      },
+    });
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Inv Branch', timezone: 'UTC', businessDayCutoff: '00:00' },
+    });
+    await tx.restaurantBranch.create({
+      data: { id: ids.branchB, name: 'Inv Branch B', timezone: 'UTC', businessDayCutoff: '00:00' },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: ids.staff,
+        userId: ids.user,
+        displayName: 'Branch A inventory actor',
+        primaryBranchId: ids.branch,
+      },
     });
     await tx.restaurantUnit.create({
       data: { id: ids.unit, name: 'Each', abbreviation: 'ea' },
@@ -119,10 +165,130 @@ beforeAll(async () => {
     await tx.restaurantStockLocation.create({
       data: { id: ids.locationB, branchId: ids.branch, name: 'Walk-in' },
     });
+    await tx.restaurantStockLocation.create({
+      data: { id: ids.locationBranchB, branchId: ids.branchB, name: 'Branch B store' },
+    });
   });
 }, 60_000);
 
+function inventoryCaller(db: import('@/lib/tenancy/scoped-db').ScopedDb) {
+  return deps.restaurantInventoryRouter.createCaller({
+    db,
+    entitlements: {
+      organizationId: orgId,
+      enabledModules: ['restaurant-pos'],
+      modules: [],
+      limits: {},
+      seatLimit: 10,
+      activeSeats: 1,
+    },
+    session: {
+      expires: 'later',
+      user: {
+        id: ids.user,
+        role: 'EMPLOYEE',
+        department: 'ops',
+        status: 'ACTIVE',
+        organizationId: orgId,
+      },
+    },
+    organization: { id: orgId },
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as never);
+}
+
 describeIfDatabase('M6-L2 inventory operations (real PostgreSQL)', () => {
+  describe('router branch authorization for line mutations', () => {
+    it('uses a LOGIN NOSUPERUSER NOBYPASSRLS runtime role', async () => {
+      await deps.withTenantDb(orgId, async (tx) => {
+        const rows = await tx.$queryRaw<
+          { rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }[]
+        >`SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+        expect(rows[0]).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+      });
+    });
+
+    it('allows the Branch A actor to add count and transfer lines within Branch A', async () => {
+      await deps.withTenantDb(orgId, async (tx) => {
+        const api = inventoryCaller(tx);
+        const count = await deps.createStockCount(tx, { locationId: ids.locationA });
+        const transfer = await deps.createStockTransfer(tx, {
+          sourceLocationId: ids.locationA,
+          destinationLocationId: ids.locationB,
+        });
+
+        await expect(
+          api.addStockCountLine({
+            stockCountId: count.id,
+            stockItemId: ids.stockItem,
+            countedQuantity: '1',
+          })
+        ).resolves.toMatchObject({ stockCountId: count.id, stockItemId: ids.stockItem });
+        await expect(
+          api.addStockTransferLine({
+            stockTransferId: transfer.id,
+            stockItemId: ids.stockItem,
+            quantity: '1',
+          })
+        ).resolves.toMatchObject({ stockTransferId: transfer.id, stockItemId: ids.stockItem });
+      });
+    });
+
+    it('denies the Branch A actor injecting lines into Branch B documents without mutation', async () => {
+      await deps.withTenantDb(orgId, async (tx) => {
+        const api = inventoryCaller(tx);
+        const count = await deps.createStockCount(tx, { locationId: ids.locationBranchB });
+        const transfer = await deps.createStockTransfer(tx, {
+          sourceLocationId: ids.locationA,
+          destinationLocationId: ids.locationBranchB,
+        });
+        const before = {
+          countLines: await tx.restaurantStockCountLine.count({
+            where: { stockCountId: count.id },
+          }),
+          transferLines: await tx.restaurantStockTransferLine.count({
+            where: { stockTransferId: transfer.id },
+          }),
+          countMovements: await tx.restaurantStockMovement.count({ where: { countId: count.id } }),
+          transferMovements: await tx.restaurantStockMovement.count({
+            where: { transferId: transfer.id },
+          }),
+        };
+
+        await expect(
+          api.addStockCountLine({
+            stockCountId: count.id,
+            stockItemId: ids.stockItem2,
+            countedQuantity: '2',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          api.addStockTransferLine({
+            stockTransferId: transfer.id,
+            stockItemId: ids.stockItem2,
+            quantity: '2',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+        await expect(
+          Promise.all([
+            tx.restaurantStockCountLine.count({ where: { stockCountId: count.id } }),
+            tx.restaurantStockTransferLine.count({ where: { stockTransferId: transfer.id } }),
+            tx.restaurantStockMovement.count({ where: { countId: count.id } }),
+            tx.restaurantStockMovement.count({ where: { transferId: transfer.id } }),
+          ])
+        ).resolves.toEqual([
+          before.countLines,
+          before.transferLines,
+          before.countMovements,
+          before.transferMovements,
+        ]);
+      });
+    });
+  });
+
   // ── AC1: Physical count posting ─────────────────────────────────────────────
 
   describe('physical count', () => {
