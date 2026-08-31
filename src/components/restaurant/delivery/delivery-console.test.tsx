@@ -6,6 +6,7 @@ import type { EntitlementView } from '@/lib/module-catalog';
 const mocks = vi.hoisted(() => ({
   zoneCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   addressCalls: [] as Array<{ input: unknown; enabled: boolean }>,
+  customerCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   createZone: vi.fn(),
   createAddress: vi.fn(),
   mutate: vi.fn(),
@@ -33,29 +34,30 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
     },
-    restaurantCustomers: {
-      list: {
-        useQuery: (_input: unknown, options: { enabled: boolean }) => ({
-          data: options.enabled
-            ? {
-                customers: [
-                  {
-                    id: 'customer_1',
-                    displayName: 'Ayesha Khan',
-                    givenName: null,
-                    familyName: null,
-                  },
-                ],
-              }
-            : undefined,
-          error: null,
-          isLoading: false,
-          refetch: vi.fn(),
-        }),
-      },
-    },
     restaurantDelivery: new Proxy(
       {
+        listCustomers: {
+          useQuery: (input: unknown, options: { enabled: boolean }) => {
+            mocks.customerCalls.push({ input, enabled: options.enabled });
+            return {
+              data: options.enabled
+                ? {
+                    customers: [
+                      {
+                        id: 'customer_1',
+                        displayName: 'Ayesha Khan',
+                        givenName: null,
+                        familyName: null,
+                      },
+                    ],
+                  }
+                : undefined,
+              error: null,
+              isLoading: false,
+              refetch: vi.fn(),
+            };
+          },
+        },
         listZones: {
           useQuery: (input: unknown, options: { enabled: boolean }) => {
             mocks.zoneCalls.push({ input, enabled: options.enabled });
@@ -117,6 +119,7 @@ describe('DeliveryConsole', () => {
     vi.clearAllMocks();
     mocks.zoneCalls.length = 0;
     mocks.addressCalls.length = 0;
+    mocks.customerCalls.length = 0;
   });
 
   it('gates reads and uses friendly selectors instead of raw identifiers', () => {
@@ -124,12 +127,20 @@ describe('DeliveryConsole', () => {
     expect(screen.getByText('Restaurant Core module disabled')).toBeInTheDocument();
     expect(mocks.zoneCalls.at(-1)?.enabled).toBe(false);
     expect(mocks.addressCalls.at(-1)?.enabled).toBe(false);
+    expect(mocks.customerCalls.at(-1)?.enabled).toBe(false);
     disabled.unmount();
 
     renderConsole();
     expect(screen.getByRole('option', { name: 'Downtown' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Ayesha Khan' })).toBeInTheDocument();
     expect(screen.queryByText('customer_1')).not.toBeInTheDocument();
+    expect(mocks.customerCalls.at(-1)).toEqual({ input: { limit: 100 }, enabled: true });
+    expect(screen.queryByRole('textbox', { name: /customer id/i })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Find customer'), { target: { value: 'Ayesha' } });
+    expect(mocks.customerCalls.at(-1)).toEqual({
+      input: { query: 'Ayesha', limit: 100 },
+      enabled: true,
+    });
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
     fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
     expect(mocks.zoneCalls.at(-1)).toEqual({ input: { branchId: 'branch_1' }, enabled: true });

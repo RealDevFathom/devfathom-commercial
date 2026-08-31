@@ -19,13 +19,16 @@ const mocks = vi.hoisted(() => ({
   updateDeliveryAddress: vi.fn(),
   setDefaultDeliveryAddress: vi.fn(),
   deleteDeliveryAddress: vi.fn(),
+  listCustomers: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: vi.fn(() => true),
+  hasModule: vi.fn((entitlements: { enabledModules: string[] }, moduleKey: string) =>
+    entitlements.enabledModules.includes(moduleKey)
+  ),
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/lib/abac', async () => {
@@ -70,10 +73,13 @@ vi.mock('@/lib/restaurant/delivery', async () => {
     deleteDeliveryAddress: mocks.deleteDeliveryAddress,
   };
 });
+vi.mock('@/lib/restaurant/customers', () => ({ listCustomers: mocks.listCustomers }));
 
 import { DeliveryError } from '@/lib/restaurant/delivery';
-import type { TRPCContext } from '../trpc';
+import { router, type TRPCContext } from '../trpc';
 import { restaurantDeliveryRouter } from './restaurant-delivery';
+
+const testRouter = router({ restaurantDelivery: restaurantDeliveryRouter });
 
 const db = { marker: 'scoped-db' };
 const zoneInput = {
@@ -106,7 +112,7 @@ const address = {
 };
 
 function caller() {
-  return restaurantDeliveryRouter.createCaller({
+  return testRouter.createCaller({
     db,
     entitlements: {
       organizationId: 'organization_server',
@@ -123,7 +129,7 @@ function caller() {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as unknown as TRPCContext);
+  } as unknown as TRPCContext).restaurantDelivery;
 }
 
 beforeEach(() => {
@@ -139,11 +145,28 @@ beforeEach(() => {
   mocks.updateDeliveryAddress.mockResolvedValue(address);
   mocks.setDefaultDeliveryAddress.mockResolvedValue(address);
   mocks.deleteDeliveryAddress.mockResolvedValue(undefined);
+  mocks.listCustomers.mockResolvedValue({
+    customers: [
+      {
+        id: 'customer_1',
+        displayName: 'Ayesha Khan',
+        givenName: 'Ayesha',
+        familyName: 'Khan',
+        birthDate: new Date('1990-01-01'),
+        notes: 'private note',
+        identifiers: [{ kind: 'PHONE', normalizedValue: '+923001234567' }],
+        tags: [{ id: 'tag_1', name: 'VIP' }],
+        loyaltySummary: { balance: 500 },
+      },
+    ],
+    nextCursor: 'customer_1',
+  });
 });
 
 describe('authorization and server-owned scope', () => {
   it('uses configure for every zone operation and customer capabilities for addresses', async () => {
     const api = caller();
+    await api.listCustomers({ limit: 20 });
     await api.listZones({ branchId: 'branch_1' });
     await api.createZone(zoneInput);
     await api.updateZone({ ...zoneInput, zoneId: 'zone_1' });
@@ -151,10 +174,17 @@ describe('authorization and server-owned scope', () => {
     await api.listAddresses({ customerId: 'customer_1' });
     await api.createAddress(addressInput);
     await api.updateAddress({ ...addressInput, addressId: 'address_1' });
-    await api.setDefaultAddress({ customerId: 'customer_1', addressId: 'address_1' });
-    await api.deleteAddress({ customerId: 'customer_1', addressId: 'address_1' });
+    await api.setDefaultAddress({
+      customerId: 'customer_1',
+      addressId: 'address_1',
+    });
+    await api.deleteAddress({
+      customerId: 'customer_1',
+      addressId: 'address_1',
+    });
 
     expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+      'customers:read',
       ...Array(4).fill('restaurant:configure'),
       'customers:read',
       ...Array(4).fill('customers:manage'),
@@ -167,6 +197,10 @@ describe('authorization and server-owned scope', () => {
 
   it('fails closed on capability and branch denial before command delegation', async () => {
     mocks.can.mockResolvedValue(false);
+    await expect(caller().listCustomers({ limit: 20 })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.listCustomers).not.toHaveBeenCalled();
     await expect(caller().listAddresses({ customerId: 'customer_1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
@@ -176,7 +210,9 @@ describe('authorization and server-owned scope', () => {
     mocks.requireBranchScope.mockRejectedValueOnce(
       new TRPCError({ code: 'FORBIDDEN', message: 'denied' })
     );
-    await expect(caller().createZone(zoneInput)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().createZone(zoneInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     expect(mocks.createDeliveryZone).not.toHaveBeenCalled();
   });
 
@@ -203,6 +239,48 @@ describe('authorization and server-owned scope', () => {
 });
 
 describe('strict public contract and serialization', () => {
+  it('lists selector customers for Restaurant Core without Loyalty and returns minimal fields', async () => {
+    const result = await caller().listCustomers({ query: 'Ayesha', limit: 20, cursor: 'cursor_1' });
+
+    expect(mocks.listCustomers).toHaveBeenCalledWith(db, {
+      query: 'Ayesha',
+      limit: 20,
+      cursor: 'cursor_1',
+    });
+    expect(result).toEqual({
+      customers: [
+        {
+          id: 'customer_1',
+          displayName: 'Ayesha Khan',
+          givenName: 'Ayesha',
+          familyName: 'Khan',
+        },
+      ],
+      nextCursor: 'customer_1',
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /birthDate|notes|identifier|normalizedValue|phone|email|tag|loyalty|address/i
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ skipInput: true })
+    );
+  });
+
+  it.each([
+    { query: '' },
+    { query: 'x'.repeat(201) },
+    { limit: 0 },
+    { limit: 101 },
+    { cursor: 'x'.repeat(201) },
+    { tagId: 'tag_1' },
+  ])('rejects unbounded or unsupported customer-directory input %#', async (input) => {
+    await expect(caller().listCustomers(input as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.listCustomers).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['organizationId', 'organization_client'],
     ['paymentMode', 'PREPAID'],

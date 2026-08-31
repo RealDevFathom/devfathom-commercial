@@ -97,7 +97,7 @@ export function DeliveryConsole() {
   const branches = trpc.restaurantStaff.listBranches.useQuery(undefined, {
     enabled: moduleEnabled,
   });
-  const customers = trpc.restaurantCustomers.list.useQuery(
+  const customers = trpc.restaurantDelivery.listCustomers.useQuery(
     { ...(customerSearch.trim() ? { query: customerSearch.trim() } : {}), limit: 100 },
     { enabled: moduleEnabled }
   );
