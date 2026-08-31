@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createHash } from 'node:crypto';
+
 vi.mock('server-only', () => ({}));
 
 import { Prisma } from '@/generated/prisma/client';
@@ -12,6 +14,23 @@ import {
   quoteDeliveryZone,
   transitionDeliveryFulfillment,
 } from './delivery';
+
+function deliveryAttachCommand(input: {
+  orderId: string;
+  customerId: string;
+  addressId: string;
+  zoneId: string;
+  instructions?: string | null;
+}) {
+  const canonicalPayload = JSON.stringify({
+    orderId: input.orderId,
+    customerId: input.customerId,
+    addressId: input.addressId,
+    zoneId: input.zoneId,
+    instructions: input.instructions?.trim() || null,
+  });
+  return `delivery.attach:v1:${createHash('sha256').update(canonicalPayload, 'utf8').digest('hex')}`;
+}
 
 describe('delivery domain validation', () => {
   it('normalizes common E.164 presentation without inventing a country code', () => {
@@ -89,10 +108,11 @@ describe('delivery payment authority', () => {
     'ignores malicious caller-supplied %s and persists unresolved mode at attach',
     async (suppliedMode) => {
       const create = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
+      const createIdempotency = vi.fn().mockResolvedValue({});
       const tx = {
         restaurantOrderIdempotencyKey: {
           findUnique: vi.fn().mockResolvedValue(null),
-          create: vi.fn().mockResolvedValue({}),
+          create: createIdempotency,
           update: vi.fn().mockResolvedValue({}),
         },
         $queryRaw: vi.fn().mockResolvedValue([{ id: 'order-1' }]),
@@ -153,6 +173,11 @@ describe('delivery payment authority', () => {
       expect(create).toHaveBeenCalledWith({
         data: expect.objectContaining({ paymentMode: null }),
       });
+      const durableMetadata = JSON.stringify(createIdempotency.mock.calls[0]?.[0]);
+      expect(durableMetadata).toMatch(/delivery\.attach:v1:[0-9a-f]{64}/);
+      expect(durableMetadata).not.toContain('customer-1');
+      expect(durableMetadata).not.toContain('address-1');
+      expect(durableMetadata).not.toContain('zone-1');
     }
   );
 
@@ -163,8 +188,13 @@ describe('delivery payment authority', () => {
       deliveryFeeSnapshot: new Prisma.Decimal('250.00'),
     };
     const findUnique = vi.fn().mockResolvedValue({
-      commandType:
-        'delivery.attach:{"orderId":"order-1","customerId":"customer-1","addressId":"address-1","zoneId":"zone-1","instructions":"Gate 2"}',
+      commandType: deliveryAttachCommand({
+        orderId: 'order-1',
+        customerId: 'customer-1',
+        addressId: 'address-1',
+        zoneId: 'zone-1',
+        instructions: 'Gate 2',
+      }),
       resultRef: 'fulfillment-1',
     });
     const findFirst = vi.fn().mockResolvedValue(committed);
@@ -197,6 +227,40 @@ describe('delivery payment authority', () => {
       },
     });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reused key with a different canonical delivery payload', async () => {
+    const tx = {
+      restaurantOrderIdempotencyKey: {
+        findUnique: vi.fn().mockResolvedValue({
+          commandType: deliveryAttachCommand({
+            orderId: 'order-1',
+            customerId: 'customer-1',
+            addressId: 'address-1',
+            zoneId: 'zone-1',
+          }),
+          resultRef: 'fulfillment-1',
+        }),
+        create: vi.fn(),
+      },
+      restaurantDeliveryFulfillment: { findFirst: vi.fn() },
+    };
+    const db = { $transaction: (work: (value: typeof tx) => unknown) => work(tx) } as never;
+
+    await expect(
+      createDeliveryFulfillment(db, {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        customerId: 'customer-1',
+        orderId: 'order-1',
+        addressId: 'address-2',
+        zoneId: 'zone-1',
+        deviceId: 'device-1',
+        idempotencyKey: 'attach-1',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_INPUT' });
+    expect(tx.restaurantDeliveryFulfillment.findFirst).not.toHaveBeenCalled();
+    expect(tx.restaurantOrderIdempotencyKey.create).not.toHaveBeenCalled();
   });
 });
 
