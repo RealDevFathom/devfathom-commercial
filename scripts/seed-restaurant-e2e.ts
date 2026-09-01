@@ -230,6 +230,9 @@ export const RESTAURANT_E2E_OWNED_ROW_COUNT = RESTAURANT_E2E_OWNED_FIXTURES.redu
 
 const FIXED_AT = new Date('2026-08-27T00:00:00.000Z');
 const BUSINESS_DATE = new Date('2026-08-27T00:00:00.000Z');
+const FIXED_DELIVERY_TAX_BUSINESS_DATE = businessDateToUtcDate(
+  resolveBusinessDate(FIXED_AT, 'Asia/Karachi', '00:00')
+);
 const CURRENT_BUSINESS_DATE = businessDateToUtcDate(
   resolveBusinessDate(new Date(), 'Asia/Karachi', '00:00')
 );
@@ -261,7 +264,7 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
   const sourceContent = 'restaurant-e2e synthetic zero-rate tax fixture v1';
   const sourceContentHash = createHash('sha256').update(sourceContent).digest('hex');
   const approvalReference = 'TEST_ONLY · SYNTHETIC_ZERO_RATE';
-  const activationIdempotencyKey = `restaurant-e2e-delivery-tax:${CURRENT_BUSINESS_DATE.toISOString()}`;
+  const activationIdempotencyKey = `restaurant-e2e-delivery-tax:${FIXED_DELIVERY_TAX_BUSINESS_DATE.toISOString()}`;
   const activationPayloadHash = createHash('sha256').update(activationIdempotencyKey).digest('hex');
   const eligibilityEvidence = { fixture: true, synthetic: true, productionTaxAdvice: false };
   const rules = [
@@ -334,7 +337,7 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
         updatedAt: rule.updatedAt.toISOString(),
       })),
     };
-    const at = CURRENT_BUSINESS_DATE.toISOString();
+    const at = FIXED_DELIVERY_TAX_BUSINESS_DATE.toISOString();
     const expected = {
       source: {
         id: IDS.deliveryTaxSource,
@@ -404,8 +407,8 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
       documentTitle: 'Synthetic zero-rate Restaurant Delivery fixture',
       sourceUrl: 'https://example.invalid/restaurant-e2e/synthetic-zero-rate-tax',
       contentHash: sourceContentHash,
-      retrievedAt: CURRENT_BUSINESS_DATE,
-      createdAt: CURRENT_BUSINESS_DATE,
+      retrievedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+      createdAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
     },
   });
   await tx.restaurantTaxProfileVersion.create({
@@ -414,18 +417,18 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
       branchId: RESTAURANT_E2E.branchA2Id,
       versionNumber: 1,
       status: 'PUBLISHED',
-      effectiveFrom: CURRENT_BUSINESS_DATE,
+      effectiveFrom: FIXED_DELIVERY_TAX_BUSINESS_DATE,
       approvalReference,
-      approvedAt: CURRENT_BUSINESS_DATE,
-      publishedAt: CURRENT_BUSINESS_DATE,
+      approvedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+      publishedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
       presetId: 'TEST-ONLY-ZERO-RATE',
       activationIdempotencyKey,
       activationPayloadHash,
       eligibilityEvidence,
       profileName: 'Synthetic zero-rate Delivery fixture',
       priceMode: 'INCLUSIVE',
-      createdAt: CURRENT_BUSINESS_DATE,
-      updatedAt: CURRENT_BUSINESS_DATE,
+      createdAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+      updatedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
       rules: {
         create: rules.map((rule) => ({
           id: rule.id,
@@ -436,12 +439,12 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
           discountTreatment: 'BEFORE_TAX',
           rate: '0',
           status: 'PUBLISHED',
-          effectiveFrom: CURRENT_BUSINESS_DATE,
+          effectiveFrom: FIXED_DELIVERY_TAX_BUSINESS_DATE,
           approvalReference,
-          approvedAt: CURRENT_BUSINESS_DATE,
-          publishedAt: CURRENT_BUSINESS_DATE,
-          createdAt: CURRENT_BUSINESS_DATE,
-          updatedAt: CURRENT_BUSINESS_DATE,
+          approvedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+          publishedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+          createdAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+          updatedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
         })),
       },
     },
