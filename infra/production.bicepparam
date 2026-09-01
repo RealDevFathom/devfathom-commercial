@@ -16,4 +16,5 @@ param platformAdminEmail = 'platform-admin@devfathom.com'
 param postgresAdminPassword = readEnvironmentVariable('DEVFATHOM_PRODUCTION_POSTGRES_PASSWORD')
 param authSecret = readEnvironmentVariable('DEVFATHOM_PRODUCTION_AUTH_SECRET')
 param platformEncryptionKey = readEnvironmentVariable('DEVFATHOM_PRODUCTION_PLATFORM_ENCRYPTION_KEY')
+param cameraCredentialKey = readEnvironmentVariable('DEVFATHOM_PRODUCTION_CAMERA_CREDENTIAL_KEY')
 param cronSecret = readEnvironmentVariable('DEVFATHOM_PRODUCTION_CRON_SECRET')

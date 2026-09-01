@@ -37,6 +37,8 @@ param authSecret string
 @secure()
 param platformEncryptionKey string
 @secure()
+param cameraCredentialKey string
+@secure()
 param cronSecret string
 @secure()
 param seedPassword string = ''
@@ -219,6 +221,11 @@ resource platformEncryptionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01'
   name: 'platform-encryption-key'
   properties: { value: platformEncryptionKey }
 }
+resource cameraCredentialSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'camera-credential-key'
+  properties: { value: cameraCredentialKey }
+}
 resource cronSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'cron-secret'
@@ -371,6 +378,7 @@ var runtimeKeyVaultSecrets = [
   { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
   { name: 'auth-secret', keyVaultUrl: '${vaultBaseUrl}/auth-secret', identity: identity.id }
   { name: 'platform-encryption-key', keyVaultUrl: '${vaultBaseUrl}/platform-encryption-key', identity: identity.id }
+  { name: 'camera-credential-key', keyVaultUrl: '${vaultBaseUrl}/camera-credential-key', identity: identity.id }
   { name: 'cron-secret', keyVaultUrl: '${vaultBaseUrl}/cron-secret', identity: identity.id }
 ]
 
@@ -395,6 +403,7 @@ var webEnvironment = [
   // Base domain, not the app URL. See the baseDomain parameter for why these differ.
   { name: 'PLATFORM_BASE_DOMAIN', value: baseDomain }
   { name: 'PLATFORM_ENCRYPTION_KEY', secretRef: 'platform-encryption-key' }
+  { name: 'CAMERA_CREDENTIAL_KEY', secretRef: 'camera-credential-key' }
   { name: 'CRON_SECRET', secretRef: 'cron-secret' }
   { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
   { name: 'EMAIL_DELIVERY_MODE', value: emailDeliveryMode }
@@ -497,7 +506,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: minReplicas, maxReplicas: 1 }
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, databaseUrlSecret, authSecretResource, platformEncryptionSecret, cronSecretResource]
+  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, databaseUrlSecret, authSecretResource, platformEncryptionSecret, cameraCredentialSecret, cronSecretResource]
 }
 
 resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
