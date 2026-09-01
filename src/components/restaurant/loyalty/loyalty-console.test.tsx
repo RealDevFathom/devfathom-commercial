@@ -263,6 +263,26 @@ vi.mock('@/lib/trpc', () => {
         export: mutation('export', { profile: {}, identifiers: [] }),
         anonymize: mutation('anonymize'),
       },
+      restaurantOrders: {
+        listOrders: {
+          useQuery: () => ({
+            data: {
+              orders: [
+                {
+                  id: 'order_internal_1',
+                  orderNumber: 1042,
+                  businessDate: '2026-08-19',
+                  status: 'CLOSED',
+                },
+              ],
+              nextCursor: null,
+            },
+            error: null,
+            isError: false,
+            isLoading: false,
+          }),
+        },
+      },
       restaurantLoyalty: {
         listPrograms: query('programs'),
         listAccounts: query('accounts'),

@@ -13,6 +13,9 @@ const preset = {
   setupNote: 'Fixture',
 };
 const callbacks = {
+  gateways: [
+    { id: 'gateway-internal', name: 'Main gateway', branchId: 'branch-1', status: 'ACTIVE' },
+  ],
   onTest: vi.fn(async () => ({ outcome: 'ok' as const, discoveredProfile: 'Profile S' })),
   onSubmit: vi.fn(async () => undefined),
 };
@@ -30,5 +33,18 @@ describe('RestaurantCameraWizard', () => {
     expect(screen.getByText('Using another brand? Configure manually')).toBeVisible();
     expect(screen.getByLabelText('Camera name')).toBeVisible();
     expect(screen.getByLabelText('Password')).toBeVisible();
+    expect(screen.getByRole('option', { name: 'Main gateway — active' })).toHaveValue(
+      'gateway-internal'
+    );
+  });
+  test('enables the gateway choice when one branch arrives asynchronously', () => {
+    const view = render(<RestaurantCameraWizard branches={[]} presets={[]} {...callbacks} />);
+    expect(screen.getByLabelText('Camera gateway')).toBeDisabled();
+
+    view.rerender(<RestaurantCameraWizard branches={branch} presets={[]} {...callbacks} />);
+    expect(screen.getByLabelText('Camera gateway')).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'Main gateway — active' })).toHaveValue(
+      'gateway-internal'
+    );
   });
 });

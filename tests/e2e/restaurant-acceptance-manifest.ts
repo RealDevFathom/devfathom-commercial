@@ -50,12 +50,9 @@ const test = (id: string, path: string): EvidenceReference => ({
   path,
 });
 
+// WHA-228, WHA-282, WHA-286, WHA-297, WHA-298, WHA-299, and WHA-300 are closed and their accepted
+// artifacts are composed into this candidate; WHA-281 is the only lane still open.
 export const activeLaneOwnership = [
-  {
-    issue: 'WHA-228',
-    ownedSurface: 'physical printing implementation and golden-byte fixtures',
-    forbiddenEvidencePathPatterns: ['^src/lib/restaurant/printing/'],
-  },
   {
     issue: 'WHA-281',
     ownedSurface: 'promotion money, loyalty, and insight integration',
@@ -63,39 +60,6 @@ export const activeLaneOwnership = [
       'promotion[^/]*(money|loyalty|insight)',
       '(money|loyalty|insight)[^/]*promotion',
     ],
-  },
-  {
-    issue: 'WHA-282',
-    ownedSurface: 'promotion offline parity and admin console',
-    forbiddenEvidencePathPatterns: [
-      'promotion[^/]*(offline|admin)',
-      '(offline|admin)[^/]*promotion',
-    ],
-  },
-  {
-    issue: 'WHA-286',
-    ownedSurface: 'role-profile provenance UI',
-    forbiddenEvidencePathPatterns: ['role[-_/]?profile', 'profile[-_/]?provenance'],
-  },
-  {
-    issue: 'WHA-297',
-    ownedSurface: 'terminal-payment integration verification',
-    forbiddenEvidencePathPatterns: ['terminal[-_/]?payments?', 'payments?[-_/]?terminal'],
-  },
-  {
-    issue: 'WHA-298',
-    ownedSurface: 'wallet passes',
-    forbiddenEvidencePathPatterns: ['(^|/)wallet([-/_.]|$)'],
-  },
-  {
-    issue: 'WHA-299',
-    ownedSurface: 'restaurant guide',
-    forbiddenEvidencePathPatterns: ['restaurant[^/]*guide', 'guide[^/]*restaurant'],
-  },
-  {
-    issue: 'WHA-300',
-    ownedSurface: 'friendly branch/operator selectors',
-    forbiddenEvidencePathPatterns: ['friendly[-_/]?selector', '(branch|operator)[-_/]?selector'],
   },
 ] as const satisfies readonly ActiveLaneOwnership[];
 
@@ -125,7 +89,8 @@ export const coverageMatrix = [
       test('restaurant-m2-contract', 'tests/restaurant-m2-contract.test.ts'),
       test('restaurant-m2-rls', 'tests/restaurant-m2-rls.test.ts'),
     ],
-    boundary: 'Friendly selectors are WHA-300; role-profile provenance UI is WHA-286.',
+    boundary:
+      'Friendly selectors (WHA-300) and role-profile provenance UI (WHA-286) are composed; browser acceptance remains.',
   },
   {
     id: 'tax-and-numbering',
@@ -165,7 +130,7 @@ export const coverageMatrix = [
       test('m5-acceptance', 'tests/restaurant-m5-acceptance.test.ts'),
     ],
     boundary:
-      'WHA-297 owns terminal review; processor/card-device selection remains External under D03.',
+      'Terminal review (WHA-297) is composed; processor/card-device selection remains External under D03.',
   },
   {
     id: 'menu-catalog',
@@ -240,7 +205,8 @@ export const coverageMatrix = [
       test('m8-acceptance', 'tests/restaurant-m8-acceptance.test.ts'),
       test('m8-rls', 'tests/restaurant-m8-rls.test.ts'),
     ],
-    boundary: 'Wallet passes are WHA-298; final browser acceptance and D08 policy remain.',
+    boundary:
+      'Wallet passes (WHA-298) are composed; final browser acceptance and D08 policy remain.',
   },
   {
     id: 'insights',
@@ -266,7 +232,7 @@ export const coverageMatrix = [
       test('promotion-evaluator-tests', 'src/lib/restaurant/promotion-evaluator.test.ts'),
     ],
     boundary:
-      'Money/loyalty/insight integration is WHA-281; offline parity/admin console is WHA-282.',
+      'Money/loyalty/insight integration remains open under WHA-281; offline parity/admin console (WHA-282) is composed.',
   },
   {
     id: 'integrations-devices',
@@ -279,7 +245,7 @@ export const coverageMatrix = [
       test('camera-stream-tests', 'src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts'),
     ],
     boundary:
-      'Provider signatures/non-in-app delivery remain stubbed; terminal review is WHA-297; D03/D05/D21 are External.',
+      'Provider signatures/non-in-app delivery remain stubbed; terminal review (WHA-297) is composed; D03/D05/D21 are External.',
   },
   {
     id: 'physical-printing',
@@ -291,7 +257,7 @@ export const coverageMatrix = [
       test('printing-tests', 'src/lib/restaurant/printing/printing.test.ts'),
     ],
     boundary:
-      'Durable print routing/simulation bridge exists, but physical printer, network, and operating-system delivery remain external/unproven; golden-byte fixture acceptance stays with WHA-228.',
+      'Durable print routing/simulation bridge exists, but physical printer, network, and operating-system delivery remain external/unproven; the golden-byte fixture (WHA-228) is composed and covered by printing.test.ts.',
   },
   {
     id: 'offline-pos-kds',
@@ -303,7 +269,7 @@ export const coverageMatrix = [
       test('pos-kds-resilience', 'tests/e2e/restaurant-pos-kds-resilience.spec.ts'),
     ],
     boundary:
-      'Accepted offline promise/latency target is External under D04; disconnect/reconnect order capture is under active correction and must not be claimed until exact-head composition and browser acceptance pass; promotion parity is WHA-282.',
+      'Accepted offline promise/latency target is External under D04; disconnect/reconnect new-order capture/replay is composed into this candidate and awaits integrated browser acceptance; promotion parity (WHA-282) is composed.',
   },
   {
     id: 'localization-accessibility',

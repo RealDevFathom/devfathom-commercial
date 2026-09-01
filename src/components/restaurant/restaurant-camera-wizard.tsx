@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
+import { OperatorSafeSelector } from './operator-safe-selector';
 
 export type CameraWizardPreset = {
   key: string;
@@ -15,6 +16,7 @@ export type CameraWizardPreset = {
   setupNote: string;
 };
 export type CameraWizardBranch = { id: string; name: string };
+export type CameraWizardGateway = { id: string; name: string; branchId: string; status: string };
 export type CameraWizardValues = {
   branchId: string;
   name: string;
@@ -28,12 +30,18 @@ export type CameraWizardValues = {
 export function RestaurantCameraWizard({
   branches,
   presets,
+  gateways,
+  gatewaysLoading = false,
+  gatewaysError = false,
   onTest,
   onSubmit,
   busy = false,
 }: {
   branches: CameraWizardBranch[];
   presets: CameraWizardPreset[];
+  gateways: CameraWizardGateway[];
+  gatewaysLoading?: boolean;
+  gatewaysError?: boolean;
   onTest: (
     values: CameraWizardValues
   ) => Promise<{ outcome: 'ok' | 'auth-failed' | 'unreachable'; discoveredProfile?: string }>;
@@ -44,6 +52,9 @@ export function RestaurantCameraWizard({
   const [selected, setSelected] = useState<string>(manual ? 'manual' : '');
   const [tested, setTested] = useState(false);
   const [outcome, setOutcome] = useState('');
+  const [branchId, setBranchId] = useState(branches.length === 1 ? branches[0]!.id : '');
+  const [gatewayId, setGatewayId] = useState('');
+  const effectiveBranchId = branchId || (branches.length === 1 ? branches[0]!.id : '');
   const chosen = useMemo(
     () => presets.find((preset) => preset.key === selected),
     [presets, selected]
@@ -55,7 +66,7 @@ export function RestaurantCameraWizard({
     return {
       branchId: String(data.get('branchId')),
       name: String(data.get('name')),
-      gatewayId: String(data.get('gatewayId')),
+      gatewayId,
       sourceRef: String(data.get('sourceRef')),
       username: String(data.get('username')),
       password: String(data.get('password')),
@@ -83,7 +94,16 @@ export function RestaurantCameraWizard({
       {branches.length > 1 && (
         <label className="mb-4 block text-sm font-medium text-text-strong">
           Branch
-          <select name="branchId" form="camera-wizard" className={field} defaultValue="">
+          <select
+            name="branchId"
+            form="camera-wizard"
+            className={field}
+            value={branchId}
+            onChange={(event) => {
+              setBranchId(event.target.value);
+              setGatewayId('');
+            }}
+          >
             {' '}
             <option value="" disabled>
               Select branch
@@ -144,10 +164,30 @@ export function RestaurantCameraWizard({
             Camera name
             <Input name="name" required />
           </label>
-          <label className="text-sm font-medium text-text-strong">
-            Gateway ID
-            <Input name="gatewayId" required />
-          </label>
+          <div className="text-sm font-medium text-text-strong">
+            <span>Camera gateway</span>
+            <OperatorSafeSelector
+              label="Camera gateway"
+              name="gatewayId"
+              required
+              value={gatewayId}
+              onChange={setGatewayId}
+              loading={gatewaysLoading}
+              error={gatewaysError}
+              disabled={!effectiveBranchId || busy}
+              emptyLabel="No active gateways for this branch"
+              options={gateways
+                .filter(
+                  (gateway) =>
+                    gateway.branchId === effectiveBranchId && gateway.status !== 'REVOKED'
+                )
+                .map((gateway) => ({
+                  value: gateway.id,
+                  label: gateway.name,
+                  code: gateway.status.toLocaleLowerCase(),
+                }))}
+            />
+          </div>
           <label className="text-sm font-medium text-text-strong">
             Host / stream source
             <Input

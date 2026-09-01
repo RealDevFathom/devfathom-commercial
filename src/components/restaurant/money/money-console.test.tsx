@@ -219,6 +219,7 @@ const mocks = vi.hoisted(() => {
       closes: [] as Array<{ input: unknown; enabled: boolean }>,
       close: [] as Array<{ input: unknown; enabled: boolean }>,
     },
+    saveTerminalConfig: vi.fn(),
   };
 });
 
@@ -300,7 +301,7 @@ vi.mock('@/lib/trpc', () => ({
       // WHA-238 terminal payments. The terminal tab is not exercised by these
       // read-model assertions, so an empty provider config is enough to render.
       getTerminalConfig: {
-        useQuery: () => ({ data: null, error: null, isLoading: false, refetch: vi.fn() }),
+        useQuery: () => ({ data: [], error: null, isLoading: false, refetch: vi.fn() }),
       },
       listTerminalReconciliations: {
         useQuery: () => ({
@@ -311,7 +312,7 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
       saveTerminalConfig: {
-        useMutation: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+        useMutation: () => ({ mutate: mocks.saveTerminalConfig, isPending: false, error: null }),
       },
     },
     restaurantCash: {
@@ -336,7 +337,7 @@ vi.mock('@/lib/trpc', () => ({
 }));
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
-import { MoneyConsole } from './money-console';
+import { MoneyConsole, type MoneyTab } from './money-console';
 
 function entitlements(enabled: boolean): EntitlementView {
   return {
@@ -360,10 +361,10 @@ function entitlements(enabled: boolean): EntitlementView {
   };
 }
 
-function renderConsole(enabled = true, initialTab?: 'daily-close') {
+function renderConsole(enabled = true, initialTab?: MoneyTab) {
   return render(
     <EntitlementsProvider value={entitlements(enabled)}>
-      <MoneyConsole initialTab={initialTab} />
+      <MoneyConsole initialTab={initialTab} canReadFinance />
     </EntitlementsProvider>
   );
 }
@@ -404,6 +405,19 @@ describe('MoneyConsole', () => {
       { tenderType: 'CARD', amount: '22.00', tipAmount: '2.00', count: 1 },
     ];
     mocks.close.data.drawerVariances = [];
+  });
+
+  it('renders an immediate denial without mounting branch or protected ledger queries', () => {
+    render(
+      <EntitlementsProvider value={entitlements(true)}>
+        <MoneyConsole canReadFinance={false} />
+      </EntitlementsProvider>
+    );
+
+    expect(screen.getByRole('heading', { name: 'Restaurant Finance' })).toBeInTheDocument();
+    expect(screen.getByText('Restaurant Finance access denied')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Branch')).not.toBeInTheDocument();
+    expect(Object.values(mocks.calls).every((calls) => calls.length === 0)).toBe(true);
   });
 
   it('gates every read by entitlement, branch, active tab, date, and detail selection', () => {
@@ -459,6 +473,27 @@ describe('MoneyConsole', () => {
     expect(
       screen.queryByRole('tablist', { name: 'Restaurant Finance ledgers' })
     ).not.toBeInTheDocument();
+  });
+
+  it('creates the first provider terminal configuration when the branch has none', () => {
+    renderConsole(true, 'terminal');
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Provider source'), {
+      target: { value: 'stripe-terminal' },
+    });
+    fireEvent.change(screen.getByLabelText('Terminal ID'), {
+      target: { value: 'tmr_front_counter' },
+    });
+    fireEvent.change(screen.getByLabelText('Device'), { target: { value: 'device_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save terminal configuration' }));
+
+    expect(mocks.saveTerminalConfig).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      source: 'stripe-terminal',
+      externalTerminalId: 'tmr_front_counter',
+      deviceId: 'device_1',
+      mode: 'DISABLED',
+    });
   });
 
   it('renders one server read model on every tab', () => {

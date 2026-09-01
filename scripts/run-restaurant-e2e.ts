@@ -8,6 +8,7 @@ const commands: Array<[string, string[]]> = [
   ...(listOnly
     ? []
     : ([
+        ['bun', ['run', 'build']],
         ['bunx', ['tsx', 'scripts/preflight-restaurant-e2e.ts']],
         ['bunx', ['tsx', 'scripts/seed-restaurant-e2e.ts']],
         ['bunx', ['tsx', 'scripts/seed-restaurant-e2e.ts']],

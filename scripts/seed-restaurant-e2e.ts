@@ -49,6 +49,7 @@ const IDS = {
   managerUser: 'user_restaurant_e2e_manager',
   deliveryOperatorUser: 'user_restaurant_e2e_delivery_operator',
   deliveryDeniedOperatorUser: 'user_restaurant_e2e_delivery_capability_denied',
+  locationsLimit: 'limit_restaurant_e2e_locations',
   operatorRole: 'role_restaurant_e2e_operator',
   deniedOperatorRole: 'role_restaurant_e2e_delivery_denied',
   managerRole: 'role_restaurant_e2e_manager',
@@ -107,6 +108,7 @@ const IDS = {
 
 export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['organizations', [RESTAURANT_E2E.organizationId]],
+  ['organization_limits', [IDS.locationsLimit]],
   [
     'organization_departments',
     ['department_restaurant_e2e_kitchen', 'department_restaurant_e2e_front_of_house'],
@@ -230,12 +232,16 @@ export const RESTAURANT_E2E_OWNED_ROW_COUNT = RESTAURANT_E2E_OWNED_FIXTURES.redu
 
 const FIXED_AT = new Date('2026-08-27T00:00:00.000Z');
 const BUSINESS_DATE = new Date('2026-08-27T00:00:00.000Z');
+const FIXED_DELIVERY_TAX_BUSINESS_DATE = businessDateToUtcDate(
+  resolveBusinessDate(FIXED_AT, 'Asia/Karachi', '00:00')
+);
 const CURRENT_BUSINESS_DATE = businessDateToUtcDate(
   resolveBusinessDate(new Date(), 'Asia/Karachi', '00:00')
 );
 const PIN_BCRYPT_SALT = '$2b$12$abcdefghijklmnopqrstuu';
 const DEVFATHOM_ORGANIZATION_ID = 'org_devfathom';
 const ALEX_EMAIL = 'alex@company.com';
+const OPERATOR_EMAIL = 'operator@restaurant-e2e.test';
 
 function deviceSecretHash(secret: string): string {
   return createHash('sha256').update(secret).digest('hex');
@@ -261,7 +267,7 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
   const sourceContent = 'restaurant-e2e synthetic zero-rate tax fixture v1';
   const sourceContentHash = createHash('sha256').update(sourceContent).digest('hex');
   const approvalReference = 'TEST_ONLY · SYNTHETIC_ZERO_RATE';
-  const activationIdempotencyKey = `restaurant-e2e-delivery-tax:${CURRENT_BUSINESS_DATE.toISOString()}`;
+  const activationIdempotencyKey = `restaurant-e2e-delivery-tax:${FIXED_DELIVERY_TAX_BUSINESS_DATE.toISOString()}`;
   const activationPayloadHash = createHash('sha256').update(activationIdempotencyKey).digest('hex');
   const eligibilityEvidence = { fixture: true, synthetic: true, productionTaxAdvice: false };
   const rules = [
@@ -334,7 +340,7 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
         updatedAt: rule.updatedAt.toISOString(),
       })),
     };
-    const at = CURRENT_BUSINESS_DATE.toISOString();
+    const at = FIXED_DELIVERY_TAX_BUSINESS_DATE.toISOString();
     const expected = {
       source: {
         id: IDS.deliveryTaxSource,
@@ -404,8 +410,8 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
       documentTitle: 'Synthetic zero-rate Restaurant Delivery fixture',
       sourceUrl: 'https://example.invalid/restaurant-e2e/synthetic-zero-rate-tax',
       contentHash: sourceContentHash,
-      retrievedAt: CURRENT_BUSINESS_DATE,
-      createdAt: CURRENT_BUSINESS_DATE,
+      retrievedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+      createdAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
     },
   });
   await tx.restaurantTaxProfileVersion.create({
@@ -414,18 +420,18 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
       branchId: RESTAURANT_E2E.branchA2Id,
       versionNumber: 1,
       status: 'PUBLISHED',
-      effectiveFrom: CURRENT_BUSINESS_DATE,
+      effectiveFrom: FIXED_DELIVERY_TAX_BUSINESS_DATE,
       approvalReference,
-      approvedAt: CURRENT_BUSINESS_DATE,
-      publishedAt: CURRENT_BUSINESS_DATE,
+      approvedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+      publishedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
       presetId: 'TEST-ONLY-ZERO-RATE',
       activationIdempotencyKey,
       activationPayloadHash,
       eligibilityEvidence,
       profileName: 'Synthetic zero-rate Delivery fixture',
       priceMode: 'INCLUSIVE',
-      createdAt: CURRENT_BUSINESS_DATE,
-      updatedAt: CURRENT_BUSINESS_DATE,
+      createdAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+      updatedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
       rules: {
         create: rules.map((rule) => ({
           id: rule.id,
@@ -436,12 +442,12 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
           discountTreatment: 'BEFORE_TAX',
           rate: '0',
           status: 'PUBLISHED',
-          effectiveFrom: CURRENT_BUSINESS_DATE,
+          effectiveFrom: FIXED_DELIVERY_TAX_BUSINESS_DATE,
           approvalReference,
-          approvedAt: CURRENT_BUSINESS_DATE,
-          publishedAt: CURRENT_BUSINESS_DATE,
-          createdAt: CURRENT_BUSINESS_DATE,
-          updatedAt: CURRENT_BUSINESS_DATE,
+          approvedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+          publishedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+          createdAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
+          updatedAt: FIXED_DELIVERY_TAX_BUSINESS_DATE,
         })),
       },
     },
@@ -450,6 +456,10 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
 
 async function main() {
   const databaseUrl = resolveRestaurantE2eDatabaseUrl();
+  const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
+  const operatorPasswordHash = operatorPassword
+    ? hashSync(operatorPassword, PIN_BCRYPT_SALT)
+    : null;
 
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
@@ -523,6 +533,33 @@ async function main() {
         },
       });
       await seedRestaurantDemoControlPlane(tx);
+      await tx.organizationLimit.upsert({
+        where: {
+          organizationId_key: {
+            organizationId: RESTAURANT_E2E.organizationId,
+            key: 'restaurant.locations.max',
+          },
+        },
+        update: {
+          value: 2,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+        create: {
+          id: IDS.locationsLimit,
+          organizationId: RESTAURANT_E2E.organizationId,
+          key: 'restaurant.locations.max',
+          value: 2,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
       // WHA-290: `User.department` is a composite foreign key onto
       // `organization_departments`, so this RESTAURANT organization's own
       // catalog (KITCHEN, FRONT_OF_HOUSE — it has no LEADERSHIP) must exist
@@ -755,9 +792,9 @@ async function main() {
             id: IDS.operatorUser,
             roleId: IDS.operatorRole,
             name: 'E2E Operator',
-            email: 'operator@restaurant-e2e.test',
+            email: OPERATOR_EMAIL,
             title: 'Operator',
-            password: null,
+            password: operatorPasswordHash,
             branchId: RESTAURANT_E2E.branchId,
           },
           {
@@ -1846,6 +1883,14 @@ async function main() {
         select: { organizationId: true },
         orderBy: { organizationId: 'asc' },
       });
+      const operator = await tx.user.findUniqueOrThrow({
+        where: { id: IDS.operatorUser },
+        select: {
+          email: true,
+          organizationRole: { select: { key: true } },
+          restaurantBranchAssignments: { select: { branchId: true } },
+        },
+      });
       const ownedRows = [];
       for (const [table, ids] of RESTAURANT_E2E_OWNED_FIXTURES) {
         const rows = await tx.$queryRaw<Array<{ id: string; organizationId: string }>>(
@@ -1855,7 +1900,7 @@ async function main() {
         );
         ownedRows.push({ table, expected: ids.length, rows });
       }
-      return { alexMemberships, ownedRows };
+      return { alexMemberships, operator, ownedRows };
     });
 
     const alexOrganizations = new Set(
@@ -1865,6 +1910,10 @@ async function main() {
       String(RESTAURANT_E2E.organizationId) === DEVFATHOM_ORGANIZATION_ID ||
       !alexOrganizations.has(DEVFATHOM_ORGANIZATION_ID) ||
       !alexOrganizations.has(RESTAURANT_E2E.organizationId) ||
+      verification.operator.email !== OPERATOR_EMAIL ||
+      verification.operator.organizationRole?.key !== 'restaurant-e2e-operator' ||
+      verification.operator.restaurantBranchAssignments.length !== 1 ||
+      verification.operator.restaurantBranchAssignments[0]?.branchId !== RESTAURANT_E2E.branchId ||
       verification.ownedRows.some(
         ({ expected, rows }) =>
           rows.length !== expected ||
