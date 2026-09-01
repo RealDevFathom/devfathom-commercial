@@ -7,6 +7,8 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
 vi.mock('server-only', () => ({}));
 
 import { CoAuthorizationError } from './co-authorization';
@@ -28,6 +30,7 @@ import {
   orderErrorResponse,
   requireActingOperator,
   requireOrderInDeviceBranch,
+  resolveTerminalEffectiveMenu,
   voidBody,
   type TerminalEffectiveMenu,
 } from './terminal-orders';
@@ -235,6 +238,87 @@ describe('canonicalJson', () => {
     expect(canonicalJson([1, 2])).not.toBe(canonicalJson([2, 1]));
     expect(canonicalJson({ a: undefined, b: null })).toBe('{"b":null}');
     expect(canonicalJson(new Date('2026-08-27T10:00:00.000Z'))).toBe('"2026-08-27T10:00:00.000Z"');
+  });
+});
+
+describe('resolveTerminalEffectiveMenu — POS modifier contract', () => {
+  it('projects linked modifier groups and ordered options into the terminal payload', async () => {
+    const findPublication = vi.fn().mockResolvedValue({
+      id: 'pub-1',
+      channels: ['TAKEAWAY'],
+      priceListId: null,
+      branch: { id: 'branch-1', timezone: 'Asia/Karachi' },
+      windows: [],
+      exceptions: [],
+      itemOverrides: [],
+      menu: {
+        id: 'menu-1',
+        name: 'All day',
+        nameLocalized: null,
+        sections: [
+          {
+            id: 'section-1',
+            name: 'Mains',
+            nameLocalized: null,
+            sortOrder: 0,
+            items: [
+              {
+                id: 'item-1',
+                productId: 'product-1',
+                variantId: null,
+                displayName: 'Burger',
+                nameLocalized: null,
+                sortOrder: 0,
+                product: {
+                  id: 'product-1',
+                  name: 'Burger',
+                  type: 'FOOD',
+                  status: 'ACTIVE',
+                  nameLocalized: null,
+                  descriptionLocalized: null,
+                  modifierGroups: [
+                    {
+                      modifierGroup: {
+                        id: 'group-1',
+                        name: 'Heat',
+                        minSelect: 0,
+                        maxSelect: 1,
+                        options: [{ id: 'option-1', name: 'Spicy', priceDelta: '1.50' }],
+                      },
+                    },
+                  ],
+                },
+                variant: null,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const db = {
+      restaurantBranchMenuPublication: { findFirst: findPublication },
+      restaurantPriceList: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as unknown as ScopedDb;
+
+    const menu = await resolveTerminalEffectiveMenu(db, {
+      branchId: 'branch-1',
+      channel: 'TAKEAWAY',
+      publicationId: 'pub-1',
+      at: new Date('2026-09-01T12:00:00.000Z'),
+    });
+
+    expect(findPublication).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'pub-1', branchId: 'branch-1' } })
+    );
+    expect(menu?.sections[0]?.items[0]?.modifierGroups).toEqual([
+      {
+        id: 'group-1',
+        name: 'Heat',
+        minSelect: 0,
+        maxSelect: 1,
+        options: [{ id: 'option-1', name: 'Spicy', priceDelta: '1.50' }],
+      },
+    ]);
   });
 });
 
