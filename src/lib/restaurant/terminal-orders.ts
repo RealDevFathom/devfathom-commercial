@@ -605,6 +605,13 @@ export type EffectiveMenuItem = {
     descriptionLocalized: Prisma.JsonValue | null;
   };
   variant: { id: string; name: string; nameLocalized: Prisma.JsonValue | null } | null;
+  modifierGroups: Array<{
+    id: string;
+    name: string;
+    minSelect: number;
+    maxSelect: number | null;
+    options: Array<{ id: string; name: string; priceDelta: string }>;
+  }>;
   price: string | null;
   priceSource: 'OVERRIDE' | 'PUBLICATION_LIST' | 'BASE_LIST' | 'NONE';
   available: boolean;
@@ -720,6 +727,7 @@ export async function resolveTerminalEffectiveMenu(
           exceptions,
         });
 
+      const { modifierGroups, ...product } = item.product;
       return {
         id: item.id,
         productId: item.productId,
@@ -727,8 +735,15 @@ export async function resolveTerminalEffectiveMenu(
         displayName: item.displayName,
         nameLocalized: item.nameLocalized,
         sortOrder: item.sortOrder,
-        product: item.product,
+        product,
         variant: item.variant,
+        modifierGroups: modifierGroups.map(({ modifierGroup }) => ({
+          ...modifierGroup,
+          options: modifierGroup.options.map((option) => ({
+            ...option,
+            priceDelta: option.priceDelta.toString(),
+          })),
+        })),
         price,
         priceSource,
         available,
@@ -864,6 +879,23 @@ const publicationSelect = {
                   status: true,
                   nameLocalized: true,
                   descriptionLocalized: true,
+                  modifierGroups: {
+                    orderBy: { sortOrder: 'asc' },
+                    select: {
+                      modifierGroup: {
+                        select: {
+                          id: true,
+                          name: true,
+                          minSelect: true,
+                          maxSelect: true,
+                          options: {
+                            orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+                            select: { id: true, name: true, priceDelta: true },
+                          },
+                        },
+                      },
+                    },
+                  },
                 },
               },
               variant: { select: { id: true, name: true, nameLocalized: true } },

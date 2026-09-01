@@ -65,6 +65,23 @@ function effectiveMenuResponse(overrides: { price?: string; available?: boolean 
               descriptionLocalized: { ur: 'تفصیل' },
             },
             variant: null,
+            modifierGroups: [
+              {
+                id: 'group-1',
+                name: 'Heat',
+                minSelect: 0,
+                maxSelect: 1,
+                internalNote: 'must not persist',
+                options: [
+                  {
+                    id: 'option-1',
+                    name: 'Spicy',
+                    priceDelta: '1.50',
+                    costPrice: '0.25',
+                  },
+                ],
+              },
+            ],
             price: overrides.price ?? '450.00',
             priceSource: 'PUBLICATION_LIST',
             available: overrides.available ?? true,
@@ -318,7 +335,18 @@ describe('storage minimization (criterion 2)', () => {
       price: '450.00',
       priceSource: 'PUBLICATION_LIST',
       available: true,
+      modifierGroups: [
+        {
+          id: 'group-1',
+          name: 'Heat',
+          minSelect: 0,
+          maxSelect: 1,
+          options: [{ id: 'option-1', name: 'Spicy', priceDelta: '1.50' }],
+        },
+      ],
     });
+    expect(serialized).not.toContain('internalNote');
+    expect(serialized).not.toContain('costPrice');
     expect(() => assertPersistSafe(snapshot)).not.toThrow();
   });
 

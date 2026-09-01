@@ -246,6 +246,13 @@ export type PosCatalogItem = {
   price: string | null;
   priceSource: 'OVERRIDE' | 'PUBLICATION_LIST' | 'BASE_LIST' | 'NONE';
   available: boolean;
+  modifierGroups?: Array<{
+    id: string;
+    name: string;
+    minSelect: number;
+    maxSelect: number | null;
+    options: Array<{ id: string; name: string; priceDelta: string }>;
+  }>;
 };
 
 export type PosCatalogSection = {
@@ -360,6 +367,32 @@ export function sanitizeCatalogSnapshot(
               price: optionalString(item.price),
               priceSource: source,
               available: item.available === true,
+              modifierGroups: asArray(item.modifierGroups, `${at}.modifierGroups`).map(
+                (rawGroup, groupIndex) => {
+                  const groupAt = `${at}.modifierGroups[${groupIndex}]`;
+                  const group = asRecord(rawGroup, groupAt);
+                  return {
+                    id: requireString(group.id, `${groupAt}.id`),
+                    name: requireString(group.name, `${groupAt}.name`),
+                    minSelect: requireNumber(group.minSelect, `${groupAt}.minSelect`),
+                    maxSelect:
+                      group.maxSelect === null
+                        ? null
+                        : requireNumber(group.maxSelect, `${groupAt}.maxSelect`),
+                    options: asArray(group.options, `${groupAt}.options`).map(
+                      (rawOption, optionIndex) => {
+                        const optionAt = `${groupAt}.options[${optionIndex}]`;
+                        const option = asRecord(rawOption, optionAt);
+                        return {
+                          id: requireString(option.id, `${optionAt}.id`),
+                          name: requireString(option.name, `${optionAt}.name`),
+                          priceDelta: requireString(option.priceDelta, `${optionAt}.priceDelta`),
+                        };
+                      }
+                    ),
+                  };
+                }
+              ),
             } satisfies PosCatalogItem;
           }
         ),
