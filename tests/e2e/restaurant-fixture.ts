@@ -11,8 +11,16 @@ export const restaurantE2eCredentials = {
     pin: '515151',
   },
   manager: { staffProfileId: 'staff_restaurant_e2e_manager', pin: '848484' },
-  pos: { deviceId: 'device_restaurant_e2e_pos', secret: 'rdk_restaurant_e2e_pos_local_ci_only' },
-  kds: { deviceId: 'device_restaurant_e2e_kds', secret: 'rdk_restaurant_e2e_kds_local_ci_only' },
+  pos: {
+    deviceId: 'device_restaurant_e2e_pos',
+    secret: 'rdk_restaurant_e2e_pos_local_ci_only',
+    clientIp: '198.51.100.10',
+  },
+  kds: {
+    deviceId: 'device_restaurant_e2e_kds',
+    secret: 'rdk_restaurant_e2e_kds_local_ci_only',
+    clientIp: '198.51.100.11',
+  },
   branchA2Id: 'branch_restaurant_e2e_a2',
   table: { id: 'table_restaurant_e2e_a1_12', name: 'Table 12' },
   customer: { id: 'customer_restaurant_e2e', name: 'E2E Guest' },
@@ -22,10 +30,12 @@ export const restaurantE2eCredentials = {
     pos: {
       deviceId: 'device_restaurant_e2e_delivery_pos',
       secret: 'rdk_restaurant_e2e_delivery_pos_local_ci_only',
+      clientIp: '198.51.100.12',
     },
     kds: {
       deviceId: 'device_restaurant_e2e_delivery_kds',
       secret: 'rdk_restaurant_e2e_delivery_kds_local_ci_only',
+      clientIp: '198.51.100.13',
     },
     addressId: 'customer_address_restaurant_e2e',
     zoneId: 'delivery_zone_restaurant_e2e_isolated',
@@ -56,11 +66,12 @@ export function terminalBrowserBaseUrl(
 
 export async function installSeededTerminalCookie(
   context: BrowserContext,
-  device: { deviceId: string; secret: string },
+  device: { deviceId: string; secret: string; clientIp: string },
   baseUrl = process.env.PLAYWRIGHT_BASE_URL ??
     `http://127.0.0.1:${Number(process.env.PLAYWRIGHT_PORT ?? 4319)}`
 ) {
   const origin = new URL(baseUrl);
+  await context.setExtraHTTPHeaders({ 'x-forwarded-for': device.clientIp });
   await context.addCookies([
     {
       name: 'devfathom-terminal',
@@ -92,24 +103,32 @@ export type RestaurantTerminalFixture = {
   deviceId: string;
   deviceSecret: string;
   sessionToken: string;
-  headers: { authorization: string; 'x-terminal-session': string };
+  headers: {
+    authorization: string;
+    'x-terminal-session': string;
+    'x-forwarded-for': string;
+  };
 };
 
 async function establishTerminal(
   request: APIRequestContext,
-  device: { deviceId: string; secret: string },
+  device: { deviceId: string; secret: string; clientIp: string },
   staff: { staffProfileId: string; pin: string } = restaurantE2eCredentials.operator
 ): Promise<RestaurantTerminalFixture> {
   const authorization = `Bearer ${device.secret}`;
   const established = await request.post('/api/restaurant/terminal/establish', {
-    headers: { authorization },
+    headers: { authorization, 'x-forwarded-for': device.clientIp },
   });
   expect(established.status()).toBe(201);
   const body = (await established.json()) as { sessionToken: string; device: { id: string } };
   expect(body.device.id).toBe(device.deviceId);
 
   const unlocked = await request.post('/api/restaurant/terminal/unlock', {
-    headers: { authorization, 'x-terminal-session': body.sessionToken },
+    headers: {
+      authorization,
+      'x-terminal-session': body.sessionToken,
+      'x-forwarded-for': device.clientIp,
+    },
     data: {
       staffProfileId: staff.staffProfileId,
       type: 'PIN',
@@ -122,7 +141,11 @@ async function establishTerminal(
     deviceId: device.deviceId,
     deviceSecret: device.secret,
     sessionToken: body.sessionToken,
-    headers: { authorization, 'x-terminal-session': body.sessionToken },
+    headers: {
+      authorization,
+      'x-terminal-session': body.sessionToken,
+      'x-forwarded-for': device.clientIp,
+    },
   };
 }
 
