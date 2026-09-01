@@ -62,4 +62,5 @@ docker/livekit/livekit.dev.keys.yaml
 
 # Playwright output
 /test-results/
+/playwright-artifacts/
 /playwright-report/
