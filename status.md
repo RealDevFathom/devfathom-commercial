@@ -1,10 +1,10 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-08-31 (PKT)
+Last reconciled: 2026-09-02 (PKT)
 
-Repository evidence is not release evidence. This checkpoint records source truth at exact code SHA
-`42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`; no deployment or production availability is claimed.
-Exact-candidate browser and release evidence remains pending.
+Repository evidence is not release evidence. The canonical private base `c7f15f65` is clean, and
+local tenant and admin health endpoints return 200. Restaurant is not yet complete, pushed, merged,
+deployed, or production-proven.
 
 ## Restaurant checkpoint
 
@@ -16,8 +16,13 @@ Exact-candidate browser and release evidence remains pending.
   branch zones, frozen snapshots, PREPAID/COD kitchen handoff, settlement, daily close, Reports,
   and Insights are implemented. Offline, missing-customer, and capability-denied attempts are
   rejected before mutation. Marketplace providers and full driver logistics remain deferred.
-- Offline order capture is under active correction. It is not claimed until the corrected work is
-  composed and exact-head disconnect/reconnect acceptance passes.
+- Accepted private artifacts exist for the KDS harness at `92b36ab6`, selector correction through
+  `b6015622`, controls product lineage through `958575ba`, and corrected OCR/offline POS through the
+  independently approved `b1a99d2b`. Final controls E2E is still running.
+- The deterministic cross-date seed correction at `652145d2` remains pending under exact focused
+  verification; it is not yet accepted.
+- A restricted fresh PostgreSQL 16 final-gate database is ready on private port 55586 with 56/56
+  migrations applied and restricted flags verified.
 - Card acquiring is provider-dependent. OPay New 9220 is a candidate device, not an integrated or
   accepted provider; simulation/local tender records do not prove authorization or settlement.
 - Pakistan tax calculation/configuration source exists. Fiscal filing, fiscal-device certification,
@@ -25,12 +30,11 @@ Exact-candidate browser and release evidence remains pending.
 
 ## Pending release gates
 
-- Exact-head Restaurant browser and build gates remain pending.
-- Exact-head SuperAdmin/control-plane browser and build gates remain pending after Restaurant freezes.
-- Exact-head Agency browser and build gates remain pending after SuperAdmin acceptance.
+- Final documentation, integration, and full Restaurant, SuperAdmin, and Agency browser, build, and
+  release gates remain pending.
 - Provider/hardware acceptance for card acquiring, printing, drawers, KDS devices, and cameras.
-- Restricted-role PostgreSQL, migration, RLS, extension, deployment, and operating evidence required
-  by release governance.
+- Final restricted-role PostgreSQL, RLS, extension, deployment, and operating evidence required by
+  release governance remains pending beyond the prepared private final-gate database.
 
 ## Optional or deferred scope
 
