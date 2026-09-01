@@ -363,7 +363,7 @@ function entitlements(enabled: boolean): EntitlementView {
 function renderConsole(enabled = true, initialTab?: 'daily-close') {
   return render(
     <EntitlementsProvider value={entitlements(enabled)}>
-      <MoneyConsole initialTab={initialTab} />
+      <MoneyConsole initialTab={initialTab} canReadFinance />
     </EntitlementsProvider>
   );
 }
@@ -404,6 +404,19 @@ describe('MoneyConsole', () => {
       { tenderType: 'CARD', amount: '22.00', tipAmount: '2.00', count: 1 },
     ];
     mocks.close.data.drawerVariances = [];
+  });
+
+  it('renders an immediate denial without mounting branch or protected ledger queries', () => {
+    render(
+      <EntitlementsProvider value={entitlements(true)}>
+        <MoneyConsole canReadFinance={false} />
+      </EntitlementsProvider>
+    );
+
+    expect(screen.getByRole('heading', { name: 'Restaurant Finance' })).toBeInTheDocument();
+    expect(screen.getByText('Restaurant Finance access denied')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Branch')).not.toBeInTheDocument();
+    expect(Object.values(mocks.calls).every((calls) => calls.length === 0)).toBe(true);
   });
 
   it('gates every read by entitlement, branch, active tab, date, and detail selection', () => {

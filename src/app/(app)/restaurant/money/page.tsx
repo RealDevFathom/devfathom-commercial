@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 
 import { MoneyConsole, type MoneyTab } from '@/components/restaurant/money/money-console';
+import { can, subjectFromSession } from '@/lib/abac';
+import { createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Restaurant Finance' };
 
@@ -18,5 +20,15 @@ export default async function RestaurantMoneyPage({
   searchParams: Promise<{ tab?: string | string[] }>;
 }) {
   const query = await searchParams;
-  return <MoneyConsole initialTab={validTab(query.tab)} />;
+  const ctx = await createTRPCContext();
+  const user = ctx.session?.user;
+  const canReadFinance = user
+    ? await can(subjectFromSession(user), 'money:read', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      })
+    : false;
+
+  return <MoneyConsole initialTab={validTab(query.tab)} canReadFinance={canReadFinance} />;
 }

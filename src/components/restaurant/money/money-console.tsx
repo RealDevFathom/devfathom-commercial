@@ -238,7 +238,36 @@ function deviceDisplayName(devices: RestaurantDeviceOption[], deviceId: string |
   return devices.find((device) => device.id === deviceId)?.name ?? 'Device name unavailable';
 }
 
-export function MoneyConsole({ initialTab = 'bills' }: { initialTab?: MoneyTab }) {
+export function MoneyConsole({
+  initialTab = 'bills',
+  canReadFinance = false,
+}: {
+  initialTab?: MoneyTab;
+  canReadFinance?: boolean;
+}) {
+  if (!canReadFinance) {
+    return (
+      <div className="min-w-0 space-y-6">
+        <PageHeader
+          eyebrow="Restaurant operations"
+          heading="Restaurant Finance"
+          description="Reconcile immutable bills, payment events, drawer movements, and daily-close corrections. POS remains transaction entry; this workspace is reconciliation and history."
+        />
+        <SectionCard title="Finance unavailable">
+          <ErrorState
+            error={{ data: { code: 'FORBIDDEN' } }}
+            retry={() => undefined}
+            subject="finance"
+          />
+        </SectionCard>
+      </div>
+    );
+  }
+
+  return <AuthorizedMoneyConsole initialTab={initialTab} />;
+}
+
+function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
   const entitlements = useEntitlements();
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
