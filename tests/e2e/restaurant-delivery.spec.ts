@@ -126,6 +126,7 @@ async function openVisibleDelivery(page: Page) {
   await expect(page.getByLabel('Saved address')).toHaveValue(fixture.delivery.addressId);
   await expect(page.getByLabel('Delivery zone')).toHaveValue(fixture.delivery.zoneId);
   await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
+  await page.getByLabel(new RegExp(fixture.modifier.name)).check();
   await page.getByRole('button', { name: 'Add to order' }).click();
   const openedResponse = page.waitForResponse(
     (response) =>

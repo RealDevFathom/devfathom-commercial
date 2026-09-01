@@ -32,7 +32,7 @@ async function createAndFireOrder(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Open order' }).click();
   const opened = (await (await openedResponse).json()) as { orderNumber: number };
   await expect(
-    page.getByText(`Order ${opened.orderNumber} active.`, { exact: true })
+    page.getByText(`Order ${opened.orderNumber} opened.`, { exact: true })
   ).toBeVisible();
   await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
   await page.getByLabel(new RegExp(fixture.modifier.name)).check();
