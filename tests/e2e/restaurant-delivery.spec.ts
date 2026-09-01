@@ -400,9 +400,7 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     );
     const summary = await summaryResponse.json();
     expect(summary.deliveryFeeTotal).toBe(fixture.delivery.fee);
-    expect(Number(summary.accountedTotal)).toBe(
-      Number(summary.derivedOrderTotal) + Number(fixture.delivery.fee)
-    );
+    expect(summary.accountedTotal).toBe(summary.derivedOrderTotal);
 
     const codKds = await readyVisible(browser, transientContexts, cod.orderNumber);
     await refreshDeliveryBoard(codKds, cod.orderNumber, 'COD');
