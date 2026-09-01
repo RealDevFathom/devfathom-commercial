@@ -13,6 +13,8 @@ const credentials = {
   RESTAURANT_INTEGRATED_E2E: '1',
   RESTAURANT_ACTOR_ADMIN_EMAIL: 'admin@restaurant-e2e.test',
   RESTAURANT_ACTOR_ADMIN_PASSWORD: 'test-only',
+  RESTAURANT_ACTOR_OPERATOR_EMAIL: 'operator@restaurant-e2e.test',
+  RESTAURANT_ACTOR_OPERATOR_PASSWORD: 'operator-test-only',
 };
 const integratedSpec = readFileSync(
   resolve(process.cwd(), 'tests/e2e/restaurant-integrated.spec.ts'),
@@ -86,6 +88,20 @@ describe('Restaurant integrated E2E safety', () => {
         RESTAURANT_ACTOR_ADMIN_EMAIL: credentials.RESTAURANT_ACTOR_ADMIN_EMAIL,
       })
     ).toThrow('RESTAURANT_ACTOR_ADMIN_PASSWORD is required');
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        RESTAURANT_ACTOR_OPERATOR_PASSWORD: undefined,
+      })
+    ).toThrow('RESTAURANT_ACTOR_OPERATOR_PASSWORD is required');
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        RESTAURANT_ACTOR_OPERATOR_EMAIL: 'different@restaurant-e2e.test',
+      })
+    ).toThrow('RESTAURANT_ACTOR_OPERATOR_EMAIL must be operator@restaurant-e2e.test');
   });
 
   test('passes only the actor credentials used by the integrated matrix', () => {
@@ -98,6 +114,10 @@ describe('Restaurant integrated E2E safety', () => {
       RESTAURANT_ACTOR_FUTURE_PASSWORD: 'unused',
     });
     expect(env.RESTAURANT_ACTOR_ADMIN_EMAIL).toBe(credentials.RESTAURANT_ACTOR_ADMIN_EMAIL);
+    expect(env.RESTAURANT_ACTOR_OPERATOR_EMAIL).toBe(credentials.RESTAURANT_ACTOR_OPERATOR_EMAIL);
+    expect(env.RESTAURANT_ACTOR_OPERATOR_PASSWORD).toBe(
+      credentials.RESTAURANT_ACTOR_OPERATOR_PASSWORD
+    );
     expect(env.RESTAURANT_ACTOR_AGENCY_EMAIL).toBeUndefined();
     expect(env.RESTAURANT_ACTOR_FUTURE_EMAIL).toBeUndefined();
     expect(env.RESTAURANT_ACTOR_FUTURE_PASSWORD).toBeUndefined();

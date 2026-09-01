@@ -80,6 +80,20 @@ describe('Restaurant E2E seed restoration guards', () => {
     expect(seed).toContain("priceDelta: '1.50'");
   });
 
+  test('seeds the restricted operator app password only from the explicit E2E credential', () => {
+    expect(seed).toContain(
+      'const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;'
+    );
+    expect(seed).toContain('hashSync(operatorPassword, PIN_BCRYPT_SALT)');
+    expect(seed).toMatch(/const operatorPasswordHash = operatorPassword[\s\S]*?: null;/);
+    expect(seed).toContain('password: operatorPasswordHash');
+    expect(seed).toContain("key: 'restaurant-e2e-operator'");
+    expect(seed).toContain(
+      'verification.operator.restaurantBranchAssignments[0]?.branchId !== RESTAURANT_E2E.branchId'
+    );
+    expect(seed).not.toContain('console.log(operatorPassword');
+  });
+
   test('two consecutive standard seeds keep restaurant-pos enabled', () => {
     const organization = seed.indexOf('await tx.organization.upsert({');
     const controlPlane = seed.indexOf('await seedRestaurantDemoControlPlane(tx);');
