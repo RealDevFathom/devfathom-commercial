@@ -880,7 +880,7 @@ const publicationSelect = {
                   nameLocalized: true,
                   descriptionLocalized: true,
                   modifierGroups: {
-                    orderBy: { sortOrder: 'asc' },
+                    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
                     select: {
                       modifierGroup: {
                         select: {
