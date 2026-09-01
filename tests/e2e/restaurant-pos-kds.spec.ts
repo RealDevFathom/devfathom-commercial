@@ -191,7 +191,11 @@ test.describe('restaurant POS and KDS core flow', () => {
       await page.getByLabel('Cash received').nth(index).fill(amount);
       await page.getByRole('button', { name: 'Apply tender' }).nth(index).click();
     }
-    await expect(page.getByText('Bill settled')).toHaveCount(2);
+    await expect(
+      page
+        .getByRole('dialog', { name: 'Collect payment' })
+        .getByRole('region', { name: /^Receipt \d+$/ })
+    ).toHaveCount(2);
 
     const summaryResponse = await request.get(
       `/api/restaurant/checkout/summary?orderId=${encodeURIComponent(opened.orderId)}`,

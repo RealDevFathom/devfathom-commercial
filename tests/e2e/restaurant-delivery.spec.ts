@@ -249,7 +249,11 @@ async function settleVisible(
   if (tender === 'CASH') await page.getByLabel('Cash received').fill(amount);
   if (tender === 'CARD') await page.getByLabel('Tender type').selectOption('CARD');
   await page.getByRole('button', { name: 'Apply tender' }).click();
-  await expect(page.getByText('Bill settled')).toBeVisible();
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Collect payment' })
+      .getByRole('region', { name: /^Receipt \d+$/ })
+  ).toBeVisible();
 }
 
 function drainRestaurantJobs(workerId: string) {
