@@ -18,6 +18,9 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: '.',
   testMatch: 'platform-control-plane.spec.ts',
+  // Relative to this config's directory, so this is the repository-root
+  // `playwright-artifacts/` — never the tracked `test-results/` baselines.
+  outputDir: '../../playwright-artifacts/platform-control-plane',
   fullyParallel: false,
   workers: 1,
   retries: 0,
