@@ -15,9 +15,10 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   outputDir: 'test-results/restaurant-integrated',
+  globalSetup: './tests/e2e/restaurant-global-setup.ts',
   use: { ...base.use, baseURL },
   webServer: {
-    command: process.env.CI ? `bunx next start --port ${port}` : `bun run dev --port ${port}`,
+    command: `bunx next start --port ${port}`,
     url: baseURL,
     reuseExistingServer: false,
     timeout: 120_000,
