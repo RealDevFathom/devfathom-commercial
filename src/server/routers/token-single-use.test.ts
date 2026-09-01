@@ -94,6 +94,17 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
     resetToken = randomBytes(32).toString('base64url');
 
     await deps.withTenantDb(organizationId, async (db) => {
+      const department = await db.organizationDepartment.findFirst({
+        where: { organizationId, active: true },
+        orderBy: [{ sortOrder: 'asc' }, { key: 'asc' }],
+        select: { key: true },
+      });
+      if (!department) {
+        throw new Error(
+          `Organization ${organizationId} has no active department; seed its catalog before running this suite.`
+        );
+      }
+
       await db.user.create({
         data: {
           id: id('user_invitee'),
@@ -101,7 +112,7 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
           email: `invitee.${suffix}@example.test`,
           name: 'Single Use Invitee',
           title: 'Engineer',
-          department: 'ENGINEERING',
+          department: department.key,
           role: 'EMPLOYEE',
           status: 'INVITED',
         },
@@ -113,7 +124,7 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
           email: `resetter.${suffix}@example.test`,
           name: 'Single Use Resetter',
           title: 'Engineer',
-          department: 'ENGINEERING',
+          department: department.key,
           role: 'EMPLOYEE',
           status: 'ACTIVE',
           password: 'not-a-real-hash',
