@@ -29,4 +29,10 @@ describe('restaurant cameras router security contract', () => {
     expect(source).toContain('requireCameraGateway().listRecordings');
     expect(source).toContain('requireCameraGateway().testConnection');
   });
+  test('authorizes camera enrollment against an active gateway in the selected branch', () => {
+    expect(source).toContain(
+      "where: { id: input.gatewayId, branchId: input.branchId, status: 'ACTIVE' }"
+    );
+    expect(source).toContain("message: 'Camera gateway unavailable.'");
+  });
 });

@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
 import { RestaurantBranchSelect } from '../restaurant-branch-select';
+import { OperatorSafeSelector } from '../operator-safe-selector';
 import type { AppRouter } from '@/server/routers/_app';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -1106,6 +1107,12 @@ function CustomerDetail({
   branchesLoading: boolean;
   branchesError: boolean;
 }) {
+  const [interactionBranchId, setInteractionBranchId] = useState('');
+  const [interactionOrderId, setInteractionOrderId] = useState('');
+  const ordersQuery = trpc.restaurantOrders.listOrders.useQuery(
+    { branchId: interactionBranchId, limit: 100 },
+    { enabled: Boolean(interactionBranchId) }
+  );
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1346,14 +1353,39 @@ function CustomerDetail({
               loading={branchesLoading}
               error={branchesError}
               disabled={busy}
+              value={interactionBranchId}
+              onChange={(value) => {
+                setInteractionBranchId(value);
+                setInteractionOrderId('');
+              }}
             />
           </Field>
           <Field label="Type">
             <Input name="type" required maxLength={100} className="mt-1 min-h-11" disabled={busy} />
           </Field>
-          <Field label="Order ID" detail="Optional">
-            <Input name="orderId" maxLength={200} className="mt-1 min-h-11" disabled={busy} />
-          </Field>
+          <div className="block text-sm font-medium text-text-body">
+            <span>Order</span>
+            <OperatorSafeSelector
+              label="Order"
+              name="orderId"
+              value={interactionOrderId}
+              onChange={setInteractionOrderId}
+              loading={ordersQuery.isLoading}
+              error={ordersQuery.isError}
+              forbidden={denied(ordersQuery.error)}
+              disabled={!interactionBranchId || busy}
+              emptyLabel="No orders available for this branch"
+              placeholder="No linked order"
+              options={(ordersQuery.data?.orders ?? []).map((order) => ({
+                value: order.id,
+                label: `Order ${order.orderNumber}`,
+                code: `${String(order.businessDate)} · ${order.status.replaceAll('_', ' ').toLocaleLowerCase()}`,
+              }))}
+            />
+            <span className="mt-1 block text-xs font-normal text-text-muted">
+              Optional; limited to the selected branch
+            </span>
+          </div>
         </div>
         <Button type="submit" variant="secondary" className="mt-3 min-h-11" disabled={busy}>
           Append interaction
