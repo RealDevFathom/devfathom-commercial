@@ -490,7 +490,7 @@ export function moneyReadRoute(opts: {
 
 // ── Register read model (C12 — read contract, consumed by L7a) ────────────────
 
-const money = (value: Prisma.Decimal): string => value.toString();
+const money = (value: Prisma.Decimal): string => value.toFixed(2);
 
 /**
  * The per-order bill/settlement state for the register, scoped to the device's branch
