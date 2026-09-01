@@ -159,13 +159,13 @@ describe('Restaurant integrated E2E safety', () => {
     )?.[0];
     expect(createAndFireOrder).toContain("selectOption('TAKEAWAY')");
     expect(createAndFireOrder).toContain("endsWith('/api/restaurant/orders/open')");
-    expect(createAndFireOrder).toContain('Order ${opened.orderNumber} active.');
+    expect(createAndFireOrder).toContain('Order ${opened.orderNumber} opened.');
     expect(createAndFireOrder).not.toContain("getByRole('checkbox')");
   });
 
   test('synchronizes the core flow on fixture-backed menu and active-order state', () => {
     expect(coreSpec).toContain('new RegExp(fixture.menuItem.name)');
-    expect(coreSpec).toContain('Order ${opened.orderNumber} active.');
+    expect(coreSpec).toContain('Order ${opened.orderNumber} opened.');
     expect(coreSpec).not.toContain('E2E Menu loaded.');
     expect(coreSpec).not.toMatch(/Order \\d\+ opened/);
   });

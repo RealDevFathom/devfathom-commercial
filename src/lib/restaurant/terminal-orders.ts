@@ -452,7 +452,7 @@ export async function listOpenOrdersForBranch(db: ScopedDb, branchId: string) {
       serverStaffProfileId: order.serverStaffProfileId,
       openedAt: order.openedAt,
       activeTableIds: order.orderTables.map((t) => t.tableId),
-      itemCount: order.items.length,
+      itemCount: order.items.reduce((total, item) => total + item.quantity, 0),
       subtotal: money(deriveSubtotal(order.items)),
     })),
   };

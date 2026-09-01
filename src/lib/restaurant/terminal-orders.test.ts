@@ -7,6 +7,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('server-only', () => ({}));
@@ -26,6 +27,7 @@ import {
   fireBody,
   idempotencyKeyFromRequest,
   ifNoneMatchSatisfied,
+  listOpenOrdersForBranch,
   openOrderBody,
   orderErrorResponse,
   requireActingOperator,
@@ -39,6 +41,34 @@ import type { TerminalContext } from './terminal-auth';
 function req(headers: Record<string, string> = {}): Request {
   return new Request('https://tenant.test/api/restaurant/orders/open', { method: 'POST', headers });
 }
+
+describe('listOpenOrdersForBranch', () => {
+  it('counts item units rather than order lines', async () => {
+    const db = {
+      restaurantOrder: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'order_1',
+            orderNumber: 42,
+            businessDate: new Date('2026-08-18T00:00:00.000Z'),
+            status: 'OPEN',
+            channel: 'DINE_IN',
+            coverCount: 1,
+            sectionId: null,
+            serverStaffProfileId: 'staff_1',
+            openedAt: new Date('2026-08-18T12:00:00.000Z'),
+            items: [{ unitPrice: new Prisma.Decimal('12.50'), quantity: 2, modifiers: [] }],
+            orderTables: [],
+          },
+        ]),
+      },
+    } as unknown as ScopedDb;
+
+    const result = await listOpenOrdersForBranch(db, 'branch_1');
+
+    expect(result.orders[0]?.itemCount).toBe(2);
+  });
+});
 
 describe('strict input schemas (C7)', () => {
   it('accepts a well-formed open body and rejects an unknown field', () => {

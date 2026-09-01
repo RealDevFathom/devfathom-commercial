@@ -191,7 +191,29 @@ async function loadMenus() {
     ]);
 
     const snapshot = JSON.parse(
-      JSON.stringify({ brands, branches, products, menus, priceLists, publications })
+      JSON.stringify({
+        brands,
+        branches,
+        products,
+        menus,
+        priceLists: priceLists.map((priceList) => ({
+          ...priceList,
+          versions: priceList.versions.map((version) => ({
+            ...version,
+            entries: version.entries.map((entry) => ({
+              ...entry,
+              price: entry.price.toFixed(2),
+            })),
+          })),
+        })),
+        publications: publications.map((publication) => ({
+          ...publication,
+          itemOverrides: publication.itemOverrides.map((override) => ({
+            ...override,
+            priceOverride: override.priceOverride?.toFixed(2) ?? null,
+          })),
+        })),
+      })
     ) as MenusSnapshot;
     return { snapshot, canRead, canWrite, canPrice, canPublish, loadError: false };
   });

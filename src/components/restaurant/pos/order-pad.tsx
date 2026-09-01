@@ -1608,7 +1608,8 @@ export function OrderPad() {
                       className="min-h-11 h-auto w-full min-w-0 justify-between px-3 py-2"
                     >
                       <span className="truncate">
-                        #{openOrder.orderNumber} · {openOrder.itemCount} items
+                        #{openOrder.orderNumber} · {openOrder.itemCount}{' '}
+                        {openOrder.itemCount === 1 ? 'item' : 'items'}
                       </span>
                       <span className="shrink-0 font-mono text-xs">{openOrder.subtotal}</span>
                     </Button>

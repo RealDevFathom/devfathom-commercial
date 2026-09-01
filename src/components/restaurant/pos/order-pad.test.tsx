@@ -438,6 +438,35 @@ describe('OrderPad transport', () => {
     expect(await screen.findByText('Order 42 active.')).toBeVisible();
   });
 
+  it('uses singular and plural unit labels for open orders', async () => {
+    const fetch = transport({
+      openOrders: [
+        {
+          id: 'order-1',
+          orderNumber: 41,
+          status: 'OPEN',
+          channel: 'DINE_IN',
+          activeTableIds: [],
+          itemCount: 1,
+          subtotal: '4.00',
+        },
+        {
+          id: 'order-2',
+          orderNumber: 42,
+          status: 'OPEN',
+          channel: 'DINE_IN',
+          activeTableIds: [],
+          itemCount: 2,
+          subtotal: '8.00',
+        },
+      ],
+    });
+    await unlock(fetch);
+
+    expect(await screen.findByRole('button', { name: /#41 · 1 item/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /#42 · 2 items/ })).toBeVisible();
+  });
+
   it('refetches zones when customer selection invalidates an in-flight zone response', async () => {
     let releaseZones = () => {};
     const zoneGate = new Promise<void>((resolve) => (releaseZones = resolve));

@@ -188,4 +188,51 @@ describe('Restaurant menus console', () => {
     expect(screen.getByLabelText('DINE IN')).toBeEnabled();
     expect(screen.getByLabelText('TAKEAWAY')).toBeEnabled();
   });
+
+  it('renders price-list money with two decimal places', () => {
+    renderConsole({
+      snapshot: {
+        ...snapshot,
+        priceLists: [
+          {
+            id: 'price_list_1',
+            name: 'Standard',
+            isDefault: true,
+            versions: [
+              {
+                id: 'version_1',
+                priceListId: 'price_list_1',
+                versionNumber: 1,
+                effectiveFrom: '2026-08-18T00:00:00.000Z',
+                status: 'DRAFT',
+                activatedAt: null,
+                supersededAt: null,
+                entries: [
+                  {
+                    id: 'entry_1',
+                    priceListVersionId: 'version_1',
+                    productId: 'product_1',
+                    variantId: null,
+                    price: '950.00',
+                  },
+                  {
+                    id: 'entry_2',
+                    priceListVersionId: 'version_1',
+                    productId: 'product_1',
+                    variantId: 'variant_1',
+                    price: '12.50',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Price lists/ }));
+
+    expect(screen.getByText('950.00')).toBeVisible();
+    expect(screen.getByText('12.50')).toBeVisible();
+  });
 });
