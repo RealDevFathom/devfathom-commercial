@@ -129,7 +129,7 @@ test('real menu image is extracted, reviewed, and imported as priced drafts', as
   await expect(page.getByRole('heading', { name: 'Menus & publishing' })).toBeVisible();
   await page.getByRole('tab', { name: /^Menus \(\d+\)$/ }).click();
   await page
-    .getByLabel('Menu', { exact: true })
+    .getByRole('combobox', { name: 'Menu' })
     .selectOption({ label: 'Chai Chowk — Final Service OCR' });
   await expect(page.getByRole('heading', { name: 'Final Service OCR' })).toBeVisible();
   await expect(page.getByText('Chicken Malai Boti', { exact: true }).first()).toBeVisible();

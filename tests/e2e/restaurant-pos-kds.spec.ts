@@ -120,7 +120,7 @@ test.describe('restaurant POS and KDS core flow', () => {
       orderNumber: number;
     };
     await expect(
-      page.getByText(`Order ${opened.orderNumber} active.`, { exact: true })
+      page.getByText(`Order ${opened.orderNumber} opened.`, { exact: true })
     ).toBeVisible();
 
     await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
