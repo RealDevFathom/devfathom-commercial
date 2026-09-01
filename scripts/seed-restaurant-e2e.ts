@@ -49,6 +49,7 @@ const IDS = {
   managerUser: 'user_restaurant_e2e_manager',
   deliveryOperatorUser: 'user_restaurant_e2e_delivery_operator',
   deliveryDeniedOperatorUser: 'user_restaurant_e2e_delivery_capability_denied',
+  locationsLimit: 'limit_restaurant_e2e_locations',
   operatorRole: 'role_restaurant_e2e_operator',
   deniedOperatorRole: 'role_restaurant_e2e_delivery_denied',
   managerRole: 'role_restaurant_e2e_manager',
@@ -107,6 +108,7 @@ const IDS = {
 
 export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['organizations', [RESTAURANT_E2E.organizationId]],
+  ['organization_limits', [IDS.locationsLimit]],
   [
     'organization_departments',
     ['department_restaurant_e2e_kitchen', 'department_restaurant_e2e_front_of_house'],
@@ -239,6 +241,7 @@ const CURRENT_BUSINESS_DATE = businessDateToUtcDate(
 const PIN_BCRYPT_SALT = '$2b$12$abcdefghijklmnopqrstuu';
 const DEVFATHOM_ORGANIZATION_ID = 'org_devfathom';
 const ALEX_EMAIL = 'alex@company.com';
+const OPERATOR_EMAIL = 'operator@restaurant-e2e.test';
 
 function deviceSecretHash(secret: string): string {
   return createHash('sha256').update(secret).digest('hex');
@@ -453,6 +456,10 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
 
 async function main() {
   const databaseUrl = resolveRestaurantE2eDatabaseUrl();
+  const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
+  const operatorPasswordHash = operatorPassword
+    ? hashSync(operatorPassword, PIN_BCRYPT_SALT)
+    : null;
 
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
@@ -526,6 +533,33 @@ async function main() {
         },
       });
       await seedRestaurantDemoControlPlane(tx);
+      await tx.organizationLimit.upsert({
+        where: {
+          organizationId_key: {
+            organizationId: RESTAURANT_E2E.organizationId,
+            key: 'restaurant.locations.max',
+          },
+        },
+        update: {
+          value: 2,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+        create: {
+          id: IDS.locationsLimit,
+          organizationId: RESTAURANT_E2E.organizationId,
+          key: 'restaurant.locations.max',
+          value: 2,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
       // WHA-290: `User.department` is a composite foreign key onto
       // `organization_departments`, so this RESTAURANT organization's own
       // catalog (KITCHEN, FRONT_OF_HOUSE — it has no LEADERSHIP) must exist
@@ -758,9 +792,9 @@ async function main() {
             id: IDS.operatorUser,
             roleId: IDS.operatorRole,
             name: 'E2E Operator',
-            email: 'operator@restaurant-e2e.test',
+            email: OPERATOR_EMAIL,
             title: 'Operator',
-            password: null,
+            password: operatorPasswordHash,
             branchId: RESTAURANT_E2E.branchId,
           },
           {
@@ -1849,6 +1883,14 @@ async function main() {
         select: { organizationId: true },
         orderBy: { organizationId: 'asc' },
       });
+      const operator = await tx.user.findUniqueOrThrow({
+        where: { id: IDS.operatorUser },
+        select: {
+          email: true,
+          organizationRole: { select: { key: true } },
+          restaurantBranchAssignments: { select: { branchId: true } },
+        },
+      });
       const ownedRows = [];
       for (const [table, ids] of RESTAURANT_E2E_OWNED_FIXTURES) {
         const rows = await tx.$queryRaw<Array<{ id: string; organizationId: string }>>(
@@ -1858,7 +1900,7 @@ async function main() {
         );
         ownedRows.push({ table, expected: ids.length, rows });
       }
-      return { alexMemberships, ownedRows };
+      return { alexMemberships, operator, ownedRows };
     });
 
     const alexOrganizations = new Set(
@@ -1868,6 +1910,10 @@ async function main() {
       String(RESTAURANT_E2E.organizationId) === DEVFATHOM_ORGANIZATION_ID ||
       !alexOrganizations.has(DEVFATHOM_ORGANIZATION_ID) ||
       !alexOrganizations.has(RESTAURANT_E2E.organizationId) ||
+      verification.operator.email !== OPERATOR_EMAIL ||
+      verification.operator.organizationRole?.key !== 'restaurant-e2e-operator' ||
+      verification.operator.restaurantBranchAssignments.length !== 1 ||
+      verification.operator.restaurantBranchAssignments[0]?.branchId !== RESTAURANT_E2E.branchId ||
       verification.ownedRows.some(
         ({ expected, rows }) =>
           rows.length !== expected ||

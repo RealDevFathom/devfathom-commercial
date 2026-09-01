@@ -23,13 +23,16 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
+      AUTH_SECRET: process.env.AUTH_SECRET ?? '',
       AUTH_TRUST_HOST: 'true',
       DATABASE_URL: process.env.DATABASE_URL ?? '',
       RESTAURANT_INTEGRATED_E2E: '1',
     },
   },
   testMatch: [
+    'restaurant-controls-final.spec.ts',
     'restaurant-integrated.spec.ts',
+    'restaurant-lifecycles-final.spec.ts',
     'restaurant-pos-kds.spec.ts',
     'restaurant-pos-kds-resilience.spec.ts',
     'restaurant-delivery.spec.ts',

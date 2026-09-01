@@ -4,8 +4,11 @@ const COMMON_POSTGRES_PORTS = new Set(['5432', '6432']);
 const REQUIRED_INTEGRATED_ENV = [
   'RESTAURANT_ACTOR_ADMIN_EMAIL',
   'RESTAURANT_ACTOR_ADMIN_PASSWORD',
+  'RESTAURANT_ACTOR_OPERATOR_EMAIL',
+  'RESTAURANT_ACTOR_OPERATOR_PASSWORD',
 ] as const;
 const INTEGRATED_CREDENTIALS = new Set<string>(REQUIRED_INTEGRATED_ENV);
+const RESTAURANT_OPERATOR_EMAIL = 'operator@restaurant-e2e.test';
 
 export function resolveRestaurantE2eDatabaseUrl(
   env: Record<string, string | undefined> = process.env
@@ -59,6 +62,9 @@ export function restaurantE2eEnvironment(
   }
   for (const name of REQUIRED_INTEGRATED_ENV) {
     if (!env[name]) throw new Error(`${name} is required.`);
+  }
+  if (env.RESTAURANT_ACTOR_OPERATOR_EMAIL !== RESTAURANT_OPERATOR_EMAIL) {
+    throw new Error(`RESTAURANT_ACTOR_OPERATOR_EMAIL must be ${RESTAURANT_OPERATOR_EMAIL}.`);
   }
   const databaseUrl = resolveRestaurantE2eDatabaseUrl(env);
   const result: Record<string, string | undefined> = {

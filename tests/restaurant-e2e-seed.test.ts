@@ -14,6 +14,7 @@ describe('Restaurant E2E seed restoration guards', () => {
 
   test.each([
     'organization',
+    'organizationLimit',
     'organizationDepartment',
     'restaurantBranch',
     'restaurantFloor',
@@ -94,6 +95,20 @@ describe('Restaurant E2E seed restoration guards', () => {
     expect(seed).toContain("priceDelta: '1.50'");
   });
 
+  test('seeds the restricted operator app password only from the explicit E2E credential', () => {
+    expect(seed).toContain(
+      'const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;'
+    );
+    expect(seed).toContain('hashSync(operatorPassword, PIN_BCRYPT_SALT)');
+    expect(seed).toMatch(/const operatorPasswordHash = operatorPassword[\s\S]*?: null;/);
+    expect(seed).toContain('password: operatorPasswordHash');
+    expect(seed).toContain("key: 'restaurant-e2e-operator'");
+    expect(seed).toContain(
+      'verification.operator.restaurantBranchAssignments[0]?.branchId !== RESTAURANT_E2E.branchId'
+    );
+    expect(seed).not.toContain('console.log(operatorPassword');
+  });
+
   test('two consecutive standard seeds keep restaurant-pos enabled', () => {
     const organization = seed.indexOf('await tx.organization.upsert({');
     const controlPlane = seed.indexOf('await seedRestaurantDemoControlPlane(tx);');
@@ -110,5 +125,14 @@ describe('Restaurant E2E seed restoration guards', () => {
       /for \(const module of RESTAURANT_MODULE_ROWS\)[\s\S]*?platformPackageModule\.upsert\([\s\S]*?update: \{ enabled: true \}/
     );
     expect(demoSeed).toContain("key: 'restaurant-pos'");
+  });
+
+  test('keeps the two seeded branches at the restaurant location limit', () => {
+    expect(seed).toContain("locationsLimit: 'limit_restaurant_e2e_locations'");
+    expect(seed).toContain("['organization_limits', [IDS.locationsLimit]]");
+    expect(seed).toContain("key: 'restaurant.locations.max'");
+    expect(seed).toMatch(
+      /tx\.organizationLimit\.upsert\([\s\S]*?update: \{[\s\S]*?value: 2,[\s\S]*?source: 'E2E_FIXTURE',[\s\S]*?createdAt: FIXED_AT,[\s\S]*?updatedAt: FIXED_AT,[\s\S]*?create: \{[\s\S]*?id: IDS\.locationsLimit,[\s\S]*?value: 2,[\s\S]*?source: 'E2E_FIXTURE'/
+    );
   });
 });
