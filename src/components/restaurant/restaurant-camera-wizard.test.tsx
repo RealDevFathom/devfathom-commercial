@@ -37,4 +37,14 @@ describe('RestaurantCameraWizard', () => {
       'gateway-internal'
     );
   });
+  test('enables the gateway choice when one branch arrives asynchronously', () => {
+    const view = render(<RestaurantCameraWizard branches={[]} presets={[]} {...callbacks} />);
+    expect(screen.getByLabelText('Camera gateway')).toBeDisabled();
+
+    view.rerender(<RestaurantCameraWizard branches={branch} presets={[]} {...callbacks} />);
+    expect(screen.getByLabelText('Camera gateway')).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'Main gateway — active' })).toHaveValue(
+      'gateway-internal'
+    );
+  });
 });
