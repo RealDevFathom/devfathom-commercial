@@ -26,6 +26,11 @@ const coreSpec = readFileSync(
   resolve(process.cwd(), 'tests/e2e/restaurant-pos-kds.spec.ts'),
   'utf8'
 );
+const runner = readFileSync(resolve(process.cwd(), 'scripts/run-restaurant-e2e.ts'), 'utf8');
+const globalSetup = readFileSync(
+  resolve(process.cwd(), 'tests/e2e/restaurant-global-setup.ts'),
+  'utf8'
+);
 
 describe('Restaurant integrated E2E safety', () => {
   test.each([undefined, '', '0', 'true'])('rejects integrated opt-in %s', (value) => {
@@ -110,10 +115,20 @@ describe('Restaurant integrated E2E safety', () => {
     expect(config.workers).toBe(1);
     expect(config.projects).toHaveLength(1);
     expect(config.projects?.[0]?.name).toBe('restaurant-integrated-serial');
+    expect(config.globalSetup).toBe('./tests/e2e/restaurant-global-setup.ts');
     expect(config.webServer).toMatchObject({
+      command: 'bunx next start --port 4319',
       reuseExistingServer: false,
       env: { AUTH_TRUST_HOST: 'true' },
     });
+  });
+
+  test('builds once and proves the KDS client can begin enrollment before the suite', () => {
+    expect(runner).toContain("['bun', ['run', 'build']]");
+    expect(globalSetup).toContain("new URL('/kds', baseURL).href");
+    expect(globalSetup).toContain("url.pathname === '/api/restaurant/terminal/establish'");
+    expect(globalSetup).toContain("request.method() === 'POST'");
+    expect(globalSetup).toContain('response?.ok()');
   });
 
   test('reuses one login and isolates resilience orders from the core table flow', () => {
