@@ -64,6 +64,17 @@ export const PLATFORM_READ_ROUTES = [
 export type PlatformReadRoute = (typeof PLATFORM_READ_ROUTES)[number];
 export type PlatformReadHref = PlatformReadRoute['href'];
 
+export function platformReadHrefForPathname(pathname: string): PlatformReadHref | null {
+  if (pathname === '/platform') return '/platform';
+  return (
+    PLATFORM_READ_ROUTES.find(
+      (route) =>
+        route.href !== '/platform' &&
+        (pathname === route.href || pathname.startsWith(`${route.href}/`))
+    )?.href ?? null
+  );
+}
+
 export function canReadPlatformRoute(role: PlatformRole, href: PlatformReadHref): boolean {
   const route = PLATFORM_READ_ROUTES.find((candidate) => candidate.href === href);
   return Boolean(route && canPlatformRole(role, route.capability));

@@ -9,7 +9,9 @@ if (process.env.AGENCY_E2E !== '1') throw new Error('AGENCY_E2E=1 is required.')
 async function signIn(page: Page) {
   await page.goto('/login');
   await page.getByLabel('Email').fill(process.env.AGENCY_E2E_ADMIN_EMAIL!);
-  await page.getByLabel('Password').fill(process.env.AGENCY_E2E_ADMIN_PASSWORD!);
+  await page
+    .getByRole('textbox', { name: 'Password' })
+    .fill(process.env.AGENCY_E2E_ADMIN_PASSWORD!);
   await page.getByRole('button', { name: /sign in/i }).click();
   await expect(page.getByText('Choose a workspace', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: /Northstar Agency E2E/i }).click();

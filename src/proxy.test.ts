@@ -30,52 +30,52 @@ function authenticatedTenantRequest(path: string) {
 }
 
 describe('platform host routing', () => {
-  it('never redirects framework assets away from their asset URL', () => {
-    const response = proxy(adminRequest('/_next/static/chunks/app.js'));
+  it('never redirects framework assets away from their asset URL', async () => {
+    const response = await proxy(adminRequest('/_next/static/chunks/app.js'));
 
     expect(response.status).toBe(200);
     expect(response.headers.get('x-middleware-next')).toBe('1');
     expect(response.headers.get('location')).toBeNull();
   });
 
-  it('keeps the admin host out of tenant pages', () => {
-    const response = proxy(adminRequest('/dashboard'));
+  it('keeps the admin host out of tenant pages', async () => {
+    const response = await proxy(adminRequest('/dashboard'));
 
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('http://admin.localhost:3000/platform');
   });
 
   it('keeps platform pages and interactive APIs off tenant hosts', async () => {
-    const page = proxy(tenantRequest('/platform/login'));
+    const page = await proxy(tenantRequest('/platform/login'));
     expect(page.status).toBe(307);
     expect(page.headers.get('location')).toBe('http://acme.localhost:3000/dashboard');
 
-    const api = proxy(tenantRequest('/api/platform/session'));
+    const api = await proxy(tenantRequest('/api/platform/session'));
     expect(api.status).toBe(404);
     await expect(api.json()).resolves.toEqual({ error: 'Not found.' });
   });
 
-  it('allows the bearer-authenticated cron worker on the canonical deployment host', () => {
-    const response = proxy(tenantRequest('/api/platform/jobs/process'));
+  it('allows the bearer-authenticated cron worker on the canonical deployment host', async () => {
+    const response = await proxy(tenantRequest('/api/platform/jobs/process'));
     expect(response.status).toBe(200);
     expect(response.headers.get('x-middleware-next')).toBe('1');
   });
 
-  it('allows unauthenticated POS access without a login redirect', () => {
-    const response = proxy(tenantRequest('/pos'));
+  it('allows unauthenticated POS access without a login redirect', async () => {
+    const response = await proxy(tenantRequest('/pos'));
 
     expect(response.status).toBe(200);
     expect(response.headers.get('x-middleware-next')).toBe('1');
     expect(response.headers.get('location')).toBeNull();
   });
 
-  it('allows public occurrence links without exposing authenticated meetings pages', () => {
-    const publicMeeting = proxy(tenantRequest('/meet/occurrence-public-id'));
+  it('allows public occurrence links without exposing authenticated meetings pages', async () => {
+    const publicMeeting = await proxy(tenantRequest('/meet/occurrence-public-id'));
     expect(publicMeeting.status).toBe(200);
     expect(publicMeeting.headers.get('x-middleware-next')).toBe('1');
     expect(publicMeeting.headers.get('location')).toBeNull();
 
-    const meetingsWorkspace = proxy(tenantRequest('/meetings'));
+    const meetingsWorkspace = await proxy(tenantRequest('/meetings'));
     expect(meetingsWorkspace.status).toBe(307);
     expect(meetingsWorkspace.headers.get('location')).toBe(
       'http://acme.localhost:3000/login?callbackUrl=%2Fmeetings'
@@ -84,8 +84,8 @@ describe('platform host routing', () => {
 });
 
 describe('actor-facing tenant URLs', () => {
-  it('removes a forbidden cross-tenant organization id before rendering the dashboard', () => {
-    const response = proxy(
+  it('removes a forbidden cross-tenant organization id before rendering the dashboard', async () => {
+    const response = await proxy(
       authenticatedTenantRequest(
         '/dashboard?organizationId=org_restaurant_b_forbidden&view=operations'
       )
@@ -98,8 +98,8 @@ describe('actor-facing tenant URLs', () => {
     expect(response.headers.get('location')).not.toContain('org_restaurant_b_forbidden');
   });
 
-  it('canonicalizes valid tenant navigation without exposing its internal id', () => {
-    const response = proxy(
+  it('canonicalizes valid tenant navigation without exposing its internal id', async () => {
+    const response = await proxy(
       authenticatedTenantRequest('/dashboard?organizationId=org_restaurant_a&view=operations')
     );
 
@@ -109,12 +109,12 @@ describe('actor-facing tenant URLs', () => {
     );
   });
 
-  it('keeps refresh canonical and cleans a raw-id history revisit again', () => {
-    const canonical = proxy(authenticatedTenantRequest('/dashboard?view=operations'));
+  it('keeps refresh canonical and cleans a raw-id history revisit again', async () => {
+    const canonical = await proxy(authenticatedTenantRequest('/dashboard?view=operations'));
     expect(canonical.status).toBe(200);
     expect(canonical.headers.get('location')).toBeNull();
 
-    const revisited = proxy(
+    const revisited = await proxy(
       authenticatedTenantRequest('/dashboard?organizationId=org_restaurant_a&view=operations')
     );
     expect(revisited.headers.get('location')).toBe(
@@ -122,8 +122,8 @@ describe('actor-facing tenant URLs', () => {
     );
   });
 
-  it('does not copy an internal organization id into an unauthenticated login URL', () => {
-    const response = proxy(tenantRequest('/dashboard?organizationId=org_restaurant_a'));
+  it('does not copy an internal organization id into an unauthenticated login URL', async () => {
+    const response = await proxy(tenantRequest('/dashboard?organizationId=org_restaurant_a'));
 
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('http://acme.localhost:3000/dashboard');
