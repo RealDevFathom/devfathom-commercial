@@ -2,8 +2,9 @@
 
 Operator workflow: [Restaurant administrator guide](../restaurant-administrator-guide.md#opening-and-daily-service).
 
-Status: local source is assembled at exact candidate
-`6cd73e4b5eb747b1d017d28ce6858d6606a7c6f9`; automated, browser, and release evidence remains
+Local source is assembled in implementation candidate
+`6cd73e4b5eb747b1d017d28ce6858d6606a7c6f9`; final gate checkpoint is
+`6c8624697af344529ccf64609ace8f2356488cbf`. Automated, browser, and release evidence remains
 pending.
 
 ## Status vocabulary
