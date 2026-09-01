@@ -73,6 +73,20 @@ describe('Restaurant E2E seed restoration guards', () => {
     expect(seed).not.toMatch(/tx\.loyaltyPointsEntry\.(?:upsert|update|delete)/);
   });
 
+  test('derives the immutable Delivery tax fixture date from the fixed fixture instant', () => {
+    expect(seed).toMatch(
+      /const FIXED_DELIVERY_TAX_BUSINESS_DATE = businessDateToUtcDate\(\s*resolveBusinessDate\(FIXED_AT, 'Asia\/Karachi', '00:00'\)\s*\)/
+    );
+
+    const taxFixture = seed.slice(
+      seed.indexOf('async function seedDeliveryTaxProfile'),
+      seed.indexOf('async function main()')
+    );
+    expect(taxFixture).toContain('FIXED_DELIVERY_TAX_BUSINESS_DATE');
+    expect(taxFixture).not.toContain('CURRENT_BUSINESS_DATE');
+    expect(taxFixture).not.toMatch(/new Date\s*\(/);
+  });
+
   test('retains the named menu, required modifier, and exact matrix total inputs', () => {
     expect(seed).toContain("name: 'Chicken Tikka Bun'");
     expect(seed).toContain("name: 'Spicy'");
