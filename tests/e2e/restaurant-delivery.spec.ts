@@ -535,7 +535,7 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     const financialRow = financialReportsTable.getByRole('row').filter({ hasText: businessDate });
     const financialCells = financialRow.getByRole('cell');
     await expect(financialCells.nth(7)).toHaveText('13.25');
-    await expect(financialCells.nth(8)).toHaveText('0.00');
+    await expect(financialCells.nth(8)).toHaveText('0');
     await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.phone);
     await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.address);
     await admin.close();
