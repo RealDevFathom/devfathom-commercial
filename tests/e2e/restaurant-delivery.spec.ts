@@ -514,17 +514,28 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
         adminOrigin
       ).href
     );
-    await expect(admin.getByText('Delivery fee sales').locator('..')).toContainText('13.25');
-    await expect(admin.getByText('Delivery fee refunds').locator('..')).toContainText(
-      /\b0(?:\.00)?\b/
-    );
+    const deliveryFeeSalesStat = admin
+      .locator('[data-slot="stat"]')
+      .filter({ has: admin.getByText('Delivery fee sales', { exact: true }) });
+    const deliveryFeeRefundsStat = admin
+      .locator('[data-slot="stat"]')
+      .filter({ has: admin.getByText('Delivery fee refunds', { exact: true }) });
+    await expect(deliveryFeeSalesStat.locator('.stat-figure')).toHaveText('13.25');
+    await expect(deliveryFeeRefundsStat.locator('.stat-figure')).toHaveText('0');
     await admin.goto(new URL('/restaurant/insights', adminOrigin).href);
     await admin.getByLabel('Branch').selectOption(fixture.delivery.branchId);
     await admin.getByLabel('From date').fill(businessDate);
     await admin.getByLabel('To date').fill(businessDate);
-    const financialRow = admin.getByRole('row').filter({ hasText: businessDate });
-    await expect(financialRow).toContainText('13.25');
-    await expect(financialRow).toContainText(/\b0(?:\.00)?\b/);
+    const financialReportsTable = admin.getByRole('region', {
+      name: 'financial reports table',
+    });
+    const financialHeaders = financialReportsTable.getByRole('columnheader');
+    await expect(financialHeaders.nth(7)).toHaveText('Delivery fees');
+    await expect(financialHeaders.nth(8)).toHaveText('Delivery fee refunds');
+    const financialRow = financialReportsTable.getByRole('row').filter({ hasText: businessDate });
+    const financialCells = financialRow.getByRole('cell');
+    await expect(financialCells.nth(7)).toHaveText('13.25');
+    await expect(financialCells.nth(8)).toHaveText('0.00');
     await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.phone);
     await expect(admin.locator('body')).not.toContainText(snapshot.rows[0]!.address);
     await admin.close();
