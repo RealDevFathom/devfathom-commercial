@@ -219,6 +219,7 @@ const mocks = vi.hoisted(() => {
       closes: [] as Array<{ input: unknown; enabled: boolean }>,
       close: [] as Array<{ input: unknown; enabled: boolean }>,
     },
+    saveTerminalConfig: vi.fn(),
   };
 });
 
@@ -300,7 +301,7 @@ vi.mock('@/lib/trpc', () => ({
       // WHA-238 terminal payments. The terminal tab is not exercised by these
       // read-model assertions, so an empty provider config is enough to render.
       getTerminalConfig: {
-        useQuery: () => ({ data: null, error: null, isLoading: false, refetch: vi.fn() }),
+        useQuery: () => ({ data: [], error: null, isLoading: false, refetch: vi.fn() }),
       },
       listTerminalReconciliations: {
         useQuery: () => ({
@@ -311,7 +312,7 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
       saveTerminalConfig: {
-        useMutation: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+        useMutation: () => ({ mutate: mocks.saveTerminalConfig, isPending: false, error: null }),
       },
     },
     restaurantCash: {
@@ -459,6 +460,27 @@ describe('MoneyConsole', () => {
     expect(
       screen.queryByRole('tablist', { name: 'Restaurant Finance ledgers' })
     ).not.toBeInTheDocument();
+  });
+
+  it('creates the first provider terminal configuration when the branch has none', () => {
+    renderConsole(true, 'terminal');
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Provider source'), {
+      target: { value: 'stripe-terminal' },
+    });
+    fireEvent.change(screen.getByLabelText('Terminal ID'), {
+      target: { value: 'tmr_front_counter' },
+    });
+    fireEvent.change(screen.getByLabelText('Device'), { target: { value: 'device_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save terminal configuration' }));
+
+    expect(mocks.saveTerminalConfig).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      source: 'stripe-terminal',
+      externalTerminalId: 'tmr_front_counter',
+      deviceId: 'device_1',
+      mode: 'DISABLED',
+    });
   });
 
   it('renders one server read model on every tab', () => {

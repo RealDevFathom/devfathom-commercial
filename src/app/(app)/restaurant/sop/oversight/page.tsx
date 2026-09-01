@@ -22,7 +22,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
-import { OperatorSafeSelector } from '@/components/restaurant/operator-safe-selector';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from '@/components/restaurant/restaurant-branch-select';
 import { RestaurantStaffSelect } from '@/components/restaurant/restaurant-staff-select';
@@ -910,22 +909,37 @@ export default function RestaurantSopOversightPage() {
 
             <div className="flex flex-wrap items-end gap-3">
               <div className="min-w-64 flex-1 space-y-1.5">
-                <span className={labelClass}>Recent occurrence</span>
-                <OperatorSafeSelector
-                  label="Recent occurrence"
+                <label className={labelClass} htmlFor="audit-occurrence">
+                  Recent occurrence
+                </label>
+                <select
+                  id="audit-occurrence"
+                  className={selectClass}
                   value={auditOccurrenceId}
-                  onChange={setAuditOccurrenceId}
-                  loading={recentOccurrencesQuery.isLoading}
-                  error={Boolean(recentOccurrencesQuery.error)}
-                  forbidden={isPermissionError(recentOccurrencesQuery.error)}
-                  emptyLabel="No accessible recent occurrences"
-                  placeholder="Choose an occurrence"
-                  options={(recentOccurrencesQuery.data ?? []).map((occurrence) => ({
-                    value: occurrence.id,
-                    label: occurrence.templateVersion.template.name,
-                    code: `${occurrence.branch.name} · ${new Date(occurrence.businessDate).toLocaleDateString()} · ${occurrence.status.replaceAll('_', ' ').toLowerCase()}`,
-                  }))}
-                />
+                  onChange={(event) => setAuditOccurrenceId(event.target.value)}
+                  disabled={
+                    recentOccurrencesQuery.isLoading || Boolean(recentOccurrencesQuery.error)
+                  }
+                >
+                  <option value="">
+                    {recentOccurrencesQuery.isLoading
+                      ? 'Loading recent occurrences…'
+                      : recentOccurrencesQuery.error
+                        ? isPermissionError(recentOccurrencesQuery.error)
+                          ? 'Occurrences unavailable for your access'
+                          : 'Occurrences unavailable'
+                        : recentOccurrencesQuery.data?.length
+                          ? 'Choose an occurrence'
+                          : 'No accessible recent occurrences'}
+                  </option>
+                  {(recentOccurrencesQuery.data ?? []).map((occurrence) => (
+                    <option key={occurrence.id} value={occurrence.id}>
+                      {occurrence.templateVersion.template.name} — {occurrence.branch.name} —{' '}
+                      {new Date(occurrence.businessDate).toLocaleDateString()} —{' '}
+                      {occurrence.status.replaceAll('_', ' ').toLowerCase()}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 

@@ -54,6 +54,7 @@ export function RestaurantCameraWizard({
   const [outcome, setOutcome] = useState('');
   const [branchId, setBranchId] = useState(branches.length === 1 ? branches[0]!.id : '');
   const [gatewayId, setGatewayId] = useState('');
+  const effectiveBranchId = branchId || (branches.length === 1 ? branches[0]!.id : '');
   const chosen = useMemo(
     () => presets.find((preset) => preset.key === selected),
     [presets, selected]
@@ -173,10 +174,13 @@ export function RestaurantCameraWizard({
               onChange={setGatewayId}
               loading={gatewaysLoading}
               error={gatewaysError}
-              disabled={!branchId || busy}
+              disabled={!effectiveBranchId || busy}
               emptyLabel="No active gateways for this branch"
               options={gateways
-                .filter((gateway) => gateway.branchId === branchId && gateway.status !== 'REVOKED')
+                .filter(
+                  (gateway) =>
+                    gateway.branchId === effectiveBranchId && gateway.status !== 'REVOKED'
+                )
                 .map((gateway) => ({
                   value: gateway.id,
                   label: gateway.name,
