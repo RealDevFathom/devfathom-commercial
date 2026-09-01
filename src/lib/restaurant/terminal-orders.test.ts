@@ -310,6 +310,10 @@ describe('resolveTerminalEffectiveMenu — POS modifier contract', () => {
     expect(findPublication).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'pub-1', branchId: 'branch-1' } })
     );
+    expect(
+      findPublication.mock.calls[0]?.[0].select.menu.select.sections.select.items.select.product
+        .select.modifierGroups.orderBy
+    ).toEqual([{ sortOrder: 'asc' }, { createdAt: 'asc' }]);
     expect(menu?.sections[0]?.items[0]?.modifierGroups).toEqual([
       {
         id: 'group-1',
