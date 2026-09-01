@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import path from 'node:path';
 
 const requiredEnvironment = [
   'DATABASE_URL',
@@ -13,7 +14,10 @@ if (missingEnvironment.length > 0) {
 }
 
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4319);
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
+// PLAYWRIGHT_BASE_URL must use the admin host: http://admin.localhost:<port>.
+// PLAYWRIGHT_DATABASE_ADMIN_URL must include ?options=-c%20app.is_platform_admin%3Dtrue
+// so fixture setup can access FORCE RLS platform tables.
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://admin.localhost:${port}`;
 
 export default defineConfig({
   testDir: '.',
@@ -39,6 +43,7 @@ export default defineConfig({
     ? undefined
     : {
         command: process.env.CI ? `bunx next start --port ${port}` : `bun run dev --port ${port}`,
+        cwd: path.resolve(__dirname, '../..'),
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,

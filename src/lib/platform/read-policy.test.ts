@@ -4,6 +4,7 @@ import type { PlatformRole } from '@/generated/prisma/client';
 import {
   canReadPlatformRoute,
   platformNavigationFor,
+  platformReadHrefForPathname,
   platformSafeFallback,
   type PlatformReadHref,
 } from '@/lib/platform/read-policy';
@@ -55,6 +56,16 @@ const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
 };
 
 describe('platform read route policy', () => {
+  it.each([
+    ['/platform', '/platform'],
+    ['/platform/organizations', '/platform/organizations'],
+    ['/platform/organizations/org-1', '/platform/organizations'],
+    ['/platform/login', null],
+    ['/platform/not-a-declared-route', null],
+  ] as const)('maps %s to its declared read route', (pathname, href) => {
+    expect(platformReadHrefForPathname(pathname)).toBe(href);
+  });
+
   it.each(roles)('%s receives exactly its capability-backed routes', (role) => {
     for (const route of routes) {
       expect(canReadPlatformRoute(role, route), `${role} -> ${route}`).toBe(

@@ -1,4 +1,10 @@
 import { NextResponse } from 'next/server';
+import { getPlatformSession } from '@/lib/platform/auth';
+import {
+  canReadPlatformRoute,
+  platformReadHrefForPathname,
+  platformSafeFallback,
+} from '@/lib/platform/read-policy';
 
 const TENANT_HOST_HEADER = 'x-devfathom-host';
 const REQUEST_ID_HEADER = 'x-devfathom-request-id';
@@ -18,7 +24,7 @@ const publicPaths = [
   '/brand',
 ];
 
-export function proxy(request: Request) {
+export async function proxy(request: Request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
   const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
@@ -44,9 +50,10 @@ export function proxy(request: Request) {
   const cookies = request.headers.get('cookie') || '';
   const hasPlatformSession = cookies.includes('df_platform_session=');
 
-  // Platform routes have a separate, short-lived operator session. Proxy only
-  // performs an optimistic cookie-presence check; the platform layout and every
-  // platform API operation revalidate the opaque token against PostgreSQL.
+  // Platform routes have a separate, short-lived operator session. Revalidate
+  // and authorize it here so denied documents and RSC requests redirect before
+  // the platform shell can render identity or route data. Layout/page checks
+  // remain in place as defense in depth.
   if (isPlatformPath) {
     if (!isPlatformHost) {
       return NextResponse.redirect(new URL('/dashboard', request.url));
@@ -54,6 +61,16 @@ export function proxy(request: Request) {
     if (pathname === '/platform/login') return next();
     if (!hasPlatformSession) {
       return NextResponse.redirect(new URL('/platform/login', request.url));
+    }
+    const identity = await getPlatformSession(request);
+    if (!identity) {
+      return NextResponse.redirect(new URL('/platform/login', request.url));
+    }
+    const readHref = platformReadHrefForPathname(pathname);
+    if (readHref && !canReadPlatformRoute(identity.role, readHref)) {
+      const fallback = platformSafeFallback(identity.role);
+      if (fallback) return NextResponse.redirect(new URL(fallback, request.url));
+      return new NextResponse(null, { status: 403 });
     }
     return next();
   }
