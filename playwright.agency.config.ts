@@ -9,6 +9,8 @@ const baseURL = `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: './tests/agency-e2e',
   testMatch: 'agency-acceptance.spec.ts',
+  // Keep run artifacts out of the tracked `test-results/` visual-QA baselines.
+  outputDir: './playwright-artifacts/agency',
   fullyParallel: false,
   workers: 1,
   retries: 0,
