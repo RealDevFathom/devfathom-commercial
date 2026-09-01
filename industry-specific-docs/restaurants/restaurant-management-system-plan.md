@@ -2,14 +2,13 @@
 
 | Field                         | Value                                                                                                                                                                                               |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Document version              | `1.5`                                                                                                                                                                                               |
-| Document status               | `RECONCILED REPOSITORY-EVIDENCE BASELINE — PRODUCTION READINESS NOT CLAIMED`                                                                                                                        |
+| Document version              | `1.6`                                                                                                                                                                                               |
+| Document status               | `PLANNING AND OPERATOR CONTRACT`                                                                                                                                                                    |
 | Industry                      | Restaurants, cafes, cloud kitchens, and food-service operators                                                                                                                                      |
 | Product                       | DevFathom Commercial                                                                                                                                                                                |
 | Delivery surface              | Responsive web and tablet browser first; native mobile is not currently planned                                                                                                                     |
-| Last updated                  | 2026-08-31                                                                                                                                                                                          |
-| Current implementation status | Restaurant source is repository-implemented in whole or in part by area; this does not establish deployment, physical hardware, or production readiness                                             |
-| Revision basis                | Original planning reviews plus the WHA-849 repository audit, reconciled against Delivery source commit `42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`; exact-candidate browser/release evidence pending |
+| Last updated                  | 2026-09-02                                                                                                                                                                                          |
+| Revision basis                | Original planning reviews, repository audit, and accepted local restaurant behavior; unverified browser steps remain validation pending                                                           |
 
 ## 1. Purpose
 
@@ -784,8 +783,7 @@ The kitchen ledger remains authoritative. Phase 0 must select how a KDS receives
 
 A browser-only application cannot assume reliable support for every printer, kitchen printer, and cash drawer.
 
-Current repository evidence is narrower than physical hardware support: commit
-`5b9bc7de8f6d274f40890b8e6f6a6704a928f045` adds a durable tenant-scoped print
+Current repository behavior is narrower than physical hardware support: the print bridge adds a durable tenant-scoped print
 route/job bridge plus ESC/POS simulation, but it does not perform physical
 printer, network, operating-system, or cash-drawer I/O. Physical print agents,
 printer certification, hardware support matrices, and production acceptance
@@ -873,7 +871,7 @@ Before Phase 3 schema implementation, jurisdiction, bill/check, order/item invar
 
 SOP escalation cannot pass Phase 5 acceptance until at least one contracted external notification channel works end to end in a production-like environment. Capture/log-only delivery is insufficient.
 
-Production pilot entry additionally requires a same-SHA deployment, migration, security, tenant/branch isolation, device, payment, inventory, backup/restore, observability, browser, and operating-runbook evidence set.
+Production pilot entry additionally requires one candidate deployment plus migration, security, tenant/branch isolation, device, payment, inventory, backup/restore, observability, browser, and operating-runbook evidence.
 
 ### Phase 0: Product and architecture decisions
 
@@ -1225,7 +1223,7 @@ Owner roles in this register are accountable for producing or approving evidence
 | D01 | Initial operating segment and launch country/countries                                                                                                                                                                         | Product owner + Restaurant operations SME               | Phase 0 exit                   | `OPEN`                | Target customer profile and pilot scope                                      |
 | D02 | Tax, service charge, tender-dependent calculation, rounding, receipt scope, fiscalization, correction, and retention rules                                                                                                     | Product owner + Finance/Legal                           | Phase 3 design                 | `OPEN`                | Current official jurisdiction sources                                        |
 | D03 | Payment processors, card-terminal vendors, supported sale/auth/capture/adjust/void/refund operations, and tip flow                                                                                                             | Product owner + Finance + Engineering                   | Phase 3 design                 | `OPEN`                | Provider documentation, sandbox proof, fee/settlement model                  |
-| D04 | Connected/offline promise, offline duration, local persistence, conflict/replay policy, and measurable latency targets                                                                                                         | Product owner + Engineering                             | Phase 3 design                 | `OPEN`                | Location-to-region benchmark and disconnect/recovery prototype               |
+| D04 | Offline POS is limited to cached-catalog composition of new orders with device-bound idempotent replay, catalog-review holds, reauthentication pause, and revocation discard; duration and measurable latency targets remain open | Product owner + Engineering                             | Phase 3 design                 | `PARTIALLY RESOLVED` | Location-to-region benchmark and disconnect/recovery prototype               |
 | D05 | Supported printers, drawers, KDS devices, browser integrations, and local device-agent policy                                                                                                                                  | Product owner + Restaurant operations SME + Engineering | Phase 3 design                 | `OPEN`                | Hardware matrix and production-like device tests                             |
 | D06 | Direct zones, frozen fees/address facts, connected POS, kitchen-ready PREPAID/COD handoff, and fee reporting are implemented; marketplace APIs, live tracking, routing, rider settlement, and own-fleet extensions remain open | Product owner + Restaurant operations SME               | Phase 3 design                 | `PARTIALLY RESOLVED`  | Integrated direct-delivery E2E; provider requirements remain                 |
 | D07 | Inventory costing, negative stock, recipe-consumption posting, remake/void-after-preparation, batch/lot, production-batch, and backdating policies                                                                             | Product owner + Finance + Restaurant operations SME     | Phase 4 design                 | `OPEN`                | Worked costing/reconciliation examples                                       |
@@ -1240,7 +1238,7 @@ Owner roles in this register are accountable for producing or approving evidence
 | D16 | Drawer shift-gating, shared-drawer exceptions, manager handover, cash tips, COD custody, and variance approval thresholds                                                                                                      | Product owner + Restaurant operations SME + Finance     | Phase 3 design                 | `OPEN`                | Opening/closing/reconciliation scenarios                                     |
 | D17 | Tip declaration, card adjustment, pooling/distribution export, cash custody, and settlement/reconciliation policy                                                                                                              | Product owner + Finance + Restaurant operations SME     | Phase 3 design                 | `OPEN`                | Provider/jurisdiction evidence and worked daily close                        |
 | D18 | Bar tabs and pre-authorization included or excluded for the pilot segment                                                                                                                                                      | Product owner + Finance                                 | Phase 3 scope                  | `OPEN`                | Pilot-segment decision and provider capability                               |
-| D19 | KDS notification transport, acknowledgement, sequence/gap detection, replay, station routing, and recovery                                                                                                                     | Engineering + Restaurant operations SME                 | Phase 3 design                 | `OPEN`                | Prototype and disconnect/reconnect tests                                     |
+| D19 | KDS uses station-bound bounded polling, explicit item acknowledgement, idempotent actions, cursor-gap reconciliation, oldest-first overflow handling, and last-known-state network recovery; push and offline queue remain deferred | Engineering + Restaurant operations SME                 | Phase 3 design                 | `PARTIALLY RESOLVED` | Connected browser and disconnect/reconnect validation                        |
 | D20 | Multilingual/RTL languages and localized menu, KDS, receipt, tax, font, and accessibility requirements                                                                                                                         | Product owner + Commercial + UX                         | Phase 2 design                 | `OPEN`                | Pilot language matrix and browser/device proof                               |
 | D21 | External notification channels, quiet hours, acknowledgement, escalation stops, opt-outs, and delivery guarantees                                                                                                              | Product owner + Operations + Engineering                | Phase 5 design                 | `OPEN`                | Provider configuration and production-like delivery/retry proof              |
 | D22 | Analytics read models, freshness, rollup cadence, rebuild, reconciliation, historical retention, and restricted labour-cost source                                                                                             | Product owner + Data Architecture + Finance             | Phase 6 design                 | `OPEN`                | Metric dictionary and ledger-to-report reconciliation                        |
@@ -1306,25 +1304,47 @@ The following existing files provide patterns to reuse. They do not imply that r
 - `docs/admin-platform/architecture-tenancy.md` — current tenant and RLS architecture.
 - `docs/admin-platform/adr/003-shared-host-login.md` and `docs/admin-platform/adr/004-authentication-identity-plane.md` — the implemented shared-host login decision and the proposed identity plane that the restaurant operator-credential design must coordinate with.
 
-## 20. Status summary
+## 20. Current administrator workflow contract
 
-This table is reconciled against Delivery source commit `42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`; exact-candidate browser and release evidence remains pending. `SOURCE
-IMPLEMENTED` means committed source plus focused evidence; it does not assert deployment, browser,
-hardware, external-service acceptance, or production readiness. Use the
-[restaurant administrator guide](../../docs/product/restaurant-administrator-guide.md) for safe
-operator workflows and current limits.
+Use the [restaurant administrator guide](../../docs/product/restaurant-administrator-guide.md) for
+step-by-step operator instructions. This section records accepted behavior and limits, not release,
+deployment, browser, hardware, external-service, or production-readiness evidence. Any browser step
+not explicitly covered in the guide is **Validation pending**.
 
-| Area                                                                                                                                     | Evidence status                                                                                                                                                                                           |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Planning baseline and decision register                                                                                                  | `FINAL FOR PHASE 0`; unresolved decisions remain `OPEN — SEE SECTION 17.2`                                                                                                                                |
-| Onboarding, packages, modules, roles, staff, and registered devices                                                                      | `SOURCE IMPLEMENTED / PARTIAL` — onboarding, entitlement gates, staff, and device consoles exist; complete branch administration is not operator-ready                                                    |
-| Catalog, menus, pricing, modifiers, recipes, OCR import, and publication                                                                 | `SOURCE IMPLEMENTED` — catalog/menu/import consoles and focused tests exist; OCR publication remains manual                                                                                               |
-| POS, KDS, orders, bills, tenders, drawer, business date, and numbering                                                                   | `SOURCE IMPLEMENTED / MOCKED` — terminal flows and focused tests exist; card processing remains provider-dependent/mock, and printing has only a durable simulation bridge with no physical hardware path |
-| Delivery                                                                                                                                 | `IMPLEMENTED — DIRECT/CONNECTED` — zones, saved addresses, frozen fee snapshots, PREPAID/COD KDS handoff, settlement, and reporting; marketplace and full driver logistics remain deferred                |
-| Tax                                                                                                                                      | `SOURCE IMPLEMENTED / CONFIGURATION-BOUND` — branch activation and Pakistan profiles exist; applicability requires qualified adviser confirmation                                                         |
-| Inventory, purchasing, workforce, SOP, customers/loyalty, and insights                                                                   | `SOURCE IMPLEMENTED / PARTIAL` — routes, domain logic, and focused tests exist; offline order capture remains under active correction and operator limits remain documented                               |
-| Browser, hardware, marketplace APIs, live rider tracking, route optimization, external payment, native mobile, and production deployment | `NOT CLAIMED`                                                                                                                                                                                             |
-
-Repository evidence must not be presented as production availability. Market a restaurant-specific
-capability as production-ready only after its code, migrations, authorization, tenant isolation,
-QA, deployment, and documentation are complete.
+- SuperAdmin/platform operators create restaurant organizations and assign packages/modules;
+  restaurant administrators manage only the tenant capabilities granted to them.
+- Branch, operator, order, occurrence, table, gateway, device, and existing provider-configuration
+  choices use readable selectors. An unavoidable provider-issued external terminal reference is
+  integration configuration, not a typed internal Terminal ID.
+- Catalog/menu administration covers canonical products, modifiers, effective pricing, branch and
+  channel publication, and recipe/BOM versions. OCR output is reviewed, corrected, rejected or
+  merged for duplicates, then committed to draft; publication remains a separate manual action.
+- Enrolled POS/KDS browsers establish their registered device, then named staff unlock with their
+  own PIN. Lock and operator switching preserve individual attribution.
+- Offline POS permits cached-catalog composition and queueing of new orders only. Reconnect replays
+  open-order/add-item commands idempotently; catalog changes can require review, authentication can
+  pause replay, and revocation discards device drafts. Payment, refund, receipt, drawer, close,
+  customer, loyalty, delivery, and existing-order changes remain connected-only.
+- Dine-in, takeaway, and connected direct-delivery workflows share order/menu controls. Delivery
+  needs a customer, saved address, active zone, Delivery publication, and PREPAID or COD handoff.
+- Bills support item, seat, fractional, and no-split allocation plus split tenders. Cash/Card/Other,
+  protected void/refund actions, mock-card and simulated-print limits, drawer movements, and later
+  refund treatment remain explicit.
+- KDS is station-bound, connected, bounded, and oldest-first. Start, Mark ready, and Recall follow
+  item state rules; gap reconciliation and last-known-state recovery do not create offline KDS work.
+- Inventory uses recipe/BOM consumption, counts, transfers, adjustments, wastage, low-stock
+  thresholds, purchase-order approval, and receipt movements without rewriting history.
+- Tax uses effective-dated branch profiles, including Pakistan presets or accountant-supplied custom
+  Cash/Card/Other rates. Applicability remains adviser-confirmed; no filing, fiscalization,
+  e-invoicing, automatic legal update, or legal claim is implied.
+- SOP work covers versioned templates, schedules, due windows, immutable evidence, submission,
+  independent verification/rejection, rework, waiver co-authorization, escalation, and reporting.
+- Staff profiles, branch assignments, least-privileged roles, credentials, and roster scheduling are
+  distinct from global web identity, payroll, and tip payout.
+- Customer/loyalty work covers consent-aware profiles, saved addresses, program/account state, and
+  append-only earn, redemption, reversal, and liability entries.
+- Finance and daily close reconcile bills, tenders/refunds, drawers, immutable close snapshots,
+  actual cash, variance, and later refunds. Protected finance reads fail closed.
+- Dashboard, analytics, and reports use scoped branch/date filters, closed-day rollups, permission
+  gates, partial/freshness states, authorized CSV links, and multi-branch aggregation limited to
+  branches the user may read.
