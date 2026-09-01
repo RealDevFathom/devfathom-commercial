@@ -2,8 +2,9 @@
 
 This is the canonical operator guide for the current DevFathom restaurant workspace. Product PRDs
 explain design and evidence; this guide explains what administrators and service teams can safely do.
-Delivery source claims are pinned to `42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`; exact-candidate
-browser and release evidence remains pending.
+Local delivery source is assembled at exact candidate
+`6cd73e4b5eb747b1d017d28ce6858d6606a7c6f9`; automated, browser, and release evidence remains
+pending.
 
 ## Read this first
 

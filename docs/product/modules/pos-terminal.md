@@ -2,9 +2,9 @@
 
 Operator workflow: [Restaurant administrator guide](../restaurant-administrator-guide.md#opening-and-daily-service).
 
-Status: evidence-linked product requirements document reconciled against commit
-`42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`. Exact-candidate browser and release
-evidence remains pending.
+Status: local source is assembled at exact candidate
+`6cd73e4b5eb747b1d017d28ce6858d6606a7c6f9`; automated, browser, and release evidence remains
+pending.
 
 ## Status vocabulary
 
