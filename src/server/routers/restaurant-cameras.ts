@@ -249,6 +249,13 @@ export const restaurantCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
       await requireBranch(ctx.db, input.branchId);
+      const gateway = await ctx.db.restaurantCameraGateway.findFirst({
+        where: { id: input.gatewayId, branchId: input.branchId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!gateway) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Camera gateway unavailable.' });
+      }
       const key = process.env.CAMERA_CREDENTIAL_KEY;
       if (!key) {
         throw new TRPCError({

@@ -25,6 +25,7 @@ import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from '../restaurant-branch-select';
 import { RestaurantDeviceSelect, type RestaurantDeviceOption } from '../restaurant-device-select';
+import { OperatorSafeSelector } from '../operator-safe-selector';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type BillPage = RouterOutputs['restaurantBills']['listBills'];
@@ -269,6 +270,7 @@ export function MoneyConsole({ initialTab = 'bills' }: { initialTab?: MoneyTab }
   const [terminalMode, setTerminalMode] = useState<'DISABLED' | 'SIMULATION' | 'WEBHOOK'>(
     'DISABLED'
   );
+  const [terminalConfigId, setTerminalConfigId] = useState('');
   const utils = trpc.useUtils();
 
   const normalizedBranchId = branchId.trim();
@@ -359,6 +361,11 @@ export function MoneyConsole({ initialTab = 'bills' }: { initialTab?: MoneyTab }
     setSelectedPaymentId('');
     setSelectedDrawerId('');
     setSelectedCloseId('');
+    setTerminalConfigId('');
+    setTerminalSource('terminal');
+    setExternalTerminalId('');
+    setTerminalDeviceId('');
+    setTerminalMode('DISABLED');
   };
   const resetCursors = () => {
     setBillCursor(undefined);
@@ -567,18 +574,34 @@ export function MoneyConsole({ initialTab = 'bills' }: { initialTab?: MoneyTab }
                       });
                     }}
                   >
-                    <Field label="Provider source">
-                      <Input
-                        value={terminalSource}
-                        onChange={(event) => setTerminalSource(event.target.value)}
+                    <div className="space-y-1.5">
+                      <span className={labelClass}>Configured terminal</span>
+                      <OperatorSafeSelector
+                        label="Configured terminal"
+                        value={terminalConfigId}
+                        onChange={(id) => {
+                          setTerminalConfigId(id);
+                          const config = terminalConfigQuery.data?.find((item) => item.id === id);
+                          setTerminalSource(config?.source ?? '');
+                          setExternalTerminalId(config?.externalTerminalId ?? '');
+                          setTerminalDeviceId(config?.deviceId ?? '');
+                          setTerminalMode(config?.mode ?? 'DISABLED');
+                        }}
+                        loading={terminalConfigQuery.isLoading}
+                        error={Boolean(terminalConfigQuery.error)}
+                        forbidden={
+                          (terminalConfigQuery.error as UiError | null)?.data?.code === 'FORBIDDEN'
+                        }
+                        disabled={saveTerminalConfig.isPending}
+                        emptyLabel="No configured terminals for this branch"
+                        placeholder="Choose a configured terminal"
+                        options={(terminalConfigQuery.data ?? []).map((config) => ({
+                          value: config.id,
+                          label: deviceDisplayName(devicesQuery.data ?? [], config.deviceId),
+                          code: `${config.source} · ${config.externalTerminalId}`,
+                        }))}
                       />
-                    </Field>
-                    <Field label="Terminal ID">
-                      <Input
-                        value={externalTerminalId}
-                        onChange={(event) => setExternalTerminalId(event.target.value)}
-                      />
-                    </Field>
+                    </div>
                     <Field label="Registered device">
                       <RestaurantDeviceSelect
                         devices={devicesQuery.data ?? []}
@@ -609,6 +632,7 @@ export function MoneyConsole({ initialTab = 'bills' }: { initialTab?: MoneyTab }
                         disabled={
                           saveTerminalConfig.isPending ||
                           !externalTerminalId.trim() ||
+                          !terminalConfigId ||
                           !terminalDeviceId.trim() ||
                           !terminalSource.trim()
                         }

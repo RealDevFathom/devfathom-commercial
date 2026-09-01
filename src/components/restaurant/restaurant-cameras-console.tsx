@@ -109,6 +109,9 @@ export function RestaurantCamerasConsole() {
       <RestaurantCameraWizard
         branches={branches}
         presets={presets.data ?? []}
+        gateways={gateways.data ?? []}
+        gatewaysLoading={gateways.isLoading}
+        gatewaysError={gateways.isError}
         onTest={onTest}
         onSubmit={onSubmit}
         busy={test.isPending || register.isPending}
