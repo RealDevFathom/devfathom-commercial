@@ -49,6 +49,7 @@ const IDS = {
   managerUser: 'user_restaurant_e2e_manager',
   deliveryOperatorUser: 'user_restaurant_e2e_delivery_operator',
   deliveryDeniedOperatorUser: 'user_restaurant_e2e_delivery_capability_denied',
+  locationsLimit: 'limit_restaurant_e2e_locations',
   operatorRole: 'role_restaurant_e2e_operator',
   deniedOperatorRole: 'role_restaurant_e2e_delivery_denied',
   managerRole: 'role_restaurant_e2e_manager',
@@ -107,6 +108,7 @@ const IDS = {
 
 export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['organizations', [RESTAURANT_E2E.organizationId]],
+  ['organization_limits', [IDS.locationsLimit]],
   [
     'organization_departments',
     ['department_restaurant_e2e_kitchen', 'department_restaurant_e2e_front_of_house'],
@@ -528,6 +530,33 @@ async function main() {
         },
       });
       await seedRestaurantDemoControlPlane(tx);
+      await tx.organizationLimit.upsert({
+        where: {
+          organizationId_key: {
+            organizationId: RESTAURANT_E2E.organizationId,
+            key: 'restaurant.locations.max',
+          },
+        },
+        update: {
+          value: 2,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+        create: {
+          id: IDS.locationsLimit,
+          organizationId: RESTAURANT_E2E.organizationId,
+          key: 'restaurant.locations.max',
+          value: 2,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
       // WHA-290: `User.department` is a composite foreign key onto
       // `organization_departments`, so this RESTAURANT organization's own
       // catalog (KITCHEN, FRONT_OF_HOUSE — it has no LEADERSHIP) must exist
