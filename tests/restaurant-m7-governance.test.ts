@@ -105,6 +105,12 @@ const M7_COLUMNS = {
     'assigneeJobRoleId',
     'assigneeStaffProfileId',
     'assigneeTargetType',
+    // 20260902180000_restaurant_sop_interval_recurrence appended these three:
+    // the INTERVAL-frequency window end, and the supersession chain that
+    // versions an assignment instead of mutating it in place.
+    'intervalEndTimeMinutes',
+    'supersedesAssignmentId',
+    'supersededAt',
   ],
   restaurant_sop_occurrences: [
     'id',
