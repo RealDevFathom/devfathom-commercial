@@ -1518,6 +1518,7 @@ enum FinanceAccountCode {
   INVENTORY_WRITE_OFF
   /// Expense (or gain, when counted stock exceeds the book). Count variance.
   INVENTORY_SHRINKAGE
+  OPERATING_EXPENSE
   /// Asset. Value claimed back from a supplier for returned goods.
   SUPPLIER_CLAIM_RECEIVABLE
   CASH
@@ -1543,6 +1544,66 @@ enum FinanceSourceKind {
   PHARMACY_DAILY_CLOSE
   PHARMACY_OPENING_STOCK
   PHARMACY_OPENING_LEDGER
+  PHARMACY_BOOKKEEPING_TRANSACTION
+}
+
+enum PharmacyBookkeepingKind {
+  SUPPLIER_PAYMENT
+  CUSTOMER_RECEIPT
+  EXPENSE
+  PETTY_CASH
+  BANK_DEPOSIT
+  SETTLEMENT
+  VOUCHER
+  CHEQUE
+}
+
+enum PharmacyBookkeepingStatus {
+  PENDING
+  POSTED
+  REVERSED
+}
+
+enum PharmacyAllocationSourceKind {
+  PURCHASE_INVOICE
+  SUPPLIER_CREDIT
+  CUSTOMER_KHATA
+  EXPENSE
+}
+
+enum PharmacyChequeStatus {
+  NONE
+  PDC
+  CLEARED
+  BOUNCED
+}
+
+enum PharmacyAccountingPeriodStatus {
+  OPEN
+  CLOSED
+  REOPENED
+}
+
+enum PharmacyBankLineStatus {
+  UNMATCHED
+  MATCHED
+  REVERSED
+}
+
+enum PharmacyTaxProductClass {
+  MEDICINE
+  FRONT_SHOP
+}
+
+enum PharmacyTaxPriceMode {
+  EXCLUSIVE
+  INCLUSIVE
+}
+
+enum PharmacyTaxProfileStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
 }
 
 enum ExpenseCategory {
@@ -2624,6 +2685,209 @@ model FinanceJournalLine {
   @@map("finance_journal_lines")
 }
 
+/// FIN-02 — one operator-entered money movement. All posted rows have a
+/// balanced `FinanceJournalEntry`; reversal is additive and links that entry.
+model PharmacyBookkeepingTransaction {
+  id               String                    @id @default(cuid())
+  organizationId   String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  reference        String
+  kind             PharmacyBookkeepingKind
+  status           PharmacyBookkeepingStatus @default(PENDING)
+  counterpartyName String?
+  amountMinor      Int
+  currency         Currency                  @default(PKR)
+  occurredAt       DateTime
+  memo             String?
+  chequeNumber     String?
+  chequeDueAt      DateTime?
+  chequeStatus     PharmacyChequeStatus      @default(NONE)
+  bankReference    String?
+  idempotencyKey   String
+  createdByUserId  String
+  postedAt         DateTime?
+  reversedAt       DateTime?
+  reversalReason   String?
+  journalEntryId   String?
+  reversalEntryId  String?
+  createdAt        DateTime                  @default(now())
+
+  allocations       PharmacyBookkeepingAllocation[]
+  bankMatches       PharmacyBankReconciliation[]
+  settlementMembers PharmacySettlementTransaction[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, reference])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, branchId, occurredAt])
+  @@index([organizationId, status, kind])
+  @@map("pharmacy_bookkeeping_transactions")
+}
+
+/// Allocation remains explicit so partial supplier/customer settlement and
+/// its reversal can be reconciled without mutating the source invoice/khata.
+model PharmacyBookkeepingAllocation {
+  id              String                       @id @default(cuid())
+  organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  transactionId   String
+  sourceKind      PharmacyAllocationSourceKind
+  sourceId        String
+  sourceReference String
+  amountMinor     Int
+  createdAt       DateTime                     @default(now())
+
+  transaction PharmacyBookkeepingTransaction @relation(fields: [organizationId, transactionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, transactionId, sourceKind, sourceId])
+  @@index([organizationId, sourceKind, sourceId])
+  @@map("pharmacy_bookkeeping_allocations")
+}
+
+model PharmacyAccountingPeriod {
+  id               String                         @id @default(cuid())
+  organizationId   String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  startsAt         DateTime
+  endsAt           DateTime
+  status           PharmacyAccountingPeriodStatus @default(OPEN)
+  closedAt         DateTime?
+  closedByUserId   String?
+  reopenedAt       DateTime?
+  reopenedByUserId String?
+  reopenReason     String?
+  createdAt        DateTime                       @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, startsAt, endsAt])
+  @@index([organizationId, branchId, status])
+  @@map("pharmacy_accounting_periods")
+}
+
+model PharmacySettlementBatch {
+  id              String             @id @default(cuid())
+  organizationId  String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  reference       String
+  provider        String
+  tenderType      PharmacyTenderType
+  businessDate    DateTime           @db.Date
+  expectedMinor   Int
+  settledMinor    Int?
+  settledAt       DateTime?
+  bankReference   String?
+  createdByUserId String
+  createdAt       DateTime           @default(now())
+
+  transactions PharmacySettlementTransaction[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, reference])
+  @@index([organizationId, branchId, businessDate])
+  @@map("pharmacy_settlement_batches")
+}
+
+model PharmacySettlementTransaction {
+  id                String @id @default(cuid())
+  organizationId    String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  settlementBatchId String
+  transactionId     String
+
+  settlementBatch PharmacySettlementBatch        @relation(fields: [organizationId, settlementBatchId], references: [organizationId, id], onDelete: Restrict)
+  transaction     PharmacyBookkeepingTransaction @relation(fields: [organizationId, transactionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, settlementBatchId, transactionId])
+  @@map("pharmacy_settlement_transactions")
+}
+
+model PharmacyBankStatementLine {
+  id             String                 @id @default(cuid())
+  organizationId String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  statementRef   String
+  lineReference  String
+  bookedAt       DateTime
+  amountMinor    Int
+  description    String
+  status         PharmacyBankLineStatus @default(UNMATCHED)
+  createdAt      DateTime               @default(now())
+
+  matches PharmacyBankReconciliation[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, statementRef, lineReference])
+  @@index([organizationId, branchId, bookedAt])
+  @@map("pharmacy_bank_statement_lines")
+}
+
+model PharmacyBankReconciliation {
+  id              String    @id @default(cuid())
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  statementLineId String
+  transactionId   String
+  amountMinor     Int
+  matchedByUserId String
+  matchedAt       DateTime  @default(now())
+  reversedAt      DateTime?
+  reversalReason  String?
+
+  statementLine PharmacyBankStatementLine      @relation(fields: [organizationId, statementLineId], references: [organizationId, id], onDelete: Restrict)
+  transaction   PharmacyBookkeepingTransaction @relation(fields: [organizationId, transactionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, statementLineId, transactionId])
+  @@index([organizationId, transactionId])
+  @@map("pharmacy_bank_reconciliations")
+}
+
+/// FIN-04 — pharmacy-specific metadata around the neutral tax calculation
+/// contract. Published versions are immutable and non-overlapping per branch.
+model PharmacyTaxProfileVersion {
+  id                String                   @id @default(cuid())
+  organizationId    String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  versionNumber     Int
+  name              String
+  status            PharmacyTaxProfileStatus @default(DRAFT)
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  approvalReference String?
+  approvedAt        DateTime?
+  approvedByUserId  String?
+  idempotencyKey    String
+  createdAt         DateTime                 @default(now())
+
+  rules PharmacyTaxRuleVersion[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, branchId, versionNumber])
+  @@index([organizationId, branchId, status, effectiveFrom])
+  @@map("pharmacy_tax_profile_versions")
+}
+
+model PharmacyTaxRuleVersion {
+  id               String                  @id @default(cuid())
+  organizationId   String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  profileVersionId String
+  productClass     PharmacyTaxProductClass
+  pctHsCode        String
+  sroReference     String?
+  sroProvisional   Boolean                 @default(true)
+  exemptionCode    String?
+  priceMode        PharmacyTaxPriceMode
+  rate             Decimal                 @db.Decimal(9, 6)
+  roundingScale    Int                     @default(2)
+  createdAt        DateTime                @default(now())
+
+  profile PharmacyTaxProfileVersion @relation(fields: [organizationId, profileVersionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, profileVersionId, productClass, pctHsCode])
+  @@index([organizationId, profileVersionId])
+  @@map("pharmacy_tax_rule_versions")
+}
 
 // ============================================
 // CHAT & MESSAGING
@@ -11854,7 +12118,7 @@ model PharmacyRegisteredDevice {
   createdAt         DateTime             @default(now())
   updatedAt         DateTime             @updatedAt
 
-  branch    PharmacyBranch                  @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  branch    PharmacyBranch               @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   snapshots PharmacyOfflineSnapshot[]
   commands  PharmacyOfflineCommand[]
   leases    PharmacyReceiptNumberLease[]
