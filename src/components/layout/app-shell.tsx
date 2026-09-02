@@ -9,7 +9,7 @@ import { PageTransition } from '@/components/motion/page-transition';
 import { useAssistant } from '@/lib/assistant-store';
 import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/components/entitlements-provider';
-import { moduleForPath } from '@/lib/module-catalog';
+import { isModuleGranted, moduleForPath } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
@@ -106,16 +106,10 @@ export function isPathModuleEnabled(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
 ) {
   const moduleKey = moduleForPath(pathname, entitlements.vertical);
-  return !moduleKey || entitlements.enabledModules.includes(moduleKey);
+  return !moduleKey || isModuleGranted(moduleKey, entitlements.enabledModules);
 }
 
-export function AppShell({
-  children,
-  brand,
-}: {
-  children: React.ReactNode;
-  brand: TenantBrand;
-}) {
+export function AppShell({ children, brand }: { children: React.ReactNode; brand: TenantBrand }) {
   // The server-side invariant lives in the `/(app)` layout, which fails closed
   // before this renders. Here the live session is the moving part, so the check
   // below (after every hook) degrades to a notice rather than throwing.
@@ -124,7 +118,8 @@ export function AppShell({
   const { data: session } = useSession();
   const entitlements = useEntitlements();
   const currentModule = moduleForPath(pathname, entitlements.vertical);
-  const moduleEnabled = !currentModule || entitlements.enabledModules.includes(currentModule);
+  const moduleEnabled =
+    !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
   const immersive = pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
   const assistantOpen = useAssistant((s) => s.open);
   // Mount the panel once it has been opened, then keep it mounted so chat
