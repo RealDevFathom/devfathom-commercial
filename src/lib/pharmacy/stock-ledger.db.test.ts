@@ -42,8 +42,14 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const ORG_A = `org_wha1165_a_${suffix}`;
 const ORG_B = `org_wha1165_b_${suffix}`;
-const BRANCH_A = 'branch_a';
-const BRANCH_B = 'branch_b';
+// A branch id is a primary key, so it is unique across the whole table and not
+// only within one organization. Suffix them per run or a second run of this
+// suite silently conflicts with the rows the first one left behind.
+const BRANCH_A = `branch_a_${suffix}`;
+const BRANCH_B = `branch_b_${suffix}`;
+const BRANCH_A_TWO = `branch_a_two_${suffix}`;
+const BRANCH_A_THREE = `branch_a_three_${suffix}`;
+const BRANCH_GUC = `branch_guc_${suffix}`;
 const ACTOR = 'user_pharmacist';
 
 /** Fixed instants, so no case depends on the wall clock. */
@@ -78,6 +84,29 @@ type Scenario = {
 };
 
 /**
+ * PLAT-04: create the branch aggregate this scenario is scoped to, if some
+ * earlier scenario in the same organization has not already created it.
+ */
+async function ensureBranch(db: ScopedDb, organizationId: string, branchId: string) {
+  // `createMany`+`skipDuplicates` is ON CONFLICT DO NOTHING: one statement, so
+  // two scenarios sharing a branch cannot race between a read and an insert.
+  await db.pharmacyBranch.createMany({
+    data: [
+      {
+        id: branchId,
+        organizationId,
+        code: branchId,
+        name: `Branch ${branchId}`,
+        addressLine: '1 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    ],
+    skipDuplicates: true,
+  });
+}
+
+/**
  * A private MED-01/MED-02 catalog and two branch locations for one test. Runs
  * as a tenant would, so RLS and every CHECK apply to the fixture too.
  */
@@ -87,6 +116,9 @@ async function scenario(
   label: string
 ): Promise<Scenario> {
   return inOrg(organizationId, async (db) => {
+    // PLAT-04: a branch-owned row now references the branch aggregate, so the
+    // fixture has to create the branch before anything scoped to it.
+    await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
       data: {
         organizationId,
@@ -941,10 +973,11 @@ describeIfDatabase('PH-INV boundaries — cross-tenant and cross-branch', () => 
   it('refuses a cross-branch lot substitution inside one tenant', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'cross-branch');
     const other = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, BRANCH_A_TWO);
       const location = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
-          branchId: 'branch_a_two',
+          branchId: BRANCH_A_TWO,
           code: `MAIN2-${tag('cross-branch')}`,
           name: 'Second branch store',
           kind: 'STORE',
@@ -956,7 +989,7 @@ describeIfDatabase('PH-INV boundaries — cross-tenant and cross-branch', () => 
         expiresAt: SOON,
         units: 40,
         label: 'other-branch',
-        branchId: 'branch_a_two',
+        branchId: BRANCH_A_TWO,
         locationId: location.id,
       });
       await stockLot(db, fixture, { expiresAt: LATER, units: 40, label: 'own-branch' });
@@ -1007,10 +1040,11 @@ describeIfDatabase('PH-INV boundaries — cross-tenant and cross-branch', () => 
   it('refuses a movement naming a location in another branch', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'cross-branch-location');
     const setup = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, BRANCH_A_THREE);
       const location = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
-          branchId: 'branch_a_three',
+          branchId: BRANCH_A_THREE,
           code: `MAIN3-${tag('cross-branch-location')}`,
           name: 'Third branch store',
           kind: 'STORE',
@@ -1046,23 +1080,24 @@ describeIfDatabase('PH-INV boundaries — cross-tenant and cross-branch', () => 
 
   it('narrows reads to one branch when the branch GUC is set (NFR-03)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'branch-guc');
-    await inOrg(ORG_A, (db) =>
-      db.pharmacyStockLocation.create({
+    await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, BRANCH_GUC);
+      return db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
-          branchId: 'branch_guc',
+          branchId: BRANCH_GUC,
           code: `GUC-${tag('branch-guc')}`,
           name: 'GUC branch store',
           kind: 'STORE',
         },
-      })
-    );
+      });
+    });
 
     const narrowed = await inOrg(ORG_A, async (db) => {
       const all = await db.pharmacyStockLocation.count();
       await db.$executeRawUnsafe(
         `SELECT set_config('app.current_branch_id', $1, true)`,
-        'branch_guc'
+        BRANCH_GUC
       );
       return {
         all,

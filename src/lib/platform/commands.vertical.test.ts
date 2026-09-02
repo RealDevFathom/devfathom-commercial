@@ -16,7 +16,9 @@ import {
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_MODULES,
   RESTAURANT_ROLE_TEMPLATES,
+  roleTemplatesForVertical,
 } from '@/lib/vertical-catalog';
+import { PHARMACY_ONBOARDING_STEPS } from '@/lib/pharmacy/onboarding';
 
 const mocks = vi.hoisted(() => ({
   pkgFindUnique: vi.fn(),
@@ -44,6 +46,11 @@ const mocks = vi.hoisted(() => ({
   tenantAuditCreate: vi.fn(),
   regulatoryProfileFindFirst: vi.fn(),
   organizationExists: vi.fn(),
+  gateStateFindMany: vi.fn(),
+  roleCount: vi.fn(),
+  publicationEntryCount: vi.fn(),
+  inventoryLotCount: vi.fn(),
+  supplierCount: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -73,7 +80,11 @@ const platformDb = {
     findUnique: mocks.orgFindUnique,
     update: mocks.orgUpdate,
   },
-  organizationRole: { create: mocks.roleCreate },
+  organizationRole: { create: mocks.roleCreate, count: mocks.roleCount },
+  pharmacyOnboardingGateState: { findMany: mocks.gateStateFindMany },
+  medicinePublicationEntry: { count: mocks.publicationEntryCount },
+  pharmacyInventoryLot: { count: mocks.inventoryLotCount },
+  pharmacySupplier: { count: mocks.supplierCount },
   organizationDepartment: { createMany: mocks.departmentCreateMany },
   user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
   organizationBrand: { create: record() },
@@ -826,23 +837,82 @@ describe('agency activation preflight unchanged', () => {
   });
 });
 
+/** A pharmacy organization that already clears the vertical-agnostic preflight. */
+function pharmacyOrg() {
+  return {
+    id: 'org_p',
+    vertical: 'PHARMACY',
+    status: 'ONBOARDING',
+    activatedAt: null,
+    packageId: 'pkg_p',
+    package: { vertical: 'PHARMACY', moduleLinks: [{ moduleId: 'mod_pharmacy_core' }] },
+    modules: [],
+    users: [{ id: 'admin_1' }],
+    deployments: [{ id: 'dep_1' }],
+  };
+}
+
+/**
+ * An effective PLAT-02 profile on confirmed jurisdiction rules. It carries both
+ * the `branchId` the activation lookup selects and the full snapshot
+ * `assertStoredBranchMayOperate` evaluates, so one `mockResolvedValue` serves
+ * every call the preflight and the readiness evaluation make.
+ */
+const VALID_PROFILE = {
+  branchId: 'branch-p',
+  licenceCategory: 'PHARMACY',
+  licenceValidFrom: new Date('2026-01-01'),
+  licenceValidTo: new Date('2027-01-01'),
+  permittedSchedules: ['RX'],
+  qualifiedPersonRegistration: 'QP-1',
+  qualifiedPersonValidFrom: new Date('2026-01-01'),
+  qualifiedPersonValidTo: new Date('2027-01-01'),
+  qualifiedPersonCoverageRosterRef: 'roster-1',
+  jurisdictionRuleSet: {
+    licenceCategories: { provisional: false, values: ['PHARMACY'] },
+    permittedSchedules: { provisional: false, values: ['RX'] },
+    pharmacistCoverageRule: { provisional: false, values: {} },
+  },
+};
+
+/** Every one of the twelve gates recorded PASSED, with a full attestation. */
+function allGatesClaimedPassed() {
+  mocks.gateStateFindMany.mockResolvedValue(
+    PHARMACY_ONBOARDING_STEPS.map((step) => ({
+      gate: step.gate,
+      status: 'PASSED',
+      evidenceRef: `evidence://${step.gate}`,
+      actorId: 'seed',
+      recordedAt: new Date('2026-09-02T00:00:00.000Z'),
+    }))
+  );
+}
+
+/** No gate row recorded, and no backing data behind any evidence-backed gate. */
+function noReadinessEvidence() {
+  mocks.gateStateFindMany.mockResolvedValue([]);
+  mocks.roleCount.mockResolvedValue(0);
+  mocks.publicationEntryCount.mockResolvedValue(0);
+  mocks.inventoryLotCount.mockResolvedValue(0);
+  mocks.supplierCount.mockResolvedValue(0);
+}
+
+/** Backing data present for all six evidence-backed gates. */
+function allReadinessEvidence() {
+  mocks.roleCount.mockResolvedValue(roleTemplatesForVertical('PHARMACY').length);
+  mocks.publicationEntryCount.mockResolvedValue(1);
+  mocks.inventoryLotCount.mockResolvedValue(1);
+  mocks.supplierCount.mockResolvedValue(1);
+}
+
 describe('pharmacy activation preflight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('fails closed without a valid effective-dated regulatory profile', async () => {
-    mocks.orgFindUnique.mockResolvedValue({
-      id: 'org_p',
-      vertical: 'PHARMACY',
-      status: 'ONBOARDING',
-      activatedAt: null,
-      packageId: 'pkg_p',
-      package: { vertical: 'PHARMACY', moduleLinks: [{ moduleId: 'mod_pharmacy_core' }] },
-      modules: [],
-      users: [{ id: 'admin_1' }],
-      deployments: [{ id: 'dep_1' }],
-    });
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    noReadinessEvidence();
 
     await expect(
       run('organization.transition', {
@@ -854,44 +924,81 @@ describe('pharmacy activation preflight', () => {
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 
-  it('activates when the effective profile and jurisdiction rules are confirmed and valid', async () => {
-    mocks.orgFindUnique.mockResolvedValue({
-      id: 'org_p',
-      vertical: 'PHARMACY',
-      status: 'ONBOARDING',
-      activatedAt: null,
-      packageId: 'pkg_p',
-      package: { vertical: 'PHARMACY', moduleLinks: [{ moduleId: 'mod_pharmacy_core' }] },
-      modules: [],
-      users: [{ id: 'admin_1' }],
-      deployments: [{ id: 'dep_1' }],
-    });
-    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
-    const profile = {
-      branchId: 'branch-p',
-      licenceCategory: 'PHARMACY',
-      licenceValidFrom: new Date('2026-01-01'),
-      licenceValidTo: new Date('2027-01-01'),
-      permittedSchedules: ['RX'],
-      qualifiedPersonRegistration: 'QP-1',
-      qualifiedPersonValidFrom: new Date('2026-01-01'),
-      qualifiedPersonValidTo: new Date('2027-01-01'),
-      qualifiedPersonCoverageRosterRef: 'roster-1',
-      jurisdictionRuleSet: {
-        licenceCategories: { provisional: false, values: ['PHARMACY'] },
-        permittedSchedules: { provisional: false, values: ['RX'] },
-        pharmacistCoverageRule: { provisional: false, values: {} },
-      },
-    };
-    mocks.regulatoryProfileFindFirst
-      .mockResolvedValueOnce({ branchId: 'branch-p' })
-      .mockResolvedValueOnce(profile);
+  it('fails closed when the regulatory profile is valid but no P0 gate has passed', async () => {
+    // PLAT-03: a valid PLAT-02 profile satisfies one of twelve gates. On its own
+    // it is not readiness, and activation must still refuse.
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
+    noReadinessEvidence();
 
     await expect(
       run('organization.transition', {
         id: 'org_p',
         status: 'ACTIVE',
-        reason: 'Regulatory checks complete',
+        reason: 'Attempt pharmacy activation',
+      })
+    ).rejects.toThrow(/onboarding gates not passed/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a seeded PASSED gate that the evidence query does not support', async () => {
+    // The acceptance criterion of PRD §6.1 PLAT-03, at the command boundary:
+    // every gate is claimed PASSED with a full attestation, and the evidence
+    // queries do not agree. Activation is refused and the refusal names the
+    // gates whose data is missing.
+    //
+    // The organization here really does hold a compatible pharmacy package and
+    // a valid regulatory profile, so COMMERCIAL_PACKAGE and PREMISES_AND_LICENCES
+    // pass on their evidence and are absent from the refusal — which is what
+    // shows the downgrade is per-gate rather than a blanket rejection.
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
+    allGatesClaimedPassed();
+    noReadinessEvidence();
+
+    const error = await run('organization.transition', {
+      id: 'org_p',
+      status: 'ACTIVE',
+      reason: 'Attempt pharmacy activation on seeded gates',
+    }).catch((thrown: Error) => thrown);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect((error as Error).message).toMatch(
+      /OWNER_AND_ROLE_TEMPLATES, MEDICINE_CATALOG_READINESS, OPENING_STOCK_READINESS, PARTIES_AND_BALANCES/
+    );
+    expect((error as Error).message).not.toMatch(/COMMERCIAL_PACKAGE|PREMISES_AND_LICENCES/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses when a single evidence-backed gate loses its backing data', async () => {
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+    mocks.inventoryLotCount.mockResolvedValue(0);
+
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Attempt pharmacy activation without opening stock',
+      })
+    ).rejects.toThrow(/OPENING_STOCK_READINESS/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('activates once the profile is valid and every P0 gate genuinely passes', async () => {
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Regulatory checks and onboarding gates complete',
       })
     ).resolves.toBeDefined();
     expect(mocks.orgUpdate).toHaveBeenCalledOnce();
