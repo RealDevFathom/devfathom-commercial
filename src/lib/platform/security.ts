@@ -2,6 +2,7 @@ import 'server-only';
 
 import { timingSafeEqual } from 'node:crypto';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { activationPreflightMessage, type ActivationGate } from '@/lib/platform/activation-gates';
 
 export class PlatformSecurityError extends Error {
   constructor(
@@ -12,6 +13,23 @@ export class PlatformSecurityError extends Error {
   ) {
     super(message);
     this.name = 'PlatformSecurityError';
+  }
+}
+
+/**
+ * WHA-1180 — a failed activation preflight, carrying the unmet gates.
+ *
+ * A subclass rather than a new error type so every existing `instanceof
+ * PlatformSecurityError` check, the 400 status, and the joined message are all
+ * unchanged; the control route adds `gates` to the response body on top.
+ */
+export class ActivationPreflightError extends PlatformSecurityError {
+  readonly gates: readonly ActivationGate[];
+
+  constructor(gates: ActivationGate[]) {
+    super(activationPreflightMessage(gates), 400);
+    this.name = 'ActivationPreflightError';
+    this.gates = gates;
   }
 }
 

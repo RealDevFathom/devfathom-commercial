@@ -31,7 +31,10 @@ process.env.PLAYWRIGHT_SHARED_BASE_URL = sharedBaseURL;
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'platform-control-plane.spec.ts',
+  // Every `platform-control-plane*.spec.ts` sibling, so a lane can add a spec
+  // file without editing this config and colliding with another lane doing the
+  // same (WHA-1180).
+  testMatch: 'platform-control-plane*.spec.ts',
   // Relative to this config's directory, so this is the repository-root
   // `playwright-artifacts/` — never the tracked `test-results/` baselines.
   outputDir: '../../playwright-artifacts/platform-control-plane',
@@ -63,6 +66,11 @@ export default defineConfig({
         env: {
           AUTH_TRUST_HOST: 'true',
           SHARED_APP_HOSTS: new URL(sharedBaseURL).hostname,
+          // WHA-1180 — the shared-host deployment default derives a tenant URL
+          // from this base domain, and offers nothing when it is unset. Stated
+          // here so the checklist's one-click action is deterministic under the
+          // managed server rather than depending on the operator's shell.
+          PLATFORM_BASE_DOMAIN: process.env.PLATFORM_BASE_DOMAIN ?? 'localhost',
         },
       },
 });

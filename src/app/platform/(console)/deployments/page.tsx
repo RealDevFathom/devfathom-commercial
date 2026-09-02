@@ -3,8 +3,16 @@ import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platf
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 
-export default async function DeploymentsPage() {
+export default async function DeploymentsPage({
+  searchParams,
+}: {
+  // WHA-1180 — the activation checklist links here with the organization whose
+  // production_deployment gate is unmet, so the registration form opens already
+  // pointed at it instead of making the operator find it in the list.
+  searchParams?: Promise<{ organizationId?: string }>;
+}) {
   await requirePlatformRead('/platform/deployments');
+  const { organizationId } = (await searchParams) ?? {};
   const data = await withPlatformDb(async (db) => {
     const [deployments, organizations] = await Promise.all([
       db.organizationDeployment.findMany({
@@ -25,6 +33,13 @@ export default async function DeploymentsPage() {
     ]);
     return { deployments, organizations };
   });
+  // Only honoured when it names an organization the operator can already pick,
+  // so a crafted query string cannot seed the form with an unknown id.
+  const preselectedOrganizationId = data.organizations.some(
+    (organization) => organization.id === organizationId
+  )
+    ? organizationId
+    : undefined;
 
   return (
     <div className="mx-auto max-w-[1480px]">
@@ -33,7 +48,10 @@ export default async function DeploymentsPage() {
         title="Deployments"
         description="Shared and dedicated production positions, provider references, health, versions, and activation readiness."
       />
-      <details className="group mt-7 border border-border-default bg-surface-card">
+      <details
+        open={Boolean(preselectedOrganizationId)}
+        className="group mt-7 border border-border-default bg-surface-card"
+      >
         <summary className="cursor-pointer list-none px-5 py-4">
           <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent-brand">
             Runtime registration
@@ -54,6 +72,7 @@ export default async function DeploymentsPage() {
                 label: 'Organization',
                 type: 'select',
                 required: true,
+                defaultValue: preselectedOrganizationId,
                 options: data.organizations.map((organization) => ({
                   label: `${organization.displayName} · ${organization.slug}`,
                   value: organization.id,
