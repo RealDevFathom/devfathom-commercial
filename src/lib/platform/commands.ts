@@ -32,6 +32,7 @@ import {
   assertStoredBranchMayOperate,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
+import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 
 const id = z
   .string()
@@ -389,6 +390,19 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
         );
       }
       throw error;
+    }
+
+    // PLAT-03 — every P0 onboarding gate must be PASSED, and readiness is
+    // recomputed here rather than read off the stored gate rows. A seeded or
+    // bootstrapped PASSED with no evidence behind it is downgraded by
+    // `evaluatePharmacyReadiness` before it is counted, so activation cannot be
+    // reached by writing rows.
+    const readiness = await evaluatePharmacyReadiness(db, organizationId, now);
+    if (!readiness.ready) {
+      throw new PlatformSecurityError(
+        `Activation preflight failed: pharmacy onboarding gates not passed (${readiness.blocking.join(', ')}).`,
+        400
+      );
     }
     return;
   }

@@ -8,6 +8,10 @@ const describeIfDatabase = runtimeUrl && ownerUrl ? describe : describe.skip;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const orgA = `org_wha1168_a_${suffix}`;
 const orgB = `org_wha1168_b_${suffix}`;
+// PLAT-04: a regulatory profile's branchId is now a foreign key onto the branch
+// aggregate, whose id is a primary key and therefore unique across tenants.
+const branchA = `branch_a_${suffix}`;
+const branchB = `branch_b_${suffix}`;
 
 beforeAll(async () => {
   if (!runtimeUrl || !ownerUrl) return;
@@ -23,6 +27,13 @@ beforeAll(async () => {
       [orgA, `wha1168-a-${suffix}`, orgB, `wha1168-b-${suffix}`]
     );
     await owner.query(
+      `INSERT INTO pharmacy_branches
+        (id, "organizationId", code, name, "addressLine", city, "provinceCode", "updatedAt")
+       VALUES ($1, $2, $1, 'Branch A', '1 Test Road', 'Lahore', 'PB', now()),
+              ($3, $4, $3, 'Branch B', '2 Test Road', 'Karachi', 'SD', now())`,
+      [branchA, orgA, branchB, orgB]
+    );
+    await owner.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id, "organizationId", "branchId", version, "effectiveFrom", "provinceCode",
         "jurisdictionRuleSetId", premises, "licenceCategory", "licenceNumber",
@@ -30,13 +41,13 @@ beforeAll(async () => {
         "qualifiedPersonRegistration", "qualifiedPersonValidFrom", "qualifiedPersonValidTo",
         "qualifiedPersonCoverageRosterRef", "fiscalStatus", "retentionPolicy")
        VALUES
-       ($1, $2, 'branch-a', 1, '2026-09-02', 'PK-PB', 'pk_pb_provisional_v1', '{}',
+       ($1, $2, $5, 1, '2026-09-02', 'PK-PB', 'pk_pb_provisional_v1', '{}',
         'PROVISIONAL', 'LIC-A', '2026-01-01', '2027-01-01', 'file-a', ARRAY[]::text[],
         'QP-A', '2026-01-01', '2027-01-01', 'roster-a', 'UNCONFIRMED', '{}'),
-       ($3, $4, 'branch-b', 1, '2026-09-02', 'PK-PB', 'pk_pb_provisional_v1', '{}',
+       ($3, $4, $6, 1, '2026-09-02', 'PK-PB', 'pk_pb_provisional_v1', '{}',
         'PROVISIONAL', 'LIC-B', '2026-01-01', '2027-01-01', 'file-b', ARRAY[]::text[],
         'QP-B', '2026-01-01', '2027-01-01', 'roster-b', 'UNCONFIRMED', '{}')`,
-      [`profile-a-${suffix}`, orgA, `profile-b-${suffix}`, orgB]
+      [`profile-a-${suffix}`, orgA, `profile-b-${suffix}`, orgB, branchA, branchB]
     );
   } finally {
     await owner.end();

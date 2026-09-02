@@ -141,9 +141,9 @@ model JurisdictionRuleSet {
   @@map("pharmacy_jurisdiction_rule_sets")
 }
 
-/// PLAT-02: an immutable effective-dated snapshot for one branch. `branchId`
-/// is an explicit scope seam until PLAT-04 introduces the pharmacy branch
-/// aggregate; it is never accepted without the tenant-scoped organizationId.
+/// PLAT-02: an immutable effective-dated snapshot for one branch. PLAT-04 turns
+/// `branchId` from a bare scope seam into a foreign key onto {@link PharmacyBranch};
+/// it is still never accepted without the tenant-scoped organizationId.
 model BranchRegulatoryProfile {
   id                               String    @id @default(cuid())
   organizationId                   String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -171,11 +171,138 @@ model BranchRegulatoryProfile {
   createdAt                        DateTime  @default(now())
 
   jurisdictionRuleSet JurisdictionRuleSet @relation(fields: [jurisdictionRuleSetId], references: [id], onDelete: Restrict)
+  branch              PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, branchId, version])
   @@index([organizationId, branchId, effectiveFrom, effectiveTo])
   @@index([jurisdictionRuleSetId])
   @@map("pharmacy_branch_regulatory_profiles")
+}
+
+/// PLAT-04 — the pharmacy branch aggregate. Every branch-owned pharmacy record
+/// (regulatory profile, stock location, inventory lot, requisition, purchase
+/// order) references it by the composite (organizationId, id), so a branch id
+/// borrowed from another tenant fails the foreign key in the database rather
+/// than being filtered out by a router that might forget the predicate.
+/// `organizationId` remains the tenant boundary under FORCE row-level security;
+/// the branch is a scope *inside* that boundary, never a substitute for it.
+model PharmacyBranch {
+  id                     String  @id @default(cuid())
+  organizationId         String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  code                   String
+  name                   String
+  addressLine            String
+  city                   String
+  provinceCode           String
+  active                 Boolean @default(true)
+  /// The stock location a branch-scoped operation defaults to. Nullable because
+  /// a branch is created before its locations exist. The database constrains it
+  /// to a location of *this* branch, via a composite foreign key on
+  /// (organizationId, id, defaultStockLocationId) — expressed in SQL only,
+  /// because modelling it as a Prisma relation would make `id` a relation
+  /// scalar of this model and break ordinary writes to it.
+  defaultStockLocationId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  regulatoryProfiles BranchRegulatoryProfile[]
+  stockLocations     PharmacyStockLocation[]       @relation("PharmacyBranchStockLocations")
+  inventoryLots      PharmacyInventoryLot[]
+  requisitions       PharmacyRequisition[]
+  purchaseOrders     PharmacyPurchaseOrder[]
+  onboardingGates    PharmacyOnboardingGateState[]
+
+  @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
+  @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
+  @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
+  @@map("pharmacy_branches")
+}
+
+/// PLAT-03 — the twelve onboarding steps of PRD §6.1, in the order the operator
+/// walks them.
+enum PharmacyOnboardingGate {
+  ORG_TYPE
+  LEGAL_BUSINESS
+  LAUNCH_JURISDICTION
+  PREMISES_AND_LICENCES
+  BRANCHES_AND_LOCATIONS
+  COMMERCIAL_PACKAGE
+  OWNER_AND_ROLE_TEMPLATES
+  MEDICINE_CATALOG_READINESS
+  OPENING_STOCK_READINESS
+  PARTIES_AND_BALANCES
+  DEVICES_AND_DOCUMENTS
+  READINESS_AND_PARALLEL_RUN
+}
+
+enum PharmacyOnboardingGateStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  PASSED
+  FAILED
+}
+
+/// PLAT-03 — one onboarding record per organization. The row itself carries no
+/// readiness verdict: readiness is always recomputed by
+/// `evaluatePharmacyReadiness`, so a stored row can never assert a readiness the
+/// underlying data does not support.
+model PharmacyOnboardingState {
+  id             String   @id @default(cuid())
+  organizationId String   @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  startedAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization                  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  gates        PharmacyOnboardingGateState[]
+  events       PharmacyOnboardingEvent[]
+
+  @@map("pharmacy_onboarding_states")
+}
+
+/// PLAT-03 — the latest recorded status of one gate. This is a *claim*, not a
+/// verdict: `evaluatePharmacyReadiness` downgrades any PASSED claim the evidence
+/// does not support, which is what stops seed or bootstrap data faking readiness.
+model PharmacyOnboardingGateState {
+  id             String                       @id @default(cuid())
+  organizationId String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  gate           PharmacyOnboardingGate
+  status         PharmacyOnboardingGateStatus @default(NOT_STARTED)
+  /// Where the operator's evidence for this claim lives. Required for a PASSED
+  /// claim on a gate the platform cannot verify from data.
+  evidenceRef    String?
+  /// The branch a branch-specific gate was recorded against, if any.
+  branchId       String?
+  actorId        String?
+  recordedAt     DateTime?
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+
+  state  PharmacyOnboardingState @relation(fields: [organizationId], references: [organizationId], onDelete: Cascade)
+  branch PharmacyBranch?         @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, gate], map: "pharmacy_onboarding_gate_states_org_gate_key")
+  @@index([organizationId, status], map: "pharmacy_onboarding_gate_states_org_status_idx")
+  @@map("pharmacy_onboarding_gate_states")
+}
+
+/// PLAT-03 — the append-only transition log. Enforced append-only by trigger, so
+/// an onboarding history cannot be rewritten to look cleaner than it was.
+model PharmacyOnboardingEvent {
+  id             String                        @id @default(cuid())
+  organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  gate           PharmacyOnboardingGate
+  fromStatus     PharmacyOnboardingGateStatus?
+  toStatus       PharmacyOnboardingGateStatus
+  evidenceRef    String?
+  actorId        String
+  note           String?
+  occurredAt     DateTime                      @default(now())
+
+  state PharmacyOnboardingState @relation(fields: [organizationId], references: [organizationId], onDelete: Cascade)
+
+  @@index([organizationId, gate, occurredAt], map: "pharmacy_onboarding_events_org_gate_occurred_idx")
+  @@map("pharmacy_onboarding_events")
 }
 
 enum MedicineProvenanceSourceType {
@@ -538,8 +665,13 @@ model PharmacyStockLocation {
   discrepancies           PharmacyStockDiscrepancy[]
   receiptLines            PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptStock")
   quarantinedReceiptLines PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptQuarantine")
+  branch        PharmacyBranch             @relation("PharmacyBranchStockLocations", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  movements     PharmacyStockMovement[]
+  balances      PharmacyStockBalance[]
+  discrepancies PharmacyStockDiscrepancy[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_stock_locations_org_branch_id_key")
   @@unique([organizationId, branchId, code], map: "pharmacy_stock_locations_org_branch_code_key")
   @@index([organizationId, branchId], map: "pharmacy_stock_locations_org_branch_idx")
   @@map("pharmacy_stock_locations")
@@ -594,6 +726,7 @@ model PharmacyInventoryLot {
 
   batch     PharmacyManufacturingBatch @relation(fields: [organizationId, manufacturingBatchId], references: [organizationId, id], onDelete: Restrict)
   packLevel PackLevel                  @relation(fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict)
+  branch    PharmacyBranch             @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
   movements      PharmacyStockMovement[]
   balances       PharmacyStockBalance[]
@@ -3049,6 +3182,7 @@ model Organization {
   users                                User[]
   roles                                OrganizationRole[]
   departments                          OrganizationDepartment[]
+  pharmacyOnboarding                   PharmacyOnboardingState?
   permissionOverrides                  UserPermissionOverride[]
   modules                              OrganizationModule[]
   limits                               OrganizationLimit[]
@@ -9702,6 +9836,7 @@ model PharmacyRequisition {
   createdAt         DateTime                  @default(now())
   updatedAt         DateTime                  @updatedAt
 
+  branch         PharmacyBranch?           @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   lines          PharmacyRequisitionLine[]
   quotes         PharmacyQuote[]
   purchaseOrders PharmacyPurchaseOrder[]
@@ -9709,6 +9844,7 @@ model PharmacyRequisition {
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
   @@index([organizationId, status, createdAt])
+  @@index([organizationId, branchId, status], map: "pharmacy_requisitions_org_branch_status_idx")
   @@map("pharmacy_requisitions")
 }
 
@@ -9816,11 +9952,18 @@ model PharmacyPurchaseOrder {
   lines         PharmacyPurchaseOrderLine[]
   approvals     PharmacyPurchaseOrderApproval[]
   goodsReceipts PharmacyGoodsReceipt[]
+  supplier    PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  requisition PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  quote       PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
+  branch      PharmacyBranch?                 @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  lines       PharmacyPurchaseOrderLine[]
+  approvals   PharmacyPurchaseOrderApproval[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
   @@index([organizationId, status, createdAt])
   @@index([organizationId, supplierId, status])
+  @@index([organizationId, branchId, status], map: "pharmacy_purchase_orders_org_branch_status_idx")
   @@map("pharmacy_purchase_orders")
 }
 
