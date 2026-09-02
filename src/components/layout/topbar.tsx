@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
@@ -453,9 +454,29 @@ export function NotificationBell() {
   return vertical === 'RESTAURANT' ? <RestaurantNotificationBell /> : <AgencyNotificationBell />;
 }
 
+/**
+ * WHA-1207 — `team.getNotifications` lives under the `hr` module (see
+ * PROCEDURE_MODULES), so a package that does not license `hr` — every pharmacy
+ * package — answers FORBIDDEN. Derive the key from the same catalog the server
+ * gates on rather than repeating the string, so the two cannot drift.
+ */
+const TEAM_NOTIFICATIONS_MODULE = moduleForProcedure('team.getNotifications');
+
 function AgencyNotificationBell() {
   const utils = trpc.useUtils();
-  const { data: notifications } = trpc.team.getNotifications.useQuery();
+  const { enabledModules } = useEntitlements();
+  // The 403 is definitive (UX rule 17): don't turn it into a poll. Gate the
+  // query on the licence the server checks, so an unlicensed workspace never
+  // issues the call at all — not even the one request `retryQuery` would allow.
+  const licensed =
+    !TEAM_NOTIFICATIONS_MODULE || isModuleGranted(TEAM_NOTIFICATIONS_MODULE, enabledModules);
+  const { data: notifications, error } = trpc.team.getNotifications.useQuery(undefined, {
+    enabled: licensed,
+  });
+  // Belt and braces: if the resolved entitlements ever disagree with the
+  // server's verdict, honour the server's denial rather than showing a bare
+  // empty bell over an error.
+  const denied = !licensed || error?.data?.code === 'FORBIDDEN';
   const markRead = trpc.team.markNotificationRead.useMutation({
     // Optimistically flip the single notification to read instead of
     // invalidating (and refetching) the whole notifications list.
@@ -477,7 +498,9 @@ function AgencyNotificationBell() {
 
   return (
     <NotificationBellView
-      notifications={notifications ?? []}
+      notifications={denied ? [] : (notifications ?? [])}
+      emptyMessage={denied ? 'Notifications are not part of this workspace’s plan' : undefined}
+      emptyDetail={denied ? 'Ask your platform administrator to enable the HR module.' : undefined}
       onMarkRead={(id) => markRead.mutate({ id })}
       onMarkAllRead={() => markAllRead.mutate()}
     />
@@ -512,6 +535,7 @@ function RestaurantNotificationBell() {
     <NotificationBellView
       notifications={denied ? [] : notifications}
       emptyMessage={denied ? 'Notifications need a restaurant staff profile' : undefined}
+      emptyDetail={denied ? 'Ask an administrator to link your account to staff.' : undefined}
       onMarkRead={(id) => markRead.mutate({ id })}
       onMarkAllRead={() => markAllRead.mutate({})}
     />
@@ -521,11 +545,14 @@ function RestaurantNotificationBell() {
 function NotificationBellView({
   notifications,
   emptyMessage = 'No notifications',
+  emptyDetail,
   onMarkRead,
   onMarkAllRead,
 }: {
   notifications: BellNotification[];
   emptyMessage?: string;
+  /** The next step to offer when the empty state is a denial, not an empty inbox. */
+  emptyDetail?: string;
   onMarkRead: (id: string) => void;
   onMarkAllRead: () => void;
 }) {
@@ -569,6 +596,11 @@ function NotificationBellView({
                 <div className="py-10 text-center">
                   <Bell className="mx-auto h-8 w-8 text-muted-foreground/20" />
                   <p className="mt-2 text-xs text-muted-foreground">{emptyMessage}</p>
+                  {emptyDetail && (
+                    <p className="mx-auto mt-1 max-w-[15rem] text-[11px] text-muted-foreground/70">
+                      {emptyDetail}
+                    </p>
+                  )}
                 </div>
               ) : (
                 notifications.slice(0, 10).map((n) => (

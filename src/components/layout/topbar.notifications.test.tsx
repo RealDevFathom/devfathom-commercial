@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   vertical: 'AGENCY',
+  enabledModules: [] as string[],
   teamQuery: vi.fn(),
   teamMarkRead: vi.fn(),
   teamMarkAllRead: vi.fn(),
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ vertical: mocks.vertical, enabledModules: [] }),
+  useEntitlements: () => ({ vertical: mocks.vertical, enabledModules: mocks.enabledModules }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -45,6 +46,9 @@ import { NotificationBell } from './topbar';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // An Agency package licenses `hr`, which is the module `team.getNotifications`
+  // gates on. Pharmacy packages do not — that is WHA-1207.
+  mocks.enabledModules = ['hr'];
   mocks.teamQuery.mockReturnValue({ data: [] });
   mocks.restaurantQuery.mockReturnValue({ data: { items: [] } });
   mocks.teamMarkRead.mockReturnValue({ mutate: vi.fn() });
@@ -165,5 +169,106 @@ describe('Restaurant notification bell when the poll is denied', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
 
     expect(screen.getByText('No notifications')).toBeInTheDocument();
+  });
+});
+
+/**
+ * WHA-1207 — every non-Restaurant vertical falls through to the shared team
+ * bell, and `team.getNotifications` gates on the `hr` module (PROCEDURE_MODULES).
+ * A pharmacy package does not license `hr`, so on every page load the bell used
+ * to fire a call the server answers 403 and then render a bare empty bell.
+ *
+ * UX rule 17: a 403 is definitive. Don't issue it, and say what happened plus
+ * the next step instead of an empty inbox that silently never fills.
+ */
+describe('Team notification bell when the package does not license notifications', () => {
+  beforeEach(() => {
+    mocks.vertical = 'PHARMACY';
+    // A pharmacy package: pharmacy modules, no `hr`.
+    mocks.enabledModules = ['pharmacy-core', 'pharmacy-inventory', 'dashboard'];
+    mocks.teamQuery.mockReturnValue({ data: undefined, error: null });
+  });
+
+  it('never issues the denied query on an unlicensed workspace', () => {
+    render(<NotificationBell />);
+
+    expect(mocks.teamQuery).toHaveBeenCalledOnce();
+    // `enabled: false` is what keeps this off the wire entirely — not even the
+    // single attempt `retryQuery` would otherwise allow.
+    expect(mocks.teamQuery).toHaveBeenCalledWith(undefined, { enabled: false });
+    // The Restaurant bell must stay untouched: this is the shared fallback path.
+    expect(mocks.restaurantQuery).not.toHaveBeenCalled();
+  });
+
+  it('shows one quiet state naming the cause and the next step', () => {
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+
+    expect(
+      screen.getByText('Notifications are not part of this workspace’s plan')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Ask your platform administrator to enable the HR module.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No notifications')).not.toBeInTheDocument();
+    // Nothing to act on: no unread badge, no "Mark all read".
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).not.toBeInTheDocument();
+  });
+
+  it('still polls and renders normally when the package does license `hr`', () => {
+    mocks.enabledModules = ['pharmacy-core', 'hr'];
+    mocks.teamQuery.mockReturnValue({
+      data: [
+        {
+          id: 'team-1',
+          title: 'Licensed update',
+          message: 'Body of a licensed notification',
+          createdAt: new Date(),
+          isRead: false,
+        },
+      ],
+      error: null,
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications, 1 unread' }));
+
+    expect(mocks.teamQuery).toHaveBeenCalledWith(undefined, { enabled: true });
+    expect(screen.getByText('Body of a licensed notification')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Notifications are not part of this workspace’s plan')
+    ).not.toBeInTheDocument();
+  });
+
+  it('honours a server denial even if the resolved entitlements claim the licence', () => {
+    mocks.enabledModules = ['pharmacy-core', 'hr'];
+    mocks.teamQuery.mockReturnValue({
+      data: undefined,
+      error: { data: { code: 'FORBIDDEN' } },
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+
+    expect(
+      screen.getByText('Notifications are not part of this workspace’s plan')
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No notifications')).not.toBeInTheDocument();
+  });
+
+  it('does not mistake a non-authorization failure for an unlicensed package', () => {
+    mocks.enabledModules = ['pharmacy-core', 'hr'];
+    mocks.teamQuery.mockReturnValue({
+      data: undefined,
+      error: { data: { code: 'INTERNAL_SERVER_ERROR' } },
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+
+    expect(screen.getByText('No notifications')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Notifications are not part of this workspace’s plan')
+    ).not.toBeInTheDocument();
   });
 });

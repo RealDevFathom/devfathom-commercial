@@ -479,21 +479,17 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   });
 
   expect(unexpectedErrors).toEqual([]);
-  // Two denials are accounted for, and nothing else may be:
-  //
-  //  - the deliberate submit with no licence evidence attached, which the form
-  //    is supposed to reject on the field; and
-  //  - `team.getNotifications`, which the shared topbar bell issues on every
-  //    workspace regardless of vertical, and which a pharmacy package does not
-  //    license. That is a gap in the shared shell rather than in these surfaces
-  //    — reported with the lane — so it is named here instead of filtered away,
-  //    and any OTHER denial still fails this test.
-  const notificationDenials = deniedCalls.filter((call) => call.includes('team.getNotifications'));
-  const unexplained = deniedCalls.filter(
-    (call) => !/^400 .*saveRegulatoryProfile/.test(call) && !call.includes('team.getNotifications')
-  );
+  // Exactly one denial is accounted for, and nothing else may be: the deliberate
+  // submit with no licence evidence attached, which the form is supposed to
+  // reject on the field.
+  const unexplained = deniedCalls.filter((call) => !/^400 .*saveRegulatoryProfile/.test(call));
   expect(unexplained).toEqual([]);
-  // UX rule 17 — a 403 is definitive, so it must stay one call per page load
-  // (four client navigations here), never a retry burst.
-  expect(notificationDenials.length).toBeLessThanOrEqual(6);
+  // WHA-1207 — the shared topbar bell used to issue `team.getNotifications` on
+  // every workspace regardless of vertical, and a pharmacy package does not
+  // license the `hr` module that procedure gates on, so it answered 403 on every
+  // page load. UX rule 17: a 403 is definitive, so the bell now gates the query
+  // on the same licence the server checks and the call is never made at all.
+  // Asserted separately from `unexplained` so a regression names itself.
+  const notificationDenials = deniedCalls.filter((call) => call.includes('team.getNotifications'));
+  expect(notificationDenials).toEqual([]);
 });
