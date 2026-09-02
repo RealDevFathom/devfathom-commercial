@@ -100,6 +100,157 @@ datasource db {
   provider = "postgresql"
 }
 
+enum PharmacyProductFamily {
+  PHARMACEUTICAL
+  BIOLOGICAL
+  DEVICE
+  ALTERNATIVE
+  FRONT_SHOP
+}
+
+enum MedicineProvenanceStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUPERSEDED
+}
+
+model Ingredient {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+  strengths      MedicineStrengthComponent[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("pharmacy_ingredients")
+}
+
+model Medicine {
+  id                           String                      @id @default(cuid())
+  organizationId               String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  productName                  String
+  brandName                    String?
+  manufacturer                 String?
+  marketingAuthorizationHolder String?
+  drapRegistrationNumber       String?
+  drapRegistrationStatus       String?
+  drapRegisteredAt             DateTime?
+  productFamily                PharmacyProductFamily
+  rx                           Boolean                     @default(false)
+  otc                          Boolean                     @default(false)
+  restricted                   Boolean                     @default(false)
+  controlled                   Boolean                     @default(false)
+  highAlert                    Boolean                     @default(false)
+  lasa                         Boolean                     @default(false)
+  coldChain                    Boolean                     @default(false)
+  saleable                     Boolean                     @default(false)
+  createdAt                    DateTime                    @default(now())
+  updatedAt                    DateTime                    @updatedAt
+  strengths                    MedicineStrengthComponent[]
+  presentations                Presentation[]
+  provenance                   MedicineProvenance[]
+
+  @@index([organizationId, productName])
+  @@map("pharmacy_medicines")
+}
+
+model MedicineStrengthComponent {
+  id             String     @id @default(cuid())
+  organizationId String     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId     String
+  ingredientId   String
+  value          Decimal    @db.Decimal(18, 6)
+  unit           String
+  createdAt      DateTime   @default(now())
+  medicine       Medicine   @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  ingredient     Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([medicineId, ingredientId, value, unit])
+  @@index([organizationId, medicineId])
+  @@map("pharmacy_medicine_strength_components")
+}
+
+model Presentation {
+  id             String      @id @default(cuid())
+  organizationId String      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId     String
+  dosageForm     String?
+  route          String?
+  presentation   String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  medicine       Medicine    @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  packLevels     PackLevel[]
+
+  @@index([organizationId, medicineId])
+  @@map("pharmacy_presentations")
+}
+
+model PackLevel {
+  id                    String            @id @default(cuid())
+  organizationId        String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  presentationId        String
+  parentPackLevelId     String?
+  versionGroupId        String
+  version               Int
+  level                 String
+  unitsPerParent        Int
+  effectiveFrom         DateTime
+  effectiveTo           DateTime?
+  referencedAt          DateTime?
+  supersedesPackLevelId String?
+  createdAt             DateTime          @default(now())
+  presentation          Presentation      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
+  parent                PackLevel?        @relation("PackHierarchy", fields: [parentPackLevelId], references: [id], onDelete: Restrict)
+  children              PackLevel[]       @relation("PackHierarchy")
+  supersedes            PackLevel?        @relation("PackVersions", fields: [supersedesPackLevelId], references: [id], onDelete: Restrict)
+  supersededBy          PackLevel[]       @relation("PackVersions")
+  printedMrps           MedicinePackMrp[]
+
+  @@unique([organizationId, versionGroupId, version])
+  @@index([organizationId, presentationId])
+  @@map("pharmacy_pack_levels")
+}
+
+model MedicinePackMrp {
+  id                     String    @id @default(cuid())
+  organizationId         String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  packLevelId            String
+  batchReference         String
+  printedMrpMinor        Int
+  roundingIncrementMinor Int       @default(1)
+  createdAt              DateTime  @default(now())
+  packLevel              PackLevel @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, packLevelId, batchReference])
+  @@index([organizationId, batchReference])
+  @@map("pharmacy_medicine_pack_mrps")
+}
+
+model MedicineProvenance {
+  id             String                   @id @default(cuid())
+  organizationId String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId     String
+  field          String
+  source         String
+  retrievedAt    DateTime
+  confidence     Decimal?                 @db.Decimal(5, 4)
+  reviewer       String?
+  status         MedicineProvenanceStatus
+  supersedesId   String?
+  assertedValue  Json?
+  createdAt      DateTime                 @default(now())
+  medicine       Medicine                 @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  supersedes     MedicineProvenance?      @relation("ProvenanceVersions", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy   MedicineProvenance[]     @relation("ProvenanceVersions")
+
+  @@index([organizationId, medicineId, field])
+  @@map("pharmacy_medicine_provenance")
+}
+
 // ============================================
 // ENUMS
 // ============================================
