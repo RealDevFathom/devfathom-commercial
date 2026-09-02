@@ -8668,3 +8668,147 @@ model PlatformAuditLog {
   @@index([requestId])
   @@map("platform_audit_logs")
 }
+
+// ============================================
+// PH-MIG — pharmacy migration (PRD §6.10 MIG-01, MIG-02)
+// ============================================
+
+enum PharmacyMigrationSourceKind {
+  ABUZAR
+  EXCEL_CSV
+}
+
+enum PharmacyMigrationBatchStatus {
+  PROFILING
+  PROFILED
+  FAILED
+}
+
+enum PharmacyMigrationExceptionBucket {
+  MISSING_BATCH
+  MISSING_EXPIRY
+  MISSING_MRP
+  UNIT_AMBIGUOUS
+  DUPLICATE_PRODUCT
+  PARTY_UNMATCHED
+  BALANCE_MISMATCH
+}
+
+enum PharmacyMigrationExceptionSeverity {
+  BLOCKING
+  WARNING
+}
+
+enum PharmacyMigrationExceptionStatus {
+  OPEN
+  SIGNED_OFF
+}
+
+/// MIG-01 — immutable evidence of one incumbent export. The file bytes are NOT
+/// stored; `contentHash` proves the profiled bytes are the handed-over bytes.
+/// A trigger and SELECT/INSERT-only policies both forbid UPDATE and DELETE.
+model PharmacyMigrationSource {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind           PharmacyMigrationSourceKind
+  fileName       String
+  byteSize       BigInt
+  contentHash    String
+  capturedAt     DateTime                    @default(now())
+  createdAt      DateTime                    @default(now())
+
+  batches PharmacyMigrationBatch[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, contentHash])
+  @@index([organizationId, kind, capturedAt])
+  @@map("pharmacy_migration_sources")
+}
+
+/// One profiling pass over a source. Re-profiling creates a NEW batch; rows are
+/// never edited in place.
+model PharmacyMigrationBatch {
+  id              String                       @id @default(cuid())
+  organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sourceId        String
+  label           String
+  status          PharmacyMigrationBatchStatus @default(PROFILING)
+  rowCount        Int                          @default(0)
+  exceptionCount  Int                          @default(0)
+  profilerVersion String
+  profiledAt      DateTime?
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+
+  source     PharmacyMigrationSource      @relation(fields: [organizationId, sourceId], references: [organizationId, id], onDelete: Restrict)
+  rows       PharmacyMigrationRow[]
+  exceptions PharmacyMigrationException[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, sourceId, status])
+  @@map("pharmacy_migration_batches")
+}
+
+/// MIG-01 — every imported row keeps its incumbent source key and its import
+/// batch. Every parsed column is nullable and has NO default: a value the
+/// incumbent did not supply stays missing and raises an exception instead.
+model PharmacyMigrationRow {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  batchId           String
+  sourceKey         String
+  rowNumber         Int
+  rawPayload        Json
+  targetModelKey    String
+  targetNaturalKey  String?
+  productName       String?
+  packLabel         String?
+  packFactor        BigInt?
+  barcode           String?
+  batchNumber       String?
+  expiryDate        DateTime? @db.Date
+  mrpMinor          BigInt?
+  costMinor         BigInt?
+  quantityCanonical BigInt?
+  supplierName      String?
+  customerName      String?
+  balanceMinor      BigInt?
+  createdAt         DateTime  @default(now())
+
+  batch      PharmacyMigrationBatch       @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
+  exceptions PharmacyMigrationException[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, batchId, sourceKey])
+  @@index([organizationId, batchId, targetModelKey])
+  @@index([organizationId, targetModelKey, targetNaturalKey])
+  @@map("pharmacy_migration_rows")
+}
+
+/// MIG-02 — the exception workbench. Identity is immutable and sign-off is
+/// one-way, both DB-enforced. `signedOffByUserId` carries a composite tenant
+/// foreign key onto `users` declared in the migration, matching the existing
+/// SQL-only composite tenant foreign keys elsewhere in this schema.
+model PharmacyMigrationException {
+  id                String                             @id @default(cuid())
+  organizationId    String                             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  batchId           String
+  rowId             String?
+  bucket            PharmacyMigrationExceptionBucket
+  severity          PharmacyMigrationExceptionSeverity
+  status            PharmacyMigrationExceptionStatus   @default(OPEN)
+  detail            String
+  signedOffByUserId String?
+  signedOffAt       DateTime?
+  signOffNote       String?
+  createdAt         DateTime                           @default(now())
+  updatedAt         DateTime                           @updatedAt
+
+  batch PharmacyMigrationBatch @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
+  row   PharmacyMigrationRow?  @relation(fields: [organizationId, rowId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, batchId, bucket])
+  @@index([organizationId, batchId, status, severity])
+  @@index([organizationId, rowId])
+  @@map("pharmacy_migration_exceptions")
+}
