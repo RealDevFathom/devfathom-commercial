@@ -461,6 +461,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
     const destinationBranch = 'branch_transfer_destination';
     const setup = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, destinationBranch);
       const destination = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
@@ -535,6 +536,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('serializes competing dispatches so the same units cannot leave twice', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-race');
     const ids = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, 'branch_race_destination');
       const destination = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
@@ -590,6 +592,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     const a = await scenario(ORG_A, BRANCH_A, 'recall-a');
     const otherBranch = 'branch_recall_b';
     const setup = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, otherBranch);
       const destination = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,

@@ -35,8 +35,8 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const ORG_A = `org_wha1171_a_${suffix}`;
 const ORG_B = `org_wha1171_b_${suffix}`;
-const BRANCH_A = 'branch_a';
-const BRANCH_B = 'branch_b';
+const BRANCH_A = `branch_a_${suffix}`;
+const BRANCH_B = `branch_b_${suffix}`;
 const RECEIVER = 'user_receiver';
 const APPROVER = 'user_manager';
 
@@ -59,6 +59,23 @@ let unique = 0;
 function tag(label: string) {
   unique += 1;
   return `${suffix}-${label}-${unique}`;
+}
+
+async function ensureBranch(db: ScopedDb, organizationId: string, branchId: string) {
+  await db.pharmacyBranch.createMany({
+    data: [
+      {
+        id: branchId,
+        organizationId,
+        code: branchId,
+        name: `Branch ${branchId}`,
+        addressLine: '1 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    ],
+    skipDuplicates: true,
+  });
 }
 
 /** Run one statement that is EXPECTED to fail, in its own transaction. */
@@ -95,6 +112,7 @@ type Fixture = {
  */
 async function fixture(organizationId: string, branchId: string, label: string): Promise<Fixture> {
   return inOrg(organizationId, async (db) => {
+    await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
       data: {
         organizationId,

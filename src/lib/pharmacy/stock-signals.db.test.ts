@@ -62,6 +62,23 @@ function tag(label: string) {
   return `${suffix}-${label}-${unique}`;
 }
 
+async function ensureBranch(db: ScopedDb, organizationId: string, branchId: string) {
+  await db.pharmacyBranch.createMany({
+    data: [
+      {
+        id: branchId,
+        organizationId,
+        code: branchId,
+        name: `Branch ${branchId}`,
+        addressLine: '1 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    ],
+    skipDuplicates: true,
+  });
+}
+
 type Scenario = {
   organizationId: string;
   branchId: string;
@@ -88,6 +105,7 @@ async function scenario(
 ): Promise<Scenario> {
   const branchId = `${BRANCH_A}_${tag(label)}`;
   return inOrg(organizationId, async (db) => {
+    await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
       data: {
         organizationId,
@@ -643,6 +661,7 @@ describeIfDatabase(
         // the transfer-line foreign key resolves the source lot through
         // (organization, source branch), so a draft cannot name a lot the donor
         // branch does not hold.
+        await ensureBranch(db, fixture.organizationId, donorBranchId);
         const donorLocation = await db.pharmacyStockLocation.create({
           data: {
             organizationId: fixture.organizationId,
