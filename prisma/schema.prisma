@@ -176,6 +176,8 @@ model BranchRegulatoryProfile {
   @@index([organizationId, branchId, effectiveFrom, effectiveTo])
   @@index([jurisdictionRuleSetId])
   @@map("pharmacy_branch_regulatory_profiles")
+}
+
 enum MedicineProvenanceSourceType {
   REGULATOR
   MANUFACTURER
@@ -295,8 +297,8 @@ model Presentation {
 }
 
 model PackLevel {
-  id                    String                 @id @default(cuid())
-  organizationId        String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                    String                      @id @default(cuid())
+  organizationId        String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   presentationId        String
   parentPackLevelId     String?
   versionGroupId        String
@@ -307,12 +309,12 @@ model PackLevel {
   effectiveTo           DateTime?
   referencedAt          DateTime?
   supersedesPackLevelId String?
-  createdAt             DateTime               @default(now())
-  presentation          Presentation           @relation(fields: [presentationId], references: [id], onDelete: Restrict)
-  parent                PackLevel?             @relation("PackHierarchy", fields: [parentPackLevelId], references: [id], onDelete: Restrict)
-  children              PackLevel[]            @relation("PackHierarchy")
-  supersedes            PackLevel?             @relation("PackVersions", fields: [supersedesPackLevelId], references: [id], onDelete: Restrict)
-  supersededBy          PackLevel[]            @relation("PackVersions")
+  createdAt             DateTime                    @default(now())
+  presentation          Presentation                @relation(fields: [presentationId], references: [id], onDelete: Restrict)
+  parent                PackLevel?                  @relation("PackHierarchy", fields: [parentPackLevelId], references: [id], onDelete: Restrict)
+  children              PackLevel[]                 @relation("PackHierarchy")
+  supersedes            PackLevel?                  @relation("PackVersions", fields: [supersedesPackLevelId], references: [id], onDelete: Restrict)
+  supersededBy          PackLevel[]                 @relation("PackVersions")
   printedMrps           MedicinePackMrp[]
   requisitionLines      PharmacyRequisitionLine[]
   purchaseOrderLines    PharmacyPurchaseOrderLine[]
@@ -486,6 +488,32 @@ enum PharmacyStockMovementKind {
   BREAK_PACK
 }
 
+enum PharmacyInventoryCountStatus {
+  OPEN
+  AWAITING_COAUTH
+  APPROVED
+}
+
+enum PharmacyTransferStatus {
+  ALLOCATED
+  APPROVED
+  DISPATCHED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  EXCEPTION
+}
+
+enum PharmacyRecallStatus {
+  OPEN
+  CLOSED
+}
+
+enum PharmacySupplierClaimStatus {
+  RESERVED
+  RELEASED
+  SUBMITTED
+}
+
 /// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
 /// validated cold-chain zones a cold-chain medicine may be put away into.
 model PharmacyStockLocation {
@@ -560,17 +588,161 @@ model PharmacyInventoryLot {
   batch     PharmacyManufacturingBatch @relation(fields: [organizationId, manufacturingBatchId], references: [organizationId, id], onDelete: Restrict)
   packLevel PackLevel                  @relation(fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict)
 
-  movements     PharmacyStockMovement[]
-  balances      PharmacyStockBalance[]
-  discrepancies PharmacyStockDiscrepancy[]
-  recommendedBy PharmacyAllocationOverride[] @relation("PharmacyAllocationRecommended")
-  selectedBy    PharmacyAllocationOverride[] @relation("PharmacyAllocationSelected")
+  movements      PharmacyStockMovement[]
+  balances       PharmacyStockBalance[]
+  discrepancies  PharmacyStockDiscrepancy[]
+  recommendedBy  PharmacyAllocationOverride[]      @relation("PharmacyAllocationRecommended")
+  selectedBy     PharmacyAllocationOverride[]      @relation("PharmacyAllocationSelected")
+  countLines     PharmacyInventoryCountLine[]
+  transferLines  PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
+  supplierClaims PharmacySupplierClaim[]
 
   @@unique([organizationId, id], map: "pharmacy_inventory_lots_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_inventory_lots_org_branch_id_key")
   @@unique([organizationId, supplierName, supplierInvoiceRef, manufacturingBatchId], map: "pharmacy_inventory_lots_org_invoice_key")
   @@index([organizationId, branchId, manufacturingBatchId], map: "pharmacy_inventory_lots_org_branch_batch_idx")
   @@map("pharmacy_inventory_lots")
+}
+
+model PharmacyInventoryCount {
+  id                String                       @id @default(cuid())
+  organizationId    String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  status            PharmacyInventoryCountStatus @default(OPEN)
+  varianceThreshold Int
+  createdById       String
+  approvedById      String?
+  createdAt         DateTime                     @default(now())
+  approvedAt        DateTime?
+  lines             PharmacyInventoryCountLine[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, createdAt])
+  @@map("pharmacy_inventory_counts")
+}
+
+model PharmacyInventoryCountLine {
+  id                  String                 @id @default(cuid())
+  organizationId      String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  countId             String
+  branchId            String
+  inventoryLotId      String
+  stockLocationId     String
+  expectedUnits       Int
+  expectedSealedPacks Int
+  expectedLooseUnits  Int
+  countedSealedPacks  Int?
+  countedLooseUnits   Int?
+  countedUnits        Int?
+  varianceUnits       Int?
+  count               PharmacyInventoryCount @relation(fields: [organizationId, countId], references: [organizationId, id], onDelete: Restrict)
+  lot                 PharmacyInventoryLot   @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, countId, inventoryLotId, stockLocationId])
+  @@index([organizationId, branchId])
+  @@map("pharmacy_inventory_count_lines")
+}
+
+model PharmacyInterbranchTransfer {
+  id             String                            @id @default(cuid())
+  organizationId String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  fromBranchId   String
+  toBranchId     String
+  status         PharmacyTransferStatus            @default(ALLOCATED)
+  allocatedById  String
+  approvedById   String?
+  dispatchedById String?
+  createdAt      DateTime                          @default(now())
+  dispatchedAt   DateTime?
+  receivedAt     DateTime?
+  lines          PharmacyInterbranchTransferLine[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, fromBranchId, status])
+  @@index([organizationId, toBranchId, status])
+  @@map("pharmacy_interbranch_transfers")
+}
+
+model PharmacyInterbranchTransferLine {
+  id                         String                      @id @default(cuid())
+  organizationId             String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  transferId                 String
+  sourceBranchId             String
+  sourceLotId                String
+  sourceStockLocationId      String
+  destinationStockLocationId String
+  quantityUnits              Int
+  receivedUnits              Int                         @default(0)
+  transfer                   PharmacyInterbranchTransfer @relation(fields: [organizationId, transferId], references: [organizationId, id], onDelete: Restrict)
+  sourceLot                  PharmacyInventoryLot        @relation("PharmacyTransferSourceLot", fields: [organizationId, sourceBranchId, sourceLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, transferId, sourceLotId, sourceStockLocationId])
+  @@map("pharmacy_interbranch_transfer_lines")
+}
+
+model PharmacyRecallNotice {
+  id               String                          @id @default(cuid())
+  organizationId   String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  batchId          String?
+  medicineId       String?
+  reference        String
+  reason           String
+  status           PharmacyRecallStatus            @default(OPEN)
+  createdById      String
+  createdAt        DateTime                        @default(now())
+  closedById       String?
+  closedAt         DateTime?
+  acknowledgements PharmacyRecallAcknowledgement[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@map("pharmacy_recall_notices")
+}
+
+model PharmacyRecallAcknowledgement {
+  id             String               @id @default(cuid())
+  organizationId String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  recallNoticeId String
+  branchId       String
+  actorId        String
+  createdAt      DateTime             @default(now())
+  notice         PharmacyRecallNotice @relation(fields: [organizationId, recallNoticeId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, recallNoticeId, branchId])
+  @@map("pharmacy_recall_acknowledgements")
+}
+
+model PharmacyCustodyRecord {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  movementId     String
+  actorId        String
+  witnessId      String
+  reason         String
+  evidenceRef    String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, movementId])
+  @@index([organizationId, branchId, createdAt])
+  @@map("pharmacy_custody_records")
+}
+
+model PharmacySupplierClaim {
+  id             String                      @id @default(cuid())
+  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  inventoryLotId String
+  reservedUnits  Int
+  returnBy       DateTime
+  status         PharmacySupplierClaimStatus @default(RESERVED)
+  createdById    String
+  createdAt      DateTime                    @default(now())
+  lot            PharmacyInventoryLot        @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@index([organizationId, branchId, returnBy])
+  @@map("pharmacy_supplier_claims")
 }
 
 /// INV-02 / §8A invariant 5: the evidence a non-FEFO selection leaves behind.
@@ -622,6 +794,7 @@ model PharmacyStockMovement {
   override PharmacyAllocationOverride? @relation(fields: [organizationId, allocationOverrideId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, idempotencyKey], map: "pharmacy_stock_movements_org_idempotency_key")
+  @@unique([organizationId, id], map: "pharmacy_stock_movements_org_id_key")
   @@index([organizationId, branchId, inventoryLotId, occurredAt], map: "pharmacy_stock_movements_org_branch_lot_idx")
   @@map("pharmacy_stock_movements")
 }
@@ -9475,19 +9648,19 @@ model PharmacySupplierLicence {
 /// PLAT-03, so the column carries no foreign key yet and the tenant boundary
 /// remains `organizationId` under forced RLS.
 model PharmacyRequisition {
-  id                  String                    @id @default(cuid())
-  organizationId      String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId            String?
-  reference           String
-  status              PharmacyRequisitionStatus @default(DRAFT)
-  requestedByUserId   String
-  neededBy            DateTime?
-  note                String?
-  submittedAt         DateTime?
-  approvedAt          DateTime?
-  approvedByUserId    String?
-  createdAt           DateTime                  @default(now())
-  updatedAt           DateTime                  @updatedAt
+  id                String                    @id @default(cuid())
+  organizationId    String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String?
+  reference         String
+  status            PharmacyRequisitionStatus @default(DRAFT)
+  requestedByUserId String
+  neededBy          DateTime?
+  note              String?
+  submittedAt       DateTime?
+  approvedAt        DateTime?
+  approvedByUserId  String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
 
   lines          PharmacyRequisitionLine[]
   quotes         PharmacyQuote[]
@@ -9615,24 +9788,24 @@ model PharmacyPurchaseOrder {
 /// quantity term only and never appears in a money column, so scheme units
 /// lower the landed unit cost and can never create revenue.
 model PharmacyPurchaseOrderLine {
-  id                     String   @id @default(cuid())
-  organizationId         String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  purchaseOrderId        String
-  lineNumber             Int
-  medicineId             String
-  packLevelId            String
-  orderedPacks           Int
-  bonusPacks             Int      @default(0)
-  canonicalUnitsPerPack  Int
-  orderedCanonicalUnits  Int
-  bonusCanonicalUnits    Int      @default(0)
-  listPricePerPackMinor  Int
-  discountBps            Int      @default(0)
-  rebateBps              Int      @default(0)
-  taxBps                 Int      @default(0)
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  purchaseOrderId       String
+  lineNumber            Int
+  medicineId            String
+  packLevelId           String
+  orderedPacks          Int
+  bonusPacks            Int      @default(0)
+  canonicalUnitsPerPack Int
+  orderedCanonicalUnits Int
+  bonusCanonicalUnits   Int      @default(0)
+  listPricePerPackMinor Int
+  discountBps           Int      @default(0)
+  rebateBps             Int      @default(0)
+  taxBps                Int      @default(0)
   /// A creditable input tax is recovered and so is not stock cost.
-  taxCreditable          Boolean  @default(false)
-  createdAt              DateTime @default(now())
+  taxCreditable         Boolean  @default(false)
+  createdAt             DateTime @default(now())
 
   purchaseOrder PharmacyPurchaseOrder @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
   medicine      Medicine              @relation(fields: [medicineId], references: [id], onDelete: Restrict)
