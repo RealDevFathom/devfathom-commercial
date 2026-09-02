@@ -26,6 +26,12 @@ vi.mock('./sidebar', () => ({
   Sidebar: () => createElement('nav', null, 'Restaurant drawer'),
   TopNavigation: () => createElement('nav', null, 'Desktop navigation'),
 }));
+// WHA-1181: a self-hiding strip with its own tRPC query and its own test file
+// (administrator-staff-profile-callout.test.tsx). Stubbed here for the same
+// reason the topbar and sidebar are — this file tests the shell.
+vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
+  AdministratorStaffProfileCallout: () => null,
+}));
 
 import { AppShell, isPathModuleEnabled } from './app-shell';
 

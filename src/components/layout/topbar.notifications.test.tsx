@@ -120,3 +120,50 @@ describe('NotificationBell vertical routing', () => {
     expect(mocks.teamMarkAllRead).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * WHA-1181 — an administrator with no staff profile is denied the poll outright.
+ * `retryQuery` stops the retry storm; the bell's job is to say so once instead
+ * of showing a bare "No notifications" over an error.
+ */
+describe('Restaurant notification bell when the poll is denied', () => {
+  beforeEach(() => {
+    mocks.vertical = 'RESTAURANT';
+  });
+
+  it('renders one quiet state naming the missing staff profile', () => {
+    mocks.restaurantQuery.mockReturnValue({
+      data: undefined,
+      error: { data: { code: 'FORBIDDEN' } },
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+
+    expect(screen.getByText('Notifications need a restaurant staff profile')).toBeInTheDocument();
+    expect(screen.queryByText('No notifications')).not.toBeInTheDocument();
+    // No unread badge and no "Mark all read": there is nothing to act on.
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary empty state for a granted but empty list', () => {
+    mocks.restaurantQuery.mockReturnValue({ data: { items: [] }, error: null });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+
+    expect(screen.getByText('No notifications')).toBeInTheDocument();
+  });
+
+  it('does not mistake a non-authorization failure for the missing-profile state', () => {
+    mocks.restaurantQuery.mockReturnValue({
+      data: undefined,
+      error: { data: { code: 'INTERNAL_SERVER_ERROR' } },
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+
+    expect(screen.getByText('No notifications')).toBeInTheDocument();
+  });
+});

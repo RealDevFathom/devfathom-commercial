@@ -55,6 +55,12 @@ vi.mock('./sidebar', () => ({
   },
   TopNavigation: () => null,
 }));
+// WHA-1181: a self-hiding strip with its own tRPC query and its own test file.
+// Stubbed for the same reason as the chrome above — the unit under test is the
+// shell's tenant-identity guard.
+vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
+  AdministratorStaffProfileCallout: () => null,
+}));
 
 import { AppShell } from './app-shell';
 

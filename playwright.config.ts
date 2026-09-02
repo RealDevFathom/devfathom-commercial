@@ -5,7 +5,9 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testIgnore: 'platform-control-plane.spec.ts',
+  // Every control-plane spec belongs to its own config (admin host, disposable
+  // database, serial workers); the glob keeps sibling spec files out of here too.
+  testIgnore: 'platform-control-plane*.spec.ts',
   // `test-results/` holds committed visual-QA baselines, and Playwright wipes its
   // outputDir on every run — so run artifacts live outside any tracked path.
   outputDir: './playwright-artifacts/e2e',

@@ -45,6 +45,16 @@ const mocks = vi.hoisted(() => ({
   platformModuleFindMany: vi.fn(),
   platformModuleFindUnique: vi.fn(),
   acknowledgementFindMany: vi.fn(),
+  // WHA-1181 — restaurant onboarding and activation now also link each
+  // organization administrator to a staff profile. Default implementations
+  // (which survive `vi.clearAllMocks`) keep every contract fixture below about
+  // the behaviour it was written for.
+  staffFindFirst: vi.fn(async () => null),
+  staffCreate: vi.fn(async () => ({ id: 'staff_1', primaryBranchId: 'branch_1' })),
+  branchFindFirst: vi.fn(async () => ({ id: 'branch_1' })),
+  userFindMany: vi.fn(async () => [
+    { id: 'user_admin', name: 'Restaurant Admin', email: 'admin@burger.co' },
+  ]),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -73,7 +83,11 @@ const platformDb = {
   // WHA-278: bootstrapOrganization seeds the tenant department catalog
   // before the administrator, because User.department is a composite FK.
   organizationDepartment: { createMany: mocks.departmentCreateMany },
-  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
+  user: {
+    findFirst: mocks.userFindFirst,
+    create: mocks.userCreate,
+    findMany: mocks.userFindMany,
+  },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },
   organizationDeployment: { create: record() },
@@ -83,9 +97,11 @@ const platformDb = {
   restaurantBranch: {
     create: mocks.branchCreate,
     findMany: mocks.branchFindMany,
+    findFirst: mocks.branchFindFirst,
     count: mocks.branchCount,
   },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
+  restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
   organizationModule: {
     upsert: mocks.moduleUpsert,
     findMany: mocks.orgModuleFindMany,
@@ -646,6 +662,12 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // the component itself); only its test names a vertical, as fixture data for
     // the generic filtered-select it renders.
     /src\/components\/platform\/platform-command-form\.[a-z]+\.test\.tsx$/,
+    // WHA-1181 — a focused battery over `commands.ts`, the one approved server
+    // enforcement point, proving its RESTAURANT branch provisions the
+    // administrator a staff profile and its AGENCY branch stays byte-identical.
+    // Naming both verticals is the assertion; the production code it covers is
+    // the already-approved consumer, not a new one.
+    /src\/lib\/platform\/commands\.administrator-staff-profile\.test\.ts$/,
     // Generated Prisma client — read-only, not authored here
     /src\/generated\//,
   ];
