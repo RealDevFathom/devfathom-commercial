@@ -32,6 +32,16 @@ const mocks = vi.hoisted(() => ({
   branchFindMany: vi.fn(),
   branchCount: vi.fn(),
   acknowledgementFindMany: vi.fn(),
+  // WHA-1181 — restaurant onboarding and activation now also link each
+  // organization administrator to a staff profile. Default implementations
+  // (which survive `vi.clearAllMocks`) keep the fixtures below about the
+  // vertical/package behaviour they were written for.
+  staffFindFirst: vi.fn(async () => null),
+  staffCreate: vi.fn(async () => ({ id: 'staff_1', primaryBranchId: 'branch_1' })),
+  branchFindFirst: vi.fn(async () => ({ id: 'branch_1' })),
+  userFindMany: vi.fn(async () => [
+    { id: 'user_admin', name: 'Restaurant Admin', email: 'admin@burger.co' },
+  ]),
   assignmentCreate: vi.fn(),
   moduleUpsert: vi.fn(),
   orgModuleFindMany: vi.fn(),
@@ -75,7 +85,11 @@ const platformDb = {
   },
   organizationRole: { create: mocks.roleCreate },
   organizationDepartment: { createMany: mocks.departmentCreateMany },
-  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
+  user: {
+    findFirst: mocks.userFindFirst,
+    create: mocks.userCreate,
+    findMany: mocks.userFindMany,
+  },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },
   organizationDeployment: { create: record() },
@@ -87,9 +101,11 @@ const platformDb = {
   restaurantBranch: {
     create: mocks.branchCreate,
     findMany: mocks.branchFindMany,
+    findFirst: mocks.branchFindFirst,
     count: mocks.branchCount,
   },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
+  restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
   restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
   organizationModule: {
     upsert: mocks.moduleUpsert,
