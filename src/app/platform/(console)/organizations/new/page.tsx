@@ -246,8 +246,8 @@ export default async function NewOrganizationPage({
                       name: 'businessDayCutoff',
                       label: 'Business-day cutoff',
                       required: true,
-                      placeholder: '04:00',
-                      help: '24-hour HH:MM in the organization timezone.',
+                      format: 'time24' as const,
+                      help: 'Use 24-hour time in the organization timezone, e.g. 09:30.',
                     },
                   ]
                 : []),

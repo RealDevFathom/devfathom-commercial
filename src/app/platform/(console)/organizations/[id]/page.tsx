@@ -310,7 +310,8 @@ export default async function OrganizationDetailPage({
                         label: 'Business-day cutoff',
                         required: true,
                         defaultValue: data.restaurantBranches[0]!.businessDayCutoff,
-                        placeholder: '04:00',
+                        format: 'time24',
+                        help: 'Use 24-hour time in the organization timezone, e.g. 09:30.',
                       },
                       ...(['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const).flatMap((kind) => {
                         const existing = organization.restaurantActivationAcknowledgements.find(
