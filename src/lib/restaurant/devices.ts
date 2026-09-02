@@ -1,8 +1,11 @@
 import 'server-only';
 
-import { createHash, randomBytes } from 'node:crypto';
-
 import type { RestaurantRegisteredDevice } from '@/generated/prisma/client';
+import {
+  generateDeviceSecret as mintDeviceSecret,
+  hashDeviceSecret,
+  isDeviceSecretFormat as hasDeviceSecretFormat,
+} from '@/lib/retail-terminal/device-secret';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type DeviceLifecycleErrorReason = 'NOT_FOUND' | 'REVOKED' | 'STALE_ROTATION';
@@ -43,63 +46,33 @@ export class DeviceLifecycleError extends Error {
  */
 
 // --- Secret primitives (pure) ---------------------------------------------
+//
+// The primitives themselves live in the neutral retail-terminal seam (PRD §11),
+// shared with the Pharmacy counter, because the invariant is identical. Only the
+// PREFIX is per-vertical: a `rdk_` secret is a restaurant device secret and
+// nothing else. The wrappers below keep this module's public API unchanged.
 
 /** Raw device secrets are prefixed so a malformed bearer token is rejected
  * before any hashing/lookup (mirrors the `df_` API-token convention). */
 export const DEVICE_SECRET_PREFIX = 'rdk_';
 
-/** Deterministic hash of a raw device secret, for storage and O(1) lookup. */
-export function hashDeviceSecret(secret: string): string {
-  return createHash('sha256').update(secret).digest('hex');
-}
+export {
+  hashDeviceSecret,
+  isDeviceUsable,
+  deviceHealth,
+  DEVICE_HEARTBEAT_INTERVAL_MS,
+  DEVICE_STALE_AFTER_MS,
+} from '@/lib/retail-terminal/device-secret';
+export type { DeviceTrustState, DeviceHealth } from '@/lib/retail-terminal/device-secret';
 
 /** True when a string is shaped like a device secret (cheap pre-lookup gate). */
 export function isDeviceSecretFormat(token: string): boolean {
-  return token.startsWith(DEVICE_SECRET_PREFIX) && token.length > DEVICE_SECRET_PREFIX.length;
+  return hasDeviceSecretFormat(token, DEVICE_SECRET_PREFIX);
 }
 
 /** Mint a new device secret: the raw value to deliver once, and the hash to store. */
 export function generateDeviceSecret(): { secret: string; secretHash: string } {
-  const secret = `${DEVICE_SECRET_PREFIX}${randomBytes(32).toString('base64url')}`;
-  return { secret, secretHash: hashDeviceSecret(secret) };
-}
-
-// --- Trust / health predicates (pure) -------------------------------------
-
-/** The minimal device state the per-call trust check reads (C5). */
-export type DeviceTrustState = {
-  status: 'ACTIVE' | 'REVOKED';
-  revokedAt: Date | null;
-};
-
-/**
- * C5 device-side revalidation: a device is usable only while ACTIVE and not
- * revoked. Called with a FRESH database row on every terminal request — a
- * revoked device therefore cannot keep operating from a stale client cache.
- */
-export function isDeviceUsable(device: DeviceTrustState): boolean {
-  return device.status === 'ACTIVE' && device.revokedAt === null;
-}
-
-export type DeviceHealth = 'REVOKED' | 'NEVER_SEEN' | 'STALE' | 'HEALTHY';
-
-/** Expected heartbeat cadence and the staleness floor (D-default, recorded in
- * BUILD-ASSUMPTIONS): a device that has missed five heartbeats reads as STALE. */
-export const DEVICE_HEARTBEAT_INTERVAL_MS = 60_000;
-export const DEVICE_STALE_AFTER_MS = 5 * DEVICE_HEARTBEAT_INTERVAL_MS;
-
-/**
- * Derive a device's operational health from its durable state and last check-in.
- * `now` is always a SERVER timestamp (client time is untrusted, C5). A revoked
- * device is REVOKED regardless of when it was last seen.
- */
-export function deviceHealth(
-  device: { status: 'ACTIVE' | 'REVOKED'; revokedAt: Date | null; lastSeenAt: Date | null },
-  now: Date
-): DeviceHealth {
-  if (!isDeviceUsable(device)) return 'REVOKED';
-  if (device.lastSeenAt === null) return 'NEVER_SEEN';
-  return now.getTime() - device.lastSeenAt.getTime() > DEVICE_STALE_AFTER_MS ? 'STALE' : 'HEALTHY';
+  return mintDeviceSecret(DEVICE_SECRET_PREFIX);
 }
 
 // --- Mutation / lookup helpers (tenant-scoped I/O) -------------------------
