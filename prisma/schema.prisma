@@ -227,8 +227,8 @@ model Ingredient {
 }
 
 model Medicine {
-  id                           String                      @id @default(cuid())
-  organizationId               String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                           String                       @id @default(cuid())
+  organizationId               String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   productName                  String
   brandName                    String?
   manufacturer                 String?
@@ -237,23 +237,26 @@ model Medicine {
   drapRegistrationStatus       String?
   drapRegisteredAt             DateTime?
   productFamily                PharmacyProductFamily
-  rx                           Boolean                     @default(false)
-  otc                          Boolean                     @default(false)
-  restricted                   Boolean                     @default(false)
-  controlled                   Boolean                     @default(false)
-  highAlert                    Boolean                     @default(false)
-  lasa                         Boolean                     @default(false)
-  coldChain                    Boolean                     @default(false)
-  saleable                     Boolean                     @default(false)
-  createdAt                    DateTime                    @default(now())
-  updatedAt                    DateTime                    @updatedAt
+  rx                           Boolean                      @default(false)
+  otc                          Boolean                      @default(false)
+  restricted                   Boolean                      @default(false)
+  controlled                   Boolean                      @default(false)
+  highAlert                    Boolean                      @default(false)
+  lasa                         Boolean                      @default(false)
+  coldChain                    Boolean                      @default(false)
+  saleable                     Boolean                      @default(false)
+  createdAt                    DateTime                     @default(now())
+  updatedAt                    DateTime                     @updatedAt
   strengths                    MedicineStrengthComponent[]
   presentations                Presentation[]
   provenance                   MedicineProvenance[]
   requisitionLines             PharmacyRequisitionLine[]
   purchaseOrderLines           PharmacyPurchaseOrderLine[]
   aliases                      MedicineAlias[]
+  // PH-INV/INV-01: the manufacturing batches this medicine has been supplied in.
+  batches                      PharmacyManufacturingBatch[]
 
+  @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
   @@map("pharmacy_medicines")
 }
@@ -292,8 +295,8 @@ model Presentation {
 }
 
 model PackLevel {
-  id                    String            @id @default(cuid())
-  organizationId        String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                    String                 @id @default(cuid())
+  organizationId        String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   presentationId        String
   parentPackLevelId     String?
   versionGroupId        String
@@ -304,17 +307,21 @@ model PackLevel {
   effectiveTo           DateTime?
   referencedAt          DateTime?
   supersedesPackLevelId String?
-  createdAt             DateTime          @default(now())
-  presentation          Presentation      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
-  parent                PackLevel?        @relation("PackHierarchy", fields: [parentPackLevelId], references: [id], onDelete: Restrict)
-  children              PackLevel[]       @relation("PackHierarchy")
-  supersedes            PackLevel?        @relation("PackVersions", fields: [supersedesPackLevelId], references: [id], onDelete: Restrict)
-  supersededBy          PackLevel[]       @relation("PackVersions")
+  createdAt             DateTime               @default(now())
+  presentation          Presentation           @relation(fields: [presentationId], references: [id], onDelete: Restrict)
+  parent                PackLevel?             @relation("PackHierarchy", fields: [parentPackLevelId], references: [id], onDelete: Restrict)
+  children              PackLevel[]            @relation("PackHierarchy")
+  supersedes            PackLevel?             @relation("PackVersions", fields: [supersedesPackLevelId], references: [id], onDelete: Restrict)
+  supersededBy          PackLevel[]            @relation("PackVersions")
   printedMrps           MedicinePackMrp[]
   requisitionLines      PharmacyRequisitionLine[]
   purchaseOrderLines    PharmacyPurchaseOrderLine[]
   barcodes              MedicineBarcode[]
+  // PH-INV/INV-01: receiving a lot against this conversion is what stamps
+  // `referencedAt` and freezes it (MED-02, §8A invariant 2).
+  inventoryLots         PharmacyInventoryLot[]
 
+  @@unique([organizationId, id], map: "pharmacy_pack_levels_org_id_key")
   @@unique([organizationId, versionGroupId, version])
   @@index([organizationId, presentationId])
   @@map("pharmacy_pack_levels")
@@ -433,6 +440,235 @@ model MedicinePublicationEntry {
   @@unique([organizationId, batchId, assertionId])
   @@index([organizationId, batchId])
   @@map("pharmacy_medicine_publication_entries")
+}
+
+// ============================================
+// PH-INV — batch/lot stock ledger (INV-01..04)
+// ============================================
+
+enum PharmacyStockLocationKind {
+  STORE
+  RACK_BIN
+  FRIDGE
+  SAFE
+  QUARANTINE
+  TRANSIT
+  RETURNS
+}
+
+enum PharmacyBatchState {
+  ACTIVE
+  RECALLED
+  QUARANTINED
+}
+
+enum PharmacyExpiryPrecision {
+  DAY
+  MONTH
+}
+
+enum PharmacyStockDisposition {
+  AVAILABLE
+  QUARANTINE
+  DAMAGED
+  DESTROYED
+  IN_TRANSIT
+}
+
+enum PharmacyStockMovementKind {
+  RECEIPT
+  SALE
+  RETURN
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT
+  WRITE_OFF
+  BREAK_PACK
+}
+
+/// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
+/// validated cold-chain zones a cold-chain medicine may be put away into.
+model PharmacyStockLocation {
+  id             String                    @id @default(cuid())
+  organizationId String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  code           String
+  name           String
+  kind           PharmacyStockLocationKind
+  coldChain      Boolean                   @default(false)
+  active         Boolean                   @default(true)
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  movements     PharmacyStockMovement[]
+  balances      PharmacyStockBalance[]
+  discrepancies PharmacyStockDiscrepancy[]
+
+  @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
+  @@unique([organizationId, branchId, code], map: "pharmacy_stock_locations_org_branch_code_key")
+  @@index([organizationId, branchId], map: "pharmacy_stock_locations_org_branch_idx")
+  @@map("pharmacy_stock_locations")
+}
+
+/// §8A invariant 18: the manufacturer's batch. Organization-scoped, not
+/// branch-scoped, because recall and batch-level quarantine apply globally at
+/// batch/product scope while quarantine and damage may apply to part of one lot.
+model PharmacyManufacturingBatch {
+  id              String                  @id @default(cuid())
+  organizationId  String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId      String
+  batchNumber     String
+  expiresAt       DateTime
+  expiryPrecision PharmacyExpiryPrecision @default(DAY)
+  state           PharmacyBatchState      @default(ACTIVE)
+  stateReason     String?
+  stateChangedAt  DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  medicine Medicine               @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  lots     PharmacyInventoryLot[]
+
+  @@unique([organizationId, id], map: "pharmacy_manufacturing_batches_org_id_key")
+  @@unique([organizationId, medicineId, batchNumber], map: "pharmacy_manufacturing_batches_org_medicine_number_key")
+  @@index([organizationId, expiresAt], map: "pharmacy_manufacturing_batches_org_expiry_idx")
+  @@map("pharmacy_manufacturing_batches")
+}
+
+/// INV-01: the receipt-specific lot — one supplier, one invoice, one landed
+/// cost, one printed MRP, one received expiry precision. `receivedAt` is null
+/// until the goods actually arrive, and unreceived stock cannot move (INV-03).
+model PharmacyInventoryLot {
+  id                      String                  @id @default(cuid())
+  organizationId          String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                String
+  manufacturingBatchId    String
+  packLevelId             String
+  /// Canonical base units in one sealed pack of this lot, resolved from the
+  /// MED-02 pack hierarchy at receipt and frozen with it.
+  unitsPerPack            Int
+  supplierName            String
+  supplierInvoiceRef      String
+  unitCostMinor           Int
+  printedMrpMinor         Int
+  receivedExpiresAt       DateTime
+  receivedExpiryPrecision PharmacyExpiryPrecision
+  receivedAt              DateTime?
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+
+  batch     PharmacyManufacturingBatch @relation(fields: [organizationId, manufacturingBatchId], references: [organizationId, id], onDelete: Restrict)
+  packLevel PackLevel                  @relation(fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict)
+
+  movements     PharmacyStockMovement[]
+  balances      PharmacyStockBalance[]
+  discrepancies PharmacyStockDiscrepancy[]
+  recommendedBy PharmacyAllocationOverride[] @relation("PharmacyAllocationRecommended")
+  selectedBy    PharmacyAllocationOverride[] @relation("PharmacyAllocationSelected")
+
+  @@unique([organizationId, id], map: "pharmacy_inventory_lots_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_inventory_lots_org_branch_id_key")
+  @@unique([organizationId, supplierName, supplierInvoiceRef, manufacturingBatchId], map: "pharmacy_inventory_lots_org_invoice_key")
+  @@index([organizationId, branchId, manufacturingBatchId], map: "pharmacy_inventory_lots_org_branch_batch_idx")
+  @@map("pharmacy_inventory_lots")
+}
+
+/// INV-02 / §8A invariant 5: the evidence a non-FEFO selection leaves behind.
+/// Append-only.
+model PharmacyAllocationOverride {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  actorId          String
+  reason           String
+  approvalPolicy   String
+  recommendedLotId String
+  selectedLotId    String
+  createdAt        DateTime @default(now())
+
+  recommendedLot PharmacyInventoryLot    @relation("PharmacyAllocationRecommended", fields: [organizationId, branchId, recommendedLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  selectedLot    PharmacyInventoryLot    @relation("PharmacyAllocationSelected", fields: [organizationId, branchId, selectedLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  movements      PharmacyStockMovement[]
+
+  @@unique([organizationId, id], map: "pharmacy_allocation_overrides_org_id_key")
+  @@index([organizationId, branchId, createdAt], map: "pharmacy_allocation_overrides_org_branch_created_idx")
+  @@map("pharmacy_allocation_overrides")
+}
+
+/// INV-01: the append-only ledger. `quantityUnits` is a SIGNED integer count of
+/// canonical base units whose sign is fixed by `kind`; `sealedPackDelta` and
+/// `looseUnitDelta` carry the physical arrangement so a BREAK_PACK (INV-04) is
+/// an explicit movement with a zero canonical total.
+model PharmacyStockMovement {
+  id                   String                    @id @default(cuid())
+  organizationId       String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  inventoryLotId       String
+  stockLocationId      String
+  kind                 PharmacyStockMovementKind
+  disposition          PharmacyStockDisposition
+  quantityUnits        Int
+  sealedPackDelta      Int                       @default(0)
+  looseUnitDelta       Int                       @default(0)
+  actorId              String
+  reason               String?
+  idempotencyKey       String
+  allocationOverrideId String?
+  occurredAt           DateTime                  @default(now())
+  createdAt            DateTime                  @default(now())
+
+  lot      PharmacyInventoryLot        @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  location PharmacyStockLocation       @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
+  override PharmacyAllocationOverride? @relation(fields: [organizationId, allocationOverrideId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey], map: "pharmacy_stock_movements_org_idempotency_key")
+  @@index([organizationId, branchId, inventoryLotId, occurredAt], map: "pharmacy_stock_movements_org_branch_lot_idx")
+  @@map("pharmacy_stock_movements")
+}
+
+/// INV-01 acceptance ("product quantity is a projection"). Derived state,
+/// maintained only by the ledger trigger and constrained non-negative, so a
+/// negative balance is unrepresentable. Never written by application code.
+model PharmacyStockBalance {
+  organizationId  String
+  branchId        String
+  inventoryLotId  String
+  stockLocationId String
+  disposition     PharmacyStockDisposition
+  onHandUnits     Int
+  sealedPacks     Int
+  looseUnits      Int
+  updatedAt       DateTime                 @default(now())
+
+  lot      PharmacyInventoryLot  @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  location PharmacyStockLocation @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
+
+  @@id([organizationId, inventoryLotId, stockLocationId, disposition], map: "pharmacy_stock_balances_pkey")
+  @@index([organizationId, branchId, disposition], map: "pharmacy_stock_balances_org_branch_idx")
+  @@map("pharmacy_stock_balances")
+}
+
+/// §8A invariant 6: what the emergency path records instead of driving a
+/// balance below zero. Append-only; closure belongs to INV-06.
+model PharmacyStockDiscrepancy {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  inventoryLotId  String?
+  stockLocationId String?
+  requestedUnits  Int
+  allocatedUnits  Int
+  shortfallUnits  Int
+  actorId         String
+  reason          String
+  createdAt       DateTime @default(now())
+
+  lot      PharmacyInventoryLot?  @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  location PharmacyStockLocation? @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_stock_discrepancies_org_id_key")
+  @@index([organizationId, branchId, createdAt], map: "pharmacy_stock_discrepancies_org_branch_created_idx")
+  @@map("pharmacy_stock_discrepancies")
 }
 
 // ============================================
