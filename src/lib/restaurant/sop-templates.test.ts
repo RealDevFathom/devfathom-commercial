@@ -52,6 +52,7 @@ function makeDb() {
     restaurantSopTemplate: model(),
     restaurantSopTemplateVersion: model(),
     restaurantSopTemplateStep: model(),
+    restaurantSopOccurrence: model(),
   };
   db.$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   return db as Record<string, Delegate> & { $transaction: ReturnType<typeof vi.fn> };
@@ -293,6 +294,34 @@ describe('createDraftVersion', () => {
     await expect(
       createDraftVersion(scoped(), 't1', { cloneFromVersionId: 'other' })
     ).rejects.toMatchObject({ reason: 'INVALID' });
+  });
+
+  it('opens a new pharmacy SOP draft without rewriting completed occurrence evidence', async () => {
+    db.restaurantSopTemplate.findUnique.mockResolvedValue({ id: 'pharmacy-temperature' });
+    db.restaurantSopTemplateVersion.findMany.mockResolvedValue([
+      { id: 'published-v1', versionNumber: 1, status: 'PUBLISHED' },
+    ]);
+    db.restaurantSopTemplateStep.findMany.mockResolvedValue([
+      {
+        id: 'step-v1',
+        stepOrder: 1,
+        title: 'Recorded temperature',
+        instructions: null,
+        requiresPhoto: false,
+        requiresSignature: false,
+        requiresNote: true,
+      },
+    ]);
+
+    await createDraftVersion(scoped(), 'pharmacy-temperature');
+
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    expect(db.restaurantSopOccurrence.updateMany).not.toHaveBeenCalled();
+    expect(db.restaurantSopTemplateVersion.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ versionNumber: 2, status: 'DRAFT' }),
+      })
+    );
   });
 });
 

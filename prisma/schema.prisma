@@ -1067,9 +1067,9 @@ model PharmacyStockLocation {
 
   purchaseReturnLines     PharmacyPurchaseReturnLine[]
   stockSignals            PharmacyStockSignal[]
-  receiptLines            PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptStock")
-  quarantinedReceiptLines PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptQuarantine")
-  branch                  PharmacyBranch             @relation("PharmacyBranchStockLocations", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  receiptLines            PharmacyGoodsReceiptLine[]   @relation("PharmacyReceiptStock")
+  quarantinedReceiptLines PharmacyGoodsReceiptLine[]   @relation("PharmacyReceiptQuarantine")
+  branch                  PharmacyBranch               @relation("PharmacyBranchStockLocations", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   movements               PharmacyStockMovement[]
   balances                PharmacyStockBalance[]
   discrepancies           PharmacyStockDiscrepancy[]
@@ -10261,7 +10261,7 @@ model PharmacyRequisition {
   createdAt         DateTime                  @default(now())
   updatedAt         DateTime                  @updatedAt
 
-  branch         PharmacyBranch?           @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  branch         PharmacyBranch?             @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   lines          PharmacyRequisitionLine[]
   quotes         PharmacyQuote[]
   purchaseOrders PharmacyPurchaseOrder[]
@@ -11373,7 +11373,7 @@ model PharmacyOpeningStockLine {
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
 
-  session    PharmacyOpeningSession    @relation(fields: [organizationId, sessionId], references: [organizationId, id], onDelete: Restrict)
+  session    PharmacyOpeningSession     @relation(fields: [organizationId, sessionId], references: [organizationId, id], onDelete: Restrict)
   exceptions PharmacyOpeningException[]
 
   @@unique([organizationId, id], map: "pharmacy_opening_stock_lines_org_id_key")
@@ -11460,17 +11460,17 @@ model PharmacyOpeningLedgerEntry {
 /// MIG-04 — the window during which the branch enters every transaction into
 /// both systems and this one is read-only evidence.
 model PharmacyParallelRunWindow {
-  id               String                    @id @default(cuid())
-  organizationId   String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId         String
-  startDate        DateTime                  @db.Date
-  endDate          DateTime                  @db.Date
-  status           PharmacyParallelRunStatus @default(OPEN)
-  openedByActorId  String
-  closedByActorId  String?
-  closedAt         DateTime?
-  createdAt        DateTime                  @default(now())
-  updatedAt        DateTime                  @updatedAt
+  id              String                    @id @default(cuid())
+  organizationId  String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  startDate       DateTime                  @db.Date
+  endDate         DateTime                  @db.Date
+  status          PharmacyParallelRunStatus @default(OPEN)
+  openedByActorId String
+  closedByActorId String?
+  closedAt        DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
 
   entries     PharmacyParallelRunDailyEntry[]
   comparisons PharmacyParallelRunComparison[]
@@ -11485,18 +11485,18 @@ model PharmacyParallelRunWindow {
 /// operator. This is the only side of the comparison a human supplies, so it
 /// carries its own actor and time and is never derived.
 model PharmacyParallelRunDailyEntry {
-  id              String   @id @default(cuid())
-  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId        String
-  windowId        String
-  businessDate    DateTime @db.Date
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  windowId              String
+  businessDate          DateTime @db.Date
   legacySalesMinor      BigInt
   legacyCashMinor       BigInt
   legacyStockValueMinor BigInt
-  enteredByActorId String
-  enteredAt        DateTime @default(now())
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  enteredByActorId      String
+  enteredAt             DateTime @default(now())
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   window PharmacyParallelRunWindow @relation(fields: [organizationId, windowId], references: [organizationId, id], onDelete: Restrict)
 
@@ -11541,15 +11541,15 @@ model PharmacyParallelRunComparison {
 /// are NOT stored: the hash proves the archive handed over is the archive
 /// referenced, exactly as MIG-01 treats a profiled source.
 model PharmacyLegacyArchive {
-  id              String   @id @default(cuid())
-  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId        String
-  label           String
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  label             String
   /// SHA-256 of the archive, lowercase hex.
-  contentHash     String
+  contentHash       String
   /// Where the archive physically lives — a URI, a vault path, a shelf.
-  storageLocation String
-  byteSize        BigInt
+  storageLocation   String
+  byteSize          BigInt
   archivedByActorId String
   archivedAt        DateTime @default(now())
   createdAt         DateTime @default(now())
@@ -11589,4 +11589,49 @@ model PharmacyCutoverEvent {
   @@unique([organizationId, id], map: "pharmacy_cutover_events_org_id_key")
   @@index([organizationId, branchId, effectiveAt], map: "pharmacy_cutover_events_org_branch_effective_idx")
   @@map("pharmacy_cutover_events")
+}
+
+enum PharmacyRecordClass {
+  PRESCRIPTION
+  CONTROLLED_REGISTER
+  FISCAL
+  AUDIT
+}
+
+enum PharmacyLegalHoldEventKind {
+  PLACED
+  RELEASED
+}
+
+/// SAFE-04: effective-dated, append-only retention requirements by pharmacy record class.
+model PharmacyRetentionClass {
+  id              String              @id @default(cuid())
+  organizationId  String              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  recordClass     PharmacyRecordClass
+  retentionDays   Int
+  effectiveFrom   DateTime
+  reason          String
+  createdByUserId String
+  createdAt       DateTime            @default(now())
+
+  @@unique([organizationId, recordClass, effectiveFrom])
+  @@index([organizationId, recordClass, effectiveFrom])
+  @@map("pharmacy_retention_classes")
+}
+
+/// SAFE-04: append-only event stream; latest event determines whether a record is held.
+model PharmacyLegalHoldEvent {
+  id             String                     @id @default(cuid())
+  organizationId String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  holdKey        String
+  recordClass    PharmacyRecordClass
+  recordId       String
+  kind           PharmacyLegalHoldEventKind
+  reason         String
+  actorUserId    String
+  createdAt      DateTime                   @default(now())
+
+  @@unique([organizationId, holdKey, createdAt])
+  @@index([organizationId, recordClass, recordId, createdAt])
+  @@map("pharmacy_legal_hold_events")
 }
