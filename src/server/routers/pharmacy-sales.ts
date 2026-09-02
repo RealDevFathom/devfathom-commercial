@@ -13,6 +13,15 @@ import {
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  applyPharmacyTender,
+  closePharmacyDrawer,
+  cutPharmacyDailyClose,
+  openPharmacyDrawer,
+  PharmacySettlementError,
+  recordPharmacyCashMovement,
+  refundPharmacyTender,
+} from '@/lib/pharmacy/settlement';
 
 import { protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
@@ -42,6 +51,9 @@ function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacySettlementError) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  }
   if (error instanceof PharmacySaleError) {
     throw new TRPCError({
       code:
@@ -57,6 +69,118 @@ function fail(error: unknown): never {
 }
 
 export const pharmacySalesRouter = router({
+  openDrawer: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          deviceId: z.string().min(1),
+          businessDate: z.date(),
+          openingFloatMinor: z.number().int().nonnegative(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        openPharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
+      )
+    ),
+  drawerMovement: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          drawerSessionId: z.string().min(1),
+          kind: z.enum(['PAID_IN', 'PAID_OUT']),
+          amountMinor: z.number().int().positive(),
+          reason: z.string().trim().min(1),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        recordPharmacyCashMovement(txDb(tx), scopeFor(ctx, input.branchId), input)
+      )
+    ),
+  closeDrawer: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          drawerSessionId: z.string().min(1),
+          countedCashMinor: z.number().int().nonnegative(),
+          controlledCountHook: z.record(z.string(), z.unknown()).optional(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        closePharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
+      )
+    ),
+  dailyClose: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          businessDate: z.date(),
+          reopenReason: z.string().trim().min(1).optional(),
+          controlledCountHook: z.record(z.string(), z.unknown()).optional(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        cutPharmacyDailyClose(txDb(tx), scopeFor(ctx, input.branchId), input)
+      )
+    ),
+  tender: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          deviceId: z.string().min(1),
+          businessDate: z.date(),
+          type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT']),
+          amountMinor: z.number().int().positive(),
+          cashReceivedMinor: z.number().int().nonnegative().optional(),
+          idempotencyKey: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  refundTender: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          originalTenderId: z.string().min(1),
+          deviceId: z.string().min(1),
+          businessDate: z.date(),
+          amountMinor: z.number().int().positive(),
+          reason: z.string().trim().min(1),
+          idempotencyKey: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          refundPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
     .mutation(({ ctx, input }) =>
