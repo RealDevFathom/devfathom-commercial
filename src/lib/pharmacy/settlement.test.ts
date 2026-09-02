@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
+  applyPharmacyTender,
   assertRefundWithinTender,
   computePharmacyClose,
   foldExpectedCash,
@@ -71,5 +72,85 @@ describe('pharmacy settlement invariants', () => {
         { kind: 'PAID_OUT', amountMinor: 400 },
       ])
     ).toBe(12_000);
+  });
+
+  it('replays one idempotency result without duplicating tender or receipt', async () => {
+    let idempotency: Record<string, unknown> | null = null;
+    const tenderCreate = vi.fn().mockResolvedValue({ id: 'tender-1' });
+    const saleUpdate = vi.fn().mockResolvedValue({});
+    const db = {
+      $executeRaw: vi.fn().mockImplementation(async () => {
+        idempotency ??= {
+          id: 'idem-1',
+          commandType: 'tender',
+          payloadHash: '',
+          resultPayload: null,
+        };
+        return 1;
+      }),
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ receipt_number: 41 }]),
+      pharmacyMoneyIdempotencyKey: {
+        findUnique: vi.fn().mockImplementation(async () => idempotency),
+        update: vi.fn().mockImplementation(async ({ data }) => {
+          idempotency = { ...idempotency, resultPayload: data.resultPayload };
+          return idempotency;
+        }),
+      },
+      pharmacySale: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sale-1',
+          status: 'OPEN',
+          lines: [{ quantity: 1, unitPriceMinor: 100, discountMinor: 0 }],
+          tenders: [],
+        }),
+        update: saleUpdate,
+      },
+      pharmacyTender: { create: tenderCreate },
+    };
+    const input = {
+      saleId: 'sale-1',
+      deviceId: 'device-1',
+      businessDate: new Date('2026-09-02T00:00:00.000Z'),
+      type: 'BANK_TRANSFER' as const,
+      amountMinor: 100,
+      idempotencyKey: 'retry-1',
+    };
+
+    // Capture the canonical hash inserted by the first command in this narrow fake.
+    db.$executeRaw.mockImplementationOnce(async (query: { values: unknown[] }) => {
+      idempotency = {
+        id: 'idem-1',
+        commandType: 'tender',
+        payloadHash: query.values[5],
+        resultPayload: null,
+      };
+      return 1;
+    });
+    const first = await applyPharmacyTender(
+      db as never,
+      {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        actorId: 'actor-1',
+      },
+      input
+    );
+    const replay = await applyPharmacyTender(
+      db as never,
+      {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        actorId: 'actor-1',
+      },
+      input
+    );
+
+    expect(first).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: false });
+    expect(replay).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: true });
+    expect(tenderCreate).toHaveBeenCalledTimes(1);
+    expect(saleUpdate).toHaveBeenCalledTimes(1);
   });
 });
