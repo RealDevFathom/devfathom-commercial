@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   branchFindMany: vi.fn(),
   branchFindUnique: vi.fn(),
   deviceFindUnique: vi.fn(),
+  userFindMany: vi.fn(),
   userFindFirst: vi.fn(),
   credFindMany: vi.fn(),
   credFindFirst: vi.fn(),
@@ -72,7 +73,7 @@ const db = {
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
   restaurantRegisteredDevice: { findUnique: mocks.deviceFindUnique },
-  user: { findFirst: mocks.userFindFirst },
+  user: { findMany: mocks.userFindMany, findFirst: mocks.userFindFirst },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
     findFirst: mocks.credFindFirst,
@@ -96,7 +97,7 @@ function caller() {
       expires: 'later',
       user: { id: 'user_gm', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
     },
-    organization: null,
+    organization: { id: 'org_workspace' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -115,6 +116,7 @@ beforeEach(() => {
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
   mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_1' });
   mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
+  mocks.userFindMany.mockResolvedValue([]);
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'staff_new',
@@ -162,6 +164,20 @@ describe('capability gating', () => {
 });
 
 describe('staff CRUD', () => {
+  it('organization-scopes both staff-dialog directories', async () => {
+    await caller().listBranches();
+    expect(mocks.branchFindMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_workspace', id: { in: ['branch_1'] } },
+      })
+    );
+
+    await caller().listEligibleUsers();
+    expect(mocks.userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_workspace' } })
+    );
+  });
+
   it('creates a staff profile and audits it', async () => {
     const result = await caller().create({ displayName: 'Dana', email: 'Dana@R.com' });
     expect(result).toMatchObject({ id: 'staff_new', email: 'dana@r.com' });

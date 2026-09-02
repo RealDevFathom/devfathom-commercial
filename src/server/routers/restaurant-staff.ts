@@ -115,13 +115,27 @@ function mapJobRoleError(err: unknown): never {
 
 const staffProcedure = capabilityProcedure('staff:manage');
 
+function workspaceOrganizationId(ctx: {
+  organization: { id: string } | null;
+  session: { user: { organizationId?: string } } | null;
+}): string {
+  const organizationId = ctx.organization?.id ?? ctx.session?.user.organizationId;
+  if (!organizationId) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+  }
+  return organizationId;
+}
+
 export const restaurantStaffRouter = router({
   // Shared restaurant consoles consume these directories, but they still expose
   // branch and staff identity. Return only the actor's effective management scope.
   listBranches: protectedProcedure.query(async ({ ctx }) => {
     const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
     return ctx.db.restaurantBranch.findMany({
-      where: { id: { in: authorization.branchIds } },
+      where: {
+        organizationId: workspaceOrganizationId(ctx),
+        id: { in: authorization.branchIds },
+      },
       select: {
         id: true,
         name: true,
@@ -141,6 +155,7 @@ export const restaurantStaffRouter = router({
       if (input?.branchId) assertAuthorizedBranch(authorization, input.branchId);
       const staff = await ctx.db.restaurantStaffProfile.findMany({
         where: {
+          organizationId: workspaceOrganizationId(ctx),
           status: 'ACTIVE',
           primaryBranchId: input?.branchId ? input.branchId : { in: authorization.branchIds },
         },
@@ -158,8 +173,9 @@ export const restaurantStaffRouter = router({
       }));
     }),
 
-  listEligibleUsers: staffProcedure.query(({ ctx }) =>
-    ctx.db.user.findMany({
+  listEligibleUsers: staffProcedure.query(({ ctx }) => {
+    return ctx.db.user.findMany({
+      where: { organizationId: workspaceOrganizationId(ctx) },
       select: {
         id: true,
         name: true,
@@ -168,8 +184,8 @@ export const restaurantStaffRouter = router({
         restaurantStaffProfiles: { select: { id: true, displayName: true }, take: 1 },
       },
       orderBy: [{ name: 'asc' }, { email: 'asc' }],
-    })
-  ),
+    });
+  }),
 
   // ── Staff profiles ────────────────────────────────────────────────────────
   list: staffProcedure
@@ -186,6 +202,7 @@ export const restaurantStaffRouter = router({
       if (input?.branchId) assertAuthorizedBranch(authorization, input.branchId);
       return ctx.db.restaurantStaffProfile.findMany({
         where: {
+          organizationId: workspaceOrganizationId(ctx),
           ...(input?.status ? { status: input.status } : {}),
           primaryBranchId: input?.branchId ? input.branchId : { in: authorization.branchIds },
         },

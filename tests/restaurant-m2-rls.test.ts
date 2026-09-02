@@ -18,6 +18,8 @@ const ids = {
   orgB: `org_m2_b_${suffix}`,
   branchA: `branch_m2_a_${suffix}`,
   branchB: `branch_m2_b_${suffix}`,
+  userA: `user_m2_a_${suffix}`,
+  userB: `user_m2_b_${suffix}`,
   staffA: `staff_m2_a_${suffix}`,
   managerA: `manager_m2_a_${suffix}`,
   staffB: `staff_m2_b_${suffix}`,
@@ -33,6 +35,8 @@ const ids = {
 };
 
 const tables = [
+  ['restaurant_branches', ids.branchA, ids.branchB],
+  ['users', ids.userA, ids.userB],
   ['restaurant_staff_profiles', ids.staffA, ids.staffB],
   ['restaurant_operator_credentials', ids.credentialA, ids.credentialB],
   ['restaurant_registered_devices', ids.deviceA, ids.deviceB],
@@ -79,6 +83,27 @@ describe('M2 cross-tenant RLS probes (real PostgreSQL)', () => {
       `INSERT INTO "restaurant_branches" ("id", "organizationId", "name", "updatedAt") VALUES
         ($1, $2, 'A', CURRENT_TIMESTAMP), ($3, $4, 'B', CURRENT_TIMESTAMP)`,
       [ids.branchA, ids.orgA, ids.branchB, ids.orgB]
+    );
+    await client!.query(
+      `INSERT INTO "organization_departments"
+        ("id", "organizationId", "key", "name", "updatedAt") VALUES
+        ($1, $2, 'OPERATIONS', 'Operations', CURRENT_TIMESTAMP),
+        ($3, $4, 'OPERATIONS', 'Operations', CURRENT_TIMESTAMP)`,
+      [`dept_m2_a_${suffix}`, ids.orgA, `dept_m2_b_${suffix}`, ids.orgB]
+    );
+    await client!.query(
+      `INSERT INTO "users"
+        ("id", "organizationId", "name", "email", "department", "title", "updatedAt") VALUES
+        ($1, $2, 'Tenant A user', $3, 'OPERATIONS', 'Staff', CURRENT_TIMESTAMP),
+        ($4, $5, 'Tenant B user', $6, 'OPERATIONS', 'Staff', CURRENT_TIMESTAMP)`,
+      [
+        ids.userA,
+        ids.orgA,
+        `m2-a-${suffix}@example.invalid`,
+        ids.userB,
+        ids.orgB,
+        `m2-b-${suffix}@example.invalid`,
+      ]
     );
     await client!.query(
       `INSERT INTO "restaurant_staff_profiles" (

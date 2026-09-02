@@ -213,7 +213,10 @@ export const restaurantTaxRouter = router({
   configuration: adminProcedure.query(async ({ ctx }) => {
     const [branches, activeProfiles] = await Promise.all([
       ctx.db.restaurantBranch.findMany({
-        where: { active: true },
+        where: {
+          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+          active: true,
+        },
         select: { id: true, name: true, timezone: true },
         orderBy: { name: 'asc' },
       }),
