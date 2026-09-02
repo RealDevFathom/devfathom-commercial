@@ -3,6 +3,7 @@ import { PlatformCommandForm } from '@/components/platform/platform-command-form
 import { PlatformPageHeading } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
+import { ianaTimezoneOptions } from '@/lib/platform/timezones';
 import {
   ALL_VERTICALS,
   VERTICALS,
@@ -37,6 +38,7 @@ export default async function NewOrganizationPage({
   await requirePlatformRead('/platform/organizations');
   const query = await searchParams;
   const vertical = chosenVertical(query.vertical);
+  const timezoneOptions = ianaTimezoneOptions();
 
   // §2 — the package query is deferred until a type exists and is filtered
   // server-side by that type. The operator is never shown, and can never submit,
@@ -226,7 +228,15 @@ export default async function NewOrganizationPage({
                 max: 100000,
               },
               { name: 'currency', label: 'Currency', required: true, defaultValue: 'USD' },
-              { name: 'timezone', label: 'Timezone', required: true, defaultValue: 'UTC' },
+              {
+                name: 'timezone',
+                label: 'Timezone',
+                type: 'select',
+                required: true,
+                defaultValue: vertical === 'RESTAURANT' ? 'Asia/Karachi' : 'UTC',
+                help: 'Type while the list is open to search IANA timezones.',
+                options: timezoneOptions,
+              },
               ...(vertical === 'RESTAURANT'
                 ? [
                     {

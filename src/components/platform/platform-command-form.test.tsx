@@ -74,4 +74,47 @@ describe('PlatformCommandForm', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input).toHaveAttribute('placeholder', 'HH:MM');
   });
+
+  it('renders a custom timezone issue inline and focuses the timezone select', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({
+          error: 'The command payload is invalid.',
+          details: [
+            {
+              code: 'custom',
+              path: ['timezone'],
+              message: 'Choose a valid IANA timezone.',
+            },
+          ],
+          fieldErrors: { timezone: 'Choose a valid IANA timezone.' },
+        }),
+      })
+    );
+    render(
+      <PlatformCommandForm
+        action="organization.restaurant.setup"
+        fields={[
+          {
+            name: 'timezone',
+            label: 'IANA timezone',
+            type: 'select',
+            required: true,
+            defaultValue: 'Asia/Karachi',
+            options: [{ label: 'Asia/Karachi', value: 'Asia/Karachi' }],
+          },
+        ]}
+      />
+    );
+
+    const select = screen.getByLabelText('IANA timezone');
+    fireEvent.submit(select.closest('form')!);
+
+    await waitFor(() => expect(select).toHaveFocus());
+    expect(screen.getByText('Choose a valid IANA timezone.')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('1 field needs attention');
+    expect(select).toHaveAttribute('aria-invalid', 'true');
+  });
 });

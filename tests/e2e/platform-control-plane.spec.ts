@@ -240,7 +240,8 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await page.getByLabel('Display name').fill('E2E Restaurant');
   await page.getByLabel('Legal name').fill('E2E Restaurant Limited');
   await page.getByLabel('Workspace slug').fill(platformFixture.tenant.slug);
-  await page.locator('input[name="timezone"]').fill('Asia/Karachi');
+  const timezone = page.locator('select[name="timezone"]');
+  await expect(timezone).toHaveValue('Asia/Karachi');
   await page.getByLabel('First branch name').fill('Gulberg Flagship');
   await page.getByLabel('First branch address').fill('42 Main Boulevard, Lahore');
   const onboardingCutoff = page.locator('input[name="businessDayCutoff"]');
@@ -255,6 +256,25 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await page.getByLabel('Tenant administrator').fill('Restaurant Owner');
   await page.getByLabel('Administrator email').fill(platformFixture.tenant.email);
   await page.getByLabel('Temporary administrator password').fill(platformFixture.tenant.password);
+  let injectInvalidTimezone = true;
+  await page.route('**/api/platform/control', async (route) => {
+    const request = route.request();
+    const body = request.postDataJSON() as {
+      action?: string;
+      payload?: Record<string, unknown>;
+    };
+    if (injectInvalidTimezone && body.action === 'organization.create' && body.payload) {
+      injectInvalidTimezone = false;
+      body.payload.timezone = 'Karachi-ish';
+      await route.continue({ postData: JSON.stringify(body) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: 'Create onboarding record' }).click();
+  await expect(page.getByText('Choose a valid IANA timezone.')).toBeVisible();
+  await expect(timezone).toBeFocused();
+  await timezone.selectOption('Asia/Karachi');
   await page.getByRole('button', { name: 'Create onboarding record' }).click();
   await expect(page).toHaveURL(/\/platform\/organizations\/(?!new(?:[/?]|$))[^/?]+/);
   await withAdminDatabase(async (db) => {
