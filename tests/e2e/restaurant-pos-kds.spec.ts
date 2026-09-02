@@ -214,7 +214,11 @@ test.describe('restaurant POS and KDS core flow', () => {
       accountedTotal: fixture.expected.twoItemTotal,
     });
 
-    const businessDate = new Date().toISOString().slice(0, 10);
+    const currentDayResponse = await request.get('/api/restaurant/cash/day/current', {
+      headers: pos.headers,
+    });
+    expect(currentDayResponse.status()).toBe(200);
+    const { businessDate } = (await currentDayResponse.json()) as { businessDate: string };
     const previewResponse = await request.get(
       `/api/restaurant/cash/day/preview?businessDate=${businessDate}`,
       { headers: pos.headers }
