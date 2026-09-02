@@ -1,5 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import OrganizationDetailPage from './page';
 
@@ -410,5 +410,134 @@ describe('OrganizationDetailPage vertical correction gating', () => {
 
     expect(screen.queryByRole('button', { name: correctionLabel })).toBeNull();
     expect(screen.getByText(/No active Agency package is published/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * WHA-1180 — the Lifecycle gate panel lists each unmet activation gate as its
+ * own checklist row with a link, instead of leaving the operator to read a
+ * single banner string after a failed submit.
+ */
+describe('OrganizationDetailPage activation gate checklist', () => {
+  // The shared-host default reads PLATFORM_BASE_DOMAIN at render time, and this
+  // project does not set `unstubEnvs`, so each case clears its own stub rather
+  // than depending on the order these run in.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** The checklist row whose message is `message`. */
+  function gateRow(message: string) {
+    const row = screen.getByText(message).closest('li');
+    if (!row) throw new Error(`No gate row for ${message}`);
+    return within(row as HTMLElement);
+  }
+
+  const sharedLabel = 'Use shared deployment';
+
+  it('renders one linked row per unmet gate', async () => {
+    // The default fixture has a package but no modules, administrator or
+    // deployment, so exactly three of the four gates are unmet.
+    await renderDetail();
+
+    expect(screen.getByText('Unmet activation gates')).toBeInTheDocument();
+    expect(
+      gateRow('Enable at least one module.').getByRole('link', { name: 'Review modules' })
+    ).toHaveAttribute('href', '/platform/organizations/org_1#modules');
+    expect(
+      gateRow('Add an active organization administrator.').getByRole('link', {
+        name: 'Add administrator',
+      })
+    ).toHaveAttribute('href', '/platform/organizations/org_1#people');
+    expect(
+      gateRow('Add a ready production deployment.').getByRole('link', { name: 'Add deployment' })
+    ).toHaveAttribute('href', '/platform/deployments?organizationId=org_1');
+    // The package IS assigned, so its gate is not listed.
+    expect(screen.queryByText('Assign a commercial package.')).toBeNull();
+  });
+
+  it('offers the one-click shared default on a shared-host organization', async () => {
+    vi.stubEnv('PLATFORM_BASE_DOMAIN', 'staging.devfathom.com');
+
+    await renderDetail();
+
+    expect(
+      gateRow('Add a ready production deployment.').getByRole('button', { name: sharedLabel })
+    ).toBeInTheDocument();
+    // It is offered on the deployment gate only.
+    expect(screen.getAllByRole('button', { name: sharedLabel })).toHaveLength(1);
+  });
+
+  it('keeps a custom-domain tenant on the manual path', async () => {
+    vi.stubEnv('PLATFORM_BASE_DOMAIN', 'staging.devfathom.com');
+
+    await renderDetail({ org: organization({ deploymentMode: 'DEDICATED' }) });
+
+    const row = gateRow('Add a ready production deployment.');
+    expect(row.queryByRole('button', { name: sharedLabel })).toBeNull();
+    expect(row.getByRole('link', { name: 'Add deployment' })).toBeInTheDocument();
+  });
+
+  it('omits the shared default when no shared host is configured', async () => {
+    vi.stubEnv('PLATFORM_BASE_DOMAIN', '');
+
+    await renderDetail();
+
+    expect(
+      gateRow('Add a ready production deployment.').queryByRole('button', { name: sharedLabel })
+    ).toBeNull();
+  });
+
+  it('shows no checklist once every gate is satisfied', async () => {
+    await renderDetail({
+      org: organization({
+        package: {
+          id: 'pkg_r1',
+          key: 'restaurant-growth',
+          name: 'Restaurant Growth',
+          vertical: 'RESTAURANT',
+          moduleLinks: [{ moduleId: 'mod_core', module: { active: true, key: 'restaurant-core' } }],
+        },
+        users: [
+          {
+            id: 'user_1',
+            name: 'Ada Admin',
+            email: 'ada@northwind.test',
+            role: 'ADMIN',
+            status: 'ACTIVE',
+            title: 'Organization administrator',
+            department: 'operations',
+            organizationRoleId: null,
+          },
+        ],
+        deployments: [
+          {
+            id: 'dep_1',
+            environment: 'production',
+            mode: 'SHARED',
+            status: 'READY',
+            provider: 'VERCEL',
+            projectId: null,
+            region: 'global',
+            url: 'https://northwind.staging.devfathom.com',
+            databaseRef: null,
+            edgeConfigRef: null,
+            version: 'local',
+          },
+        ],
+      }),
+    });
+
+    expect(screen.queryByText('Unmet activation gates')).toBeNull();
+    expect(screen.queryByText('Add a ready production deployment.')).toBeNull();
+    // The lifecycle form itself is untouched by the checklist.
+    expect(screen.getByRole('button', { name: 'Apply lifecycle change' })).toBeInTheDocument();
+  });
+
+  it('hides the checklist for an organization that can no longer be activated', async () => {
+    await renderDetail({ org: organization({ status: 'PURGED' }) });
+
+    expect(screen.queryByText('Unmet activation gates')).toBeNull();
+    expect(screen.getByText('This lifecycle is terminal.')).toBeInTheDocument();
   });
 });
