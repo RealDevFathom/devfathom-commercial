@@ -62,6 +62,23 @@ function tag(label: string) {
   return `${suffix}-${label}-${unique}`;
 }
 
+async function ensureBranch(db: ScopedDb, organizationId: string, branchId: string) {
+  await db.pharmacyBranch.createMany({
+    data: [
+      {
+        id: branchId,
+        organizationId,
+        code: branchId,
+        name: `Branch ${branchId}`,
+        addressLine: '1 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    ],
+    skipDuplicates: true,
+  });
+}
+
 type Scenario = {
   organizationId: string;
   branchId: string;
@@ -72,7 +89,9 @@ type Scenario = {
 };
 
 async function scenario(organizationId: string, label: string): Promise<Scenario> {
+  const branchId = `${BRANCH_A}_${organizationId}_${suffix}`;
   return inOrg(organizationId, async (db) => {
+    await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
       data: {
         organizationId,
@@ -97,7 +116,7 @@ async function scenario(organizationId: string, label: string): Promise<Scenario
       db.pharmacyStockLocation.create({
         data: {
           organizationId,
-          branchId: BRANCH_A,
+          branchId,
           code: `MAIN-${tag(label)}`,
           name: 'Main store',
           kind: 'STORE',
@@ -109,7 +128,7 @@ async function scenario(organizationId: string, label: string): Promise<Scenario
     ]);
     return {
       organizationId,
-      branchId: BRANCH_A,
+      branchId,
       medicineId: medicine.id,
       packLevelId: packLevel.id,
       locationId: location.id,
