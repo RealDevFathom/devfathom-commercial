@@ -36,6 +36,17 @@ import {
   transferStock,
 } from '@/lib/pharmacy/stock-ledger';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
+import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
+import {
+  acknowledgeSignal,
+  createDraftAction,
+  dismissSignal,
+  markStaleSignals,
+  ownerDigest,
+  refreshStockSignals,
+  roleDashboard,
+  snoozeSignal,
+} from '@/lib/pharmacy/stock-signals-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
@@ -65,6 +76,12 @@ function domainError(error: unknown): never {
           ? 'FORBIDDEN'
           : 'BAD_REQUEST';
     throw new TRPCError({ code, message: error.reason });
+  }
+  if (error instanceof PharmacyStockSignalError) {
+    throw new TRPCError({
+      code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.reason,
+    });
   }
   throw error;
 }
@@ -604,6 +621,228 @@ export const pharmacyInventoryRouter = router({
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },
         input.medicineId,
+        new Date()
+      );
+    }),
+
+  // ── PUR-07 — the deterministic stock action centre ────────────────────────
+
+  /** The approved threshold a stock-level signal is measured against. */
+  approveSafetyStock: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          safetyStockUnits: z.number().int().min(0),
+          coverageDays: z.number().int().positive().max(365).default(30),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      if (!(await ctx.db.medicine.findFirst({ where: { id: input.medicineId } }))) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Medicine is outside this workspace.' });
+      }
+      const data = {
+        safetyStockUnits: input.safetyStockUnits,
+        coverageDays: input.coverageDays,
+        // The approver is the SESSION actor: a threshold approved by whoever the
+        // payload names is not an approval.
+        approvedByUserId: scope.actorId,
+        approvedAt: new Date(),
+      };
+      return ctx.db.pharmacySafetyStock.upsert({
+        where: {
+          organizationId_branchId_medicineId: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            medicineId: input.medicineId,
+          },
+        },
+        create: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          medicineId: input.medicineId,
+          ...data,
+        },
+        update: data,
+      });
+    }),
+
+  /** Recompute the branch's signals from current ledger facts. */
+  refreshStockSignals: auditedProtectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) => refreshStockSignals(txDb(tx), scope, new Date()));
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  markStaleSignals: auditedProtectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(({ ctx, input }) =>
+      markStaleSignals(ctx.db, scopeFor(ctx, input.branchId), new Date())
+    ),
+
+  acknowledgeSignal: auditedProtectedProcedure
+    .input(z.object({ branchId, signalId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await acknowledgeSignal(ctx.db, scopeFor(ctx, input.branchId), {
+          signalId: input.signalId,
+          at: new Date(),
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** §8A invariant 29: a snooze is only auditable with its reason attached. */
+  snoozeSignal: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          signalId: z.string().min(1),
+          until: z.date(),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await snoozeSignal(ctx.db, scopeFor(ctx, input.branchId), {
+          signalId: input.signalId,
+          until: input.until,
+          reason: input.reason,
+          at: new Date(),
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  dismissSignal: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          signalId: z.string().min(1),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await dismissSignal(ctx.db, scopeFor(ctx, input.branchId), {
+          signalId: input.signalId,
+          reason: input.reason,
+          at: new Date(),
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /**
+   * §8A invariant 29: the one-click action. Creates a DRAFT requisition,
+   * transfer or claim — never an order, never a stock movement.
+   */
+  createDraftAction: auditedProtectedProcedure
+    .input(
+      z.discriminatedUnion('kind', [
+        z
+          .object({
+            kind: z.literal('DRAFT_REQUISITION'),
+            branchId,
+            signalId: z.string().min(1),
+            reference: z.string().trim().min(1).max(120),
+            medicineId: z.string().min(1),
+            packLevelId: z.string().min(1),
+            canonicalUnitsPerPack: z.number().int().positive(),
+            quantityPacks: z.number().int().positive(),
+            neededBy: z.date().optional(),
+          })
+          .strict(),
+        z
+          .object({
+            kind: z.literal('DRAFT_TRANSFER'),
+            branchId,
+            signalId: z.string().min(1),
+            fromBranchId: z.string().trim().min(1).max(128),
+            lines: z
+              .array(
+                z
+                  .object({
+                    sourceLotId: z.string().min(1),
+                    sourceStockLocationId: z.string().min(1),
+                    destinationStockLocationId: z.string().min(1),
+                    quantityUnits: z.number().int().positive(),
+                  })
+                  .strict()
+              )
+              .min(1),
+          })
+          .strict(),
+        z
+          .object({
+            kind: z.literal('DRAFT_CLAIM'),
+            branchId,
+            signalId: z.string().min(1),
+            reference: z.string().trim().min(1).max(120),
+            supplierId: z.string().min(1),
+            lines: z
+              .array(
+                z
+                  .object({
+                    inventoryLotId: z.string().min(1),
+                    stockLocationId: z.string().min(1),
+                    quantityUnits: z.number().int().positive(),
+                    reason: z.string().trim().min(1).max(500),
+                    returnWindowEndsAt: z.date(),
+                    expectedCreditMinor: z.number().int().min(0),
+                  })
+                  .strict()
+              )
+              .min(1),
+          })
+          .strict(),
+      ])
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) => createDraftAction(txDb(tx), scope, input));
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** PUR-07 role dashboards: live signals per kind and accountable owner. */
+  stockSignalDashboard: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      return roleDashboard(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        new Date()
+      );
+    }),
+
+  /** PUR-07 owner digest payload. */
+  stockSignalDigest: protectedProcedure
+    .input(z.object({ branchId, ownerUserId: z.string().trim().min(1).max(200) }).strict())
+    .query(({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      return ownerDigest(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        input.ownerUserId,
         new Date()
       );
     }),
