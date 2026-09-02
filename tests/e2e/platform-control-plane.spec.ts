@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import {
   controlPlaneEnvironmentAvailable,
   loginPlatform,
@@ -183,29 +184,29 @@ test('failure ledger records denial, validation, rollback, success, replay, and 
   }
 
   await withAdminDatabase(async (db) => {
+    const failureRequestId = (suffix: string) =>
+      `pcorr_${createHash('sha256').update(`${correlation}-${suffix}`).digest('hex').slice(0, 32)}`;
+    const denyRequestId = failureRequestId('deny');
+    const invalidRequestId = failureRequestId('invalid');
+    const rollbackRequestId = failureRequestId('rollback');
+    const successRequestId = `${correlation}-success`;
     const evidence = await db.query<{
       request_id: string;
       success: boolean | null;
       payload: string;
     }>(
-      `SELECT "requestId" AS request_id, success, row_to_json(a)::text AS payload FROM platform_audit_logs a WHERE "requestId" LIKE $1 ORDER BY "requestId"`,
-      [`${correlation}-%`]
+      `SELECT "requestId" AS request_id, success, row_to_json(a)::text AS payload FROM platform_audit_logs a WHERE "requestId" = ANY($1::text[]) ORDER BY "requestId"`,
+      [[denyRequestId, invalidRequestId, rollbackRequestId, successRequestId]]
     );
     const byRequest = new Map(evidence.rows.map((row) => [row.request_id, row]));
-    expect(evidence.rows.filter((row) => row.request_id === `${correlation}-deny`)).toHaveLength(1);
-    expect(evidence.rows.filter((row) => row.request_id === `${correlation}-invalid`)).toHaveLength(
-      1
-    );
-    expect(
-      evidence.rows.filter((row) => row.request_id === `${correlation}-rollback`)
-    ).toHaveLength(1);
-    expect(evidence.rows.filter((row) => row.request_id === `${correlation}-success`)).toHaveLength(
-      1
-    );
-    expect(byRequest.get(`${correlation}-rollback`)?.success).toBe(false);
-    expect(byRequest.get(`${correlation}-deny`)?.success).toBe(false);
-    expect(byRequest.get(`${correlation}-invalid`)?.success).toBe(false);
-    expect(byRequest.get(`${correlation}-success`)?.success).toBe(true);
+    expect(evidence.rows.filter((row) => row.request_id === denyRequestId)).toHaveLength(1);
+    expect(evidence.rows.filter((row) => row.request_id === invalidRequestId)).toHaveLength(1);
+    expect(evidence.rows.filter((row) => row.request_id === rollbackRequestId)).toHaveLength(1);
+    expect(evidence.rows.filter((row) => row.request_id === successRequestId)).toHaveLength(1);
+    expect(byRequest.get(rollbackRequestId)?.success).toBe(false);
+    expect(byRequest.get(denyRequestId)?.success).toBe(false);
+    expect(byRequest.get(invalidRequestId)?.success).toBe(false);
+    expect(byRequest.get(successRequestId)?.success).toBe(true);
     expect(JSON.stringify(evidence.rows)).not.toContain(secret);
     expect(JSON.stringify(evidence.rows)).not.toMatch(/forced e2e rollback|\bat .+\(.+\.ts:/);
   });

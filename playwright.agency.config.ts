@@ -32,6 +32,8 @@ export default defineConfig({
       DATABASE_URL: env.DATABASE_URL!,
       TEST_DATABASE_URL: env.TEST_DATABASE_URL!,
       AGENCY_E2E: '1',
+      AUTH_TRUST_HOST: 'true',
+      SHARED_APP_HOSTS: '127.0.0.1',
     },
   },
 });

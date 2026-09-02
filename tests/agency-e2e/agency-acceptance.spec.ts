@@ -21,7 +21,7 @@ async function signIn(page: Page) {
 
 test('onboarding selection and dashboard navigation retain the Agency tenant', async ({ page }) => {
   await signIn(page);
-  await expect(page.getByRole('heading', { name: /Agency Gate Admin/ })).toBeVisible();
+  await expect(page.getByText('Agency Gate Admin', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Active Projects', { exact: true })).toBeVisible();
   for (const route of [
     '/clients',

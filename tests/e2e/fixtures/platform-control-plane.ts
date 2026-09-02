@@ -4,6 +4,8 @@ import pg from 'pg';
 
 const runtimeUrl = process.env.DATABASE_URL;
 const adminUrl = process.env.PLAYWRIGHT_DATABASE_ADMIN_URL;
+const platformOrigin = new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://admin.localhost:4319')
+  .origin;
 
 export const platformFixture = {
   admin: {
@@ -61,6 +63,26 @@ export async function prepareControlPlaneFixture() {
       `DELETE FROM platform_settings WHERE key IN ('e2e.denied', 'e2e.ledger.success', 'e2e.rollback')`
     );
     await admin.query(
+      `INSERT INTO platform_modules (id, key, name, category, "routePrefix", active, "sortOrder", "createdAt", "updatedAt")
+       VALUES
+         ('e2e_restaurant_core', 'restaurant-core', 'Restaurant Core', 'Restaurant', '/restaurant', true, 0, now(), now()),
+         ('e2e_restaurant_menu', 'restaurant-menu', 'Restaurant Menu', 'Restaurant', '/restaurant/menus', true, 1, now(), now())
+       ON CONFLICT (key) DO UPDATE SET active = true, "updatedAt" = now()`
+    );
+    await admin.query(
+      `INSERT INTO platform_packages (id, key, name, vertical, version, active, "defaultSeats", "createdAt", "updatedAt")
+       VALUES ('e2e_restaurant_package', 'e2e-restaurant-package', 'E2E Restaurant Package', 'RESTAURANT', 1, true, 25, now(), now())
+       ON CONFLICT (key) DO UPDATE SET vertical = 'RESTAURANT', active = true, "updatedAt" = now()`
+    );
+    await admin.query(
+      `INSERT INTO platform_package_modules (id, "packageId", "moduleId", enabled)
+       SELECT 'e2e_package_' || m.key, p.id, m.id, true
+       FROM platform_packages p
+       JOIN platform_modules m ON m.key IN ('restaurant-core', 'restaurant-menu')
+       WHERE p.key = 'e2e-restaurant-package'
+       ON CONFLICT ("packageId", "moduleId") DO UPDATE SET enabled = true`
+    );
+    await admin.query(
       `INSERT INTO platform_users (id, name, email, "passwordHash", role, active, "mfaRequired", "createdAt", "updatedAt")
        VALUES ('e2e_platform_operator', 'E2E Platform Operator', $1, $2, 'OPERATIONS', true, false, now(), now())
        ON CONFLICT (email) DO UPDATE SET "passwordHash" = EXCLUDED."passwordHash", role = 'OPERATIONS', active = true, "mfaRequired" = false`,
@@ -77,19 +99,21 @@ export async function prepareControlPlaneFixture() {
 }
 
 export async function loginPlatform(page: Page, identity = platformFixture.admin) {
-  const origin = new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://admin.localhost:4319').origin;
   const response = await page.request.post('/api/platform/session', {
-    headers: { origin },
+    headers: { origin: platformOrigin },
     data: identity,
   });
   expect(response.status()).toBe(200);
   const cookie = response.headers()['set-cookie']?.match(/df_platform_session=([^;]+)/)?.[1];
   if (!cookie) throw new Error('Platform session response did not set its opaque cookie.');
-  await page
-    .context()
-    .addCookies([
-      { name: 'df_platform_session', value: cookie, domain: new URL(origin).hostname, path: '/' },
-    ]);
+  await page.context().addCookies([
+    {
+      name: 'df_platform_session',
+      value: cookie,
+      domain: new URL(platformOrigin).hostname,
+      path: '/',
+    },
+  ]);
   await page.goto('/platform');
   await expect(page).toHaveURL(/\/platform(?:\/|$)/);
 }
@@ -99,14 +123,14 @@ export async function loginPlatformRequest(
   identity = platformFixture.admin
 ) {
   const response = await request.post('/api/platform/session', {
-    headers: { origin: new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4319').origin },
+    headers: { origin: platformOrigin },
     data: identity,
   });
   expect(response.status()).toBe(200);
 }
 
 export const platformMutationHeaders = {
-  origin: new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4319').origin,
+  origin: platformOrigin,
 };
 
 export async function withAdminDatabase<T>(run: (client: pg.Client) => Promise<T>) {
