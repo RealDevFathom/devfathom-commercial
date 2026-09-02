@@ -1467,6 +1467,51 @@ enum TransactionType {
   EXPENSE
 }
 
+enum FinanceJournalSide {
+  DEBIT
+  CREDIT
+}
+
+/// FIN-01: the accounts the posting adapters use. Deliberately the smallest set
+/// that lets every event listed in FIN-01 balance and every FIN-03 read be a
+/// query rather than a special case — there is no account here that no adapter
+/// posts to.
+enum FinanceAccountCode {
+  /// Asset. Perpetual stock value, carried per lot and location.
+  INVENTORY
+  /// Asset. Stock that has left a branch and not yet been received.
+  INVENTORY_IN_TRANSIT
+  /// Liability. Goods received and owed for; FIN-02 settles it.
+  GOODS_RECEIVED_ACCRUAL
+  /// Asset. What the sale is owed, before FIN-02 tender/khata settlement.
+  SALES_CLEARING
+  /// Income. Recognised GROSS, so a discount never hides inside revenue.
+  SALES_REVENUE
+  /// Contra-revenue. The explicit commercial treatment of a discount,
+  /// promotion or complimentary line.
+  SALES_DISCOUNT
+  /// Expense. Recognised at the exact landed cost of the allocated lot.
+  COST_OF_GOODS_SOLD
+  /// Expense. Expiry and damage.
+  INVENTORY_WRITE_OFF
+  /// Expense (or gain, when counted stock exceeds the book). Count variance.
+  INVENTORY_SHRINKAGE
+  /// Asset. Value claimed back from a supplier for returned goods.
+  SUPPLIER_CLAIM_RECEIVABLE
+}
+
+/// FIN-01 traceability: the operational table an entry accounts for. `sourceId`
+/// is a row id in that table.
+enum FinanceSourceKind {
+  PHARMACY_GOODS_RECEIPT
+  PHARMACY_SALE_LINE
+  PHARMACY_SALE_RETURN_LINE
+  PHARMACY_STOCK_WRITE_OFF
+  PHARMACY_SUPPLIER_CLAIM
+  PHARMACY_INTERBRANCH_TRANSFER_LINE
+  PHARMACY_INVENTORY_COUNT_LINE
+}
+
 enum ExpenseCategory {
   SALARIES
   SUBSCRIPTIONS
@@ -2473,6 +2518,79 @@ model RecurringExpense {
   @@index([organizationId])
   @@map("recurring_expenses")
 }
+
+/// FIN-01 / §8A invariant 15 — the shared double-entry journal. One entry per
+/// operational event, named by `sourceKind` + `sourceId` so every posting is
+/// traceable back to the row that caused it, and balanced by a DEFERRABLE
+/// constraint trigger (debits = credits at COMMIT, not per statement, so an
+/// adapter may write its legs one at a time).
+///
+/// APPEND-ONLY. Entries and lines are never updated or deleted (trigger). A
+/// correction is a new entry whose `reversesEntryId` names the original and
+/// whose lines are the originals with their sides swapped — additive, linked,
+/// and at most once per entry.
+model FinanceJournalEntry {
+  id              String            @id @default(cuid())
+  organizationId  String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  /// Null for an organization-level event. Line-level `branchId` is what the
+  /// FIN-03 reads group by, because one entry (an inter-branch transfer) can
+  /// legitimately span two branches.
+  branchId        String?
+  sourceKind      FinanceSourceKind
+  /// The primary key of the operational row this entry accounts for.
+  sourceId        String
+  description     String
+  currency        Currency          @default(PKR)
+  actorId         String
+  occurredAt      DateTime
+  idempotencyKey  String
+  reversesEntryId String?
+  reversalReason  String?
+  createdAt       DateTime          @default(now())
+
+  reverses FinanceJournalEntry?  @relation("FinanceEntryReversal", fields: [organizationId, reversesEntryId], references: [organizationId, id], onDelete: Restrict, map: "finance_journal_entries_reverses_fkey")
+  reversal FinanceJournalEntry[] @relation("FinanceEntryReversal")
+  lines    FinanceJournalLine[]
+
+  @@unique([organizationId, id], map: "finance_journal_entries_org_id_key")
+  @@unique([organizationId, idempotencyKey], map: "finance_journal_entries_org_idempotency_key")
+  @@unique([organizationId, reversesEntryId], map: "finance_journal_entries_org_reverses_key")
+  @@index([organizationId, sourceKind, sourceId], map: "finance_journal_entries_org_source_idx")
+  @@index([organizationId, branchId, occurredAt], map: "finance_journal_entries_org_branch_occurred_idx")
+  @@map("finance_journal_entries")
+}
+
+/// One leg of a journal entry. `amountMinor` is a NON-NEGATIVE integer in minor
+/// units; direction lives in `side`, so no leg is ever a signed amount whose
+/// sign has to be interpreted. The dimension columns are deliberately plain
+/// identifiers with no foreign key: the journal is shared across verticals and
+/// must not depend on any one vertical's tables.
+model FinanceJournalLine {
+  id             String             @id @default(cuid())
+  organizationId String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  entryId        String
+  accountCode    FinanceAccountCode
+  side           FinanceJournalSide
+  amountMinor    Int
+  branchId       String?
+  /// FIN-03 analysis dimensions: product, stock lot, stock location, and the
+  /// operational line this leg belongs to (a sale line, a receipt line).
+  productId      String?
+  lotId          String?
+  locationId     String?
+  sourceLineId   String?
+  memo           String?
+  createdAt      DateTime           @default(now())
+
+  entry FinanceJournalEntry @relation(fields: [organizationId, entryId], references: [organizationId, id], onDelete: Restrict, map: "finance_journal_lines_entry_fkey")
+
+  @@unique([organizationId, id], map: "finance_journal_lines_org_id_key")
+  @@index([organizationId, entryId], map: "finance_journal_lines_org_entry_idx")
+  @@index([organizationId, accountCode, branchId], map: "finance_journal_lines_org_account_branch_idx")
+  @@index([organizationId, lotId, locationId], map: "finance_journal_lines_org_lot_location_idx")
+  @@map("finance_journal_lines")
+}
+
 
 // ============================================
 // CHAT & MESSAGING
