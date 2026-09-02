@@ -1,0 +1,76 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { bookkeepingJournalLines, createSettlementBatch } from './bookkeeping';
+
+const base = {
+  reference: 'REF-1',
+  amountMinor: 1250,
+  occurredAt: new Date('2026-09-02T00:00:00Z'),
+  idempotencyKey: 'key-1',
+} as const;
+
+describe('pharmacy bookkeeping journal mappings', () => {
+  it.each([
+    ['SUPPLIER_PAYMENT', 'ACCOUNTS_PAYABLE', 'BANK'],
+    ['CUSTOMER_RECEIPT', 'BANK', 'ACCOUNTS_RECEIVABLE'],
+    ['EXPENSE', 'OPERATING_EXPENSE', 'BANK'],
+    ['PETTY_CASH', 'OPERATING_EXPENSE', 'CASH'],
+    ['BANK_DEPOSIT', 'BANK', 'CASH'],
+    ['SETTLEMENT', 'BANK', 'SALES_CLEARING'],
+    ['VOUCHER', 'ACCOUNTS_PAYABLE', 'BANK'],
+    ['CHEQUE', 'ACCOUNTS_PAYABLE', 'BANK'],
+  ] as const)('maps %s into the shared ledger', (kind, debit, credit) => {
+    const lines = bookkeepingJournalLines({ ...base, kind });
+    expect(lines).toEqual([
+      { accountCode: debit, side: 'DEBIT', amountMinor: 1250 },
+      { accountCode: credit, side: 'CREDIT', amountMinor: 1250 },
+    ]);
+  });
+});
+
+describe('POS settlement batches', () => {
+  it('selects tenders inside the tenant and branch and pins each amount', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      { id: 'tender-1', amountMinor: 700 },
+      { id: 'tender-2', amountMinor: 300 },
+    ]);
+    const create = vi.fn().mockResolvedValue({ id: 'batch-1' });
+    const db = {
+      pharmacyTender: { findMany },
+      pharmacySettlementBatch: { create },
+    } as unknown as ScopedDb;
+    await createSettlementBatch(
+      db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'accountant-a' },
+      {
+        reference: 'SET-1',
+        provider: 'Wallet',
+        tenderType: 'WALLET',
+        businessDate: new Date('2026-09-02'),
+        tenderIds: ['tender-1', 'tender-2'],
+      }
+    );
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        id: { in: ['tender-1', 'tender-2'] },
+        type: 'WALLET',
+      },
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          expectedMinor: 1000,
+          tenders: {
+            create: [
+              { organizationId: 'org-a', tenderId: 'tender-1', amountMinor: 700 },
+              { organizationId: 'org-a', tenderId: 'tender-2', amountMinor: 300 },
+            ],
+          },
+        }),
+        include: { tenders: true },
+      })
+    );
+  });
+});

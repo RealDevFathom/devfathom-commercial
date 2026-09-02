@@ -1,0 +1,220 @@
+// @vitest-environment node
+import { randomBytes } from 'node:crypto';
+import pg from 'pg';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+const runtimeUrl = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+const ownerUrl = process.env.M8_TEST_OWNER_DATABASE_URL;
+if (runtimeUrl) process.env.DATABASE_URL = runtimeUrl;
+const describeDb = runtimeUrl && ownerUrl ? describe : describe.skip;
+const suffix = randomBytes(5).toString('hex');
+const organizationId = `org_fin02_${suffix}`;
+const branchId = `branch_fin02_${suffix}`;
+const actorId = `accountant_${suffix}`;
+
+type Deps = {
+  withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  bookkeeping: typeof import('./bookkeeping');
+  tax: typeof import('./tax-profiles');
+};
+let deps: Deps;
+const inTenant = <T>(work: (db: ScopedDb) => Promise<T>) => deps.withTenantDb(organizationId, work);
+const scope = { organizationId, branchId, actorId };
+
+beforeAll(async () => {
+  if (!runtimeUrl || !ownerUrl) return;
+  const [scoped, bookkeeping, tax, guard] = await Promise.all([
+    import('@/lib/tenancy/scoped-db'),
+    import('./bookkeeping'),
+    import('./tax-profiles'),
+    import('@/lib/testing/rls-role-guard'),
+  ]);
+  deps = { withTenantDb: scoped.withTenantDb, bookkeeping, tax };
+  await guard.assertRlsEnforcingRole(scoped.withPlatformDb);
+  const owner = new pg.Client({ connectionString: ownerUrl });
+  await owner.connect();
+  try {
+    await owner.query(`SET app.is_platform_admin = 'true'`);
+    await owner.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode","createdAt","updatedAt") VALUES ($1,$2,'Finance fixture','Finance fixture','ACTIVE','SHARED',now(),now())`,
+      [organizationId, `finance-${suffix}`]
+    );
+    await owner.query(
+      `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","createdAt","updatedAt") VALUES ($1,$2,$3,'Main pharmacy','1 Test Road','Lahore','PB',now(),now())`,
+      [branchId, organizationId, `FIN-${suffix}`]
+    );
+  } finally {
+    await owner.end();
+  }
+}, 120_000);
+
+describeDb('FIN-02 bookkeeper acceptance', () => {
+  it('keeps partial allocations reconciled when one payment is reversed', async () => {
+    await inTenant(async (db) => {
+      const first = await db.$transaction((tx) =>
+        deps.bookkeeping.postBookkeepingTransaction(tx as ScopedDb, scope, {
+          reference: `PAY-1-${suffix}`,
+          kind: 'SUPPLIER_PAYMENT',
+          amountMinor: 6_000,
+          occurredAt: new Date('2026-08-10T10:00:00Z'),
+          idempotencyKey: `pay-1-${suffix}`,
+          allocations: [
+            {
+              sourceKind: 'PURCHASE_INVOICE',
+              sourceId: 'invoice-1',
+              sourceReference: 'INV-100',
+              amountMinor: 6_000,
+            },
+          ],
+        })
+      );
+      await db.$transaction((tx) =>
+        deps.bookkeeping.postBookkeepingTransaction(tx as ScopedDb, scope, {
+          reference: `PAY-2-${suffix}`,
+          kind: 'SUPPLIER_PAYMENT',
+          amountMinor: 4_000,
+          occurredAt: new Date('2026-08-11T10:00:00Z'),
+          idempotencyKey: `pay-2-${suffix}`,
+          allocations: [
+            {
+              sourceKind: 'PURCHASE_INVOICE',
+              sourceId: 'invoice-1',
+              sourceReference: 'INV-100',
+              amountMinor: 4_000,
+            },
+          ],
+        })
+      );
+      const bankLine = await db.pharmacyBankStatementLine.create({
+        data: {
+          organizationId,
+          branchId,
+          statementRef: 'AUG-26',
+          lineReference: 'BANK-1',
+          bookedAt: new Date('2026-08-10T10:00:00Z'),
+          amountMinor: -6_000,
+          description: 'Supplier payment',
+        },
+      });
+      await deps.bookkeeping.reconcileBankLine(db, scope, {
+        statementLineId: bankLine.id,
+        transactionId: first.id,
+        amountMinor: 6_000,
+      });
+      await db.$transaction((tx) =>
+        deps.bookkeeping.reverseBookkeepingTransaction(tx as ScopedDb, scope, {
+          transactionId: first.id,
+          at: new Date('2026-08-12T10:00:00Z'),
+          reason: 'Cheque returned',
+          idempotencyKey: `reverse-${suffix}`,
+        })
+      );
+
+      const activeAllocated = await db.pharmacyBookkeepingAllocation.aggregate({
+        where: { organizationId, sourceId: 'invoice-1', transaction: { status: 'POSTED' } },
+        _sum: { amountMinor: true },
+      });
+      expect(activeAllocated._sum.amountMinor).toBe(4_000);
+      expect(
+        await db.pharmacyBankStatementLine.findUniqueOrThrow({ where: { id: bankLine.id } })
+      ).toMatchObject({ status: 'REVERSED' });
+      expect(
+        await db.pharmacyBankReconciliation.findFirstOrThrow({
+          where: { organizationId, transactionId: first.id },
+        })
+      ).toMatchObject({ reversalReason: 'Cheque returned' });
+      const journal = await db.financeJournalEntry.findMany({
+        where: { organizationId, sourceId: first.id },
+        include: { lines: true },
+      });
+      expect(journal).toHaveLength(2);
+      const signed = journal
+        .flatMap((entry) => entry.lines)
+        .reduce(
+          (sum, line) => sum + (line.side === 'DEBIT' ? line.amountMinor : -line.amountMinor),
+          0
+        );
+      expect(signed).toBe(0);
+    });
+  });
+
+  it('refuses postings inside a closed period and permits them after controlled reopen', async () => {
+    await inTenant(async (db) => {
+      const period = await deps.bookkeeping.closeAccountingPeriod(db, scope, {
+        startsAt: new Date('2026-09-01T00:00:00Z'),
+        endsAt: new Date('2026-10-01T00:00:00Z'),
+      });
+      const post = () =>
+        db.$transaction((tx) =>
+          deps.bookkeeping.postBookkeepingTransaction(tx as ScopedDb, scope, {
+            reference: `EXP-${suffix}`,
+            kind: 'EXPENSE',
+            amountMinor: 500,
+            occurredAt: new Date('2026-09-10T10:00:00Z'),
+            idempotencyKey: `expense-${suffix}`,
+          })
+        );
+      await expect(post()).rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+      await deps.bookkeeping.reopenAccountingPeriod(db, scope, {
+        periodId: period.id,
+        reason: 'Approved correction',
+      });
+      await expect(post()).resolves.toMatchObject({ status: 'POSTED' });
+    });
+  });
+});
+
+describeDb('FIN-04 tax profile versioning', () => {
+  it('selects effective approved versions and applies shared inclusive rounding', async () => {
+    await inTenant(async (db) => {
+      const first = await db.$transaction((tx) =>
+        deps.tax.publishPharmacyTaxProfile(tx as ScopedDb, scope, {
+          name: '2026 medicine tax',
+          effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+          effectiveTo: new Date('2027-01-01T00:00:00Z'),
+          approvalReference: 'ACCOUNTANT-1',
+          idempotencyKey: `tax-1-${suffix}`,
+          rules: [
+            {
+              productClass: 'MEDICINE',
+              pctHsCode: '3004',
+              sroReference: 'SRO-PROVISIONAL-1',
+              priceMode: 'INCLUSIVE',
+              rate: '0.10',
+            },
+          ],
+        })
+      );
+      const second = await db.$transaction((tx) =>
+        deps.tax.publishPharmacyTaxProfile(tx as ScopedDb, scope, {
+          name: '2027 medicine tax',
+          effectiveFrom: new Date('2027-01-01T00:00:00Z'),
+          approvalReference: 'ACCOUNTANT-2',
+          idempotencyKey: `tax-2-${suffix}`,
+          rules: [
+            { productClass: 'MEDICINE', pctHsCode: '3004', priceMode: 'EXCLUSIVE', rate: '0.18' },
+          ],
+        })
+      );
+      expect([first.versionNumber, second.versionNumber]).toEqual([1, 2]);
+      const result = await deps.tax.calculatePharmacyTax(db, {
+        organizationId,
+        branchId,
+        at: new Date('2026-06-01T00:00:00Z'),
+        productClass: 'MEDICINE',
+        pctHsCode: '3004',
+        consideration: '110.00',
+      });
+      expect(result.profileVersionId).toBe(first.id);
+      expect(result.net.toString()).toBe('100');
+      expect(result.tax.toString()).toBe('10');
+      await expect(
+        db.pharmacyTaxProfileVersion.update({
+          where: { id: first.id },
+          data: { name: 'rewritten' },
+        })
+      ).rejects.toThrow(/PHARMACY_TAX_PROFILE_PUBLISHED_IMMUTABLE/);
+    });
+  });
+});
