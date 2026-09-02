@@ -12,6 +12,20 @@
 -- Capture that fixture role instead of assuming the conventional postgres name.
 SELECT current_user AS extension_function_owner \gset
 
+-- Preparation records skips it cannot perform in this table. A real deployment
+-- always runs preparation as one database-owning role; this proof drives it as
+-- several fixture roles in turn, so create the table up front under the fixture
+-- owner and grant each role the access that deploy role would already have.
+CREATE SCHEMA IF NOT EXISTS platform_ops;
+CREATE TABLE IF NOT EXISTS platform_ops.platform_db_hardening (
+  extension_name text NOT NULL,
+  owner_role name NOT NULL,
+  reason text NOT NULL,
+  function_count integer NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT platform_db_hardening_pkey PRIMARY KEY (extension_name, owner_role)
+);
+
 \if :preinstall_vulnerable
   CREATE EXTENSION IF NOT EXISTS btree_gist;
 \endif
@@ -29,6 +43,8 @@ GRANT EXECUTE ON FUNCTION public.wha766_unrelated_fixture(integer) TO PUBLIC;
 \endif
 
 CREATE ROLE wha911_nonowner LOGIN NOSUPERUSER NOBYPASSRLS;
+GRANT USAGE ON SCHEMA platform_ops TO wha911_nonowner;
+GRANT SELECT, INSERT, UPDATE ON platform_ops.platform_db_hardening TO wha911_nonowner;
 
 DO $proof$
 DECLARE
@@ -69,21 +85,54 @@ SELECT count(*) AS public_execute_before_failed_preparation
  )
 \gset
 
-SET SESSION AUTHORIZATION wha911_nonowner;
-\set ON_ERROR_STOP off
-\ir ../../prisma/prepare-extensions.sql
-\set failed_preparation_sqlstate :SQLSTATE
-\set ON_ERROR_STOP on
-RESET SESSION AUTHORIZATION;
+\if :preinstall_vulnerable
+  -- Managed PostgreSQL owns extension functions with an internal superuser no
+  -- customer role may assume (Azure Database for PostgreSQL uses "azuresu").
+  -- Preparation must skip the revoke it cannot perform, record that skip, and
+  -- leave the ACLs exactly as it found them.
+  SET SESSION AUTHORIZATION wha911_nonowner;
+  \ir ../../prisma/prepare-extensions.sql
+  RESET SESSION AUTHORIZATION;
 
-SELECT :'failed_preparation_sqlstate' = 'P0001' AS failed_closed \gset
-\if :failed_closed
+  SELECT EXISTS (
+    SELECT 1
+      FROM platform_ops.platform_db_hardening
+     WHERE extension_name = 'btree_gist'
+       AND owner_role = :'extension_function_owner'
+       AND reason = 'managed-owner'
+       AND function_count > 0
+  ) AS non_owner_recorded_skip \gset
+  \if :non_owner_recorded_skip
+  \else
+    \echo 'managed-owner preparation did not record a skip for' :extension_function_owner
+    \quit 1
+  \endif
+
+  -- The guard migration must tolerate exactly what preparation could not correct.
+  SET SESSION AUTHORIZATION wha911_nonowner;
+  \ir ../../prisma/migrations/20260830120000_btree_gist_public_execute_acl/migration.sql
+  RESET SESSION AUTHORIZATION;
+
+  DELETE FROM platform_ops.platform_db_hardening;
 \else
-  \echo 'expected non-owner preparation to fail with SQLSTATE P0001, got' :failed_preparation_sqlstate
-  \quit 1
+  -- With the extension absent this role cannot bootstrap it at all, which is a
+  -- different failure from an unassumable owner and must still fail closed.
+  SET SESSION AUTHORIZATION wha911_nonowner;
+  \set ON_ERROR_STOP off
+  \ir ../../prisma/prepare-extensions.sql
+  \set failed_preparation_sqlstate :SQLSTATE
+  \set ON_ERROR_STOP on
+  RESET SESSION AUTHORIZATION;
+
+  SELECT :'failed_preparation_sqlstate' = 'P0001' AS failed_closed \gset
+  \if :failed_closed
+  \else
+    \echo 'expected extension-absent preparation to fail with SQLSTATE P0001, got' :failed_preparation_sqlstate
+    \quit 1
+  \endif
 \endif
 
-SELECT count(*) = :public_execute_before_failed_preparation AS failed_preparation_left_acl_unchanged
+SELECT count(*) = :public_execute_before_failed_preparation AS skipped_preparation_left_acl_unchanged
   FROM pg_catalog.pg_proc AS procedure
   JOIN pg_catalog.pg_depend AS dependency
     ON dependency.classid = 'pg_catalog.pg_proc'::regclass
@@ -102,17 +151,21 @@ SELECT count(*) = :public_execute_before_failed_preparation AS failed_preparatio
       AND acl.privilege_type = 'EXECUTE'
  )
 \gset
-\if :failed_preparation_left_acl_unchanged
+\if :skipped_preparation_left_acl_unchanged
 \else
-  \echo 'failed preparation changed btree_gist ACLs'
+  \echo 'skipped preparation changed btree_gist ACLs'
   \quit 1
 \endif
 
+REVOKE ALL ON platform_ops.platform_db_hardening FROM wha911_nonowner;
+REVOKE USAGE ON SCHEMA platform_ops FROM wha911_nonowner;
 DROP ROLE wha911_nonowner;
 
 \if :preinstall_vulnerable
 \else
   CREATE ROLE wha911_creator_only LOGIN NOSUPERUSER NOBYPASSRLS;
+  GRANT USAGE ON SCHEMA platform_ops TO wha911_creator_only;
+  GRANT SELECT, INSERT, UPDATE ON platform_ops.platform_db_hardening TO wha911_creator_only;
   SELECT format(
     'GRANT CREATE ON DATABASE %I TO wha911_creator_only',
     current_database()
@@ -152,19 +205,26 @@ DROP ROLE wha911_nonowner;
     \quit 1
   \endif
 
+  -- This role can install the extension but cannot assume the bootstrap role that
+  -- ends up owning its functions: the managed-service shape, reached from an
+  -- extension-absent start. Installation must succeed and the skip be recorded.
   SET SESSION AUTHORIZATION wha911_creator_only;
-  \set ON_ERROR_STOP off
   \ir ../../prisma/prepare-extensions.sql
-  \set creator_only_sqlstate :SQLSTATE
-  \set ON_ERROR_STOP on
   RESET SESSION AUTHORIZATION;
 
-  SELECT :'creator_only_sqlstate' = 'P0001' AS creator_only_failed_closed,
-         NOT EXISTS (
+  SELECT EXISTS (
            SELECT 1
              FROM pg_catalog.pg_extension
             WHERE extname = 'btree_gist'
-         ) AS creator_only_extension_rolled_back,
+         ) AS creator_only_installed_extension,
+         EXISTS (
+           SELECT 1
+             FROM platform_ops.platform_db_hardening
+            WHERE extension_name = 'btree_gist'
+              AND owner_role = :'extension_function_owner'
+              AND reason = 'managed-owner'
+              AND function_count > 0
+         ) AS creator_only_recorded_skip,
          EXISTS (
            SELECT 1
              FROM pg_catalog.pg_proc AS procedure
@@ -179,14 +239,14 @@ DROP ROLE wha911_nonowner;
               AND acl.privilege_type = 'EXECUTE'
          ) AS creator_only_preserved_unrelated_acl
   \gset
-  \if :creator_only_failed_closed
+  \if :creator_only_installed_extension
   \else
-    \echo 'expected CREATE-only preparation to fail with SQLSTATE P0001, got' :creator_only_sqlstate
+    \echo 'CREATE-only preparation did not install btree_gist'
     \quit 1
   \endif
-  \if :creator_only_extension_rolled_back
+  \if :creator_only_recorded_skip
   \else
-    \echo 'CREATE-only preparation left btree_gist installed after owner preflight failure'
+    \echo 'CREATE-only preparation did not record a managed-owner skip for' :extension_function_owner
     \quit 1
   \endif
   \if :creator_only_preserved_unrelated_acl
@@ -195,9 +255,24 @@ DROP ROLE wha911_nonowner;
     \quit 1
   \endif
 
+  -- The guard migration must tolerate this state too.
+  SET SESSION AUTHORIZATION wha911_creator_only;
+  \ir ../../prisma/migrations/20260830120000_btree_gist_public_execute_acl/migration.sql
+  RESET SESSION AUTHORIZATION;
+
+  DELETE FROM platform_ops.platform_db_hardening;
+
   SELECT format(
     'REVOKE CREATE ON DATABASE %I FROM wha911_creator_only',
     current_database()
+  ) \gexec
+  REVOKE ALL ON platform_ops.platform_db_hardening FROM wha911_creator_only;
+  REVOKE USAGE ON SCHEMA platform_ops FROM wha911_creator_only;
+  -- Preparation no longer rolls the installation back, so this role now owns the
+  -- extension it created and cannot be dropped until that is reassigned.
+  SELECT format(
+    'REASSIGN OWNED BY wha911_creator_only TO %I',
+    :'extension_function_owner'
   ) \gexec
   DROP ROLE wha911_creator_only;
 \endif
@@ -274,9 +349,20 @@ SELECT format(
 \endif
 
 -- The SET-capable run above performs the correction. This second run proves
--- that preparation remains idempotent.
+-- that preparation remains idempotent, and that it bootstraps its own record
+-- table when absent.
+DROP TABLE platform_ops.platform_db_hardening;
 \ir ../../prisma/prepare-extensions.sql
 \ir ../../prisma/migrations/20260830120000_btree_gist_public_execute_acl/migration.sql
+
+SELECT count(*) = 0 AS assumable_owner_recorded_no_skip
+  FROM platform_ops.platform_db_hardening
+\gset
+\if :assumable_owner_recorded_no_skip
+\else
+  \echo 'preparation recorded a skip despite being able to assume the function owner'
+  \quit 1
+\endif
 
 DO $proof$
 DECLARE
@@ -441,5 +527,7 @@ DROP SCHEMA wha766_proof CASCADE;
   DROP EXTENSION btree_gist;
   DROP ROLE wha911_preparer;
 \endif
+
+DROP SCHEMA platform_ops CASCADE;
 
 \echo 'WHA-911 owner-aware btree_gist ACL regression proof passed'
