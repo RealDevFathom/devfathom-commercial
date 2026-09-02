@@ -33,6 +33,7 @@ export type CommandField = {
   step?: number;
   disabled?: boolean;
   filterBy?: string;
+  format?: 'time24';
   options?: Array<{ label: string; value: string; filterValue?: string }>;
 };
 
@@ -112,6 +113,7 @@ export function PlatformCommandForm({
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState('');
   const [selectState, setSelectState] = useState(() => ({
     fields,
@@ -138,11 +140,27 @@ export function PlatformCommandForm({
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     setError('');
+    setFieldErrors({});
     setRevealed('');
+    const clientFieldErrors: Record<string, string> = {};
+    for (const field of fields) {
+      if (field.format !== 'time24') continue;
+      const value = String(new FormData(form).get(field.name) ?? '');
+      if (value && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+        clientFieldErrors[field.name] = 'Use 24-hour time, e.g. 09:30';
+      }
+    }
+    if (Object.keys(clientFieldErrors).length) {
+      setFieldErrors(clientFieldErrors);
+      setError(`${Object.keys(clientFieldErrors).length} field needs attention`);
+      (form.elements.namedItem(Object.keys(clientFieldErrors)[0]!) as HTMLElement)?.focus();
+      return;
+    }
     setPending(true);
     try {
-      const payload = payloadFromForm(event.currentTarget, fields);
+      const payload = payloadFromForm(form, fields);
       const response = await fetch('/api/platform/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -151,11 +169,28 @@ export function PlatformCommandForm({
       const body = (await response.json()) as {
         error?: string;
         data?: { id?: string; [key: string]: unknown };
-        details?: Array<{ message?: string }>;
+        details?: Array<{ message?: string; path?: Array<PropertyKey> }>;
+        fieldErrors?: Record<string, string>;
       };
       if (!response.ok) {
-        const message = body.error ?? body.details?.[0]?.message ?? 'The command failed.';
-        setError(message);
+        const mapped = Object.fromEntries(
+          Object.entries(body.fieldErrors ?? {}).map(([path, message]) => [
+            fields.find((field) => path === field.name || path.endsWith(`.${field.name}`))?.name ??
+              path,
+            message,
+          ])
+        );
+        const visibleErrors = Object.fromEntries(
+          Object.entries(mapped).filter(([name]) => fields.some((field) => field.name === name))
+        );
+        if (Object.keys(visibleErrors).length) {
+          setFieldErrors(visibleErrors);
+          const count = Object.keys(visibleErrors).length;
+          setError(`${count} ${count === 1 ? 'field needs' : 'fields need'} attention`);
+          (form.elements.namedItem(Object.keys(visibleErrors)[0]!) as HTMLElement)?.focus();
+        } else {
+          setError(body.error ?? body.details?.[0]?.message ?? 'The command failed.');
+        }
         return;
       }
       toast.success(submitLabel.replace(/^Save /, '').replace(/^Create /, '') + ' saved');
@@ -202,6 +237,8 @@ export function PlatformCommandForm({
             );
           }
           const wide = field.type === 'textarea' || field.type === 'json';
+          const fieldError = fieldErrors[field.name];
+          const errorId = `${field.name}-error`;
           return (
             <label key={field.name} className={cn('block', wide && 'sm:col-span-2')}>
               <span className="mb-1.5 block text-xs font-semibold text-text-strong">
@@ -219,6 +256,8 @@ export function PlatformCommandForm({
                   }
                   placeholder={field.placeholder}
                   rows={field.type === 'json' ? 6 : 3}
+                  aria-invalid={Boolean(fieldError)}
+                  aria-describedby={fieldError ? errorId : undefined}
                   className="w-full rounded-lg border border-border-default bg-card px-3 py-2.5 font-sans text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 />
               ) : field.type === 'select' ? (
@@ -228,6 +267,8 @@ export function PlatformCommandForm({
                   disabled={field.disabled}
                   value={selectValues[field.name] ?? ''}
                   onChange={(event) => updateSelect(field.name, event.target.value)}
+                  aria-invalid={Boolean(fieldError)}
+                  aria-describedby={fieldError ? errorId : undefined}
                   className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 >
                   {!field.required ? <option value="">Not set</option> : null}
@@ -245,6 +286,8 @@ export function PlatformCommandForm({
                     required={field.required}
                     disabled={field.disabled}
                     defaultChecked={Boolean(field.defaultValue)}
+                    aria-invalid={Boolean(fieldError)}
+                    aria-describedby={fieldError ? errorId : undefined}
                     className="h-4 w-4 accent-[var(--accent-brand)]"
                   />
                   {field.checkboxText ?? 'Enabled'}
@@ -260,16 +303,36 @@ export function PlatformCommandForm({
                       ? undefined
                       : String(field.defaultValue ?? '')
                   }
-                  placeholder={field.placeholder}
+                  placeholder={field.format === 'time24' ? 'HH:MM' : field.placeholder}
                   min={field.min}
                   max={field.max}
                   step={field.step}
+                  inputMode={field.format === 'time24' ? 'numeric' : undefined}
+                  maxLength={field.format === 'time24' ? 5 : undefined}
+                  pattern={field.format === 'time24' ? '[0-2][0-9]:[0-5][0-9]' : undefined}
+                  aria-invalid={Boolean(fieldError)}
+                  aria-describedby={fieldError ? errorId : undefined}
+                  onInput={
+                    field.format === 'time24'
+                      ? (event) => {
+                          const input = event.currentTarget;
+                          const digits = input.value.replace(/\D/g, '').slice(0, 4);
+                          input.value =
+                            digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits;
+                        }
+                      : undefined
+                  }
                   className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 />
               )}
               {field.help ? (
                 <span className="mt-1.5 block text-[10px] leading-4 text-text-faint">
                   {field.help}
+                </span>
+              ) : null}
+              {fieldError ? (
+                <span id={errorId} className="mt-1.5 block text-xs text-destructive">
+                  {fieldError}
                 </span>
               ) : null}
             </label>

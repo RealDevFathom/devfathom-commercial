@@ -9,6 +9,7 @@ import { verticalForModuleKey } from '@/lib/module-catalog';
 import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
+import { ianaTimezoneOptions } from '@/lib/platform/timezones';
 import {
   ALL_VERTICALS,
   VERTICALS,
@@ -33,6 +34,7 @@ export default async function OrganizationDetailPage({
   params: Promise<{ id: string }>;
 }) {
   await requirePlatformRead('/platform/organizations');
+  const timezoneOptions = ianaTimezoneOptions();
   const { id } = await params;
   const now = new Date();
   const data = await withPlatformDb(async (db) => {
@@ -302,15 +304,19 @@ export default async function OrganizationDetailPage({
                       {
                         name: 'timezone',
                         label: 'IANA timezone',
+                        type: 'select',
                         required: true,
                         defaultValue: data.restaurantBranches[0]!.timezone,
+                        help: 'Type while the list is open to search IANA timezones.',
+                        options: timezoneOptions,
                       },
                       {
                         name: 'businessDayCutoff',
                         label: 'Business-day cutoff',
                         required: true,
                         defaultValue: data.restaurantBranches[0]!.businessDayCutoff,
-                        placeholder: '04:00',
+                        format: 'time24',
+                        help: 'Use 24-hour time in the organization timezone, e.g. 09:30.',
                       },
                       ...(['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const).flatMap((kind) => {
                         const existing = organization.restaurantActivationAcknowledgements.find(
@@ -538,7 +544,14 @@ export default async function OrganizationDetailPage({
                   min: 0,
                   max: 365,
                 },
-                { name: 'timezone', label: 'Timezone', defaultValue: organization.timezone },
+                {
+                  name: 'timezone',
+                  label: 'Timezone',
+                  type: 'select',
+                  defaultValue: organization.timezone,
+                  help: 'Type while the list is open to search IANA timezones.',
+                  options: timezoneOptions,
+                },
                 { name: 'locale', label: 'Locale', defaultValue: organization.locale },
                 { name: 'currency', label: 'Currency', defaultValue: organization.currency },
                 {
