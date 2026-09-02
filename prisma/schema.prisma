@@ -212,6 +212,7 @@ model PharmacyBranch {
   requisitions       PharmacyRequisition[]
   purchaseOrders     PharmacyPurchaseOrder[]
   onboardingGates    PharmacyOnboardingGateState[]
+  registeredDevices  PharmacyRegisteredDevice[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -1073,6 +1074,7 @@ model PharmacyStockLocation {
   movements               PharmacyStockMovement[]
   balances                PharmacyStockBalance[]
   discrepancies           PharmacyStockDiscrepancy[]
+  deviceQuotas            PharmacyDeviceLotQuota[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_stock_locations_org_branch_id_key")
@@ -1145,6 +1147,7 @@ model PharmacyInventoryLot {
   transferLines       PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
   supplierClaims      PharmacySupplierClaim[]
   purchaseReturnLines PharmacyPurchaseReturnLine[]
+  deviceQuotas        PharmacyDeviceLotQuota[]
 
   @@unique([organizationId, id], map: "pharmacy_inventory_lots_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_inventory_lots_org_branch_id_key")
@@ -11763,4 +11766,199 @@ model PharmacyLegalHoldEvent {
   @@unique([organizationId, holdKey, createdAt])
   @@index([organizationId, recordClass, recordId, createdAt])
   @@map("pharmacy_legal_hold_events")
+}
+
+// ── PH-OFF — the enrolled offline counter runtime (PRD §6.9 OFF-01..03) ──────
+
+/// OFF-02: the actions the offline action matrix decides on. The allow/deny
+/// rule itself is a table in code (`src/lib/pharmacy/offline-action-matrix.ts`)
+/// with one test per row; this enum only names what that table must cover, and
+/// a test asserts the two lists are the same set.
+enum PharmacyOfflineAction {
+  SEARCH_CATALOG
+  SCAN_BARCODE
+  CASH_OTC_SALE
+  KHATA_SALE_WITHIN_CACHED_LIMIT
+  PERMITTED_REFUND
+  PROVISIONAL_CLOSE
+  CONTROLLED_MEDICINE_SALE
+  CATALOG_CHANGE
+  PRICE_CHANGE
+  RULE_CHANGE
+  UNVERIFIED_PRESCRIPTION_FILL
+}
+
+enum PharmacyDeviceKind {
+  PHARMACY_COUNTER
+}
+
+enum PharmacyDeviceStatus {
+  ACTIVE
+  REVOKED
+}
+
+/// OFF-01: what a signed snapshot covers. One kind per independently versioned
+/// payload, so a price refresh does not invalidate the cached licence state.
+enum PharmacyOfflineSnapshotKind {
+  CATALOG
+  PRICES
+  TAX
+  RULES
+  LICENCE
+  STAFF
+  LOT_BALANCES
+  CUSTOMER_CREDIT
+}
+
+enum PharmacyOfflineCommandStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  DEAD
+}
+
+/// OFF-01 — an enrolled pharmacy counter. Only the SHA-256 hash of the device
+/// secret is stored, and it is globally unique so the transport resolves the
+/// device in one indexed lookup before it knows the tenant. Revocation is a
+/// state, never a deletion.
+model PharmacyRegisteredDevice {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  name              String
+  kind              PharmacyDeviceKind   @default(PHARMACY_COUNTER)
+  deviceSecretHash  String               @unique(map: "pharmacy_registered_devices_secret_hash_key")
+  status            PharmacyDeviceStatus @default(ACTIVE)
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  enrolledByActorId String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  branch    PharmacyBranch                  @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  snapshots PharmacyOfflineSnapshot[]
+  commands  PharmacyOfflineCommand[]
+  leases    PharmacyReceiptNumberLease[]
+  quotas    PharmacyDeviceLotQuota[]
+
+  @@unique([organizationId, id], map: "pharmacy_registered_devices_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_registered_devices_org_branch_id_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_registered_devices_org_branch_status_idx")
+  @@map("pharmacy_registered_devices")
+}
+
+/// OFF-01 — a signed snapshot issued to one counter. Append-only: a refresh is a
+/// new version, never an edit, so a device can always say which envelope it
+/// verified. `payloadHash` binds the signature to an exact payload and the
+/// issued/expires window bounds how long the device may keep trusting it.
+model PharmacyOfflineSnapshot {
+  id              String                      @id @default(cuid())
+  organizationId  String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  deviceId        String
+  kind            PharmacyOfflineSnapshotKind
+  version         Int
+  payloadHash     String
+  signature       String
+  signingKeyId    String
+  issuedByActorId String
+  issuedAt        DateTime                    @default(now())
+  expiresAt       DateTime
+  createdAt       DateTime                    @default(now())
+
+  device PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_offline_snapshots_org_id_key")
+  @@unique([organizationId, deviceId, kind, version], map: "pharmacy_offline_snapshots_device_version_key")
+  @@index([organizationId, deviceId, kind, version(sort: Desc)], map: "pharmacy_offline_snapshots_device_kind_idx")
+  @@map("pharmacy_offline_snapshots")
+}
+
+/// OFF-01 — one entry of the append-only offline command log. `sequence` is the
+/// device's FIFO position and `idempotencyKey` is minted once at compose time
+/// and reused on every attempt, so a lost response resolves to one server-side
+/// effect. The identity columns are immutable and no row is ever deleted; only
+/// the replay bookkeeping advances, and only away from PENDING.
+model PharmacyOfflineCommand {
+  id              String                       @id @default(cuid())
+  organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  deviceId        String
+  sequence        Int
+  idempotencyKey  String
+  action          PharmacyOfflineAction
+  payload         Json
+  payloadHash     String
+  /// Client-origin UTC instant, metadata only — never an ordering input.
+  clientOriginAt  DateTime
+  receivedAt      DateTime                     @default(now())
+  status          PharmacyOfflineCommandStatus @default(PENDING)
+  attempts        Int                          @default(0)
+  nextAttemptAt   DateTime?
+  settledAt       DateTime?
+  serverRef       String?
+  /// The lease-issued number this command carried, if any. Immutable once set.
+  receiptNumber   Int?
+  rejectionReason String?
+  lastError       String?
+
+  device PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_offline_commands_org_id_key")
+  @@unique([organizationId, deviceId, idempotencyKey], map: "pharmacy_offline_commands_device_key_key")
+  @@unique([organizationId, deviceId, sequence], map: "pharmacy_offline_commands_device_sequence_key")
+  @@index([organizationId, deviceId, status, sequence], map: "pharmacy_offline_commands_replay_idx")
+  @@map("pharmacy_offline_commands")
+}
+
+/// OFF-01 / §8A invariant 16 — a block of receipt numbers reserved for one
+/// counter BEFORE it goes offline, drawn from the same per-device sequence the
+/// online settlement path uses. `nextNumber` is the cursor within the block and
+/// only ever advances; `blockEnd + 1` marks an exhausted lease. Reconnect
+/// replays numbers that were already issued rather than assigning new ones.
+model PharmacyReceiptNumberLease {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  deviceId        String
+  blockStart      Int
+  blockEnd        Int
+  nextNumber      Int
+  issuedToActorId String
+  issuedAt        DateTime @default(now())
+
+  device PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_receipt_number_leases_org_id_key")
+  @@unique([organizationId, branchId, deviceId, blockStart], map: "pharmacy_receipt_number_leases_block_key")
+  @@map("pharmacy_receipt_number_leases")
+}
+
+/// OFF-03 — the units of one (lot, location) bucket a single counter owns while
+/// offline. The database guard keeps the sum of every device's OUTSTANDING quota
+/// for a bucket at or below what the bucket actually holds, so quotas partition
+/// branch stock instead of each counter holding an independent full-stock
+/// snapshot. A released quota keeps its row: what a counter was permitted to
+/// sell during an outage stays auditable.
+model PharmacyDeviceLotQuota {
+  id               String    @id @default(cuid())
+  organizationId   String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  deviceId         String
+  inventoryLotId   String
+  stockLocationId  String
+  quotaUnits       Int
+  consumedUnits    Int       @default(0)
+  grantedByActorId String
+  grantedAt        DateTime  @default(now())
+  releasedAt       DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  device   PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+  lot      PharmacyInventoryLot     @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  location PharmacyStockLocation    @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_device_lot_quotas_org_id_key")
+  @@index([organizationId, inventoryLotId, stockLocationId], map: "pharmacy_device_lot_quotas_bucket_idx")
+  @@map("pharmacy_device_lot_quotas")
 }
