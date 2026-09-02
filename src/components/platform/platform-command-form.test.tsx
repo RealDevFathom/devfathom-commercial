@@ -69,7 +69,9 @@ describe('PlatformCommandForm', () => {
     fireEvent.submit(input.closest('form')!);
 
     await waitFor(() => expect(input).toHaveFocus());
-    expect(screen.getByText('Use 24-hour time, e.g. 09:30')).toBeInTheDocument();
+    expect(screen.getByTestId('platform-field-error-businessDayCutoff')).toHaveTextContent(
+      'Use 24-hour time, e.g. 09:30'
+    );
     expect(screen.getByRole('alert')).toHaveTextContent('1 field needs attention');
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input).toHaveAttribute('placeholder', 'HH:MM');
