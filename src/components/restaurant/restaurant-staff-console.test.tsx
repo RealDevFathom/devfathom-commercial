@@ -45,6 +45,15 @@ const mocks = vi.hoisted(() => ({
   roleSaveOptions: undefined as MutationOptions | undefined,
   setOverride: vi.fn(),
   clearOverride: vi.fn(),
+  seedRoles: vi.fn(),
+  /** Job roles the dialog's `listJobRoles` query answers with. */
+  jobRoles: [] as unknown[],
+  /** The committed override state the staged changes sit on top of. */
+  access: {
+    data: { capabilities: [], inherited: [], allowed: [] as string[], denied: [] as string[] },
+    error: null,
+    isLoading: false,
+  },
   eligibleUsers: [
     {
       id: 'user_available',
@@ -74,6 +83,7 @@ vi.mock('@/lib/trpc', () => ({
         listStaffJobRoles: { invalidate: mocks.invalidate },
         listStaffJobRoleAudit: { invalidate: mocks.invalidate },
         resolveStaffCapabilities: { invalidate: mocks.invalidate },
+        listJobRoles: { invalidate: mocks.invalidate },
       },
     }),
     restaurantStaff: {
@@ -92,43 +102,24 @@ vi.mock('@/lib/trpc', () => ({
       // SOP-1: the job-roles dialog is mounted (closed) by the console, so its
       // hooks must resolve even though these cases never open it.
       listJobRoles: {
-        useQuery: () => ({
-          data: [
-            {
-              id: 'cashier',
-              key: 'cashier',
-              name: 'Cashier',
-              isSystem: true,
-              description: '',
-              capabilities: [{ capability: 'pos:operate' }, { capability: 'payments:collect' }],
-            },
-            {
-              id: 'server',
-              key: 'server',
-              name: 'Server',
-              isSystem: true,
-              description: '',
-              capabilities: [{ capability: 'orders:read' }, { capability: 'customers:read' }],
-            },
-          ],
-          error: null,
-          isLoading: false,
-        }),
+        useQuery: () => ({ data: mocks.jobRoles, error: null, isLoading: false }),
       },
       listStaffJobRoles: { useQuery: () => ({ data: [], isLoading: false }) },
       listStaffJobRoleAudit: { useQuery: () => ({ data: [], isLoading: false }) },
-      resolveStaffCapabilities: {
-        useQuery: () => ({
-          data: { capabilities: [], inherited: [], allowed: [], denied: [] },
-          error: null,
-          isLoading: false,
-        }),
-      },
-      setStaffJobRoles: {
+      resolveStaffCapabilities: { useQuery: () => mocks.access },
+      // WHA-1181 (7)/(8): the dialog commits role selection AND staged direct /
+      // deny changes through this one mutation.
+      setStaffAccess: {
         useMutation: (options: MutationOptions) => {
           mocks.roleSaveOptions = options;
           return { mutate: mocks.roleSave, isPending: false };
         },
+      },
+      seedDefaultJobRoles: {
+        useMutation: () => ({ mutate: mocks.seedRoles, isPending: false, error: null }),
+      },
+      setStaffJobRoles: {
+        useMutation: () => ({ mutate: mocks.noopMutate, isPending: false }),
       },
       setStaffCapabilityOverride: {
         useMutation: () => ({ mutate: mocks.setOverride, isPending: false }),
@@ -201,6 +192,7 @@ vi.mock('@/lib/trpc', () => ({
 }));
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
+import { RESTAURANT_CAPABILITIES } from '@/lib/vertical-catalog';
 import { RestaurantStaffConsole } from './restaurant-staff-console';
 
 const entitlements = {
@@ -300,10 +292,35 @@ describe('Restaurant staff credential UI', () => {
   });
 });
 
+const JOB_ROLES = [
+  {
+    id: 'cashier',
+    key: 'cashier',
+    name: 'Cashier',
+    isSystem: true,
+    description: '',
+    capabilities: [{ capability: 'pos:operate' }, { capability: 'payments:collect' }],
+  },
+  {
+    id: 'server',
+    key: 'server',
+    name: 'Server',
+    isSystem: true,
+    description: '',
+    capabilities: [{ capability: 'orders:read' }, { capability: 'customers:read' }],
+  },
+];
+
 describe('Restaurant staff role profiles', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.roleSaveOptions = undefined;
+    mocks.jobRoles = JOB_ROLES;
+    mocks.access = {
+      data: { capabilities: [], inherited: [], allowed: [], denied: [] },
+      error: null,
+      isLoading: false,
+    };
     mocks.staff.data = [
       {
         id: 'staff_1',
@@ -346,33 +363,174 @@ describe('Restaurant staff role profiles', () => {
     expect(cashier).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('adds a direct discount and denies an inherited capability with pressed buttons', () => {
+  // WHA-1181 (7): the row repaints on click with no request in flight.
+  it('flips Direct and Deny optimistically, sending nothing until the single save', () => {
     openProfile();
     fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
+
     const discount = screen.getByText('orders:discount').parentElement!;
     fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
-    expect(mocks.setOverride).toHaveBeenCalledWith(
-      expect.objectContaining({ capability: 'orders:discount', effect: 'ALLOW' })
+    // Instant: pressed state and provenance badge, before any server answer.
+    expect(within(discount).getByRole('button', { name: 'Direct' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
     );
+    expect(discount).toHaveTextContent('Direct');
+    expect(discount).toHaveAttribute('data-pending', 'true');
+
     const pos = screen.getByText('pos:operate').parentElement!;
     fireEvent.click(within(pos).getByRole('button', { name: 'Deny' }));
-    expect(mocks.setOverride).toHaveBeenCalledWith(
-      expect.objectContaining({ capability: 'pos:operate', effect: 'DENY' })
+    expect(pos).toHaveTextContent('Denied');
+
+    // The per-click mutations are gone; nothing reached the server yet.
+    expect(mocks.setOverride).not.toHaveBeenCalled();
+    expect(mocks.clearOverride).not.toHaveBeenCalled();
+    expect(mocks.roleSave).not.toHaveBeenCalled();
+  });
+
+  // WHA-1181 (8): one button commits everything, labelled with the count.
+  it('counts role and capability changes together and commits them in one command', () => {
+    openProfile();
+    fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
+    expect(screen.getByRole('button', { name: 'Save 1 change' })).toBeEnabled();
+
+    const discount = screen.getByText('orders:discount').parentElement!;
+    fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
+    const pos = screen.getByText('pos:operate').parentElement!;
+    fireEvent.click(within(pos).getByRole('button', { name: 'Deny' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 3 changes' }));
+    expect(mocks.roleSave).toHaveBeenCalledTimes(1);
+    expect(mocks.roleSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobRoleIds: ['cashier'],
+        overrides: expect.arrayContaining([
+          { capability: 'orders:discount', effect: 'ALLOW' },
+          { capability: 'pos:operate', effect: 'DENY' },
+        ]),
+      })
     );
   });
 
-  it('preserves role selection after a save error and sends it again', () => {
+  it('does not count a capability toggled back to where it started', () => {
+    openProfile();
+    const discount = screen.getByText('orders:discount').parentElement!;
+    fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
+    expect(screen.getByRole('button', { name: 'Save 1 change' })).toBeInTheDocument();
+    fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
+    // Back to the committed state: nothing to save, so the button reverts to
+    // its idle label and is disabled again.
+    expect(screen.getByRole('button', { name: 'Save role profiles' })).toBeDisabled();
+  });
+
+  it('rolls back to the server state and pins an inline row error when the commit fails', () => {
     openProfile();
     const cashier = screen.getByRole('button', { name: /Cashier/ });
     fireEvent.click(cashier);
-    fireEvent.click(screen.getByRole('button', { name: 'Save role profiles' }));
+    const discount = screen.getByText('orders:discount').parentElement!;
+    fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 changes' }));
     act(() => mocks.roleSaveOptions?.onError?.({ message: 'Save failed.' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('Your selections are still here');
+
+    // Nothing was written, so the base is still the server's answer — and the
+    // operator's staged intent survives so a retry sends the same thing.
+    expect(screen.getByText('Nothing was saved; your changes are still here.', { exact: false }));
+    expect(within(discount).getByRole('alert')).toHaveTextContent('Not saved');
     expect(cashier).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Save role profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 changes' }));
     expect(mocks.roleSave).toHaveBeenLastCalledWith(
-      expect.objectContaining({ jobRoleIds: ['cashier'] })
+      expect.objectContaining({
+        jobRoleIds: ['cashier'],
+        overrides: [{ capability: 'orders:discount', effect: 'ALLOW' }],
+      })
     );
+  });
+
+  // WHA-1181 (6): the bulk actions, and roles staying the primary path.
+  it('stages every capability as a direct exception behind a confirmation', () => {
+    openProfile();
+    fireEvent.click(screen.getByRole('button', { name: 'Grant all as direct exceptions' }));
+    // Confirmation first — nothing is staged by opening it.
+    expect(screen.getByRole('button', { name: 'Save role profiles' })).toBeDisabled();
+    const confirm = screen.getByRole('alertdialog', {
+      name: 'Confirm granting every capability directly',
+    });
+    expect(confirm).toHaveTextContent('a role profile is the better tool');
+
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Grant all as direct' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: `Save ${RESTAURANT_CAPABILITIES.length} changes` })
+    );
+    const overrides = mocks.roleSave.mock.calls[0]![0].overrides as {
+      capability: string;
+      effect: string | null;
+    }[];
+    expect(overrides).toHaveLength(RESTAURANT_CAPABILITIES.length);
+    expect(overrides.every((override) => override.effect === 'ALLOW')).toBe(true);
+  });
+
+  it('cancels the grant-all confirmation without staging anything', () => {
+    openProfile();
+    fireEvent.click(screen.getByRole('button', { name: 'Grant all as direct exceptions' }));
+    fireEvent.click(
+      within(
+        screen.getByRole('alertdialog', { name: 'Confirm granting every capability directly' })
+      ).getByRole('button', { name: 'Cancel' })
+    );
+    expect(screen.getByRole('button', { name: 'Save role profiles' })).toBeDisabled();
+  });
+
+  it('clears direct exceptions without re-granting anything an operator denied', () => {
+    mocks.access = {
+      data: {
+        capabilities: [],
+        inherited: [],
+        allowed: ['orders:discount'],
+        denied: ['cash:open'],
+      },
+      error: null,
+      isLoading: false,
+    };
+    openProfile();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear direct exceptions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save 1 change' }));
+
+    expect(mocks.roleSave.mock.calls[0]![0].overrides).toEqual([
+      { capability: 'orders:discount', effect: null },
+    ]);
+  });
+
+  it('asks before discarding pending changes on close', async () => {
+    openProfile();
+    fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]!);
+
+    const prompt = screen.getByRole('alertdialog', { name: 'Discard unsaved changes' });
+    expect(prompt).toHaveTextContent('Discard 1 unsaved change?');
+    // "Keep editing" leaves the dialog open with the change intact.
+    fireEvent.click(within(prompt).getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByRole('button', { name: /Cashier/ })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]!);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('closes without a prompt when nothing is pending', async () => {
+    openProfile();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]!);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('offers the role seed inline instead of pointing at a page that does not exist', () => {
+    mocks.jobRoles = [];
+    openProfile();
+
+    expect(screen.getByText(/No active role profiles exist/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add the default role profiles' }));
+    expect(mocks.seedRoles).toHaveBeenCalledOnce();
   });
 
   it('uses an opaque modal, traps focus, closes with Escape, and restores trigger focus', async () => {

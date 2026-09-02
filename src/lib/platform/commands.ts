@@ -33,9 +33,9 @@ import {
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
 import {
-  ensureAdministratorStaffProfile,
-  type AdministratorStaffProfileResult,
-} from '@/lib/restaurant/administrator-staff-profile';
+  provisionRestaurantOrganization,
+  type RestaurantProvisioningResult,
+} from '@/lib/restaurant/organization-provisioning';
 
 const id = z
   .string()
@@ -701,16 +701,6 @@ async function bootstrapOrganization(
         userId: admin.id,
       },
     });
-    // WHA-1181 — the branch assignment alone left the administrator without the
-    // `RestaurantStaffProfile` every restaurant procedure resolves them to, so
-    // the workspace nav rendered while notifications answered 403. Created here,
-    // beside the branch it points at.
-    await ensureAdministratorStaffProfile(db, {
-      organizationId: organization.id,
-      userId: admin.id,
-      displayName: admin.name,
-      email: admin.email,
-    });
     for (const template of roleTemplatesForVertical(input.vertical)) {
       await db.organizationRole.create({
         data: {
@@ -728,6 +718,16 @@ async function bootstrapOrganization(
         },
       });
     }
+    // WHA-1181 — the branch, the branch assignment and the back-office roles
+    // above are not the rows the restaurant surfaces read. Provision the ones
+    // they DO read: the administrator's staff profile (without which every
+    // restaurant procedure answers 403), the floor role profiles their access is
+    // inherited from, and each branch's default kitchen station. Last, so it
+    // sees the branch and the administrator it links together.
+    await provisionRestaurantOrganization(db, {
+      organizationId: organization.id,
+      administrators: [{ id: admin.id, name: admin.name, email: admin.email }],
+    });
   }
   // §2.3: onboarding no longer copies the package's enabled modules into
   // OrganizationModule. Those rows behave as permanent OVERRIDEs in the resolver
@@ -1072,13 +1072,13 @@ async function runCommand(
         },
       });
       // WHA-1181 — activation is the moment a RESTAURANT organization's people
-      // start using the workspace, so every administrator must hold the staff
-      // profile the restaurant procedures resolve them to. The helper is
-      // idempotent, so this both covers an administrator added after onboarding
-      // and repairs an organization created before the onboarding fix above.
-      const administratorStaffProfiles: (AdministratorStaffProfileResult & {
-        userId: string;
-      })[] = [];
+      // start using the workspace, so everything those surfaces read must exist:
+      // every administrator's staff profile (without which the procedures answer
+      // 403), the floor role profiles their capabilities are inherited from, and
+      // each branch's default kitchen station. The path is idempotent, so this
+      // both covers an administrator added after onboarding and repairs an
+      // organization created before the onboarding fix above.
+      let restaurantProvisioning: RestaurantProvisioningResult | null = null;
       if (input.status === 'ACTIVE' && before.vertical === 'RESTAURANT') {
         const administrators = await db.user.findMany({
           where: {
@@ -1089,15 +1089,10 @@ async function runCommand(
           select: { id: true, name: true, email: true },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         });
-        for (const administrator of administrators) {
-          const profile = await ensureAdministratorStaffProfile(db, {
-            organizationId: input.id,
-            userId: administrator.id,
-            displayName: administrator.name,
-            email: administrator.email,
-          });
-          administratorStaffProfiles.push({ ...profile, userId: administrator.id });
-        }
+        restaurantProvisioning = await provisionRestaurantOrganization(db, {
+          organizationId: input.id,
+          administrators,
+        });
       }
       if (
         input.status === 'SUSPENDED' ||
@@ -1132,12 +1127,10 @@ async function runCommand(
         organizationId: input.id,
         auditBefore: { status: before.status },
         // The command response keeps its established shape; only the audit
-        // record carries the staff profiles activation provisioned, so the
-        // ledger can answer "who was linked, and when".
+        // record carries what activation provisioned, so the ledger can answer
+        // "who was linked, which roles and stations appeared, and when".
         data: organization,
-        audit: administratorStaffProfiles.length
-          ? { ...organization, restaurantAdministratorStaffProfiles: administratorStaffProfiles }
-          : organization,
+        audit: restaurantProvisioning ? { ...organization, restaurantProvisioning } : organization,
       };
     }
     case 'organization.module': {

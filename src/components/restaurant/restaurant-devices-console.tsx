@@ -74,6 +74,9 @@ export function RestaurantDevicesConsole() {
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [enrollmentKind, setEnrollmentKind] = useState<'POS' | 'KDS'>('POS');
   const [enrollmentBranchId, setEnrollmentBranchId] = useState('');
+  const [enrollmentStationId, setEnrollmentStationId] = useState('');
+  const [newStationName, setNewStationName] = useState('Kitchen');
+  const [enrollError, setEnrollError] = useState('');
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [deviceAction, setDeviceAction] = useState<'revoke' | 'rotate'>('revoke');
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
@@ -90,6 +93,20 @@ export function RestaurantDevicesConsole() {
     { branchId: enrollmentBranchId },
     { enabled: enrollOpen && enrollmentKind === 'KDS' && Boolean(enrollmentBranchId) }
   );
+  const activeStations = (stationsQuery.data ?? []).filter((station) => station.active);
+  const createStation = trpc.restaurantFloor.createStation.useMutation({
+    onSuccess: (station) => {
+      void utils.restaurantFloor.listStations.invalidate({ branchId: enrollmentBranchId });
+      // Select what was just created: an operator who names a station in this
+      // dialog wants to enroll against it, and making them find it in a select
+      // that was empty a moment ago is a step with no decision in it.
+      if (station) setEnrollmentStationId(station.id);
+      setNewStationName('');
+      setEnrollError('');
+      toast.success(`Station “${station?.name ?? 'Kitchen'}” created.`);
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const revokeDevice = trpc.restaurantDevices.revoke.useMutation({
     onSuccess: () => {
       setSelectedDevice(null);
@@ -122,6 +139,27 @@ export function RestaurantDevicesConsole() {
   const approvers = approversQuery.data?.approvers ?? [];
 
   const permissionDenied = isPermissionError(devicesQuery.error);
+  /**
+   * WHA-1181 (9) — the station requirement is enforced here rather than by
+   * `required` on the select. The native constraint fired an untargeted "Please
+   * select an item in the list" tooltip on a branch that had no station to
+   * select, which is a dead end rather than a validation message. Everything
+   * else on this form keeps its native validation, which runs before this
+   * handler is ever reached.
+   */
+  const submitEnrollment = (event: FormEvent<HTMLFormElement>) => {
+    if (enrollmentKind !== 'KDS') return;
+    if (enrollmentStationId) {
+      setEnrollError('');
+      return;
+    }
+    event.preventDefault();
+    setEnrollError(
+      activeStations.length === 0
+        ? 'Create a KDS station for this branch before enrolling a kitchen display.'
+        : 'Choose the KDS station this display shows tickets for.'
+    );
+  };
   const submitRevocation = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedDevice) return;
@@ -180,6 +218,9 @@ export function RestaurantDevicesConsole() {
                 onClick={() => {
                   setEnrollmentKind('POS');
                   setEnrollmentBranchId('');
+                  setEnrollmentStationId('');
+                  setNewStationName('Kitchen');
+                  setEnrollError('');
                   setEnrollOpen(true);
                 }}
               >
@@ -327,7 +368,12 @@ export function RestaurantDevicesConsole() {
               This browser becomes a dedicated terminal and your administrator session ends.
             </DialogDescription>
           </DialogHeader>
-          <form className="space-y-4" method="post" action="/api/restaurant/devices/browser-enroll">
+          <form
+            className="space-y-4"
+            method="post"
+            action="/api/restaurant/devices/browser-enroll"
+            onSubmit={submitEnrollment}
+          >
             <label className="space-y-1.5">
               <span className={labelClass}>Device name</span>
               <Input name="name" required maxLength={120} className="h-11" />
@@ -344,7 +390,13 @@ export function RestaurantDevicesConsole() {
                 loading={branchesQuery.isLoading}
                 error={Boolean(branchesQuery.error)}
                 value={enrollmentBranchId}
-                onChange={setEnrollmentBranchId}
+                onChange={(value) => {
+                  setEnrollmentBranchId(value);
+                  // Stations are per branch; a selection from the previous one
+                  // would enroll this display against another branch's screen.
+                  setEnrollmentStationId('');
+                  setEnrollError('');
+                }}
               />
             </div>
             <label className="space-y-1.5">
@@ -352,35 +404,100 @@ export function RestaurantDevicesConsole() {
               <select
                 name="kind"
                 value={enrollmentKind}
-                onChange={(event) => setEnrollmentKind(event.target.value as 'POS' | 'KDS')}
+                onChange={(event) => {
+                  setEnrollmentKind(event.target.value as 'POS' | 'KDS');
+                  setEnrollError('');
+                }}
                 className={selectClass}
               >
                 <option value="POS">POS register</option>
                 <option value="KDS">Kitchen display</option>
               </select>
             </label>
+            {/*
+              WHA-1181 (9) — the station field belongs to a kitchen display and
+              nothing else, and it used to be a bare `required` select. On a new
+              organization, which has no stations, that select was empty and
+              unsatisfiable: submitting produced the browser's native "Please
+              select an item in the list" tooltip over a control offering no
+              item, with no explanation and nowhere to go. `required` is gone and
+              the form validates this field itself in `submitEnrollment`, so the
+              empty case can say what a station is and offer to create one
+              inline. The other fields keep their native validation — only this
+              one had an unsatisfiable state to explain.
+            */}
             {enrollmentKind === 'KDS' ? (
-              <label className="space-y-1.5">
-                <span className={labelClass}>KDS station</span>
-                <select
-                  name="stationId"
-                  required
-                  defaultValue=""
-                  className={selectClass}
-                  disabled={!enrollmentBranchId || stationsQuery.isLoading}
-                >
-                  <option value="" disabled>
-                    {stationsQuery.isLoading ? 'Loading stations…' : 'Select a station'}
-                  </option>
-                  {(stationsQuery.data ?? [])
-                    .filter((station) => station.active)
-                    .map((station) => (
+              <div className="space-y-1.5">
+                <label htmlFor="device-station-id" className={labelClass}>
+                  KDS station
+                </label>
+                {stationsQuery.isLoading ? (
+                  <Skeleton className="h-11 w-full" />
+                ) : !enrollmentBranchId ? (
+                  <p className="text-sm text-text-muted">Select a branch to choose its station.</p>
+                ) : activeStations.length === 0 ? (
+                  <div className="space-y-3 rounded-md border border-dashed border-border-default p-3">
+                    <p className="text-sm text-text-muted">
+                      This branch has no KDS station yet. A KDS station is a kitchen screen that
+                      receives tickets — e.g. Kitchen, Grill, Bar.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input
+                        aria-label="New station name"
+                        value={newStationName}
+                        onChange={(event) => setNewStationName(event.target.value)}
+                        placeholder="Kitchen"
+                        maxLength={120}
+                        className="h-11 w-full sm:w-56"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-11"
+                        disabled={createStation.isPending || newStationName.trim().length === 0}
+                        onClick={() =>
+                          createStation.mutate({
+                            branchId: enrollmentBranchId,
+                            name: newStationName.trim(),
+                          })
+                        }
+                      >
+                        {createStation.isPending ? 'Creating…' : 'Create station'}
+                      </Button>
+                    </div>
+                    {createStation.error ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        {createStation.error.message}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <select
+                    id="device-station-id"
+                    name="stationId"
+                    value={enrollmentStationId}
+                    onChange={(event) => {
+                      setEnrollmentStationId(event.target.value);
+                      setEnrollError('');
+                    }}
+                    aria-invalid={enrollError ? true : undefined}
+                    aria-describedby={enrollError ? 'device-station-error' : undefined}
+                    className={selectClass}
+                  >
+                    <option value="">Select a station</option>
+                    {activeStations.map((station) => (
                       <option key={station.id} value={station.id}>
                         {station.name}
                       </option>
                     ))}
-                </select>
-              </label>
+                  </select>
+                )}
+                {enrollError ? (
+                  <p id="device-station-error" role="alert" className="text-sm text-destructive">
+                    {enrollError}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
             <label className="flex items-start gap-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-text-body">
               <input

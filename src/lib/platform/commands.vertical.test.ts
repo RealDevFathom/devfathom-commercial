@@ -29,7 +29,10 @@ const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
   userCreate: vi.fn(),
   branchCreate: vi.fn(),
-  branchFindMany: vi.fn(),
+  // Defaulted because WHA-1181 provisioning enumerates a restaurant's branches
+  // to seed their kitchen stations; the activation fixtures below still set
+  // their own preflight answer explicitly.
+  branchFindMany: vi.fn(async (): Promise<Record<string, unknown>[]> => [{ id: 'branch_1' }]),
   branchCount: vi.fn(),
   acknowledgementFindMany: vi.fn(),
   // WHA-1181 — restaurant onboarding and activation now also link each
@@ -38,7 +41,25 @@ const mocks = vi.hoisted(() => ({
   // vertical/package behaviour they were written for.
   staffFindFirst: vi.fn(async () => null),
   staffCreate: vi.fn(async () => ({ id: 'staff_1', primaryBranchId: 'branch_1' })),
+  staffFindUnique: vi.fn(async () => ({ id: 'staff_1' })),
   branchFindFirst: vi.fn(async () => ({ id: 'branch_1' })),
+  branchFindUnique: vi.fn(async () => ({ id: 'branch_1' })),
+  jobRoleFindMany: vi.fn(async () => []),
+  jobRoleFindFirst: vi.fn(async () => ({ id: 'jobrole_owner', active: true })),
+  jobRoleFindUnique: vi.fn(async () => ({ id: 'jobrole_owner', key: 'owner', active: true })),
+  jobRoleCreate: vi.fn(async ({ data }: { data: { key: string } }) => ({
+    id: `jobrole_${data.key}`,
+    key: data.key,
+    capabilities: [],
+  })),
+  staffJobRoleFindUnique: vi.fn(async () => null),
+  staffJobRoleCreate: vi.fn(async () => ({ id: 'holding_1' })),
+  stationFindFirst: vi.fn(async () => null),
+  stationCreate: vi.fn(async ({ data }: { data: { name: string; branchId: string } }) => ({
+    id: 'station_1',
+    name: data.name,
+    branchId: data.branchId,
+  })),
   userFindMany: vi.fn(async () => [
     { id: 'user_admin', name: 'Restaurant Admin', email: 'admin@burger.co' },
   ]),
@@ -64,6 +85,9 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (run: (db: unknown) => Promise<unknown>) => run(platformDb)),
   withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => Promise<unknown>) =>
     run(platformDb)
+  ),
+  withOrganizationDefaults: vi.fn(
+    async (tx: unknown, _organizationId: string, run: (db: unknown) => Promise<unknown>) => run(tx)
   ),
 }));
 
@@ -102,10 +126,34 @@ const platformDb = {
     create: mocks.branchCreate,
     findMany: mocks.branchFindMany,
     findFirst: mocks.branchFindFirst,
+    findUnique: mocks.branchFindUnique,
     count: mocks.branchCount,
   },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
-  restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
+  restaurantStaffProfile: {
+    findFirst: mocks.staffFindFirst,
+    create: mocks.staffCreate,
+    findUnique: mocks.staffFindUnique,
+  },
+  // WHA-1181 (5)/(9a): restaurant provisioning also seeds the floor role
+  // profiles, grants the administrator the owner role, and gives each branch a
+  // default kitchen station. Defaults survive `vi.clearAllMocks` so the fixtures
+  // below stay about the vertical/package behaviour they were written for.
+  restaurantJobRole: {
+    findMany: mocks.jobRoleFindMany,
+    findFirst: mocks.jobRoleFindFirst,
+    findUnique: mocks.jobRoleFindUnique,
+    create: mocks.jobRoleCreate,
+  },
+  restaurantStaffJobRole: {
+    findUnique: mocks.staffJobRoleFindUnique,
+    create: mocks.staffJobRoleCreate,
+  },
+  restaurantStaffJobRoleAudit: { create: record() },
+  restaurantKitchenStation: {
+    findFirst: mocks.stationFindFirst,
+    create: mocks.stationCreate,
+  },
   restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
   organizationModule: {
     upsert: mocks.moduleUpsert,

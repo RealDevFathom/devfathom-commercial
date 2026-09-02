@@ -124,6 +124,56 @@ export async function withPlatformDb<T>(
 }
 
 /**
+ * WHA-1181 — run `run` with `app.current_organization_id` installed as
+ * `organizationId` for the duration, then restore whatever it was.
+ *
+ * WHY THIS EXISTS. Most tenant tables declare
+ * `organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))`,
+ * so an insert that omits the column takes its tenant from the GUC. Inside
+ * {@link withPlatformDb} that GUC is deliberately BLANK, and the platform control
+ * plane is exactly where a tenant's provisioning rows are written — an omitted
+ * column there lands the empty string and the row belongs to no organization.
+ *
+ * The alternative, threading an explicit `organizationId` through every domain
+ * writer a provisioning path reuses, changes the shape of well-tested tenant
+ * modules (`job-roles.ts`, `stations.ts`) for the benefit of one caller. Setting
+ * the GUC the schema already reads keeps those modules untouched.
+ *
+ * THIS DOES NOT WIDEN ACCESS. Every restaurant policy reads
+ * `current_setting('app.is_platform_admin', true) = 'true' OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')`.
+ * The platform admin flag is untouched here and already short-circuits the OR, so
+ * naming an organization can only ever narrow what an unprivileged caller sees —
+ * never grant a tenant caller reach into another tenant.
+ *
+ * Restoration is in a `finally` so a throw mid-provisioning cannot leave the rest
+ * of a platform command writing under a tenant's id. That is belt-and-braces: a
+ * throw normally aborts the surrounding transaction anyway.
+ */
+export async function withOrganizationDefaults<T>(
+  tx: ScopedDb,
+  organizationId: string,
+  run: (tx: ScopedDb) => Promise<T>
+): Promise<T> {
+  assertOrganizationId(organizationId);
+
+  const [previous] = await tx.$queryRawUnsafe<{ value: string | null }[]>(
+    `SELECT current_setting('app.current_organization_id', true) AS value`
+  );
+  await tx.$queryRawUnsafe(
+    `SELECT set_config('app.current_organization_id', $1, true)`,
+    organizationId
+  );
+  try {
+    return await run(tx);
+  } finally {
+    await tx.$queryRawUnsafe(
+      `SELECT set_config('app.current_organization_id', $1, true)`,
+      previous?.value ?? ''
+    );
+  }
+}
+
+/**
  * A request-safe Prisma facade for code paths that cannot hold one interactive
  * transaction open (notably RSC prefetch helpers). Every model operation is
  * executed in its own tenant-scoped transaction. Request handlers should prefer
