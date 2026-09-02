@@ -4,6 +4,7 @@ import { PlatformPageHeading } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
+import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import {
   ALL_VERTICALS,
   VERTICALS,
@@ -258,6 +259,40 @@ export default async function NewOrganizationPage({
                       required: true,
                       format: 'time24' as const,
                       help: 'Use 24-hour time in the organization timezone, e.g. 09:30.',
+                    },
+                  ]
+                : []),
+              // WHA-1206 — a pharmacy is provisioned with its first branch too,
+              // and the premises columns it needs are not the restaurant's. The
+              // province is asked for here because it selects the jurisdiction
+              // whose published rules the branch's licence is later validated
+              // against, on the regulatory profile page.
+              ...(vertical === 'PHARMACY'
+                ? [
+                    {
+                      name: 'firstBranchName',
+                      label: 'First branch name',
+                      required: true,
+                      placeholder: 'Clifton Chemist',
+                      help: '2–120 characters. The stable branch code remains MAIN.',
+                    },
+                    {
+                      name: 'firstBranchAddress',
+                      label: 'First branch address',
+                      required: true,
+                      placeholder: 'Street and building',
+                    },
+                    { name: 'firstBranchCity', label: 'First branch city', required: true },
+                    {
+                      name: 'firstBranchProvinceCode',
+                      label: 'First branch province',
+                      type: 'select' as const,
+                      required: true,
+                      help: 'Sets the jurisdiction the branch licence is recorded under.',
+                      options: Object.entries(PAKISTAN_PROVINCES).map(([value, label]) => ({
+                        label,
+                        value,
+                      })),
                     },
                   ]
                 : []),

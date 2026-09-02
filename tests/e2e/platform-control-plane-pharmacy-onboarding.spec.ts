@@ -11,14 +11,12 @@
  * organization (WHA-1180's pattern), so it neither depends on nor disturbs
  * another lane's fixture whichever order they run in.
  *
- * Two things the fixture seeds that the *product* should arguably provision,
- * both reported with the lane rather than papered over:
- *
- *  1. `organization.create` seeds the vertical role templates only for
- *     RESTAURANT (`commands.ts`), so a pharmacy organization is created without
- *     the pharmacy role templates its own readiness gate requires. Seeded here.
- *  2. A pharmacy organization is created with no `PharmacyBranch`, and no
- *     tenant surface creates one. Seeded here.
+ * Two things this fixture used to seed by hand, because `organization.create`
+ * provisioned them only for RESTAURANT: the vertical role templates the
+ * OWNER_AND_ROLE_TEMPLATES gate requires, and the `PharmacyBranch` a regulatory
+ * profile belongs to. WHA-1206 moved both into provisioning, so the fixture now
+ * *asserts* them instead — a pharmacy that stops being provisioned with either
+ * fails here rather than being propped up by the test.
  *
  * The confirmed Sindh rule set stands in for counsel confirming a jurisdiction
  * (PHARM-P0-COUNSEL-001) — an out-of-band act with no application path by
@@ -193,6 +191,12 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
         adminName: 'Pharmacy Owner',
         adminEmail: tenant.email,
         adminPassword: tenant.password,
+        // WHA-1206 — the premises of the branch provisioning creates, the same
+        // four answers the operator console asks a pharmacy for.
+        firstBranchName: tenant.branchName,
+        firstBranchAddress: '21 Khayaban-e-Shamsheer',
+        firstBranchCity: 'Karachi',
+        firstBranchProvinceCode: 'PK-SD',
       },
     },
     failOnStatusCode: false,
@@ -206,37 +210,52 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
     return row.rows[0]!.id;
   });
 
-  // ── The state a pharmacy organization is *actually* created in ─────────────
+  // ── WHA-1206 — what `organization.create` provisioned, read back ───────────
+  // Both of these used to be seeded here by hand. Asserted rather than created,
+  // so the fix stays proven: if provisioning stops writing either one, this test
+  // fails at the assertion instead of quietly passing on fixture data.
+  const branchId = await withAdminDatabase(async (db) => {
+    const roles = await db.query<{ key: string }>(
+      `SELECT key FROM organization_roles WHERE "organizationId" = $1 ORDER BY key`,
+      [organizationId]
+    );
+    expect(roles.rows.map((row) => row.key)).toEqual([
+      'admin',
+      'auditor',
+      'cashier',
+      'finance',
+      'inventory',
+      'manager',
+      'owner',
+      'pharmacist',
+      'procurement',
+    ]);
+    const branches = await db.query<{
+      id: string;
+      code: string;
+      name: string;
+      city: string;
+      provinceCode: string;
+    }>(
+      `SELECT id, code, name, city, "provinceCode" FROM pharmacy_branches WHERE "organizationId" = $1`,
+      [organizationId]
+    );
+    expect(branches.rows).toHaveLength(1);
+    expect(branches.rows[0]).toMatchObject({
+      code: 'MAIN',
+      name: tenant.branchName,
+      city: 'Karachi',
+      provinceCode: 'PK-SD',
+    });
+    return branches.rows[0]!.id;
+  });
+
   await withAdminDatabase(async (db) => {
     // The base activation gate every vertical shares.
     await db.query(
       `UPDATE organization_deployments SET status='READY'
         WHERE "organizationId"=$1 AND environment='production'`,
       [organizationId]
-    );
-    // Gap 1 — the pharmacy role templates `organization.create` does not seed.
-    for (const key of [
-      'owner',
-      'pharmacist',
-      'manager',
-      'cashier',
-      'procurement',
-      'inventory',
-      'finance',
-      'auditor',
-    ]) {
-      await db.query(
-        `INSERT INTO organization_roles (id, "organizationId", key, name, "isSystem", "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, initcap($3), true, now(), now())
-         ON CONFLICT ("organizationId", key) DO NOTHING`,
-        [`role_${suffix}_${key}`, organizationId, key]
-      );
-    }
-    // Gap 2 — the branch a regulatory profile belongs to.
-    await db.query(
-      `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt")
-       VALUES ($1,$2,'MAIN',$3,'21 Khayaban-e-Shamsheer','Karachi','SD',now())`,
-      [`branch_${suffix}`, organizationId, tenant.branchName]
     );
     // The three evidence gates whose own consoles are other lanes' rows: an
     // authorized supplier, a published medicine catalog, and received opening
@@ -291,7 +310,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
           "receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt")
        VALUES ($1,$2,$3,$4,$5,10,'Karachi Pharma Distributors','INV-1',500,900,
                '2027-06-30T00:00:00.000Z','DAY',now(),now())`,
-      [`lot_${suffix}`, organizationId, `branch_${suffix}`, `mfgbatch_${suffix}`, `pack_${suffix}`]
+      [`lot_${suffix}`, organizationId, branchId, `mfgbatch_${suffix}`, `pack_${suffix}`]
     );
   });
 

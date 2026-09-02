@@ -105,6 +105,31 @@ describe('NewOrganizationPage package step', () => {
     ]);
   });
 
+  // WHA-1206 — the four premises answers a pharmacy's first branch is created
+  // from. Asked here because `pharmacy_branches` requires all four, and the
+  // province decides which jurisdiction's published rules the branch licence is
+  // later recorded against.
+  it('asks a PHARMACY organization for its first branch premises, province by name', async () => {
+    const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
+
+    for (const field of [
+      'firstBranchName',
+      'firstBranchAddress',
+      'firstBranchCity',
+      'firstBranchProvinceCode',
+    ]) {
+      expect(container.querySelector(`[name="${field}"]`)).not.toBeNull();
+    }
+    // The restaurant-only field does not follow the pharmacy path.
+    expect(container.querySelector('[name="businessDayCutoff"]')).toBeNull();
+    // UX rule 1: the operator picks a province by its name, never by its code.
+    const provinces = [
+      ...container.querySelectorAll('select[name="firstBranchProvinceCode"] option'),
+    ].map((option) => option.textContent);
+    expect(provinces).toContain('Sindh');
+    expect(provinces).not.toContain('PK-SD');
+  });
+
   it('filters packages server-side by the chosen vertical and submits it explicitly', async () => {
     const { container } = render(await renderPage({ vertical: 'RESTAURANT' }));
 

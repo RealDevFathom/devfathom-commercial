@@ -27,12 +27,14 @@ import {
   mandatoryModulesForVertical,
   modulesForVertical,
   roleTemplatesForVertical,
+  VERTICALS,
 } from '@/lib/vertical-catalog';
 import { moduleDefinitionForKey, verticalForModuleKey } from '@/lib/module-catalog';
 import {
   assertStoredBranchMayOperate,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
+import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import {
   ensureAdministratorStaffProfile,
@@ -585,17 +587,57 @@ const organizationInput = z
     firstBranchName: z.string().trim().min(2).max(120).optional(),
     firstBranchAddress: z.string().trim().min(1).max(300).optional(),
     businessDayCutoff: businessDayCutoff.optional(),
+    // WHA-1206 — `pharmacy_branches` splits the premises into an address line, a
+    // city and a province, and all three are NOT NULL. The province is not
+    // cosmetic: it is the jurisdiction whose published rule set PLAT-02
+    // validates the branch's licence against, so it is asked for rather than
+    // guessed.
+    firstBranchCity: z.string().trim().min(1).max(120).optional(),
+    firstBranchProvinceCode: z.string().trim().min(2).max(16).optional(),
   })
   .superRefine((input, ctx) => {
-    if (input.vertical !== 'RESTAURANT') return;
-    for (const field of ['firstBranchName', 'firstBranchAddress', 'businessDayCutoff'] as const) {
+    // WHA-1206 — a vertical that is provisioned with a first branch has to be
+    // given that branch's own required columns at creation. Which columns those
+    // are differs by vertical, so the requirement is stated per vertical rather
+    // than as one shared set. AGENCY provisions no branch and asks for nothing.
+    const branchFields: Record<OrganizationVertical, readonly (keyof typeof input)[]> = {
+      AGENCY: [],
+      RESTAURANT: ['firstBranchName', 'firstBranchAddress', 'businessDayCutoff'],
+      PHARMACY: [
+        'firstBranchName',
+        'firstBranchAddress',
+        'firstBranchCity',
+        'firstBranchProvinceCode',
+      ],
+    };
+    const required = branchFields[input.vertical];
+    if (required.length === 0) return;
+    for (const field of required) {
       if (!input[field])
         ctx.addIssue({
           code: 'custom',
           path: [field],
-          message: 'Required for Restaurant organizations.',
+          message: `Required for ${VERTICALS[input.vertical].label} organizations.`,
         });
     }
+    // The closed set every pharmacy surface can name (UX rule 1: no surface
+    // prints a bare code). A province outside it would render as its own code on
+    // the regulatory profile page and match no published rule set.
+    if (
+      input.vertical === 'PHARMACY' &&
+      input.firstBranchProvinceCode &&
+      !(input.firstBranchProvinceCode in PAKISTAN_PROVINCES)
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['firstBranchProvinceCode'],
+        message: 'Choose one of the provinces the regulatory profile recognises.',
+      });
+    // Reached for RESTAURANT and PHARMACY, not for AGENCY (returned above). A
+    // branch-first vertical dates its own records — business days, licence and
+    // expiry windows — in the organization timezone, so an unusable zone has to
+    // be refused before the branch is written rather than surface later as a
+    // wrong date.
     const timezone = ianaTimezone.safeParse(input.timezone);
     if (!timezone.success)
       ctx.addIssue({
@@ -695,9 +737,8 @@ async function bootstrapOrganization(
     },
   });
   // §9 Steps 3/5/6 — restaurant onboarding is branch-first. Create the single
-  // default branch (organization timezone, conservative name), assign the
-  // bootstrap administrator to it, and instantiate the restaurant role templates
-  // from the catalog. Guarded so the AGENCY path is byte-identical.
+  // default branch (organization timezone, conservative name) and assign the
+  // bootstrap administrator to it. Guarded so the AGENCY path is byte-identical.
   if (input.vertical === 'RESTAURANT') {
     const defaultBranch = await db.restaurantBranch.create({
       data: {
@@ -727,6 +768,44 @@ async function bootstrapOrganization(
       displayName: admin.name,
       email: admin.email,
     });
+  }
+  // WHA-1206 — a pharmacy is branch-first too, and nothing else creates its
+  // first branch: PLAT-02's regulatory profile hangs off a `PharmacyBranch`, and
+  // PLAT-03's PREMISES_AND_LICENCES gate is answered per branch. Without this a
+  // new pharmacy opens on an empty state that no tenant surface can clear.
+  //
+  // Created without a regulatory profile on purpose. The licences gate stays
+  // outstanding until an operator fills PLAT-02 in the workspace — that is the
+  // gate working, and pre-seeding a profile here would be exactly the "seed data
+  // fakes readiness" move PLAT-03 exists to refuse.
+  if (input.vertical === 'PHARMACY') {
+    await db.pharmacyBranch.create({
+      data: {
+        organizationId: organization.id,
+        // The same stable code the restaurant path uses; the operator-facing
+        // name is the one they supplied.
+        code: 'MAIN',
+        name: input.firstBranchName!,
+        addressLine: input.firstBranchAddress!,
+        city: input.firstBranchCity!,
+        provinceCode: input.firstBranchProvinceCode!,
+      },
+    });
+  }
+  // §9 Step 6 — instantiate the vertical's role templates from the catalog.
+  //
+  // WHA-1206: this ran inside the restaurant block, so a pharmacy was created
+  // holding only the bootstrap `admin` role while its own OWNER_AND_ROLE_TEMPLATES
+  // gate requires every key in `roleTemplatesForVertical('PHARMACY')` — an
+  // organization that could never be activated without a manual database write.
+  //
+  // AGENCY is deliberately still excluded rather than folded in. Its template set
+  // repeats the `admin` role created above (which would collide on the
+  // (organizationId, key) unique index) and adds `member`, which no agency gate
+  // requires. Seeding it would change every agency onboarding to close a gap
+  // agencies do not have; that is a product decision about a shipped vertical,
+  // not part of this fix.
+  if (input.vertical !== 'AGENCY') {
     for (const template of roleTemplatesForVertical(input.vertical)) {
       await db.organizationRole.create({
         data: {
