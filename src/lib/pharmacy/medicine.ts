@@ -72,6 +72,32 @@ export function deriveLooseUnitPrice(input: {
   return { unitPriceMinor, proRataCeilingMinor };
 }
 
+/**
+ * MED-08: the price of one sale unit drawn from a received lot.
+ *
+ * Lives here, beside `deriveLooseUnitPrice`, rather than next to the sale
+ * writer: the counter previews this price in the browser before a line is sent,
+ * and this module is free of Prisma and `server-only` so a client bundle can
+ * hold it. Keeping ONE definition is what makes the quoted price and the
+ * charged price the same number.
+ */
+export function priceFromLot(input: {
+  printedMrpMinor: number;
+  canonicalUnitsInPack: number;
+  canonicalUnitsPerSaleUnit: number;
+  roundingIncrementMinor?: number;
+}): { unitPriceMinor: number; proRataCeilingMinor: number } {
+  const loose = deriveLooseUnitPrice({
+    printedMrpMinor: input.printedMrpMinor,
+    canonicalUnitsInPack: input.canonicalUnitsInPack,
+    roundingIncrementMinor: input.roundingIncrementMinor ?? 1,
+  });
+  return {
+    unitPriceMinor: loose.unitPriceMinor * input.canonicalUnitsPerSaleUnit,
+    proRataCeilingMinor: loose.proRataCeilingMinor * input.canonicalUnitsPerSaleUnit,
+  };
+}
+
 export function assertSaleable(input: {
   productFamily: 'PHARMACEUTICAL' | 'BIOLOGICAL' | 'DEVICE' | 'ALTERNATIVE' | 'FRONT_SHOP';
   hasPresentation: boolean;

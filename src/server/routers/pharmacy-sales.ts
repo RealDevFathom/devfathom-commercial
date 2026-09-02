@@ -2,6 +2,17 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import {
+  PharmacyCounterError,
+  readCounterCart,
+  readCounterReceipt,
+  searchCounterCatalog,
+} from '@/lib/pharmacy/counter';
+import {
+  PharmacyCounterKeymapError,
+  resolveCounterKeymap,
+  type CounterBinding,
+} from '@/lib/pharmacy/counter-keymap';
+import {
   addSaleLine,
   captureDemand,
   changeSaleStatus,
@@ -52,6 +63,20 @@ function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
 
 function fail(error: unknown): never {
   if (error instanceof PharmacySettlementError) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  }
+  if (error instanceof PharmacyCounterError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CROSS_BRANCH_REFERENCE'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  if (error instanceof PharmacyCounterKeymapError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   }
   if (error instanceof PharmacySaleError) {
@@ -324,4 +349,163 @@ export const pharmacySalesRouter = router({
     .query(({ ctx, input }) =>
       demandAggregate(ctx.db, scopeFor(ctx, input.branchId), input.from, input.to)
     ),
+
+  // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
+
+  /** The branches this counter may open a bill against, with the money format. */
+  counterBranches: protectedProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const [branches, organization] = await Promise.all([
+      ctx.db.pharmacyBranch.findMany({
+        where: { organizationId, active: true },
+        select: { id: true, code: true, name: true, city: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      }),
+      ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { currency: true },
+      }),
+    ]);
+    return { branches, currency: organization?.currency ?? 'PKR' };
+  }),
+
+  /** POS-02: one search across brand, generic, ingredient, form, barcode and alias. */
+  counterSearch: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          query: z.string().trim().min(2).max(120),
+          limit: z.number().int().min(1).max(50).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await searchCounterCatalog(ctx.db, scopeFor(ctx, input.branchId), {
+          query: input.query,
+          limit: input.limit,
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /** The open bill with the FEFO allocation each line actually drew (POS-03). */
+  counterCart: protectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await readCounterCart(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * POS-08: the receipt model, for the thermal and A4 renders alike.
+   *
+   * A query, deliberately. Reprinting re-reads the same sale and therefore the
+   * same receipt number; only `tender` can ever issue one.
+   */
+  counterReceipt: protectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        const [branch, organization] = await Promise.all([
+          ctx.db.pharmacyBranch.findFirst({
+            where: { id: input.branchId, organizationId: scope.organizationId },
+            select: { name: true },
+          }),
+          ctx.db.organization.findUnique({
+            where: { id: scope.organizationId },
+            select: { currency: true },
+          }),
+        ]);
+        if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
+        return await readCounterReceipt(ctx.db, scope, input.saleId, {
+          name: branch.name,
+          currency: organization?.currency ?? 'PKR',
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  // ── POS-01 configurable shortcuts ─────────────────────────────────────────
+
+  /** This operator's resolved keymap, falling back to the shipped default. */
+  counterKeymap: protectedProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements?.organizationId;
+    const userId = ctx.session?.user?.id;
+    if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const stored = await ctx.db.pharmacyCounterKeymapPreference.findFirst({
+      where: { organizationId, userId },
+      select: { preset: true, overrides: true },
+    });
+    try {
+      const resolved = resolveCounterKeymap({
+        preset: (stored?.preset ?? 'devfathom') as 'devfathom' | 'legacySpeed',
+        overrides: (stored?.overrides ?? {}) as Record<string, CounterBinding>,
+      });
+      return { ...resolved, stored: stored !== null };
+    } catch {
+      // A row that no longer resolves (a preset removed, a chord that now
+      // collides) must not leave the counter with no shortcuts at all. Fall
+      // back to the shipped default and say the stored map was not applied.
+      return { ...resolveCounterKeymap({ preset: 'devfathom' }), stored: false };
+    }
+  }),
+
+  /**
+   * Save this operator's keymap.
+   *
+   * Validated before it is written, so a map that would shadow a workflow is
+   * refused at the boundary rather than persisted and discovered mid-bill.
+   */
+  counterSaveKeymap: protectedProcedure
+    .input(
+      z
+        .object({
+          preset: z.enum(['devfathom', 'legacySpeed']),
+          // Keys are validated by `resolveCounterKeymap` rather than by the
+          // schema: it is the same check that rejects a duplicate chord, so an
+          // unknown action and a shadowed workflow fail through one path.
+          overrides: z
+            .record(
+              z.string().trim().min(1).max(64),
+              z
+                .object({
+                  key: z.string().trim().min(1).max(16),
+                  ctrl: z.boolean().optional(),
+                  alt: z.boolean().optional(),
+                  shift: z.boolean().optional(),
+                })
+                .strict()
+            )
+            .default({}),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements?.organizationId;
+      const userId = ctx.session?.user?.id;
+      if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      try {
+        const resolved = resolveCounterKeymap({
+          preset: input.preset,
+          overrides: input.overrides as Record<string, CounterBinding>,
+        });
+        await ctx.db.pharmacyCounterKeymapPreference.upsert({
+          where: { organizationId_userId: { organizationId, userId } },
+          update: { preset: input.preset, overrides: input.overrides },
+          create: { organizationId, userId, preset: input.preset, overrides: input.overrides },
+        });
+        return { ...resolved, stored: true };
+      } catch (error) {
+        fail(error);
+      }
+    }),
 });

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1190-ph-pos-ui-keyboard-first-pharmacy-counter-search-pack-strip-unit-toggle-fefo-cart-rx-panel-receipts-pos-01-pos-/scripts/paperclip-issue-update.sh:*)",
+      "Bash(/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1190-ph-pos-ui-keyboard-first-pharmacy-counter-search-pack-strip-unit-toggle-fefo-cart-rx-panel-receipts-pos-01-pos-/scripts/paperclip:*)",
+      "Bash(curl:*)",
+      "Bash(env)",
+      "Bash(env:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/Saad/.paperclip/instances/default/companies/439a6e2c-06be-4fe0-bb43-b213140f664a",
+      "/Users/Saad/.paperclip/instances/default/companies/439a6e2c-06be-4fe0-bb43-b213140f664a/acp-engine/agents/853b8bd2-fe69-48ac-a353-7935c2a345b4",
+      "/Users/Saad/.paperclip/instances/default/workspaces/853b8bd2-fe69-48ac-a353-7935c2a345b4"
+    ],
+    "defaultMode": "default"
+  }
+}

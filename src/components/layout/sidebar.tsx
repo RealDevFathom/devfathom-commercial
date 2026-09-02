@@ -51,7 +51,7 @@ import type { TenantBrand } from '@/lib/tenant-brand';
 import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 
-type NavGroup = 'Workspace' | 'Restaurant' | 'Firm';
+type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Firm';
 
 interface NavItem {
   label: string;
@@ -237,6 +237,11 @@ export const navigation: NavItem[] = [
     icon: BarChart3,
     group: 'Restaurant',
   },
+  // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
+  // it is a first-class rail entry. `moduleForPath` resolves it to
+  // `pharmacy-counter`, which is what gates it — the item is never
+  // vertical-checked here.
+  { label: 'Counter', href: '/pharmacy/counter', icon: Monitor, group: 'Pharmacy' },
   {
     label: 'Reviews',
     href: '/reviews',
@@ -274,7 +279,7 @@ export const navigation: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
 ];
 
-const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Firm'];
+const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Firm'];
 
 export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,

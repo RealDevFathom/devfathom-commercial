@@ -1,4 +1,10 @@
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import {
+  PharmacyCounterPrescriptionError,
+  readCounterPatientPanel,
+  searchCounterPatients,
+} from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 
@@ -127,4 +133,59 @@ export const pharmacyPrescriptionsRouter = router({
     .mutation(({ ctx, input }) =>
       ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
     ),
+
+  // ── POS-09: the prescription panel beside the cart ────────────────────────
+
+  /** Patients a counter can attach without navigating away from the bill. */
+  counterPatients: protectedProcedure
+    .input(z.object({ query: z.string().trim().min(2).max(120) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return {
+          patients: await searchCounterPatients(
+            ctx.db,
+            ctx.entitlements.organizationId,
+            input.query
+          ),
+        };
+      } catch (error) {
+        if (error instanceof PharmacyCounterPrescriptionError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+        }
+        throw error;
+      }
+    }),
+
+  /**
+   * The panel itself: masked identity plus live authorizations.
+   *
+   * `auditedProtectedProcedure` and the explicit `auditPatientRead` below keep
+   * this on the same audited path as `readPatient` — a counter-side read of a
+   * patient is still a protected read (RX-01), not an exemption.
+   */
+  counterPatientPanel: auditedProtectedProcedure
+    .input(z.object({ patientId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const panel = await readCounterPatientPanel(
+          ctx.db,
+          ctx.entitlements.organizationId,
+          input.patientId
+        );
+        auditPatientRead({
+          organizationId: ctx.entitlements.organizationId,
+          actorId: ctx.session.user.id,
+          patientId: panel.patientId,
+        });
+        return panel;
+      } catch (error) {
+        if (error instanceof PharmacyCounterPrescriptionError) {
+          throw new TRPCError({
+            code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+            message: error.reason,
+          });
+        }
+        throw error;
+      }
+    }),
 });

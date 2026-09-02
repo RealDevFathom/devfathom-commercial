@@ -910,6 +910,25 @@ model PharmacyReceiptNumberSequence {
   @@map("pharmacy_receipt_number_sequences")
 }
 
+/// POS-01: one counter operator's configurable shortcut map. Organization- and
+/// user-scoped rather than branch-scoped, because muscle memory belongs to the
+/// cashier and follows them between counters. `overrides` is a JSON map from
+/// counter action to chord; it is validated by `resolveCounterKeymap` before it
+/// is stored, so an unknown action or a duplicate chord never reaches a row.
+model PharmacyCounterKeymapPreference {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  preset         String   @default("devfathom")
+  overrides      Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, userId])
+  @@map("pharmacy_counter_keymap_preferences")
+}
+
 model PharmacySaleLine {
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
