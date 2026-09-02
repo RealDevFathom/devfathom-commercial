@@ -45,7 +45,7 @@ jobs:
           az acr repository show --name "$AZURE_ACR_NAME" --image "devfathom-commercial@${IMAGE_DIGEST}" --output none
 
           migration_command=$(az containerapp job show --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_MIGRATION_JOB_NAME" --query "properties.template.containers[?name=='migrate'].args[1] | [0]" --output tsv)
-          [[ "$migration_command" == 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts' ]] || { echo 'Production migration job is not configured for the supported migration-only path.' >&2; exit 1; }
+          [[ "$migration_command" == 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts' ]] || { echo 'Production migration job is not configured for the supported migration-only path.' >&2; exit 1; }
           initialization_secrets=$(az containerapp job secret list --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_MIGRATION_JOB_NAME" --query "[?name=='seed-password' || name=='admin-password' || name=='platform-admin-password'].name" --output tsv)
           [[ -z "$initialization_secrets" ]] || { echo 'Production migration job still contains initialization secrets.' >&2; exit 1; }
 

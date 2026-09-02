@@ -11,6 +11,7 @@ param seedDatabase = true
 param bootstrapDatabase = false
 param emailDeliveryMode = 'capture'
 param postgresAdminPassword = readEnvironmentVariable('DEVFATHOM_STAGING_POSTGRES_PASSWORD')
+param appDatabasePassword = readEnvironmentVariable('DEVFATHOM_STAGING_APP_DATABASE_PASSWORD')
 param authSecret = readEnvironmentVariable('DEVFATHOM_STAGING_AUTH_SECRET')
 param platformEncryptionKey = readEnvironmentVariable('DEVFATHOM_STAGING_PLATFORM_ENCRYPTION_KEY')
 param cameraCredentialKey = readEnvironmentVariable('DEVFATHOM_STAGING_CAMERA_CREDENTIAL_KEY')

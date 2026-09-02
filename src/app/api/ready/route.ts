@@ -59,7 +59,12 @@ const SCHEMA_DRIFT_SQLSTATES = new Set(['42P01', '42703']);
  */
 const SCHEMA_DRIFT_PRISMA_CODES = new Set(['P2021', 'P2022']);
 
-type UnreadyReason = 'migrations_pending' | 'schema_drift' | 'timeout' | 'database_unavailable';
+type UnreadyReason =
+  | 'runtime_role_privileged'
+  | 'migrations_pending'
+  | 'schema_drift'
+  | 'timeout'
+  | 'database_unavailable';
 
 class ProbeTimeoutError extends Error {}
 
@@ -93,6 +98,15 @@ function classify(error: unknown): UnreadyReason {
 
 /** Resolve to the reason the deployment is not ready, or `null` when it is. */
 async function probeSchema(): Promise<UnreadyReason | null> {
+  const roles = await db.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>`
+    SELECT rolsuper, rolbypassrls
+      FROM pg_roles
+     WHERE rolname = current_user
+  `;
+
+  const role = roles[0];
+  if (!role || role.rolsuper || role.rolbypassrls) return 'runtime_role_privileged';
+
   const migrations = await db.$queryRaw<Array<{ pending: number }>>`
     SELECT count(*)::int AS pending
       FROM "_prisma_migrations"

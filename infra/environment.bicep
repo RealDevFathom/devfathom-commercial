@@ -57,6 +57,9 @@ param postgresExtensions string
 @secure()
 param postgresAdminPassword string
 @secure()
+@description('Password for the restricted PostgreSQL login used only by the web application.')
+param appDatabasePassword string
+@secure()
 param authSecret string
 @secure()
 param platformEncryptionKey string
@@ -89,7 +92,8 @@ var appEnvironmentName = 'df-${shortEnvironment}-${suffix}-cae'
 var appName = 'devfathom-${shortEnvironment}'
 var migrationJobName = 'devfathom-${shortEnvironment}-migrate'
 var databaseUrl = 'postgresql://devfathomadmin:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
-var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts'
+var appDatabaseUrl = 'postgresql://devfathom_app:${uriComponent(appDatabasePassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
+var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts'
 var migrationCommand = seedDatabase && bootstrapDatabase
   ? fail('seedDatabase and bootstrapDatabase cannot both be enabled.')
   : seedDatabase
@@ -244,6 +248,11 @@ resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'database-url'
   properties: { value: databaseUrl }
+}
+resource appDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'app-database-url'
+  properties: { value: appDatabaseUrl }
 }
 resource authSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
@@ -409,7 +418,7 @@ resource vaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 
 var vaultBaseUrl = 'https://${vault.name}${environment().suffixes.keyvaultDns}/secrets'
 var runtimeKeyVaultSecrets = [
-  { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
+  { name: 'app-database-url', keyVaultUrl: '${vaultBaseUrl}/app-database-url', identity: identity.id }
   { name: 'auth-secret', keyVaultUrl: '${vaultBaseUrl}/auth-secret', identity: identity.id }
   { name: 'platform-encryption-key', keyVaultUrl: '${vaultBaseUrl}/platform-encryption-key', identity: identity.id }
   { name: 'camera-credential-key', keyVaultUrl: '${vaultBaseUrl}/camera-credential-key', identity: identity.id }
@@ -417,7 +426,10 @@ var runtimeKeyVaultSecrets = [
 ]
 
 var migrationSecrets = concat(
-  [{ name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }],
+  [
+    { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
+    { name: 'app-database-url', keyVaultUrl: '${vaultBaseUrl}/app-database-url', identity: identity.id }
+  ],
   seedDatabase ? [{ name: 'seed-password', value: seedPassword }] : [],
   seedDatabase || bootstrapDatabase
     ? [
@@ -429,7 +441,7 @@ var migrationSecrets = concat(
 
 var webEnvironment = [
   { name: 'NODE_ENV', value: 'production' }
-  { name: 'DATABASE_URL', secretRef: 'database-url' }
+  { name: 'DATABASE_URL', secretRef: 'app-database-url' }
   { name: 'AUTH_SECRET', secretRef: 'auth-secret' }
   { name: 'AUTH_URL', value: 'https://${tenantHost}' }
   { name: 'AUTH_TRUST_HOST', value: 'true' }
@@ -454,6 +466,7 @@ var migrationEnvironment = concat(
     { name: 'NODE_ENV', value: 'production' }
     { name: 'DATABASE_URL', secretRef: 'database-url' }
     { name: 'EXTENSION_ADMIN_DATABASE_URL', secretRef: 'database-url' }
+    { name: 'APP_DATABASE_URL', secretRef: 'app-database-url' }
     { name: 'AUTH_URL', value: 'https://${tenantHost}' }
     { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
   ],
@@ -547,7 +560,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: minReplicas, maxReplicas: 1 }
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, databaseUrlSecret, authSecretResource, platformEncryptionSecret, cameraCredentialSecret, cronSecretResource]
+  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, appDatabaseUrlSecret, authSecretResource, platformEncryptionSecret, cameraCredentialSecret, cronSecretResource]
 }
 
 resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
@@ -582,7 +595,7 @@ resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
       ]
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, database, databaseUrlSecret]
+  dependsOn: [acrPull, vaultSecretsUser, database, databaseUrlSecret, appDatabaseUrlSecret]
 }
 
 output appName string = app.name
