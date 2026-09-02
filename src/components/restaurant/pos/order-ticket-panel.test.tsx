@@ -22,6 +22,7 @@ const order: OrderDetail = {
       modifiers: [],
     },
   ],
+  kitchenTickets: [{ id: 'ticket-1', ticketNumber: 7, stationId: 'station-1' }],
   tables: [{ id: 'link-1', tableId: 'table-1', active: true }],
   totals: { subtotal: '24.00', tax: '0.00', serviceCharge: '0.00' },
 };
@@ -36,6 +37,7 @@ function handlers() {
     onHold: vi.fn(),
     onFire: vi.fn(),
     onSend: vi.fn(),
+    onReprint: vi.fn(),
     onServed: vi.fn(),
     onRemake: vi.fn(),
     onVoid: vi.fn().mockResolvedValue(true),
@@ -62,10 +64,12 @@ describe('OrderTicketPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
     fireEvent.click(screen.getByRole('button', { name: 'Fire' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send whole order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reprint KOT 7' }));
 
     expect(actions.onHold).toHaveBeenCalledWith(2);
     expect(actions.onFire).toHaveBeenCalledWith(2);
     expect(actions.onSend).toHaveBeenCalledOnce();
+    expect(actions.onReprint).toHaveBeenCalledWith('ticket-1');
   });
 
   it('submits post-prep void approval, disposition, and reason', async () => {

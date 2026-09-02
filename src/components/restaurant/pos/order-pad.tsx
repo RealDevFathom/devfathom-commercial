@@ -1683,6 +1683,10 @@ export function OrderPad() {
               onSend={() =>
                 order && void mutate('fire', { orderId: order.id }, 'Order sent to kitchen.')
               }
+              onReprint={(ticketId) =>
+                order &&
+                void mutate('reprint-kot', { orderId: order.id, ticketId }, 'KOT reprint queued.')
+              }
               onServed={(itemId) =>
                 order &&
                 void mutate('mark-served', { orderId: order.id, itemId }, 'Item marked served.')

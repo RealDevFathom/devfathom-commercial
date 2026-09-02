@@ -232,6 +232,14 @@ beforeAll(async () => {
     await tx.restaurantStationRoutingRule.create({
       data: { stationId: ids.stationBar, productId: ids.product, priority: 0 },
     });
+    await tx.restaurantPrintRoute.create({
+      data: {
+        branchId: ids.branch,
+        stationId: ids.stationBar,
+        documentType: 'BAR_TICKET',
+        printerId: 'tcp://127.0.0.1:9100',
+      },
+    });
 
     await tx.restaurantBrand.create({ data: { id: ids.brand, name: 'Acme' } });
     await tx.restaurantMenu.create({ data: { id: ids.menu, brandId: ids.brand, name: 'All Day' } });
@@ -436,8 +444,12 @@ describeIfDatabase('orders command layer (real DB)', () => {
 
   it('sends the order: HELD→QUEUED, order→SENT, and generates KOTs (C2)', async () => {
     const { orderId, db } = await openWithItem();
-    const result = await deps.orders.sendOrder(db, { orderId, actor: actor() });
+    const sendActor = actor();
+    const result = await deps.orders.sendOrder(db, { orderId, actor: sendActor });
     expect(result.tickets.length).toBeGreaterThanOrEqual(1);
+    await expect(deps.orders.sendOrder(db, { orderId, actor: sendActor })).resolves.toMatchObject({
+      replayed: true,
+    });
 
     const order = await read((tx) =>
       tx.restaurantOrder.findUnique({
@@ -453,6 +465,40 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(order?.items.every((i) => i.status === 'QUEUED')).toBe(true);
     expect(order?.kitchenTickets[0]?.stationId).toBe(ids.stationBar); // product routes to bar
     expect(order?.kitchenTickets[0]?.items).toHaveLength(1);
+    const printJobs = await read((tx) =>
+      tx.restaurantPrintJob.findMany({
+        where: { idempotencyKey: `kitchen-ticket:${result.tickets[0]!.ticketId}:v1` },
+      })
+    );
+    expect(printJobs).toHaveLength(1);
+    expect(printJobs[0]).toMatchObject({
+      status: 'PENDING',
+      printerId: 'tcp://127.0.0.1:9100',
+      documentType: 'BAR_TICKET',
+    });
+
+    const reprintActor = actor();
+    await expect(
+      deps.orders.reprintKitchenTicket(db, {
+        orderId,
+        ticketId: result.tickets[0]!.ticketId,
+        actor: reprintActor,
+      })
+    ).resolves.toMatchObject({ ticketId: result.tickets[0]!.ticketId, replayed: false });
+    await expect(
+      deps.orders.reprintKitchenTicket(db, {
+        orderId,
+        ticketId: result.tickets[0]!.ticketId,
+        actor: reprintActor,
+      })
+    ).resolves.toMatchObject({ ticketId: result.tickets[0]!.ticketId, replayed: true });
+    await expect(
+      read((tx) =>
+        tx.restaurantPrintJob.count({
+          where: { idempotencyKey: { startsWith: 'kitchen-ticket:reprint-' } },
+        })
+      )
+    ).resolves.toBe(1);
   });
 
   it('fires one course without touching another (hold/fire isolation)', async () => {

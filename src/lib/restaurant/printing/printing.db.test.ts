@@ -1,10 +1,13 @@
 import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer } from 'node:net';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { PrintJob, PrintRoutingConfig } from './contract';
-import { PrintBridgeService } from './service';
+import { acknowledgePrintJob, claimNextPrintJob, PrintBridgeService } from './service';
 import { SimulatedPrintBridgeAdapter } from './stub';
+import { writeToPrinter } from '../../../../scripts/print-bridge';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -117,5 +120,54 @@ describeIfDatabase('durable print bridge', () => {
       })
     );
     expect(stored).toMatchObject({ status: 'PRINTED', attemptCount: 2 });
+  });
+
+  it('claims a durable job, writes ESC/POS to a fake TCP printer, and acknowledges it', async () => {
+    const server = createServer();
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Fake printer did not bind TCP.');
+    const received = new Promise<Buffer>((resolve) => {
+      server.once('connection', (socket) => {
+        const chunks: Buffer[] = [];
+        socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+        socket.on('end', () => resolve(Buffer.concat(chunks)));
+      });
+    });
+    try {
+      const tcpConfig: PrintRoutingConfig = {
+        branchId: branchA,
+        routes: [
+          {
+            documentType: 'BAR_TICKET',
+            stationId: null,
+            printerId: `tcp://127.0.0.1:${address.port}`,
+            enabled: true,
+          },
+        ],
+      };
+      const tcpJob = { ...job, idempotencyKey: `fake-tcp-${suffix}` };
+      await tenancy.withTenantDb(orgA, (db) =>
+        new PrintBridgeService(db).enqueue(orgA, tcpConfig, tcpJob)
+      );
+      const claimed = await tenancy.withTenantDb(orgA, (db) => claimNextPrintJob(db, branchA));
+      expect(claimed).not.toBeNull();
+      await writeToPrinter(claimed!.printerId, Buffer.from(claimed!.bytes, 'base64'));
+      expect((await received).includes(Buffer.from('Soda'))).toBe(true);
+      await expect(
+        tenancy.withTenantDb(orgA, (db) =>
+          acknowledgePrintJob(db, { branchId: branchA, jobId: claimed!.id, status: 'PRINTED' })
+        )
+      ).resolves.toEqual({ acknowledged: true, replayed: false });
+      await expect(
+        tenancy.withTenantDb(orgA, (db) =>
+          db.restaurantPrintJob.findUniqueOrThrow({ where: { id: claimed!.id } })
+        )
+      ).resolves.toMatchObject({ status: 'PRINTED', attemptCount: 1 });
+    } finally {
+      server.close();
+      await once(server, 'close');
+    }
   });
 });

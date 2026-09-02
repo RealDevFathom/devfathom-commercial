@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
@@ -6,8 +7,12 @@ import {
   PrintRoutingConfigSchema,
   type PrintDocumentType,
 } from '@/lib/restaurant/printing/contract';
-import { simulatedPrintRuntime } from '@/lib/restaurant/printing/runtime';
-import { PrintBridgeService } from '@/lib/restaurant/printing/service';
+import {
+  acknowledgePrintJob,
+  claimNextPrintJob,
+  PrintBridgeService,
+} from '@/lib/restaurant/printing/service';
+import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 
 const ACTION_FOR_DOCUMENT: Record<PrintDocumentType, Action> = {
@@ -15,6 +20,50 @@ const ACTION_FOR_DOCUMENT: Record<PrintDocumentType, Action> = {
   BAR_TICKET: 'orders:read',
   RECEIPT: 'money:read',
 };
+
+const bridgeAckBody = z
+  .object({
+    jobId: z.string().min(1),
+    status: z.enum(['PRINTED', 'OFFLINE']),
+    error: z.string().trim().max(500).optional(),
+  })
+  .strict();
+
+function isBridgeRequest(request: Request) {
+  return request.headers.get('authorization')?.startsWith('Bearer rdk_') ?? false;
+}
+
+const bridgeClaim = withDeviceAuth(async (ctx, request) => {
+  const rawWait = new URL(request.url).searchParams.get('wait');
+  const waitSeconds = Math.min(20, Math.max(0, Number.parseInt(rawWait ?? '15', 10) || 0));
+  const deadline = Date.now() + waitSeconds * 1_000;
+  do {
+    const job = await claimNextPrintJob(ctx.db, ctx.device.branchId);
+    if (job) return NextResponse.json({ job });
+    if (Date.now() >= deadline || request.signal.aborted) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  } while (true);
+  return new NextResponse(null, { status: 204 });
+});
+
+const bridgeAck = withDeviceAuth(async (ctx, request) => {
+  const parsed = bridgeAckBody.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'Invalid print acknowledgement.' }, { status: 400 });
+  }
+  const result = await acknowledgePrintJob(ctx.db, {
+    branchId: ctx.device.branchId,
+    jobId: parsed.data.jobId,
+    status: parsed.data.status,
+  });
+  if (!result.acknowledged) {
+    return NextResponse.json({ error: 'Print job not found.' }, { status: 404 });
+  }
+  if (parsed.data.status === 'OFFLINE' && parsed.data.error) {
+    console.warn(`Print bridge reported job ${parsed.data.jobId} offline: ${parsed.data.error}`);
+  }
+  return NextResponse.json(result);
+});
 
 function sameOrigin(request: Request) {
   const origin = request.headers.get('origin');
@@ -43,10 +92,11 @@ async function branchExists(
 }
 
 /**
- * Simulation-only local print bridge boundary. GET/PUT manage branch routing;
- * POST renders and submits one idempotent job. No vendor SDK, daemon, or hardware I/O ships here.
+ * Web sessions manage routes and enqueue manual jobs. A branch-bound registered
+ * device token long-polls and acknowledges the durable bridge queue.
  */
 export async function GET(request: Request) {
+  if (isBridgeRequest(request)) return bridgeClaim(request);
   const ctx = await context(request);
   if (!ctx) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
   if (!(await permitted(ctx, 'restaurant:configure'))) {
@@ -64,13 +114,12 @@ export async function GET(request: Request) {
       kitchenStations: { where: { active: true }, select: { id: true, name: true } },
     },
   });
-  const runtime = simulatedPrintRuntime();
   const configs = await ctx.db.restaurantPrintRoute.findMany({
     where: { branchId: { in: branches.map((branch) => branch.id) } },
     orderBy: { createdAt: 'asc' },
   });
   return NextResponse.json({
-    mode: runtime.adapter.kind,
+    mode: 'DEVICE_BRIDGE',
     branches: branches.map((branch) => ({
       ...branch,
       config: {
@@ -131,10 +180,11 @@ export async function PUT(request: Request) {
       });
     }
   });
-  return NextResponse.json({ mode: 'SIMULATION_ONLY', config: parsed.data });
+  return NextResponse.json({ mode: 'DEVICE_BRIDGE', config: parsed.data });
 }
 
 export async function POST(request: Request) {
+  if (isBridgeRequest(request)) return bridgeAck(request);
   if (!sameOrigin(request)) return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
   const ctx = await context(request);
   if (!ctx) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
@@ -150,20 +200,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Branch not found.' }, { status: 404 });
   }
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
-  const runtime = simulatedPrintRuntime();
   const result = await ctx.db.$transaction(async (db) => {
     const routes = await db.restaurantPrintRoute.findMany({
       where: { branchId: parsed.data.branchId },
       select: { documentType: true, stationId: true, printerId: true, enabled: true },
     });
-    return new PrintBridgeService(runtime.adapter, db).submit(
+    return new PrintBridgeService(db).enqueue(
       organizationId,
       { branchId: parsed.data.branchId, routes },
       parsed.data
     );
   });
   return NextResponse.json(
-    { mode: runtime.adapter.kind, result },
-    { status: result.status === 'PRINTED' ? 200 : result.status === 'OFFLINE' ? 503 : 409 }
+    { mode: 'DEVICE_BRIDGE', result },
+    { status: result.status === 'QUEUED' ? 202 : result.status === 'PRINTED' ? 200 : 409 }
   );
 }

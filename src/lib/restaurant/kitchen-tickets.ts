@@ -1,7 +1,8 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import type { PrintDocumentType, PrintJob } from './printing/contract';
+import type { PrintDocumentType, PrintJob, PrintRoute } from './printing/contract';
+import { PrintBridgeService } from './printing/service';
 
 import { resolveStation, type StationMatchLevel, type StationRoutingRule } from './station-routing';
 
@@ -47,6 +48,7 @@ export type GeneratedTicket = {
   ticketId: string;
   stationId: string;
   ticketNumber: number;
+  createdAt: Date;
   matchedBy: StationMatchLevel;
   items: Array<{ orderItemId: string; quantity: number }>;
 };
@@ -89,6 +91,65 @@ export function kitchenTicketPrintJob(
       })),
     },
   };
+}
+
+function routeTypeForTicket(
+  routes: readonly PrintRoute[],
+  stationId: string
+): Extract<PrintDocumentType, 'KITCHEN_TICKET' | 'BAR_TICKET'> | null {
+  const eligible = routes.filter(
+    (route) =>
+      route.enabled &&
+      (route.documentType === 'KITCHEN_TICKET' || route.documentType === 'BAR_TICKET')
+  );
+  const exact = eligible.find((route) => route.stationId === stationId);
+  const fallback = eligible.find((route) => route.stationId === null);
+  const selected = exact ?? fallback;
+  return selected?.documentType === 'KITCHEN_TICKET' || selected?.documentType === 'BAR_TICKET'
+    ? selected.documentType
+    : null;
+}
+
+/** Persist one routed print intent per generated KOT; hardware delivery is bridge-owned. */
+export async function enqueueKitchenTicketPrintJobs(
+  tx: ScopedDb,
+  input: {
+    organizationId: string;
+    branchId: string;
+    orderReference: string;
+    tickets: readonly GeneratedTicket[];
+    labelsByOrderItemId: Readonly<Record<string, string>>;
+  }
+): Promise<number> {
+  if (input.tickets.length === 0) return 0;
+  const routes = await tx.restaurantPrintRoute.findMany({
+    where: {
+      branchId: input.branchId,
+      enabled: true,
+      documentType: { in: ['KITCHEN_TICKET', 'BAR_TICKET'] },
+    },
+    orderBy: [{ stationId: 'desc' }, { documentType: 'desc' }],
+    select: { documentType: true, stationId: true, printerId: true, enabled: true },
+  });
+  const service = new PrintBridgeService(tx);
+  let enqueued = 0;
+  for (const ticket of input.tickets) {
+    const documentType = routeTypeForTicket(routes, ticket.stationId);
+    if (!documentType) continue;
+    const result = await service.enqueue(
+      input.organizationId,
+      { branchId: input.branchId, routes },
+      kitchenTicketPrintJob(ticket, {
+        branchId: input.branchId,
+        orderReference: input.orderReference,
+        createdAt: ticket.createdAt.toISOString(),
+        documentType,
+        labelsByOrderItemId: input.labelsByOrderItemId,
+      })
+    );
+    if (result.status !== 'NO_PRINTER') enqueued += 1;
+  }
+  return enqueued;
 }
 
 /**
@@ -150,7 +211,7 @@ export async function generateKitchenTickets(
     const ticketNumber = await allocateTicketNumber(tx, stationId, input.businessDate);
     const ticket = await tx.restaurantKitchenTicket.create({
       data: { orderId: input.orderId, stationId, businessDate: input.businessDate, ticketNumber },
-      select: { id: true },
+      select: { id: true, createdAt: true },
     });
     const items: Array<{ orderItemId: string; quantity: number }> = [];
     for (const item of group.items) {
@@ -164,6 +225,7 @@ export async function generateKitchenTickets(
       ticketId: ticket.id,
       stationId,
       ticketNumber,
+      createdAt: ticket.createdAt,
       matchedBy: group.matchedBy,
       items,
     });

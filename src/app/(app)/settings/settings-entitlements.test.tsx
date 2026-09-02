@@ -268,8 +268,8 @@ describe('Settings entitlement presentation', () => {
   });
 });
 
-describe('Print routing simulation settings', () => {
-  it('renders the explicit simulation label and empty state', async () => {
+describe('Print routing settings', () => {
+  it('renders the KOT/KDS explanation and empty state', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ mode: 'SIMULATION_ONLY', branches: [] })))
@@ -279,7 +279,7 @@ describe('Print routing simulation settings', () => {
     expect(
       await screen.findByText('No active restaurant branches are available.')
     ).toBeInTheDocument();
-    expect(screen.getByText(/do not connect to physical printers/i)).toBeInTheDocument();
+    expect(screen.getByText(/each station may use either, both, or neither/i)).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
 
@@ -305,10 +305,11 @@ describe('Print routing simulation settings', () => {
     );
     render(<PrintRoutingSection />);
     await waitFor(() => expect(screen.getByLabelText('Branch')).toHaveValue('branch-1'));
-    expect(screen.getByLabelText('Kitchen tickets station')).toBeInTheDocument();
+    expect(screen.getByLabelText('Kitchen printer (KOT) station')).toBeInTheDocument();
     expect(screen.getByLabelText('Bar tickets printer ID')).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Enable receipts' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save simulation routes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled();
+    expect(screen.getByText(/each station may use either, both, or neither/i)).toBeVisible();
     vi.unstubAllGlobals();
   });
 });

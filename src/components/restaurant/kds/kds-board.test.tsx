@@ -328,6 +328,38 @@ describe('KdsBoard transport', () => {
     expect(screen.getByText('Item recalled.')).toBeVisible();
   });
 
+  it('queues a KOT reprint for the displayed station ticket', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const path = String(input);
+      if (path.endsWith('/operators')) return json(operatorDirectory());
+      if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+      if (path.includes('/queue?')) return json(queue([ticket(2, 'Burger', 'NEW')]));
+      if (path.endsWith('/orders/reprint-kot')) return json({ ticketId: 'ticket-2' });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal('fetch', fetch);
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '00000000-0000-4000-8000-000000000049'
+    );
+
+    render(<KdsBoard />);
+    await connect();
+    fireEvent.click(screen.getByRole('button', { name: 'Reprint KOT 2 for order 42' }));
+    await flush();
+
+    const call = fetch.mock.calls.find(([input]) => String(input).endsWith('/orders/reprint-kot'));
+    expect(call).toBeDefined();
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      orderId: 'order-2',
+      ticketId: 'ticket-2',
+    });
+    expect(new Headers(call?.[1]?.headers).get('Idempotency-Key')).toBe(
+      '00000000-0000-4000-8000-000000000049'
+    );
+    expect(screen.getByText('KOT 2 reprint queued.')).toBeVisible();
+  });
+
   it('rejects a denied device before exposing operators or the secret', async () => {
     vi.useFakeTimers();
     vi.stubGlobal(

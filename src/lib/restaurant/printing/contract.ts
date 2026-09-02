@@ -51,6 +51,18 @@ export type PrintResult =
   | { status: 'PRINTED'; printerId: string; bytes: number; replayed: boolean }
   | { status: 'OFFLINE' | 'NO_PRINTER'; retryable: true; replayed: boolean };
 
+export type PrintEnqueueResult =
+  | { status: 'QUEUED'; printerId: string; replayed: boolean }
+  | { status: 'PRINTED'; printerId: string; bytes: number; replayed: true }
+  | { status: 'NO_PRINTER'; retryable: true; replayed: boolean };
+
+export type ClaimedPrintJob = {
+  id: string;
+  printerId: string;
+  documentType: PrintDocumentType;
+  bytes: string;
+};
+
 export interface PrintBridgeAdapter {
   readonly kind: string;
   send(printerId: string, bytes: Uint8Array): Promise<'PRINTED' | 'OFFLINE'>;

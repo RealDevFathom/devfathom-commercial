@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import { POS_MONTHLY_ORDERS_LIMIT, resolveEntitlementLimit } from '@/lib/entitlement-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -8,7 +10,12 @@ import { evaluateOrderSettlement } from './bills';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
 import { postOrderRecipeConsumption } from './inventory';
-import { generateKitchenTickets, type FiredItem, type GeneratedTicket } from './kitchen-tickets';
+import {
+  enqueueKitchenTicketPrintJobs,
+  generateKitchenTickets,
+  type FiredItem,
+  type GeneratedTicket,
+} from './kitchen-tickets';
 import { earnLoyaltyForClosedOrder } from './loyalty';
 import {
   DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE,
@@ -80,7 +87,9 @@ export type OrderCommandErrorReason =
   | 'NOT_CLOSABLE'
   | 'NOT_SETTLED'
   | 'LIMIT_REACHED'
-  | 'LIMIT_UNAVAILABLE';
+  | 'LIMIT_UNAVAILABLE'
+  | 'PRINT_ROUTE_NOT_FOUND'
+  | 'TICKET_NOT_FOUND';
 
 export class OrderCommandError extends Error {
   constructor(
@@ -211,7 +220,9 @@ type LoadedItem = {
 
 type LoadedOrder = {
   id: string;
+  organizationId: string;
   branchId: string;
+  orderNumber: number;
   status: OrderStatus;
   channel: OrderChannel;
   businessDate: Date;
@@ -224,7 +235,9 @@ async function loadOrder(tx: ScopedDb, orderId: string): Promise<LoadedOrder> {
     where: { id: orderId },
     select: {
       id: true,
+      organizationId: true,
       branchId: true,
+      orderNumber: true,
       status: true,
       channel: true,
       businessDate: true,
@@ -813,6 +826,13 @@ async function fireItems(
     businessDate: order.businessDate,
     items: fired,
   });
+  await enqueueKitchenTicketPrintJobs(tx, {
+    organizationId: order.organizationId,
+    branchId: order.branchId,
+    orderReference: `Order ${order.orderNumber}`,
+    tickets,
+    labelsByOrderItemId: Object.fromEntries(items.map((item) => [item.id, item.name])),
+  });
   await record(tx, order, actor, eventType, {
     course,
     itemIds: items.map((i) => i.id),
@@ -825,6 +845,73 @@ async function fireItems(
   });
   await syncAggregate(tx, order.id, order.status);
   return { orderId: order.id, itemIds: items.map((i) => i.id), tickets, replayed: false };
+}
+
+export type ReprintKitchenTicketInput = {
+  orderId: string;
+  ticketId: string;
+  actor: CommandActor;
+};
+
+/** Queue a fresh KOT copy while making transport retries idempotent. */
+export async function reprintKitchenTicket(
+  db: ScopedDb,
+  input: ReprintKitchenTicketInput
+): Promise<{ orderId: string; ticketId: string; replayed: boolean }> {
+  return runInTransaction(db, async (tx) => {
+    const idem = await beginIdempotent(tx, input.actor, 'kot.reprint');
+    if (idem.replay) {
+      return { orderId: input.orderId, ticketId: idem.resultRef ?? input.ticketId, replayed: true };
+    }
+    const order = await loadOrder(tx, input.orderId);
+    const ticket = await tx.restaurantKitchenTicket.findFirst({
+      where: { id: input.ticketId, orderId: order.id },
+      select: {
+        id: true,
+        stationId: true,
+        ticketNumber: true,
+        createdAt: true,
+        items: { select: { orderItemId: true, quantity: true } },
+      },
+    });
+    if (!ticket) {
+      throw new OrderCommandError(
+        'The kitchen ticket does not exist on this order.',
+        'TICKET_NOT_FOUND'
+      );
+    }
+    const reprintKey = createHash('sha256')
+      .update(`${ticket.id}:${input.actor.deviceId}:${input.actor.idempotencyKey}`)
+      .digest('hex');
+    const reprintTicket: GeneratedTicket = {
+      ticketId: `reprint-${reprintKey}`,
+      stationId: ticket.stationId,
+      ticketNumber: ticket.ticketNumber,
+      createdAt: new Date(),
+      matchedBy: 'default',
+      items: ticket.items,
+    };
+    const enqueued = await enqueueKitchenTicketPrintJobs(tx, {
+      organizationId: order.organizationId,
+      branchId: order.branchId,
+      orderReference: `Order ${order.orderNumber} · KOT ${ticket.ticketNumber} · REPRINT`,
+      tickets: [reprintTicket],
+      labelsByOrderItemId: Object.fromEntries(order.items.map((item) => [item.id, item.name])),
+    });
+    if (enqueued === 0) {
+      throw new OrderCommandError(
+        'No enabled kitchen printer route matches this ticket station.',
+        'PRINT_ROUTE_NOT_FOUND'
+      );
+    }
+    await record(tx, order, input.actor, 'kot.reprinted', {
+      ticketId: ticket.id,
+      stationId: ticket.stationId,
+      ticketNumber: ticket.ticketNumber,
+    });
+    await recordIdempotentResult(tx, input.actor, ticket.id);
+    return { orderId: order.id, ticketId: ticket.id, replayed: false };
+  });
 }
 
 export type HoldCourseInput = { orderId: string; course: number; actor: CommandActor };

@@ -36,6 +36,7 @@ export type OrderDetail = {
   publicationId: string | null;
   coverCount: number | null;
   items: OrderItem[];
+  kitchenTickets: Array<{ id: string; ticketNumber: number; stationId: string }>;
   tables: { id: string; tableId: string; active: boolean }[];
   totals: { subtotal: string; tax: string; serviceCharge: string; deliveryFee?: string };
 };
@@ -56,6 +57,7 @@ type OrderTicketPanelProps = {
   onHold: (course: number) => void;
   onFire: (course: number) => void;
   onSend: () => void;
+  onReprint: (ticketId: string) => void;
   onServed: (itemId: string) => void;
   onRemake: (itemId: string, reason: string) => void;
   onVoid: (input: VoidItemInput) => Promise<boolean>;
@@ -83,6 +85,7 @@ export function OrderTicketPanel({
   onHold,
   onFire,
   onSend,
+  onReprint,
   onServed,
   onRemake,
   onVoid,
@@ -182,6 +185,23 @@ export function OrderTicketPanel({
             Send whole order
           </Button>
         </div>
+
+        {order.kitchenTickets.length > 0 ? (
+          <div className="mb-4 flex flex-wrap gap-2" aria-label="Kitchen ticket reprints">
+            {order.kitchenTickets.map((ticket) => (
+              <Button
+                key={ticket.id}
+                type="button"
+                variant="outline"
+                onClick={() => onReprint(ticket.id)}
+                disabled={pending}
+                className="h-11"
+              >
+                Reprint KOT {ticket.ticketNumber}
+              </Button>
+            ))}
+          </div>
+        ) : null}
 
         {courses.length === 0 ? (
           <p className="py-6 text-center text-sm text-text-muted">

@@ -360,27 +360,33 @@ export function RestaurantDevicesConsole() {
               </select>
             </label>
             {enrollmentKind === 'KDS' ? (
-              <label className="space-y-1.5">
-                <span className={labelClass}>KDS station</span>
-                <select
-                  name="stationId"
-                  required
-                  defaultValue=""
-                  className={selectClass}
-                  disabled={!enrollmentBranchId || stationsQuery.isLoading}
-                >
-                  <option value="" disabled>
-                    {stationsQuery.isLoading ? 'Loading stations…' : 'Select a station'}
-                  </option>
-                  {(stationsQuery.data ?? [])
-                    .filter((station) => station.active)
-                    .map((station) => (
-                      <option key={station.id} value={station.id}>
-                        {station.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
+              <div className="space-y-1.5">
+                <label className="space-y-1.5">
+                  <span className={labelClass}>KDS station</span>
+                  <select
+                    name="stationId"
+                    required
+                    defaultValue=""
+                    className={selectClass}
+                    disabled={!enrollmentBranchId || stationsQuery.isLoading}
+                  >
+                    <option value="" disabled>
+                      {stationsQuery.isLoading ? 'Loading stations…' : 'Select a station'}
+                    </option>
+                    {(stationsQuery.data ?? [])
+                      .filter((station) => station.active)
+                      .map((station) => (
+                        <option key={station.id} value={station.id}>
+                          {station.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <p className="text-xs text-text-muted">
+                  Stations are required only for kitchen display screens; printer routes are
+                  configured separately in Settings → Printing.
+                </p>
+              </div>
             ) : null}
             <label className="flex items-start gap-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-text-body">
               <input
