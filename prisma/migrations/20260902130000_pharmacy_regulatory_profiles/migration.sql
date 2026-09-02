@@ -95,17 +95,9 @@ CREATE POLICY "tenant_isolation" ON "pharmacy_branch_regulatory_profiles"
     OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
   );
 
-ALTER TABLE "pharmacy_jurisdiction_rule_sets" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE "pharmacy_jurisdiction_rule_sets" FORCE ROW LEVEL SECURITY;
-CREATE POLICY "jurisdiction_rules_read" ON "pharmacy_jurisdiction_rule_sets"
-  FOR SELECT USING (true);
-CREATE POLICY "jurisdiction_rules_platform_insert" ON "pharmacy_jurisdiction_rule_sets"
-  FOR INSERT WITH CHECK (current_setting('app.is_platform_admin', true) = 'true');
-CREATE POLICY "jurisdiction_rules_platform_update" ON "pharmacy_jurisdiction_rule_sets"
-  FOR UPDATE
-  USING (current_setting('app.is_platform_admin', true) = 'true')
-  WITH CHECK (current_setting('app.is_platform_admin', true) = 'true');
-
+-- Seed the provisional PK-PB rule set BEFORE row-level security is forced:
+-- the migration role is not a superuser on the gate cluster or on Azure, so an
+-- INSERT after FORCE RLS would be rejected by the platform-admin-only policy.
 INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   "id", "code", "version", "effectiveFrom", "licenceCategories",
   "permittedSchedules", "prescriptionOnlyClasses", "prescriptionRetentionDays",
@@ -120,3 +112,15 @@ INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   '{"values":{},"provisional":true,"toConfirm":"PHARM-P0-COUNSEL-001 C-09..C-16"}',
   '{"values":{},"provisional":true,"toConfirm":"PHARM-P0-COUNSEL-001 C-53..C-58"}'
 );
+
+ALTER TABLE "pharmacy_jurisdiction_rule_sets" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "pharmacy_jurisdiction_rule_sets" FORCE ROW LEVEL SECURITY;
+CREATE POLICY "jurisdiction_rules_read" ON "pharmacy_jurisdiction_rule_sets"
+  FOR SELECT USING (true);
+CREATE POLICY "jurisdiction_rules_platform_insert" ON "pharmacy_jurisdiction_rule_sets"
+  FOR INSERT WITH CHECK (current_setting('app.is_platform_admin', true) = 'true');
+CREATE POLICY "jurisdiction_rules_platform_update" ON "pharmacy_jurisdiction_rule_sets"
+  FOR UPDATE
+  USING (current_setting('app.is_platform_admin', true) = 'true')
+  WITH CHECK (current_setting('app.is_platform_admin', true) = 'true');
+
