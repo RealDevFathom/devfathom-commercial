@@ -212,6 +212,17 @@ test('failure ledger records denial, validation, rollback, success, replay, and 
   });
 });
 
+test('restaurant onboarding time field exposes the HH:MM input contract', async ({ page }) => {
+  await loginPlatform(page);
+  await page.goto('/platform/organizations/new');
+  await page.getByRole('link', { name: /Continue as Restaurant/ }).click();
+
+  const cutoff = page.locator('input[name="businessDayCutoff"]');
+  await expect(cutoff).toHaveAttribute('placeholder', 'HH:MM');
+  await expect(cutoff).toHaveAttribute('inputmode', 'numeric');
+  await expect(cutoff).toHaveAttribute('maxlength', '5');
+});
+
 test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   const unexpectedErrors: string[] = [];
   page.on('console', (message) => {
@@ -232,7 +243,13 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await page.locator('input[name="timezone"]').fill('Asia/Karachi');
   await page.getByLabel('First branch name').fill('Gulberg Flagship');
   await page.getByLabel('First branch address').fill('42 Main Boulevard, Lahore');
-  await page.locator('input[name="businessDayCutoff"]').fill('04:30');
+  const onboardingCutoff = page.locator('input[name="businessDayCutoff"]');
+  await expect(onboardingCutoff).toHaveAttribute('placeholder', 'HH:MM');
+  await onboardingCutoff.fill('24:30');
+  await page.getByRole('button', { name: 'Create onboarding record' }).click();
+  await expect(page.getByText('Use 24-hour time, e.g. 09:30')).toBeVisible();
+  await expect(onboardingCutoff).toBeFocused();
+  await onboardingCutoff.fill('04:30');
   await page.getByLabel('Primary contact', { exact: true }).fill('Restaurant Owner');
   await page.getByLabel('Primary contact email').fill(platformFixture.tenant.email);
   await page.getByLabel('Tenant administrator').fill('Restaurant Owner');

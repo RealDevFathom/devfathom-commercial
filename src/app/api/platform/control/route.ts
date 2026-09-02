@@ -9,6 +9,19 @@ const envelope = z.object({
   payload: z.unknown(),
 });
 
+function validationEnvelope(error: z.ZodError) {
+  const details = error.issues.map((issue) => ({
+    ...issue,
+    path: issue.path,
+    message: issue.message || 'This field is invalid.',
+  }));
+  const fieldErrors = Object.fromEntries(
+    details.map((issue) => [issue.path.join('.') || '_root', issue.message])
+  );
+
+  return { error: 'The command payload is invalid.', details, fieldErrors };
+}
+
 export async function POST(request: Request) {
   try {
     assertPlatformMutationOrigin(request);
@@ -18,10 +31,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ data });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json(
-        { error: 'The command payload is invalid.', details: error.issues },
-        { status: 400 }
-      );
+      return NextResponse.json(validationEnvelope(error), { status: 400 });
     }
     if (error instanceof PlatformSecurityError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
