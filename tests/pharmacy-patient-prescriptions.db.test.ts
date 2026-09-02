@@ -180,11 +180,11 @@ describeIfDatabase('RX-01/RX-02 PostgreSQL RLS and cumulative fills', () => {
 
     let observedLockWait = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      const activity = await owner!.query<{ wait_event_type: string | null }>(
-        `SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1`,
+      const activity = await owner!.query<{ blocked: boolean }>(
+        `SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked`,
         [secondPid]
       );
-      if (activity.rows[0]?.wait_event_type === 'Lock') {
+      if (activity.rows[0]?.blocked) {
         observedLockWait = true;
         break;
       }
