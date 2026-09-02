@@ -5,6 +5,12 @@ import {
   AGENCY_MODULES,
   AGENCY_ROLE_TEMPLATES,
   AGENCY_DEPARTMENTS,
+  PHARMACY_CAPABILITIES,
+  PHARMACY_DEPARTMENTS,
+  PHARMACY_LIMIT_KEYS,
+  PHARMACY_MODULES,
+  PHARMACY_PACKAGES,
+  PHARMACY_ROLE_TEMPLATES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_CAPABILITIES,
   RESTAURANT_CAPABILITY_NAMESPACES,
@@ -33,10 +39,11 @@ import {
 } from './vertical-catalog';
 
 describe('vertical definitions (§2)', () => {
-  it('defines exactly the two verticals with UI labels', () => {
-    expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT']);
+  it('defines the registered verticals with UI labels', () => {
+    expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT', 'PHARMACY']);
     expect(VERTICALS.AGENCY.label).toBe('Agency');
     expect(VERTICALS.RESTAURANT.label).toBe('Restaurant');
+    expect(VERTICALS.PHARMACY.label).toBe('Pharmacy');
   });
 });
 
@@ -58,7 +65,7 @@ describe('vertical department defaults', () => {
   // WHA-290 — the identity paths derive a department instead of taking one, so
   // both declared defaults must be keys the vertical's own catalog contains.
   it('declares provisioning defaults that exist in each vertical catalog', () => {
-    for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+    for (const vertical of ALL_VERTICALS) {
       const keys = departmentsForVertical(vertical).map((department) => department.key);
       expect(keys).toContain(adminDepartmentKeyForVertical(vertical));
       expect(keys).toContain(memberDepartmentKeyForVertical(vertical));
@@ -73,7 +80,7 @@ describe('vertical department defaults', () => {
   });
 
   it('numbers default rows in catalog order for every vertical', () => {
-    for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+    for (const vertical of ALL_VERTICALS) {
       expect(defaultDepartmentRowsForVertical(vertical)).toEqual(
         departmentsForVertical(vertical).map((department, index) => ({
           key: department.key,
@@ -82,6 +89,69 @@ describe('vertical department defaults', () => {
         }))
       );
     }
+  });
+});
+
+describe('pharmacy registry (PLAT-01)', () => {
+  it('registers the core, optional modules, limits, departments and roles', () => {
+    expect(PHARMACY_MODULES).toHaveLength(9);
+    expect(
+      PHARMACY_MODULES.filter((module) => module.mandatory).map((module) => module.key)
+    ).toEqual(['pharmacy-core']);
+    expect(PHARMACY_MODULES.every((module) => module.routePrefix.startsWith('/pharmacy'))).toBe(
+      true
+    );
+    expect(PHARMACY_LIMIT_KEYS.map((limit) => limit.key)).toEqual([
+      'pharmacy.branches.max',
+      'pharmacy.counters.max',
+      'pharmacy.users.max',
+    ]);
+    expect(PHARMACY_DEPARTMENTS.map((department) => department.name)).toEqual([
+      'Counter',
+      'Dispensary',
+      'Store',
+      'Procurement',
+      'Finance',
+      'Compliance',
+    ]);
+    expect(PHARMACY_ROLE_TEMPLATES.map((role) => role.key)).toEqual([
+      'owner',
+      'pharmacist',
+      'manager',
+      'cashier',
+      'procurement',
+      'inventory',
+      'finance',
+      'auditor',
+    ]);
+    expect(
+      PHARMACY_ROLE_TEMPLATES.flatMap((role) => role.capabilities).every((capability) =>
+        PHARMACY_CAPABILITIES.includes(capability)
+      )
+    ).toBe(true);
+  });
+
+  it('composes Essentials, Professional and Chain per the pharmacy catalog', () => {
+    expect(PHARMACY_PACKAGES.map((pkg) => pkg.name)).toEqual([
+      'Pharmacy Essentials',
+      'Pharmacy Professional',
+      'Pharmacy Chain',
+    ]);
+    expect(PHARMACY_PACKAGES[0]?.moduleKeys).toEqual([
+      'pharmacy-core',
+      'pharmacy-counter',
+      'pharmacy-inventory',
+      'pharmacy-procurement',
+      'pharmacy-finance',
+      'pharmacy-reports',
+    ]);
+    expect(PHARMACY_PACKAGES[1]?.moduleKeys).toEqual([
+      ...PHARMACY_PACKAGES[0]!.moduleKeys,
+      'pharmacy-dispensing',
+      'pharmacy-safety',
+      'pharmacy-crm',
+    ]);
+    expect(PHARMACY_PACKAGES[2]?.moduleKeys).toEqual(PHARMACY_MODULES.map((module) => module.key));
   });
 });
 
@@ -424,6 +494,7 @@ describe('commercial packages (§13)', () => {
 
   it('packagesForVertical filters by vertical', () => {
     expect(packagesForVertical('RESTAURANT')).toEqual(RESTAURANT_PACKAGES);
+    expect(packagesForVertical('PHARMACY')).toEqual(PHARMACY_PACKAGES);
     expect(packagesForVertical('AGENCY')).toEqual([]);
   });
 });
@@ -432,6 +503,9 @@ describe('package compatibility (§2.3 / D10)', () => {
   it('is a single vertical-column equality', () => {
     expect(isPackageCompatibleWithVertical('RESTAURANT', 'RESTAURANT')).toBe(true);
     expect(isPackageCompatibleWithVertical('AGENCY', 'AGENCY')).toBe(true);
+    expect(isPackageCompatibleWithVertical('PHARMACY', 'PHARMACY')).toBe(true);
+    expect(isPackageCompatibleWithVertical('PHARMACY', 'RESTAURANT')).toBe(false);
+    expect(isPackageCompatibleWithVertical('RESTAURANT', 'PHARMACY')).toBe(false);
     expect(isPackageCompatibleWithVertical('RESTAURANT', 'AGENCY')).toBe(false);
     expect(isPackageCompatibleWithVertical('AGENCY', 'RESTAURANT')).toBe(false);
   });

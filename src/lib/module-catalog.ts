@@ -1,5 +1,6 @@
 import {
   AGENCY_MODULES,
+  PHARMACY_MODULES,
   RESTAURANT_MODULES,
   type OrganizationVertical,
 } from '@/lib/vertical-catalog';
@@ -53,6 +54,10 @@ export const MODULE_CATALOG: readonly ModuleDefinition[] = [
     band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
   })),
   ...RESTAURANT_MODULES.map((module) => ({
+    ...module,
+    band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
+  })),
+  ...PHARMACY_MODULES.map((module) => ({
     ...module,
     band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
   })),

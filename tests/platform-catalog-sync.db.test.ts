@@ -36,7 +36,12 @@ import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { RESTAURANT_MODULES, RESTAURANT_PACKAGES } from '@/lib/vertical-catalog';
+import {
+  PHARMACY_MODULES,
+  PHARMACY_PACKAGES,
+  RESTAURANT_MODULES,
+  RESTAURANT_PACKAGES,
+} from '@/lib/vertical-catalog';
 import { MODULE_CATALOG } from '@/lib/module-catalog';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -232,7 +237,8 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     const missingModules = MODULE_CATALOG.filter(
       (definition) => !registeredModules.has(definition.key)
     );
-    const missingPackages = RESTAURANT_PACKAGES.filter(
+    const verticalPackages = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES];
+    const missingPackages = verticalPackages.filter(
       (definition) => !registeredPackages.has(definition.key)
     );
     // Restaurant module rows are ensured ad hoc by the batteries this suite
@@ -241,7 +247,7 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     // only asserted relative to what was actually missing. The packages are the
     // guaranteed-absent half — nothing but bootstrap and this helper ever
     // creates one — and they are what keeps the assertions below non-vacuous.
-    expect(missingPackages).toHaveLength(RESTAURANT_PACKAGES.length);
+    expect(missingPackages).toHaveLength(verticalPackages.length);
 
     createdPackageKeys = missingPackages.map((definition) => definition.key);
 
@@ -266,6 +272,20 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
       );
       expect(
         registered!.moduleLinks.find((link) => link.module.key === 'restaurant-core')?.limits
+      ).toEqual(definition.defaultLimits);
+    }
+    for (const definition of PHARMACY_MODULES) {
+      expect(after.modules.map((row) => row.key)).toContain(definition.key);
+    }
+    for (const definition of PHARMACY_PACKAGES) {
+      const registered = after.packages.find((row) => row.key === definition.key);
+      expect(registered).toBeDefined();
+      expect(registered!.vertical).toBe('PHARMACY');
+      expect(registered!.moduleLinks.map((link) => link.module.key).sort()).toEqual(
+        [...definition.moduleKeys].sort()
+      );
+      expect(
+        registered!.moduleLinks.find((link) => link.module.key === 'pharmacy-core')?.limits
       ).toEqual(definition.defaultLimits);
     }
 
