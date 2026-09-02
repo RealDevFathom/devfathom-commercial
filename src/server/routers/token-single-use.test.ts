@@ -80,12 +80,24 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
       ...(await import('@/lib/auth/anonymous-access')),
     };
 
+    // This suite files its users under an existing organization's department, so
+    // it needs one whose WHA-278 catalog actually exists. Picking whichever row
+    // came back first selected, on a shared test database, an organization some
+    // other battery had inserted directly without a department catalog — the
+    // fixture then died in `beforeAll` and reported all nine tests as skipped,
+    // which reads as a missing env gate rather than a broken fixture. Require
+    // the department catalog in the query, and order by id so the choice is
+    // deterministic across runs.
     const organization = await deps.withPlatformDb((db) =>
-      db.organization.findFirst({ select: { id: true } })
+      db.organization.findFirst({
+        where: { departments: { some: { active: true } } },
+        orderBy: { id: 'asc' },
+        select: { id: true },
+      })
     );
     if (!organization) {
       throw new Error(
-        'TEST_DATABASE_URL points at a database with no organizations; run migrations and the seed first.'
+        'TEST_DATABASE_URL points at a database with no organization holding an active department catalog; run migrations and the seed first.'
       );
     }
     organizationId = organization.id;

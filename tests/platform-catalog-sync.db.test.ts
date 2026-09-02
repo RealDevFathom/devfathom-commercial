@@ -119,6 +119,25 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     // The Aug-14 shape: the 18 agency modules, an agency package linked to all
     // of them, and an organization inheriting its entitlements from it.
     await deps.withPlatformDb(async (db) => {
+      // Establish the precondition instead of assuming it. The canonical
+      // vertical packages are what keeps the assertions below non-vacuous, but
+      // "nothing but bootstrap creates one" stops being true the moment this
+      // database has been seeded or bootstrapped (`prisma db seed` runs the same
+      // `syncPlatformCatalog`), which is exactly the case when the release gate
+      // runs `test:rls` against the same database. Clear them first so the pass
+      // under test really does create them, and do it only where no organization
+      // is on the package, so a shared database is never left dangling.
+      const verticalPackageKeys = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].map(
+        (definition) => definition.key
+      );
+      const clearable = await db.platformPackage.findMany({
+        where: { key: { in: verticalPackageKeys }, organizations: { none: {} } },
+        select: { id: true },
+      });
+      const clearableIds = clearable.map((row) => row.id);
+      await db.platformPackageModule.deleteMany({ where: { packageId: { in: clearableIds } } });
+      await db.platformPackage.deleteMany({ where: { id: { in: clearableIds } } });
+
       await db.platformModule.createMany({
         data: deps.PLATFORM_MODULES.map(([key, name, category, routePrefix]) => ({
           key,
@@ -295,19 +314,32 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     // The architecture gate: all commercial entitlements remain byte-identical;
     // the newly registered always-on plumbing is additive and has BASELINE source.
     const afterEntitlements = await resolve();
-    const commercialBytes = (view: typeof beforeEntitlements) =>
-      JSON.stringify({
+    const alwaysOn = ['admin', 'dashboard', 'notifications'];
+    // `modules` is the whole active catalog by construction, so registering a
+    // module necessarily adds an entry (that growth is bounded separately below:
+    // every new row must be disabled and granted by nothing). The commercial gate
+    // is that nothing the organization already held moved, so the granted set is
+    // compared in full while `modules` is compared over the keys that existed
+    // before — comparing the raw view would assert the catalog never grows, which
+    // is the opposite of what this pass does.
+    const commercialBytes = (
+      view: typeof beforeEntitlements,
+      baseline: typeof beforeEntitlements
+    ) => {
+      const knownKeys = new Set(baseline.modules.map((entry) => entry.key));
+      return JSON.stringify({
         ...view,
-        enabledModules: view.enabledModules.filter(
-          (key) => !['admin', 'dashboard', 'notifications'].includes(key)
-        ),
+        enabledModules: view.enabledModules.filter((key) => !alwaysOn.includes(key)),
         modules: view.modules.filter(
-          (entry) => !['admin', 'dashboard', 'notifications'].includes(entry.key)
+          (entry) => !alwaysOn.includes(entry.key) && knownKeys.has(entry.key)
         ),
       });
-    expect(commercialBytes(afterEntitlements)).toBe(commercialBytes(beforeEntitlements));
-    expect(commercialBytes(await resolve(RESTAURANT_ORG_ID))).toBe(
-      commercialBytes(beforeRestaurantEntitlements)
+    };
+    expect(commercialBytes(afterEntitlements, beforeEntitlements)).toBe(
+      commercialBytes(beforeEntitlements, beforeEntitlements)
+    );
+    expect(commercialBytes(await resolve(RESTAURANT_ORG_ID), beforeRestaurantEntitlements)).toBe(
+      commercialBytes(beforeRestaurantEntitlements, beforeRestaurantEntitlements)
     );
     for (const key of ['admin', 'dashboard', 'notifications']) {
       expect(afterEntitlements.modules.find((entry) => entry.key === key)).toMatchObject({

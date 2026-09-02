@@ -19,6 +19,7 @@ import {
   createFixtureMenuExtractionAdapter,
   withFixtureMarker,
 } from '../src/lib/restaurant/menu-extraction-fixtures';
+import { moduleDefinitionForKey } from '../src/lib/module-catalog';
 import { RESTAURANT_MODULES } from '../src/lib/vertical-catalog';
 
 const ORG = 'org_devfathom';
@@ -46,6 +47,10 @@ async function main() {
   //    one this console gates on. Catalog rows are control-plane only.
   await withPlatformDb(async (platformDb) => {
     for (const [index, module] of RESTAURANT_MODULES.entries()) {
+      // `band` and the owning vertical are required registry facts; read them
+      // from the module catalog rather than restating them here.
+      const definition = moduleDefinitionForKey(module.key);
+      if (!definition) throw new Error(`Unknown module key: ${module.key}`);
       await platformDb.platformModule.upsert({
         where: { key: module.key },
         update: { active: true },
@@ -54,6 +59,8 @@ async function main() {
           name: module.name,
           category: module.category,
           routePrefix: module.routePrefix ?? null,
+          band: definition.band,
+          vertical: definition.vertical,
           active: true,
           sortOrder: 100 + index,
         },
