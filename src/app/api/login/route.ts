@@ -110,8 +110,19 @@ export async function POST(request: Request) {
   // Minting intents is limited separately so a valid credential cannot be used to
   // fill the intent table.
   const intentGate = rateLimit(`login:intent:${ip ?? 'unknown'}`, 20, 5 * 60_000);
-  if (!ipGate.ok || !accountGate.ok || !intentGate.ok) {
-    return json(UNIFORM_FAILURE, { status: 429 });
+  const blocked = [ipGate, accountGate, intentGate].filter((gate) => !gate.ok);
+  if (blocked.length > 0) {
+    // The BODY stays byte-identical to the 401 — a limiter must not become an
+    // enumeration oracle. The status and Retry-After describe the limiter, not
+    // the address: these counters trip exactly the same way for an account that
+    // does not exist, so neither one reveals more than the 429 already does.
+    // They are what lets the client say "you have used your limit" instead of
+    // "your password is wrong" (WHA-1208).
+    const retryAfter = Math.max(1, ...blocked.map((gate) => gate.retryAfter));
+    return json(UNIFORM_FAILURE, {
+      status: 429,
+      headers: { 'retry-after': String(retryAfter) },
+    });
   }
 
   const resolution = await resolveSharedLogin({

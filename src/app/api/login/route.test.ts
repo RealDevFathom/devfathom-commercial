@@ -137,6 +137,44 @@ describe('POST /api/login', () => {
       expect(mocks.resolveSharedLogin).not.toHaveBeenCalled();
     });
 
+    // WHA-1208: the body may not distinguish the two, but the status and
+    // Retry-After must, or the form can only say "wrong password".
+    it('separates a tripped limiter from a wrong password by status, not by body', async () => {
+      const wrongPassword = await POST(request(CREDENTIALS));
+      const wrongPasswordBody = await wrongPassword.text();
+
+      mocks.rateLimit.mockReturnValue({ ok: false, retryAfter: 137 });
+      const limited = await POST(request(CREDENTIALS));
+
+      expect(wrongPassword.status).toBe(401);
+      expect(limited.status).toBe(429);
+      // Byte-identical body: still no enumeration oracle.
+      expect(await limited.text()).toBe(wrongPasswordBody);
+      // ...but the client is told how long to wait.
+      expect(limited.headers.get('retry-after')).toBe('137');
+      expect(wrongPassword.headers.get('retry-after')).toBeNull();
+    });
+
+    it('reports the longest wait when more than one limiter is blocked', async () => {
+      mocks.rateLimit
+        .mockReturnValueOnce({ ok: false, retryAfter: 12 })
+        .mockReturnValueOnce({ ok: true, retryAfter: 0 })
+        .mockReturnValueOnce({ ok: false, retryAfter: 240 });
+
+      const response = await POST(request(CREDENTIALS));
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('retry-after')).toBe('240');
+    });
+
+    it('never advertises a zero-second wait', async () => {
+      mocks.rateLimit.mockReturnValue({ ok: false, retryAfter: 0 });
+
+      const response = await POST(request(CREDENTIALS));
+
+      expect(response.headers.get('retry-after')).toBe('1');
+    });
+
     it('rate limits before discovery runs', async () => {
       mocks.rateLimit.mockReturnValue({ ok: false, retryAfter: 60 });
 

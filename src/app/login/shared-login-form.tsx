@@ -21,6 +21,30 @@ const inputClass =
 
 const GENERIC_ERROR = 'Invalid email or password. Please try again.';
 
+/** "in 45 seconds" / "in 3 minutes" — never "in 0 seconds". */
+function describeWait(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'in a few minutes';
+  if (seconds < 60) return `in ${Math.ceil(seconds)} seconds`;
+  const minutes = Math.ceil(seconds / 60);
+  return `in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+}
+
+/**
+ * WHA-1208 — a tripped rate limiter is not a wrong password.
+ *
+ * `/api/login` deliberately returns the SAME body for both, so the endpoint
+ * cannot be used to discover which addresses exist. But the status code already
+ * separates them, so the form can name the real state — and say that retyping
+ * the password will not help, because the limiter runs before the credential
+ * check and the password was never looked at.
+ */
+function rateLimitedError(retryAfterHeader: string | null): string {
+  const wait = describeWait(Number(retryAfterHeader));
+  // Neutral about WHICH limiter tripped: the per-address one would otherwise
+  // hint that the address is real.
+  return `Too many sign-in attempts. Your password was not checked — wait ${wait} and try again.`;
+}
+
 /**
  * The shared-host sign-in.
  *
@@ -107,6 +131,14 @@ export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
         credentials: 'include',
         body: JSON.stringify({ email, password, callbackUrl }),
       });
+
+      // Checked before the body, which is deliberately identical to a 401's.
+      if (response.status === 429) {
+        setError(rateLimitedError(response.headers.get('retry-after')));
+        setIsSubmitting(false);
+        return;
+      }
+
       const body = (await response.json()) as {
         outcome?: string;
         organizations?: Organization[];
