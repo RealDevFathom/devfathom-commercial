@@ -26,7 +26,9 @@ import { GET } from './route';
 
 /** No pending migrations, and no tenant row visible — the expected steady state. */
 function healthyDatabase() {
-  mocks.queryRaw.mockResolvedValue([{ pending: 0 }]);
+  mocks.queryRaw
+    .mockResolvedValueOnce([{ rolsuper: false, rolbypassrls: false }])
+    .mockResolvedValueOnce([{ pending: 0 }]);
   mocks.findFirst.mockResolvedValue(null);
 }
 
@@ -68,7 +70,9 @@ describe('GET /api/ready', () => {
   });
 
   it('is not ready while a migration is applied but unfinished', async () => {
-    mocks.queryRaw.mockResolvedValue([{ pending: 1 }]);
+    mocks.queryRaw
+      .mockResolvedValueOnce([{ rolsuper: false, rolbypassrls: false }])
+      .mockResolvedValueOnce([{ pending: 1 }]);
 
     const response = await GET();
 
@@ -82,8 +86,26 @@ describe('GET /api/ready', () => {
     expect(mocks.findFirst).not.toHaveBeenCalled();
   });
 
+  it.each([[{ rolsuper: true, rolbypassrls: false }], [{ rolsuper: false, rolbypassrls: true }]])(
+    'refuses readiness for a PostgreSQL role that can bypass RLS (%o)',
+    async (role) => {
+      mocks.queryRaw.mockResolvedValueOnce([role]);
+
+      const response = await GET();
+
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'runtime_role_privileged',
+      });
+      expect(mocks.findFirst).not.toHaveBeenCalled();
+    }
+  );
+
   it('reports schema drift when the recent column is missing (the staging P2022)', async () => {
-    mocks.queryRaw.mockResolvedValue([{ pending: 0 }]);
+    mocks.queryRaw
+      .mockResolvedValueOnce([{ rolsuper: false, rolbypassrls: false }])
+      .mockResolvedValueOnce([{ pending: 0 }]);
     mocks.findFirst.mockRejectedValue(knownRequestError('P2022', '42703'));
 
     const response = await GET();
@@ -96,7 +118,9 @@ describe('GET /api/ready', () => {
   });
 
   it('reports schema drift when the model table itself is absent', async () => {
-    mocks.queryRaw.mockResolvedValue([{ pending: 0 }]);
+    mocks.queryRaw
+      .mockResolvedValueOnce([{ rolsuper: false, rolbypassrls: false }])
+      .mockResolvedValueOnce([{ pending: 0 }]);
     mocks.findFirst.mockRejectedValue(knownRequestError('P2021', '42P01'));
 
     const response = await GET();

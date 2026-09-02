@@ -37,6 +37,7 @@ if [[ -z ${DEVFATHOM_STAGING_IMAGE:-} ]]; then
 fi
 
 export DEVFATHOM_STAGING_POSTGRES_PASSWORD="$(openssl rand -base64 48 | tr -d '/+=' | cut -c1-40)"
+export DEVFATHOM_STAGING_APP_DATABASE_PASSWORD="$(openssl rand -base64 48 | tr -d '/+=' | cut -c1-40)"
 export DEVFATHOM_STAGING_AUTH_SECRET="$(openssl rand -base64 48 | tr -d '\n')"
 export DEVFATHOM_STAGING_PLATFORM_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d '\n')"
 export DEVFATHOM_STAGING_CAMERA_CREDENTIAL_KEY="$(openssl rand -base64 32 | tr -d '\n')"
