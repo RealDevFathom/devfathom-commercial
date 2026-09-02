@@ -219,6 +219,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',
   pharmacyPrescriptions: 'pharmacy-dispensing',
+  pharmacyDispensing: 'pharmacy-dispensing',
+  pharmacySafety: 'pharmacy-safety',
 };
 
 export function moduleForProcedure(path: string): string | null {
