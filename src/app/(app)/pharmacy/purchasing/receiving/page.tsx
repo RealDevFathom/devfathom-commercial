@@ -1,0 +1,1234 @@
+import type { Metadata } from 'next';
+import type * as React from 'react';
+import { revalidatePath } from 'next/cache';
+import { redirect, RedirectType } from 'next/navigation';
+
+import { SectionCard } from '@/components/ui/section-card';
+import { Stat } from '@/components/ui/stat';
+import { StatusPill } from '@/components/ui/status-pill';
+import { hasModule } from '@/lib/entitlements';
+import type {
+  GoodsReceiptDetail,
+  MedicineOption,
+  PurchaseOrderDetail,
+  PurchasingWorkspace,
+  ReceivingExceptionRow,
+  ScanResolution,
+  StockLocationOption,
+} from '@/lib/pharmacy/purchasing-console';
+import {
+  BranchPicker,
+  ChooseBranchState,
+  NoBranchState,
+  resolveBranch,
+} from '../_components/branch-scope';
+import {
+  AccessState,
+  EmptyState,
+  LoadFailure,
+  NoticeBanner,
+  PurchasingHeader,
+  PurchasingTabs,
+} from '../_components/console-chrome';
+import {
+  Derived,
+  SelectField,
+  SubmitButton,
+  supplierOptions,
+  TextAreaField,
+  TextField,
+} from '../_components/form-controls';
+import {
+  actionFailure,
+  dateOnly,
+  dateTime,
+  destination,
+  field,
+  integerField,
+  money,
+  moneyFieldMinor,
+  noticeFrom,
+  NO_ACTOR,
+  optionalField,
+  optionalIntegerField,
+  param,
+  purchasingCaller,
+  PURCHASING_ROUTE,
+  tenantContext,
+  units,
+  dateField,
+  today,
+  type Notice,
+  type SearchQuery,
+} from '../_lib/console';
+
+export const metadata: Metadata = { title: 'Goods in · Pharmacy purchasing' };
+
+const ROUTE = `${PURCHASING_ROUTE}/receiving`;
+const HEADING = 'Goods in';
+const DESCRIPTION =
+  'The receiving bench. Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost against a purchase order or a direct purchase, then post it into the batch ledger.';
+
+const DIRECT_SLOTS = [0, 1, 2] as const;
+
+/**
+ * PUR-02 receiving, PUR-04 match exceptions and PUR-05 direct purchase.
+ *
+ * The layout is ordered the way the bench works rather than the way the data
+ * model is drawn: what is blocked (the exception queue), then what is in front
+ * of you (the capture form), then what you have already filed. The pack → unit
+ * conversion, the outstanding balance and the resulting unit cost are all read
+ * back beside the field that drives them, because a number that is only visible
+ * after posting is a number nobody checked.
+ */
+export default async function PharmacyReceivingPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchQuery>;
+}) {
+  const query = await searchParams;
+  const notice = noticeFrom(query);
+  const ctx = await tenantContext();
+  if (!ctx)
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={false} />;
+  const moduleEnabled = hasModule(ctx.entitlements, 'pharmacy-procurement');
+  if (!moduleEnabled || !ctx.session?.user) {
+    return (
+      <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
+    );
+  }
+  const caller = await purchasingCaller();
+  if (!caller) {
+    return (
+      <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
+    );
+  }
+
+  let workspace: PurchasingWorkspace;
+  let orders: PurchaseOrderDetail[];
+  try {
+    [workspace, orders] = await Promise.all([caller.workspace(), caller.purchaseOrders()]);
+  } catch {
+    return (
+      <Frame notice={notice}>
+        <LoadFailure detail="The receiving bench could not load its pickers." retryHref={ROUTE} />
+      </Frame>
+    );
+  }
+
+  const scope = resolveBranch(workspace.branches, param(query, 'branch'));
+  if (scope.kind === 'none') {
+    return (
+      <Frame notice={notice}>
+        <NoBranchState surface="Goods in" />
+      </Frame>
+    );
+  }
+  if (scope.kind === 'unchosen') {
+    return (
+      <Frame notice={notice}>
+        <ChooseBranchState branches={scope.branches} route={ROUTE} surface="Goods in" />
+      </Frame>
+    );
+  }
+
+  const branchId = scope.branch.id;
+  const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
+
+  let receipts: GoodsReceiptDetail[];
+  let exceptions: ReceivingExceptionRow[];
+  try {
+    [receipts, exceptions] = await Promise.all([
+      caller.goodsReceipts({ branchId }),
+      caller.receivingExceptionQueue({ branchId, status: exceptionStatus }),
+    ]);
+  } catch {
+    return (
+      <Frame branch={scope} notice={notice}>
+        <LoadFailure
+          detail="Receipts for this branch could not be read. Nothing was written."
+          retryHref={`${ROUTE}?branch=${encodeURIComponent(branchId)}`}
+        />
+      </Frame>
+    );
+  }
+
+  const locations = workspace.stockLocations.filter((location) => location.branchId === branchId);
+  // PUR-02 receives against an order that has left the building; a draft or
+  // unapproved order has nothing to deliver.
+  const receivable = orders.filter(
+    (order) => order.status === 'SENT' || order.status === 'RECEIVING'
+  );
+  const selectedOrder = receivable.find((order) => order.id === param(query, 'order')) ?? null;
+  const selectedReceipt =
+    receipts.find((receipt) => receipt.id === param(query, 'receipt')) ?? null;
+
+  let outstanding: Record<
+    string,
+    { receivedUnits: number; acceptedUnits: number; rejectedUnits: number }
+  > = {};
+  if (selectedOrder) {
+    outstanding = await caller.receivedAgainstOrder({ purchaseOrderId: selectedOrder.id });
+  }
+
+  /** The scan box resolves against the register, not against a guess. */
+  const scanTerm = param(query, 'scan');
+  let scan: ScanResolution | null = null;
+  if (scanTerm) scan = await caller.resolveScan({ term: scanTerm });
+
+  let lots: Awaited<ReturnType<typeof caller.lotsFromReceipt>> = [];
+  if (selectedReceipt && selectedReceipt.status === 'POSTED') {
+    lots = await caller.lotsFromReceipt({ branchId, goodsReceiptId: selectedReceipt.id });
+  }
+
+  // ── actions ───────────────────────────────────────────────────────────────
+
+  async function receiveAgainstOrder(form: FormData) {
+    'use server';
+    const branch = field(form, 'branchId');
+    const purchaseOrderId = field(form, 'purchaseOrderId');
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new Error(NO_ACTOR);
+      const order = (await actionCaller.purchaseOrders()).find((row) => row.id === purchaseOrderId);
+      if (!order) throw new Error('That order no longer exists. Reload the page.');
+
+      const lines = order.lines.flatMap((line) => {
+        // A line with no batch number was not delivered on this consignment.
+        // It stays outstanding rather than being filed as a zero receipt.
+        if (!field(form, `batchNumber:${line.id}`)) return [];
+        return [
+          {
+            ...readCaptureFields(form, line.id),
+            purchaseOrderLineId: line.id,
+            medicineId: line.medicineId,
+            packLevelId: line.packLevelId,
+            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+          },
+        ];
+      });
+      if (lines.length === 0) {
+        throw Object.assign(
+          new Error(
+            'Enter a batch number on at least one line — that is what marks it as arrived.'
+          ),
+          { field: 'batchNumber' }
+        );
+      }
+      const receipt = await actionCaller.createGoodsReceipt({
+        branchId: branch,
+        reference: field(form, 'reference'),
+        supplierId: order.supplierId,
+        purchaseOrderId: order.id,
+        supplierInvoiceRef: field(form, 'supplierInvoiceRef'),
+        supplierInvoiceDate: dateField(form, 'supplierInvoiceDate', 'Invoice date'),
+        warrantyEvidenceRef: field(form, 'warrantyEvidenceRef'),
+        receivedAt: dateField(form, 'receivedAt', 'Received on'),
+        note: optionalField(form, 'note'),
+        lines,
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message: `Receipt ${receipt.reference} drafted. Nothing is in stock until you post it.`,
+          kind: 'success',
+        },
+        { branch, receipt: receipt.id, order: order.id }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...actionFailure(error, 'Could not draft the receipt.'), kind: 'error' },
+        { branch, order: purchaseOrderId }
+      );
+    }
+    redirect(next, RedirectType.replace);
+  }
+
+  async function receiveDirect(form: FormData) {
+    'use server';
+    const branch = field(form, 'branchId');
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new Error(NO_ACTOR);
+      const lines = DIRECT_SLOTS.flatMap((slot) => {
+        const pack = readPack(field(form, `directPack-${slot}`));
+        if (!pack) return [];
+        return [
+          {
+            ...readCaptureFields(form, `d${slot}`),
+            medicineId: pack.medicineId,
+            packLevelId: pack.packLevelId,
+            canonicalUnitsPerPack: pack.canonicalUnitsPerPack,
+          },
+        ];
+      });
+      if (lines.length === 0) {
+        throw Object.assign(new Error('Choose a medicine and pack for at least one line.'), {
+          field: 'directPack-0',
+        });
+      }
+      const receipt = await actionCaller.createGoodsReceipt({
+        branchId: branch,
+        reference: field(form, 'directReference'),
+        supplierId: field(form, 'supplierId'),
+        supplierInvoiceRef: field(form, 'directInvoiceRef'),
+        supplierInvoiceDate: dateField(form, 'directInvoiceDate', 'Invoice date'),
+        warrantyEvidenceRef: field(form, 'directWarranty'),
+        receivedAt: dateField(form, 'directReceivedAt', 'Received on'),
+        directPurchase: {
+          reason: field(form, 'bypassReason'),
+          approvedByUserId: field(form, 'bypassApprovedByUserId'),
+        },
+        note: optionalField(form, 'directNote'),
+        lines,
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message: `Direct purchase ${receipt.reference} drafted with a recorded bypass. Post it to move the stock.`,
+          kind: 'success',
+        },
+        { branch, receipt: receipt.id }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...actionFailure(error, 'Could not draft the direct purchase.'), kind: 'error' },
+        { branch }
+      );
+    }
+    redirect(next, RedirectType.replace);
+  }
+
+  async function postReceipt(form: FormData) {
+    'use server';
+    const branch = field(form, 'branchId');
+    const goodsReceiptId = field(form, 'goodsReceiptId');
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new Error(NO_ACTOR);
+      const result = await actionCaller.postGoodsReceipt({ branchId: branch, goodsReceiptId });
+      revalidatePath(ROUTE);
+      const raised = result.exceptions?.length ?? 0;
+      next = destination(
+        ROUTE,
+        {
+          message:
+            raised === 0
+              ? 'Receipt posted. The accepted units are in stock and saleable.'
+              : `Receipt posted with ${raised} match exception${raised === 1 ? '' : 's'}. They stay open until somebody resolves them.`,
+          kind: 'success',
+        },
+        { branch, receipt: goodsReceiptId }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...actionFailure(error, 'Could not post the receipt.'), kind: 'error' },
+        { branch, receipt: goodsReceiptId }
+      );
+    }
+    redirect(next, RedirectType.replace);
+  }
+
+  async function reverseReceipt(form: FormData) {
+    'use server';
+    const branch = field(form, 'branchId');
+    const goodsReceiptId = field(form, 'goodsReceiptId');
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new Error(NO_ACTOR);
+      await actionCaller.reverseGoodsReceipt({
+        branchId: branch,
+        goodsReceiptId,
+        reason: field(form, 'reversalReason'),
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message:
+            'Receipt reversed with linked compensating movements. Nothing posted was edited or deleted.',
+          kind: 'success',
+        },
+        { branch, receipt: goodsReceiptId }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...actionFailure(error, 'Could not reverse the receipt.'), kind: 'error' },
+        { branch, receipt: goodsReceiptId }
+      );
+    }
+    redirect(next, RedirectType.replace);
+  }
+
+  async function resolveException(form: FormData) {
+    'use server';
+    const branch = field(form, 'branchId');
+    const receivingExceptionId = field(form, 'receivingExceptionId');
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new Error(NO_ACTOR);
+      await actionCaller.resolveReceivingException({
+        branchId: branch,
+        receivingExceptionId,
+        resolutionNote: field(form, 'resolutionNote'),
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message: 'Exception resolved. The quantities it recorded are unchanged.',
+          kind: 'success',
+        },
+        { branch, receipt: optionalField(form, 'goodsReceiptId') }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...actionFailure(error, 'Could not resolve the exception.'), kind: 'error' },
+        { branch, receipt: optionalField(form, 'goodsReceiptId') }
+      );
+    }
+    redirect(next, RedirectType.replace);
+  }
+
+  const openExceptionCount = exceptionStatus === 'OPEN' ? exceptions.length : null;
+
+  return (
+    <Frame branch={scope} notice={notice}>
+      <div className="grid gap-6 sm:grid-cols-4">
+        <Stat
+          label="Open exceptions"
+          value={openExceptionCount ?? '—'}
+          sub="Visible until resolved"
+        />
+        <Stat label="Orders to receive" value={receivable.length} sub="Sent or part-received" />
+        <Stat
+          label="Draft receipts"
+          value={receipts.filter((receipt) => receipt.status === 'DRAFT').length}
+          sub="Filed, not yet in stock"
+        />
+        <Stat label="Receiving locations" value={locations.length} sub={scope.branch.name} />
+      </div>
+
+      {/* ── PUR-04 review queue ────────────────────────────────────────────── */}
+      <SectionCard
+        eyebrow="PUR-04"
+        title={`Match exceptions — ${exceptionStatus === 'OPEN' ? 'open' : 'resolved'} (${exceptions.length})`}
+        titleLevel={2}
+        actions={
+          <a
+            className="min-h-11 rounded-[var(--radius-sm)] px-3 text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
+            href={linkTo(query, branchId, {
+              exceptions: exceptionStatus === 'OPEN' ? 'resolved' : 'open',
+            })}
+          >
+            {exceptionStatus === 'OPEN' ? 'Show resolved' : 'Show open'}
+          </a>
+        }
+      >
+        {exceptions.length === 0 ? (
+          <EmptyState
+            title={
+              exceptionStatus === 'OPEN'
+                ? 'No open exceptions at this branch'
+                : 'Nothing has been resolved yet'
+            }
+            detail={
+              exceptionStatus === 'OPEN'
+                ? 'A shortage, overage, damage, price conflict or pack conflict is raised when a receipt posts, and stays here until somebody records who closed it and why.'
+                : 'Resolved exceptions are kept with the note that closed them. None have been closed at this branch.'
+            }
+          />
+        ) : (
+          <ul className="space-y-3">
+            {exceptions.map((exception) => (
+              <li
+                className="rounded-[var(--radius-sm)] border border-warning/40 bg-warning/5 p-4"
+                key={exception.id}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-text-strong">
+                    {exception.goodsReceiptLine.medicine.productName} · batch{' '}
+                    {exception.goodsReceiptLine.batchNumber}
+                  </span>
+                  <StatusPill
+                    status={exception.kind}
+                    tone={exception.status === 'RESOLVED' ? 'success' : 'warning'}
+                  />
+                </div>
+                <p className="mt-1 text-sm text-text-body">{exception.detail}</p>
+                <p className="mt-1 text-xs text-text-muted">
+                  {exception.goodsReceipt.reference} · {exception.goodsReceipt.supplier.name} ·
+                  raised {dateTime(exception.raisedAt)}
+                  {exception.expectedUnits != null
+                    ? ` · expected ${exception.expectedUnits} units, observed ${exception.observedUnits ?? 0}`
+                    : ''}
+                  {exception.expectedMinor != null
+                    ? ` · expected ${money(exception.expectedMinor)}, invoiced ${money(exception.observedMinor)}`
+                    : ''}
+                </p>
+                {exception.status === 'RESOLVED' ? (
+                  <p className="mt-2 text-xs text-text-muted">
+                    Resolved {dateTime(exception.resolvedAt)} · {exception.resolutionNote}
+                  </p>
+                ) : (
+                  <form action={resolveException} className="mt-3 flex flex-wrap items-end gap-3">
+                    <input name="branchId" type="hidden" value={branchId} />
+                    <input name="receivingExceptionId" type="hidden" value={exception.id} />
+                    <input name="goodsReceiptId" type="hidden" value={exception.goodsReceiptId} />
+                    <TextField
+                      className="min-w-64 flex-1"
+                      label="How was this settled?"
+                      name="resolutionNote"
+                      notice={notice}
+                      required
+                      hint="Recorded with your name. The recorded quantities never change."
+                    />
+                    <SubmitButton>Resolve</SubmitButton>
+                  </form>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
+      {/* ── PUR-02 capture against a purchase order ────────────────────────── */}
+      <SectionCard eyebrow="PUR-02" title="Receive against a purchase order" titleLevel={2}>
+        {receivable.length === 0 ? (
+          <EmptyState
+            title="No order is out with a supplier"
+            detail="A receipt is filed against an order that has been sent. Approve and send an order, or use the direct purchase path below for a cash-and-carry invoice."
+            steps={[{ label: 'Open requisitions & orders', href: `${PURCHASING_ROUTE}/orders` }]}
+          />
+        ) : (
+          <>
+            <form action={ROUTE} className="flex flex-wrap items-end gap-3" method="get">
+              <input name="branch" type="hidden" value={branchId} />
+              <label className="min-w-56 text-sm font-medium text-text-body" htmlFor="order-pick">
+                Purchase order
+                <select
+                  className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
+                  defaultValue={selectedOrder?.id ?? ''}
+                  id="order-pick"
+                  name="order"
+                >
+                  <option value="">Choose an order…</option>
+                  {receivable.map((order) => (
+                    <option key={order.id} value={order.id}>
+                      {order.reference} — {order.supplier.name} ({order.lines.length} lines)
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-56 flex-1 text-sm font-medium text-text-body" htmlFor="scan">
+                Scan or search
+                <input
+                  autoComplete="off"
+                  className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
+                  defaultValue={scanTerm ?? ''}
+                  id="scan"
+                  name="scan"
+                  placeholder="Scan a barcode or type a product name"
+                />
+              </label>
+              <SubmitButton variant="secondary">Find line</SubmitButton>
+            </form>
+            {scan ? (
+              <p
+                className={`mt-3 text-sm ${scan.kind === 'unresolved' ? 'text-destructive' : 'text-text-muted'}`}
+                role={scan.kind === 'unresolved' ? 'alert' : 'status'}
+              >
+                {scan.kind === 'unresolved'
+                  ? `Nothing in this workspace matches “${scan.label}”. Check the code, or pick the line by name below.`
+                  : `Matched ${scan.label}. Its line is highlighted below.`}
+              </p>
+            ) : null}
+
+            {selectedOrder ? (
+              <form action={receiveAgainstOrder} className="mt-5 space-y-4">
+                <input name="branchId" type="hidden" value={branchId} />
+                <input name="purchaseOrderId" type="hidden" value={selectedOrder.id} />
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <TextField label="Receipt reference" name="reference" notice={notice} required />
+                  <TextField
+                    label="Supplier invoice number"
+                    name="supplierInvoiceRef"
+                    notice={notice}
+                    required
+                    hint="Required: stock is not saleable without its source invoice."
+                  />
+                  <TextField
+                    defaultValue={today()}
+                    label="Invoice date"
+                    name="supplierInvoiceDate"
+                    notice={notice}
+                    required
+                    type="date"
+                  />
+                  <TextField
+                    defaultValue={today()}
+                    label="Received on"
+                    name="receivedAt"
+                    notice={notice}
+                    required
+                    type="date"
+                  />
+                  <TextField
+                    className="lg:col-span-4"
+                    label="Warranty / source evidence"
+                    name="warrantyEvidenceRef"
+                    notice={notice}
+                    required
+                    hint="Where the warranty or source declaration for this consignment is filed."
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  {selectedOrder.lines.map((line) => {
+                    const already = outstanding[line.id];
+                    const orderedUnits = line.orderedCanonicalUnits + line.bonusCanonicalUnits;
+                    const remaining = Math.max(0, orderedUnits - (already?.receivedUnits ?? 0));
+                    return (
+                      <CaptureFieldset
+                        highlighted={
+                          scan?.kind !== 'unresolved' && scan?.medicineId === line.medicineId
+                        }
+                        key={line.id}
+                        keyPrefix={line.id}
+                        locations={locations}
+                        notice={notice}
+                        subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
+                          line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
+                        } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
+                        suggestedPacks={
+                          line.canonicalUnitsPerPack > 0
+                            ? Math.floor(remaining / line.canonicalUnitsPerPack)
+                            : 0
+                        }
+                        suggestedPriceMinor={line.listPricePerPackMinor}
+                        title={line.medicine.productName}
+                        unitsPerPack={line.canonicalUnitsPerPack}
+                      />
+                    );
+                  })}
+                </div>
+
+                <TextAreaField label="Receipt note" name="note" notice={notice} />
+                <SubmitButton>File receipt (draft)</SubmitButton>
+                <p className="text-sm text-text-muted">
+                  A draft receipt is a document. Nothing reaches the ledger, and nothing becomes
+                  saleable, until it is posted.
+                </p>
+              </form>
+            ) : (
+              <p className="mt-4 text-sm text-text-muted">
+                Choose an order above to open its lines for capture. Nothing is loaded until you do.
+              </p>
+            )}
+          </>
+        )}
+      </SectionCard>
+
+      {/* ── PUR-05 direct purchase ─────────────────────────────────────────── */}
+      <SectionCard eyebrow="PUR-05" title="Direct purchase — no purchase order" titleLevel={2}>
+        <p className="text-sm text-text-muted">
+          A phone, WhatsApp or cash-and-carry invoice. Every validation and every posting is the
+          same as receiving against an order — the only difference is that a bypass reason and a
+          named approver stand in place of the order.
+        </p>
+        {workspace.approvers.length === 0 ? (
+          <div className="mt-4">
+            <EmptyState
+              title="No second person can approve a bypass"
+              detail="A direct purchase needs an approver who is not you, and this workspace has no other active user. Invite a colleague, or raise a purchase order instead."
+              steps={[
+                { label: 'Invite a colleague', href: '/team' },
+                { label: 'Raise a purchase order', href: `${PURCHASING_ROUTE}/orders` },
+              ]}
+            />
+          </div>
+        ) : (
+          <form action={receiveDirect} className="mt-4 space-y-4">
+            <input name="branchId" type="hidden" value={branchId} />
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <TextField
+                label="Direct purchase reference"
+                name="directReference"
+                notice={notice}
+                required
+              />
+              <SelectField
+                emptyHint="No orderable supplier. Authorize one and file a verified licence first."
+                label="Supplier"
+                name="supplierId"
+                notice={notice}
+                options={supplierOptions(workspace.suppliers)}
+                required
+              />
+              <TextField
+                label="Direct purchase invoice number"
+                name="directInvoiceRef"
+                notice={notice}
+                required
+              />
+              <TextField
+                defaultValue={today()}
+                label="Direct purchase invoice date"
+                name="directInvoiceDate"
+                notice={notice}
+                required
+                type="date"
+              />
+              <TextField
+                defaultValue={today()}
+                label="Direct purchase received on"
+                name="directReceivedAt"
+                notice={notice}
+                required
+                type="date"
+              />
+              <TextField
+                label="Direct purchase warranty evidence"
+                name="directWarranty"
+                notice={notice}
+                required
+              />
+              <TextAreaField
+                className="sm:col-span-2"
+                label="Why was there no purchase order?"
+                name="bypassReason"
+                notice={notice}
+                required
+                hint="Recorded permanently with the receipt."
+              />
+              <SelectField
+                emptyHint="Nobody else is active in this workspace."
+                hint="You cannot approve your own bypass, so you are not on this list."
+                label="Approved by"
+                name="bypassApprovedByUserId"
+                notice={notice}
+                options={workspace.approvers.map((approver) => ({
+                  value: approver.id,
+                  label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
+                }))}
+                required
+              />
+            </div>
+            <div className="space-y-3">
+              {DIRECT_SLOTS.map((slot) => (
+                <div key={slot} className="space-y-3">
+                  <SelectField
+                    emptyHint="No medicine has an effective pack level."
+                    label={`Line ${slot + 1} — medicine and pack`}
+                    name={`directPack-${slot}`}
+                    notice={notice}
+                    options={packOptions(workspace.medicines)}
+                    placeholder="Skip this line"
+                  />
+                  <CaptureFieldset
+                    keyPrefix={`d${slot}`}
+                    locations={locations}
+                    notice={notice}
+                    subtitle="Fill this only if you chose a medicine above."
+                    title={`Line ${slot + 1} capture`}
+                    unitsPerPack={null}
+                  />
+                </div>
+              ))}
+            </div>
+            <TextAreaField label="Direct purchase note" name="directNote" notice={notice} />
+            <SubmitButton>File direct purchase (draft)</SubmitButton>
+          </form>
+        )}
+      </SectionCard>
+
+      {/* ── receipts, side by side with the selected one ───────────────────── */}
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
+        <SectionCard eyebrow="PUR-02/04" title={`Receipts (${receipts.length})`} titleLevel={2}>
+          {receipts.length === 0 ? (
+            <EmptyState
+              title="Nothing has been received at this branch"
+              detail="File a receipt against a sent order, or record a direct purchase. Both appear here with their posting state."
+            />
+          ) : (
+            <ul className="space-y-2">
+              {receipts.map((receipt) => (
+                <li key={receipt.id}>
+                  <a
+                    aria-current={receipt.id === selectedReceipt?.id ? 'true' : undefined}
+                    className={`flex min-h-11 w-full flex-wrap items-center justify-between gap-2 rounded-[var(--radius-sm)] border px-3 py-2.5 text-left transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 ${
+                      receipt.id === selectedReceipt?.id
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border-subtle hover:bg-muted'
+                    }`}
+                    href={linkTo(query, branchId, { receipt: receipt.id })}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-text-strong">
+                        {receipt.reference}
+                      </span>
+                      <span className="block truncate text-xs text-text-muted">
+                        {receipt.supplier.name} · {dateOnly(receipt.receivedAt)}
+                        {receipt.directPurchase ? ' · direct purchase' : ''}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      {receipt.exceptions.some((row) => row.status === 'OPEN') ? (
+                        <StatusPill status="Exceptions" tone="warning" />
+                      ) : null}
+                      <StatusPill status={receipt.status} />
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+
+        {selectedReceipt ? (
+          <ReceiptDetail
+            branchId={branchId}
+            lots={lots}
+            notice={notice}
+            onPost={postReceipt}
+            onReverse={reverseReceipt}
+            receipt={selectedReceipt}
+          />
+        ) : (
+          <SectionCard title="No receipt selected" titleLevel={2}>
+            <EmptyState
+              title="Pick a receipt to post or inspect it"
+              detail="Its captured lines, the exceptions it raised and the batch lots it produced open here, beside the list."
+            />
+          </SectionCard>
+        )}
+      </div>
+    </Frame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+function Frame({
+  branch,
+  notice,
+  children,
+}: {
+  branch?: ReturnType<typeof resolveBranch>;
+  notice: Notice | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <main className="min-w-0 space-y-6">
+      <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
+      <PurchasingTabs active={ROUTE} />
+      {branch?.kind === 'resolved' ? (
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <p className="text-sm text-text-muted">
+            Receiving into{' '}
+            <span className="font-medium text-text-strong">{branch.branch.name}</span>
+            {branch.implicit ? ' — the only active branch in this workspace.' : '.'}
+          </p>
+          <BranchPicker branches={branch.branches} route={ROUTE} selected={branch.branch.id} />
+        </div>
+      ) : null}
+      <NoticeBanner notice={notice} />
+      {children}
+    </main>
+  );
+}
+
+/**
+ * One line of capture. Every field the PH-INV lot needs is here, because the lot
+ * is built from this row: a batch, an expiry with its printed precision, the
+ * printed MRP, the pack conversion, the quantity, the bonus and the invoiced
+ * cost. The pack → unit conversion and the resulting unit cost are read back
+ * beside the inputs, so what is about to be committed is legible before it is.
+ */
+function CaptureFieldset({
+  keyPrefix,
+  title,
+  subtitle,
+  locations,
+  notice,
+  unitsPerPack,
+  suggestedPacks,
+  suggestedPriceMinor,
+  highlighted,
+}: {
+  keyPrefix: string;
+  title: string;
+  subtitle: string;
+  locations: StockLocationOption[];
+  notice: Notice | null;
+  unitsPerPack: number | null;
+  suggestedPacks?: number;
+  suggestedPriceMinor?: number;
+  highlighted?: boolean;
+}) {
+  const stock = locations.filter((location) => location.kind !== 'QUARANTINE');
+  const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
+  return (
+    <fieldset
+      className={`rounded-[var(--radius-sm)] border p-4 ${
+        highlighted ? 'border-primary bg-primary/5' : 'border-border-subtle'
+      }`}
+    >
+      <legend className="px-1 text-sm font-medium text-text-strong">{title}</legend>
+      <p className="text-xs text-text-muted">{subtitle}</p>
+      {unitsPerPack ? (
+        <Derived label="Pack conversion" value={`1 pack = ${unitsPerPack} units`} />
+      ) : null}
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <TextField
+          label="Batch number"
+          name={`batchNumber:${keyPrefix}`}
+          notice={notice}
+          hint="Leave blank if this line did not arrive."
+        />
+        <TextField
+          label="Printed expiry"
+          name={`printedExpiry:${keyPrefix}`}
+          notice={notice}
+          type="date"
+        />
+        <SelectField
+          defaultValue="MONTH"
+          emptyHint="—"
+          hint="Most cartons print a month only."
+          label="Expiry precision"
+          name={`expiryPrecision:${keyPrefix}`}
+          notice={notice}
+          options={[
+            { value: 'MONTH', label: 'Month printed (e.g. 06/2027)' },
+            { value: 'DAY', label: 'Exact day printed' },
+          ]}
+        />
+        <TextField
+          inputMode="decimal"
+          label="Printed MRP (PKR)"
+          name={`printedMrp:${keyPrefix}`}
+          notice={notice}
+          hint="Per pack, as printed on the carton."
+        />
+        <TextField
+          defaultValue={suggestedPacks && suggestedPacks > 0 ? suggestedPacks : undefined}
+          inputMode="numeric"
+          label="Packs received"
+          min={0}
+          name={`receivedPacks:${keyPrefix}`}
+          notice={notice}
+          type="number"
+          hint={suggestedPacks ? 'Pre-filled with the outstanding balance.' : undefined}
+        />
+        <TextField
+          inputMode="numeric"
+          label="Free / bonus packs"
+          min={0}
+          name={`bonusPacks:${keyPrefix}`}
+          notice={notice}
+          type="number"
+          hint="Lowers the unit cost; never revenue."
+        />
+        <TextField
+          defaultValue={
+            suggestedPriceMinor != null ? (suggestedPriceMinor / 100).toFixed(2) : undefined
+          }
+          inputMode="decimal"
+          label="Invoiced price / pack (PKR)"
+          name={`invoicedPrice:${keyPrefix}`}
+          notice={notice}
+          hint={suggestedPriceMinor != null ? 'Pre-filled from the order.' : undefined}
+        />
+        <TextField
+          inputMode="decimal"
+          label="Discount %"
+          name={`discount:${keyPrefix}`}
+          notice={notice}
+        />
+        <TextField inputMode="decimal" label="Tax %" name={`tax:${keyPrefix}`} notice={notice} />
+        <SelectField
+          defaultValue="no"
+          emptyHint="—"
+          hint="A creditable input tax is recovered, so it is not stock cost."
+          label="Tax creditable"
+          name={`taxCreditable:${keyPrefix}`}
+          notice={notice}
+          options={[
+            { value: 'no', label: 'No — tax is part of the cost' },
+            { value: 'yes', label: 'Yes — input tax is recoverable' },
+          ]}
+        />
+        <SelectField
+          emptyHint="This branch has no active stock location. Create one before receiving."
+          label="Receive into"
+          name={`stockLocation:${keyPrefix}`}
+          notice={notice}
+          options={stock.map((location) => ({
+            value: location.id,
+            label: `${location.name} (${location.kind}${location.coldChain ? ', cold chain' : ''})`,
+          }))}
+        />
+        <TextField
+          inputMode="numeric"
+          label="Rejected units"
+          min={0}
+          name={`rejectedUnits:${keyPrefix}`}
+          notice={notice}
+          type="number"
+          hint="Damaged or short-dated. Never enters available stock."
+        />
+        <SelectField
+          className="lg:col-span-2"
+          emptyHint="No quarantine location at this branch. Create one before rejecting goods."
+          label="Quarantine into (only if rejecting)"
+          name={`quarantineLocation:${keyPrefix}`}
+          notice={notice}
+          options={quarantine.map((location) => ({
+            value: location.id,
+            label: location.name,
+          }))}
+          placeholder="Not rejecting anything"
+        />
+        <TextField
+          className="lg:col-span-2"
+          label="Rejection reason (only if rejecting)"
+          name={`rejectionReason:${keyPrefix}`}
+          notice={notice}
+        />
+      </div>
+    </fieldset>
+  );
+}
+
+function ReceiptDetail({
+  receipt,
+  lots,
+  branchId,
+  notice,
+  onPost,
+  onReverse,
+}: {
+  receipt: GoodsReceiptDetail;
+  lots: {
+    lineNumber: number;
+    batchNumber: string;
+    medicine: { productName: string };
+    inventoryLot: unknown;
+  }[];
+  branchId: string;
+  notice: Notice | null;
+  onPost: (form: FormData) => Promise<void>;
+  onReverse: (form: FormData) => Promise<void>;
+}) {
+  return (
+    <SectionCard
+      eyebrow="PUR-02/04/05"
+      title={receipt.reference}
+      titleLevel={2}
+      actions={<StatusPill status={receipt.status} />}
+    >
+      <p className="text-sm text-text-muted">
+        {receipt.supplier.name} · invoice {receipt.supplierInvoiceRef} (
+        {dateOnly(receipt.supplierInvoiceDate)}) · received {dateOnly(receipt.receivedAt)}
+        {receipt.purchaseOrder ? ` · against ${receipt.purchaseOrder.reference}` : ''}
+      </p>
+      {receipt.directPurchase ? (
+        <div className="mt-3 rounded-[var(--radius-sm)] border border-warning/40 bg-warning/5 p-3">
+          <p className="text-sm text-text-body">
+            <span className="font-medium">Direct purchase.</span> {receipt.bypassReason}
+          </p>
+          <p className="mt-1 text-xs text-text-muted">
+            Bypass approved {dateTime(receipt.bypassApprovedAt)}. Recorded permanently.
+          </p>
+        </div>
+      ) : null}
+
+      <ul className="mt-4 space-y-2">
+        {receipt.lines.map((line) => (
+          <li className="rounded-[var(--radius-sm)] border border-border-subtle p-3" key={line.id}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium text-text-strong">{line.medicine.productName}</span>
+              <span className="font-mono text-sm tabular-nums text-text-strong">
+                {money(line.unitCostMinor)} / unit
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-text-muted">
+              Batch {line.batchNumber} · expires {dateOnly(line.printedExpiry)} (
+              {line.expiryPrecision.toLowerCase()} precision) · MRP {money(line.printedMrpMinor)} ·{' '}
+              {line.receivedPacks} {line.packLevel.level}
+              {line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''} ×{' '}
+              {line.canonicalUnitsPerPack} ={' '}
+              {units(line.receivedCanonicalUnits + line.bonusCanonicalUnits)}
+            </p>
+            <p className="mt-1 text-xs text-text-muted">
+              Accepted {units(line.acceptedCanonicalUnits)} into {line.stockLocation.name}
+              {line.rejectedCanonicalUnits > 0
+                ? ` · rejected ${units(line.rejectedCanonicalUnits)} into ${line.quarantineLocation?.name ?? 'quarantine'} — ${line.rejectionReason}`
+                : ''}
+            </p>
+          </li>
+        ))}
+      </ul>
+
+      {receipt.exceptions.length > 0 ? (
+        <div className="mt-4">
+          <h4 className="text-sm font-medium text-text-strong">
+            Exceptions raised by this receipt
+          </h4>
+          <ul className="mt-2 space-y-1">
+            {receipt.exceptions.map((exception) => (
+              <li className="text-xs text-text-muted" key={exception.id}>
+                {exception.kind} · {exception.status} · {exception.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {receipt.status === 'POSTED' ? (
+        <div className="mt-4">
+          <h4 className="text-sm font-medium text-text-strong">Stock produced</h4>
+          {lots.length === 0 ? (
+            <p className="mt-1 text-sm text-text-muted">
+              This receipt posted no lot, which means every line was rejected in full.
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {lots.map((lot) => (
+                <li
+                  className="text-xs text-text-muted"
+                  key={`${lot.lineNumber}-${lot.batchNumber}`}
+                >
+                  {lot.medicine.productName} · batch {lot.batchNumber} · in the batch ledger
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+
+      <div className="mt-5 border-t border-border-subtle pt-5">
+        {receipt.status === 'DRAFT' ? (
+          <form action={onPost}>
+            <input name="branchId" type="hidden" value={branchId} />
+            <input name="goodsReceiptId" type="hidden" value={receipt.id} />
+            <SubmitButton>Post into stock</SubmitButton>
+            <p className="mt-2 text-sm text-text-muted">
+              Posting creates the batch lot, both dispositions and any match exception in one
+              transaction: all of it commits, or none of it does.
+            </p>
+          </form>
+        ) : receipt.status === 'POSTED' ? (
+          <form action={onReverse} className="flex flex-wrap items-end gap-3">
+            <input name="branchId" type="hidden" value={branchId} />
+            <input name="goodsReceiptId" type="hidden" value={receipt.id} />
+            <TextField
+              className="min-w-64 flex-1"
+              label="Why is this being reversed?"
+              name="reversalReason"
+              notice={notice}
+              required
+            />
+            <SubmitButton variant="destructive">Reverse posting</SubmitButton>
+            <p className="w-full text-sm text-text-muted">
+              A reversal writes linked compensating movements. If the stock has already moved on,
+              the ledger refuses rather than driving a balance negative.
+            </p>
+          </form>
+        ) : (
+          <p className="text-sm text-text-muted">
+            This receipt is {receipt.status.toLowerCase()} and cannot be posted again.
+            {receipt.reversalReason ? ` Reversed because: ${receipt.reversalReason}` : ''}
+          </p>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Form readers
+// ---------------------------------------------------------------------------
+
+function packOptions(medicines: MedicineOption[]) {
+  return medicines.flatMap((medicine) =>
+    medicine.packs.map((pack) => ({
+      value: `${medicine.id}|${pack.packLevelId}|${pack.canonicalUnitsPerPack}`,
+      label: `${medicine.productName} — ${pack.level} (${pack.conversionLabel})`,
+    }))
+  );
+}
+
+function readPack(value: string) {
+  const [medicineId, packLevelId, unitsPerPack] = value.split('|');
+  if (!medicineId || !packLevelId || !unitsPerPack) return null;
+  const canonicalUnitsPerPack = Number(unitsPerPack);
+  if (!Number.isSafeInteger(canonicalUnitsPerPack) || canonicalUnitsPerPack <= 0) return null;
+  return { medicineId, packLevelId, canonicalUnitsPerPack };
+}
+
+function percentToBps(form: FormData, name: string, label: string): number {
+  const raw = field(form, name);
+  if (!raw) return 0;
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+    throw Object.assign(new Error(`${label}: enter a percentage like 5 or 12.5.`), { field: name });
+  }
+  return Math.round(Number(raw) * 100);
+}
+
+/** Everything the PH-INV lot needs, read off one capture fieldset. */
+function readCaptureFields(form: FormData, key: string) {
+  const rejectedCanonicalUnits = optionalIntegerField(
+    form,
+    `rejectedUnits:${key}`,
+    'Rejected units',
+    0
+  );
+  return {
+    batchNumber: field(form, `batchNumber:${key}`),
+    printedExpiry: dateField(form, `printedExpiry:${key}`, 'Printed expiry'),
+    expiryPrecision: (field(form, `expiryPrecision:${key}`) === 'DAY' ? 'DAY' : 'MONTH') as
+      'DAY' | 'MONTH',
+    printedMrpMinor: moneyFieldMinor(form, `printedMrp:${key}`, 'Printed MRP'),
+    receivedPacks: integerField(form, `receivedPacks:${key}`, 'Packs received'),
+    bonusPacks: optionalIntegerField(form, `bonusPacks:${key}`, 'Free packs', 0),
+    rejectedCanonicalUnits,
+    // PUR-04 refuses a rejection with nowhere to put it, so the reason and the
+    // quarantine location travel together or not at all.
+    rejectionReason: rejectedCanonicalUnits > 0 ? field(form, `rejectionReason:${key}`) : undefined,
+    quarantineLocationId:
+      rejectedCanonicalUnits > 0 ? field(form, `quarantineLocation:${key}`) : undefined,
+    invoicedPricePerPackMinor: moneyFieldMinor(
+      form,
+      `invoicedPrice:${key}`,
+      'Invoiced price per pack'
+    ),
+    discountBps: percentToBps(form, `discount:${key}`, 'Discount'),
+    taxBps: percentToBps(form, `tax:${key}`, 'Tax'),
+    taxCreditable: field(form, `taxCreditable:${key}`) === 'yes',
+    stockLocationId: field(form, `stockLocation:${key}`),
+  };
+}
+
+function linkTo(query: SearchQuery, branchId: string, next: Record<string, string>): string {
+  const params = new URLSearchParams({ branch: branchId });
+  for (const key of ['order', 'receipt', 'exceptions', 'scan'] as const) {
+    const value = param(query, key);
+    if (value) params.set(key, value);
+  }
+  for (const [key, value] of Object.entries(next)) params.set(key, value);
+  return `${ROUTE}?${params}`;
+}
