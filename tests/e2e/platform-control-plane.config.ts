@@ -31,7 +31,11 @@ process.env.PLAYWRIGHT_SHARED_BASE_URL = sharedBaseURL;
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'platform-control-plane.spec.ts',
+  // A glob, not one filename: the control-plane scenario is now split across
+  // sibling spec files so concurrent lanes can add assertions without editing
+  // the same file. Every `platform-control-plane*.spec.ts` runs under this
+  // config (and only this config — see `playwright.config.ts`'s testIgnore).
+  testMatch: 'platform-control-plane*.spec.ts',
   // Relative to this config's directory, so this is the repository-root
   // `playwright-artifacts/` — never the tracked `test-results/` baselines.
   outputDir: '../../playwright-artifacts/platform-control-plane',

@@ -15,6 +15,7 @@ import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
+import { AdministratorStaffProfileCallout } from '@/components/restaurant/administrator-staff-profile-callout';
 import { toast } from 'sonner';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
@@ -183,6 +184,10 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
           </div>
         ) : null}
         <Topbar brand={brand} onMenuClick={() => setMobileMenuOpen(true)} />
+        {/* WHA-1181 — a one-time setup step for a restaurant administrator whose
+            organization activated before staff profiles were provisioned. Self-
+            hiding, so it costs a healthy workspace nothing. */}
+        <AdministratorStaffProfileCallout />
         <TopNavigation />
         <main
           data-slot="app-canvas"
