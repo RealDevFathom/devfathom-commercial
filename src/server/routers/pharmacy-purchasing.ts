@@ -8,6 +8,20 @@ import {
 } from '@/lib/pharmacy/goods-receipt';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
+  listGoodsReceipts,
+  listPurchaseOrders,
+  listPurchaseReturns,
+  listReceivingExceptionQueue,
+  listRequisitions,
+  listReturnableLots,
+  listSupplierCredits,
+  listSuppliers,
+  lotsFromReceipt,
+  purchasingWorkspace,
+  receivedAgainstOrder,
+  resolveScan,
+} from '@/lib/pharmacy/purchasing-console';
+import {
   assertApprovalAllowed,
   assertPurchaseOrderTransition,
   assertRequisitionTransition,
@@ -139,6 +153,19 @@ function receivingScope(ctx: TRPCContext, branch: string): ReceivingScope {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'No tenant actor on this request.' });
   }
   return { organizationId, branchId: branch, actorId };
+}
+
+/**
+ * The organization-only half of the same rule, for the reads that are not
+ * branch-scoped. Suppliers, requisitions and orders are tenant-level records;
+ * their `branchId`, where they carry one, is a filter and not a boundary.
+ */
+function tenantScope(ctx: TRPCContext): { organizationId: string } {
+  const organizationId = ctx.entitlements?.organizationId;
+  if (!organizationId) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'No tenant actor on this request.' });
+  }
+  return { organizationId };
 }
 
 /**
@@ -1137,4 +1164,101 @@ export const pharmacyPurchasingRouter = router({
         { supplierId: input.supplierId }
       );
     }),
+
+  // ── PUR-01..06 console reads ────────────────────────────────────────────────
+  //
+  // The lane composed its writes and its refusals first, so nothing above reads
+  // a list back. These add the projections the four purchasing surfaces render
+  // and change no state. They live on this router rather than a new one so the
+  // `pharmacyPurchasing` → `pharmacy-procurement` module gate in module-catalog
+  // covers a read exactly as it covers a write; a separate router key would be
+  // ungated until somebody remembered to add it.
+
+  /**
+   * Every option the purchasing surfaces offer, in one round trip: branches,
+   * stock locations, medicines with their derived pack conversions, suppliers
+   * with their PUR-01 eligibility, and the users who may approve a PUR-05
+   * bypass. UX rules 1 and 16: resolved server-side, this organization only.
+   */
+  workspace: protectedProcedure.query(({ ctx }) =>
+    purchasingWorkspace(ctx.db, {
+      organizationId: tenantScope(ctx).organizationId,
+      actorId: ctx.session.user.id,
+    })
+  ),
+
+  /** PUR-01 — suppliers with licence evidence and the current trade decision. */
+  suppliers: protectedProcedure
+    .input(z.object({ includeInactive: z.boolean().default(false) }).strict().optional())
+    .query(({ ctx, input }) =>
+      listSuppliers(ctx.db, tenantScope(ctx), { includeInactive: input?.includeInactive })
+    ),
+
+  /** PUR-02 — requisitions with their lines, quotes and resulting orders. */
+  requisitions: protectedProcedure.query(({ ctx }) => listRequisitions(ctx.db, tenantScope(ctx))),
+
+  /** PUR-02/PUR-03 — orders with lines, approval history and posted receipts. */
+  purchaseOrders: protectedProcedure.query(({ ctx }) =>
+    listPurchaseOrders(ctx.db, tenantScope(ctx))
+  ),
+
+  /**
+   * PUR-02 — canonical units already received against each ordered line, from
+   * POSTED receipts only. The receiving bench pre-fills the outstanding balance
+   * from this, so it never asks the operator to work out what is still owed.
+   */
+  receivedAgainstOrder: protectedProcedure
+    .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) =>
+      Object.fromEntries(
+        await receivedAgainstOrder(ctx.db, tenantScope(ctx), input.purchaseOrderId)
+      )
+    ),
+
+  /** PUR-02 receiving / PUR-05 — the receipts filed at one branch. */
+  goodsReceipts: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => listGoodsReceipts(ctx.db, receivingScope(ctx, input.branchId))),
+
+  /** PUR-04 — the review queue, joined to the medicine and receipt it concerns. */
+  receivingExceptionQueue: protectedProcedure
+    .input(z.object({ branchId, status: z.enum(['OPEN', 'RESOLVED']).default('OPEN') }).strict())
+    .query(({ ctx, input }) =>
+      listReceivingExceptionQueue(ctx.db, receivingScope(ctx, input.branchId), {
+        status: input.status,
+      })
+    ),
+
+  /**
+   * PUR-02 acceptance — the stock a posted receipt produced, read back from the
+   * PH-INV ledger rather than from the receipt document.
+   */
+  lotsFromReceipt: protectedProcedure
+    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
+    .query(({ ctx, input }) =>
+      lotsFromReceipt(ctx.db, receivingScope(ctx, input.branchId), input.goodsReceiptId)
+    ),
+
+  /** PUR-06 — returns and claims with their window state and credit position. */
+  purchaseReturns: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => listPurchaseReturns(ctx.db, receivingScope(ctx, input.branchId))),
+
+  /** PUR-06 — the available lots a return may be raised against. */
+  returnableLots: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => listReturnableLots(ctx.db, receivingScope(ctx, input.branchId))),
+
+  /**
+   * PUR-02 receiving — resolve a scanned barcode, or a typed fragment of a
+   * product name, to the medicine the carton in the operator's hand contains.
+   */
+  resolveScan: protectedProcedure
+    .input(z.object({ term: z.string().trim().min(1).max(200) }).strict())
+    .query(({ ctx, input }) => resolveScan(ctx.db, tenantScope(ctx), input.term)),
+
+  /** PUR-06 — supplier credits recorded at this branch and what they cover. */
+  supplierCredits: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => listSupplierCredits(ctx.db, receivingScope(ctx, input.branchId))),
 });
