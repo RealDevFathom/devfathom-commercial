@@ -89,7 +89,7 @@ var appEnvironmentName = 'df-${shortEnvironment}-${suffix}-cae'
 var appName = 'devfathom-${shortEnvironment}'
 var migrationJobName = 'devfathom-${shortEnvironment}-migrate'
 var databaseUrl = 'postgresql://devfathomadmin:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
-var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy'
+var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts'
 var migrationCommand = seedDatabase && bootstrapDatabase
   ? fail('seedDatabase and bootstrapDatabase cannot both be enabled.')
   : seedDatabase

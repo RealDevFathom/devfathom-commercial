@@ -5,8 +5,8 @@ import { hash } from 'bcryptjs';
 import 'dotenv/config';
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
+import { PLATFORM_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 import { upsertPlatformAdmin } from './platform-admin.js';
-import { PLATFORM_MODULES } from './production-bootstrap.js';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
@@ -1534,16 +1534,19 @@ async function main() {
         skipDuplicates: true,
       });
 
-      for (const [key, name, category, routePrefix] of PLATFORM_MODULES) {
-        const module = await tx.platformModule.upsert({
-          where: { key },
-          update: { name, category, routePrefix, active: true },
-          create: { key, name, category, routePrefix },
-        });
+      // Reconciles the whole module and package registry — agency AND restaurant —
+      // so a database that predates a shipped module still receives it. Runs
+      // ahead of seedTenantData's early return, which is the path an existing
+      // staging database takes on every redeploy.
+      const { moduleIds } = await syncPlatformCatalog(tx);
+
+      for (const [key] of PLATFORM_MODULES) {
+        const moduleId = moduleIds.get(key);
+        if (!moduleId) throw new Error(`Unknown platform module: ${key}`);
         await tx.platformPackageModule.upsert({
-          where: { packageId_moduleId: { packageId: suite.id, moduleId: module.id } },
+          where: { packageId_moduleId: { packageId: suite.id, moduleId } },
           update: { enabled: true },
-          create: { packageId: suite.id, moduleId: module.id },
+          create: { packageId: suite.id, moduleId },
         });
         // §2.3: org_devfathom inherits its modules live from the Agency Suite
         // package (platform_package_modules); no OrganizationModule copy.

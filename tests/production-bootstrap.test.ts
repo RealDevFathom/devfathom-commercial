@@ -53,15 +53,28 @@ function fakeTransaction() {
     deployment: null,
     departments: [],
   };
+  // `syncPlatformCatalog` reads the registry before writing it, so the fake has
+  // to remember what a previous pass created: a package that already exists is
+  // deliberately left alone rather than re-composed.
+  const moduleKeys = new Set<string>();
+  const packageKeys = new Set<string>();
+  const findManyByKey = (known: Set<string>) =>
+    vi.fn(async (args: { where: { key: { in: string[] } } }) =>
+      args.where.key.in.filter((key) => known.has(key)).map((key) => ({ key }))
+    );
   const platformModule = {
-    upsert: vi.fn(async (args: { where: { key: string } }) => ({
-      id: `module_${args.where.key}`,
-    })),
+    findMany: findManyByKey(moduleKeys),
+    upsert: vi.fn(async (args: { where: { key: string } }) => {
+      moduleKeys.add(args.where.key);
+      return { id: `module_${args.where.key}` };
+    }),
   };
   const platformPackage = {
-    upsert: vi.fn(async (args: { where: { key: string } }) => ({
-      id: `package_${args.where.key}`,
-    })),
+    findMany: findManyByKey(packageKeys),
+    upsert: vi.fn(async (args: { where: { key: string } }) => {
+      packageKeys.add(args.where.key);
+      return { id: `package_${args.where.key}` };
+    }),
   };
   const organizationDeployment = {
     upsert: vi.fn(

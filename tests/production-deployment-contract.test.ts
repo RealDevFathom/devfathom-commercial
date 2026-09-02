@@ -18,7 +18,7 @@ describe('production deployment contract', () => {
     );
     expect(workflow).toContain('[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]');
     expect(workflow).toContain(
-      `[[ "$migration_command" == 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy' ]]`
+      `[[ "$migration_command" == 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts' ]]`
     );
     expect(workflow).toContain('az containerapp job secret list');
     expect(workflow).toContain('[[ -z "$initialization_secrets" ]]');
@@ -61,7 +61,7 @@ describe('production deployment contract', () => {
 
     expect(template).toContain('param bootstrapDatabase bool = false');
     expect(template).toContain(
-      "var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy'"
+      "var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts'"
     );
     expect(template).toContain(
       "{ name: 'EXTENSION_ADMIN_DATABASE_URL', secretRef: 'database-url' }"
@@ -71,6 +71,9 @@ describe('production deployment contract', () => {
     expect(production).toContain('param minReplicas = 1');
     expect(production).not.toMatch(/DEVFATHOM_PRODUCTION_(?:SEED|ADMIN|PLATFORM_ADMIN)_PASSWORD/);
     expect(bootstrap).toContain('param bootstrapDatabase = true');
+    // `postgresExtensions` has no default, so a param file that omits it does
+    // not compile — the bootstrap file was left behind when it was introduced.
+    expect(bootstrap).toContain("param postgresExtensions = 'btree_gist'");
     expect(bootstrap).toContain('DEVFATHOM_PRODUCTION_ADMIN_PASSWORD');
     expect(bootstrap).toContain('DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD');
     expect(bootstrap).not.toContain('DEVFATHOM_PRODUCTION_SEED_PASSWORD');

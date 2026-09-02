@@ -4,30 +4,10 @@ import type { Prisma } from '../src/generated/prisma/client.js';
 import {
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
-  RESTAURANT_MODULES,
-  RESTAURANT_PACKAGES,
 } from '../src/lib/vertical-catalog.js';
+import { PLATFORM_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 
-export const PLATFORM_MODULES = [
-  ['dashboard', 'Dashboard', 'Core', '/dashboard'],
-  ['projects', 'Projects', 'Delivery', '/projects'],
-  ['clients', 'Clients', 'Delivery', '/clients'],
-  ['finance', 'Finance', 'Operations', '/finance'],
-  ['chat', 'Chat', 'Collaboration', '/chat'],
-  ['meetings', 'Meetings', 'Collaboration', '/meetings'],
-  ['notes', 'Notes', 'Knowledge', '/notes'],
-  ['hr', 'HR', 'People', '/hr'],
-  ['reviews', 'Performance reviews', 'People', '/reviews'],
-  ['email', 'Email', 'Communication', '/email'],
-  ['api', 'API access', 'Developer', '/organization/api'],
-  ['webhooks', 'Webhooks', 'Developer', '/organization/webhooks'],
-  ['audit', 'Audit logs', 'Security', '/audit-logs'],
-  ['branding', 'White-label branding', 'Configuration', '/organization/branding'],
-  ['domains', 'Custom domains', 'Configuration', '/organization/domains'],
-  ['identity', 'Enterprise SSO', 'Security', '/organization/authentication'],
-  ['scim', 'SCIM provisioning', 'Security', '/organization/provisioning'],
-  ['data', 'Data controls', 'Governance', '/organization/data'],
-] as const;
+export { PLATFORM_MODULES } from './catalog-sync.js';
 
 export type ProductionBootstrapInput = {
   organizationId: string;
@@ -124,63 +104,25 @@ export async function bootstrapProduction(
     skipDuplicates: true,
   });
 
-  for (const [key, name, category, routePrefix] of PLATFORM_MODULES) {
-    const platformModule = await tx.platformModule.upsert({
-      where: { key },
-      update: {},
-      create: { key, name, category, routePrefix },
-    });
+  // Modules and restaurant packages are reconciled by the shared helper, which
+  // also runs on every deployment via `prisma/sync-catalog.ts`. Composing the
+  // Agency Suite stays here: it is this bootstrap's own package, and the
+  // organization created above points at it.
+  const { moduleIds } = await syncPlatformCatalog(tx);
+
+  for (const [key] of PLATFORM_MODULES) {
+    const moduleId = moduleIds.get(key);
+    if (!moduleId) throw new Error(`Unknown platform module: ${key}`);
     await tx.platformPackageModule.upsert({
       where: {
-        packageId_moduleId: { packageId: suite.id, moduleId: platformModule.id },
+        packageId_moduleId: { packageId: suite.id, moduleId },
       },
       update: {},
-      create: { packageId: suite.id, moduleId: platformModule.id },
+      create: { packageId: suite.id, moduleId },
     });
     // §2.3: the bootstrap org inherits its modules live from the package
     // (platform_package_modules); no OrganizationModule copy. assertActivationReady
     // remains satisfied by the package's moduleLinks.
-  }
-
-  const restaurantModuleIds = new Map<string, string>();
-  for (const module of RESTAURANT_MODULES) {
-    const platformModule = await tx.platformModule.upsert({
-      where: { key: module.key },
-      update: {},
-      create: {
-        key: module.key,
-        name: module.name,
-        category: module.category,
-        routePrefix: module.routePrefix,
-      },
-    });
-    restaurantModuleIds.set(module.key, platformModule.id);
-  }
-
-  for (const restaurantPackage of RESTAURANT_PACKAGES) {
-    const platformPackage = await tx.platformPackage.upsert({
-      where: { key: restaurantPackage.key },
-      update: {},
-      create: {
-        key: restaurantPackage.key,
-        name: restaurantPackage.name,
-        vertical: restaurantPackage.vertical,
-      },
-    });
-
-    for (const moduleKey of restaurantPackage.moduleKeys) {
-      const moduleId = restaurantModuleIds.get(moduleKey);
-      if (!moduleId) throw new Error(`Unknown restaurant module: ${moduleKey}`);
-      await tx.platformPackageModule.upsert({
-        where: { packageId_moduleId: { packageId: platformPackage.id, moduleId } },
-        update: {},
-        create: {
-          packageId: platformPackage.id,
-          moduleId,
-          limits: moduleKey === 'restaurant-core' ? restaurantPackage.defaultLimits : undefined,
-        },
-      });
-    }
   }
 
   const adminRole = await tx.organizationRole.upsert({
