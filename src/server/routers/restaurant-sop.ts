@@ -111,7 +111,7 @@ const NAME = z.string().min(1).max(200);
 const OPTIONAL_TEXT = z.string().max(2_000).nullable().optional();
 const STEP_TITLE = z.string().min(1).max(500);
 const DATE_ISO = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD date.');
-const FREQUENCY = z.enum(['ONCE', 'DAILY', 'WEEKLY', 'MONTHLY']);
+const FREQUENCY = z.enum(['ONCE', 'DAILY', 'WEEKLY', 'MONTHLY', 'INTERVAL']);
 const MINUTES_OF_DAY = z.number().int().min(0).max(1439);
 const DAYS_OF_WEEK = z.array(z.number().int().min(0).max(6)).max(7);
 const MONTH_DAY = z.number().int().min(1).max(31).nullable();
@@ -142,14 +142,28 @@ function sopTemplatesMax(limits: Record<string, number>): number {
 /** The recurrence fields shared by createAssignment and previewSchedule. */
 const recurrenceShape = {
   frequency: FREQUENCY,
-  interval: z.number().int().min(1).max(365).default(1),
+  interval: z.number().int().min(1).max(1440).default(1),
   daysOfWeek: DAYS_OF_WEEK.default([]),
   monthDay: MONTH_DAY.default(null),
   startDate: DATE_ISO,
   endDate: DATE_ISO.nullable().default(null),
   dueTimeMinutes: MINUTES_OF_DAY.default(0),
+  intervalEndTimeMinutes: MINUTES_OF_DAY.nullable().default(null),
   windowMinutes: z.number().int().min(0).max(1440).default(1440),
 } as const;
+
+function validateIntervalRecurrence(
+  value: { frequency: z.infer<typeof FREQUENCY>; interval: number; daysOfWeek: number[] },
+  ctx: z.RefinementCtx
+) {
+  if (value.frequency !== 'INTERVAL') return;
+  if (value.interval < 15) {
+    ctx.addIssue({ code: 'custom', path: ['interval'], message: 'Minimum is 15 minutes.' });
+  }
+  if (value.daysOfWeek.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['daysOfWeek'], message: 'Select at least one weekday.' });
+  }
+}
 
 export const restaurantSopRouter = router({
   // ── Templates ───────────────────────────────────────────────────────────────
@@ -368,13 +382,14 @@ export const restaurantSopRouter = router({
     .input(
       z
         .object({
+          ...recurrenceShape,
           branchId: z.string(),
           templateId: z.string(),
           graceMinutes: z.number().int().min(0).max(1440).default(0),
           assigneeTarget: ASSIGNEE_TARGET,
-          ...recurrenceShape,
         })
         .strict()
+        .superRefine(validateIntervalRecurrence)
     )
     .mutation(async ({ ctx, input }) => {
       try {
@@ -399,13 +414,15 @@ export const restaurantSopRouter = router({
       z
         .object({
           id: z.string(),
+          effectiveDate: DATE_ISO,
           frequency: FREQUENCY.optional(),
-          interval: z.number().int().min(1).max(365).optional(),
+          interval: z.number().int().min(1).max(1440).optional(),
           daysOfWeek: DAYS_OF_WEEK.optional(),
           monthDay: MONTH_DAY.optional(),
           startDate: DATE_ISO.optional(),
           endDate: DATE_ISO.nullable().optional(),
           dueTimeMinutes: MINUTES_OF_DAY.optional(),
+          intervalEndTimeMinutes: MINUTES_OF_DAY.nullable().optional(),
           windowMinutes: z.number().int().min(0).max(1440).optional(),
           graceMinutes: z.number().int().min(0).max(1440).optional(),
           assigneeTarget: ASSIGNEE_TARGET.optional(),
@@ -463,12 +480,13 @@ export const restaurantSopRouter = router({
     .input(
       z
         .object({
+          ...recurrenceShape,
           branchId: z.string(),
           from: DATE_ISO,
           to: DATE_ISO,
-          ...recurrenceShape,
         })
         .strict()
+        .superRefine(validateIntervalRecurrence)
     )
     .query(async ({ ctx, input }) => {
       const branch = await ctx.db.restaurantBranch.findUnique({
@@ -491,6 +509,7 @@ export const restaurantSopRouter = router({
             startDate: input.startDate,
             endDate: input.endDate,
             dueTimeMinutes: input.dueTimeMinutes,
+            intervalEndTimeMinutes: input.intervalEndTimeMinutes,
             windowMinutes: input.windowMinutes,
           },
           branch.timezone,

@@ -165,6 +165,17 @@ function makeCtx(
 }
 
 describe('sopEscalationHandler', () => {
+  it('keys escalation independently to each same-date INTERVAL occurrence id', async () => {
+    const { db, mocks } = makeDb({});
+    await sopEscalationHandler(makeCtx(db, { occurrenceId: 'interval_0930' }));
+    expect(mocks.occFindUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'interval_0930' } })
+    );
+    expect(mocks.eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ occurrenceId: 'occ_1' }) })
+    );
+  });
+
   it('fires step 1 on first run (no prior events)', async () => {
     const { db, mocks } = makeDb({});
     await sopEscalationHandler(makeCtx(db));

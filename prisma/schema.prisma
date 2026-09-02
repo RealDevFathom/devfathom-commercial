@@ -6973,6 +6973,7 @@ enum RestaurantSopRecurrenceFrequency {
   DAILY
   WEEKLY
   MONTHLY
+  INTERVAL
 }
 
 /// SOP-1: how an assignment names WHO owes the work. PERSON pins one named staff
@@ -7209,26 +7210,30 @@ model RestaurantSopTemplateStep {
 
 /// M7/§11.5: a branch-scoped recurring assignment of a template. Recurrence is
 /// expressed as a frequency + interval (+ daysOfWeek for WEEKLY, monthDay for
-/// MONTHLY) over [startDate, endDate], with a branch-local due time and window.
+/// MONTHLY, or an inclusive branch-local start/end time for INTERVAL) over the
+/// effective-date window [startDate, endDate], with a due/completion window.
 /// The occurrence generator (an L-domain lane) folds this into dated occurrences;
 /// L1 only stores the recurrence seam and pins nothing about a specific version.
 model RestaurantSopAssignment {
-  id             String                           @id @default(cuid())
-  organizationId String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
-  templateId     String
-  frequency      RestaurantSopRecurrenceFrequency @default(DAILY)
-  interval       Int                              @default(1)
-  daysOfWeek     Int[]
-  monthDay       Int?
-  startDate      DateTime                         @db.Date
-  endDate        DateTime?                        @db.Date
-  dueTimeMinutes Int                              @default(0)
-  windowMinutes  Int                              @default(1440)
-  graceMinutes   Int                              @default(0)
-  active         Boolean                          @default(true)
-  createdAt      DateTime                         @default(now())
-  updatedAt      DateTime                         @updatedAt
+  id                     String                           @id @default(cuid())
+  organizationId         String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId               String
+  templateId             String
+  frequency              RestaurantSopRecurrenceFrequency @default(DAILY)
+  interval               Int                              @default(1)
+  daysOfWeek             Int[]
+  monthDay               Int?
+  startDate              DateTime                         @db.Date
+  endDate                DateTime?                        @db.Date
+  dueTimeMinutes         Int                              @default(0)
+  intervalEndTimeMinutes Int?
+  windowMinutes          Int                              @default(1440)
+  graceMinutes           Int                              @default(0)
+  active                 Boolean                          @default(true)
+  supersedesAssignmentId String?                          @unique
+  supersededAt           DateTime?
+  createdAt              DateTime                         @default(now())
+  updatedAt              DateTime                         @updatedAt
 
   // SOP-1: the assignee target. Exactly one of the two id columns is set, and it
   // must be the one matching `assigneeTargetType` — a CHECK constraint in the
@@ -7245,6 +7250,8 @@ model RestaurantSopAssignment {
   assigneeStaff   RestaurantStaffProfile?   @relation("SopAssignmentAssignee", fields: [assigneeStaffProfileId], references: [id], onDelete: Cascade)
   assigneeJobRole RestaurantJobRole?        @relation(fields: [assigneeJobRoleId], references: [id], onDelete: Cascade)
   occurrences     RestaurantSopOccurrence[]
+  supersedes      RestaurantSopAssignment?  @relation("SopAssignmentSuccessors", fields: [supersedesAssignmentId], references: [id], onDelete: Restrict)
+  supersededBy    RestaurantSopAssignment?  @relation("SopAssignmentSuccessors")
 
   @@index([organizationId])
   @@index([branchId])
@@ -7252,14 +7259,16 @@ model RestaurantSopAssignment {
   @@index([active])
   @@index([assigneeStaffProfileId])
   @@index([assigneeJobRoleId])
+  @@index([supersededAt])
   @@map("restaurant_sop_assignments")
 }
 
 /// M7/§11.5: one dated instance of an assignment, pinning the template VERSION it
 /// was generated against (immutable history). `businessDate` is the branch-local
 /// business day (business-date.ts); `dueAt`/`windowEndsAt` are the derived UTC
-/// instants. `status` is exactly one of the eight §11.5 states. One occurrence
-/// per (assignment, businessDate) makes generation idempotent.
+/// instants. `status` is exactly one of the eight §11.5 states. A unique
+/// (assignment, dueAt) slot makes generation idempotent while allowing
+/// INTERVAL assignments to materialize multiple occurrences per business date.
 model RestaurantSopOccurrence {
   id                String                        @id @default(cuid())
   organizationId    String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -7300,7 +7309,7 @@ model RestaurantSopOccurrence {
   verifications    RestaurantSopVerification[]
   escalationEvents RestaurantSopEscalationEvent[]
 
-  @@unique([assignmentId, businessDate])
+  @@unique([assignmentId, dueAt])
   @@index([organizationId])
   @@index([assignmentId])
   @@index([templateVersionId])

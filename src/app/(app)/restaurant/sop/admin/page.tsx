@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
-import type { inferRouterOutputs } from '@trpc/server';
+import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -29,14 +29,17 @@ import { RestaurantStaffSelect } from '@/components/restaurant/restaurant-staff-
 import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
+type RouterInputs = inferRouterInputs<AppRouter>;
 type SopTemplate = RouterOutputs['restaurantSop']['listTemplates'][number];
 type SopAssignment = RouterOutputs['restaurantSop']['listAssignments'][number];
 type SopVersion = RouterOutputs['restaurantSop']['getVersion'];
 type AssignableJobRole = RouterOutputs['restaurantSop']['listAssignableJobRoles'][number];
+type SchedulePreview = RouterOutputs['restaurantSop']['previewSchedule'];
+type SchedulePreviewInput = RouterInputs['restaurantSop']['previewSchedule'];
 /** SOP-1: which of the two assignment modes the form is currently composing. */
 type AssigneeMode = 'role' | 'person';
 type UiError = { message: string; data?: { code?: string } | null };
-type Frequency = 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY';
+type Frequency = 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'INTERVAL';
 type PendingAction =
   | 'create-template'
   | 'set-template-active'
@@ -137,6 +140,12 @@ function resolveTemplateCapacity(limit: number | undefined, activeCount: number)
 }
 
 function recurrenceLabel(assignment: SopAssignment) {
+  if (assignment.frequency === 'INTERVAL') {
+    const days = assignment.daysOfWeek
+      .map((day) => dayOptions.find(([value]) => Number(value) === day)?.[1] ?? String(day))
+      .join(', ');
+    return `Every ${assignment.interval} min · ${days} · ${assignment.branch.timezone}`;
+  }
   const interval = assignment.interval === 1 ? '' : ` every ${assignment.interval}`;
   if (assignment.frequency === 'WEEKLY' && assignment.daysOfWeek.length) {
     const days = assignment.daysOfWeek
@@ -148,6 +157,29 @@ function recurrenceLabel(assignment: SopAssignment) {
     return `${assignment.frequency}${interval} · day ${assignment.monthDay}`;
   }
   return `${assignment.frequency}${interval}`;
+}
+
+function intervalMinutes(data: FormData): number {
+  const value = formNumber(data, 'interval', 1);
+  return formText(data, 'intervalUnit') === 'hours' ? value * 60 : value;
+}
+
+function schedulePreviewLine(
+  preview: SchedulePreview,
+  timeZone: string | undefined
+): string | null {
+  if (!preview.length || !timeZone) return null;
+  const firstDate = preview[0]!.businessDate;
+  const today = preview.filter((item) => item.businessDate === firstDate);
+  const times = today.slice(0, 3).map((item) =>
+    new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZone,
+    }).format(new Date(item.dueAt))
+  );
+  return `Next: ${times.join(', ')}${today.length > 3 ? ' …' : ''} (${today.length} today) · ${timeZone}`;
 }
 
 function EmptyState({ title, detail }: { title: string; detail: string }) {
@@ -209,6 +241,11 @@ export type SopAdminViewProps = {
   onRemoveStep: (stepId: string, title: string) => void;
   onReorderSteps: (versionId: string, orderedStepIds: string[]) => void;
   onCreateAssignment: (event: FormEvent<HTMLFormElement>) => void;
+  onPreviewSchedule?: (event: FormEvent<HTMLFormElement>) => void;
+  schedulePreview?: SchedulePreview;
+  previewBranchId?: string;
+  previewLoading?: boolean;
+  previewError?: string;
   onToggleAssignment: (id: string, active: boolean) => void;
 };
 
@@ -241,6 +278,11 @@ export function SopAdminView({
   onRemoveStep,
   onReorderSteps,
   onCreateAssignment,
+  onPreviewSchedule,
+  schedulePreview = [],
+  previewBranchId,
+  previewLoading = false,
+  previewError,
   onToggleAssignment,
 }: SopAdminViewProps) {
   const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
@@ -254,9 +296,14 @@ export function SopAdminView({
   // form swaps one control for the other rather than showing both and validating
   // afterwards — an invalid combination is never expressible.
   const [assigneeMode, setAssigneeMode] = useState<AssigneeMode>('role');
+  const [intervalUnit, setIntervalUnit] = useState<'minutes' | 'hours'>('minutes');
+  const previewTimezone = branchesQuery.data?.find(
+    (branch) => branch.id === previewBranchId
+  )?.timezone;
   const selectedTemplate =
     templates.find((template) => template.id === selectedTemplateId) ?? templates[0] ?? null;
   const versions = selectedTemplate?.versions ?? [];
+  const previewLine = schedulePreviewLine(schedulePreview, previewTimezone);
   const selectedVersion =
     versions.find((item) => item.id === selectedVersionId) ?? versions[0] ?? null;
   const draftVersion = versions.find((item) => item.status === 'DRAFT');
@@ -885,7 +932,14 @@ export function SopAdminView({
             }
           >
             <div className="grid gap-6 xl:grid-cols-[minmax(18rem,0.72fr)_minmax(0,1.28fr)]">
-              <form onSubmit={onCreateAssignment}>
+              <form
+                onSubmit={(event) => {
+                  const submitter = (event.nativeEvent as SubmitEvent)
+                    .submitter as HTMLButtonElement;
+                  if (submitter?.value === 'preview' && onPreviewSchedule) onPreviewSchedule(event);
+                  else onCreateAssignment(event);
+                }}
+              >
                 <fieldset disabled={!selectedTemplate || anyPending}>
                   <legend className="font-display text-base font-semibold text-text-strong">
                     Create assignment
@@ -969,23 +1023,47 @@ export function SopAdminView({
                         <option value="DAILY">Daily</option>
                         <option value="WEEKLY">Weekly</option>
                         <option value="MONTHLY">Monthly</option>
+                        <option value="INTERVAL">Every N minutes</option>
                       </select>
                     </label>
                     <label className="space-y-1.5">
                       <span className={labelClass}>Every</span>
                       <Input
+                        key={`${frequency}-${intervalUnit}`}
                         name="interval"
                         type="number"
-                        min={1}
-                        max={365}
-                        defaultValue={1}
+                        min={frequency === 'INTERVAL' ? (intervalUnit === 'hours' ? 1 : 15) : 1}
+                        max={
+                          frequency === 'INTERVAL' ? (intervalUnit === 'hours' ? 24 : 1440) : 365
+                        }
+                        defaultValue={
+                          frequency === 'INTERVAL' ? (intervalUnit === 'hours' ? 1 : 15) : 1
+                        }
                         required
                         className="h-11"
                       />
                     </label>
-                    {frequency === 'WEEKLY' ? (
+                    {frequency === 'INTERVAL' ? (
+                      <label className="space-y-1.5">
+                        <span className={labelClass}>Interval unit</span>
+                        <select
+                          name="intervalUnit"
+                          className={selectClass}
+                          value={intervalUnit}
+                          onChange={(event) =>
+                            setIntervalUnit(event.target.value as 'minutes' | 'hours')
+                          }
+                        >
+                          <option value="minutes">Minutes</option>
+                          <option value="hours">Hours</option>
+                        </select>
+                      </label>
+                    ) : null}
+                    {frequency === 'WEEKLY' || frequency === 'INTERVAL' ? (
                       <fieldset className="sm:col-span-2 xl:col-span-1 2xl:col-span-2">
-                        <legend className={labelClass}>Days of week</legend>
+                        <legend className={labelClass}>
+                          Days of week{frequency === 'INTERVAL' ? ' · required' : ''}
+                        </legend>
                         <div className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-7 xl:grid-cols-4 2xl:grid-cols-7">
                           {dayOptions.map(([value, label]) => (
                             <label
@@ -1027,7 +1105,9 @@ export function SopAdminView({
                       <Input name="endDate" type="date" className="h-11" />
                     </label>
                     <label className="space-y-1.5">
-                      <span className={labelClass}>Due time</span>
+                      <span className={labelClass}>
+                        {frequency === 'INTERVAL' ? 'Start time' : 'Due time'}
+                      </span>
                       <Input
                         name="dueTime"
                         type="time"
@@ -1036,6 +1116,18 @@ export function SopAdminView({
                         className="h-11"
                       />
                     </label>
+                    {frequency === 'INTERVAL' ? (
+                      <label className="space-y-1.5">
+                        <span className={labelClass}>End time</span>
+                        <Input
+                          name="intervalEndTime"
+                          type="time"
+                          defaultValue="17:00"
+                          required
+                          className="h-11"
+                        />
+                      </label>
+                    ) : null}
                     <label className="space-y-1.5">
                       <span className={labelClass}>Due window · min</span>
                       <Input
@@ -1061,9 +1153,33 @@ export function SopAdminView({
                       />
                     </label>
                   </div>
-                  <Button type="submit" className="mt-4 min-h-11">
-                    {pendingAction === 'create-assignment' ? 'Creating…' : 'Create assignment'}
-                  </Button>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button type="submit" className="min-h-11">
+                      {pendingAction === 'create-assignment' ? 'Creating…' : 'Create assignment'}
+                    </Button>
+                    <Button
+                      type="submit"
+                      name="intent"
+                      value="preview"
+                      variant="outline"
+                      className="min-h-11"
+                    >
+                      {previewLoading ? 'Previewing…' : 'Preview schedule'}
+                    </Button>
+                  </div>
+                  {previewError ? (
+                    <p className="mt-3 text-sm text-destructive" role="alert">
+                      {previewError}
+                    </p>
+                  ) : null}
+                  {previewLine ? (
+                    <div
+                      className="mt-3 rounded-md border border-border-subtle bg-surface-sunken p-3"
+                      role="status"
+                    >
+                      <p className="text-sm text-text-body">{previewLine}</p>
+                    </div>
+                  ) : null}
                 </fieldset>
               </form>
 
@@ -1103,7 +1219,9 @@ export function SopAdminView({
                           </TableCell>
                           <TableCell>
                             <span className="block">
-                              Due {minutesLabel(assignment.dueTimeMinutes)}
+                              {assignment.frequency === 'INTERVAL'
+                                ? `${minutesLabel(assignment.dueTimeMinutes)}–${minutesLabel(assignment.intervalEndTimeMinutes!)}`
+                                : `Due ${minutesLabel(assignment.dueTimeMinutes)}`}
                             </span>
                             <span className="block text-xs text-text-faint">
                               {assignment.windowMinutes}m window · {assignment.graceMinutes}m grace
@@ -1184,6 +1302,7 @@ export default function RestaurantSopAdminPage() {
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [mutationError, setMutationError] = useState('');
+  const [previewInput, setPreviewInput] = useState<SchedulePreviewInput | null>(null);
 
   const templatesQuery = trpc.restaurantSop.listTemplates.useQuery(
     { includeInactive: true },
@@ -1205,6 +1324,16 @@ export default function RestaurantSopAdminPage() {
   const versionQuery = trpc.restaurantSop.getVersion.useQuery(
     { versionId: selectedVersion?.id ?? '' },
     { enabled: moduleEnabled && Boolean(selectedVersion) }
+  );
+  const previewQuery = trpc.restaurantSop.previewSchedule.useQuery(
+    previewInput ?? {
+      branchId: '',
+      from: '2000-01-01',
+      to: '2000-01-01',
+      frequency: 'DAILY',
+      startDate: '2000-01-01',
+    },
+    { enabled: Boolean(previewInput) }
   );
 
   const succeed = (message: string) => {
@@ -1392,18 +1521,48 @@ export default function RestaurantSopAdminPage() {
         templateId: selectedTemplate.id,
         assigneeTarget,
         frequency,
-        interval: formNumber(data, 'interval', 1),
+        interval:
+          frequency === 'INTERVAL' ? intervalMinutes(data) : formNumber(data, 'interval', 1),
         daysOfWeek:
-          frequency === 'WEEKLY' ? data.getAll('daysOfWeek').map((day) => Number(day)) : [],
+          frequency === 'WEEKLY' || frequency === 'INTERVAL'
+            ? data.getAll('daysOfWeek').map((day) => Number(day))
+            : [],
         monthDay: frequency === 'MONTHLY' ? formNumber(data, 'monthDay', 1) : null,
         startDate: formText(data, 'startDate'),
         endDate: formText(data, 'endDate') || null,
         dueTimeMinutes: timeToMinutes(formText(data, 'dueTime')),
+        intervalEndTimeMinutes:
+          frequency === 'INTERVAL' ? timeToMinutes(formText(data, 'intervalEndTime')) : null,
         windowMinutes: formNumber(data, 'windowMinutes', 60),
         graceMinutes: formNumber(data, 'graceMinutes', 15),
       },
       { onSuccess: () => form.reset() }
     );
+  };
+
+  const previewAssignment = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const frequency = formText(data, 'frequency') as Frequency;
+    const startDate = formText(data, 'startDate');
+    setPreviewInput({
+      branchId: formText(data, 'branchId'),
+      from: startDate,
+      to: formText(data, 'endDate') || startDate,
+      frequency,
+      interval: frequency === 'INTERVAL' ? intervalMinutes(data) : formNumber(data, 'interval', 1),
+      daysOfWeek:
+        frequency === 'WEEKLY' || frequency === 'INTERVAL'
+          ? data.getAll('daysOfWeek').map(Number)
+          : [],
+      monthDay: frequency === 'MONTHLY' ? formNumber(data, 'monthDay', 1) : null,
+      startDate,
+      endDate: formText(data, 'endDate') || null,
+      dueTimeMinutes: timeToMinutes(formText(data, 'dueTime')),
+      intervalEndTimeMinutes:
+        frequency === 'INTERVAL' ? timeToMinutes(formText(data, 'intervalEndTime')) : null,
+      windowMinutes: formNumber(data, 'windowMinutes', 60),
+    });
   };
 
   return (
@@ -1460,6 +1619,11 @@ export default function RestaurantSopAdminPage() {
         reorderSteps.mutate({ versionId, orderedStepIds })
       }
       onCreateAssignment={submitAssignment}
+      onPreviewSchedule={previewAssignment}
+      schedulePreview={previewQuery.data ?? []}
+      previewLoading={previewQuery.isFetching}
+      previewError={previewQuery.error?.message}
+      previewBranchId={previewInput?.branchId}
       onToggleAssignment={(id, active) => toggleAssignment.mutate({ id, active })}
     />
   );

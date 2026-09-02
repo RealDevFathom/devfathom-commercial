@@ -227,6 +227,28 @@ describe('publish immutability mapping', () => {
 });
 
 describe('createAssignment — recurrence validation mapping', () => {
+  it('rejects INTERVAL cadences below 15 minutes or without selected weekdays', async () => {
+    const base = {
+      branchId: 'b1',
+      templateId: 't1',
+      frequency: 'INTERVAL' as const,
+      startDate: '2026-05-10',
+      dueTimeMinutes: 600,
+      intervalEndTimeMinutes: 1380,
+      assigneeTarget: { type: 'role' as const, jobRoleId: 'jr1' },
+    };
+    await expect(
+      caller().createAssignment({ ...base, interval: 14, daysOfWeek: [0] })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(
+      caller().createAssignment({ ...base, interval: 60, daysOfWeek: [] })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+  });
+
   it('maps an end-before-start rule to BAD_REQUEST', async () => {
     await expect(
       caller().createAssignment({
@@ -259,7 +281,77 @@ describe('createAssignment — recurrence validation mapping', () => {
   });
 });
 
+describe('updateAssignment — effective-dated successor', () => {
+  it('appends a linked successor and does not rewrite occurrence or evidence rows', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue({
+      id: 'assignment_1',
+      branchId: 'b1',
+      templateId: 't1',
+      frequency: 'DAILY',
+      interval: 1,
+      daysOfWeek: [],
+      monthDay: null,
+      startDate: new Date('2026-05-01T00:00:00.000Z'),
+      endDate: null,
+      dueTimeMinutes: 600,
+      intervalEndTimeMinutes: null,
+      windowMinutes: 60,
+      graceMinutes: 15,
+      active: true,
+      assigneeTargetType: 'ROLE',
+      assigneeStaffProfileId: null,
+      assigneeJobRoleId: 'jr1',
+    });
+
+    const successor = await caller().updateAssignment({
+      id: 'assignment_1',
+      effectiveDate: '2026-06-01',
+      frequency: 'INTERVAL',
+      interval: 60,
+      daysOfWeek: [1, 3, 5],
+      dueTimeMinutes: 600,
+      intervalEndTimeMinutes: 1380,
+    });
+
+    expect(successor).toMatchObject({ supersedesAssignmentId: 'assignment_1' });
+    expect(db.restaurantSopAssignment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          startDate: new Date('2026-06-01T00:00:00.000Z'),
+          supersedesAssignmentId: 'assignment_1',
+        }),
+      })
+    );
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: { active: false, supersededAt: expect.any(Date) },
+    });
+    expect(db.restaurantSopOccurrence.findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('previewSchedule — DST-correct, no persistence', () => {
+  it('previews every interval slot in the branch timezone', async () => {
+    db.restaurantBranch.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });
+    const preview = await caller().previewSchedule({
+      branchId: 'b1',
+      from: '2026-03-08',
+      to: '2026-03-08',
+      frequency: 'INTERVAL',
+      interval: 30,
+      daysOfWeek: [0],
+      startDate: '2026-03-08',
+      endDate: '2026-03-08',
+      dueTimeMinutes: 9 * 60,
+      intervalEndTimeMinutes: 10 * 60,
+    });
+    expect(preview?.map((item) => item.dueAt.toISOString())).toEqual([
+      '2026-03-08T04:00:00.000Z',
+      '2026-03-08T04:30:00.000Z',
+      '2026-03-08T05:00:00.000Z',
+    ]);
+  });
+
   it('returns the next-valid instant across a NY spring-forward gap', async () => {
     db.restaurantBranch.findUnique.mockResolvedValue({ timezone: 'America/New_York' });
     const preview = await caller().previewSchedule({

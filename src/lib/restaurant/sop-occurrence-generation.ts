@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -21,7 +22,7 @@ import { occurrenceOwnerColumns } from '@/lib/restaurant/sop-assignment';
  * Two properties matter:
  *
  *  - WINDOW-IDEMPOTENT. Re-running over the same window creates ZERO duplicates.
- *    The occurrence table's `unique(assignmentId, businessDate)` is the guarantee;
+ *    The occurrence table's `unique(assignmentId, dueAt)` is the guarantee;
  *    this handler additionally pre-filters already-materialised business dates so
  *    the steady state does no write work, and swallows the unique-violation a
  *    concurrent generator would otherwise race into (at-least-once execution, D13).
@@ -59,6 +60,11 @@ export type GenerateResult = {
   created: number;
   skipped: number;
 };
+
+/** Stable across retries and workers; the database unique key remains the final guard. */
+export function occurrenceId(assignmentId: string, dueAt: Date): string {
+  return `sopocc_${createHash('sha256').update(`${assignmentId}\0${dueAt.toISOString()}`).digest('hex')}`;
+}
 
 const DAY_MS = 86_400_000;
 
@@ -136,11 +142,11 @@ export async function generateDueSopOccurrences(
           lte: businessDateToUtcDate(windowEndISO),
         },
       },
-      select: { businessDate: true },
+      select: { dueAt: true },
     });
-    const existingDates = new Set(existing.map((row) => dateColumnToISO(row.businessDate)));
+    const existingDueTimes = new Set(existing.map((row) => row.dueAt.getTime()));
 
-    const missing = occurrences.filter((occ) => !existingDates.has(occ.businessDate));
+    const missing = occurrences.filter((occ) => !existingDueTimes.has(occ.dueAt.getTime()));
     if (missing.length === 0) continue;
 
     // SOP-1: freeze the owner path onto each occurrence, exactly as the template
@@ -161,6 +167,7 @@ export async function generateDueSopOccurrences(
         await runOccurrenceTransaction(db, (tx) =>
           tx.restaurantSopOccurrence.create({
             data: {
+              id: occurrenceId(assignment.id, occ.dueAt),
               assignmentId: assignment.id,
               templateVersionId: version.id,
               branchId: assignment.branchId,
@@ -178,7 +185,7 @@ export async function generateDueSopOccurrences(
         );
         result.created += 1;
       } catch (error) {
-        // A concurrent generator won the unique(assignmentId, businessDate) race:
+        // A concurrent generator won the unique(assignmentId, dueAt) race:
         // the occurrence already exists, which is exactly the idempotent outcome.
         if (isUniqueViolation(error)) {
           result.skipped += 1;

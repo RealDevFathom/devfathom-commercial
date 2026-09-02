@@ -22,7 +22,7 @@
  */
 
 /** Mirrors the `RestaurantSopRecurrenceFrequency` Prisma enum. */
-export type RecurrenceFrequency = 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY';
+export type RecurrenceFrequency = 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'INTERVAL';
 
 /** How the branch-local due time landed relative to a DST transition. */
 export type DstAdjustment = 'none' | 'spring-forward' | 'fall-back';
@@ -46,6 +46,8 @@ export type RecurrenceRule = {
   endDate: string | null;
   /** Branch-local wall-clock due time, minutes-of-day 0..1439. */
   dueTimeMinutes: number;
+  /** INTERVAL-only inclusive branch-local end time. */
+  intervalEndTimeMinutes?: number | null;
   /** Completion-window length in minutes (>= 0); `windowEndsAt = dueAt + this`. */
   windowMinutes: number;
 };
@@ -265,6 +267,27 @@ export function assertValidRule(rule: RecurrenceRule): void {
   if (!Number.isInteger(rule.windowMinutes) || rule.windowMinutes < 0) {
     throw new RecurrenceError(`windowMinutes must be an integer >= 0 (got ${rule.windowMinutes}).`);
   }
+  if (rule.frequency === 'INTERVAL') {
+    if (rule.interval < 15) {
+      throw new RecurrenceError('INTERVAL interval must be at least 15 minutes.');
+    }
+    if (rule.daysOfWeek.length === 0) {
+      throw new RecurrenceError('INTERVAL requires at least one selected weekday.');
+    }
+    if (
+      rule.intervalEndTimeMinutes == null ||
+      !Number.isInteger(rule.intervalEndTimeMinutes) ||
+      rule.intervalEndTimeMinutes < 0 ||
+      rule.intervalEndTimeMinutes > 1439
+    ) {
+      throw new RecurrenceError('INTERVAL requires intervalEndTimeMinutes in 0..1439.');
+    }
+    if (rule.intervalEndTimeMinutes <= rule.dueTimeMinutes) {
+      throw new RecurrenceError('INTERVAL end time must be later than its start time.');
+    }
+  } else if (rule.intervalEndTimeMinutes != null) {
+    throw new RecurrenceError('intervalEndTimeMinutes is only valid for INTERVAL recurrence.');
+  }
   for (const dow of rule.daysOfWeek) {
     if (!Number.isInteger(dow) || dow < 0 || dow > 6) {
       throw new RecurrenceError(`daysOfWeek entries must be integers in 0..6 (got ${dow}).`);
@@ -305,6 +328,9 @@ export function occursOn(rule: RecurrenceRule, dateISO: string): boolean {
 
     case 'DAILY':
       return (targetIndex - startIndex) % rule.interval === 0;
+
+    case 'INTERVAL':
+      return rule.daysOfWeek.includes(weekdayOf(target));
 
     case 'WEEKLY': {
       const selectedDays = rule.daysOfWeek.length > 0 ? rule.daysOfWeek : [weekdayOf(start)];
@@ -370,7 +396,19 @@ export function enumerateOccurrences(
   for (let index = lo; index <= hi; index += 1) {
     const dateISO = isoFromDayIndex(index);
     if (occursOn(rule, dateISO)) {
-      occurrences.push(computeOccurrence(rule, dateISO, timeZone));
+      if (rule.frequency === 'INTERVAL') {
+        for (
+          let minute = rule.dueTimeMinutes;
+          minute <= rule.intervalEndTimeMinutes!;
+          minute += rule.interval
+        ) {
+          occurrences.push(
+            computeOccurrence({ ...rule, dueTimeMinutes: minute }, dateISO, timeZone)
+          );
+        }
+      } else {
+        occurrences.push(computeOccurrence(rule, dateISO, timeZone));
+      }
     }
     if (rule.frequency === 'ONCE') break; // a ONCE rule fires only on startDate
   }
