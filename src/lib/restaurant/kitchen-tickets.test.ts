@@ -108,6 +108,7 @@ describe('generateKitchenTickets', () => {
           ticketId: 'ticket_7',
           stationId: 'bar',
           ticketNumber: 7,
+          createdAt: new Date('2026-08-29T08:00:00.000Z'),
           matchedBy: 'product',
           items: [{ orderItemId: 'lime', quantity: 2 }],
         },

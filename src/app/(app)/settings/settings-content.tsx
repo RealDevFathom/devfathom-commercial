@@ -272,7 +272,7 @@ export function PrintRoutingSection() {
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error || 'Print routing could not be saved.');
-      toast.success('Simulation routing saved for this process.');
+      toast.success('Print routes saved.');
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Print routing could not be saved.');
@@ -288,11 +288,11 @@ export function PrintRoutingSection() {
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-warning/10">
             <Printer className="h-3.5 w-3.5 text-warning" />
           </span>
-          Print bridge simulation
+          Printing
         </CardTitle>
         <p className="mt-1 text-xs text-muted-foreground">
-          Configure vendor-neutral ESC/POS routes for testing. Settings are process-local and do not
-          connect to physical printers.
+          A kitchen printer (KOT) prints paper tickets; a kitchen display (KDS) shows the same
+          station queue on screen, and each station may use either, both, or neither.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -332,7 +332,7 @@ export function PrintRoutingSection() {
               const route = routeFor(type);
               const label =
                 type === 'KITCHEN_TICKET'
-                  ? 'Kitchen tickets'
+                  ? 'Kitchen printer (KOT)'
                   : type === 'BAR_TICKET'
                     ? 'Bar tickets'
                     : 'Receipts';
@@ -364,7 +364,7 @@ export function PrintRoutingSection() {
                         aria-label={`${label} printer ID`}
                         value={route.printerId}
                         onChange={(event) => updateRoute(type, { printerId: event.target.value })}
-                        placeholder="sim-printer-1"
+                        placeholder="tcp://192.168.1.50:9100"
                         className="mt-1 min-h-11"
                       />
                     </label>
@@ -382,7 +382,7 @@ export function PrintRoutingSection() {
             })}
             <div className="flex justify-end">
               <Button onClick={() => void save()} disabled={saving || !selected}>
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save simulation routes
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save print routes
               </Button>
             </div>
           </>

@@ -115,6 +115,8 @@ export const fireBody = z
   .object({ orderId: ID, course: z.number().int().min(1).optional() })
   .strict();
 
+export const reprintKotBody = z.object({ orderId: ID, ticketId: ID }).strict();
+
 export const markServedBody = z.object({ orderId: ID, itemId: ID }).strict();
 
 export const remakeBody = z.object({ orderId: ID, itemId: ID, reason: z.string().min(1) }).strict();
@@ -357,8 +359,9 @@ export function orderErrorResponse(err: unknown): NextResponse | null {
       err.reason === 'ITEM_STATE' ||
       err.reason === 'NOT_CLOSABLE' ||
       err.reason === 'NOTHING_TO_SEND' ||
-      err.reason === 'NOTHING_TO_FIRE';
-    const notFound = err.reason.endsWith('_NOT_FOUND');
+      err.reason === 'NOTHING_TO_FIRE' ||
+      err.reason === 'PRINT_ROUTE_NOT_FOUND';
+    const notFound = err.reason.endsWith('_NOT_FOUND') && err.reason !== 'PRINT_ROUTE_NOT_FOUND';
     const status = notFound ? 404 : conflict ? 409 : 400;
     return json({ error: err.message }, status);
   }

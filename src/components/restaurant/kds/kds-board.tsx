@@ -351,6 +351,41 @@ export function KdsBoard() {
     }
   }
 
+  async function reprint(ticket: QueueTicket) {
+    if (!runtime || pendingMutation.current) return;
+    const intent = `reprint:${ticket.ticketId}`;
+    pendingMutation.current = true;
+    setPending(intent);
+    setNotice(null);
+    try {
+      await request('/api/restaurant/orders/reprint-kot', {
+        method: 'POST',
+        headers: {
+          'X-Terminal-Session': runtime.sessionToken,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': keyFor(intent),
+        },
+        body: JSON.stringify({ orderId: ticket.orderId, ticketId: ticket.ticketId }),
+      });
+      idempotencyKeys.current.delete(intent);
+      setNotice({ tone: 'success', message: `KOT ${ticket.ticketNumber} reprint queued.` });
+    } catch (error) {
+      if (error instanceof RequestError && error.status < 500)
+        idempotencyKeys.current.delete(intent);
+      if (error instanceof RequestError && (error.status === 401 || error.status === 403)) {
+        disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
+      } else {
+        setNotice({
+          tone: error instanceof RequestError ? 'danger' : 'warning',
+          message: error instanceof Error ? error.message : 'KOT reprint failed. Try again.',
+        });
+      }
+    } finally {
+      pendingMutation.current = false;
+      setPending(null);
+    }
+  }
+
   const busy = loading || pending !== null;
   const shellStatus = !runtime
     ? 'disconnected'
@@ -584,6 +619,7 @@ export function KdsBoard() {
                             ticket={ticket}
                             pending={pending !== null}
                             onAction={mutate}
+                            onReprint={reprint}
                           />
                         ))}
                       </div>
@@ -609,10 +645,12 @@ function TicketCard({
   ticket,
   pending,
   onAction,
+  onReprint,
 }: {
   ticket: QueueTicket;
   pending: boolean;
   onAction: (item: QueueItem) => void;
+  onReprint: (ticket: QueueTicket) => void;
 }) {
   const createdAt = new Date(ticket.createdAt);
   return (
@@ -624,11 +662,21 @@ function TicketCard({
           </h4>
           <p className="font-mono text-xs text-text-muted">Order #{ticket.orderNumber}</p>
         </div>
-        <div className="shrink-0 text-right font-mono text-xs tabular-nums text-text-muted">
+        <div className="flex shrink-0 flex-col items-end gap-2 text-right font-mono text-xs tabular-nums text-text-muted">
           <time dateTime={ticket.createdAt} title={createdAt.toLocaleString()}>
             {formatAge(ticket.createdAt)}
           </time>
           <p>{TIME_FORMATTER.format(createdAt)}</p>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11"
+            disabled={pending}
+            onClick={() => onReprint(ticket)}
+            aria-label={`Reprint KOT ${ticket.ticketNumber} for order ${ticket.orderNumber}`}
+          >
+            Reprint KOT
+          </Button>
         </div>
       </div>
       <div className="divide-y divide-border-subtle">

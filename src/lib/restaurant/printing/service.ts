@@ -1,23 +1,42 @@
-import type { PrintBridgeAdapter, PrintJob, PrintResult, PrintRoutingConfig } from './contract';
+import type {
+  ClaimedPrintJob,
+  PrintBridgeAdapter,
+  PrintEnqueueResult,
+  PrintJob,
+  PrintResult,
+  PrintRoutingConfig,
+} from './contract';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { PrintDocumentSchema } from './contract';
 import { renderEscPos } from './esc-pos';
 import { resolvePrintRoute } from './routing';
+
+const CLAIM_LEASE_MS = 30_000;
 
 type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob'>;
 
 export class PrintBridgeService {
-  constructor(
-    private readonly adapter: PrintBridgeAdapter,
-    private readonly db: PrintDb
-  ) {}
+  private readonly adapter: PrintBridgeAdapter | null;
+  private readonly db: PrintDb;
 
-  async submit(
+  constructor(db: PrintDb);
+  constructor(adapter: PrintBridgeAdapter, db: PrintDb);
+  constructor(adapterOrDb: PrintBridgeAdapter | PrintDb, db?: PrintDb) {
+    this.adapter = db ? (adapterOrDb as PrintBridgeAdapter) : null;
+    this.db = db ?? (adapterOrDb as PrintDb);
+  }
+
+  async enqueue(
     organizationId: string,
     config: PrintRoutingConfig,
     job: PrintJob
-  ): Promise<PrintResult> {
-    if (job.branchId !== config.branchId)
+  ): Promise<PrintEnqueueResult> {
+    if (job.branchId !== config.branchId) {
       return { status: 'NO_PRINTER', retryable: true, replayed: false };
+    }
+    const route = resolvePrintRoute(config.routes, job);
+    if (!route) return { status: 'NO_PRINTER', retryable: true, replayed: false };
+
     await this.db.$executeRawUnsafe(
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       `${organizationId}:${job.branchId}:${job.idempotencyKey}`
@@ -38,17 +57,45 @@ export class PrintBridgeService {
         replayed: true,
       };
     }
-    if (!prior) {
-      await this.db.restaurantPrintJob.create({
-        data: {
-          organizationId,
-          branchId: job.branchId,
-          stationId: job.stationId,
-          idempotencyKey: job.idempotencyKey,
-          documentType: job.document.type,
-          document: job.document,
-        },
-      });
+    if (prior) {
+      return { status: 'QUEUED', printerId: prior.printerId ?? route.printerId, replayed: true };
+    }
+    await this.db.restaurantPrintJob.create({
+      data: {
+        organizationId,
+        branchId: job.branchId,
+        stationId: job.stationId,
+        idempotencyKey: job.idempotencyKey,
+        documentType: job.document.type,
+        document: job.document,
+        printerId: route.printerId,
+      },
+    });
+    return { status: 'QUEUED', printerId: route.printerId, replayed: false };
+  }
+
+  async submit(
+    organizationId: string,
+    config: PrintRoutingConfig,
+    job: PrintJob
+  ): Promise<PrintResult> {
+    if (!this.adapter) throw new Error('A print adapter is required for synchronous delivery.');
+    const key = {
+      organizationId_branchId_idempotencyKey: {
+        organizationId,
+        branchId: job.branchId,
+        idempotencyKey: job.idempotencyKey,
+      },
+    };
+    const queued = await this.enqueue(organizationId, config, job);
+    if (queued.status === 'NO_PRINTER') return queued;
+    if (queued.status === 'PRINTED') {
+      return {
+        status: 'PRINTED',
+        printerId: queued.printerId,
+        bytes: queued.bytes,
+        replayed: true,
+      };
     }
     return this.deliver(config, job, key);
   }
@@ -73,7 +120,7 @@ export class PrintBridgeService {
       return { status: 'NO_PRINTER', retryable: true, replayed: false };
     }
     const bytes = renderEscPos(job.document);
-    const delivery = await this.adapter.send(route.printerId, bytes);
+    const delivery = await this.adapter!.send(route.printerId, bytes);
     if (delivery === 'OFFLINE') {
       await this.db.restaurantPrintJob.update({
         where: key,
@@ -106,4 +153,71 @@ export class PrintBridgeService {
     });
     return result;
   }
+}
+
+/** Atomically lease one queued job for a branch-bound bridge device. */
+export async function claimNextPrintJob(
+  db: ScopedDb,
+  branchId: string,
+  now = new Date()
+): Promise<ClaimedPrintJob | null> {
+  const leaseBefore = new Date(now.getTime() - CLAIM_LEASE_MS);
+  const candidates = await db.restaurantPrintJob.findMany({
+    where: {
+      branchId,
+      printerId: { not: null },
+      status: { in: ['PENDING', 'OFFLINE'] },
+      OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lte: leaseBefore } }],
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: 10,
+  });
+  for (const candidate of candidates) {
+    const claimed = await db.restaurantPrintJob.updateMany({
+      where: {
+        id: candidate.id,
+        branchId,
+        status: { in: ['PENDING', 'OFFLINE'] },
+        OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lte: leaseBefore } }],
+      },
+      data: { lastAttemptAt: now, attemptCount: { increment: 1 } },
+    });
+    if (claimed.count !== 1 || !candidate.printerId) continue;
+    const document = PrintDocumentSchema.parse(candidate.document);
+    return {
+      id: candidate.id,
+      printerId: candidate.printerId,
+      documentType: candidate.documentType,
+      bytes: Buffer.from(renderEscPos(document)).toString('base64'),
+    };
+  }
+  return null;
+}
+
+/** Acknowledge a claimed job without allowing a bridge to cross its bound branch. */
+export async function acknowledgePrintJob(
+  db: ScopedDb,
+  input: { branchId: string; jobId: string; status: 'PRINTED' | 'OFFLINE'; now?: Date }
+): Promise<{ acknowledged: boolean; replayed: boolean }> {
+  const current = await db.restaurantPrintJob.findFirst({
+    where: { id: input.jobId, branchId: input.branchId },
+    select: { status: true, document: true },
+  });
+  if (!current) return { acknowledged: false, replayed: false };
+  if (current.status === 'PRINTED') return { acknowledged: true, replayed: true };
+  const now = input.now ?? new Date();
+  const document = PrintDocumentSchema.parse(current.document);
+  await db.restaurantPrintJob.update({
+    where: { id: input.jobId },
+    data:
+      input.status === 'PRINTED'
+        ? {
+            status: 'PRINTED',
+            byteCount: renderEscPos(document).length,
+            printedAt: now,
+            lastAttemptAt: now,
+          }
+        : { status: 'OFFLINE', lastAttemptAt: now },
+  });
+  return { acknowledged: true, replayed: false };
 }
