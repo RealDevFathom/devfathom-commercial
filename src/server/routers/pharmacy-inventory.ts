@@ -12,6 +12,22 @@ import { z } from 'zod';
 
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
+  acknowledgeRecall,
+  allocateTransfer,
+  approveCount,
+  approveTransfer,
+  closeRecall,
+  createCount,
+  createRecall,
+  dispatchTransfer,
+  nearExpiryBoard,
+  quarantinePart,
+  recallTrace,
+  receiveTransferLine,
+  reserveSupplierClaim,
+  writeOff,
+} from '@/lib/pharmacy/inventory-operations';
+import {
   allocateForSale,
   breakPack,
   expiryInstant,
@@ -314,6 +330,271 @@ export const pharmacyInventoryRouter = router({
         domainError(error);
       }
     }),
+
+  createCount: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          varianceThreshold: z.number().int().nonnegative(),
+          readings: z
+            .array(
+              z
+                .object({
+                  inventoryLotId: z.string().min(1),
+                  stockLocationId: z.string().min(1),
+                  countedSealedPacks: z.number().int().nonnegative(),
+                  countedLooseUnits: z.number().int().nonnegative(),
+                })
+                .strict()
+            )
+            .min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          createCount(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  approveCount: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          countId: z.string().min(1),
+          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          approveCount(
+            txDb(tx),
+            scopeFor(ctx, input.branchId),
+            input.countId,
+            input.idempotencyKeyPrefix
+          )
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  writeOff: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1),
+          stockLocationId: z.string().min(1),
+          units: z.number().int().positive(),
+          witnessId: z.string().trim().min(1),
+          reason: z.string().trim().min(1).max(500),
+          evidenceRef: z.string().trim().min(1).max(500),
+          idempotencyKey: z.string().trim().min(1).max(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          writeOff(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  quarantinePart: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1),
+          stockLocationId: z.string().min(1),
+          units: z.number().int().positive(),
+          damaged: z.boolean().optional(),
+          reason: z.string().trim().min(1).max(500),
+          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          quarantinePart(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  allocateTransfer: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          toBranchId: branchId,
+          lines: z
+            .array(
+              z
+                .object({
+                  sourceLotId: z.string().min(1),
+                  sourceStockLocationId: z.string().min(1),
+                  destinationStockLocationId: z.string().min(1),
+                  quantityUnits: z.number().int().positive(),
+                })
+                .strict()
+            )
+            .min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await allocateTransfer(ctx.db, scopeFor(ctx, input.branchId), input);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  approveTransfer: protectedProcedure
+    .input(z.object({ branchId, transferId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await approveTransfer(ctx.db, scopeFor(ctx, input.branchId), input.transferId);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  dispatchTransfer: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          transferId: z.string().min(1),
+          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          dispatchTransfer(
+            txDb(tx),
+            scopeFor(ctx, input.branchId),
+            input.transferId,
+            input.idempotencyKeyPrefix
+          )
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  receiveTransferLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          transferId: z.string().min(1),
+          lineId: z.string().min(1),
+          receivedUnits: z.number().int().positive(),
+          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          receiveTransferLine(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  createRecall: protectedProcedure
+    .input(
+      z
+        .object({
+          batchId: z.string().min(1).optional(),
+          medicineId: z.string().min(1).optional(),
+          reference: z.string().trim().min(1).max(200),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) => createRecall(txDb(tx), actorFor(ctx), input));
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  recallTrace: auditedProtectedProcedure
+    .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await recallTrace(ctx.db, actorFor(ctx).organizationId, input.recallNoticeId);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  acknowledgeRecall: protectedProcedure
+    .input(z.object({ branchId, recallNoticeId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await acknowledgeRecall(ctx.db, scopeFor(ctx, input.branchId), input.recallNoticeId);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  closeRecall: protectedProcedure
+    .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          closeRecall(txDb(tx), actorFor(ctx), input.recallNoticeId)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  reserveSupplierClaim: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1),
+          reservedUnits: z.number().int().positive(),
+          returnBy: z.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await reserveSupplierClaim(ctx.db, scopeFor(ctx, input.branchId), input);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  nearExpiryBoard: auditedProtectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => nearExpiryBoard(ctx.db, scopeFor(ctx, input.branchId), new Date())),
 
   onHand: auditedProtectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())

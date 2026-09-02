@@ -54,6 +54,7 @@ const LATER = new Date('2027-10-01T00:00:00.000Z');
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   ledger: typeof import('./stock-ledger');
+  operations: typeof import('./inventory-operations');
 };
 let deps: Deps;
 
@@ -204,12 +205,13 @@ async function expectRejection(
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, ledger, roleGuard] = await Promise.all([
+  const [scopedDb, ledger, operations, roleGuard] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./stock-ledger'),
+    import('./inventory-operations'),
     import('@/lib/testing/rls-role-guard'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, ledger };
+  deps = { withTenantDb: scopedDb.withTenantDb, ledger, operations };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
 }, 120_000);
 
@@ -348,6 +350,322 @@ describeIfDatabase('PH-INV ledger — INV-01 append-only stock ledger', () => {
       })
     );
     expect(message).toContain('reconcile');
+  });
+});
+
+describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
+  it('requires a second actor above the count variance threshold and posts the adjustment once approved', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'count-coauth');
+    const count = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'count-coauth',
+      });
+      return deps.operations.createCount(db, scopeOf(fixture), {
+        varianceThreshold: 2,
+        readings: [
+          {
+            inventoryLotId: lot.id,
+            stockLocationId: fixture.locationId,
+            countedSealedPacks: 3,
+            countedLooseUnits: 5,
+          },
+        ],
+      });
+    });
+    expect(count.status).toBe('AWAITING_COAUTH');
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.approveCount(db, scopeOf(fixture), count.id, tag('same-actor'))
+      )
+    ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+    const result = await inOrg(ORG_A, async (db) => {
+      const approved = await deps.operations.approveCount(
+        db,
+        { ...scopeOf(fixture), actorId: 'user_second_pharmacist' },
+        count.id,
+        tag('coauth')
+      );
+      const line = count.lines[0]!;
+      const balance = await db.pharmacyStockBalance.findFirst({
+        where: { inventoryLotId: line.inventoryLotId, disposition: 'AVAILABLE' },
+      });
+      return { approved, balance };
+    });
+    expect(result.approved.status).toBe('APPROVED');
+    expect(result.balance?.onHandUnits).toBe(35);
+  });
+
+  it('quarantines only part of a lot and keeps the remainder available', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'partial-quarantine');
+    const balances = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'partial-quarantine',
+      });
+      await deps.operations.quarantinePart(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        reason: 'Damaged carton inspection',
+        idempotencyKeyPrefix: tag('partial-quarantine'),
+      });
+      return db.pharmacyStockBalance.findMany({
+        where: { inventoryLotId: lot.id },
+        orderBy: { disposition: 'asc' },
+      });
+    });
+    expect(balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 30 }),
+        expect.objectContaining({ disposition: 'QUARANTINE', onHandUnits: 10 }),
+      ])
+    );
+  });
+
+  it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
+    const destinationBranch = 'branch_transfer_destination';
+    const setup = await inOrg(ORG_A, async (db) => {
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: destinationBranch,
+          code: `DEST-${tag('transfer')}`,
+          name: 'Destination branch',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'transfer-workflow',
+      });
+      const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+        toBranchId: destinationBranch,
+        lines: [
+          {
+            sourceLotId: lot.id,
+            sourceStockLocationId: fixture.locationId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: 30,
+          },
+        ],
+      });
+      await deps.operations.approveTransfer(
+        db,
+        { ...scopeOf(fixture), actorId: 'transfer_approver' },
+        transfer.id
+      );
+      await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
+      return { transferId: transfer.id, lineId: transfer.lines[0]!.id, lotId: lot.id };
+    });
+    const dispatched = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findMany({ where: { inventoryLotId: setup.lotId } })
+    );
+    expect(dispatched).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 10 }),
+        expect.objectContaining({ disposition: 'IN_TRANSIT', onHandUnits: 30 }),
+      ])
+    );
+    const received = await inOrg(ORG_A, (db) =>
+      deps.operations.receiveTransferLine(
+        db,
+        { organizationId: ORG_A, branchId: destinationBranch, actorId: 'receiver' },
+        {
+          transferId: setup.transferId,
+          lineId: setup.lineId,
+          receivedUnits: 20,
+          idempotencyKeyPrefix: tag('receive'),
+        }
+      )
+    );
+    expect(received.status).toBe('EXCEPTION');
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.receiveTransferLine(
+          db,
+          { organizationId: ORG_A, branchId: 'wrong_destination', actorId: 'receiver' },
+          {
+            transferId: setup.transferId,
+            lineId: setup.lineId,
+            receivedUnits: 10,
+            idempotencyKeyPrefix: tag('wrong-branch'),
+          }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
+  });
+
+  it('serializes competing dispatches so the same units cannot leave twice', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-race');
+    const ids = await inOrg(ORG_A, async (db) => {
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: 'branch_race_destination',
+          code: `RACE-${tag('destination')}`,
+          name: 'Race destination',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'transfer-race',
+      });
+      const make = async (label: string) => {
+        const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+          toBranchId: destination.branchId,
+          lines: [
+            {
+              sourceLotId: lot.id,
+              sourceStockLocationId: fixture.locationId,
+              destinationStockLocationId: destination.id,
+              quantityUnits: 30,
+            },
+          ],
+        });
+        await deps.operations.approveTransfer(
+          db,
+          { ...scopeOf(fixture), actorId: `approver_${label}` },
+          transfer.id
+        );
+        return transfer.id;
+      };
+      return { lotId: lot.id, transfers: [await make('a'), await make('b')] };
+    });
+    const results = await Promise.allSettled(
+      ids.transfers.map((transferId, index) =>
+        inOrg(ORG_A, (db) =>
+          deps.operations.dispatchTransfer(db, scopeOf(fixture), transferId, tag(`race-${index}`))
+        )
+      )
+    );
+    expect(results.filter((one) => one.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((one) => one.status === 'rejected')).toHaveLength(1);
+    const balances = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findMany({ where: { inventoryLotId: ids.lotId } })
+    );
+    expect(balances.reduce((sum, row) => sum + row.onHandUnits, 0)).toBe(40);
+    expect(balances.find((row) => row.disposition === 'AVAILABLE')?.onHandUnits).toBe(10);
+  });
+
+  it('globally recalls a batch, traces branch holdings, acknowledges, and reconciles closure', async () => {
+    const a = await scenario(ORG_A, BRANCH_A, 'recall-a');
+    const otherBranch = 'branch_recall_b';
+    const setup = await inOrg(ORG_A, async (db) => {
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: otherBranch,
+          code: `RECALL-${tag('b')}`,
+          name: 'Recall branch B',
+          kind: 'STORE',
+        },
+      });
+      const first = await stockLot(db, a, {
+        expiresAt: LATER,
+        units: 20,
+        label: 'recall-global-a',
+      });
+      const second = await deps.ledger.receiveLot(
+        db,
+        { ...scopeOf(a), branchId: otherBranch },
+        {
+          manufacturingBatchId: first.batch.id,
+          packLevelId: a.packLevelId,
+          stockLocationId: destination.id,
+          unitsPerPack: 10,
+          supplierName: 'Other distributor',
+          supplierInvoiceRef: tag('recall-b'),
+          unitCostMinor: 100,
+          printedMrpMinor: 200,
+          receivedExpiresAt: LATER,
+          receivedExpiryPrecision: 'DAY',
+          quantityUnits: 10,
+          idempotencyKey: tag('recall-receipt'),
+          receivedAt: NOW,
+        }
+      );
+      const notice = await deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        {
+          batchId: first.batch.id,
+          reference: tag('manual-recall'),
+          reason: 'Manual regulator notice',
+        }
+      );
+      return { notice, medicineId: a.medicineId, secondLotId: second.lot.id };
+    });
+    const trace = await inOrg(ORG_A, (db) =>
+      deps.operations.recallTrace(db, ORG_A, setup.notice.id)
+    );
+    expect(new Set(trace.map((row) => row.branchId))).toEqual(new Set([BRANCH_A, otherBranch]));
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.ledger.allocateForSale(
+          db,
+          { ...scopeOf(a), branchId: otherBranch },
+          {
+            medicineId: setup.medicineId,
+            requiredUnits: 1,
+            at: NOW,
+            idempotencyKeyPrefix: tag('recalled-sale'),
+          }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
+    await inOrg(ORG_A, async (db) => {
+      await deps.operations.acknowledgeRecall(db, scopeOf(a), setup.notice.id);
+      await deps.operations.closeRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        setup.notice.id
+      );
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: setup.secondLotId },
+        include: { batch: true },
+      });
+      expect(lot.batch.state).toBe('ACTIVE');
+    });
+  });
+
+  it('excludes supplier-claim reserved units from sale allocation and reports expiry value windows', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'supplier-claim');
+    const result = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: new Date('2026-09-20T00:00:00Z'),
+        units: 20,
+        label: 'supplier-claim',
+      });
+      await deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        reservedUnits: 15,
+        returnBy: new Date('2026-09-15T00:00:00Z'),
+      });
+      const board = await deps.operations.nearExpiryBoard(db, fixture, NOW);
+      return board;
+    });
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.ledger.allocateForSale(db, scopeOf(fixture), {
+          medicineId: fixture.medicineId,
+          requiredUnits: 10,
+          at: NOW,
+          idempotencyKeyPrefix: tag('claim-sale'),
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
+    expect(result.find((row) => row.bucketDays === 30)).toMatchObject({
+      units: 20,
+      valueAtRiskMinor: 24000,
+      withinSupplierReturnWindow: true,
+    });
   });
 });
 
