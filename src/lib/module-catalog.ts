@@ -193,6 +193,9 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // belongs to mandatory Restaurant Core, not separately licensed Insights.
   restaurantReports: 'restaurant-core',
   pharmacyMedicine: 'pharmacy-core',
+  // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
+  // Inventory, separately from the mandatory medicine identity in Core.
+  pharmacyInventory: 'pharmacy-inventory',
 };
 
 export function moduleForProcedure(path: string): string | null {
