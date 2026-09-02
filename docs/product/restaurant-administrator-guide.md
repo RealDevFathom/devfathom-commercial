@@ -3,7 +3,8 @@
 This is the canonical operator guide for the current DevFathom restaurant workspace. Product PRDs
 explain design and evidence; this guide explains what administrators and service teams can safely do.
 The guide reflects accepted local behavior. It does not claim deployment, release, external-service,
-hardware, or browser evidence.
+or hardware evidence. Browser evidence is limited to the workflow markers below; the overall browser
+gate is not green.
 
 ## Read this first
 
@@ -53,7 +54,8 @@ require a distinct manager credential.
 - **Common failure/recovery:** If restaurant type or module is absent, ask the platform operator to
   correct onboarding/entitlements. Do not substitute an agency workspace. Active vertical
   conversion is not an ordinary operator workflow.
-- **Browser validation:** Validation pending.
+- **Browser validation:** The tenant-safe route matrix is browser-proven on `f2c59457`; onboarding
+  completion remains pending.
 
 ### 2. Review branches
 
@@ -65,7 +67,8 @@ require a distinct manager credential.
   primary; the current active primary cannot be deactivated until another branch is made primary.
 - **Common failure/recovery:** If saving fails, correct the displayed fields or plan limit and retry.
   Preserve historical locations by deactivating them; do not use internal identifiers.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Readable branch codes and duplicate, limit, and deactivation guards are
+  browser-proven on `f2c59457`.
 
 ### 3. Set up staff, roles, PINs, devices, and roster
 
@@ -100,7 +103,8 @@ require a distinct manager credential.
   product status, active price version, branch publication, channel/daypart, exception, and device
   branch. Modifier groups with the same configured sort order remain deterministic by creation
   order. Retire/supersede through the UI; do not rewrite historical versions or enter internal IDs.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Price-list values rendering with two decimal places is browser-proven on
+  `f2c59457`; the rest of this workflow remains pending.
 
 ### 5. Import with OCR, review/correct, then publish manually
 
@@ -116,7 +120,8 @@ require a distinct manager credential.
   source cleanup; it does not create a duplicate import. A finished copy of the same file is blocked
   unless an explicit new idempotency key starts a deliberate new import. Retry/discard in the
   console or create manually in Catalog. OCR output is not authoritative.
-- **Browser validation:** Validation pending.
+- **Browser validation:** The OCR upload, extraction, review, and priced-draft import lifecycle is
+  browser-proven on `f2c59457`.
 
 ### 6. Configure Pakistan tax
 
@@ -133,7 +138,8 @@ require a distinct manager credential.
   payment treatment, or date. Obtain current advice from a qualified Pakistani accountant and,
   where needed, legal counsel; DevFathom is not tax/legal advice. Filing, fiscal-device
   certification, authority e-invoicing, and automatic legal updates are not built.
-- **Browser validation:** Validation pending. Legal applicability remains adviser-confirmed.
+- **Browser validation:** Pakistan tax-profile selection and exact CASH preview rounding are
+  browser-proven on `f2c59457`. Legal applicability remains adviser-confirmed.
 
 ## Opening and daily service
 
@@ -156,7 +162,8 @@ require a distinct manager credential.
   oldest-first view is authoritative, not that later tickets disappeared. There is no KDS offline
   queue, push channel, cross-station expediter view, bump-bar integration, or physical kitchen-print
   delivery.
-- **Browser validation:** Validation pending.
+- **Browser validation:** KDS stale-state recovery and bounded cursor-gap review are browser-proven
+  on `f2c59457`; physical hardware remains unproven.
 
 ### 8. Run dine-in and takeaway
 
@@ -174,7 +181,8 @@ require a distinct manager credential.
   enter internal identifiers. Delivery requires a Delivery publication, customer, saved address,
   active zone, and a live connection. Missing or unauthorized inputs are rejected before order,
   idempotency, or audit mutation.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Opening a new POS order is browser-proven on `f2c59457`; the offline
+  open-order count remains failed under WHA-1144.
 
 ### 9. Dispatch and complete direct delivery
 
@@ -189,7 +197,7 @@ require a distinct manager credential.
   handoff.
 - **Common failure/recovery:** Delivery stays connected-only. Resolve the displayed readiness,
   payment, permission, or connection failure and reload before retrying a transition.
-- **Browser validation:** Validation pending.
+- **Browser validation:** COD/PREPAID kitchen-ready handoff is browser-proven on `f2c59457`.
 
 ### 9A. Work through a connection loss at POS
 
@@ -203,7 +211,7 @@ require a distinct manager credential.
   loyalty, delivery, and edits to existing orders stay connected-only. Device revocation discards
   its drafts. If the saved store cannot be recovered, clear site data or re-enroll this browser;
   never recreate queued work by guessing whether replay succeeded.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Offline replay remains failed on the open-order count under WHA-1144.
 
 ### 10. Split, tender, void, refund, and receipt
 
@@ -220,7 +228,8 @@ require a distinct manager credential.
   provider source and its external terminal identifier; this is provider-issued configuration, not
   an internal database ID. Print routing is simulation-only and does not prove physical receipt
   delivery. Finance fails closed before protected ledger queries for users without finance access.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Split-tender receipt acceptance remains failed under WHA-1144; no final
+  browser count is claimed. Finance denial before protected reads is browser-proven on `f2c59457`.
 
 ### 11. Customers and loyalty
 
@@ -310,7 +319,8 @@ require a distinct manager credential.
   not load, and No matching data as distinct states. Check branch/date/business-date cutoff, module,
   and permission; empty/no-data is not zero activity. Dashboard figures are reconciled closed-day
   rollups, not current-shift data.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Dashboard preference persistence is browser-proven on `f2c59457`; the rest
+  of this workflow remains pending.
 
 ### 16. Drawer and daily close
 
@@ -322,7 +332,8 @@ require a distinct manager credential.
 - **Common failure/recovery:** Review open orders and cash movements first. Record actual count and
   explain variance; never falsify it. Later refunds post in the current open business date and
   reference the original; they do not silently reopen history.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Drawer reload/lock recovery and foreign-device denial are browser-proven on
+  `f2c59457`; physical drawer hardware remains unproven.
 
 ### 17. Reconcile finance
 
@@ -335,7 +346,8 @@ require a distinct manager credential.
 - **Common failure/recovery:** Choose the correct branch and business date before treating an empty
   result as no activity. Use readable staff/device/configuration values. Never retry a refund or
   correction until detail/history confirms whether the first attempt posted.
-- **Browser validation:** Validation pending.
+- **Browser validation:** Finance denial before protected ledger reads is browser-proven on
+  `f2c59457`; authorized finance reconciliation remains pending.
 
 ## Recovery checklist
 

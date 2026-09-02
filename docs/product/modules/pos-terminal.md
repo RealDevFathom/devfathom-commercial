@@ -2,9 +2,9 @@
 
 Operator workflow: [Restaurant administrator guide](../restaurant-administrator-guide.md#opening-and-daily-service).
 
-Status: evidence-linked product requirements document reconciled against commit
-`42a26cb2d70ec0d2d3e01a7f882d5c1e3d7cfb0b`. Exact-candidate browser and release
-evidence remains pending.
+Exact candidate `fee1686e16f532cb6ffad61f4c1320fd29909e7d` passed the serialized automated
+gate (1139 files / 4046 tests, zero failed or skipped). Browser completion, the Linux/amd64 image
+gate, and release authorization remain pending.
 
 ## Status vocabulary
 
