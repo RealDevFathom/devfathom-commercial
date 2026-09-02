@@ -1,9 +1,8 @@
 # Restaurant vertical — Build Assumptions (`restaurant/v1`)
 
-Local source is assembled in implementation candidate
-`6cd73e4b5eb747b1d017d28ce6858d6606a7c6f9`; final gate checkpoint is
-`6c8624697af344529ccf64609ace8f2356488cbf`. Automated, browser, and release evidence remains
-pending.
+Exact candidate `fee1686e16f532cb6ffad61f4c1320fd29909e7d` passed the serialized automated
+gate (1139 files / 4046 tests, zero failed or skipped). Browser completion, the Linux/amd64 image
+gate, and release authorization remain pending.
 
 **Direct Delivery v1 — connected own-delivery handoff (WHA-1048)** · Delivery requires
 `orders:take` plus `customers:read`, a customer, saved address, active same-branch zone, and a
