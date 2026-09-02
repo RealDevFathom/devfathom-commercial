@@ -10,9 +10,11 @@
  * the compatibility rules the command layer is being tested for.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ZodError } from 'zod';
 
 import {
   AGENCY_DEPARTMENTS,
+  PHARMACY_ROLE_TEMPLATES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_MODULES,
   RESTAURANT_ROLE_TEMPLATES,
@@ -33,6 +35,9 @@ const mocks = vi.hoisted(() => ({
   branchCreate: vi.fn(),
   branchFindMany: vi.fn(),
   branchCount: vi.fn(),
+  // WHA-1206 — the pharmacy branch aggregate, a different table from the
+  // restaurant branch above, so a test can tell which one provisioning wrote.
+  pharmacyBranchCreate: vi.fn(),
   acknowledgementFindMany: vi.fn(),
   // WHA-1181 — restaurant onboarding and activation now also link each
   // organization administrator to a staff profile. Default implementations
@@ -115,6 +120,7 @@ const platformDb = {
     findFirst: mocks.branchFindFirst,
     count: mocks.branchCount,
   },
+  pharmacyBranch: { create: mocks.pharmacyBranchCreate },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
   restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
@@ -162,6 +168,19 @@ function restaurantCreatePayload(overrides: Record<string, unknown> = {}) {
     firstBranchName: 'Main Branch',
     firstBranchAddress: '1 Restaurant Way',
     businessDayCutoff: '04:00',
+    ...overrides,
+  });
+}
+
+function pharmacyCreatePayload(overrides: Record<string, unknown> = {}) {
+  return createPayload({
+    vertical: 'PHARMACY',
+    packageId: 'pkg_p',
+    timezone: 'Asia/Karachi',
+    firstBranchName: 'Clifton Chemist',
+    firstBranchAddress: '21 Khayaban-e-Shamsheer',
+    firstBranchCity: 'Karachi',
+    firstBranchProvinceCode: 'PK-SD',
     ...overrides,
   });
 }
@@ -327,6 +346,126 @@ describe('organization.create vertical + package compatibility', () => {
       .data.department;
     expect(adminDepartment).toBe('FRONT_OF_HOUSE');
     expect(seeded.map((row) => row.key)).toContain(adminDepartment);
+  });
+
+  // -------------------------------------------------------------------------
+  // WHA-1206 — a PHARMACY organization is provisioned the same way: its own
+  // first branch and its own role templates. Before this, both were seeded only
+  // inside the RESTAURANT block, so a pharmacy was created holding one `admin`
+  // role and no branch — a tenant whose OWNER_AND_ROLE_TEMPLATES and
+  // PREMISES_AND_LICENCES gates could never pass without a manual database write.
+  // -------------------------------------------------------------------------
+  it('provisions a PHARMACY organization: its own branch aggregate and role templates', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_p',
+      active: true,
+      vertical: 'PHARMACY',
+      moduleLinks: [{ moduleId: 'pharmacy-core', enabled: true }],
+    });
+
+    await run('organization.create', pharmacyCreatePayload());
+
+    expect(mocks.orgCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ vertical: 'PHARMACY' }) })
+    );
+    // The pharmacy branch aggregate, not the restaurant one: the regulatory
+    // profile PLAT-02 writes has a composite FK onto `pharmacy_branches`.
+    expect(mocks.pharmacyBranchCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.pharmacyBranchCreate).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_new',
+        code: 'MAIN',
+        name: 'Clifton Chemist',
+        addressLine: '21 Khayaban-e-Shamsheer',
+        city: 'Karachi',
+        provinceCode: 'PK-SD',
+      },
+    });
+    expect(mocks.branchCreate).not.toHaveBeenCalled();
+    expect(mocks.assignmentCreate).not.toHaveBeenCalled();
+    // Bootstrap admin role + every pharmacy role template the readiness gate
+    // requires, asserted against the catalog rather than a copied list.
+    const createdRoleKeys = mocks.roleCreate.mock.calls.map(
+      (call) => (call[0] as { data: { key: string } }).data.key
+    );
+    expect(mocks.roleCreate).toHaveBeenCalledTimes(1 + PHARMACY_ROLE_TEMPLATES.length);
+    for (const template of roleTemplatesForVertical('PHARMACY')) {
+      expect(createdRoleKeys).toContain(template.key);
+    }
+    // No restaurant template leaked into a pharmacy tenant.
+    for (const template of RESTAURANT_ROLE_TEMPLATES) {
+      if (roleTemplatesForVertical('PHARMACY').some((one) => one.key === template.key)) continue;
+      expect(createdRoleKeys).not.toContain(template.key);
+    }
+  });
+
+  it('refuses a PHARMACY create that names no premises for its first branch', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_p',
+      active: true,
+      vertical: 'PHARMACY',
+      moduleLinks: [],
+    });
+
+    const error = await caught(
+      run(
+        'organization.create',
+        createPayload({ vertical: 'PHARMACY', packageId: 'pkg_p', timezone: 'Asia/Karachi' })
+      )
+    );
+
+    // Every missing premises column is reported on its own field, so the
+    // operator form marks all four at once rather than one per submission.
+    const paths = ((error as ZodError).issues ?? []).map((issue) => issue.path.join('.'));
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'firstBranchName',
+        'firstBranchAddress',
+        'firstBranchCity',
+        'firstBranchProvinceCode',
+      ])
+    );
+    expect(mocks.orgCreate).not.toHaveBeenCalled();
+    expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a province no pharmacy surface can name', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_p',
+      active: true,
+      vertical: 'PHARMACY',
+      moduleLinks: [],
+    });
+
+    const error = await caught(
+      run('organization.create', pharmacyCreatePayload({ firstBranchProvinceCode: 'PK-ZZ' }))
+    );
+
+    expect(((error as ZodError).issues ?? []).map((issue) => issue.path.join('.'))).toContain(
+      'firstBranchProvinceCode'
+    );
+    expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
+  });
+
+  it('leaves the AGENCY path untouched: no branch of either kind, no template roles', async () => {
+    // The guard this fix widened. `AGENCY_ROLE_TEMPLATES` repeats the bootstrap
+    // `admin` role and adds `member`; seeding it would collide on the
+    // (organizationId, key) unique index and change every agency onboarding.
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_1',
+      active: true,
+      vertical: 'AGENCY',
+      moduleLinks: [],
+    });
+
+    await run('organization.create', createPayload());
+
+    expect(mocks.roleCreate).toHaveBeenCalledTimes(1);
+    expect((mocks.roleCreate.mock.calls[0]![0] as { data: { key: string } }).data.key).toBe(
+      'admin'
+    );
+    expect(mocks.branchCreate).not.toHaveBeenCalled();
+    expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
   });
 
   it('rejects a crafted RESTAURANT create carrying an AGENCY package', async () => {
