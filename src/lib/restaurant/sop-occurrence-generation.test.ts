@@ -14,19 +14,21 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   generateDueSopOccurrences,
   generateSopOccurrencesHandler,
+  occurrenceId,
 } from './sop-occurrence-generation';
 
 type AssignmentFixture = {
   id: string;
   branchId: string;
   templateId: string;
-  frequency: 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  frequency: 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'INTERVAL';
   interval: number;
   daysOfWeek: number[];
   monthDay: number | null;
   startDate: Date;
   endDate: Date | null;
   dueTimeMinutes: number;
+  intervalEndTimeMinutes: number | null;
   windowMinutes: number;
   branch: { id: string; timezone: string; businessDayCutoff: string };
 };
@@ -55,6 +57,7 @@ function assignment(overrides: Partial<AssignmentFixture> = {}): AssignmentFixtu
     startDate: utcDate(2026, 6, 1),
     endDate: null,
     dueTimeMinutes: 6 * 60,
+    intervalEndTimeMinutes: null,
     windowMinutes: 120,
     branch: { id: 'b1', timezone: 'America/New_York', businessDayCutoff: '00:00' },
     ...overrides,
@@ -97,13 +100,11 @@ function makeDb(opts: {
                 o.businessDate.getTime() >= where.businessDate.gte.getTime() &&
                 o.businessDate.getTime() <= where.businessDate.lte.getTime()
             )
-            .map((o) => ({ businessDate: o.businessDate }))
+            .map((o) => ({ dueAt: o.dueAt }))
       ),
       create: vi.fn(async ({ data }: { data: OccurrenceRow }) => {
         const dup = store.find(
-          (o) =>
-            o.assignmentId === data.assignmentId &&
-            o.businessDate.getTime() === data.businessDate.getTime()
+          (o) => o.assignmentId === data.assignmentId && o.dueAt.getTime() === data.dueAt.getTime()
         );
         if (dup) {
           throw new Prisma.PrismaClientKnownRequestError('duplicate', {
@@ -201,6 +202,39 @@ describe('generateDueSopOccurrences', () => {
     );
     expect(byAssignment.a1).toBe('2026-06-15T13:00:00.000Z'); // 09:00 EDT
     expect(byAssignment.a2).toBe('2026-06-15T07:00:00.000Z'); // 09:00 CEST
+  });
+
+  it('materialises and de-duplicates multiple INTERVAL slots on one business date', async () => {
+    const { db, store } = makeDb({
+      assignments: [
+        assignment({
+          frequency: 'INTERVAL',
+          interval: 20,
+          daysOfWeek: [1],
+          dueTimeMinutes: 9 * 60,
+          intervalEndTimeMinutes: 10 * 60,
+        }),
+      ],
+    });
+    const options = {
+      now: at('2026-06-15T12:00:00.000Z'),
+      lookbackDays: 0,
+      horizonDays: 0,
+    };
+    expect(await generateDueSopOccurrences(db, options)).toMatchObject({ created: 4 });
+    expect(await generateDueSopOccurrences(db, options)).toMatchObject({ created: 0 });
+    expect(store.map((row) => row.dueAt.toISOString())).toEqual([
+      '2026-06-15T13:00:00.000Z',
+      '2026-06-15T13:20:00.000Z',
+      '2026-06-15T13:40:00.000Z',
+      '2026-06-15T14:00:00.000Z',
+    ]);
+  });
+
+  it('derives deterministic occurrence identity from assignment and due instant', () => {
+    const dueAt = at('2026-06-15T13:00:00.000Z');
+    expect(occurrenceId('a1', dueAt)).toBe(occurrenceId('a1', new Date(dueAt)));
+    expect(occurrenceId('a1', dueAt)).not.toBe(occurrenceId('a2', dueAt));
   });
 
   it('swallows a concurrent unique violation as a skip', async () => {

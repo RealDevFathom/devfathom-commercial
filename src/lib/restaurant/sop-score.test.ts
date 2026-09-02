@@ -175,6 +175,19 @@ describe('scoreFromCounts', () => {
 });
 
 describe('scoreOccurrences', () => {
+  it('scores same-date INTERVAL slots as independent occurrences', () => {
+    const result = scoreOccurrences(
+      [
+        occ({ id: 'interval_0900', status: 'VERIFIED', submittedAt: WINDOW_ENDS }),
+        occ({ id: 'interval_0930', status: 'MISSED' }),
+        occ({ id: 'interval_1000', status: 'VERIFIED', submittedAt: WINDOW_ENDS }),
+      ],
+      new Date(WINDOW_ENDS.getTime() + 1)
+    );
+    expect(result.counts).toMatchObject({ onTime: 2, missed: 1 });
+    expect(result.denominator).toBe(3);
+  });
+
   it('classifies and tallies a mixed set at one instant', () => {
     const asOf = new Date(WINDOW_ENDS.getTime() + 2 * 3_600_000);
     const result = scoreOccurrences(

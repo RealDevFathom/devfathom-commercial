@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import {
+  RecurrenceError,
   type RecurrenceFrequency,
   type RecurrenceRule,
   assertValidRule,
@@ -530,6 +531,7 @@ export type AssignmentRuleFields = {
   startDate: string; // YYYY-MM-DD (branch-local)
   endDate: string | null;
   dueTimeMinutes: number;
+  intervalEndTimeMinutes?: number | null;
   windowMinutes: number;
 };
 
@@ -554,6 +556,7 @@ function ruleOf(fields: AssignmentRuleFields): RecurrenceRule {
     startDate: fields.startDate,
     endDate: fields.endDate,
     dueTimeMinutes: fields.dueTimeMinutes,
+    intervalEndTimeMinutes: fields.intervalEndTimeMinutes,
     windowMinutes: fields.windowMinutes,
   };
 }
@@ -567,6 +570,7 @@ export type StoredAssignmentRule = {
   startDate: Date;
   endDate: Date | null;
   dueTimeMinutes: number;
+  intervalEndTimeMinutes: number | null;
   windowMinutes: number;
 };
 
@@ -580,6 +584,7 @@ export function assignmentRecurrenceRule(assignment: StoredAssignmentRule): Recu
     startDate: dateColumnToISO(assignment.startDate),
     endDate: assignment.endDate ? dateColumnToISO(assignment.endDate) : null,
     dueTimeMinutes: assignment.dueTimeMinutes,
+    intervalEndTimeMinutes: assignment.intervalEndTimeMinutes,
     windowMinutes: assignment.windowMinutes,
   };
 }
@@ -612,6 +617,7 @@ export async function createAssignment(db: ScopedDb, input: CreateAssignmentInpu
       startDate: businessDateToUtcDate(input.startDate),
       endDate: input.endDate ? businessDateToUtcDate(input.endDate) : null,
       dueTimeMinutes: input.dueTimeMinutes,
+      intervalEndTimeMinutes: input.intervalEndTimeMinutes ?? null,
       windowMinutes: input.windowMinutes,
       graceMinutes: input.graceMinutes,
     },
@@ -619,6 +625,8 @@ export async function createAssignment(db: ScopedDb, input: CreateAssignmentInpu
 }
 
 export type UpdateAssignmentInput = Partial<AssignmentRuleFields & { graceMinutes: number }> & {
+  /** Branch-local date on which the successor configuration starts. */
+  effectiveDate: string;
   /**
    * SOP-1: re-target the assignment. Applies to occurrences generated FROM NOW ON
    * — already-materialised occurrences keep the owner they were stamped with, the
@@ -641,7 +649,7 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
     interval: patch.interval ?? existing.interval,
     daysOfWeek: patch.daysOfWeek ?? existing.daysOfWeek,
     monthDay: patch.monthDay !== undefined ? patch.monthDay : existing.monthDay,
-    startDate: patch.startDate ?? dateColumnToISO(existing.startDate),
+    startDate: patch.effectiveDate,
     endDate:
       patch.endDate !== undefined
         ? patch.endDate
@@ -649,25 +657,49 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
           ? dateColumnToISO(existing.endDate)
           : null,
     dueTimeMinutes: patch.dueTimeMinutes ?? existing.dueTimeMinutes,
+    intervalEndTimeMinutes:
+      patch.intervalEndTimeMinutes !== undefined
+        ? patch.intervalEndTimeMinutes
+        : existing.intervalEndTimeMinutes,
     windowMinutes: patch.windowMinutes ?? existing.windowMinutes,
   };
   assertValidRule(ruleOf(merged));
+  if (merged.startDate < dateColumnToISO(existing.startDate)) {
+    throw new RecurrenceError('A successor effectiveDate cannot precede its assignment.');
+  }
   if (patch.assigneeTarget) await assertAssigneeTarget(db, patch.assigneeTarget);
 
-  return db.restaurantSopAssignment.update({
-    where: { id },
-    data: {
-      ...(patch.assigneeTarget ? assigneeTargetColumns(patch.assigneeTarget) : {}),
-      frequency: merged.frequency,
-      interval: merged.interval,
-      daysOfWeek: merged.daysOfWeek,
-      monthDay: merged.monthDay,
-      startDate: businessDateToUtcDate(merged.startDate),
-      endDate: merged.endDate ? businessDateToUtcDate(merged.endDate) : null,
-      dueTimeMinutes: merged.dueTimeMinutes,
-      windowMinutes: merged.windowMinutes,
-      ...(patch.graceMinutes !== undefined ? { graceMinutes: patch.graceMinutes } : {}),
-    },
+  return runSopTransaction(db, async (tx) => {
+    const successor = await tx.restaurantSopAssignment.create({
+      data: {
+        branchId: existing.branchId,
+        templateId: existing.templateId,
+        ...(patch.assigneeTarget
+          ? assigneeTargetColumns(patch.assigneeTarget)
+          : {
+              assigneeTargetType: existing.assigneeTargetType,
+              assigneeStaffProfileId: existing.assigneeStaffProfileId,
+              assigneeJobRoleId: existing.assigneeJobRoleId,
+            }),
+        frequency: merged.frequency,
+        interval: merged.interval,
+        daysOfWeek: merged.daysOfWeek,
+        monthDay: merged.monthDay,
+        startDate: businessDateToUtcDate(merged.startDate),
+        endDate: merged.endDate ? businessDateToUtcDate(merged.endDate) : null,
+        dueTimeMinutes: merged.dueTimeMinutes,
+        intervalEndTimeMinutes: merged.intervalEndTimeMinutes,
+        windowMinutes: merged.windowMinutes,
+        graceMinutes: patch.graceMinutes ?? existing.graceMinutes,
+        active: existing.active,
+        supersedesAssignmentId: existing.id,
+      },
+    });
+    await tx.restaurantSopAssignment.update({
+      where: { id: existing.id },
+      data: { active: false, supersededAt: new Date() },
+    });
+    return successor;
   });
 }
 
@@ -675,9 +707,12 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
 export async function setAssignmentActive(db: ScopedDb, id: string, active: boolean) {
   const existing = await db.restaurantSopAssignment.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, supersededAt: true },
   });
   if (!existing) throw new SopTemplateError(`Assignment ${id} was not found.`, 'NOT_FOUND');
+  if (active && existing.supersededAt) {
+    throw new SopTemplateError('A superseded assignment cannot be reactivated.', 'INVALID_STATE');
+  }
   return db.restaurantSopAssignment.update({ where: { id }, data: { active } });
 }
 

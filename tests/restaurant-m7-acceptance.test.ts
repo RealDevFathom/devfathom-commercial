@@ -664,12 +664,10 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     );
     expect(generated.created).toBe(1);
     const pinned = await deps.withTenantDb(orgId, (tx) =>
-      tx.restaurantSopOccurrence.findUniqueOrThrow({
+      tx.restaurantSopOccurrence.findFirstOrThrow({
         where: {
-          assignmentId_businessDate: {
-            assignmentId: assignment.id,
-            businessDate: new Date('2026-08-20T00:00:00.000Z'),
-          },
+          assignmentId: assignment.id,
+          businessDate: new Date('2026-08-20T00:00:00.000Z'),
         },
         select: { id: true, templateVersionId: true },
       })

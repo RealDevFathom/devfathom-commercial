@@ -27,6 +27,7 @@ function rule(partial: Partial<RecurrenceRule>): RecurrenceRule {
     startDate: '2026-01-01',
     endDate: null,
     dueTimeMinutes: 9 * 60, // 09:00 local
+    intervalEndTimeMinutes: null,
     windowMinutes: 120,
     ...partial,
   };
@@ -138,6 +139,21 @@ describe('zonedWallTimeToUtc — Europe/Berlin DST', () => {
 });
 
 describe('occursOn — structured selection', () => {
+  it('INTERVAL is effective on every date inside its inclusive date window', () => {
+    const r = rule({
+      frequency: 'INTERVAL',
+      interval: 30,
+      startDate: '2026-02-10',
+      endDate: '2026-02-11',
+      intervalEndTimeMinutes: 10 * 60,
+      daysOfWeek: [2, 3],
+    });
+    expect(occursOn(r, '2026-02-09')).toBe(false);
+    expect(occursOn(r, '2026-02-10')).toBe(true);
+    expect(occursOn(r, '2026-02-11')).toBe(true);
+    expect(occursOn(r, '2026-02-12')).toBe(false);
+  });
+
   it('DAILY every day from the start', () => {
     const r = rule({ frequency: 'DAILY', interval: 1, startDate: '2026-02-10' });
     expect(occursOn(r, '2026-02-10')).toBe(true);
@@ -199,6 +215,131 @@ describe('occursOn — structured selection', () => {
     const r = rule({ frequency: 'DAILY', startDate: '2026-05-01', endDate: '2026-05-03' });
     expect(occursOn(r, '2026-05-03')).toBe(true);
     expect(occursOn(r, '2026-05-04')).toBe(false);
+  });
+});
+
+describe('INTERVAL intraday expansion', () => {
+  it('emits exactly 14 hourly slots from 10:00 through 23:00 in Asia/Karachi', () => {
+    const occurrences = enumerateOccurrences(
+      rule({
+        frequency: 'INTERVAL',
+        interval: 60,
+        daysOfWeek: [4],
+        dueTimeMinutes: 10 * 60,
+        intervalEndTimeMinutes: 23 * 60,
+      }),
+      'Asia/Karachi',
+      '2026-01-01',
+      '2026-01-01'
+    );
+    expect(occurrences).toHaveLength(14);
+    expect(occurrences[0]!.dueAt.toISOString()).toBe('2026-01-01T05:00:00.000Z');
+    expect(occurrences[13]!.dueAt.toISOString()).toBe('2026-01-01T18:00:00.000Z');
+  });
+
+  it.each([
+    [10 * 60, 23 * 60, 15],
+    [10 * 60, 23 * 60, 45],
+    [7 * 60 + 10, 19 * 60 + 5, 125],
+  ])('obeys floor((end-start)/interval)+1 for %i..%i every %i minutes', (start, end, interval) => {
+    const occurrences = enumerateOccurrences(
+      rule({
+        frequency: 'INTERVAL',
+        interval,
+        daysOfWeek: [4],
+        dueTimeMinutes: start,
+        intervalEndTimeMinutes: end,
+      }),
+      'Asia/Karachi',
+      '2026-01-01',
+      '2026-01-01'
+    );
+    expect(occurrences).toHaveLength(Math.floor((end - start) / interval) + 1);
+  });
+
+  it('emits every N minutes between inclusive branch-local bounds', () => {
+    const occurrences = enumerateOccurrences(
+      rule({
+        frequency: 'INTERVAL',
+        interval: 30,
+        daysOfWeek: [4],
+        dueTimeMinutes: 9 * 60,
+        intervalEndTimeMinutes: 10 * 60,
+      }),
+      'Asia/Karachi',
+      '2026-01-01',
+      '2026-01-01'
+    );
+    expect(occurrences.map((item) => item.dueAt.toISOString())).toEqual([
+      '2026-01-01T04:00:00.000Z',
+      '2026-01-01T04:30:00.000Z',
+      '2026-01-01T05:00:00.000Z',
+    ]);
+  });
+
+  it('rejects missing or reversed interval-hour bounds', () => {
+    expect(() =>
+      enumerateOccurrences(
+        rule({ frequency: 'INTERVAL', interval: 30, daysOfWeek: [4] }),
+        'UTC',
+        '2026-01-01',
+        '2026-01-01'
+      )
+    ).toThrow(/requires intervalEndTimeMinutes/);
+    expect(() =>
+      enumerateOccurrences(
+        rule({
+          frequency: 'INTERVAL',
+          interval: 30,
+          daysOfWeek: [4],
+          dueTimeMinutes: 600,
+          intervalEndTimeMinutes: 540,
+        }),
+        'UTC',
+        '2026-01-01',
+        '2026-01-01'
+      )
+    ).toThrow(/end time must be later/);
+  });
+
+  it('requires selected weekdays, honours them, enforces 15 minutes, and never crosses midnight', () => {
+    expect(() =>
+      enumerateOccurrences(
+        rule({ frequency: 'INTERVAL', interval: 14, daysOfWeek: [4], intervalEndTimeMinutes: 600 }),
+        'Asia/Karachi',
+        '2026-01-01',
+        '2026-01-01'
+      )
+    ).toThrow(/at least 15 minutes/);
+    expect(() =>
+      enumerateOccurrences(
+        rule({ frequency: 'INTERVAL', interval: 15, daysOfWeek: [], intervalEndTimeMinutes: 600 }),
+        'Asia/Karachi',
+        '2026-01-01',
+        '2026-01-01'
+      )
+    ).toThrow(/selected weekday/);
+    expect(
+      enumerateOccurrences(
+        rule({ frequency: 'INTERVAL', interval: 60, daysOfWeek: [5], intervalEndTimeMinutes: 600 }),
+        'Asia/Karachi',
+        '2026-01-01',
+        '2026-01-01'
+      )
+    ).toEqual([]);
+    expect(() =>
+      enumerateOccurrences(
+        rule({
+          frequency: 'INTERVAL',
+          interval: 60,
+          daysOfWeek: [4],
+          intervalEndTimeMinutes: 1440,
+        }),
+        'Asia/Karachi',
+        '2026-01-01',
+        '2026-01-01'
+      )
+    ).toThrow(/0..1439/);
   });
 });
 

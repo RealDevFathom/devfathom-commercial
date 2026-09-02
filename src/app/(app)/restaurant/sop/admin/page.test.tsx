@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,7 +15,15 @@ vi.mock('@/lib/trpc', () => ({
     restaurantStaff: {
       listBranches: {
         useQuery: () => ({
-          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          data: [
+            {
+              id: 'branch_1',
+              name: 'Downtown',
+              timezone: 'Asia/Karachi',
+              active: true,
+              isDefault: true,
+            },
+          ],
           error: null,
           isLoading: false,
         }),
@@ -236,5 +244,39 @@ describe('SOP admin entitlement states', () => {
       renderView({ templateLimit: 1, templates: [template()] });
       expect(createFieldset()).toBeDisabled();
     });
+  });
+});
+
+describe('SOP interval recurrence authoring', () => {
+  it('shows unit, weekday, minimum, end-time, and preview controls', () => {
+    renderView({
+      templates: [template()],
+      selectedTemplateId: 'tpl_1',
+      jobRoles: [{ id: 'role_1', key: 'manager', name: 'Manager' }],
+    });
+
+    fireEvent.change(screen.getByLabelText('Frequency'), { target: { value: 'INTERVAL' } });
+
+    expect(screen.getByLabelText('Every')).toHaveAttribute('min', '15');
+    expect(screen.getByLabelText('Interval unit')).toHaveValue('minutes');
+    expect(screen.getByText('Days of week · required')).toBeVisible();
+    expect(screen.getByLabelText('Start time')).toBeRequired();
+    expect(screen.getByLabelText('End time')).toBeRequired();
+    expect(screen.getByRole('button', { name: 'Preview schedule' })).toBeEnabled();
+  });
+
+  it('renders the exact concise branch-timezone preview line', () => {
+    renderView({
+      templates: [template()],
+      selectedTemplateId: 'tpl_1',
+      previewBranchId: 'branch_1',
+      schedulePreview: Array.from({ length: 14 }, (_, index) => ({
+        businessDate: '2026-01-01',
+        dueAt: new Date(Date.UTC(2026, 0, 1, 5 + index)),
+        windowEndsAt: new Date(Date.UTC(2026, 0, 1, 6 + index)),
+        adjustment: 'none' as const,
+      })),
+    });
+    expect(screen.getByText('Next: 10:00, 11:00, 12:00 … (14 today) · Asia/Karachi')).toBeVisible();
   });
 });
