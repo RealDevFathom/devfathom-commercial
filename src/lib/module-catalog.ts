@@ -294,6 +294,12 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // Core-owned back-office surfaces, then the `/restaurant` core catch-all —
   // the vertical catalog owns the `/restaurant` route prefix via
   // `restaurant-core` (mandatory for every restaurant organization).
+  // PH-PUR (WHA-1196): the purchasing and receiving consoles. Same key as the
+  // `pharmacyPurchasing` procedure map above, so hiding the surface and
+  // rejecting the direct route can never disagree with rejecting the call. No
+  // `/pharmacy` catch-all is listed: the other pharmacy surfaces are licensed
+  // separately and a catch-all would gate them all on `pharmacy-core`.
+  ['/pharmacy/purchasing', 'pharmacy-procurement'],
   ['/restaurant/staff/roster', 'restaurant-core'],
   ['/restaurant/staff', 'restaurant-core'],
   ['/restaurant/devices', 'restaurant-core'],
