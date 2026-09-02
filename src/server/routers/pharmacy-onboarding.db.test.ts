@@ -125,23 +125,24 @@ describe('pharmacy onboarding router against PostgreSQL', () => {
   });
 
   afterAll(async () => {
-    // `pharmacy_onboarding_events` carries an unconditional BEFORE DELETE
-    // trigger, so the ON DELETE CASCADE from the organization is refused and the
-    // row cannot be removed by any role — the history is append-only by
-    // construction. Dropping this fixture therefore requires the table owner to
-    // disable that trigger for the duration, which is exactly why no application
-    // path can do it.
-    await owner.query(
-      `ALTER TABLE pharmacy_onboarding_events DISABLE TRIGGER pharmacy_onboarding_events_append_only`
-    );
+    // `pharmacy_onboarding_events` is append-only, but only for a tenant that
+    // still exists (WHA-1209). Deleting the organization runs the ON DELETE
+    // CASCADE the schema declares, and the trigger recognises a delete whose
+    // organization is already gone — so dropping this fixture no longer needs
+    // the owner to DISABLE TRIGGER. The append-only guarantee itself is asserted
+    // below, and again in `src/lib/platform/jobs.purge.db.test.ts`.
     try {
+      // The organization first: its cascade clears the gate states, which hold
+      // an ON DELETE RESTRICT reference to the branches. Then the branches,
+      // which no foreign key ties to the organization and which the cascade
+      // therefore never reaches.
       await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [
         [organizationId, otherOrganizationId],
       ]);
+      await owner.query('DELETE FROM pharmacy_branches WHERE "organizationId" = ANY($1)', [
+        [organizationId, otherOrganizationId],
+      ]);
     } finally {
-      await owner.query(
-        `ALTER TABLE pharmacy_onboarding_events ENABLE TRIGGER pharmacy_onboarding_events_append_only`
-      );
       await owner.end();
     }
   });
