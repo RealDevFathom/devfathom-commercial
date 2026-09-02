@@ -244,18 +244,20 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await expect(timezone).toHaveValue('Asia/Karachi');
   await page.getByLabel('First branch name').fill('Gulberg Flagship');
   await page.getByLabel('First branch address').fill('42 Main Boulevard, Lahore');
-  const onboardingCutoff = page.locator('input[name="businessDayCutoff"]');
-  await expect(onboardingCutoff).toHaveAttribute('placeholder', 'HH:MM');
-  await onboardingCutoff.fill('24:30');
-  await page.getByRole('button', { name: 'Create onboarding record' }).click();
-  await expect(page.getByText('Use 24-hour time, e.g. 09:30')).toBeVisible();
-  await expect(onboardingCutoff).toBeFocused();
-  await onboardingCutoff.fill('04:30');
   await page.getByLabel('Primary contact', { exact: true }).fill('Restaurant Owner');
   await page.getByLabel('Primary contact email').fill(platformFixture.tenant.email);
   await page.getByLabel('Tenant administrator').fill('Restaurant Owner');
   await page.getByLabel('Administrator email').fill(platformFixture.tenant.email);
   await page.getByLabel('Temporary administrator password').fill(platformFixture.tenant.password);
+  const onboardingCutoff = page.locator('input[name="businessDayCutoff"]');
+  await expect(onboardingCutoff).toHaveAttribute('placeholder', 'HH:MM');
+  await onboardingCutoff.fill('24:30');
+  await page.getByRole('button', { name: 'Create onboarding record' }).click();
+  await expect(page.getByTestId('platform-field-error-businessDayCutoff')).toHaveText(
+    'Use 24-hour time, e.g. 09:30'
+  );
+  await expect(onboardingCutoff).toBeFocused();
+  await onboardingCutoff.fill('04:30');
   let injectInvalidTimezone = true;
   await page.route('**/api/platform/control', async (route) => {
     const request = route.request();

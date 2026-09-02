@@ -331,7 +331,11 @@ export function PlatformCommandForm({
                 </span>
               ) : null}
               {fieldError ? (
-                <span id={errorId} className="mt-1.5 block text-xs text-destructive">
+                <span
+                  id={errorId}
+                  data-testid={`platform-field-error-${field.name}`}
+                  className="mt-1.5 block text-xs text-destructive"
+                >
                   {fieldError}
                 </span>
               ) : null}
