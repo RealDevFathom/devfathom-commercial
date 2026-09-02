@@ -152,6 +152,8 @@ model Medicine {
   strengths                    MedicineStrengthComponent[]
   presentations                Presentation[]
   provenance                   MedicineProvenance[]
+  requisitionLines             PharmacyRequisitionLine[]
+  purchaseOrderLines           PharmacyPurchaseOrderLine[]
 
   @@index([organizationId, productName])
   @@map("pharmacy_medicines")
@@ -209,6 +211,8 @@ model PackLevel {
   supersedes            PackLevel?        @relation("PackVersions", fields: [supersedesPackLevelId], references: [id], onDelete: Restrict)
   supersededBy          PackLevel[]       @relation("PackVersions")
   printedMrps           MedicinePackMrp[]
+  requisitionLines      PharmacyRequisitionLine[]
+  purchaseOrderLines    PharmacyPurchaseOrderLine[]
 
   @@unique([organizationId, versionGroupId, version])
   @@index([organizationId, presentationId])
@@ -8963,4 +8967,284 @@ model PharmacyMigrationException {
   @@index([organizationId, batchId, status, severity])
   @@index([organizationId, rowId])
   @@map("pharmacy_migration_exceptions")
+}
+
+// ============================================
+// PH-PUR — pharmacy procurement (PRD §6.3 PUR-01, PUR-02, PUR-03)
+// ============================================
+
+enum PharmacyRequisitionStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  CANCELLED
+}
+
+/// PUR-02: DRAFT → SUBMITTED → APPROVED → SENT → RECEIVING. RECEIVING is the
+/// hand-off point; the receipt itself belongs to the PH-INV ledger lane.
+enum PharmacyPurchaseOrderStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  SENT
+  RECEIVING
+  CANCELLED
+}
+
+enum PharmacyApprovalDecision {
+  APPROVED
+  REJECTED
+}
+
+/// PUR-01 — a licensed supplier or distributor. `authorized` is the operator's
+/// standing decision to trade; the licence evidence beneath decides whether
+/// that decision is currently usable. Both are checked before a PO is created
+/// and again before it is sent, because either can lapse in between.
+model PharmacySupplier {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name             String
+  legalName        String?
+  authorized       Boolean  @default(false)
+  /// Free-text districts/cities this distributor delivers to.
+  serviceArea      String?
+  contactName      String?
+  contactPhone     String?
+  /// Net payment terms in days; 0 is cash on delivery.
+  paymentTermsDays Int      @default(0)
+  creditLimitMinor Int      @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  licences       PharmacySupplierLicence[]
+  quotes         PharmacyQuote[]
+  purchaseOrders PharmacyPurchaseOrder[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, name])
+  @@index([organizationId, authorized, active])
+  @@map("pharmacy_suppliers")
+}
+
+/// PUR-01 — licence evidence. Append-only (trigger): a licence filing is a
+/// regulated record, so a correction supersedes rather than rewrites.
+model PharmacySupplierLicence {
+  id               String    @id @default(cuid())
+  organizationId   String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  supplierId       String
+  licenceType      String
+  licenceNumber    String
+  issuingAuthority String
+  issuedAt         DateTime
+  expiresAt        DateTime
+  /// Where the scanned licence lives; evidence, not the licence itself.
+  evidenceUri      String?
+  verifiedAt       DateTime?
+  verifiedByUserId String?
+  supersedesId     String?
+  createdAt        DateTime  @default(now())
+
+  supplier     PharmacySupplier          @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  supersedes   PharmacySupplierLicence?  @relation("SupplierLicenceVersions", fields: [organizationId, supersedesId], references: [organizationId, id], onDelete: Restrict)
+  supersededBy PharmacySupplierLicence[] @relation("SupplierLicenceVersions")
+
+  @@unique([organizationId, id])
+  @@index([organizationId, supplierId, expiresAt])
+  @@map("pharmacy_supplier_licences")
+}
+
+/// PUR-02 — the demand that starts the cycle. `branchId` is the branch-owned
+/// scope seam required by PLAT-04; the pharmacy branch entity itself lands with
+/// PLAT-03, so the column carries no foreign key yet and the tenant boundary
+/// remains `organizationId` under forced RLS.
+model PharmacyRequisition {
+  id                  String                    @id @default(cuid())
+  organizationId      String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String?
+  reference           String
+  status              PharmacyRequisitionStatus @default(DRAFT)
+  requestedByUserId   String
+  neededBy            DateTime?
+  note                String?
+  submittedAt         DateTime?
+  approvedAt          DateTime?
+  approvedByUserId    String?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  lines          PharmacyRequisitionLine[]
+  quotes         PharmacyQuote[]
+  purchaseOrders PharmacyPurchaseOrder[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, reference])
+  @@index([organizationId, status, createdAt])
+  @@map("pharmacy_requisitions")
+}
+
+model PharmacyRequisitionLine {
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  requisitionId         String
+  lineNumber            Int
+  medicineId            String
+  packLevelId           String
+  /// Demand is stated at a pack level and mirrored in integer canonical units.
+  quantityPacks         Int
+  canonicalUnitsPerPack Int
+  canonicalUnits        Int
+  note                  String?
+  createdAt             DateTime @default(now())
+
+  requisition PharmacyRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  medicine    Medicine            @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  packLevel   PackLevel           @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  quoteLines  PharmacyQuoteLine[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, requisitionId, lineNumber])
+  @@index([organizationId, medicineId])
+  @@map("pharmacy_requisition_lines")
+}
+
+/// PUR-02 — one supplier's offer against one requisition. Quotes are compared
+/// and explained, never auto-awarded.
+model PharmacyQuote {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  requisitionId  String
+  supplierId     String
+  reference      String?
+  quotedAt       DateTime
+  validUntil     DateTime
+  note           String?
+  createdAt      DateTime @default(now())
+
+  requisition    PharmacyRequisition     @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  supplier       PharmacySupplier        @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  lines          PharmacyQuoteLine[]
+  purchaseOrders PharmacyPurchaseOrder[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, requisitionId, supplierId])
+  @@index([organizationId, supplierId, validUntil])
+  @@map("pharmacy_quotes")
+}
+
+model PharmacyQuoteLine {
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  quoteId               String
+  requisitionLineId     String
+  pricePerPackMinor     Int
+  /// Buy `schemeBuyPacks`, get `schemeFreePacks` free. Both zero = no scheme.
+  schemeBuyPacks        Int      @default(0)
+  schemeFreePacks       Int      @default(0)
+  discountBps           Int      @default(0)
+  moqPacks              Int      @default(1)
+  leadTimeDays          Int      @default(0)
+  /// Shortest remaining shelf life the supplier will ship, in days.
+  minimumExpiryDays     Int      @default(0)
+  canonicalUnitsPerPack Int
+  createdAt             DateTime @default(now())
+
+  quote           PharmacyQuote           @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
+  requisitionLine PharmacyRequisitionLine @relation(fields: [organizationId, requisitionLineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, quoteId, requisitionLineId])
+  @@map("pharmacy_quote_lines")
+}
+
+/// PUR-02/PUR-03 — the order itself. Batch, expiry and printed MRP are absent
+/// by design: they are unknown until the goods are received, and inventing them
+/// here would let unreceived stock look saleable.
+model PharmacyPurchaseOrder {
+  id                 String                      @id @default(cuid())
+  organizationId     String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String?
+  reference          String
+  status             PharmacyPurchaseOrderStatus @default(DRAFT)
+  supplierId         String
+  requisitionId      String?
+  quoteId            String?
+  createdByUserId    String
+  expectedDeliveryAt DateTime?
+  freightMinor       Int                         @default(0)
+  otherChargesMinor  Int                         @default(0)
+  note               String?
+  submittedAt        DateTime?
+  approvedAt         DateTime?
+  approvedByUserId   String?
+  sentAt             DateTime?
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  supplier    PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  requisition PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  quote       PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
+  lines       PharmacyPurchaseOrderLine[]
+  approvals   PharmacyPurchaseOrderApproval[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, reference])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, supplierId, status])
+  @@map("pharmacy_purchase_orders")
+}
+
+/// PUR-03 — money terms in the order they are applied: list → discount →
+/// rebate → tax, with freight allocated at the order level. `bonusPacks` is a
+/// quantity term only and never appears in a money column, so scheme units
+/// lower the landed unit cost and can never create revenue.
+model PharmacyPurchaseOrderLine {
+  id                     String   @id @default(cuid())
+  organizationId         String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  purchaseOrderId        String
+  lineNumber             Int
+  medicineId             String
+  packLevelId            String
+  orderedPacks           Int
+  bonusPacks             Int      @default(0)
+  canonicalUnitsPerPack  Int
+  orderedCanonicalUnits  Int
+  bonusCanonicalUnits    Int      @default(0)
+  listPricePerPackMinor  Int
+  discountBps            Int      @default(0)
+  rebateBps              Int      @default(0)
+  taxBps                 Int      @default(0)
+  /// A creditable input tax is recovered and so is not stock cost.
+  taxCreditable          Boolean  @default(false)
+  createdAt              DateTime @default(now())
+
+  purchaseOrder PharmacyPurchaseOrder @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
+  medicine      Medicine              @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  packLevel     PackLevel             @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, purchaseOrderId, lineNumber])
+  @@index([organizationId, medicineId])
+  @@map("pharmacy_purchase_order_lines")
+}
+
+/// PUR-02 — the approval event. Append-only (trigger): who decided, under which
+/// policy, and between which two states. A rejection is recorded, not erased.
+model PharmacyPurchaseOrderApproval {
+  id              String                      @id @default(cuid())
+  organizationId  String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  purchaseOrderId String
+  actorUserId     String
+  policy          String
+  decision        PharmacyApprovalDecision
+  fromStatus      PharmacyPurchaseOrderStatus
+  toStatus        PharmacyPurchaseOrderStatus
+  reason          String?
+  createdAt       DateTime                    @default(now())
+
+  purchaseOrder PharmacyPurchaseOrder @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId, purchaseOrderId, createdAt])
+  @@map("pharmacy_purchase_order_approvals")
 }

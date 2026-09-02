@@ -193,6 +193,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // belongs to mandatory Restaurant Core, not separately licensed Insights.
   restaurantReports: 'restaurant-core',
   pharmacyMedicine: 'pharmacy-core',
+  pharmacyPurchasing: 'pharmacy-core',
 };
 
 export function moduleForProcedure(path: string): string | null {
