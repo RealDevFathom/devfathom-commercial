@@ -52,6 +52,7 @@ import { pharmacyInventoryRouter } from './pharmacy-inventory';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { pharmacyDispensingRouter } from './pharmacy-dispensing';
 import { pharmacySafetyRouter } from './pharmacy-safety';
+import { pharmacySalesRouter } from './pharmacy-sales';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -107,6 +108,7 @@ export const appRouter = router({
   pharmacyPrescriptions: pharmacyPrescriptionsRouter,
   pharmacyDispensing: pharmacyDispensingRouter,
   pharmacySafety: pharmacySafetyRouter,
+  pharmacySales: pharmacySalesRouter,
 });
 
 export type AppRouter = typeof appRouter;
