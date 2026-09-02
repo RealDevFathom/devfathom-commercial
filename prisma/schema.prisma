@@ -601,11 +601,6 @@ model PharmacyInventoryLot {
   recommendedBy PharmacyAllocationOverride[] @relation("PharmacyAllocationRecommended")
   selectedBy    PharmacyAllocationOverride[] @relation("PharmacyAllocationSelected")
   receiptLines  PharmacyGoodsReceiptLine[]
-  movements      PharmacyStockMovement[]
-  balances       PharmacyStockBalance[]
-  discrepancies  PharmacyStockDiscrepancy[]
-  recommendedBy  PharmacyAllocationOverride[]      @relation("PharmacyAllocationRecommended")
-  selectedBy     PharmacyAllocationOverride[]      @relation("PharmacyAllocationSelected")
   countLines     PharmacyInventoryCountLine[]
   transferLines  PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
   supplierClaims PharmacySupplierClaim[]
@@ -10013,6 +10008,8 @@ model PrescriptionFill {
   @@unique([organizationId, prescriptionLineId, fillSequence])
   @@unique([organizationId, idempotencyKey])
   @@map("pharmacy_prescription_fills")
+}
+
 /// PUR-02 receiving / PUR-05 — the document that turns an order or a supplier
 /// invoice into stock. It holds no quantity of its own: posting it writes an
 /// inventory lot and RECEIPT movements into the PH-INV ledger, which stays the
