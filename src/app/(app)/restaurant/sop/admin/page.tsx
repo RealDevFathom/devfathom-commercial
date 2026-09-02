@@ -181,7 +181,7 @@ export type SopAdminViewProps = {
    * How the module reached its current state. `NONE` means the plan never
    * granted it; the other sources mean it was granted and then switched off.
    */
-  moduleSource?: 'PACKAGE' | 'CONTRACT' | 'OVERRIDE' | 'NONE';
+  moduleSource?: 'BASELINE' | 'PACKAGE' | 'CONTRACT' | 'OVERRIDE' | 'NONE';
   /** `undefined` when the platform never configured `sop.templates.max`. */
   templateLimit: number | undefined;
   templates: SopTemplate[];

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { PLATFORM_MODULES } from '../../prisma/production-bootstrap';
-
 import {
+  MODULE_CATALOG,
   PROCEDURE_MODULES,
   ROUTE_MODULES,
   SOP_DEPTH_REQUIREMENTS,
@@ -95,10 +94,7 @@ describe('module catalog routing', () => {
   });
 
   it('maps every procedure and route to a module in the production catalogs', () => {
-    const catalogKeys = new Set<string>([
-      ...PLATFORM_MODULES.map(([key]) => key),
-      ...RESTAURANT_MODULES.map((module) => module.key),
-    ]);
+    const catalogKeys = new Set(MODULE_CATALOG.map((module) => module.key));
 
     expect(Object.values(PROCEDURE_MODULES).filter((key) => !catalogKeys.has(key))).toEqual([]);
     expect(ROUTE_MODULES.map(([, key]) => key).filter((key) => !catalogKeys.has(key))).toEqual([]);
@@ -166,16 +162,11 @@ describe('module catalog routing', () => {
     expect(moduleForPath('/restaurant/inventory-x', 'RESTAURANT')).toBe('restaurant-core');
   });
 
-  // §3 — the Dashboard surface is vertical-dispatched: mandatory core for a
-  // restaurant organization, the Agency dashboard module otherwise (including
-  // legacy callers that pass no vertical).
-  it('dispatches the dashboard route by organization vertical', () => {
+  it('keeps the baseline dashboard independent of organization vertical', () => {
     expect(moduleForPath('/dashboard')).toBe('dashboard');
     expect(moduleForPath('/dashboard', 'AGENCY')).toBe('dashboard');
-    expect(moduleForPath('/dashboard', 'RESTAURANT')).toBe('restaurant-core');
-    expect(moduleForPath('/dashboard/widgets', 'RESTAURANT')).toBe('restaurant-core');
-    // Only the dashboard entry is vertical-dispatched; agency surfaces keep
-    // their module regardless of the caller's vertical.
+    expect(moduleForPath('/dashboard', 'RESTAURANT')).toBe('dashboard');
+    expect(moduleForPath('/dashboard/widgets', 'RESTAURANT')).toBe('dashboard');
     expect(moduleForPath('/projects', 'RESTAURANT')).toBe('projects');
   });
 
@@ -197,11 +188,16 @@ describe('module vertical ownership', () => {
     expect(verticalForModuleKey(key)).toBe(expected);
   });
 
-  it.each([['dashboard'], ['projects'], ['finance'], ['hr'], ['not-a-real-module']])(
-    'treats non-restaurant module %s as AGENCY',
+  it.each([['agency-core'], ['projects'], ['finance']])(
+    'maps agency module %s to AGENCY',
     (key) => {
       expect(verticalForModuleKey(key)).toBe('AGENCY');
     }
+  );
+
+  it.each([['dashboard'], ['hr'], ['not-a-real-module']])(
+    'does not assign shared or unknown module %s to a vertical',
+    (key) => expect(verticalForModuleKey(key)).toBeNull()
   );
 });
 

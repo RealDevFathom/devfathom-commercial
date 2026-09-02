@@ -5,7 +5,7 @@ import { hash } from 'bcryptjs';
 import 'dotenv/config';
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
-import { PLATFORM_MODULES, syncPlatformCatalog } from './catalog-sync.js';
+import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 import { upsertPlatformAdmin } from './platform-admin.js';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -1496,7 +1496,7 @@ async function main() {
 
       const suite = await tx.platformPackage.upsert({
         where: { key: 'agency-suite' },
-        update: { active: true, version: { increment: 1 } },
+        update: { active: true },
         create: {
           key: 'agency-suite',
           name: 'Agency Suite',
@@ -1540,7 +1540,7 @@ async function main() {
       // staging database takes on every redeploy.
       const { moduleIds } = await syncPlatformCatalog(tx);
 
-      for (const [key] of PLATFORM_MODULES) {
+      for (const [key] of AGENCY_SUITE_MODULES) {
         const moduleId = moduleIds.get(key);
         if (!moduleId) throw new Error(`Unknown platform module: ${key}`);
         await tx.platformPackageModule.upsert({

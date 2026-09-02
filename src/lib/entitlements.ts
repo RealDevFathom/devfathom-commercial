@@ -77,7 +77,7 @@ export async function resolveOrganizationEntitlements(
         platformDb.platformModule.findMany({
           where: { active: true },
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-          select: { id: true, key: true, name: true },
+          select: { id: true, key: true, name: true, band: true },
         }),
         organization?.packageId
           ? platformDb.platformPackage.findUnique({
@@ -128,8 +128,8 @@ export async function resolveOrganizationEntitlements(
     states.set(catalogModule.id, {
       key: catalogModule.key,
       name: catalogModule.name,
-      enabled: false,
-      source: 'NONE',
+      enabled: catalogModule.band === 'BASELINE',
+      source: catalogModule.band === 'BASELINE' ? 'BASELINE' : 'NONE',
       seatLimit: null,
       expiresAt: null,
       limits: {},
@@ -139,7 +139,7 @@ export async function resolveOrganizationEntitlements(
   for (const link of packageRecord?.moduleLinks ?? []) {
     if (!link.module.active) continue;
     const state = states.get(link.module.id);
-    if (!state) continue;
+    if (!state || state.source === 'BASELINE') continue;
     Object.assign(state, {
       enabled: true,
       source: 'PACKAGE' as const,
@@ -154,7 +154,7 @@ export async function resolveOrganizationEntitlements(
     for (const link of contract.modules) {
       if (!link.module.active) continue;
       const state = states.get(link.module.id);
-      if (!state || state.source === 'CONTRACT') continue;
+      if (!state || state.source === 'BASELINE' || state.source === 'CONTRACT') continue;
       Object.assign(state, {
         enabled: true,
         source: 'CONTRACT' as const,
@@ -167,7 +167,7 @@ export async function resolveOrganizationEntitlements(
 
   for (const override of overrides) {
     const state = states.get(override.moduleId);
-    if (!state) continue;
+    if (!state || state.source === 'BASELINE') continue;
     const inWindow = override.startsAt <= now && (!override.expiresAt || override.expiresAt > now);
     Object.assign(state, {
       enabled: inWindow && (override.status === 'ENABLED' || override.status === 'TRIAL'),

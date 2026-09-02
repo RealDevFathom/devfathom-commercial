@@ -5,9 +5,9 @@ import {
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
-import { PLATFORM_MODULES, syncPlatformCatalog } from './catalog-sync.js';
+import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 
-export { PLATFORM_MODULES } from './catalog-sync.js';
+export { AGENCY_SUITE_MODULES, PLATFORM_MODULES } from './catalog-sync.js';
 
 export type ProductionBootstrapInput = {
   organizationId: string;
@@ -110,7 +110,7 @@ export async function bootstrapProduction(
   // organization created above points at it.
   const { moduleIds } = await syncPlatformCatalog(tx);
 
-  for (const [key] of PLATFORM_MODULES) {
+  for (const [key] of AGENCY_SUITE_MODULES) {
     const moduleId = moduleIds.get(key);
     if (!moduleId) throw new Error(`Unknown platform module: ${key}`);
     await tx.platformPackageModule.upsert({

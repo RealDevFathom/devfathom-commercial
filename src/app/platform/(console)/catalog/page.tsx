@@ -1,4 +1,5 @@
 import { Plus } from 'lucide-react';
+import { Fragment } from 'react';
 import {
   PlatformCommandButton,
   PlatformCommandForm,
@@ -8,12 +9,27 @@ import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { VERTICALS } from '@/lib/vertical-catalog';
 
+const BAND_LABELS = {
+  BASELINE: 'Baseline',
+  PLATFORM: 'Platform',
+  VERTICAL_CORE: 'Vertical core',
+  VERTICAL_OPTIONAL: 'Vertical optional',
+} as const;
+
+function moduleGroup(module: {
+  band: keyof typeof BAND_LABELS;
+  vertical: keyof typeof VERTICALS | null;
+}) {
+  const vertical = module.vertical ? ` · ${VERTICALS[module.vertical].label}` : '';
+  return `${BAND_LABELS[module.band]}${vertical}`;
+}
+
 export default async function CatalogPage() {
   await requirePlatformRead('/platform/catalog');
   const data = await withPlatformDb(async (db) => {
     const [modules, packages, cameraPresets] = await Promise.all([
       db.platformModule.findMany({
-        orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }],
+        orderBy: [{ band: 'asc' }, { vertical: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
         include: { _count: { select: { organizations: true, contracts: true } } },
       }),
       db.platformPackage.findMany({
@@ -170,88 +186,130 @@ export default async function CatalogPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
-                  {data.modules.map((module) => (
-                    <tr key={module.id}>
-                      <td className="px-4 py-4">
-                        <p className="text-xs font-semibold">{module.name}</p>
-                        <p className="mt-1 font-mono text-[9px] text-text-muted">{module.key}</p>
-                      </td>
-                      <td className="px-4 py-4 text-xs">{module.category}</td>
-                      <td className="px-4 py-4 font-mono text-[9px]">
-                        {module.routePrefix ?? '—'}
-                      </td>
-                      <td className="px-4 py-4 text-xs">{module._count.organizations}</td>
-                      <td className="px-4 py-4 text-xs">{module._count.contracts}</td>
-                      <td className="px-4 py-4">
-                        <PlatformStatus value={module.active ? 'ACTIVE' : 'INACTIVE'} />
-                      </td>
-                      <td className="px-4 py-4 text-right">
-                        <details className="relative inline-block text-left">
-                          <summary className="cursor-pointer list-none border border-border-default px-3 py-2 text-[10px] font-semibold">
-                            Edit
-                          </summary>
-                          <div className="absolute right-0 z-20 mt-2 w-[min(440px,85vw)] border border-border-default bg-surface-card p-4 shadow-xl">
-                            <PlatformCommandForm
-                              compact
-                              action="catalog.module.upsert"
-                              submitLabel="Update module"
-                              fields={[
-                                {
-                                  name: 'id',
-                                  label: 'Module',
-                                  type: 'hidden',
-                                  defaultValue: module.id,
-                                },
-                                {
-                                  name: 'key',
-                                  label: 'Module key',
-                                  required: true,
-                                  defaultValue: module.key,
-                                },
-                                {
-                                  name: 'name',
-                                  label: 'Name',
-                                  required: true,
-                                  defaultValue: module.name,
-                                },
-                                {
-                                  name: 'description',
-                                  label: 'Description',
-                                  type: 'textarea',
-                                  defaultValue: module.description,
-                                },
-                                {
-                                  name: 'category',
-                                  label: 'Category',
-                                  required: true,
-                                  defaultValue: module.category,
-                                },
-                                {
-                                  name: 'routePrefix',
-                                  label: 'Route prefix',
-                                  defaultValue: module.routePrefix,
-                                },
-                                { name: 'icon', label: 'Icon key', defaultValue: module.icon },
-                                {
-                                  name: 'sortOrder',
-                                  label: 'Sort order',
-                                  type: 'number',
-                                  min: 0,
-                                  defaultValue: module.sortOrder,
-                                },
-                                {
-                                  name: 'active',
-                                  label: 'Active',
-                                  type: 'checkbox',
-                                  defaultValue: module.active,
-                                },
-                              ]}
-                            />
-                          </div>
-                        </details>
-                      </td>
-                    </tr>
-                  ))}
+                  {data.modules.map((module, index) => {
+                    const group = moduleGroup(module);
+                    const startsGroup =
+                      index === 0 || moduleGroup(data.modules[index - 1]!) !== group;
+                    return (
+                      <Fragment key={module.id}>
+                        {startsGroup ? (
+                          <tr className="bg-surface-sunken/40">
+                            <th
+                              colSpan={7}
+                              scope="rowgroup"
+                              className="px-4 py-3 font-mono text-[10px] uppercase tracking-[0.12em] text-text-muted"
+                            >
+                              {group}
+                            </th>
+                          </tr>
+                        ) : null}
+                        <tr>
+                          <td className="px-4 py-4">
+                            <p className="text-xs font-semibold">{module.name}</p>
+                            <p className="mt-1 font-mono text-[9px] text-text-muted">
+                              {module.key}
+                            </p>
+                          </td>
+                          <td className="px-4 py-4 text-xs">{module.category}</td>
+                          <td className="px-4 py-4 font-mono text-[9px]">
+                            {module.routePrefix ?? '—'}
+                          </td>
+                          <td className="px-4 py-4 text-xs">{module._count.organizations}</td>
+                          <td className="px-4 py-4 text-xs">{module._count.contracts}</td>
+                          <td className="px-4 py-4">
+                            <PlatformStatus value={module.active ? 'ACTIVE' : 'INACTIVE'} />
+                          </td>
+                          <td className="px-4 py-4 text-right">
+                            <details className="relative inline-block text-left">
+                              <summary className="cursor-pointer list-none border border-border-default px-3 py-2 text-[10px] font-semibold">
+                                Edit
+                              </summary>
+                              <div className="absolute right-0 z-20 mt-2 w-[min(440px,85vw)] border border-border-default bg-surface-card p-4 shadow-xl">
+                                <PlatformCommandForm
+                                  compact
+                                  action="catalog.module.upsert"
+                                  submitLabel="Update module"
+                                  fields={[
+                                    {
+                                      name: 'id',
+                                      label: 'Module',
+                                      type: 'hidden',
+                                      defaultValue: module.id,
+                                    },
+                                    {
+                                      name: 'key',
+                                      label: 'Module key',
+                                      required: true,
+                                      defaultValue: module.key,
+                                    },
+                                    {
+                                      name: 'name',
+                                      label: 'Name',
+                                      required: true,
+                                      defaultValue: module.name,
+                                    },
+                                    {
+                                      name: 'description',
+                                      label: 'Description',
+                                      type: 'textarea',
+                                      defaultValue: module.description,
+                                    },
+                                    {
+                                      name: 'category',
+                                      label: 'Category',
+                                      required: true,
+                                      defaultValue: module.category,
+                                    },
+                                    {
+                                      name: 'band',
+                                      label: 'Band',
+                                      type: 'select',
+                                      required: true,
+                                      defaultValue: module.band,
+                                      options: Object.entries(BAND_LABELS).map(
+                                        ([value, label]) => ({ value, label })
+                                      ),
+                                    },
+                                    {
+                                      name: 'vertical',
+                                      label: 'Vertical',
+                                      type: 'select',
+                                      defaultValue: module.vertical,
+                                      options: Object.entries(VERTICALS).map(
+                                        ([value, definition]) => ({
+                                          value,
+                                          label: definition.label,
+                                        })
+                                      ),
+                                    },
+                                    {
+                                      name: 'routePrefix',
+                                      label: 'Route prefix',
+                                      defaultValue: module.routePrefix,
+                                    },
+                                    { name: 'icon', label: 'Icon key', defaultValue: module.icon },
+                                    {
+                                      name: 'sortOrder',
+                                      label: 'Sort order',
+                                      type: 'number',
+                                      min: 0,
+                                      defaultValue: module.sortOrder,
+                                    },
+                                    {
+                                      name: 'active',
+                                      label: 'Active',
+                                      type: 'checkbox',
+                                      defaultValue: module.active,
+                                    },
+                                  ]}
+                                />
+                              </div>
+                            </details>
+                          </td>
+                        </tr>
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -286,30 +344,39 @@ export default async function CatalogPage() {
                       <span>{item._count.organizations} organizations</span>
                     </div>
                     <div className="mt-4 space-y-2">
-                      {data.modules.map((module) => {
-                        const link = linked.get(module.id);
-                        return (
-                          <div key={module.id} className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-xs">{module.name}</p>
-                              <p className="font-mono text-[8px] text-text-faint">
-                                {module.category}
-                              </p>
+                      {data.modules
+                        .filter(
+                          (module) =>
+                            module.band !== 'BASELINE' &&
+                            (!module.vertical || module.vertical === item.vertical)
+                        )
+                        .map((module) => {
+                          const link = linked.get(module.id);
+                          return (
+                            <div
+                              key={module.id}
+                              className="flex items-center justify-between gap-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-xs">{module.name}</p>
+                                <p className="font-mono text-[8px] text-text-faint">
+                                  {module.category}
+                                </p>
+                              </div>
+                              <PlatformCommandButton
+                                action="catalog.package.module"
+                                label={link?.enabled ? 'Included' : 'Add'}
+                                tone="quiet"
+                                payload={{
+                                  packageId: item.id,
+                                  moduleId: module.id,
+                                  enabled: !link?.enabled,
+                                  limits: link?.limits ?? null,
+                                }}
+                              />
                             </div>
-                            <PlatformCommandButton
-                              action="catalog.package.module"
-                              label={link?.enabled ? 'Included' : 'Add'}
-                              tone="quiet"
-                              payload={{
-                                packageId: item.id,
-                                moduleId: module.id,
-                                enabled: !link?.enabled,
-                                limits: link?.limits ?? null,
-                              }}
-                            />
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
                     </div>
                     <details className="mt-5 border-t border-border-subtle pt-4">
                       <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase tracking-[0.1em] text-text-muted">
@@ -447,6 +514,26 @@ export default async function CatalogPage() {
                   { name: 'name', label: 'Name', required: true },
                   { name: 'description', label: 'Description', type: 'textarea' },
                   { name: 'category', label: 'Category', required: true },
+                  {
+                    name: 'band',
+                    label: 'Band',
+                    type: 'select',
+                    required: true,
+                    defaultValue: 'PLATFORM',
+                    options: Object.entries(BAND_LABELS).map(([value, label]) => ({
+                      value,
+                      label,
+                    })),
+                  },
+                  {
+                    name: 'vertical',
+                    label: 'Vertical',
+                    type: 'select',
+                    options: Object.entries(VERTICALS).map(([value, definition]) => ({
+                      value,
+                      label: definition.label,
+                    })),
+                  },
                   { name: 'routePrefix', label: 'Route prefix', placeholder: '/payroll' },
                   { name: 'icon', label: 'Icon key' },
                   { name: 'active', label: 'Active', type: 'checkbox', defaultValue: true },

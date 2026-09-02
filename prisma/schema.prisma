@@ -2246,6 +2246,13 @@ enum OrganizationVertical {
   RESTAURANT
 }
 
+enum PlatformModuleBand {
+  BASELINE
+  PLATFORM
+  VERTICAL_CORE
+  VERTICAL_OPTIONAL
+}
+
 enum RestaurantActivationAcknowledgementKind {
   TAX
   PAYMENT
@@ -7910,22 +7917,25 @@ model PlatformSetting {
 }
 
 model PlatformModule {
-  id          String   @id @default(cuid())
-  key         String   @unique
+  id          String                @id @default(cuid())
+  key         String                @unique
   name        String
   description String?
   category    String
+  band        PlatformModuleBand
+  vertical    OrganizationVertical?
   routePrefix String?
   icon        String?
-  active      Boolean  @default(true)
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  active      Boolean               @default(true)
+  sortOrder   Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
 
   packageLinks  PlatformPackageModule[]
   organizations OrganizationModule[]
   contracts     PlatformContractModule[]
 
+  @@index([band, vertical, active])
   @@index([category, active])
   @@map("platform_modules")
 }

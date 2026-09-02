@@ -1,53 +1,27 @@
 import type { Prisma } from '../src/generated/prisma/client.js';
-import { RESTAURANT_MODULES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
+import { MODULE_CATALOG } from '../src/lib/module-catalog.js';
+import { RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
 
 /**
  * Agency modules, as `[key, name, category, routePrefix]`. The restaurant half
  * of the catalog is declared in `src/lib/vertical-catalog.ts`.
  */
-export const PLATFORM_MODULES = [
-  ['dashboard', 'Dashboard', 'Core', '/dashboard'],
-  ['projects', 'Projects', 'Delivery', '/projects'],
-  ['clients', 'Clients', 'Delivery', '/clients'],
-  ['finance', 'Finance', 'Operations', '/finance'],
-  ['chat', 'Chat', 'Collaboration', '/chat'],
-  ['meetings', 'Meetings', 'Collaboration', '/meetings'],
-  ['notes', 'Notes', 'Knowledge', '/notes'],
-  ['hr', 'HR', 'People', '/hr'],
-  ['reviews', 'Performance reviews', 'People', '/reviews'],
-  ['email', 'Email', 'Communication', '/email'],
-  ['api', 'API access', 'Developer', '/organization/api'],
-  ['webhooks', 'Webhooks', 'Developer', '/organization/webhooks'],
-  ['audit', 'Audit logs', 'Security', '/audit-logs'],
-  ['branding', 'White-label branding', 'Configuration', '/organization/branding'],
-  ['domains', 'Custom domains', 'Configuration', '/organization/domains'],
-  ['identity', 'Enterprise SSO', 'Security', '/organization/authentication'],
-  ['scim', 'SCIM provisioning', 'Security', '/organization/provisioning'],
-  ['data', 'Data controls', 'Governance', '/organization/data'],
-] as const;
+/** Sellable Agency Suite composition: shared platform plus Agency vertical modules, no baseline. */
+export const AGENCY_SUITE_MODULES = MODULE_CATALOG.filter(
+  (module) =>
+    module.band === 'PLATFORM' || (module.vertical === 'AGENCY' && module.band !== 'BASELINE')
+).map(({ key, name, category, routePrefix }) => [key, name, category, routePrefix] as const);
 
-type ModuleDefinition = {
-  key: string;
-  name: string;
-  category: string;
-  routePrefix: string;
-};
+/** The pre-band 18-row registry shape, retained only for migration snapshot fixtures. */
+export const PLATFORM_MODULES = MODULE_CATALOG.filter(
+  (module) =>
+    module.key === 'dashboard' ||
+    module.band === 'PLATFORM' ||
+    (module.vertical === 'AGENCY' && module.band === 'VERTICAL_OPTIONAL')
+).map(({ key, name, category, routePrefix }) => [key, name, category, routePrefix] as const);
 
 /** Every module key the product ships, in registry order. */
-const CATALOG_MODULES: readonly ModuleDefinition[] = [
-  ...PLATFORM_MODULES.map(([key, name, category, routePrefix]) => ({
-    key,
-    name,
-    category,
-    routePrefix,
-  })),
-  ...RESTAURANT_MODULES.map(({ key, name, category, routePrefix }) => ({
-    key,
-    name,
-    category,
-    routePrefix,
-  })),
-];
+const CATALOG_MODULES = MODULE_CATALOG;
 
 export type PlatformCatalogSync = {
   modulesCreated: number;
@@ -98,7 +72,14 @@ export async function syncPlatformCatalog(
     const platformModule = await tx.platformModule.upsert({
       where: { key: definition.key },
       update: {},
-      create: definition,
+      create: {
+        key: definition.key,
+        name: definition.name,
+        category: definition.category,
+        routePrefix: definition.routePrefix,
+        band: definition.band,
+        vertical: definition.vertical,
+      },
     });
     moduleIds.set(definition.key, platformModule.id);
     if (!existingModuleKeys.has(definition.key)) modulesCreated += 1;

@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   orgModuleCount: vi.fn(),
   platformModuleFindUnique: vi.fn(),
   platformModuleFindMany: vi.fn(),
+  packageModuleUpsert: vi.fn(),
   departmentCreateMany: vi.fn(),
   auditCreate: vi.fn(),
   organizationExists: vi.fn(),
@@ -92,6 +93,7 @@ const platformDb = {
     findUnique: mocks.platformModuleFindUnique,
     findMany: mocks.platformModuleFindMany,
   },
+  platformPackageModule: { upsert: mocks.packageModuleUpsert },
 };
 
 import { executePlatformCommand } from './commands';
@@ -504,7 +506,7 @@ describe('organization.module enablement guard', () => {
 
   it('rejects an agency module on a restaurant organization', async () => {
     mocks.orgFindUnique.mockResolvedValue({ vertical: 'RESTAURANT' });
-    mocks.platformModuleFindUnique.mockResolvedValue({ key: 'dashboard' });
+    mocks.platformModuleFindUnique.mockResolvedValue({ key: 'projects' });
 
     const error = await caught(run('organization.module', modulePayload('mod_dash')));
 
@@ -512,6 +514,27 @@ describe('organization.module enablement guard', () => {
     expect(error).toMatchObject({ status: 400 });
     expect(mocks.moduleUpsert).not.toHaveBeenCalled();
     expectSanitizedModuleFailureAudit();
+  });
+
+  it('allows shared platform modules on either vertical', async () => {
+    mocks.orgFindUnique.mockResolvedValue({ vertical: 'RESTAURANT' });
+    mocks.platformModuleFindUnique.mockResolvedValue({ key: 'hr' });
+
+    await run('organization.module', modulePayload('mod_hr'));
+
+    expect(mocks.moduleUpsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects disabling a baseline module', async () => {
+    mocks.orgFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
+    mocks.platformModuleFindUnique.mockResolvedValue({ key: 'dashboard' });
+
+    const error = await caught(
+      run('organization.module', { ...modulePayload('mod_dashboard'), status: 'DISABLED' })
+    );
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(mocks.moduleUpsert).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown module id', async () => {
@@ -583,6 +606,50 @@ describe('catalog.package.upsert vertical metadata', () => {
     const updateArg = mocks.pkgUpdate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
     expect(updateArg.data).not.toHaveProperty('vertical');
     expect(updateArg.data).toHaveProperty('version');
+  });
+});
+
+describe('catalog.package.module band compatibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.pkgFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
+    mocks.packageModuleUpsert.mockResolvedValue({ id: 'link_1' });
+  });
+
+  const attach = () =>
+    run('catalog.package.module', {
+      packageId: 'pkg_1',
+      moduleId: 'mod_1',
+      enabled: true,
+    });
+
+  it('allows a shared platform module', async () => {
+    mocks.platformModuleFindUnique.mockResolvedValue({
+      key: 'chat',
+      band: 'PLATFORM',
+      vertical: null,
+    });
+
+    await attach();
+
+    expect(mocks.packageModuleUpsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects baseline plumbing and cross-vertical modules', async () => {
+    mocks.platformModuleFindUnique.mockResolvedValue({
+      key: 'dashboard',
+      band: 'BASELINE',
+      vertical: null,
+    });
+    expect(await caught(attach())).toBeInstanceOf(PlatformSecurityError);
+
+    mocks.platformModuleFindUnique.mockResolvedValue({
+      key: 'restaurant-pos',
+      band: 'VERTICAL_OPTIONAL',
+      vertical: 'RESTAURANT',
+    });
+    expect(await caught(attach())).toBeInstanceOf(PlatformSecurityError);
+    expect(mocks.packageModuleUpsert).not.toHaveBeenCalled();
   });
 });
 

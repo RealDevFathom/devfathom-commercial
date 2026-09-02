@@ -15,9 +15,8 @@ import type { OrganizationVertical } from '@/generated/prisma/enums';
  * limit matrix) and the Phase 0 decisions remain OPEN. They are stable enough to
  * build against and are revised only here.
  *
- * The Agency vertical's module registry stays in `prisma/production-bootstrap.ts`
- * (`PLATFORM_MODULES`); this catalog does not duplicate it. What lives here for
- * Agency is only its vertical identity and the compatibility rule.
+ * Both verticals declare their owned core/optional modules here. Shared baseline
+ * and platform modules are composed with them by `module-catalog.ts`.
  */
 
 export type { OrganizationVertical };
@@ -115,7 +114,7 @@ export function memberDepartmentKeyForVertical(vertical: OrganizationVertical): 
 }
 
 // ---------------------------------------------------------------------------
-// §6 — Commercial restaurant module map (ten modules)
+// §6 — Vertical-owned commercial module maps
 // ---------------------------------------------------------------------------
 
 export type CommercialModule = {
@@ -131,6 +130,41 @@ export type CommercialModule = {
   /** §6.1 — Restaurant Core is mandatory for every restaurant organization. */
   mandatory: boolean;
 };
+
+export const AGENCY_MODULES: readonly CommercialModule[] = [
+  {
+    key: 'agency-core',
+    name: 'Agency Core',
+    category: 'Core',
+    routePrefix: '/agency',
+    vertical: 'AGENCY',
+    mandatory: true,
+  },
+  {
+    key: 'projects',
+    name: 'Projects',
+    category: 'Delivery',
+    routePrefix: '/projects',
+    vertical: 'AGENCY',
+    mandatory: false,
+  },
+  {
+    key: 'clients',
+    name: 'Clients',
+    category: 'Delivery',
+    routePrefix: '/clients',
+    vertical: 'AGENCY',
+    mandatory: false,
+  },
+  {
+    key: 'finance',
+    name: 'Finance',
+    category: 'Operations',
+    routePrefix: '/finance',
+    vertical: 'AGENCY',
+    mandatory: false,
+  },
+];
 
 export const RESTAURANT_MODULES: readonly CommercialModule[] = [
   {
@@ -275,6 +309,9 @@ export const RESTAURANT_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
   },
 ];
 
+/** Agency packages currently meter seats at organization level, not module limits. */
+export const AGENCY_LIMIT_KEYS: readonly LimitKeyDefinition[] = [];
+
 export const RESTAURANT_LIMIT_KEY_NAMES: readonly string[] = RESTAURANT_LIMIT_KEYS.map(
   (limit) => limit.key
 );
@@ -386,6 +423,11 @@ export type RoleTemplate = {
    * bootstrap admin role. All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
 };
+
+export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
+  { key: 'admin', name: 'Administrator', isSystem: true, capabilities: ['*'] },
+  { key: 'member', name: 'Member', isSystem: true, capabilities: [] },
+];
 
 export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   { key: 'owner', name: 'Owner / Administrator', isSystem: true, capabilities: ['*'] },
@@ -829,11 +871,9 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
 // Pure helpers — the compatibility surface consumers must call
 // ---------------------------------------------------------------------------
 
-/** Commercial modules belonging to a vertical. Agency modules are owned by the
- * platform module registry (production-bootstrap `PLATFORM_MODULES`), so this
- * returns them only for the restaurant vertical. */
+/** Commercial modules owned by a vertical. */
 export function modulesForVertical(vertical: OrganizationVertical): readonly CommercialModule[] {
-  return vertical === 'RESTAURANT' ? RESTAURANT_MODULES : [];
+  return vertical === 'RESTAURANT' ? RESTAURANT_MODULES : AGENCY_MODULES;
 }
 
 /** The mandatory modules a vertical must enable (§6.1: Restaurant Core). */
@@ -862,7 +902,7 @@ export function packageByKey(key: string): PackageDefinition | undefined {
 }
 
 export function roleTemplatesForVertical(vertical: OrganizationVertical): readonly RoleTemplate[] {
-  return vertical === 'RESTAURANT' ? RESTAURANT_ROLE_TEMPLATES : [];
+  return vertical === 'RESTAURANT' ? RESTAURANT_ROLE_TEMPLATES : AGENCY_ROLE_TEMPLATES;
 }
 
 /**
@@ -879,7 +919,7 @@ export function jobRoleTemplatesForVertical(
 export function limitKeysForVertical(
   vertical: OrganizationVertical
 ): readonly LimitKeyDefinition[] {
-  return vertical === 'RESTAURANT' ? RESTAURANT_LIMIT_KEYS : [];
+  return vertical === 'RESTAURANT' ? RESTAURANT_LIMIT_KEYS : AGENCY_LIMIT_KEYS;
 }
 
 /**
