@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1196-ph-ui-purchasing-and-receiving-suppliers-requisition-po-approval-receive-with-batch-expiry-mrp-bonus-capture-ma/scripts/paperclip-issue-update.sh:*)",
+      "Bash(/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1196-ph-ui-purchasing-and-receiving-suppliers-requisition-po-approval-receive-with-batch-expiry-mrp-bonus-capture-ma/scripts/paperclip:*)",
+      "Bash(curl:*)",
+      "Bash(env)",
+      "Bash(env:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/Saad/.paperclip/instances/default/companies/439a6e2c-06be-4fe0-bb43-b213140f664a",
+      "/Users/Saad/.paperclip/instances/default/companies/439a6e2c-06be-4fe0-bb43-b213140f664a/acp-engine/agents/9e308e5e-f842-4bb2-ab5f-5f6c273fae0c",
+      "/Users/Saad/.paperclip/instances/default/workspaces/9e308e5e-f842-4bb2-ab5f-5f6c273fae0c"
+    ],
+    "defaultMode": "default"
+  }
+}
