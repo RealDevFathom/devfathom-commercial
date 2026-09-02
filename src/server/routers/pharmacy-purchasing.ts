@@ -24,6 +24,16 @@ import {
   receiptLineQuantities,
   receiptLineUnitCostMinor,
 } from '@/lib/pharmacy/receiving';
+import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
+import {
+  allocateSupplierCredit,
+  createPurchaseReturn,
+  debitNotePositions,
+  dispatchPurchaseReturn,
+  issueDebitNote,
+  recordSupplierCredit,
+  submitPurchaseReturn,
+} from '@/lib/pharmacy/supplier-returns-operations';
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
@@ -84,6 +94,22 @@ function domainError(error: unknown): never {
               error.reason === 'BLOCKED_STOCK'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  if (error instanceof PharmacySupplierReturnError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CROSS_TENANT_REFERENCE' ||
+              error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'SELF_APPROVAL'
+            ? 'FORBIDDEN'
+            : // ALREADY_CLAIMED, RETURN_WINDOW_CLOSED, OVER_ALLOCATION and the
+              // transition refusals are all "you asked for something the current
+              // state does not allow", not authorization failures.
+              'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -930,5 +956,185 @@ export const pharmacyPurchasingRouter = router({
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  // ── PUR-06 — returns, expiry claims, debit notes and supplier credit ──────
+
+  /**
+   * Open a DRAFT return or expiry claim. Reserves nothing: the INV-09 hold is
+   * taken at submission, so a draft never removes stock from sale.
+   */
+  createPurchaseReturn: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          supplierId: z.string().min(1),
+          kind: z.enum(['PURCHASE_RETURN', 'EXPIRY_CLAIM']),
+          reference: z.string().trim().min(1).max(120),
+          note: z.string().trim().max(1000).optional(),
+          lines: z
+            .array(
+              z
+                .object({
+                  inventoryLotId: z.string().min(1),
+                  stockLocationId: z.string().min(1),
+                  quantityUnits: z.number().int().positive(),
+                  reason: z.string().trim().min(1).max(500),
+                  returnWindowEndsAt: z.date(),
+                  expectedCreditMinor: z.number().int().min(0),
+                })
+                .strict()
+            )
+            .min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          createPurchaseReturn(txDb(tx), scope, {
+            supplierId: input.supplierId,
+            kind: input.kind,
+            reference: input.reference,
+            note: input.note,
+            lines: input.lines,
+          })
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** Take the INV-09 reservation. From here the quantity cannot be sold. */
+  submitPurchaseReturn: auditedProtectedProcedure
+    .input(z.object({ branchId, purchaseReturnId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          submitPurchaseReturn(txDb(tx), scope, {
+            purchaseReturnId: input.purchaseReturnId,
+            at: new Date(),
+          })
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** Post the RETURN_TO_SUPPLIER movements and release the reservation. */
+  dispatchPurchaseReturn: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          purchaseReturnId: z.string().min(1),
+          idempotencyKey: z.string().trim().min(1).max(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          dispatchPurchaseReturn(txDb(tx), scope, {
+            purchaseReturnId: input.purchaseReturnId,
+            at: new Date(),
+            idempotencyKeyPrefix: input.idempotencyKey,
+          })
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  issueDebitNote: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          purchaseReturnId: z.string().min(1),
+          reference: z.string().trim().min(1).max(120),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await issueDebitNote(ctx.db, scope, {
+          purchaseReturnId: input.purchaseReturnId,
+          reference: input.reference,
+          at: new Date(),
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  recordSupplierCredit: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          supplierId: z.string().min(1),
+          reference: z.string().trim().min(1).max(120),
+          amountMinor: z.number().int().positive(),
+          receivedAt: z.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await recordSupplierCredit(ctx.db, scope, {
+          supplierId: input.supplierId,
+          reference: input.reference,
+          amountMinor: input.amountMinor,
+          receivedAt: input.receivedAt,
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  allocateSupplierCredit: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          supplierCreditId: z.string().min(1),
+          debitNoteId: z.string().min(1),
+          amountMinor: z.number().int().positive(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          allocateSupplierCredit(txDb(tx), scope, {
+            supplierCreditId: input.supplierCreditId,
+            debitNoteId: input.debitNoteId,
+            amountMinor: input.amountMinor,
+            at: new Date(),
+          })
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** PUR-06 acceptance: expected and received credit, side by side. */
+  debitNotePositions: protectedProcedure
+    .input(z.object({ branchId, supplierId: z.string().min(1).optional() }).strict())
+    .query(({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      return debitNotePositions(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        { supplierId: input.supplierId }
+      );
     }),
 });

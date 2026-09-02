@@ -40,7 +40,14 @@ export class PharmacyInventoryError extends Error {
 export type BatchState = 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
 
 /** Lot/location-scope state; quarantine and damage can apply to part of one lot. */
-export type StockDisposition = 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' | 'DESTROYED' | 'IN_TRANSIT';
+export type StockDisposition =
+  | 'AVAILABLE'
+  | 'QUARANTINE'
+  | 'DAMAGED'
+  | 'DESTROYED'
+  | 'IN_TRANSIT'
+  /** PUR-06: dispatched back to the supplier on a return or expiry claim. */
+  | 'RETURN_TO_SUPPLIER';
 
 /** Why a candidate may not be sold or transferred (INV-03). */
 export type BlockReason =
@@ -50,6 +57,7 @@ export type BlockReason =
   | 'DAMAGED'
   | 'DESTROYED'
   | 'IN_TRANSIT'
+  | 'RETURNED_TO_SUPPLIER'
   | 'UNRECEIVED'
   | 'UNAUTHORIZED'
   | 'EMPTY';
@@ -220,6 +228,7 @@ export function blockReasonFor(
   if (candidate.disposition === 'DAMAGED') return 'DAMAGED';
   if (candidate.disposition === 'DESTROYED') return 'DESTROYED';
   if (candidate.disposition === 'IN_TRANSIT') return 'IN_TRANSIT';
+  if (candidate.disposition === 'RETURN_TO_SUPPLIER') return 'RETURNED_TO_SUPPLIER';
   if (candidate.disposition !== 'AVAILABLE') return 'UNAUTHORIZED';
   if (candidate.receivedAt === null || candidate.receivedAt.getTime() > scope.at.getTime()) {
     return 'UNRECEIVED';

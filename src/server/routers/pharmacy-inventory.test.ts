@@ -55,6 +55,20 @@ function makeDb() {
     pharmacyStockBalance: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
+    pharmacySafetyStock: Object.assign(model(), {
+      upsert: vi
+        .fn()
+        .mockImplementation(async ({ create }: { create: object }) => ({ id: 'new', ...create })),
+      findMany: vi.fn().mockResolvedValue([]),
+    }),
+    pharmacyStockSignal: Object.assign(model(), { findMany: vi.fn().mockResolvedValue([]) }),
+    pharmacyStockSignalEvent: model(),
+    pharmacyStockSignalAction: model(),
+    pharmacyRequisition: model(),
+    pharmacyRequisitionLine: model(),
+    pharmacyInterbranchTransfer: model(),
+    pharmacyPurchaseReturn: model(),
+    pharmacyPurchaseReturnLine: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -194,5 +208,89 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUR-07 — the stock action centre transport', () => {
+  it('gates the action centre behind the same pharmacy-inventory entitlement', () => {
+    expect(moduleForProcedure('pharmacyInventory.refreshStockSignals')).toBe('pharmacy-inventory');
+    expect(moduleForProcedure('pharmacyInventory.createDraftAction')).toBe('pharmacy-inventory');
+  });
+
+  it('records the SESSION actor as the safety-stock approver, never a payload field', async () => {
+    db.medicine.findFirst.mockResolvedValue({ id: 'medicine_1' });
+    await caller({ userId: 'user_pharmacist_in_charge' }).approveSafetyStock({
+      branchId: 'branch_a',
+      medicineId: 'medicine_1',
+      safetyStockUnits: 120,
+      coverageDays: 30,
+    });
+    expect(db.pharmacySafetyStock.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          organizationId: 'org_a',
+          approvedByUserId: 'user_pharmacist_in_charge',
+        }),
+      })
+    );
+  });
+
+  it('rejects a cross-tenant medicine ID when approving a safety stock', async () => {
+    await expect(
+      caller().approveSafetyStock({
+        branchId: 'branch_a',
+        medicineId: 'medicine_from_org_b',
+        safetyStockUnits: 120,
+        coverageDays: 30,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacySafetyStock.upsert).not.toHaveBeenCalled();
+  });
+
+  it('refuses a snooze or a dismissal with no reason (§8A invariant 29)', async () => {
+    for (const call of [
+      () =>
+        caller().snoozeSignal({
+          branchId: 'branch_a',
+          signalId: 'signal_1',
+          until: new Date('2026-09-10T00:00:00.000Z'),
+          reason: '   ',
+        }),
+      () => caller().dismissSignal({ branchId: 'branch_a', signalId: 'signal_1', reason: '' }),
+    ]) {
+      await expect(call()).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(db.pharmacyStockSignal.update).not.toHaveBeenCalled();
+  });
+
+  it('has no draft-action shape that could name a purchase order or a movement', async () => {
+    // §8A invariant 29 at the transport layer: the discriminated union admits
+    // exactly three kinds, all of them drafts. A caller cannot smuggle a fourth.
+    await expect(
+      caller().createDraftAction({
+        // @ts-expect-error — proving the schema rejects a non-draft action kind.
+        kind: 'CREATE_PURCHASE_ORDER',
+        branchId: 'branch_a',
+        signalId: 'signal_1',
+      })
+    ).rejects.toBeDefined();
+    expect(db.pharmacyStockSignalAction.create).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a draft action when there is no tenant actor to attribute it to', async () => {
+    await expect(
+      caller({ userId: null }).createDraftAction({
+        kind: 'DRAFT_REQUISITION',
+        branchId: 'branch_a',
+        signalId: 'signal_1',
+        reference: 'REQ-1',
+        medicineId: 'medicine_1',
+        packLevelId: 'pack_1',
+        canonicalUnitsPerPack: 10,
+        quantityPacks: 8,
+      })
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
 });
