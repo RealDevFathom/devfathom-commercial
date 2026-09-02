@@ -36,6 +36,7 @@ const sharedModules = [
   ['scim', 'SCIM provisioning', 'Security', '/organization/provisioning', 'PLATFORM'],
   ['data', 'Data controls', 'Governance', '/organization/data', 'PLATFORM'],
   ['pharmacy-core', 'Pharmacy Core', 'Pharmacy', '/pharmacy', 'PLATFORM'],
+  ['pharmacy-dispensing', 'Pharmacy Dispensing', 'Pharmacy', '/pharmacy/prescriptions', 'PLATFORM'],
 ] as const;
 
 /** The single registry used by catalog sync, entitlement resolution, and UI compatibility. */
@@ -213,6 +214,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',
+  pharmacyPrescriptions: 'pharmacy-dispensing',
 };
 
 export function moduleForProcedure(path: string): string | null {
