@@ -1,9 +1,16 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { deriveLooseUnitPrice } from './medicine';
+import { priceFromLot } from './medicine';
 import { allocateForSale } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+
+/**
+ * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
+ * can preview a price in the browser without pulling Prisma into the bundle.
+ * Existing server callers keep importing it from here.
+ */
+export { priceFromLot };
 
 export class PharmacySaleError extends Error {
   constructor(
@@ -21,23 +28,6 @@ export class PharmacySaleError extends Error {
   ) {
     super(reason);
   }
-}
-
-export function priceFromLot(input: {
-  printedMrpMinor: number;
-  canonicalUnitsInPack: number;
-  canonicalUnitsPerSaleUnit: number;
-  roundingIncrementMinor?: number;
-}) {
-  const loose = deriveLooseUnitPrice({
-    printedMrpMinor: input.printedMrpMinor,
-    canonicalUnitsInPack: input.canonicalUnitsInPack,
-    roundingIncrementMinor: input.roundingIncrementMinor ?? 1,
-  });
-  return {
-    unitPriceMinor: loose.unitPriceMinor * input.canonicalUnitsPerSaleUnit,
-    proRataCeilingMinor: loose.proRataCeilingMinor * input.canonicalUnitsPerSaleUnit,
-  };
 }
 
 export function validateDiscount(input: {
