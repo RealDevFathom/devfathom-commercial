@@ -28,3 +28,4 @@ param customDomains = [
     certificateId: '/subscriptions/8f456d9c-74ac-4a21-aaa3-2d65719120c5/resourceGroups/rg-devfathom-staging-uaenorth/providers/Microsoft.App/managedEnvironments/df-stg-7azfl6tid4bb4-cae/managedCertificates/mc-df-stg-7azfl6t-admin-staging-de-6237'
   }
 ]
+param postgresExtensions = 'btree_gist'

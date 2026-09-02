@@ -46,6 +46,14 @@ environment that is only served on its default Container Apps hostname.
 ''')
 param customDomains customDomainBinding[] = []
 
+@description('''
+Comma-separated allow-list for the azure.extensions server parameter. Azure Database for PostgreSQL
+refuses CREATE EXTENSION for anything absent from it, so this must cover every extension the
+migrations and prisma/prepare-extensions.ts create, or the migration job fails before applying any
+migration.
+''')
+param postgresExtensions string
+
 @secure()
 param postgresAdminPassword string
 @secure()
@@ -207,6 +215,16 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-0
     charset: 'UTF8'
     collation: 'en_US.utf8'
   }
+}
+
+resource postgresExtensionAllowList 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: postgres
+  name: 'azure.extensions'
+  properties: {
+    value: postgresExtensions
+    source: 'user-override'
+  }
+  dependsOn: [database]
 }
 
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
