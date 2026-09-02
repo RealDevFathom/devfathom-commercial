@@ -1,3 +1,5 @@
+import { moduleDefinitionForKey, type ModuleDefinition } from '@/lib/module-catalog';
+
 /**
  * Test-only helper for the WHA-278 composite foreign key.
  *
@@ -49,8 +51,8 @@ type PlatformModuleCreate = {
   key: string;
   name: string;
   category: string;
-  band: 'VERTICAL_CORE' | 'VERTICAL_OPTIONAL';
-  vertical: 'RESTAURANT';
+  band: ModuleDefinition['band'];
+  vertical: ModuleDefinition['vertical'];
   active?: boolean;
 };
 
@@ -66,15 +68,14 @@ export async function ensurePlatformModule(
   key: string,
   create: Omit<PlatformModuleCreate, 'key' | 'band' | 'vertical'>
 ): Promise<{ id: string }> {
+  // The band and the owning vertical are registry facts, so they are read from
+  // the module catalog rather than re-derived here. Branching on them inline is
+  // exactly the scattered conditional the §16 / §2.3 audit forbids, and a fixture
+  // that guessed them could register a row the catalog disagrees with.
+  const definition = moduleDefinitionForKey(key);
+  if (!definition) throw new Error(`Unknown module key: ${key}`);
   await db.platformModule.createMany({
-    data: [
-      {
-        key,
-        ...create,
-        band: key === 'restaurant-core' ? 'VERTICAL_CORE' : 'VERTICAL_OPTIONAL',
-        vertical: 'RESTAURANT',
-      },
-    ],
+    data: [{ key, ...create, band: definition.band, vertical: definition.vertical }],
     skipDuplicates: true,
   });
   return db.platformModule.findUniqueOrThrow({ where: { key } });

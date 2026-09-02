@@ -329,22 +329,52 @@ describe('§6 contract item 4 — module enablement outside the vertical rejecte
     expect(mocks.moduleUpsert).not.toHaveBeenCalled();
   });
 
-  it('rejects enabling an agency module on a restaurant organization', async () => {
-    mocks.orgFindUnique.mockResolvedValue({ vertical: 'RESTAURANT' });
-    mocks.platformModuleFindUnique.mockResolvedValue({ key: 'dashboard' });
+  // module-catalog architecture decision: only VERTICAL_* modules belong to a
+  // vertical. `dashboard` is BASELINE (always on everywhere), so it is not an
+  // agency module and enabling it is not a cross-vertical violation — the
+  // agency-owned VERTICAL_OPTIONAL keys are projects/clients/finance.
+  it.each(['projects', 'clients', 'finance'])(
+    'rejects enabling the agency VERTICAL_OPTIONAL module %s on a restaurant organization',
+    async (key) => {
+      mocks.orgFindUnique.mockResolvedValue({ vertical: 'RESTAURANT' });
+      mocks.platformModuleFindUnique.mockResolvedValue({ key });
 
-    const error = await caught(
-      run('organization.module', {
-        organizationId: 'org_r',
-        moduleId: 'mod_dashboard',
-        status: 'ENABLED',
-        reason: 'operator',
-      })
-    );
+      const error = await caught(
+        run('organization.module', {
+          organizationId: 'org_r',
+          moduleId: `mod_${key}`,
+          status: 'ENABLED',
+          reason: 'operator',
+        })
+      );
 
-    expect(error).toBeInstanceOf(PlatformSecurityError);
-    expect(error).toMatchObject({ status: 400 });
-    expect(mocks.moduleUpsert).not.toHaveBeenCalled();
+      expect(error).toBeInstanceOf(PlatformSecurityError);
+      expect(error).toMatchObject({ status: 400 });
+      expect(mocks.moduleUpsert).not.toHaveBeenCalled();
+    }
+  );
+
+  // The other half of the decision: PLATFORM modules are sellable into any
+  // vertical's package, so enablement itself is vertical-agnostic for them.
+  // Whether the organization actually HOLDS one stays a package/contract/override
+  // question, resolved by `resolveOrganizationEntitlements`, not by this guard.
+  it.each([
+    ['notes', 'RESTAURANT'],
+    ['notes', 'AGENCY'],
+    ['chat', 'RESTAURANT'],
+    ['chat', 'AGENCY'],
+  ])('allows the PLATFORM module %s on a %s organization', async (key, vertical) => {
+    mocks.orgFindUnique.mockResolvedValue({ vertical });
+    mocks.platformModuleFindUnique.mockResolvedValue({ key });
+
+    await run('organization.module', {
+      organizationId: 'org_x',
+      moduleId: `mod_${key}`,
+      status: 'ENABLED',
+      reason: 'operator',
+    });
+
+    expect(mocks.moduleUpsert).toHaveBeenCalledTimes(1);
   });
 
   it('allows enabling a restaurant module on a restaurant organization', async () => {

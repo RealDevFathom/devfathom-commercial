@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import { hashSync } from 'bcryptjs';
 
 import type { PrismaClient } from '../src/generated/prisma/client.js';
+import { moduleDefinitionForKey } from '../src/lib/module-catalog.js';
 import { adminDepartmentKeyForVertical } from '../src/lib/vertical-catalog.js';
 
 type Tx = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0];
@@ -1032,6 +1033,12 @@ const DEMO_PACKAGE_LIMITS: Record<string, number> = {
 export async function seedRestaurantDemoControlPlane(tx: Tx): Promise<void> {
   const moduleIds = new Map<string, string>();
   for (const [index, module] of RESTAURANT_MODULE_ROWS.entries()) {
+    // `band` (and the owning vertical) are required registry facts since the
+    // banded module catalog landed, and they are read from the catalog rather
+    // than restated here for the same reason the rows above mirror it: this is
+    // the catalog's data, not a second definition of it.
+    const definition = moduleDefinitionForKey(module.key);
+    if (!definition) throw new Error(`Unknown module key: ${module.key}`);
     const row = await tx.platformModule.upsert({
       where: { key: module.key },
       update: {
@@ -1046,6 +1053,8 @@ export async function seedRestaurantDemoControlPlane(tx: Tx): Promise<void> {
         name: module.name,
         category: module.category,
         routePrefix: module.routePrefix,
+        band: definition.band,
+        vertical: definition.vertical,
         sortOrder: 100 + index,
         createdAt: AT,
         updatedAt: AT,
