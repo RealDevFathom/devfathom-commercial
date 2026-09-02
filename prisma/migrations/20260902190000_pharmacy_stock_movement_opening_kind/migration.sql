@@ -1,0 +1,12 @@
+-- PH-MIG / MIG-03 — the OPENING stock movement kind.
+--
+-- This is a migration of its own on purpose. PostgreSQL refuses to USE an enum
+-- value in the same transaction that ADDs it (SQLSTATE 55P04, "unsafe use of new
+-- value of enum type"), and the next migration both widens the movement
+-- direction CHECK to mention 'OPENING' and creates constraints over it. Adding
+-- the value here lets that transaction commit before anything references it.
+--
+-- Opening stock is deliberately NOT posted as a RECEIPT: no supplier delivered
+-- it and no invoice backs it. Keeping it a distinct kind is what lets the
+-- opening totals stay auditable for the life of the ledger.
+ALTER TYPE "PharmacyStockMovementKind" ADD VALUE IF NOT EXISTS 'OPENING';
