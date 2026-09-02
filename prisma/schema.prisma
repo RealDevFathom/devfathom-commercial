@@ -176,6 +176,7 @@ model BranchRegulatoryProfile {
   @@index([organizationId, branchId, effectiveFrom, effectiveTo])
   @@index([jurisdictionRuleSetId])
   @@map("pharmacy_branch_regulatory_profiles")
+}
 enum MedicineProvenanceSourceType {
   REGULATOR
   MANUFACTURER
@@ -252,6 +253,7 @@ model Medicine {
   provenance                   MedicineProvenance[]
   requisitionLines             PharmacyRequisitionLine[]
   purchaseOrderLines           PharmacyPurchaseOrderLine[]
+  prescriptionLines            PrescriptionLine[]
   aliases                      MedicineAlias[]
 
   @@index([organizationId, productName])
@@ -286,6 +288,7 @@ model Presentation {
   medicine       Medicine          @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   packLevels     PackLevel[]
   barcodes       MedicineBarcode[]
+  prescriptionLines PrescriptionLine[]
 
   @@index([organizationId, medicineId])
   @@map("pharmacy_presentations")
@@ -9427,4 +9430,132 @@ model PharmacyPurchaseOrderApproval {
   @@unique([organizationId, id])
   @@index([organizationId, purchaseOrderId, createdAt])
   @@map("pharmacy_purchase_order_approvals")
+}
+
+enum PatientConsentPurpose {
+  DISPENSING
+  REMINDERS
+  LOYALTY
+  MARKETING
+}
+enum PatientConsentChannel {
+  IN_PERSON
+  PHONE
+  SMS
+  WHATSAPP
+  EMAIL
+}
+enum PrescriptionSourceKind {
+  PAPER_IMAGE
+  WHATSAPP_PHOTO
+}
+enum PrescriptionCustodyState {
+  NOT_HELD
+  HELD_AT_PHARMACY
+  RETURNED_TO_PATIENT
+  TRANSFERRED
+}
+
+model PharmacyPatient {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  displayName String
+  cnic String?
+  phone String?
+  dateOfBirth DateTime? @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  consents PatientConsent[]
+  prescriptions Prescription[]
+  @@unique([organizationId, id])
+  @@map("pharmacy_patients")
+}
+
+model PatientConsent {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  patientId String
+  purpose PatientConsentPurpose
+  channel PatientConsentChannel
+  version Int
+  granted Boolean
+  recordedByUserId String
+  recordedAt DateTime @default(now())
+  revokedAt DateTime?
+  supersedesId String?
+  patient PharmacyPatient @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  supersedes PatientConsent? @relation("ConsentVersions", fields: [organizationId, supersedesId], references: [organizationId, id], onDelete: Restrict)
+  supersededBy PatientConsent[] @relation("ConsentVersions")
+  @@unique([organizationId, id])
+  @@unique([organizationId, patientId, purpose, channel, version])
+  @@map("pharmacy_patient_consents")
+}
+
+model PharmacyPrescriber {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name String
+  registrationNumber String
+  phone String?
+  facility String?
+  createdAt DateTime @default(now())
+  prescriptions Prescription[]
+  @@unique([organizationId, id])
+  @@unique([organizationId, registrationNumber])
+  @@map("pharmacy_prescribers")
+}
+
+model Prescription {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  patientId String
+  prescriberId String
+  sourceKind PrescriptionSourceKind
+  sourceFileRef String
+  custodyState PrescriptionCustodyState @default(NOT_HELD)
+  validFrom DateTime
+  validUntil DateTime
+  authorizedRepeats Int @default(0)
+  capturedByUserId String
+  capturedAt DateTime @default(now())
+  patient PharmacyPatient @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  prescriber PharmacyPrescriber @relation(fields: [organizationId, prescriberId], references: [organizationId, id], onDelete: Restrict)
+  lines PrescriptionLine[]
+  @@unique([organizationId, id])
+  @@map("pharmacy_prescriptions")
+}
+
+model PrescriptionLine {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  prescriptionId String
+  lineNumber Int
+  medicineId String
+  presentationId String
+  authorizedCanonicalUnits Int
+  directions String
+  createdAt DateTime @default(now())
+  prescription Prescription @relation(fields: [organizationId, prescriptionId], references: [organizationId, id], onDelete: Restrict)
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  presentation Presentation @relation(fields: [presentationId], references: [id], onDelete: Restrict)
+  fills PrescriptionFill[]
+  @@unique([organizationId, id])
+  @@unique([organizationId, prescriptionId, lineNumber])
+  @@map("pharmacy_prescription_lines")
+}
+
+model PrescriptionFill {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  prescriptionLineId String
+  fillSequence Int
+  quantityCanonicalUnits Int
+  dispensedByUserId String
+  dispensedAt DateTime @default(now())
+  idempotencyKey String
+  line PrescriptionLine @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  @@unique([organizationId, id])
+  @@unique([organizationId, prescriptionLineId, fillSequence])
+  @@unique([organizationId, idempotencyKey])
+  @@map("pharmacy_prescription_fills")
 }
