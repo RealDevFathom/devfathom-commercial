@@ -34,6 +34,10 @@ import {
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import {
+  ensureAdministratorStaffProfile,
+  type AdministratorStaffProfileResult,
+} from '@/lib/restaurant/administrator-staff-profile';
 
 const id = z
   .string()
@@ -713,6 +717,16 @@ async function bootstrapOrganization(
         userId: admin.id,
       },
     });
+    // WHA-1181 — the branch assignment alone left the administrator without the
+    // `RestaurantStaffProfile` every restaurant procedure resolves them to, so
+    // the workspace nav rendered while notifications answered 403. Created here,
+    // beside the branch it points at.
+    await ensureAdministratorStaffProfile(db, {
+      organizationId: organization.id,
+      userId: admin.id,
+      displayName: admin.name,
+      email: admin.email,
+    });
     for (const template of roleTemplatesForVertical(input.vertical)) {
       await db.organizationRole.create({
         data: {
@@ -1073,6 +1087,34 @@ async function runCommand(
           actorId: actor.id,
         },
       });
+      // WHA-1181 — activation is the moment a RESTAURANT organization's people
+      // start using the workspace, so every administrator must hold the staff
+      // profile the restaurant procedures resolve them to. The helper is
+      // idempotent, so this both covers an administrator added after onboarding
+      // and repairs an organization created before the onboarding fix above.
+      const administratorStaffProfiles: (AdministratorStaffProfileResult & {
+        userId: string;
+      })[] = [];
+      if (input.status === 'ACTIVE' && before.vertical === 'RESTAURANT') {
+        const administrators = await db.user.findMany({
+          where: {
+            organizationId: input.id,
+            role: 'ADMIN',
+            status: { in: ['ACTIVE', 'ON_LEAVE'] },
+          },
+          select: { id: true, name: true, email: true },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        });
+        for (const administrator of administrators) {
+          const profile = await ensureAdministratorStaffProfile(db, {
+            organizationId: input.id,
+            userId: administrator.id,
+            displayName: administrator.name,
+            email: administrator.email,
+          });
+          administratorStaffProfiles.push({ ...profile, userId: administrator.id });
+        }
+      }
       if (
         input.status === 'SUSPENDED' ||
         (before.status === 'SUSPENDED' && input.status === 'ACTIVE')
@@ -1105,8 +1147,13 @@ async function runCommand(
         targetId: input.id,
         organizationId: input.id,
         auditBefore: { status: before.status },
+        // The command response keeps its established shape; only the audit
+        // record carries the staff profiles activation provisioned, so the
+        // ledger can answer "who was linked, and when".
         data: organization,
-        audit: organization,
+        audit: administratorStaffProfiles.length
+          ? { ...organization, restaurantAdministratorStaffProfiles: administratorStaffProfiles }
+          : organization,
       };
     }
     case 'organization.module': {

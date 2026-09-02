@@ -34,6 +34,10 @@ export default defineConfig({
   // Every `platform-control-plane*.spec.ts` sibling, so a lane can add a spec
   // file without editing this config and colliding with another lane doing the
   // same (WHA-1180).
+  // A glob, not one filename: the control-plane scenario is now split across
+  // sibling spec files so concurrent lanes can add assertions without editing
+  // the same file. Every `platform-control-plane*.spec.ts` runs under this
+  // config (and only this config — see `playwright.config.ts`'s testIgnore).
   testMatch: 'platform-control-plane*.spec.ts',
   // Relative to this config's directory, so this is the repository-root
   // `playwright-artifacts/` — never the tracked `test-results/` baselines.

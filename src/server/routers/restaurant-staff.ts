@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
+import { ensureAdministratorStaffProfile } from '@/lib/restaurant/administrator-staff-profile';
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
@@ -127,6 +128,53 @@ function workspaceOrganizationId(ctx: {
 }
 
 export const restaurantStaffRouter = router({
+  /**
+   * WHA-1181 — does the signed-in user own the staff profile every restaurant
+   * procedure resolves them to? Organizations activated before the onboarding
+   * fix left their administrator without one, and the only signal was a 403 on
+   * every restaurant call. `protectedProcedure` because a user with no profile
+   * is exactly the case this has to answer for; it reads nothing but their own
+   * link, so it leaks nothing a capability gate would protect.
+   */
+  mySelfProfile: protectedProcedure.query(async ({ ctx }) => {
+    const profile = await ctx.db.restaurantStaffProfile.findFirst({
+      where: { userId: ctx.session!.user.id },
+      select: { id: true, status: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return { hasProfile: profile !== null, status: profile?.status ?? null };
+  }),
+
+  /**
+   * The one-time repair behind the workspace call to action. Gated by
+   * `staff:manage` (the organization administrator's capability), and it creates
+   * only the caller's OWN profile through the same path activation uses.
+   *
+   * Deliberately outside `createStaffProfileWithinCommercialLimit`: this profile
+   * is provisioning the platform owed the administrator at activation, not an
+   * operator seat the tenant chose to add — and refusing the repair at the
+   * operator cap would strand the administrator in the very 403 loop this fixes.
+   */
+  provisionMyProfile: staffProcedure.mutation(async ({ ctx }) => {
+    const user = ctx.session!.user;
+    const result = await ensureAdministratorStaffProfile(ctx.db, {
+      organizationId: user.organizationId,
+      userId: user.id,
+      displayName: user.name,
+      email: user.email,
+    });
+    if (result.created) {
+      annotateAudit(ctx, {
+        targetType: 'RestaurantStaffProfile',
+        targetId: result.staffProfileId,
+        targetLabel: user.name,
+        description: 'Created the organization administrator’s own restaurant staff profile',
+        metadata: { primaryBranchId: result.primaryBranchId, selfProvisioned: true },
+      });
+    }
+    return result;
+  }),
+
   // Shared restaurant consoles consume these directories, but they still expose
   // branch and staff identity. Return only the actor's effective management scope.
   listBranches: protectedProcedure.query(async ({ ctx }) => {
