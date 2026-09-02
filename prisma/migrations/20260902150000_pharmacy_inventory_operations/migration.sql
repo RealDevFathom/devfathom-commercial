@@ -5,8 +5,6 @@ CREATE TYPE "PharmacyTransferStatus" AS ENUM ('ALLOCATED','APPROVED','DISPATCHED
 CREATE TYPE "PharmacyRecallStatus" AS ENUM ('OPEN','CLOSED');
 CREATE TYPE "PharmacySupplierClaimStatus" AS ENUM ('RESERVED','RELEASED','SUBMITTED');
 
-ALTER TABLE "pharmacy_stock_movements" ADD CONSTRAINT "pharmacy_stock_movements_org_id_key" UNIQUE ("organizationId","id");
-
 CREATE TABLE "pharmacy_inventory_counts" (
   "id" TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
   "branchId" TEXT NOT NULL, "status" "PharmacyInventoryCountStatus" NOT NULL DEFAULT 'OPEN',
