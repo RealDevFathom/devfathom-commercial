@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { assertSaleable, canonicalUnits, deriveLooseUnitPrice } from './medicine';
+import {
+  assertSaleable,
+  canonicalUnits,
+  deriveLooseUnitPrice,
+  medicineDuplicateKey,
+  normalizeMedicineText,
+} from './medicine';
 
 describe('pharmacy medicine invariants', () => {
   it('converts two cartons of 20 x 5 x 10 into 2,000 canonical units', () => {
@@ -57,5 +63,32 @@ describe('pharmacy medicine invariants', () => {
         provenanceFields: new Set(),
       })
     ).not.toThrow();
+  });
+
+  it('normalizes scan codes and preserves Urdu letters in aliases', () => {
+    expect(normalizeMedicineText(' 01-234 567 ')).toBe('01234567');
+    expect(normalizeMedicineText('پیرا سیٹامول')).toBe('پیراسیٹامول');
+  });
+
+  it('groups exact normalized name, strength, and form without fuzzy merging', () => {
+    const exact = medicineDuplicateKey({
+      productName: 'Panadol',
+      strengths: [{ value: 500, unit: 'mg' }],
+      dosageForm: 'Tablet',
+    });
+    expect(
+      medicineDuplicateKey({
+        productName: ' PANADOL ',
+        strengths: [{ value: '500', unit: 'MG' }],
+        dosageForm: 'tablet',
+      })
+    ).toBe(exact);
+    expect(
+      medicineDuplicateKey({
+        productName: 'Panadole',
+        strengths: [{ value: 500, unit: 'mg' }],
+        dosageForm: 'Tablet',
+      })
+    ).not.toBe(exact);
   });
 });

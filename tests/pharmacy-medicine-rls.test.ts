@@ -35,7 +35,7 @@ describe('pharmacy medicine PostgreSQL RLS and immutability', () => {
     await client.query(`GRANT "${role}" TO CURRENT_USER`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
     await client.query(
-      `GRANT SELECT,INSERT,UPDATE,DELETE ON pharmacy_ingredients,pharmacy_medicines,pharmacy_medicine_strength_components,pharmacy_presentations,pharmacy_pack_levels,pharmacy_medicine_pack_mrps,pharmacy_medicine_provenance TO "${role}"`
+      `GRANT SELECT,INSERT,UPDATE,DELETE ON pharmacy_ingredients,pharmacy_medicines,pharmacy_medicine_strength_components,pharmacy_presentations,pharmacy_pack_levels,pharmacy_medicine_pack_mrps,pharmacy_medicine_provenance,pharmacy_medicine_barcodes,pharmacy_medicine_aliases,pharmacy_medicine_review_decisions,pharmacy_medicine_publication_batches,pharmacy_medicine_publication_entries TO "${role}"`
     );
     await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
     await client.query(
@@ -82,6 +82,14 @@ describe('pharmacy medicine PostgreSQL RLS and immutability', () => {
         [orgB]
       )
     );
+    await expectPgCode('23514', () =>
+      client.query(
+        `INSERT INTO pharmacy_medicine_aliases
+          (id,"medicineId",type,value,"normalizedValue")
+         VALUES ('cross_tenant_alias',$1,'LEGACY_CODE','legacy-b','legacyb')`,
+        [`medicine_b_${suffix}`]
+      )
+    );
   });
 
   it('never rewrites a referenced conversion; correction inserts a version', async () => {
@@ -121,4 +129,109 @@ describe('pharmacy medicine PostgreSQL RLS and immutability', () => {
       ])
     );
   });
+
+  it('keeps scan codes unique per tenant and resolves only the tenant target', async () => {
+    await client.query(
+      `INSERT INTO pharmacy_medicine_barcodes
+        (id,"presentationId","packLevelId",type,code,"normalizedCode")
+       VALUES ($1,$2,$3,'GTIN','01-234','01234')`,
+      [`barcode_a_${suffix}`, `presentation_a_${suffix}`, `pack_a_${suffix}`]
+    );
+    await expectPgCode('23505', () =>
+      client.query(
+        `INSERT INTO pharmacy_medicine_barcodes
+          (id,"presentationId",type,code,"normalizedCode") VALUES ($1,$2,'INTERNAL','01234','01234')`,
+        [`barcode_duplicate_${suffix}`, `presentation_a_${suffix}`]
+      )
+    );
+    const resolved = await client.query(
+      `SELECT "presentationId","packLevelId" FROM pharmacy_medicine_barcodes WHERE "normalizedCode"='01234'`
+    );
+    expect(resolved.rows).toEqual([
+      { presentationId: `presentation_a_${suffix}`, packLevelId: `pack_a_${suffix}` },
+    ]);
+  });
+
+  it('does not allow scraped or user assertions to replace accepted regulator evidence', async () => {
+    await client.query(
+      `INSERT INTO pharmacy_medicine_provenance
+        (id,"medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue")
+       VALUES ($1,$2,'drapRegistrationNumber','DRAP','REGULATOR',now(),'ACCEPTED','"DRAP-1"')`,
+      [`assertion_verified_${suffix}`, `medicine_a_${suffix}`]
+    );
+    await expectPgCode('23514', () =>
+      client.query(
+        `INSERT INTO pharmacy_medicine_provenance
+          (id,"medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue","supersedesId")
+         VALUES ($1,$2,'drapRegistrationNumber','scraper','SCRAPED',now(),'UNREVIEWED','"invented"',$3)`,
+        [`assertion_scraped_${suffix}`, `medicine_a_${suffix}`, `assertion_verified_${suffix}`]
+      )
+    );
+  });
+
+  it('records review actions append-only and never merges candidates automatically', async () => {
+    await client.query(
+      `INSERT INTO pharmacy_medicine_review_decisions
+        (id,"duplicateKey",action,"medicineIds","reviewerId")
+       VALUES ($1,'panadol:500mg:tablet','DEFER',$2,'reviewer')`,
+      [`decision_${suffix}`, [`medicine_a_${suffix}`]]
+    );
+    await expectPgCode('23514', () =>
+      client.query(`UPDATE pharmacy_medicine_review_decisions SET action='MERGE' WHERE id=$1`, [
+        `decision_${suffix}`,
+      ])
+    );
+    const medicineCount = await client.query(
+      `SELECT count(*)::int AS count FROM pharmacy_medicines`
+    );
+    expect(medicineCount.rows[0].count).toBe(1);
+  });
+
+  it('restores the prior assertion by supersession when a publication is reversed', async () => {
+    await client.query(
+      `INSERT INTO pharmacy_medicine_provenance
+        (id,"medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue","supersedesId")
+       VALUES ($1,$2,'brandName','manufacturer','MANUFACTURER',now(),'CORRECTED','"New brand"',NULL)`,
+      [`assertion_published_${suffix}`, `medicine_a_${suffix}`]
+    );
+    await client.query(
+      `INSERT INTO pharmacy_medicine_provenance
+        (id,"medicineId",field,source,"sourceType","retrievedAt",reviewer,status,"assertedValue","supersedesId")
+       VALUES ($1,$2,'brandName','rollback','MANUFACTURER',now(),'reviewer','CORRECTED','"Old brand"',$3)`,
+      [`assertion_restored_${suffix}`, `medicine_a_${suffix}`, `assertion_published_${suffix}`]
+    );
+    const current = await client.query(
+      `SELECT "assertedValue" FROM pharmacy_medicine_provenance
+       WHERE "medicineId"=$1 AND field='brandName'
+         AND id NOT IN (SELECT "supersedesId" FROM pharmacy_medicine_provenance WHERE "supersedesId" IS NOT NULL)`,
+      [`medicine_a_${suffix}`]
+    );
+    expect(current.rows).toEqual([{ assertedValue: 'Old brand' }]);
+  });
+
+  it('records p95 catalog search latency on a 20k-row tenant fixture', async () => {
+    await client.query(
+      `INSERT INTO pharmacy_medicines
+        (id,"productName","brandName","productFamily","updatedAt")
+       SELECT 'perf_' || $1 || '_' || n, 'Generic ' || n, 'Brand ' || n,
+              'PHARMACEUTICAL', now()
+         FROM generate_series(1,20000) AS n`,
+      [suffix]
+    );
+    const samples: number[] = [];
+    for (let iteration = 0; iteration < 12; iteration += 1) {
+      const started = performance.now();
+      await client.query(
+        `SELECT id FROM pharmacy_medicines
+          WHERE pharmacy_normalize_catalog_text("productName") % 'generic19999'
+             OR pharmacy_normalize_catalog_text(coalesce("brandName",'')) % 'generic19999'
+          LIMIT 25`
+      );
+      if (iteration >= 2) samples.push(performance.now() - started);
+    }
+    samples.sort((a, b) => a - b);
+    const p95Ms = samples[Math.ceil(samples.length * 0.95) - 1]!;
+    console.info(`pharmacy catalog search 20k fixture p95=${p95Ms.toFixed(2)}ms`);
+    expect(p95Ms).toBeLessThan(200);
+  }, 30_000);
 });
