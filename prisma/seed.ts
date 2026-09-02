@@ -5,6 +5,7 @@ import { hash } from 'bcryptjs';
 import 'dotenv/config';
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
+import { upsertPlatformAdmin } from './platform-admin.js';
 import { PLATFORM_MODULES } from './production-bootstrap.js';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -1612,25 +1613,11 @@ async function main() {
         },
       });
 
-      const platformAdminEmail = process.env.PLATFORM_ADMIN_EMAIL;
-      const platformAdminPassword = process.env.PLATFORM_ADMIN_PASSWORD;
-      if (platformAdminEmail || platformAdminPassword) {
-        if (!platformAdminEmail || !platformAdminPassword) {
-          throw new Error(
-            'Set both PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD to seed a platform administrator.'
-          );
-        }
-        await tx.platformUser.upsert({
-          where: { email: platformAdminEmail.toLowerCase() },
-          update: { active: true, role: 'SUPER_ADMIN' },
-          create: {
-            name: 'Platform Administrator',
-            email: platformAdminEmail.toLowerCase(),
-            passwordHash: await hash(platformAdminPassword, 12),
-            role: 'SUPER_ADMIN',
-          },
-        });
-      }
+      // Runs ahead of seedTenantData because that function returns early once
+      // seed data is present, refreshing the eight @company.com tenant users and
+      // nothing else. A rotated PLATFORM_ADMIN_PASSWORD has to land on every
+      // deployment, not only the one that creates the administrator.
+      await upsertPlatformAdmin(tx);
 
       await seedTenantData(tx);
       await tx.user.updateMany({
