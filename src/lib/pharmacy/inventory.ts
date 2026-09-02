@@ -28,6 +28,9 @@ export class PharmacyInventoryError extends Error {
       | 'NOT_FOUND'
       | 'CROSS_TENANT_REFERENCE'
       | 'CROSS_BRANCH_REFERENCE'
+      | 'INVALID_UNITS'
+      | 'INVALID_STATE'
+      | 'COAUTH_REQUIRED'
   ) {
     super(reason);
   }

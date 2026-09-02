@@ -78,7 +78,13 @@ const CANDIDATE_COLUMNS = Prisma.sql`
   balance."disposition"::text AS "disposition",
   batch."expiresAt"           AS "expiresAt",
   lot."receivedAt"            AS "receivedAt",
-  balance."onHandUnits"       AS "availableUnits",
+  (balance."onHandUnits" - COALESCE((
+    SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
+    WHERE claim."organizationId" = balance."organizationId"
+      AND claim."branchId" = balance."branchId"
+      AND claim."inventoryLotId" = balance."inventoryLotId"
+      AND claim."status" = 'RESERVED'
+  ), 0))                         AS "availableUnits",
   lot."unitsPerPack"          AS "unitsPerPack",
   balance."sealedPacks"       AS "sealedPacks",
   balance."looseUnits"        AS "looseUnits"`;
@@ -114,6 +120,13 @@ async function loadCandidates(
       AND balance."branchId" = ${scope.branchId}
       AND batch."medicineId" = ${medicineId}
       AND balance."onHandUnits" > 0
+      AND (balance."onHandUnits" - COALESCE((
+        SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
+        WHERE claim."organizationId" = balance."organizationId"
+          AND claim."branchId" = balance."branchId"
+          AND claim."inventoryLotId" = balance."inventoryLotId"
+          AND claim."status" = 'RESERVED'
+      ), 0)) > 0
     ORDER BY batch."expiresAt" ASC, lot."receivedAt" ASC NULLS FIRST,
              balance."inventoryLotId" ASC, balance."stockLocationId" ASC`;
 
