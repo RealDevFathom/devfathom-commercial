@@ -1,6 +1,13 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import {
+  listReceivingExceptions,
+  postGoodsReceipt,
+  resolveReceivingException,
+  reverseGoodsReceipt,
+} from '@/lib/pharmacy/goods-receipt';
+import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import {
   assertApprovalAllowed,
   assertPurchaseOrderTransition,
   assertRequisitionTransition,
@@ -11,19 +18,30 @@ import {
   SEGREGATION_OF_DUTIES_POLICY,
   type QuoteCandidate,
 } from '@/lib/pharmacy/purchasing';
+import {
+  assertDirectPurchaseAuthorized,
+  PharmacyReceivingError,
+  receiptLineQuantities,
+  receiptLineUnitCostMinor,
+} from '@/lib/pharmacy/receiving';
+import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import type { TRPCContext } from '../trpc';
 
 /**
- * PH-PUR — PRD §6.3 PUR-01, PUR-02 (to approval) and PUR-03. Receiving is the
- * follow-up lane once the PH-INV ledger lands, so a purchase order stops at
- * SENT here and never invents a batch, an expiry or a printed MRP.
+ * PH-PUR — PRD §6.3 PUR-01, PUR-02 (requisition through approval and on into
+ * receiving), PUR-03, PUR-04 and PUR-05.
  *
- * The arithmetic and the refusals live in `@/lib/pharmacy/purchasing`; this
- * router resolves rows through the tenant-scoped client and maps the domain
- * errors onto tRPC codes.
+ * The arithmetic and the refusals live in `@/lib/pharmacy/purchasing` and
+ * `@/lib/pharmacy/receiving`, and the ledger postings in
+ * `@/lib/pharmacy/goods-receipt`; this router resolves rows through the
+ * tenant-scoped client, pins the tenant, branch and actor to the SESSION rather
+ * than the payload, and maps the domain errors onto tRPC codes.
  */
 
 const bps = z.number().int().min(0).max(10_000);
+const branchId = z.string().trim().min(1).max(128);
 
 function domainError(error: unknown): never {
   if (error instanceof PharmacyPurchasingError) {
@@ -41,7 +59,60 @@ function domainError(error: unknown): never {
       message: error.message,
     });
   }
+  if (error instanceof PharmacyReceivingError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CROSS_TENANT_REFERENCE' ||
+              error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'SUPPLIER_NOT_AUTHORIZED' ||
+              error.reason === 'SUPPLIER_LICENCE_EXPIRED' ||
+              error.reason === 'SELF_APPROVAL'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  if (error instanceof PharmacyInventoryError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CROSS_TENANT_REFERENCE' ||
+              error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'BLOCKED_STOCK'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
   throw error;
+}
+
+/**
+ * Prisma's interactive-transaction client omits lifecycle methods from its
+ * generated type even though the model delegates are identical, so a
+ * transaction handle needs the widening the rest of the repository uses before
+ * it reaches a service function.
+ */
+function txDb(tx: unknown): ScopedDb {
+  return tx as ScopedDb;
+}
+
+/**
+ * The tenant, branch and actor of a receiving posting. The organization and the
+ * actor come from the SESSION and never from an input field: a payload-supplied
+ * tenant is a substitution vector, and bypass or resolution evidence naming
+ * somebody else is not evidence.
+ */
+function receivingScope(ctx: TRPCContext, branch: string): ReceivingScope {
+  const organizationId = ctx.entitlements?.organizationId;
+  const actorId = ctx.session?.user?.id;
+  if (!organizationId || !actorId) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'No tenant actor on this request.' });
+  }
+  return { organizationId, branchId: branch, actorId };
 }
 
 /**
@@ -559,6 +630,303 @@ export const pharmacyPurchasingRouter = router({
             medicineId: order.lines[index]!.medicineId,
           })),
         };
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  // ----- PUR-02 receiving / PUR-05 direct purchase -----
+
+  /**
+   * PUR-02 receiving and PUR-05: draft what arrived. Nothing here touches
+   * stock — a draft receipt is a document, and the ledger only learns about it
+   * when `postGoodsReceipt` runs.
+   *
+   * `directPurchase` is the PUR-05 path: no purchase order, and a bypass reason
+   * and approver in its place. Everything else about the two paths is identical
+   * by construction, because they are the same procedure.
+   */
+  createGoodsReceipt: protectedProcedure
+    .input(
+      z
+        .object({
+          reference: z.string().trim().min(1).max(100),
+          branchId,
+          supplierId: z.string().min(1),
+          purchaseOrderId: z.string().min(1).optional(),
+          supplierInvoiceRef: z.string().trim().min(1).max(200),
+          supplierInvoiceDate: z.date(),
+          warrantyEvidenceRef: z.string().trim().min(1).max(500),
+          receivedAt: z.date(),
+          directPurchase: z
+            .object({
+              reason: z.string().trim().min(1).max(1000),
+              approvedByUserId: z.string().trim().min(1).max(200),
+            })
+            .strict()
+            .optional(),
+          note: z.string().trim().max(2000).optional(),
+          lines: z
+            .array(
+              z
+                .object({
+                  purchaseOrderLineId: z.string().min(1).optional(),
+                  medicineId: z.string().min(1),
+                  packLevelId: z.string().min(1),
+                  batchNumber: z.string().trim().min(1).max(120),
+                  printedExpiry: z.date(),
+                  expiryPrecision: z.enum(['DAY', 'MONTH']),
+                  printedMrpMinor: z.number().int().positive(),
+                  canonicalUnitsPerPack: z.number().int().positive(),
+                  receivedPacks: z.number().int().nonnegative(),
+                  bonusPacks: z.number().int().nonnegative().default(0),
+                  rejectedCanonicalUnits: z.number().int().nonnegative().default(0),
+                  rejectionReason: z.string().trim().min(1).max(500).optional(),
+                  invoicedPricePerPackMinor: z.number().int().nonnegative(),
+                  discountBps: bps.default(0),
+                  taxBps: bps.default(0),
+                  taxCreditable: z.boolean().default(false),
+                  stockLocationId: z.string().min(1),
+                  quarantineLocationId: z.string().min(1).optional(),
+                })
+                .strict()
+                // PUR-04: rejected goods need somewhere that is not the shelf,
+                // and a reason, before the row can even be drafted.
+                .refine(
+                  (line) =>
+                    line.rejectedCanonicalUnits === 0
+                      ? !line.quarantineLocationId && !line.rejectionReason
+                      : Boolean(line.quarantineLocationId) && Boolean(line.rejectionReason),
+                  {
+                    message:
+                      'Rejected units need a quarantine location and a reason; accepted-only lines need neither.',
+                    path: ['rejectedCanonicalUnits'],
+                  }
+                )
+            )
+            .min(1),
+        })
+        .strict()
+        .refine((value) => Boolean(value.directPurchase) !== Boolean(value.purchaseOrderId), {
+          message:
+            'A goods receipt is either against a purchase order or a direct purchase with a bypass, never both or neither.',
+          path: ['purchaseOrderId'],
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        // PUR-01: an unauthorized or licence-expired supplier cannot be
+        // received from, checked here and again when the receipt posts.
+        assertOrderableSupplier(
+          await ctx.db.pharmacySupplier.findFirst({
+            where: { id: input.supplierId },
+            include: WITH_LICENCES,
+          }),
+          input.receivedAt
+        );
+        if (input.directPurchase) {
+          assertDirectPurchaseAuthorized({
+            bypassReason: input.directPurchase.reason,
+            bypassApprovedByUserId: input.directPurchase.approvedByUserId,
+            receivedByUserId: scope.actorId,
+          });
+        }
+        if (
+          input.purchaseOrderId &&
+          !(await ctx.db.pharmacyPurchaseOrder.findFirst({
+            where: { id: input.purchaseOrderId, supplierId: input.supplierId },
+          }))
+        ) {
+          throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+        }
+
+        const ownOrderLines = input.purchaseOrderId
+          ? new Set(
+              (
+                await ctx.db.pharmacyPurchaseOrderLine.findMany({
+                  where: { purchaseOrderId: input.purchaseOrderId },
+                  select: { id: true },
+                })
+              ).map((line) => line.id)
+            )
+          : new Set<string>();
+
+        const lines = [];
+        for (const [index, line] of input.lines.entries()) {
+          if (!(await ctx.db.medicine.findFirst({ where: { id: line.medicineId } })))
+            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
+            throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+          // An ordered line borrowed from another order — or from another
+          // tenant — would make the three-way match compare the goods against
+          // something they were never ordered on.
+          if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
+            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+
+          const quantities = receiptLineQuantities({
+            receivedPacks: line.receivedPacks,
+            bonusPacks: line.bonusPacks,
+            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+            rejectedCanonicalUnits: line.rejectedCanonicalUnits,
+          });
+          // The tenant and branch are not repeated here: they travel in the
+          // composite key of the receipt this line is nested under, so Prisma
+          // supplies them and a payload could never disagree with the header.
+          lines.push({
+            lineNumber: index + 1,
+            purchaseOrderLineId: line.purchaseOrderLineId ?? null,
+            medicineId: line.medicineId,
+            packLevelId: line.packLevelId,
+            batchNumber: line.batchNumber,
+            printedExpiry: line.printedExpiry,
+            expiryPrecision: line.expiryPrecision,
+            printedMrpMinor: line.printedMrpMinor,
+            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+            receivedPacks: line.receivedPacks,
+            bonusPacks: line.bonusPacks,
+            receivedCanonicalUnits: quantities.receivedCanonicalUnits,
+            bonusCanonicalUnits: quantities.bonusCanonicalUnits,
+            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+            rejectedCanonicalUnits: quantities.rejectedCanonicalUnits,
+            rejectionReason: line.rejectionReason ?? null,
+            invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+            discountBps: line.discountBps,
+            taxBps: line.taxBps,
+            taxCreditable: line.taxCreditable,
+            // PUR-03: bonus units divide the same money over more units, so a
+            // scheme lowers the landed cost and never adds revenue.
+            unitCostMinor: receiptLineUnitCostMinor({
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+              discountBps: line.discountBps,
+              taxBps: line.taxBps,
+              taxCreditable: line.taxCreditable,
+            }),
+            stockLocationId: line.stockLocationId,
+            quarantineLocationId: line.quarantineLocationId ?? null,
+          });
+        }
+
+        return await ctx.db.pharmacyGoodsReceipt.create({
+          data: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            reference: input.reference,
+            supplierId: input.supplierId,
+            purchaseOrderId: input.purchaseOrderId ?? null,
+            supplierInvoiceRef: input.supplierInvoiceRef,
+            supplierInvoiceDate: input.supplierInvoiceDate,
+            warrantyEvidenceRef: input.warrantyEvidenceRef,
+            receivedByUserId: scope.actorId,
+            receivedAt: input.receivedAt,
+            directPurchase: Boolean(input.directPurchase),
+            bypassReason: input.directPurchase?.reason ?? null,
+            bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
+            bypassApprovedAt: input.directPurchase ? new Date() : null,
+            note: input.note,
+            lines: { create: lines },
+          },
+          include: { lines: { orderBy: { lineNumber: 'asc' } } },
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /**
+   * PUR-02 receiving: post the receipt into the PH-INV batch ledger, and raise
+   * the PUR-04 match exceptions the delivery earned.
+   *
+   * One transaction: the lot, both dispositions, every exception, the receipt
+   * status and the order's move to RECEIVING commit together or not at all.
+   */
+  postGoodsReceipt: protectedProcedure
+    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          postGoodsReceipt(txDb(tx), scope, {
+            goodsReceiptId: input.goodsReceiptId,
+            at: new Date(),
+          })
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /**
+   * PUR-04: undo a posting with linked compensating movements. Nothing that was
+   * posted is edited or deleted; if the stock has already moved on, the ledger
+   * refuses rather than driving a balance negative.
+   */
+  reverseGoodsReceipt: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+          reason: z.string().trim().min(1).max(1000),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          reverseGoodsReceipt(txDb(tx), scope, {
+            goodsReceiptId: input.goodsReceiptId,
+            reason: input.reason,
+            at: new Date(),
+          })
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** PUR-04: the queue that stays visible until somebody resolves it. */
+  receivingExceptions: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          status: z.enum(['OPEN', 'RESOLVED']).default('OPEN'),
+          goodsReceiptId: z.string().min(1).optional(),
+        })
+        .strict()
+    )
+    .query(({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      return listReceivingExceptions(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        { status: input.status, goodsReceiptId: input.goodsReceiptId }
+      );
+    }),
+
+  /** PUR-04: close one, with the actor from the session and a mandatory note. */
+  resolveReceivingException: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          receivingExceptionId: z.string().min(1),
+          resolutionNote: z.string().trim().min(1).max(1000),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await resolveReceivingException(ctx.db, receivingScope(ctx, input.branchId), {
+          receivingExceptionId: input.receivingExceptionId,
+          resolutionNote: input.resolutionNote,
+          at: new Date(),
+        });
       } catch (error) {
         domainError(error);
       }
