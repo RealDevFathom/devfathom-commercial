@@ -129,7 +129,12 @@ test.describe('restaurant POS and KDS core flow', () => {
     await page.getByLabel(new RegExp(fixture.modifier.name)).check();
     await page.getByRole('button', { name: 'Add to order' }).click();
     await expect(page.getByText(`2 × ${fixture.menuItem.name}`)).toBeVisible();
-    await expect(page.getByText(fixture.modifier.name, { exact: true })).toBeVisible();
+    await expect(
+      page
+        .getByRole('listitem')
+        .filter({ hasText: `2 × ${fixture.menuItem.name}` })
+        .getByText(fixture.modifier.name, { exact: true })
+    ).toBeVisible();
     await page.getByRole('button', { name: 'Send whole order' }).click();
     await expect(page.getByText('Order sent to kitchen.')).toBeVisible();
 
@@ -185,17 +190,16 @@ test.describe('restaurant POS and KDS core flow', () => {
     await page.getByRole('button', { name: 'Create split bills' }).click();
     await expect(page.getByText('FRACTIONAL')).toHaveCount(2);
 
-    const amounts = page.getByLabel('Amount');
-    for (let index = 0; index < 2; index += 1) {
-      const amount = await amounts.nth(index).inputValue();
-      await page.getByLabel('Cash received').nth(index).fill(amount);
-      await page.getByRole('button', { name: 'Apply tender' }).nth(index).click();
+    const splitAmount = (Number(fixture.expected.twoItemTotal) / 2).toFixed(2);
+    const receipts = page
+      .getByRole('dialog', { name: 'Collect payment' })
+      .getByRole('region', { name: /^Receipt \d+$/ });
+    for (let settled = 1; settled <= 2; settled += 1) {
+      await page.getByLabel('Amount').first().fill(splitAmount);
+      await page.getByLabel('Cash received').first().fill(splitAmount);
+      await page.getByRole('button', { name: 'Apply tender' }).first().click();
+      await expect(receipts).toHaveCount(settled);
     }
-    await expect(
-      page
-        .getByRole('dialog', { name: 'Collect payment' })
-        .getByRole('region', { name: /^Receipt \d+$/ })
-    ).toHaveCount(2);
 
     const summaryResponse = await request.get(
       `/api/restaurant/checkout/summary?orderId=${encodeURIComponent(opened.orderId)}`,

@@ -18,6 +18,7 @@ import { add, compare, equals, isNegative, isZero, money, sub, sum, ZERO } from 
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
 import {
   quoteTaxSettlement,
+  splitFractionalMoney,
   splitMoney,
   type PaymentCategory,
   type TaxQuoteResult,
@@ -157,6 +158,9 @@ type BillForTender = {
   roundingAdjustment: Prisma.Decimal;
   branchId: string;
   businessDate: Date;
+  splitKind: string;
+  fractionNumerator: number | null;
+  fractionDenominator: number | null;
 };
 
 type TenderRow = { id: string; type: TenderType; amount: Prisma.Decimal; createdAt: Date };
@@ -167,7 +171,8 @@ type SettlementContext = {
   rules: Map<string, { priceMode: 'EXCLUSIVE' | 'INCLUSIVE'; rate: Prisma.Decimal }>;
   quote: TaxQuoteResult;
   lines: Array<{
-    billLineId: string;
+    billLineId: string | null;
+    sourceOrderItemId?: string;
     unitOrdinal: number;
     comp: Prisma.Decimal;
     beforeTaxDiscount: Prisma.Decimal;
@@ -294,6 +299,9 @@ export async function applyTenderInTransaction(
       roundingAdjustment: true,
       branchId: true,
       businessDate: true,
+      splitKind: true,
+      fractionNumerator: true,
+      fractionDenominator: true,
     },
   });
   if (!bill) {
@@ -439,6 +447,29 @@ async function loadSettlementContext(
       orderItem: { select: { modifiers: { select: { priceDelta: true } } } },
     },
   });
+  const fractionalItems =
+    bill.splitKind === 'FRACTIONAL'
+      ? await tx.restaurantOrderItem.findMany({
+          where: { orderId: bill.orderId, status: { not: 'VOIDED' } },
+          orderBy: { id: 'asc' },
+          select: {
+            id: true,
+            quantity: true,
+            unitPrice: true,
+            modifiers: { select: { priceDelta: true } },
+          },
+        })
+      : [];
+  const fractionalBills =
+    bill.splitKind === 'FRACTIONAL'
+      ? await tx.restaurantBill.findMany({
+          where: { orderId: bill.orderId, status: { not: 'VOID' }, splitKind: 'FRACTIONAL' },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: { id: true, fractionNumerator: true },
+        })
+      : [];
+  const fractionalIndex = fractionalBills.findIndex((candidate) => candidate.id === bill.id);
+  const fractionalWeights = fractionalBills.map((candidate) => candidate.fractionNumerator ?? 0);
   const applications = await tx.restaurantPromotionBillApplicationSnapshot.findMany({
     where: { billId: bill.id, reversesBillApplicationId: null },
     orderBy: [{ applicationOrdinal: 'asc' }, { id: 'asc' }],
@@ -472,11 +503,29 @@ async function loadSettlementContext(
   }
 
   const lines: SettlementContext['lines'] = [];
-  const quoteLines = billLines.flatMap((line) => {
-    const modifiers = sum(line.orderItem.modifiers.map((modifier) => modifier.priceDelta));
+  const evidenceLines =
+    bill.splitKind === 'FRACTIONAL'
+      ? fractionalItems.map((line) => ({
+          id: line.id,
+          orderItemId: line.id,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          compAmount: ZERO,
+          modifiers: line.modifiers,
+        }))
+      : billLines.map((line) => ({
+          id: line.id,
+          orderItemId: line.orderItemId,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          compAmount: line.compAmount,
+          modifiers: line.orderItem.modifiers,
+        }));
+  const quoteLines = evidenceLines.flatMap((line) => {
+    const modifiers = sum(line.modifiers.map((modifier) => modifier.priceDelta));
     const comps =
       line.quantity > 0
-        ? splitMoney(
+        ? splitFractionalMoney(
             line.compAmount,
             Array.from({ length: line.quantity }, () => '1')
           )
@@ -484,12 +533,24 @@ async function loadSettlementContext(
     return Array.from({ length: line.quantity }, (_, unitOrdinal) => {
       const beforeTaxDiscount = discounts.get(`${line.orderItemId}:${unitOrdinal}`) ?? ZERO;
       const comp = comps[unitOrdinal] ?? ZERO;
-      lines.push({ billLineId: line.id, unitOrdinal, comp, beforeTaxDiscount });
+      lines.push({
+        billLineId: bill.splitKind === 'FRACTIONAL' ? null : line.id,
+        ...(bill.splitKind === 'FRACTIONAL' ? { sourceOrderItemId: line.id } : {}),
+        unitOrdinal,
+        comp,
+        beforeTaxDiscount,
+      });
+      const unitPrice =
+        bill.splitKind === 'FRACTIONAL'
+          ? splitMoney(line.unitPrice.plus(modifiers), fractionalWeights.map(String))[
+              fractionalIndex
+            ]!
+          : line.unitPrice;
       return {
         id: `${line.id}:${unitOrdinal}`,
-        unitPrice: line.unitPrice,
+        unitPrice,
         quantity: 1,
-        modifierTotal: modifiers,
+        modifierTotal: bill.splitKind === 'FRACTIONAL' ? ZERO : modifiers,
         comp,
         beforeTaxDiscount,
       };
@@ -580,13 +641,19 @@ async function finalizeTaxSettlement(
   settlement: SettlementContext
 ) {
   const quoteLines = settlement.quote.lines;
-  const lineIds = [...new Set(settlement.lines.map((line) => line.billLineId))];
+  const lineIds = [
+    ...new Set(settlement.lines.map((line) => line.billLineId ?? line.sourceOrderItemId!)),
+  ];
   const afterTaxByLine = allocateAcross(
     settlement.quote.afterTaxDiscount,
     lineIds.map((id) =>
       sum(
         quoteLines
-          .filter((_, index) => settlement.lines[index]!.billLineId === id)
+          .filter(
+            (_, index) =>
+              (settlement.lines[index]!.billLineId ??
+                settlement.lines[index]!.sourceOrderItemId) === id
+          )
           .map((line) => line.gross)
       )
     )
@@ -596,15 +663,21 @@ async function finalizeTaxSettlement(
     lineIds.map((id) =>
       sum(
         quoteLines
-          .filter((_, index) => settlement.lines[index]!.billLineId === id)
+          .filter(
+            (_, index) =>
+              (settlement.lines[index]!.billLineId ??
+                settlement.lines[index]!.sourceOrderItemId) === id
+          )
           .map((line) => line.gross)
       )
     )
   );
-  const lines = lineIds.map((billLineId, lineIndex) => {
+  const lines = lineIds.map((evidenceLineId, lineIndex) => {
     const units = quoteLines
       .map((line, index) => ({ line, identity: settlement.lines[index]! }))
-      .filter((unit) => unit.identity.billLineId === billLineId);
+      .filter(
+        (unit) => (unit.identity.billLineId ?? unit.identity.sourceOrderItemId) === evidenceLineId
+      );
     const merchandiseTax = sum(units.map((unit) => unit.line.tax));
     const merchandiseGross = sum(units.map((unit) => unit.line.gross));
     const bucketDiscounts = allocateAcross(
@@ -613,7 +686,8 @@ async function finalizeTaxSettlement(
     );
     let bucketIndex = 0;
     return {
-      billLineId,
+      billLineId: bill.splitKind === 'FRACTIONAL' ? null : evidenceLineId,
+      ...(bill.splitKind === 'FRACTIONAL' ? { sourceOrderItemId: evidenceLineId } : {}),
       taxAmount: merchandiseTax,
       serviceChargeAmount: serviceByLine[lineIndex] ?? ZERO,
       lineTotal: sub(
@@ -621,7 +695,7 @@ async function finalizeTaxSettlement(
         afterTaxByLine[lineIndex] ?? ZERO
       ),
       buckets: units.flatMap((unit) =>
-        unit.line.buckets.map((bucket) => ({
+        (bill.splitKind === 'FRACTIONAL' ? [] : unit.line.buckets).map((bucket) => ({
           unitOrdinal: unit.identity.unitOrdinal,
           ruleVersionId: bucket.ruleId,
           paymentCategory: bucket.category,
@@ -640,19 +714,22 @@ async function finalizeTaxSettlement(
       ),
     };
   });
-  const tenderTaxAllocations = allocateTenderTax(
-    [
-      ...priorTenders,
-      {
-        id: finalTenderId,
-        type: input.tender.type,
-        amount: money(input.tender.amount),
-        createdAt: at,
-      },
-    ],
-    settlement,
-    lines
-  );
+  const tenderTaxAllocations =
+    bill.splitKind === 'FRACTIONAL'
+      ? undefined
+      : allocateTenderTax(
+          [
+            ...priorTenders,
+            {
+              id: finalTenderId,
+              type: input.tender.type,
+              amount: money(input.tender.amount),
+              createdAt: at,
+            },
+          ],
+          settlement,
+          lines
+        );
   const inclusiveMerchandiseTax = sum(
     settlement.quote.lines.flatMap((line) =>
       line.buckets
@@ -685,6 +762,16 @@ async function finalizeTaxSettlement(
     lines,
     serviceChargeBuckets: [],
     tenderTaxAllocations,
+    ...(bill.splitKind === 'FRACTIONAL'
+      ? {
+          fractionalEvidence: {
+            sourceOrderId: bill.orderId,
+            fractionNumerator: bill.fractionNumerator!,
+            fractionDenominator: bill.fractionDenominator!,
+            allocationMethod: 'LARGEST_REMAINDER' as const,
+          },
+        }
+      : {}),
   });
 }
 
@@ -736,7 +823,8 @@ function allocateTenderTax(
   tenders: TenderRow[],
   settlement: SettlementContext,
   lines: Array<{
-    billLineId: string;
+    billLineId: string | null;
+    sourceOrderItemId?: string;
     buckets: Array<{
       unitOrdinal: number;
       ruleVersionId: string;
@@ -770,8 +858,12 @@ function allocateTenderTax(
         originalTenderId: share.originalTenderId,
         paymentCategory: category,
         bucket: {
-          allocationKind: 'MERCHANDISE' as const,
-          billLineId: line.billLineId,
+          ...(line.billLineId
+            ? { allocationKind: 'MERCHANDISE' as const, billLineId: line.billLineId }
+            : {
+                allocationKind: 'FRACTIONAL_MERCHANDISE' as const,
+                sourceOrderItemId: line.sourceOrderItemId!,
+              }),
           unitOrdinal: bucket.unitOrdinal,
           ruleVersionId: bucket.ruleVersionId,
           paymentCategory: category,

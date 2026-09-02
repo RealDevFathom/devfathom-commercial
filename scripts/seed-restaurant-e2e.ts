@@ -86,6 +86,10 @@ const IDS = {
   deliveryTaxRuleCash: 'tax_rule_restaurant_e2e_delivery_cash',
   deliveryTaxRuleCard: 'tax_rule_restaurant_e2e_delivery_card',
   deliveryTaxRuleOther: 'tax_rule_restaurant_e2e_delivery_other',
+  coreTaxProfile: 'tax_profile_restaurant_e2e_core',
+  coreTaxRuleCash: 'tax_rule_restaurant_e2e_core_cash',
+  coreTaxRuleCard: 'tax_rule_restaurant_e2e_core_card',
+  coreTaxRuleOther: 'tax_rule_restaurant_e2e_core_other',
   loyaltyProgram: 'loyalty_program_restaurant_e2e_v1',
   loyaltyAccount: 'loyalty_account_restaurant_e2e',
   loyaltyEntry: 'loyalty_entry_restaurant_e2e_opening',
@@ -210,10 +214,17 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['restaurant_customer_addresses', [IDS.customerAddress]],
   ['restaurant_delivery_zones', [IDS.deliveryZone, IDS.isolatedDeliveryZone]],
   ['restaurant_tax_official_sources', [IDS.deliveryTaxSource]],
-  ['restaurant_tax_profile_versions', [IDS.deliveryTaxProfile]],
+  ['restaurant_tax_profile_versions', [IDS.deliveryTaxProfile, IDS.coreTaxProfile]],
   [
     'restaurant_tax_rule_versions',
-    [IDS.deliveryTaxRuleCash, IDS.deliveryTaxRuleCard, IDS.deliveryTaxRuleOther],
+    [
+      IDS.deliveryTaxRuleCash,
+      IDS.deliveryTaxRuleCard,
+      IDS.deliveryTaxRuleOther,
+      IDS.coreTaxRuleCash,
+      IDS.coreTaxRuleCard,
+      IDS.coreTaxRuleOther,
+    ],
   ],
   ['restaurant_loyalty_program_versions', [IDS.loyaltyProgram]],
   ['restaurant_loyalty_accounts', [IDS.loyaltyAccount]],
@@ -454,6 +465,54 @@ async function seedDeliveryTaxProfile(tx: Prisma.TransactionClient) {
   });
 }
 
+async function seedCoreTaxProfile(tx: Prisma.TransactionClient) {
+  if (await tx.restaurantTaxProfileVersion.findUnique({ where: { id: IDS.coreTaxProfile } }))
+    return;
+  const at = FIXED_DELIVERY_TAX_BUSINESS_DATE;
+  const approvalReference = 'TEST_ONLY · SYNTHETIC_ZERO_RATE';
+  const activationIdempotencyKey = `restaurant-e2e-core-tax:${at.toISOString()}`;
+  await tx.restaurantTaxProfileVersion.create({
+    data: {
+      id: IDS.coreTaxProfile,
+      branchId: RESTAURANT_E2E.branchId,
+      versionNumber: 1,
+      status: 'PUBLISHED',
+      effectiveFrom: at,
+      approvalReference,
+      approvedAt: at,
+      publishedAt: at,
+      presetId: 'TEST-ONLY-ZERO-RATE',
+      activationIdempotencyKey,
+      activationPayloadHash: createHash('sha256').update(activationIdempotencyKey).digest('hex'),
+      eligibilityEvidence: { fixture: true, synthetic: true, productionTaxAdvice: false },
+      profileName: 'Synthetic zero-rate Core POS fixture',
+      priceMode: 'INCLUSIVE',
+      createdAt: at,
+      updatedAt: at,
+      rules: {
+        create: [
+          { id: IDS.coreTaxRuleCash, paymentCategory: 'CASH', ruleCode: 'TEST_ZERO_CORE_CASH' },
+          { id: IDS.coreTaxRuleCard, paymentCategory: 'CARD', ruleCode: 'TEST_ZERO_CORE_CARD' },
+          { id: IDS.coreTaxRuleOther, paymentCategory: 'OTHER', ruleCode: 'TEST_ZERO_CORE_OTHER' },
+        ].map((rule) => ({
+          ...rule,
+          officialSourceId: IDS.deliveryTaxSource,
+          priceMode: 'INCLUSIVE' as const,
+          discountTreatment: 'BEFORE_TAX' as const,
+          rate: '0',
+          status: 'PUBLISHED' as const,
+          effectiveFrom: at,
+          approvalReference,
+          approvedAt: at,
+          publishedAt: at,
+          createdAt: at,
+          updatedAt: at,
+        })),
+      },
+    },
+  });
+}
+
 async function main() {
   const databaseUrl = resolveRestaurantE2eDatabaseUrl();
   const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
@@ -635,6 +694,7 @@ async function main() {
         });
         await requirePristineDeliveryLane(tx);
         await seedDeliveryTaxProfile(tx);
+        await seedCoreTaxProfile(tx);
         await tx.restaurantFloor.upsert({
           where: { id: IDS.floor },
           update: {

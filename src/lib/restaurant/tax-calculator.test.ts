@@ -7,6 +7,7 @@ import {
   resolveTaxProfile,
   resolveTaxRule,
   splitMoney,
+  splitFractionalMoney,
   TaxConfigurationError,
   TaxPaymentCategoryError,
   TaxProfileResolutionError,
@@ -74,6 +75,37 @@ describe('tax calculator G1 mapping', () => {
 });
 
 describe('tax calculator G2 cent arithmetic', () => {
+  it('fractional evidence allocates two and three ways exactly with the remainder last', () => {
+    const two = splitFractionalMoney('25.01', ['1', '1']);
+    const three = splitFractionalMoney('10.01', ['1', '1', '1']);
+    expect(two.map((value) => value.toFixed(2))).toEqual(['12.50', '12.51']);
+    expect(three.map((value) => value.toFixed(2))).toEqual(['3.33', '3.34', '3.34']);
+    expect(Prisma.Decimal.sum(new Prisma.Decimal(0), ...two).toFixed(2)).toBe('25.01');
+    expect(Prisma.Decimal.sum(new Prisma.Decimal(0), ...three).toFixed(2)).toBe('10.01');
+  });
+
+  it('fractional evidence sums exactly under zero-rate and rated profiles', () => {
+    for (const rate of ['0', '0.05']) {
+      const fractionalRules = [rule('CASH', rate), rule('CARD', rate), rule('OTHER', rate)];
+      const shares = splitFractionalMoney('100.01', ['1', '1', '1']);
+      const quotes = shares.map((share, index) =>
+        quoteTaxSettlement({
+          lines: [{ id: `fraction-${index}`, unitPrice: share, quantity: 1 }],
+          profiles,
+          rules: fractionalRules,
+          at,
+          proposedTenderType: 'CASH',
+        })
+      );
+      expect(
+        Prisma.Decimal.sum(
+          new Prisma.Decimal(0),
+          ...quotes.map((quote) => quote.lines[0]!.consideration)
+        ).toFixed(2)
+      ).toBe('100.01');
+    }
+  });
+
   it('tax_quote_cash_card_other_uses_effective_category_rule', () => {
     expect(
       (['CASH', 'CARD', 'OTHER'] as const).map((proposedTenderType) =>

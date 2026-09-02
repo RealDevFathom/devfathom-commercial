@@ -1083,7 +1083,8 @@ export type SettlementBucketEvidence = {
 };
 
 export type SettlementLineEvidence = {
-  billLineId: string;
+  billLineId: string | null;
+  sourceOrderItemId?: string;
   taxAmount: Prisma.Decimal;
   serviceChargeAmount: Prisma.Decimal;
   lineTotal: Prisma.Decimal;
@@ -1095,6 +1096,12 @@ export type SettlementTaxBucketIdentity = {
   paymentCategory: 'CASH' | 'CARD' | 'OTHER';
 } & (
   | { allocationKind: 'MERCHANDISE'; billLineId: string; unitOrdinal: number }
+  | {
+      allocationKind: 'FRACTIONAL_MERCHANDISE';
+      sourceOrderItemId: string;
+      unitOrdinal: number;
+      billLineId?: never;
+    }
   | { allocationKind: 'SERVICE_CHARGE'; billLineId?: never; unitOrdinal?: never }
 );
 
@@ -1127,6 +1134,12 @@ export type FinalizeBillSettlementInput = SettleBillInput & {
   serviceChargeBuckets: readonly SettlementBucketEvidence[];
   /** Omitted for legacy/v0-compatible callers that do not yet allocate tax by tender. */
   tenderTaxAllocations?: readonly SettlementTenderTaxAllocation[];
+  fractionalEvidence?: {
+    sourceOrderId: string;
+    fractionNumerator: number;
+    fractionDenominator: number;
+    allocationMethod: 'LARGEST_REMAINDER';
+  };
 };
 
 export type FinalizeBillSettlementResult = SettleBillResult & {
@@ -1144,6 +1157,7 @@ function taxBucketIdentityKey(bucket: SettlementTaxBucketIdentity): string {
   return JSON.stringify([
     bucket.allocationKind,
     bucket.billLineId ?? null,
+    'sourceOrderItemId' in bucket ? bucket.sourceOrderItemId : null,
     bucket.unitOrdinal ?? null,
     bucket.ruleVersionId,
     bucket.paymentCategory,
@@ -1253,6 +1267,10 @@ export async function finalizeBillSettlement(
       serviceChargeRate: true,
       serviceChargeBasis: true,
       serviceChargeTaxTreatment: true,
+      orderId: true,
+      splitKind: true,
+      fractionNumerator: true,
+      fractionDenominator: true,
       lines: { select: { id: true, compAmount: true } },
     },
   });
@@ -1260,11 +1278,25 @@ export async function finalizeBillSettlement(
   if (bill.status !== 'OPEN')
     throw new BillCommandError('Only an OPEN bill can be settled.', 'BILL_NOT_OPEN');
 
+  const fractional = bill.splitKind === 'FRACTIONAL';
   const expectedLineIds = bill.lines.map((line) => line.id).sort();
-  const suppliedLineIds = input.lines.map((line) => line.billLineId).sort();
+  const suppliedLineIds = input.lines
+    .flatMap((line) => (line.billLineId ? [line.billLineId] : []))
+    .sort();
+  const invalidFractionalEvidence =
+    fractional &&
+    (!input.fractionalEvidence ||
+      input.fractionalEvidence.sourceOrderId !== bill.orderId ||
+      input.fractionalEvidence.fractionNumerator !== bill.fractionNumerator ||
+      input.fractionalEvidence.fractionDenominator !== bill.fractionDenominator ||
+      input.fractionalEvidence.allocationMethod !== 'LARGEST_REMAINDER' ||
+      input.lines.length === 0 ||
+      input.lines.some((line) => line.billLineId !== null || !line.sourceOrderItemId));
   if (
-    expectedLineIds.length !== suppliedLineIds.length ||
-    expectedLineIds.some((id, index) => id !== suppliedLineIds[index])
+    invalidFractionalEvidence ||
+    (!fractional &&
+      (expectedLineIds.length !== suppliedLineIds.length ||
+        expectedLineIds.some((id, index) => id !== suppliedLineIds[index])))
   ) {
     throw new BillCommandError(
       'Settlement evidence must cover every bill line exactly once.',
@@ -1301,7 +1333,7 @@ export async function finalizeBillSettlement(
     !equals(lineTaxTotal, input.taxTotal) ||
     !equals(lineServiceTotal, input.serviceChargeTotal) ||
     !equals(bill.deliveryFeeTotal, input.deliveryFeeTotal) ||
-    !equals(add(merchandiseBucketTax, serviceBucketTax), input.taxTotal) ||
+    (!fractional && !equals(add(merchandiseBucketTax, serviceBucketTax), input.taxTotal)) ||
     !(input.serviceChargeBuckets.length === 0
       ? equals(bill.serviceChargeTotal, input.serviceChargeTotal) &&
         (input.serviceChargeTotal.isZero() ||
@@ -1315,6 +1347,7 @@ export async function finalizeBillSettlement(
     throw new BillCommandError('Settlement totals do not reconcile.', 'INVALID_SPLIT');
   }
   for (const line of input.lines) {
+    if (fractional) continue;
     if (
       line.buckets.some((bucket) => !Number.isInteger(bucket.unitOrdinal) || bucket.unitOrdinal < 0)
     ) {
@@ -1342,8 +1375,12 @@ export async function finalizeBillSettlement(
     ...input.lines.flatMap((line) =>
       line.buckets.map((bucket) => ({
         id: randomUUID(),
-        allocationKind: 'MERCHANDISE' as const,
-        billLineId: line.billLineId,
+        ...(line.billLineId
+          ? { allocationKind: 'MERCHANDISE' as const, billLineId: line.billLineId }
+          : {
+              allocationKind: 'FRACTIONAL_MERCHANDISE' as const,
+              sourceOrderItemId: line.sourceOrderItemId!,
+            }),
         unitOrdinal: bucket.unitOrdinal,
         ruleVersionId: bucket.ruleVersionId,
         paymentCategory: bucket.paymentCategory as 'CASH' | 'CARD' | 'OTHER',
@@ -1391,6 +1428,19 @@ export async function finalizeBillSettlement(
     compTotal: bill.compTotal.toFixed(2),
     discountTotal: input.discountTotal.toFixed(2),
     serviceChargeTotal: input.serviceChargeTotal.toFixed(2),
+    ...(input.fractionalEvidence
+      ? {
+          fractional: {
+            ...input.fractionalEvidence,
+            lines: input.lines.map((line) => ({
+              sourceOrderItemId: line.sourceOrderItemId,
+              taxAmount: line.taxAmount.toFixed(2),
+              serviceChargeAmount: line.serviceChargeAmount.toFixed(2),
+              lineTotal: line.lineTotal.toFixed(2),
+            })),
+          },
+        }
+      : {}),
     ...(bill.serviceChargePolicyVersionId
       ? {
           serviceCharge: {
@@ -1426,14 +1476,16 @@ export async function finalizeBillSettlement(
 
   let frozenBucketIndex = 0;
   for (const line of input.lines) {
-    await tx.restaurantBillLine.update({
-      where: { id: line.billLineId },
-      data: {
-        taxAmount: line.taxAmount,
-        serviceChargeAmount: line.serviceChargeAmount,
-        lineTotal: line.lineTotal,
-      },
-    });
+    if (line.billLineId) {
+      await tx.restaurantBillLine.update({
+        where: { id: line.billLineId },
+        data: {
+          taxAmount: line.taxAmount,
+          serviceChargeAmount: line.serviceChargeAmount,
+          lineTotal: line.lineTotal,
+        },
+      });
+    }
     for (const bucket of line.buckets) {
       const frozenBucket = frozenBuckets[frozenBucketIndex++];
       if (!frozenBucket) throw new Error('Tax settlement bucket identity was not created.');
@@ -1449,7 +1501,7 @@ export async function finalizeBillSettlement(
            ${bucket.priceMode}::"RestaurantTaxPriceMode", ${bucket.rate},
            ${bucket.taxableAmount}, ${bucket.taxAmount}, ${bucket.grossAmount},
            ${bucket.preDiscountGrossAmount}, ${bucket.beforeTaxDiscountAmount},
-           ${bucket.afterTaxDiscountAmount}, 1, 'MERCHANDISE', ${line.billLineId},
+           ${bucket.afterTaxDiscountAmount}, 1, ${line.billLineId ? 'MERCHANDISE' : 'FRACTIONAL_MERCHANDISE'}, ${line.billLineId},
            ${bucket.unitOrdinal})
       `;
     }

@@ -297,6 +297,36 @@ export function splitMoney(total: DecimalInput, shares: DecimalInput[]): Prisma.
   return allocated.map((value) => value.div(HUNDRED));
 }
 
+/** Fractional-bill allocation uses the same largest-remainder rule, with a stable
+ * last-fraction tie break so the final sibling absorbs an otherwise equal remainder. */
+export function splitFractionalMoney(
+  total: DecimalInput,
+  shares: DecimalInput[]
+): Prisma.Decimal[] {
+  const exactShares = shares.map((share) => decimal(share, 'Fraction'));
+  if (exactShares.length === 0 || exactShares.some((share) => !share.isPositive()))
+    throw new RangeError('Fractions must be positive');
+  const totalCents = cents(total);
+  const denominator = Decimal.sum(ZERO, ...exactShares);
+  const raw = exactShares.map((share, index) => ({
+    index,
+    value: totalCents.times(share).div(denominator),
+  }));
+  const allocated = raw.map(({ value }) => value.floor());
+  const remainder = totalCents.minus(Decimal.sum(ZERO, ...allocated)).toNumber();
+  raw
+    .sort(
+      (a, b) =>
+        b.value.minus(b.value.floor()).comparedTo(a.value.minus(a.value.floor())) ||
+        b.index - a.index
+    )
+    .slice(0, remainder)
+    .forEach(({ index }) => {
+      allocated[index] = allocated[index].plus(1);
+    });
+  return allocated.map((value) => value.div(HUNDRED));
+}
+
 function zeroWeights(): Record<PaymentCategory, Prisma.Decimal> {
   return { CASH: new Decimal(0), CARD: new Decimal(0), OTHER: new Decimal(0) };
 }
@@ -305,7 +335,7 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
   const proposedCategory = mapTenderTypeToPaymentCategory(input.proposedTenderType);
   const profile = resolveTaxProfile(input.profiles, input.at);
   const considerations = input.lines.map(lineConsideration);
-  const merchandiseCents = Decimal.sum(...considerations.map((value) => cents(value)));
+  const merchandiseCents = Decimal.sum(ZERO, ...considerations.map((value) => cents(value)));
   const weights = zeroWeights();
   let unallocated = merchandiseCents;
   for (const tender of input.priorTenderWeights ?? []) {
@@ -351,9 +381,9 @@ export function quoteTaxSettlement(input: TaxQuoteInput): TaxQuoteResult {
   const serviceChargePayable =
     serviceCharge?.gross ?? money(service?.amount ?? ZERO, 'Service charge');
   if (serviceChargePayable.isNegative()) throw new RangeError('Service charge cannot be negative');
-  const net = Decimal.sum(...lines.map((line) => line.net), serviceCharge?.net ?? ZERO);
-  const tax = Decimal.sum(...lines.map((line) => line.tax), serviceCharge?.tax ?? ZERO);
-  const merchandisePayable = Decimal.sum(...lines.map((line) => line.gross));
+  const net = Decimal.sum(ZERO, ...lines.map((line) => line.net), serviceCharge?.net ?? ZERO);
+  const tax = Decimal.sum(ZERO, ...lines.map((line) => line.tax), serviceCharge?.tax ?? ZERO);
+  const merchandisePayable = Decimal.sum(ZERO, ...lines.map((line) => line.gross));
   const afterTaxDiscount = money(input.afterTaxDiscount ?? ZERO, 'After-tax discount');
   if (afterTaxDiscount.isNegative()) throw new RangeError('After-tax discount cannot be negative');
   if (afterTaxDiscount.greaterThan(merchandisePayable))
