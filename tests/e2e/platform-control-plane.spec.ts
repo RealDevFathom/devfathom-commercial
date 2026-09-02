@@ -389,9 +389,13 @@ test('compact navigation preserves keyboard focus and has no hydration/request e
     if (message.type() === 'error') failures.push(message.text());
   });
   page.on('pageerror', (error) => failures.push(error.message));
-  page.on('requestfailed', (request) =>
-    failures.push(request.failure()?.errorText ?? 'request failed')
-  );
+  page.on('requestfailed', (request) => {
+    // Closing the drawer unmounts its links, so Chromium cancels the RSC
+    // prefetches they still had in flight. Excluded the same way the onboarding
+    // test above excludes it.
+    const failure = request.failure()?.errorText ?? 'request failed';
+    if (failure !== 'net::ERR_ABORTED') failures.push(failure);
+  });
   await loginPlatform(page);
   const trigger = page.getByRole('button', { name: 'Open platform navigation' });
   await trigger.focus();

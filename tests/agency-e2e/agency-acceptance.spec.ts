@@ -22,7 +22,9 @@ async function signIn(page: Page) {
 test('onboarding selection and dashboard navigation retain the Agency tenant', async ({ page }) => {
   await signIn(page);
   await expect(page.getByText('Agency Gate Admin', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('Active Projects', { exact: true })).toBeVisible();
+  // The dashboard labels both a stat tile and its section with this text, so
+  // anchor on the section heading the way the other route assertions do.
+  await expect(page.getByRole('heading', { name: 'Active Projects' })).toBeVisible();
   for (const route of [
     '/clients',
     '/projects',
@@ -51,7 +53,8 @@ test('projects and tasks resolve the exact owned board', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
   await expect(page.getByText('Atlas Launch E2E')).toBeVisible();
   await page.goto(`/projects/${AGENCY_E2E.projectId}/board/${AGENCY_E2E.boardId}`);
-  await expect(page.getByText('Delivery Board', { exact: true })).toBeVisible();
+  // The board renders its name in both the breadcrumb and the page heading.
+  await expect(page.getByRole('heading', { name: 'Delivery Board' })).toBeVisible();
   await expect(page.getByText('Ship Agency acceptance gate', { exact: true })).toBeVisible();
 });
 
@@ -64,7 +67,9 @@ test('team and custom roles are visible to the Agency administrator', async ({ p
   await expect(page.getByText('Agency Administrator')).toBeVisible();
   await page.goto('/organization');
   await expect(page.getByText('Custom roles', { exact: true })).toBeVisible();
-  await expect(page.getByText('Delivery Lead', { exact: true })).toBeVisible();
+  // The role name also renders as an <option> in the member role selector, so
+  // assert the custom-roles list entry itself.
+  await expect(page.locator('summary').getByText('Delivery Lead', { exact: true })).toBeVisible();
 });
 
 test('meetings expose only the owned scheduled meeting', async ({ page }) => {
@@ -80,14 +85,17 @@ test('finance exposes the owned transaction and invoice surface', async ({ page 
   await expect(page.getByRole('heading', { name: 'Finance' })).toBeVisible();
   await expect(page.getByText('Atlas launch deposit E2E')).toBeVisible();
   await page.getByRole('tab', { name: 'Invoices' }).click();
-  await expect(page.getByText('AGENCY-E2E-001')).toBeVisible();
+  // The invoice tab lists the number in its summary and in each responsive row.
+  await expect(page.getByText('AGENCY-E2E-001').first()).toBeVisible();
 });
 
 test('Insights and reports calculate from the owned Agency work state', async ({ page }) => {
   await signIn(page);
   await page.goto('/team/stats');
   await expect(page.getByRole('heading', { name: 'Team Insights' })).toBeVisible();
-  await expect(page.getByText('Agency Gate Admin')).toBeVisible();
+  // Scoped past the topbar identity so this proves the member reached the
+  // insights themselves, which name them in more than one card.
+  await expect(page.getByRole('main').getByText('Agency Gate Admin').first()).toBeVisible();
   await expect(page.getByText(/with active work/i)).toBeVisible();
 });
 
@@ -102,7 +110,10 @@ test('disabled integrations are honest and Restaurant-only surfaces do not leak'
   await expect(page.locator('a[href^="/restaurant"]')).toHaveCount(0);
 
   await page.goto('/restaurant/orders');
-  await expect(page).not.toHaveURL(/\/restaurant\/orders/);
+  // A module the package does not license is denied in place with an honest
+  // panel instead of a silent redirect (app-shell.tsx), so the Restaurant page
+  // body is never rendered — which is what "does not leak" has to mean here.
+  await expect(page.getByRole('heading', { name: 'This module is not enabled' })).toBeVisible();
   await expect(page.getByText('Northstar Agency E2E', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: /Restaurant/i })).toHaveCount(0);
 });

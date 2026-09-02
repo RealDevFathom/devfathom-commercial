@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { m } from 'motion/react';
@@ -33,12 +33,14 @@ function PlatformDrawer({
   identity,
   nav,
   pathname,
+  onClose,
   onNavigate,
   onSignOut,
 }: {
   identity: PlatformIdentity;
   nav: ReturnType<typeof platformNavigationFor>;
   pathname: string;
+  onClose: (event: React.MouseEvent<HTMLElement>) => void;
   onNavigate: () => void;
   onSignOut: () => void;
 }) {
@@ -59,7 +61,7 @@ function PlatformDrawer({
         </div>
         <button
           type="button"
-          onClick={onNavigate}
+          onClick={onClose}
           className="ml-auto grid size-11 place-items-center rounded-full border border-sidebar-border transition hover:bg-sidebar-accent"
           aria-label="Close menu"
         >
@@ -144,11 +146,45 @@ export function PlatformShell({
   children: React.ReactNode;
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreMenuFocus = useRef(false);
   const pathname = usePathname();
   const router = useRouter();
   const { theme, setTheme } = useTheme();
   const nav = platformNavigationFor(identity.role);
   const currentPage = nav.find((item) => isActivePath(pathname, item.href)) ?? nav[0];
+
+  const closeMobileMenu = useCallback((options: { restoreFocus: boolean }) => {
+    restoreMenuFocus.current = options.restoreFocus;
+    setMobileMenuOpen(false);
+  }, []);
+
+  // Closing the drawer unmounts whatever the keyboard was on, which drops focus
+  // to the body and strands a keyboard user at the top of the document. Hand it
+  // back to the trigger that opened the drawer once the close has committed.
+  useEffect(() => {
+    if (mobileMenuOpen || !restoreMenuFocus.current) return;
+    restoreMenuFocus.current = false;
+    menuTriggerRef.current?.focus();
+  }, [mobileMenuOpen]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeMobileMenu({ restoreFocus: true });
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [mobileMenuOpen, closeMobileMenu]);
+
+  // Enter/Space on a button dispatches a click with `detail === 0`; a pointer
+  // click reports 1 or more. Only the keyboard path pulls focus back, so a tap
+  // still leaves focus where the pointer put it.
+  function handleCloseClick(event: React.MouseEvent<HTMLElement>) {
+    closeMobileMenu({ restoreFocus: event.detail === 0 });
+  }
 
   async function signOut() {
     await fetch('/api/platform/session', {
@@ -173,7 +209,7 @@ export function PlatformShell({
           <button
             type="button"
             className="fixed inset-0 z-40 bg-black/45 backdrop-blur-sm lg:hidden"
-            onClick={() => setMobileMenuOpen(false)}
+            onClick={handleCloseClick}
             aria-label="Close platform navigation"
           />
           <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
@@ -181,7 +217,10 @@ export function PlatformShell({
               identity={identity}
               nav={nav}
               pathname={pathname}
-              onNavigate={() => setMobileMenuOpen(false)}
+              onClose={handleCloseClick}
+              // A navigation link is leaving this view, so the trigger it would
+              // restore to is about to be re-rendered for the next route.
+              onNavigate={() => closeMobileMenu({ restoreFocus: false })}
               onSignOut={() => void signOut()}
             />
           </div>
@@ -192,6 +231,7 @@ export function PlatformShell({
         <header className="studio-topbar sticky top-0 z-30 flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card/94 px-4 backdrop-blur-xl sm:px-6 xl:px-8">
           <button
             type="button"
+            ref={menuTriggerRef}
             onClick={() => setMobileMenuOpen(true)}
             className="studio-icon-button lg:hidden"
             aria-label="Open platform navigation"

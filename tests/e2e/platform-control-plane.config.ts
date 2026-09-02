@@ -19,6 +19,16 @@ const port = Number(process.env.PLAYWRIGHT_PORT ?? 4319);
 // so fixture setup can access FORCE RLS platform tables.
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://admin.localhost:${port}`;
 
+// The shared, slug-free application is the same server on a second host, so the
+// lane names one instead of leaving the shared-host proof skipped. `www` is a
+// reserved shared label (host-routing.ts), and SHARED_APP_HOSTS below states the
+// classification for the server outright rather than leaning on that rule.
+// Assigned back onto the environment because this config is also loaded by each
+// worker, which is where the spec reads it.
+const sharedHost = process.env.PLAYWRIGHT_SHARED_HOST ?? 'www.localhost';
+const sharedBaseURL = process.env.PLAYWRIGHT_SHARED_BASE_URL ?? `http://${sharedHost}:${port}`;
+process.env.PLAYWRIGHT_SHARED_BASE_URL = sharedBaseURL;
+
 export default defineConfig({
   testDir: '.',
   testMatch: 'platform-control-plane.spec.ts',
@@ -50,5 +60,9 @@ export default defineConfig({
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
+        env: {
+          AUTH_TRUST_HOST: 'true',
+          SHARED_APP_HOSTS: new URL(sharedBaseURL).hostname,
+        },
       },
 });
