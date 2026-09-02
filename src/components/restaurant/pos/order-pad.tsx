@@ -1154,7 +1154,14 @@ export function OrderPad() {
                 type="button"
                 variant="outline"
                 disabled={!online || busy || queuedCount === 0}
-                onClick={() => void replayQueue(runtime)}
+                onClick={() =>
+                  void replayQueue(runtime).then(() => {
+                    // An operator can click while an automatic online replay is still folding its
+                    // lost response into storage. Queue one explicit pass after that single-flight
+                    // attempt so the stable idempotency key is actually retried.
+                    return replayQueue(runtime);
+                  })
+                }
               >
                 Retry queued orders
               </Button>

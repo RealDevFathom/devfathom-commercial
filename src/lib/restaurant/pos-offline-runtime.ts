@@ -37,6 +37,7 @@ export type PosOfflineRuntimeState = PosPersistedState<PosQueueSnapshot>;
 /** The sole impure adapter between the POS, IndexedDB, and the pure queue transitions. */
 export class PosOfflineRuntime {
   private state: PosOfflineRuntimeState;
+  private activeReplay: Promise<ReplayResult> | null = null;
 
   constructor(
     readonly scope: PosScope,
@@ -103,7 +104,20 @@ export class PosOfflineRuntime {
     await this.persist();
   }
 
-  async replay(send: (request: PosReplayRequest) => Promise<PosReplayResponse>) {
+  replay(send: (request: PosReplayRequest) => Promise<PosReplayResponse>): Promise<ReplayResult> {
+    if (this.activeReplay) return this.activeReplay;
+    const replay = this.runReplay(send);
+    this.activeReplay = replay;
+    const clear = () => {
+      if (this.activeReplay === replay) this.activeReplay = null;
+    };
+    void replay.then(clear, clear);
+    return replay;
+  }
+
+  private async runReplay(
+    send: (request: PosReplayRequest) => Promise<PosReplayResponse>
+  ): Promise<ReplayResult> {
     for (;;) {
       const next = nextReplayCommand(this.queue(), this.scope.deviceId);
       if (next.status !== 'READY') return { state: next.status, discarded: null };
@@ -152,3 +166,8 @@ export class PosOfflineRuntime {
     return writePosState(this.driver, this.state);
   }
 }
+
+type ReplayResult = {
+  state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED';
+  discarded: { drafts: number; commands: number } | null;
+};

@@ -63,6 +63,39 @@ describe('PosOfflineRuntime', () => {
     expect(runtime.snapshot().queue?.drafts).toHaveLength(1);
   });
 
+  it('coalesces concurrent replay triggers into one transport pass', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    const calls: string[] = [];
+    let releaseOpen!: () => void;
+    let openStarted!: () => void;
+    const openPending = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      openStarted = resolve;
+    });
+    const send = async (request: { path: string }) => {
+      calls.push(request.path);
+      if (request.path.endsWith('/open')) {
+        openStarted();
+        await openPending;
+        return { status: 201, serverRef: 'order-1' };
+      }
+      return { status: 201, serverRef: 'item-1' };
+    };
+
+    const onlineReplay = runtime.replay(send);
+    const duplicateOnlineReplay = runtime.replay(send);
+    expect(duplicateOnlineReplay).toBe(onlineReplay);
+    await started;
+    expect(calls).toEqual(['/api/restaurant/orders/open']);
+
+    releaseOpen();
+    await Promise.all([onlineReplay, duplicateOnlineReplay]);
+    expect(calls).toEqual(['/api/restaurant/orders/open', '/api/restaurant/orders/add-item']);
+  });
+
   it('purges only a confirmed revocation and reports the discarded draft', async () => {
     const driver = createMemoryDriver();
     const runtime = new PosOfflineRuntime(scope, driver);
