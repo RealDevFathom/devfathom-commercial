@@ -41,6 +41,8 @@ const mocks = vi.hoisted(() => ({
   packageModuleUpsert: vi.fn(),
   departmentCreateMany: vi.fn(),
   auditCreate: vi.fn(),
+  tenantAuditCreate: vi.fn(),
+  regulatoryProfileFindFirst: vi.fn(),
   organizationExists: vi.fn(),
 }));
 
@@ -50,6 +52,9 @@ vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn(), decryptSecret: v
 vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (run: (db: unknown) => Promise<unknown>) => run(platformDb)),
+  withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => Promise<unknown>) =>
+    run(platformDb)
+  ),
 }));
 
 function record() {
@@ -77,6 +82,8 @@ const platformDb = {
   platformJob: { create: record() },
   organizationLifecycleEvent: { create: record() },
   platformAuditLog: { create: mocks.auditCreate },
+  auditLog: { create: mocks.tenantAuditCreate },
+  branchRegulatoryProfile: { findFirst: mocks.regulatoryProfileFindFirst },
   restaurantBranch: {
     create: mocks.branchCreate,
     findMany: mocks.branchFindMany,
@@ -824,7 +831,7 @@ describe('pharmacy activation preflight', () => {
     vi.clearAllMocks();
   });
 
-  it('fails closed until PLAT-02/03 readiness checks exist', async () => {
+  it('fails closed without a valid effective-dated regulatory profile', async () => {
     mocks.orgFindUnique.mockResolvedValue({
       id: 'org_p',
       vertical: 'PHARMACY',
@@ -843,7 +850,50 @@ describe('pharmacy activation preflight', () => {
         status: 'ACTIVE',
         reason: 'Attempt pharmacy activation',
       })
-    ).rejects.toThrow(/PLAT-02 and PLAT-03/);
+    ).rejects.toThrow(/PROFILE_MISSING/);
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('activates when the effective profile and jurisdiction rules are confirmed and valid', async () => {
+    mocks.orgFindUnique.mockResolvedValue({
+      id: 'org_p',
+      vertical: 'PHARMACY',
+      status: 'ONBOARDING',
+      activatedAt: null,
+      packageId: 'pkg_p',
+      package: { vertical: 'PHARMACY', moduleLinks: [{ moduleId: 'mod_pharmacy_core' }] },
+      modules: [],
+      users: [{ id: 'admin_1' }],
+      deployments: [{ id: 'dep_1' }],
+    });
+    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
+    const profile = {
+      branchId: 'branch-p',
+      licenceCategory: 'PHARMACY',
+      licenceValidFrom: new Date('2026-01-01'),
+      licenceValidTo: new Date('2027-01-01'),
+      permittedSchedules: ['RX'],
+      qualifiedPersonRegistration: 'QP-1',
+      qualifiedPersonValidFrom: new Date('2026-01-01'),
+      qualifiedPersonValidTo: new Date('2027-01-01'),
+      qualifiedPersonCoverageRosterRef: 'roster-1',
+      jurisdictionRuleSet: {
+        licenceCategories: { provisional: false, values: ['PHARMACY'] },
+        permittedSchedules: { provisional: false, values: ['RX'] },
+        pharmacistCoverageRule: { provisional: false, values: {} },
+      },
+    };
+    mocks.regulatoryProfileFindFirst
+      .mockResolvedValueOnce({ branchId: 'branch-p' })
+      .mockResolvedValueOnce(profile);
+
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Regulatory checks complete',
+      })
+    ).resolves.toBeDefined();
+    expect(mocks.orgUpdate).toHaveBeenCalledOnce();
   });
 });

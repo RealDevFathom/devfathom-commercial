@@ -28,6 +28,10 @@ import {
   roleTemplatesForVertical,
 } from '@/lib/vertical-catalog';
 import { moduleDefinitionForKey, verticalForModuleKey } from '@/lib/module-catalog';
+import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
 
 const id = z
   .string()
@@ -360,10 +364,33 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
   }
 
   if (organization.vertical === 'PHARMACY') {
-    throw new PlatformSecurityError(
-      'Pharmacy activation is unavailable until PLAT-02 and PLAT-03 readiness checks exist.',
-      400
-    );
+    const now = new Date();
+    const profile = await db.branchRegulatoryProfile.findFirst({
+      where: {
+        organizationId,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+      },
+      select: { branchId: true },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    try {
+      await assertStoredBranchMayOperate(
+        db,
+        organizationId,
+        profile?.branchId ?? 'activation-preflight',
+        { name: 'ACTIVATE', at: now, requiresQualifiedPerson: true }
+      );
+    } catch (error) {
+      if (error instanceof BranchOperationDeniedError) {
+        throw new PlatformSecurityError(
+          `Activation preflight failed: pharmacy regulatory profile denied operation (${error.reason}).`,
+          400
+        );
+      }
+      throw error;
+    }
+    return;
   }
 
   // §9 Step 7 — restaurant activation preflight (the implementable subset). The

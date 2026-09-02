@@ -115,6 +115,68 @@ enum MedicineProvenanceStatus {
   SUPERSEDED
 }
 
+/// SAFE-01: platform-owned, effective-dated jurisdiction configuration. The
+/// JSON rule fields retain per-value provenance (`provisional` + `toConfirm`)
+/// instead of turning unconfirmed counsel assumptions into permissive enums.
+model JurisdictionRuleSet {
+  id                        String    @id @default(cuid())
+  code                      String
+  version                   Int
+  effectiveFrom             DateTime
+  effectiveTo               DateTime?
+  licenceCategories         Json
+  permittedSchedules        Json
+  prescriptionOnlyClasses   Json
+  prescriptionRetentionDays Json
+  controlledRegisterFlags   Json
+  pharmacistCoverageRule    Json
+  recordRetentionByClass    Json
+  createdAt                 DateTime  @default(now())
+
+  regulatoryProfiles BranchRegulatoryProfile[]
+
+  @@unique([code, version])
+  @@index([code, effectiveFrom, effectiveTo])
+  @@map("pharmacy_jurisdiction_rule_sets")
+}
+
+/// PLAT-02: an immutable effective-dated snapshot for one branch. `branchId`
+/// is an explicit scope seam until PLAT-04 introduces the pharmacy branch
+/// aggregate; it is never accepted without the tenant-scoped organizationId.
+model BranchRegulatoryProfile {
+  id                               String    @id @default(cuid())
+  organizationId                   String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                         String
+  version                          Int
+  effectiveFrom                    DateTime
+  effectiveTo                      DateTime?
+  provinceCode                     String
+  jurisdictionRuleSetId            String
+  premises                         Json
+  licenceCategory                  String
+  licenceNumber                    String
+  licenceValidFrom                 DateTime
+  licenceValidTo                   DateTime
+  licenceEvidenceFileRef           String
+  permittedSchedules               String[]
+  qualifiedPersonRegistration      String
+  qualifiedPersonValidFrom         DateTime
+  qualifiedPersonValidTo           DateTime
+  qualifiedPersonCoverageRosterRef String
+  ntn                              String?
+  strn                             String?
+  fiscalStatus                     String
+  retentionPolicy                  Json
+  createdAt                        DateTime  @default(now())
+
+  jurisdictionRuleSet JurisdictionRuleSet @relation(fields: [jurisdictionRuleSetId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, version])
+  @@index([organizationId, branchId, effectiveFrom, effectiveTo])
+  @@index([jurisdictionRuleSetId])
+  @@map("pharmacy_branch_regulatory_profiles")
+}
+
 model Ingredient {
   id             String                      @id @default(cuid())
   organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
