@@ -1,0 +1,355 @@
+/**
+ * PH-OFF / OFF-01 — the pharmacy counter's offline runtime.
+ *
+ * The sole impure adapter between the counter surface, the neutral
+ * retail-terminal local store, and the pure queue transitions. It owns three
+ * jobs and delegates everything else:
+ *
+ *  1. **Hydrate and persist** one scope-partitioned document through the
+ *     retail-terminal seam. Snapshots, the command queue, the receipt leases and
+ *     the OFF-03 quotas live in that single document, so every write is atomic
+ *     and the storage-minimization denylist walks all of it. A document written
+ *     by another counter, another branch or another schema version fails closed.
+ *  2. **Install signed snapshots.** Everything decidable without the key is
+ *     decided here (scope, window, version monotonicity, payload hash); the
+ *     signature itself is the injected `SnapshotVerifier` — the server and the
+ *     tests use the Node Ed25519 one, a browser surface supplies a WebCrypto one.
+ *     A snapshot that fails ANY of those is not stored, so the OFF-02 matrix can
+ *     never read an unverified snapshot as satisfied.
+ *  3. **Replay the outbox**, one command at a time, in the counter's own FIFO
+ *     order, with the classification rule shared with the Restaurant POS.
+ *
+ * WHAT IS NOT STORED. The signing key is asymmetric, so the counter holds only a
+ * public key — and the denylist would refuse anything named like a secret,
+ * credential or customer field anyway. Payloads are held as composed; the
+ * enforcement is the guard on every write, not a promise in a comment.
+ */
+import {
+  createMemoryDriver,
+  createTerminalIndexedDbDriver,
+  emptyTerminalState,
+  purgeTerminalScope,
+  readTerminalState,
+  writeTerminalState,
+} from '@/lib/retail-terminal/local-store';
+import type {
+  PersistedTerminalState,
+  TerminalScope,
+  TerminalStorageDriver,
+  TerminalStoreDatabase,
+} from '@/lib/retail-terminal/local-store';
+import { classifyReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
+
+import {
+  applyCounterReplayOutcome,
+  beginCounterReplay,
+  buildCounterReplayRequest,
+  createCounterQueue,
+  enqueueCounterCommand,
+  nextCounterReplay,
+  purgeCounterQueue,
+  resumeCounterAfterReauth,
+} from './counter-command-queue';
+import type {
+  CounterCommandInput,
+  CounterEnqueueResult,
+  CounterLeaseCursor,
+  CounterMatrixInputs,
+  CounterQueueSnapshot,
+  CounterQuota,
+  CounterReplayRequest,
+} from './counter-command-queue';
+import type { CachedSnapshotState, PharmacyOfflineSnapshotKind } from './offline-action-matrix';
+import { checkEnvelope } from './offline-snapshot-envelope';
+import type { EnvelopeRejection, OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
+
+/** Bump when the persisted document shape changes; an older record fails closed. */
+export const COUNTER_STORE_SCHEMA_VERSION = 1;
+
+export const COUNTER_STORE_DATABASE: TerminalStoreDatabase = {
+  // A distinct database name from the Restaurant POS: a device enrolled in both
+  // cannot read the other's documents even before the scope check runs.
+  databaseName: 'devfathom-pharmacy-counter',
+  objectStoreName: 'scope-state',
+  schemaVersion: COUNTER_STORE_SCHEMA_VERSION,
+};
+
+export function createCounterIndexedDbDriver(
+  factory: IDBFactory | null = null
+): TerminalStorageDriver {
+  return createTerminalIndexedDbDriver(COUNTER_STORE_DATABASE, factory);
+}
+
+export { createMemoryDriver };
+
+/** One verified snapshot exactly as the counter keeps it. */
+export type StoredCounterSnapshot = {
+  envelope: OfflineSnapshotEnvelope;
+  signature: string;
+  payload: unknown;
+  /** Set only after the injected verifier accepted the envelope. */
+  verified: boolean;
+};
+
+export type CounterCache = {
+  /** The Ed25519 public key the counter verifies envelopes against. Not a secret. */
+  snapshotPublicKey: string;
+  snapshots: StoredCounterSnapshot[];
+};
+
+export type CounterRuntimeState = PersistedTerminalState<CounterQueueSnapshot, CounterCache>;
+
+/** The cryptographic half of snapshot verification, injected. */
+export interface SnapshotVerifier {
+  verify(input: {
+    envelope: OfflineSnapshotEnvelope;
+    signature: string;
+    publicKey: string;
+  }): Promise<boolean> | boolean;
+}
+
+export type InstallSnapshotResult =
+  | { ok: true; snapshot: StoredCounterSnapshot }
+  | { ok: false; reason: EnvelopeRejection | 'BAD_SIGNATURE'; message: string };
+
+export type CounterReplayResponse = {
+  status: number;
+  serverMessage?: string;
+  retryAfter?: string | null;
+  serverRef?: string | null;
+};
+
+type ReplayResult = {
+  state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED';
+  discarded: { commands: number } | null;
+};
+
+export class PharmacyCounterRuntime {
+  private state: CounterRuntimeState;
+  private activeReplay: Promise<ReplayResult> | null = null;
+
+  constructor(
+    readonly scope: TerminalScope,
+    private readonly driver: TerminalStorageDriver,
+    private readonly verifier: SnapshotVerifier,
+    snapshotPublicKey: string
+  ) {
+    this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+      scope,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    this.state.queue = createCounterQueue(scope.deviceId);
+    this.state.catalog = { snapshotPublicKey, snapshots: [] };
+  }
+
+  snapshot(): CounterRuntimeState {
+    return this.state;
+  }
+
+  /**
+   * Load this counter's document. A queue that names another device is
+   * `unrecoverable` rather than adopted — queued money and stock work is never
+   * rebound to a replacement counter.
+   */
+  async hydrate(): Promise<'ready' | 'unrecoverable'> {
+    const result = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+      this.driver,
+      this.scope,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    if (result.status === 'unrecoverable') return 'unrecoverable';
+    if (result.status === 'ok') {
+      if (result.state.queue && result.state.queue.deviceId !== this.scope.deviceId) {
+        return 'unrecoverable';
+      }
+      this.state = {
+        ...result.state,
+        queue: result.state.queue ?? createCounterQueue(this.scope.deviceId),
+        catalog: result.state.catalog ?? this.cache(),
+      };
+    }
+    return 'ready';
+  }
+
+  /**
+   * Verify and install one signed snapshot. Ordered so the cheap, key-free
+   * checks run first and the signature check runs last — and so a snapshot that
+   * fails any of them is NOT stored, which is what lets the OFF-02 matrix treat
+   * "present in the cache" as "verified and in window".
+   */
+  async installSnapshot(input: {
+    envelope: OfflineSnapshotEnvelope;
+    signature: string;
+    payload: unknown;
+    payloadHash: string;
+    nowMs: number;
+  }): Promise<InstallSnapshotResult> {
+    const cache = this.cache();
+    const held = cache.snapshots.find((stored) => stored.envelope.kind === input.envelope.kind);
+    const envelopeCheck = checkEnvelope({
+      envelope: input.envelope,
+      scope: this.scope,
+      nowMs: input.nowMs,
+      heldVersion: held?.envelope.version ?? null,
+      payloadHash: input.payloadHash,
+    });
+    if (!envelopeCheck.ok) {
+      return { ok: false, reason: envelopeCheck.reason, message: envelopeCheck.message };
+    }
+
+    const signatureOk = await this.verifier.verify({
+      envelope: input.envelope,
+      signature: input.signature,
+      publicKey: cache.snapshotPublicKey,
+    });
+    if (!signatureOk) {
+      return {
+        ok: false,
+        reason: 'BAD_SIGNATURE',
+        message: 'This snapshot failed signature verification and will not be used.',
+      };
+    }
+
+    const stored: StoredCounterSnapshot = {
+      envelope: input.envelope,
+      signature: input.signature,
+      payload: input.payload,
+      verified: true,
+    };
+    this.state = {
+      ...this.state,
+      catalog: {
+        ...cache,
+        snapshots: [
+          ...cache.snapshots.filter((row) => row.envelope.kind !== input.envelope.kind),
+          stored,
+        ],
+      },
+    };
+    await this.persist();
+    return { ok: true, snapshot: stored };
+  }
+
+  /** The matrix's view of the cache: kind, verified, and the signed expiry. */
+  cachedSnapshotStates(): CachedSnapshotState[] {
+    return this.cache().snapshots.map((stored) => ({
+      kind: stored.envelope.kind,
+      verified: stored.verified,
+      expiresAtMs: Date.parse(stored.envelope.expiresAt),
+    }));
+  }
+
+  payloadFor(kind: PharmacyOfflineSnapshotKind): unknown {
+    return this.cache().snapshots.find((stored) => stored.envelope.kind === kind)?.payload ?? null;
+  }
+
+  /** Record the receipt-number blocks this counter reserved before going offline. */
+  async adoptLeases(leases: readonly CounterLeaseCursor[]): Promise<void> {
+    this.state = { ...this.state, queue: { ...this.queue(), leases: [...leases] } };
+    await this.persist();
+  }
+
+  /** Record the OFF-03 quotas this counter was granted before going offline. */
+  async adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
+    this.state = { ...this.state, queue: { ...this.queue(), quotas: [...quotas] } };
+    await this.persist();
+  }
+
+  /**
+   * Compose one command. The OFF-02 decision is evaluated against the CACHED
+   * snapshot states rather than anything the caller supplies, so a surface
+   * cannot talk the matrix into accepting a snapshot the runtime never verified.
+   */
+  async enqueue(
+    input: CounterCommandInput,
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+  ): Promise<CounterEnqueueResult> {
+    const result = enqueueCounterCommand(this.queue(), input, {
+      ...matrix,
+      snapshots: this.cachedSnapshotStates(),
+    });
+    if (!result.ok) return result;
+    this.state = { ...this.state, queue: result.snapshot };
+    await this.persist();
+    return result;
+  }
+
+  async resume(): Promise<void> {
+    this.state = { ...this.state, queue: resumeCounterAfterReauth(this.queue()) };
+    await this.persist();
+  }
+
+  replay(
+    send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>
+  ): Promise<ReplayResult> {
+    if (this.activeReplay) return this.activeReplay;
+    const replay = this.runReplay(send);
+    this.activeReplay = replay;
+    const clear = () => {
+      if (this.activeReplay === replay) this.activeReplay = null;
+    };
+    void replay.then(clear, clear);
+    return replay;
+  }
+
+  private async runReplay(
+    send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>
+  ): Promise<ReplayResult> {
+    for (;;) {
+      const next = nextCounterReplay(this.queue(), this.scope.deviceId);
+      if (next.status !== 'READY') return { state: next.status, discarded: null };
+
+      const request = buildCounterReplayRequest(this.queue(), next.command);
+      this.state = {
+        ...this.state,
+        queue: beginCounterReplay(this.queue(), next.command.commandId),
+      };
+      await this.persist();
+
+      let response: CounterReplayResponse;
+      try {
+        response = await send(request);
+      } catch {
+        response = { status: 0 };
+      }
+      const outcome = classifyReplayOutcome(response);
+      const applied = applyCounterReplayOutcome(this.queue(), {
+        commandId: next.command.commandId,
+        outcome,
+        serverRef: response.serverRef,
+      });
+      this.state = { ...this.state, queue: applied.snapshot };
+
+      if (applied.snapshot.replay === 'STOPPED_REVOKED') {
+        await purgeTerminalScope(this.driver, this.scope);
+        return { state: 'STOPPED', discarded: applied.discarded };
+      }
+      await this.persist();
+      if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
+    }
+  }
+
+  /** Confirmed revocation outside a replay (a heartbeat said so). */
+  async revoke(): Promise<{ commands: number } | null> {
+    const purged = purgeCounterQueue(this.queue());
+    this.state = { ...this.state, queue: purged.snapshot };
+    await purgeTerminalScope(this.driver, this.scope);
+    return purged.discarded;
+  }
+
+  close(): void {
+    this.driver.close();
+  }
+
+  private queue(): CounterQueueSnapshot {
+    return this.state.queue ?? createCounterQueue(this.scope.deviceId);
+  }
+
+  private cache(): CounterCache {
+    return this.state.catalog ?? { snapshotPublicKey: '', snapshots: [] };
+  }
+
+  private persist(): Promise<void> {
+    return writeTerminalState(this.driver, this.state, COUNTER_STORE_SCHEMA_VERSION);
+  }
+}
