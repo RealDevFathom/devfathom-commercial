@@ -30,6 +30,22 @@ param emailDeliveryMode string
 @maxValue(1)
 param minReplicas int = 0
 
+@description('Hostname binding served by an existing managed certificate.')
+type customDomainBinding = {
+  @description('Hostname to bind, for example staging.devfathom.com.')
+  name: string
+
+  @description('Resource id of the managed certificate that serves the hostname.')
+  certificateId: string
+}
+
+@description('''
+Custom domain bindings for the app ingress. A deployment replaces the whole ingress configuration,
+so a hostname bound out of band is dropped unless it is declared here. Leave empty for an
+environment that is only served on its default Container Apps hostname.
+''')
+param customDomains customDomainBinding[] = []
+
 @secure()
 param postgresAdminPassword string
 @secure()
@@ -462,6 +478,13 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         allowInsecure: false
         targetPort: 3000
         transport: 'auto'
+        customDomains: [
+          for domain in customDomains: {
+            name: domain.name
+            certificateId: domain.certificateId
+            bindingType: 'SniEnabled'
+          }
+        ]
       }
       registries: [
         { server: registry.properties.loginServer, identity: identity.id }
