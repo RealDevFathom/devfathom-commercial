@@ -1,0 +1,9 @@
+numTotalTestSuites=unavailable
+numPassedTestSuites=unavailable
+numFailedTestSuites=unavailable
+numPendingTestSuites=unavailable
+numTotalTests=unavailable
+numPassedTests=unavailable
+numFailedTests=unavailable
+numPendingTests=unavailable
+reason=NOT RUN because PostgreSQL pg-start failed before database bootstrap

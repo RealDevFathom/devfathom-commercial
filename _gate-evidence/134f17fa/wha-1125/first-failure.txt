@@ -1,0 +1,4 @@
+First non-green check: pg-start=1
+PostgreSQL 16.15: FATAL: could not create any Unix-domain sockets
+Unix-domain socket path was 121 bytes; PostgreSQL maximum is 103 bytes.
+Exact rejected path is recorded in postgres.log.

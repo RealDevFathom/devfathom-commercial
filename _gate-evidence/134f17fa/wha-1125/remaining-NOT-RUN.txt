@@ -1,0 +1,17 @@
+Database bootstrap: NOT RUN
+Role proof: NOT RUN
+prepare-extensions: NOT RUN
+prisma migrate deploy: NOT RUN
+prisma migration count: unavailable
+prisma generate: NOT RUN
+runtime grants: NOT RUN
+seed: NOT RUN
+serialized Vitest: NOT RUN; all counts unavailable
+test:rls: NOT RUN
+next typegen: NOT RUN
+lint: NOT RUN
+Prettier check: NOT RUN
+TypeScript typecheck (8 GiB): NOT RUN
+Next.js build: NOT RUN
+Bicep build/build-params: NOT RUN
+Docker image gate: NOT RUN because Docker daemon was unavailable

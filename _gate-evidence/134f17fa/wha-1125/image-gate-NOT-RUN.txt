@@ -1,0 +1,2 @@
+NOT RUN: Docker daemon unavailable.
+Post-stop diagnostic: docker info exited 1 with "Cannot connect to the Docker daemon".

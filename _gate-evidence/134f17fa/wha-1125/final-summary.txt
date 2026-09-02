@@ -1,0 +1,27 @@
+WHA-1212 PART 1 AUTOMATED GATE
+HEAD=134f17fa15dc6cb3733f1368dcff54b1faf47a7d
+MIGRATION_COUNT=unavailable
+PART1_STATUS=NOT_GREEN
+ROLE_FIELDS=rolname|rolsuper|rolbypassrls|rolcreatedb|rolcreaterole|rolinherit|rolcanlogin
+unavailable
+VITEST_COUNTS
+unavailable
+EXIT_CODES
+head=0
+exact-head=0
+branch=0
+initial-porcelain=0
+environment-metadata=0
+postgres-version=0
+postgres-major-16=0
+port-free=0
+fresh-pgdata=0
+initdb=0
+pg-start=1
+final-head=0
+final-porcelain=0
+FIRST_FAILURE
+First non-green check: pg-start=1
+PostgreSQL 16.15: FATAL: could not create any Unix-domain sockets
+Unix-domain socket path was 121 bytes; PostgreSQL maximum is 103 bytes.
+Exact rejected path is recorded in postgres.log.

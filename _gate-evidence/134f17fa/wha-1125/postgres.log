@@ -1,0 +1,6 @@
+2026-09-03 04:08:41.912 PKT [38413] LOG:  starting PostgreSQL 16.15 (Homebrew) on aarch64-apple-darwin25.6.0, compiled by Apple clang version 21.0.0 (clang-2100.1.1.101), 64-bit
+2026-09-03 04:08:41.913 PKT [38413] LOG:  listening on IPv4 address "127.0.0.1", port 55594
+2026-09-03 04:08:41.913 PKT [38413] LOG:  Unix-domain socket path "/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1212-be7d8157-257-iNHPB6/pgsocket-55594/.s.PGSQL.55594" is too long (maximum 103 bytes)
+2026-09-03 04:08:41.913 PKT [38413] WARNING:  could not create Unix-domain socket in directory "/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1212-be7d8157-257-iNHPB6/pgsocket-55594"
+2026-09-03 04:08:41.913 PKT [38413] FATAL:  could not create any Unix-domain sockets
+2026-09-03 04:08:41.913 PKT [38413] LOG:  database system is shut down

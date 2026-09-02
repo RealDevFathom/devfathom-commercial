@@ -1,0 +1,2 @@
+initdb (exact invocation in phase1-gate.sh; credential-bearing arguments omitted here)
+pg-start (exact invocation in phase1-gate.sh; credential-bearing arguments omitted here)
