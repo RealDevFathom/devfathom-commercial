@@ -273,6 +273,17 @@ export async function installSopPack(
   const pack = findSopPack(packKey);
   if (!pack) throw new Error(`Unknown SOP pack "${packKey}".`);
 
+  return installSopPackDefinition(db, pack, opts);
+}
+
+/** Shared vertical seam: materialise a validated pack on the existing SOP engine. */
+export async function installSopPackDefinition(
+  db: ScopedDb,
+  pack: SopPack,
+  opts: { now?: Date } = {}
+): Promise<InstallPackResult> {
+  const packKey = pack.key;
+
   const existing = await db.restaurantSopTemplate.findFirst({
     where: { name: pack.name },
     select: { id: true, versions: { select: { id: true }, orderBy: { versionNumber: 'asc' } } },
