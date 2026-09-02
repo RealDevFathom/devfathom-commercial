@@ -1,6 +1,6 @@
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { MODULE_CATALOG } from '../src/lib/module-catalog.js';
-import { RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
+import { PHARMACY_PACKAGES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
 
 /**
  * Agency modules, as `[key, name, category, routePrefix]`. The restaurant half
@@ -88,7 +88,11 @@ export async function syncPlatformCatalog(
   const existingPackageKeys = new Set(
     (
       await tx.platformPackage.findMany({
-        where: { key: { in: RESTAURANT_PACKAGES.map((definition) => definition.key) } },
+        where: {
+          key: {
+            in: [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].map((definition) => definition.key),
+          },
+        },
         select: { key: true },
       })
     ).map((row) => row.key)
@@ -96,7 +100,7 @@ export async function syncPlatformCatalog(
 
   let packagesCreated = 0;
   let linksCreated = 0;
-  for (const definition of RESTAURANT_PACKAGES) {
+  for (const definition of [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES]) {
     if (existingPackageKeys.has(definition.key)) continue;
 
     const platformPackage = await tx.platformPackage.upsert({
@@ -112,14 +116,14 @@ export async function syncPlatformCatalog(
 
     for (const moduleKey of definition.moduleKeys) {
       const moduleId = moduleIds.get(moduleKey);
-      if (!moduleId) throw new Error(`Unknown restaurant module: ${moduleKey}`);
+      if (!moduleId) throw new Error(`Unknown vertical module: ${moduleKey}`);
       await tx.platformPackageModule.upsert({
         where: { packageId_moduleId: { packageId: platformPackage.id, moduleId } },
         update: {},
         create: {
           packageId: platformPackage.id,
           moduleId,
-          limits: moduleKey === 'restaurant-core' ? definition.defaultLimits : undefined,
+          limits: moduleKey.endsWith('-core') ? definition.defaultLimits : undefined,
         },
       });
       linksCreated += 1;

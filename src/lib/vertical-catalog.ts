@@ -23,6 +23,7 @@ export type { OrganizationVertical };
 
 export const AGENCY: OrganizationVertical = 'AGENCY';
 export const RESTAURANT: OrganizationVertical = 'RESTAURANT';
+export const PHARMACY: OrganizationVertical = 'PHARMACY';
 
 // ---------------------------------------------------------------------------
 // §2 / §2.1 — Vertical definitions
@@ -46,9 +47,14 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
     label: 'Restaurant',
     description: 'Branches, POS, menu, inventory, SOP, loyalty, and insights.',
   },
+  PHARMACY: {
+    vertical: 'PHARMACY',
+    label: 'Pharmacy',
+    description: 'Counters, dispensing, inventory, procurement, safety, and reporting.',
+  },
 };
 
-export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT'];
+export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT', 'PHARMACY'];
 
 export type DepartmentDefinition = {
   key: string;
@@ -69,9 +75,19 @@ export const RESTAURANT_DEPARTMENTS: readonly DepartmentDefinition[] = [
   { key: 'FRONT_OF_HOUSE', name: 'Front of House' },
 ];
 
+export const PHARMACY_DEPARTMENTS: readonly DepartmentDefinition[] = [
+  { key: 'COUNTER', name: 'Counter' },
+  { key: 'DISPENSARY', name: 'Dispensary' },
+  { key: 'STORE', name: 'Store' },
+  { key: 'PROCUREMENT', name: 'Procurement' },
+  { key: 'FINANCE', name: 'Finance' },
+  { key: 'COMPLIANCE', name: 'Compliance' },
+];
+
 export function departmentsForVertical(
   vertical: OrganizationVertical
 ): readonly DepartmentDefinition[] {
+  if (vertical === PHARMACY) return PHARMACY_DEPARTMENTS;
   return vertical === RESTAURANT ? RESTAURANT_DEPARTMENTS : AGENCY_DEPARTMENTS;
 }
 
@@ -98,6 +114,7 @@ export function defaultDepartmentRowsForVertical(
  * rather than in the kitchen. Always a key present in `departmentsForVertical`.
  */
 export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  if (vertical === PHARMACY) return 'COUNTER';
   return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'LEADERSHIP';
 }
 
@@ -110,6 +127,7 @@ export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): s
  * kitchen. Always a key present in `departmentsForVertical`.
  */
 export function memberDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  if (vertical === PHARMACY) return 'COUNTER';
   return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'ENGINEERING';
 }
 
@@ -249,6 +267,25 @@ export const RESTAURANT_MODULES: readonly CommercialModule[] = [
   },
 ];
 
+export const PHARMACY_MODULES: readonly CommercialModule[] = [
+  ['pharmacy-core', 'Pharmacy Core', 'Core', '/pharmacy'],
+  ['pharmacy-counter', 'Pharmacy Counter', 'Operations', '/pharmacy/counter'],
+  ['pharmacy-inventory', 'Pharmacy Inventory', 'Inventory', '/pharmacy/inventory'],
+  ['pharmacy-procurement', 'Pharmacy Procurement', 'Procurement', '/pharmacy/procurement'],
+  ['pharmacy-dispensing', 'Pharmacy Dispensing', 'Clinical', '/pharmacy/dispensing'],
+  ['pharmacy-safety', 'Pharmacy Safety', 'Compliance', '/pharmacy/safety'],
+  ['pharmacy-finance', 'Pharmacy Finance', 'Finance', '/pharmacy/finance'],
+  ['pharmacy-reports', 'Pharmacy Reports', 'Reports', '/pharmacy/reports'],
+  ['pharmacy-crm', 'Pharmacy CRM', 'Customers', '/pharmacy/crm'],
+].map(([key, name, category, routePrefix], index) => ({
+  key,
+  name,
+  category,
+  routePrefix,
+  vertical: 'PHARMACY' as const,
+  mandatory: index === 0,
+}));
+
 // ---------------------------------------------------------------------------
 // §7 — Limits and usage (keys + counting contracts)
 // ---------------------------------------------------------------------------
@@ -311,6 +348,12 @@ export const RESTAURANT_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
 
 /** Agency packages currently meter seats at organization level, not module limits. */
 export const AGENCY_LIMIT_KEYS: readonly LimitKeyDefinition[] = [];
+
+export const PHARMACY_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
+  { key: 'pharmacy.branches.max', countedUnit: 'Active pharmacy branches' },
+  { key: 'pharmacy.counters.max', countedUnit: 'Active dispensing and sales counters' },
+  { key: 'pharmacy.users.max', countedUnit: 'Active pharmacy users' },
+];
 
 export const RESTAURANT_LIMIT_KEY_NAMES: readonly string[] = RESTAURANT_LIMIT_KEYS.map(
   (limit) => limit.key
@@ -427,6 +470,33 @@ export type RoleTemplate = {
 export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   { key: 'admin', name: 'Administrator', isSystem: true, capabilities: ['*'] },
   { key: 'member', name: 'Member', isSystem: true, capabilities: [] },
+];
+
+export const PHARMACY_CAPABILITIES: readonly string[] = [
+  'pharmacy.*',
+  'pharmacy.dispense',
+  'pharmacy.manage',
+  'pharmacy.counter',
+  'pharmacy.procurement',
+  'pharmacy.inventory',
+  'pharmacy.finance',
+  'pharmacy.audit',
+];
+
+export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
+  { key: 'owner', name: 'Owner', isSystem: true, capabilities: ['pharmacy.*'] },
+  { key: 'pharmacist', name: 'Pharmacist', isSystem: true, capabilities: ['pharmacy.dispense'] },
+  { key: 'manager', name: 'Manager', isSystem: true, capabilities: ['pharmacy.manage'] },
+  { key: 'cashier', name: 'Cashier', isSystem: true, capabilities: ['pharmacy.counter'] },
+  {
+    key: 'procurement',
+    name: 'Procurement',
+    isSystem: true,
+    capabilities: ['pharmacy.procurement'],
+  },
+  { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy.inventory'] },
+  { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['pharmacy.finance'] },
+  { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['pharmacy.audit'] },
 ];
 
 export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
@@ -867,12 +937,64 @@ export const RESTAURANT_PACKAGES: readonly PackageDefinition[] = [
   },
 ];
 
+const PHARMACY_ESSENTIALS_MODULES = [
+  'pharmacy-core',
+  'pharmacy-counter',
+  'pharmacy-inventory',
+  'pharmacy-procurement',
+  'pharmacy-finance',
+  'pharmacy-reports',
+] as const;
+const PHARMACY_PROFESSIONAL_MODULES = [
+  ...PHARMACY_ESSENTIALS_MODULES,
+  'pharmacy-dispensing',
+  'pharmacy-safety',
+  'pharmacy-crm',
+] as const;
+
+export const PHARMACY_PACKAGES: readonly PackageDefinition[] = [
+  {
+    key: 'pharmacy-essentials',
+    name: 'Pharmacy Essentials',
+    vertical: 'PHARMACY',
+    moduleKeys: PHARMACY_ESSENTIALS_MODULES,
+    defaultLimits: {
+      'pharmacy.branches.max': 1,
+      'pharmacy.counters.max': 2,
+      'pharmacy.users.max': 10,
+    },
+  },
+  {
+    key: 'pharmacy-professional',
+    name: 'Pharmacy Professional',
+    vertical: 'PHARMACY',
+    moduleKeys: PHARMACY_PROFESSIONAL_MODULES,
+    defaultLimits: {
+      'pharmacy.branches.max': 5,
+      'pharmacy.counters.max': 10,
+      'pharmacy.users.max': 50,
+    },
+  },
+  {
+    key: 'pharmacy-chain',
+    name: 'Pharmacy Chain',
+    vertical: 'PHARMACY',
+    moduleKeys: PHARMACY_MODULES.map((module) => module.key),
+    defaultLimits: {
+      'pharmacy.branches.max': 100,
+      'pharmacy.counters.max': 500,
+      'pharmacy.users.max': 2500,
+    },
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure helpers — the compatibility surface consumers must call
 // ---------------------------------------------------------------------------
 
 /** Commercial modules owned by a vertical. */
 export function modulesForVertical(vertical: OrganizationVertical): readonly CommercialModule[] {
+  if (vertical === 'PHARMACY') return PHARMACY_MODULES;
   return vertical === 'RESTAURANT' ? RESTAURANT_MODULES : AGENCY_MODULES;
 }
 
@@ -894,14 +1016,15 @@ export function isRestaurantModuleKey(key: string): boolean {
 /** Commercial packages offered for a vertical (§2.3 onboarding filter). Agency
  * packages are not modeled here; only their compatibility rule is. */
 export function packagesForVertical(vertical: OrganizationVertical): readonly PackageDefinition[] {
-  return RESTAURANT_PACKAGES.filter((pkg) => pkg.vertical === vertical);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].filter((pkg) => pkg.vertical === vertical);
 }
 
 export function packageByKey(key: string): PackageDefinition | undefined {
-  return RESTAURANT_PACKAGES.find((pkg) => pkg.key === key);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].find((pkg) => pkg.key === key);
 }
 
 export function roleTemplatesForVertical(vertical: OrganizationVertical): readonly RoleTemplate[] {
+  if (vertical === 'PHARMACY') return PHARMACY_ROLE_TEMPLATES;
   return vertical === 'RESTAURANT' ? RESTAURANT_ROLE_TEMPLATES : AGENCY_ROLE_TEMPLATES;
 }
 
@@ -919,6 +1042,7 @@ export function jobRoleTemplatesForVertical(
 export function limitKeysForVertical(
   vertical: OrganizationVertical
 ): readonly LimitKeyDefinition[] {
+  if (vertical === 'PHARMACY') return PHARMACY_LIMIT_KEYS;
   return vertical === 'RESTAURANT' ? RESTAURANT_LIMIT_KEYS : AGENCY_LIMIT_KEYS;
 }
 

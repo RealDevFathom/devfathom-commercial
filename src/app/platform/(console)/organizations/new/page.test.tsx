@@ -51,6 +51,10 @@ describe('NewOrganizationPage type-first choice', () => {
       'href',
       '/platform/organizations/new?vertical=RESTAURANT'
     );
+    expect(screen.getByRole('link', { name: /Pharmacy/ })).toHaveAttribute(
+      'href',
+      '/platform/organizations/new?vertical=PHARMACY'
+    );
 
     // No preselect: neither the onboarding form nor a defaulted vertical exists
     // before the operator chooses, and no package query has run.
@@ -78,6 +82,29 @@ describe('NewOrganizationPage type-first choice', () => {
 });
 
 describe('NewOrganizationPage package step', () => {
+  it('offers only pharmacy packages for a PHARMACY organization', async () => {
+    mocks.packageFindMany.mockResolvedValue([
+      { id: 'pkg_p1', name: 'Pharmacy Essentials', defaultSeats: 10 },
+      { id: 'pkg_p2', name: 'Pharmacy Professional', defaultSeats: 50 },
+      { id: 'pkg_p3', name: 'Pharmacy Chain', defaultSeats: 2500 },
+    ]);
+
+    const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
+
+    expect(mocks.packageFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true, vertical: 'PHARMACY' } })
+    );
+    expect(
+      [...container.querySelectorAll('select[name="packageId"] option')].map(
+        (option) => option.textContent
+      )
+    ).toEqual([
+      'Pharmacy Essentials · 10 default seats',
+      'Pharmacy Professional · 50 default seats',
+      'Pharmacy Chain · 2500 default seats',
+    ]);
+  });
+
   it('filters packages server-side by the chosen vertical and submits it explicitly', async () => {
     const { container } = render(await renderPage({ vertical: 'RESTAURANT' }));
 

@@ -2244,6 +2244,7 @@ model EmailMessage {
 enum OrganizationVertical {
   AGENCY
   RESTAURANT
+  PHARMACY
 }
 
 enum PlatformModuleBand {

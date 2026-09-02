@@ -818,3 +818,32 @@ describe('agency activation preflight unchanged', () => {
     expect(mocks.platformModuleFindMany).not.toHaveBeenCalled();
   });
 });
+
+describe('pharmacy activation preflight', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fails closed until PLAT-02/03 readiness checks exist', async () => {
+    mocks.orgFindUnique.mockResolvedValue({
+      id: 'org_p',
+      vertical: 'PHARMACY',
+      status: 'ONBOARDING',
+      activatedAt: null,
+      packageId: 'pkg_p',
+      package: { vertical: 'PHARMACY', moduleLinks: [{ moduleId: 'mod_pharmacy_core' }] },
+      modules: [],
+      users: [{ id: 'admin_1' }],
+      deployments: [{ id: 'dep_1' }],
+    });
+
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Attempt pharmacy activation',
+      })
+    ).rejects.toThrow(/PLAT-02 and PLAT-03/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+});

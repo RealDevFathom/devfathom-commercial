@@ -359,6 +359,13 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     throw new PlatformSecurityError(`Activation preflight failed: add ${missing.join(', ')}.`, 400);
   }
 
+  if (organization.vertical === 'PHARMACY') {
+    throw new PlatformSecurityError(
+      'Pharmacy activation is unavailable until PLAT-02 and PLAT-03 readiness checks exist.',
+      400
+    );
+  }
+
   // §9 Step 7 — restaurant activation preflight (the implementable subset). The
   // agency path is complete above and returns here with byte-identical behavior;
   // the checks below only run for restaurant organizations. Operator credential
