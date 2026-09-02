@@ -535,7 +535,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               type: 'Readiness'
-              httpGet: { path: '/api/health', port: 3000, scheme: 'HTTP' }
+              httpGet: { path: '/api/ready', port: 3000, scheme: 'HTTP' }
               initialDelaySeconds: 10
               periodSeconds: 10
               failureThreshold: 12
