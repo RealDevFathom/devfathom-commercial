@@ -435,6 +435,19 @@ export function RestaurantDevicesConsole() {
                   <Skeleton className="h-11 w-full" />
                 ) : !enrollmentBranchId ? (
                   <p className="text-sm text-text-muted">Select a branch to choose its station.</p>
+                ) : stationsQuery.error ? (
+                  /*
+                   * A failed lookup is NOT an empty branch. Kitchen stations
+                   * live behind the POS module, so an organization without it
+                   * gets FORBIDDEN here — and telling that operator "this branch
+                   * has no station yet" would send them to a Create action that
+                   * fails for the same reason. Say which of the two it is.
+                   */
+                  <p role="alert" className="text-sm text-destructive">
+                    {isPermissionError(stationsQuery.error)
+                      ? 'Kitchen displays need the Restaurant POS module. Enable it for this organization, then enroll this display.'
+                      : 'Stations could not be loaded for this branch. Close this dialog and try again.'}
+                  </p>
                 ) : activeStations.length === 0 ? (
                   <div className="space-y-3 rounded-md border border-dashed border-border-default p-3">
                     <p className="text-sm text-text-muted">

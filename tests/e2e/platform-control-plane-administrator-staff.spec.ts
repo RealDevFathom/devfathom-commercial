@@ -272,6 +272,49 @@ test('the administrator SuperAdmin creates is provisioned a staff profile and is
   expect(stations).toHaveLength(1);
   expect(stations[0]).toMatchObject({ name: 'Kitchen', is_default: true });
 
+  // Kitchen stations live behind the POS module, and the fixture package
+  // licenses only Restaurant Core and Menu. Enable it the way an operator would,
+  // so the enrollment scenario at the end of this test is the real one rather
+  // than a permission failure dressed up as an empty branch.
+  const posModuleId = await withAdminDatabase(async (db) => {
+    const row = await db.query<{ id: string }>(
+      `SELECT id FROM platform_modules WHERE key = 'restaurant-pos'`
+    );
+    return row.rows[0]!.id;
+  });
+  const licensed = await request.post('/api/platform/control', {
+    headers: platformMutationHeaders,
+    data: {
+      action: 'organization.module',
+      payload: {
+        organizationId,
+        moduleId: posModuleId,
+        status: 'ENABLED',
+        reason: 'E2E kitchen-display enrollment needs Restaurant POS',
+      },
+    },
+    failOnStatusCode: false,
+  });
+  expect(licensed.status(), await licensed.text()).toBe(200);
+
+  // …and the device cap the enrollment path enforces, which the fixture package
+  // does not carry either. Both are ordinary operator commands, set here rather
+  // than in the shared fixture so the sibling control-plane specs are untouched.
+  const capped = await request.post('/api/platform/control', {
+    headers: platformMutationHeaders,
+    data: {
+      action: 'organization.limit',
+      payload: {
+        organizationId,
+        key: 'pos.registeredDevices.max',
+        value: 25,
+        source: 'CONTRACT',
+      },
+    },
+    failOnStatusCode: false,
+  });
+  expect(capped.status(), await capped.text()).toBe(200);
+
   // ── The owner-reported symptom: the created administrator signs in and the
   // notification poll is served rather than denied.
   expect(
@@ -319,7 +362,16 @@ test('the administrator SuperAdmin creates is provisioned a staff profile and is
 
   // The station field belongs to a kitchen display only.
   await expect(enrollDialog.getByText('KDS station')).toHaveCount(0);
-  await enrollDialog.getByLabel('Branch').selectOption({ label: tenant.branchName });
+
+  // `RestaurantBranchSelect` decorates the option text ("Clifton Flagship ·
+  // MAIN (default)"), and `selectOption({ label })` is an EXACT match — so the
+  // value is read off the option rather than guessing at the presentation.
+  const branchSelect = enrollDialog.getByLabel('Branch');
+  const branchValue = await branchSelect
+    .locator('option', { hasText: tenant.branchName })
+    .getAttribute('value');
+  expect(branchValue, 'the default branch must be offered to the administrator').toBeTruthy();
+  await branchSelect.selectOption(branchValue!);
   await enrollDialog.getByLabel('Device kind').selectOption('KDS');
 
   const stationSelect = enrollDialog.getByLabel('KDS station');
@@ -342,8 +394,9 @@ test('the administrator SuperAdmin creates is provisioned a staff profile and is
   await enrollDialog.getByRole('button', { name: 'Enroll this browser' }).click();
 
   // Enrollment ends the administrator session and turns this browser into the
-  // terminal, so nothing may follow it in this test.
-  await expect(page).toHaveURL(/\/restaurant\/terminal/, { timeout: 30_000 });
+  // terminal, so nothing may follow it in this test. A kitchen display lands on
+  // the KDS rail (`/kds`); a POS register would land on `/pos`.
+  await expect(page).toHaveURL(/\/kds$/, { timeout: 30_000 });
   const enrolled = await withAdminDatabase(async (db) => {
     const result = await db.query<{ kind: string; station_name: string | null }>(
       `SELECT d.kind::text AS kind, st.name AS station_name

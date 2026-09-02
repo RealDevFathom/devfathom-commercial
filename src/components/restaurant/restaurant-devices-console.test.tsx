@@ -14,6 +14,8 @@ type RotationOptions = {
   onSuccess?: (result: { secret: string }) => void;
 };
 
+type UiError = { message: string; data?: { code?: string } | null };
+
 type StationOptions = {
   onSuccess?: (result: { id: string; name: string; branchId: string }) => void;
 };
@@ -51,7 +53,7 @@ const mocks = vi.hoisted(() => ({
   // enrollment dialog used to dead-end on.
   stations: {
     data: [] as { id: string; name: string; active: boolean }[],
-    error: null,
+    error: null as UiError | null,
     isLoading: false,
   },
   createStation: vi.fn(),
@@ -186,7 +188,7 @@ describe('Restaurant device security UI', () => {
       mocks.rotationOptions?.onSuccess?.({ secret: 'rdk_rotated_once' });
       options?.onSettled?.();
     });
-    mocks.stations.data = [];
+    mocks.stations = { data: [], error: null, isLoading: false };
     mocks.stationOptions = undefined;
   });
 
@@ -420,6 +422,25 @@ describe('Restaurant device security UI', () => {
     );
 
     expect(screen.getByRole('combobox', { name: 'KDS station' })).toHaveValue('station_new');
+  });
+
+  it('says the POS module is missing rather than claiming the branch has no station', () => {
+    // Kitchen stations live behind Restaurant POS, so an organization without it
+    // gets FORBIDDEN from `listStations`. Rendering the empty state there would
+    // point the operator at a Create action that fails for the same reason —
+    // the same kind of dead end this whole item is about.
+    mocks.stations = {
+      data: [],
+      error: { message: 'Forbidden', data: { code: 'FORBIDDEN' } },
+      isLoading: false,
+    };
+    openKdsEnrollment();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Kitchen displays need the Restaurant POS module.'
+    );
+    expect(screen.queryByRole('button', { name: 'Create station' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/This branch has no KDS station yet/)).not.toBeInTheDocument();
   });
 
   it('reports a missing station itself rather than through the browser tooltip', () => {
