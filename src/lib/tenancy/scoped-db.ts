@@ -124,6 +124,68 @@ export async function withPlatformDb<T>(
 }
 
 /**
+ * WHA-1181 — run `run` AS one tenant inside an existing transaction, then put
+ * the surrounding scope back exactly as it was.
+ *
+ * WHY THIS EXISTS. A provisioning path reuses ordinary tenant domain writers
+ * (`job-roles.ts`, the station insert) from the PLATFORM control plane, and those
+ * writers assume tenant scope in two separate ways:
+ *
+ *   1. WRITES. Most tenant tables declare `organizationId String
+ *      @default(dbgenerated("current_setting('app.current_organization_id', true)"))`,
+ *      so an insert that omits the column takes its tenant from the GUC. Inside
+ *      {@link withPlatformDb} that GUC is deliberately BLANK, so the row would
+ *      land under the empty string and belong to no organization.
+ *   2. READS. Every idempotence check in those writers is an unfiltered read —
+ *      `ensureDefaultJobRoles` asks "which role keys exist?" and lets RLS answer.
+ *      Under `app.is_platform_admin = 'true'` the policy short-circuits and that
+ *      question is answered for EVERY tenant at once, so a fresh organization
+ *      looks fully seeded and gets nothing.
+ *
+ * Setting only the organization id fixes (1) and leaves (2) silently broken,
+ * which is why both GUCs move together here: this installs the same scope
+ * {@link withTenantDb} would, for the duration of `run`.
+ *
+ * DROPPING THE PLATFORM FLAG ONLY NARROWS. `is_platform_admin` is the permissive
+ * side of `... = 'true' OR "organizationId" = NULLIF(current_setting(...), '')`.
+ * Clearing it while naming the organization leaves the tenant's own rows
+ * reachable and nothing else — this can never grant reach into another tenant.
+ *
+ * Restoration is in a `finally` so a throw mid-provisioning cannot leave the rest
+ * of a platform command running under a tenant's scope. That is belt-and-braces:
+ * a throw normally aborts the surrounding transaction anyway.
+ */
+export async function withOrganizationDefaults<T>(
+  tx: ScopedDb,
+  organizationId: string,
+  run: (tx: ScopedDb) => Promise<T>
+): Promise<T> {
+  assertOrganizationId(organizationId);
+
+  const [previous] = await tx.$queryRawUnsafe<
+    { organization: string | null; platformAdmin: string | null }[]
+  >(
+    `SELECT current_setting('app.current_organization_id', true) AS organization,
+            current_setting('app.is_platform_admin', true) AS "platformAdmin"`
+  );
+  await tx.$queryRawUnsafe(
+    `SELECT set_config('app.current_organization_id', $1, true),
+            set_config('app.is_platform_admin', 'false', true)`,
+    organizationId
+  );
+  try {
+    return await run(tx);
+  } finally {
+    await tx.$queryRawUnsafe(
+      `SELECT set_config('app.current_organization_id', $1, true),
+              set_config('app.is_platform_admin', $2, true)`,
+      previous?.organization ?? '',
+      previous?.platformAdmin ?? 'false'
+    );
+  }
+}
+
+/**
  * A request-safe Prisma facade for code paths that cannot hold one interactive
  * transaction open (notably RSC prefetch helpers). Every model operation is
  * executed in its own tenant-scoped transaction. Request handlers should prefer

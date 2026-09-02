@@ -11,10 +11,21 @@ const mocks = vi.hoisted(() => ({
   staffFindFirst: vi.fn(),
   staffCreate: vi.fn(),
   branchFindFirst: vi.fn(),
+  branchFindMany: vi.fn(),
+  jobRoleFindMany: vi.fn(),
+  jobRoleCreate: vi.fn(),
+  jobRoleFindFirst: vi.fn(),
+  stationFindFirst: vi.fn(),
+  stationCreate: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withOrganizationDefaults: vi.fn(
+    async (tx: unknown, _organizationId: string, run: (db: unknown) => Promise<unknown>) => run(tx)
+  ),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -33,11 +44,23 @@ vi.mock('@/lib/abac', async () => {
 });
 
 import { restaurantStaffRouter } from './restaurant-staff';
+import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { TRPCContext } from '../trpc';
 
 const db = {
   restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
-  restaurantBranch: { findFirst: mocks.branchFindFirst },
+  restaurantBranch: { findFirst: mocks.branchFindFirst, findMany: mocks.branchFindMany },
+  // The self-service repair runs the same provisioning path activation does, so
+  // it also converges the floor role profiles and the branch's kitchen station.
+  restaurantJobRole: {
+    findMany: mocks.jobRoleFindMany,
+    findFirst: mocks.jobRoleFindFirst,
+    create: mocks.jobRoleCreate,
+  },
+  restaurantKitchenStation: {
+    findFirst: mocks.stationFindFirst,
+    create: mocks.stationCreate,
+  },
 };
 
 function caller() {
@@ -78,6 +101,15 @@ beforeEach(() => {
     id: 'staff_new',
     primaryBranchId: data.primaryBranchId,
   }));
+  // Fully-provisioned by default: every role already seeded, the owner role
+  // already held, the branch already has its station. Each test that cares
+  // about one of those overrides just that mock.
+  mocks.branchFindMany.mockResolvedValue([{ id: 'branch_default' }]);
+  mocks.jobRoleFindMany.mockResolvedValue(
+    RESTAURANT_JOB_ROLE_TEMPLATES.map((role) => ({ key: role.key }))
+  );
+  mocks.jobRoleFindFirst.mockResolvedValue(null);
+  mocks.stationFindFirst.mockResolvedValue({ id: 'station_1' });
 });
 
 describe('restaurantStaff.mySelfProfile', () => {
@@ -107,10 +139,11 @@ describe('restaurantStaff.provisionMyProfile', () => {
   it('creates only the calling administrator’s own profile, against the default branch', async () => {
     const result = await caller().provisionMyProfile();
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: true,
       staffProfileId: 'staff_new',
       primaryBranchId: 'branch_default',
+      userId: 'user_admin',
     });
     expect(mocks.staffCreate).toHaveBeenCalledOnce();
     expect(mocks.staffCreate.mock.calls[0]![0].data).toMatchObject({
@@ -131,7 +164,11 @@ describe('restaurantStaff.provisionMyProfile', () => {
       expect.objectContaining({
         targetType: 'RestaurantStaffProfile',
         targetId: 'staff_new',
-        metadata: { primaryBranchId: 'branch_default', selfProvisioned: true },
+        metadata: expect.objectContaining({
+          primaryBranchId: 'branch_default',
+          selfProvisioned: true,
+          profileCreated: true,
+        }),
       })
     );
   });
@@ -141,13 +178,51 @@ describe('restaurantStaff.provisionMyProfile', () => {
 
     const result = await caller().provisionMyProfile();
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: false,
       staffProfileId: 'staff_1',
       primaryBranchId: 'branch_default',
+      roleProfileGranted: false,
     });
     expect(mocks.staffCreate).not.toHaveBeenCalled();
+    expect(mocks.jobRoleCreate).not.toHaveBeenCalled();
+    expect(mocks.stationCreate).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('also repairs the missing role profiles and station the same gap left behind', async () => {
+    // WHA-1181 (5)/(9a) — the owner hit all three symptoms in one organization.
+    // The self-service repair converges every one of them, not just the profile.
+    mocks.jobRoleFindMany.mockResolvedValue([]);
+    mocks.stationFindFirst.mockResolvedValue(null);
+    mocks.jobRoleCreate.mockImplementation(async ({ data }: { data: { key: string } }) => ({
+      id: `jobrole_${data.key}`,
+      key: data.key,
+      capabilities: [],
+    }));
+    mocks.stationCreate.mockResolvedValue({
+      id: 'station_new',
+      name: 'Kitchen',
+      branchId: 'branch_default',
+    });
+
+    await caller().provisionMyProfile();
+
+    expect(mocks.jobRoleCreate).toHaveBeenCalledTimes(RESTAURANT_JOB_ROLE_TEMPLATES.length);
+    expect(mocks.stationCreate.mock.calls[0]![0].data).toMatchObject({
+      branchId: 'branch_default',
+      name: 'Kitchen',
+      isDefault: true,
+    });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          jobRolesCreated: RESTAURANT_JOB_ROLE_TEMPLATES.map((role) => role.key),
+          stationsCreated: ['station_new'],
+        }),
+      })
+    );
   });
 
   it('is denied when the ABAC decision withholds staff:manage', async () => {

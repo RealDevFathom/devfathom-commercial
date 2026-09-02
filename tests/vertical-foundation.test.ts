@@ -36,7 +36,10 @@ const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
   userCreate: vi.fn(),
   branchCreate: vi.fn(),
-  branchFindMany: vi.fn(),
+  // Defaulted because WHA-1181 provisioning enumerates a restaurant's branches
+  // to seed their kitchen stations; the §9 preflight fixtures still set their
+  // own answer explicitly.
+  branchFindMany: vi.fn(async (): Promise<Record<string, unknown>[]> => [{ id: 'branch_1' }]),
   branchCount: vi.fn(),
   assignmentCreate: vi.fn(),
   moduleUpsert: vi.fn(),
@@ -51,7 +54,25 @@ const mocks = vi.hoisted(() => ({
   // the behaviour it was written for.
   staffFindFirst: vi.fn(async () => null),
   staffCreate: vi.fn(async () => ({ id: 'staff_1', primaryBranchId: 'branch_1' })),
+  staffFindUnique: vi.fn(async () => ({ id: 'staff_1' })),
   branchFindFirst: vi.fn(async () => ({ id: 'branch_1' })),
+  branchFindUnique: vi.fn(async () => ({ id: 'branch_1' })),
+  jobRoleFindMany: vi.fn(async () => [] as { key: string }[]),
+  jobRoleFindFirst: vi.fn(async () => ({ id: 'jobrole_owner', active: true })),
+  jobRoleFindUnique: vi.fn(async () => ({ id: 'jobrole_owner', key: 'owner', active: true })),
+  jobRoleCreate: vi.fn(async ({ data }: { data: { key: string } }) => ({
+    id: `jobrole_${data.key}`,
+    key: data.key,
+    capabilities: [],
+  })),
+  staffJobRoleFindUnique: vi.fn(async () => null),
+  staffJobRoleCreate: vi.fn(async () => ({ id: 'holding_1' })),
+  stationFindFirst: vi.fn(async () => null),
+  stationCreate: vi.fn(async ({ data }: { data: { name: string; branchId: string } }) => ({
+    id: 'station_1',
+    name: data.name,
+    branchId: data.branchId,
+  })),
   userFindMany: vi.fn(async () => [
     { id: 'user_admin', name: 'Restaurant Admin', email: 'admin@burger.co' },
   ]),
@@ -63,6 +84,9 @@ vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn(), decryptSecret: v
 vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (run: (db: unknown) => Promise<unknown>) => run(platformDb)),
+  withOrganizationDefaults: vi.fn(
+    async (tx: unknown, _organizationId: string, run: (db: unknown) => Promise<unknown>) => run(tx)
+  ),
 }));
 
 function record() {
@@ -98,10 +122,34 @@ const platformDb = {
     create: mocks.branchCreate,
     findMany: mocks.branchFindMany,
     findFirst: mocks.branchFindFirst,
+    findUnique: mocks.branchFindUnique,
     count: mocks.branchCount,
   },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
-  restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
+  restaurantStaffProfile: {
+    findFirst: mocks.staffFindFirst,
+    create: mocks.staffCreate,
+    findUnique: mocks.staffFindUnique,
+  },
+  // WHA-1181 — restaurant provisioning also seeds the floor role profiles,
+  // grants the administrator the owner role, and gives each branch its default
+  // kitchen station. These defaults keep the §9 fixtures below about the
+  // onboarding/activation behaviour they were written for.
+  restaurantJobRole: {
+    findMany: mocks.jobRoleFindMany,
+    findFirst: mocks.jobRoleFindFirst,
+    findUnique: mocks.jobRoleFindUnique,
+    create: mocks.jobRoleCreate,
+  },
+  restaurantStaffJobRole: {
+    findUnique: mocks.staffJobRoleFindUnique,
+    create: mocks.staffJobRoleCreate,
+  },
+  restaurantStaffJobRoleAudit: { create: record() },
+  restaurantKitchenStation: {
+    findFirst: mocks.stationFindFirst,
+    create: mocks.stationCreate,
+  },
   organizationModule: {
     upsert: mocks.moduleUpsert,
     findMany: mocks.orgModuleFindMany,
@@ -668,6 +716,13 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // Naming both verticals is the assertion; the production code it covers is
     // the already-approved consumer, not a new one.
     /src\/lib\/platform\/commands\.administrator-staff-profile\.test\.ts$/,
+    // WHA-1181 — the provisioning DB battery. The vertical appears once, as the
+    // `vertical` COLUMN VALUE of the fixture organization it inserts, because
+    // the row has to be faithful for the restaurant tables to accept it. The
+    // module under test (`src/lib/restaurant/organization-provisioning.ts`)
+    // names no vertical at all: it is restaurant-only by directory, and the
+    // already-approved `commands.ts` is what decides to call it.
+    /src\/lib\/restaurant\/organization-provisioning\.db\.test\.ts$/,
     // Generated Prisma client — read-only, not authored here
     /src\/generated\//,
   ];
