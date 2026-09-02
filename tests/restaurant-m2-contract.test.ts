@@ -81,6 +81,11 @@ function reachableFrom(entries: string[]): string[] {
 }
 
 describe('WHA-25 M2 binding contracts', () => {
+  // The walk starts at 18 auth entry points and reads 408 files, ~370 of them the
+  // generated Prisma client, so its cost is I/O bound and grows with the schema.
+  // It takes ~2.9s idle and crossed vitest's 5s default under the serial full-run
+  // gate (5067ms). The reachability assertion itself still holds — this timeout
+  // buys headroom for the read, it does not weaken the contract.
   it('keeps operator credential modules and tables transitively unreachable from web auth', () => {
     const authEntries = [
       join(ROOT, 'src/lib/auth.ts'),
@@ -99,7 +104,7 @@ describe('WHA-25 M2 binding contracts', () => {
     });
 
     expect(violations.map((file) => file.slice(ROOT.length + 1))).toEqual([]);
-  });
+  }, 60_000);
 
   it.each(M2_TABLES)('%s has enabled and forced tenant RLS with read and write checks', (table) => {
     expect(MIGRATION).toMatch(new RegExp(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY;`));

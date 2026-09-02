@@ -17,8 +17,13 @@ describe('production deployment contract', () => {
       workflow.indexOf('- uses: azure/login@v3')
     );
     expect(workflow).toContain('[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]');
+    // The migration job runs extensions → migrate deploy → runtime-role grant →
+    // module-registry reconcile, and never `prisma/seed.ts`: seeding stays
+    // staging-only. `prepare-runtime-role.ts` (406b7183) provisions the
+    // NOBYPASSRLS app role, and `sync-catalog.ts` reconciles the module registry
+    // on already-provisioned databases where the bootstrap path never reruns.
     expect(workflow).toContain(
-      `[[ "$migration_command" == 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts' ]]`
+      `[[ "$migration_command" == 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts' ]]`
     );
     expect(workflow).toContain('az containerapp job secret list');
     expect(workflow).toContain('[[ -z "$initialization_secrets" ]]');
@@ -61,8 +66,12 @@ describe('production deployment contract', () => {
 
     expect(template).toContain('param bootstrapDatabase bool = false');
     expect(template).toContain(
-      "var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts'"
+      "var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts'"
     );
+    // Production still never seeds: the migration-only command carries no
+    // `prisma/seed.ts` (the seed suffix is reachable only from the staging-only
+    // `seedDatabase` branch), and production disables seed and bootstrap alike.
+    expect(production).toContain('param seedDatabase = false');
     expect(template).toContain(
       "{ name: 'EXTENSION_ADMIN_DATABASE_URL', secretRef: 'database-url' }"
     );
