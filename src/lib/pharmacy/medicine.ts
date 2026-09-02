@@ -11,6 +11,30 @@ export class PharmacyMedicineError extends Error {
   }
 }
 
+/** Stable normalization shared by aliases, scans, and duplicate review groups. */
+export function normalizeMedicineText(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase('en')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+export function medicineDuplicateKey(input: {
+  productName: string;
+  strengths: readonly { value: number | string; unit: string }[];
+  dosageForm?: string | null;
+}): string {
+  const strength = input.strengths
+    .map(({ value, unit }) => `${value}${normalizeMedicineText(unit)}`)
+    .sort()
+    .join('+');
+  return [
+    normalizeMedicineText(input.productName),
+    strength,
+    normalizeMedicineText(input.dosageForm ?? ''),
+  ].join(':');
+}
+
 export function canonicalUnits(quantity: number, factors: readonly number[]): number {
   if (!Number.isSafeInteger(quantity) || quantity < 0 || factors.length === 0) {
     throw new PharmacyMedicineError('INVALID_CONVERSION');
