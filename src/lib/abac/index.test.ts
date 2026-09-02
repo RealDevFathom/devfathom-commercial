@@ -95,9 +95,15 @@ describe('custom ABAC decisions', () => {
       // WHA-863: browser enrollment and revocation use the narrower device
       // capability instead of inheriting broad administrator authority.
       'devices:manage',
+      // Pharmacy RX-03/04 and RX-05: pharmacist dispense decisions, substitution
+      // evidence, controlled register and incident approval. Org-role-driven
+      // through the DB customDecision path with no static agency-role policy,
+      // so they stay default-deny like the restaurant capabilities above.
+      'pharmacy:dispense',
+      'pharmacy:safety',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS).toHaveLength(35);
+    expect(ALL_ACTIONS).toHaveLength(37);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);
