@@ -58,6 +58,7 @@ Use `.env.example` as the machine-copyable template.
 | `PLATFORM_BASE_DOMAIN`             | no        | base domain; admin host is `admin.<value>`                                              |
 | `SHARED_APP_HOSTS`                 | no        | optional comma-separated shared hosts that follow no reserved-label rule                |
 | `PLATFORM_ENCRYPTION_KEY`          | yes       | encrypt SSO/email/MFA/support secrets                                                   |
+| `CAMERA_CREDENTIAL_KEY`            | yes       | encrypt Restaurant camera credentials; must be a base64-encoded 32-byte key             |
 | `CRON_SECRET`                      | yes       | job worker bearer credential                                                            |
 | `DEFAULT_ORGANIZATION_ID`          | no        | local/default-host tenant — see the warning below                                       |
 
