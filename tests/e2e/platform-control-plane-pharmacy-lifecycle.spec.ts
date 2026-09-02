@@ -153,6 +153,26 @@ test('SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical req
       'SUSPENDED',
       'RESUMED',
     ]);
+    const regulatoryProfiles = await db.query(
+      `SELECT version,"jurisdictionRuleSetId","effectiveFrom","effectiveTo"
+       FROM pharmacy_branch_regulatory_profiles
+       WHERE "organizationId"=$1 AND "branchId"='e2e_pharmacy_branch'
+       ORDER BY version`,
+      [organizationId]
+    );
+    expect(regulatoryProfiles.rows).toMatchObject([
+      {
+        version: 1,
+        jurisdictionRuleSetId: 'pk_pb_provisional_v1',
+        effectiveTo: new Date('2026-09-02T01:00:00.000Z'),
+      },
+      {
+        version: 2,
+        jurisdictionRuleSetId: 'e2e_pk_pb_confirmed',
+        effectiveFrom: new Date('2026-09-02T01:00:00.000Z'),
+        effectiveTo: null,
+      },
+    ]);
     const audit = await db.query<{ action: string }>(
       `SELECT action FROM platform_audit_logs WHERE "organizationId"=$1 AND action IN ('organization.create','organization.update','organization.transition') ORDER BY "createdAt"`,
       [organizationId]
@@ -198,7 +218,7 @@ async function seedProvisionalProfile(organizationId: string) {
     await db.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
-       VALUES ('e2e_pharmacy_profile_provisional',$1,'e2e_pharmacy_branch',1,now()-interval '1 day','PK-PB','pk_pb_provisional_v1','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
+       VALUES ('e2e_pharmacy_profile_provisional',$1,'e2e_pharmacy_branch',1,'2026-09-02T00:00:00.000Z','PK-PB','pk_pb_provisional_v1','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
       [organizationId]
     );
   });
