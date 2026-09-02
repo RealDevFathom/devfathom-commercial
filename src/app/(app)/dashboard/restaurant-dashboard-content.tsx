@@ -16,6 +16,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { moduleForPath } from '@/lib/module-catalog';
 import { RestaurantManagementOverview } from './restaurant-management-overview';
+import { FirstRunChecklist } from '@/components/onboarding/first-run-checklist';
+import type { SetupChecklist } from '@/lib/onboarding/setup-evaluator';
 
 const operationalLinks = [
   { label: 'Point of sale', href: '/pos', icon: ReceiptText },
@@ -30,7 +32,13 @@ const operationalLinks = [
   { label: 'Advanced Insights', href: '/restaurant/insights', icon: BarChart3 },
 ] as const;
 
-export function RestaurantDashboardContent({ enabledModules }: { enabledModules: string[] }) {
+export function RestaurantDashboardContent({
+  enabledModules,
+  checklist,
+}: {
+  enabledModules: string[];
+  checklist?: SetupChecklist;
+}) {
   const visibleLinks = operationalLinks.filter((item) => {
     const moduleKey = moduleForPath(item.href, 'RESTAURANT');
     return moduleKey ? enabledModules.includes(moduleKey) : true;
@@ -52,6 +60,8 @@ export function RestaurantDashboardContent({ enabledModules }: { enabledModules:
         }
         className="[&_[data-slot=eyebrow]]:text-text-body [&_p]:text-text-body"
       />
+
+      {checklist ? <FirstRunChecklist checklist={checklist} /> : null}
 
       <RestaurantManagementOverview
         insightsEnabled={enabledModules.includes('restaurant-insights')}
