@@ -210,7 +210,11 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // belongs to mandatory Restaurant Core, not separately licensed Insights.
   restaurantReports: 'restaurant-core',
   pharmacyMedicine: 'pharmacy-core',
-  pharmacyPurchasing: 'pharmacy-core',
+  // PH-PUR (PUR-01..05): suppliers, requisitions, quotes, purchase orders and
+  // goods receiving are licensed as Pharmacy Procurement, separately from the
+  // mandatory medicine identity in Core — the registry key is
+  // `pharmacy-procurement` (vertical-catalog), not `pharmacy-core`.
+  pharmacyPurchasing: 'pharmacy-procurement',
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',

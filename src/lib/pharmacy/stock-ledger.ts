@@ -148,10 +148,26 @@ export type ReceiveLotInput = {
   printedMrpMinor: number;
   receivedExpiresAt: Date;
   receivedExpiryPrecision: 'DAY' | 'MONTH';
+  /**
+   * Canonical units accepted onto the shelf. Zero posts no AVAILABLE movement
+   * at all, which is what a wholly rejected delivery looks like.
+   */
   quantityUnits: number;
   idempotencyKey: string;
   /** Omit to book goods that have not arrived: the lot stays unreceived. */
   receivedAt?: Date;
+  /**
+   * PUR-04: units refused at the door. They belong to this same lot — same
+   * batch, same invoice, same landed cost — but are posted to a quarantine or
+   * returns location and never to AVAILABLE, so rejected goods can never be
+   * sold while the exception they raised is still open.
+   */
+  quarantine?: {
+    units: number;
+    stockLocationId: string;
+    idempotencyKey: string;
+    reason: string;
+  };
 };
 
 /**
@@ -160,6 +176,12 @@ export type ReceiveLotInput = {
  * Both writes belong to the caller's transaction. Omitting `receivedAt` books
  * the lot without a receipt movement — unreceived stock, which the ledger
  * trigger then refuses to move at all (INV-03).
+ *
+ * A delivery that was partly refused posts two RECEIPT movements against the
+ * one lot: the accepted units to AVAILABLE and the rejected units to
+ * QUARANTINE. They are separate buckets of the same lot (§8A invariant 18 —
+ * quarantine can apply to part of one inventory lot), so the rejected units are
+ * visible, counted and unsellable rather than absent from the books.
  */
 export async function receiveLot(db: ScopedDb, scope: LedgerScope, input: ReceiveLotInput) {
   const batch = await db.pharmacyManufacturingBatch.findFirst({
@@ -167,16 +189,21 @@ export async function receiveLot(db: ScopedDb, scope: LedgerScope, input: Receiv
   });
   if (!batch) throw new PharmacyInventoryError('CROSS_TENANT_REFERENCE');
 
-  const location = await db.pharmacyStockLocation.findFirst({
-    where: { id: input.stockLocationId, organizationId: scope.organizationId },
-  });
-  if (!location) throw new PharmacyInventoryError('CROSS_TENANT_REFERENCE');
-  if (location.branchId !== scope.branchId) {
-    throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  await assertLocationInBranch(db, scope, input.stockLocationId);
+  if (input.quarantine) {
+    if (!Number.isSafeInteger(input.quarantine.units) || input.quarantine.units <= 0) {
+      throw new PharmacyInventoryError('INVALID_QUANTITY');
+    }
+    await assertLocationInBranch(db, scope, input.quarantine.stockLocationId);
+  }
+  if (!Number.isSafeInteger(input.quantityUnits) || input.quantityUnits < 0) {
+    throw new PharmacyInventoryError('INVALID_QUANTITY');
+  }
+  if (input.quantityUnits === 0 && !input.quarantine) {
+    throw new PharmacyInventoryError('INVALID_QUANTITY');
   }
 
   const receivedAt = input.receivedAt ?? null;
-  const arrangement = arrangementFor(input.quantityUnits, input.unitsPerPack);
 
   const lot = await db.pharmacyInventoryLot.create({
     data: {
@@ -195,25 +222,137 @@ export async function receiveLot(db: ScopedDb, scope: LedgerScope, input: Receiv
     },
   });
 
-  if (receivedAt === null) return { lot, movement: null };
+  if (receivedAt === null) return { lot, movement: null, quarantineMovement: null };
 
-  const movement = await db.pharmacyStockMovement.create({
+  const movement =
+    input.quantityUnits > 0
+      ? await postReceipt(db, scope, {
+          inventoryLotId: lot.id,
+          stockLocationId: input.stockLocationId,
+          disposition: 'AVAILABLE',
+          units: input.quantityUnits,
+          unitsPerPack: input.unitsPerPack,
+          idempotencyKey: input.idempotencyKey,
+          occurredAt: receivedAt,
+        })
+      : null;
+
+  const quarantineMovement = input.quarantine
+    ? await postReceipt(db, scope, {
+        inventoryLotId: lot.id,
+        stockLocationId: input.quarantine.stockLocationId,
+        disposition: 'QUARANTINE',
+        units: input.quarantine.units,
+        unitsPerPack: input.unitsPerPack,
+        idempotencyKey: input.quarantine.idempotencyKey,
+        occurredAt: receivedAt,
+        reason: input.quarantine.reason,
+      })
+    : null;
+
+  return { lot, movement, quarantineMovement };
+}
+
+async function assertLocationInBranch(db: ScopedDb, scope: LedgerScope, stockLocationId: string) {
+  const location = await db.pharmacyStockLocation.findFirst({
+    where: { id: stockLocationId, organizationId: scope.organizationId },
+  });
+  if (!location) throw new PharmacyInventoryError('CROSS_TENANT_REFERENCE');
+  if (location.branchId !== scope.branchId) {
+    throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  }
+}
+
+async function postReceipt(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    inventoryLotId: string;
+    stockLocationId: string;
+    disposition: 'AVAILABLE' | 'QUARANTINE';
+    units: number;
+    unitsPerPack: number;
+    idempotencyKey: string;
+    occurredAt: Date;
+    reason?: string;
+  }
+) {
+  const arrangement = arrangementFor(input.units, input.unitsPerPack);
+  return db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      inventoryLotId: lot.id,
+      inventoryLotId: input.inventoryLotId,
       stockLocationId: input.stockLocationId,
       kind: 'RECEIPT',
-      disposition: 'AVAILABLE',
-      quantityUnits: input.quantityUnits,
+      disposition: input.disposition,
+      quantityUnits: input.units,
       sealedPackDelta: arrangement.sealedPacks,
       looseUnitDelta: arrangement.looseUnits,
       actorId: scope.actorId,
+      reason: input.reason,
       idempotencyKey: input.idempotencyKey,
-      occurredAt: receivedAt,
+      occurredAt: input.occurredAt,
     },
   });
-  return { lot, movement };
+}
+
+export type ReverseMovementsInput = {
+  /** Movements to compensate, in the order the reversals should be posted. */
+  movementIds: readonly string[];
+  reason: string;
+  at: Date;
+};
+
+/**
+ * PUR-04 / §8A invariant 8: undo a posting by adding its negation, never by
+ * editing it.
+ *
+ * Each reversal is an ADJUSTMENT that names the movement it cancels, lands in
+ * the same lot, location and disposition, and carries the exact opposite
+ * quantity and arrangement. The migration's trigger re-checks all of that, and
+ * the balance's non-negative CHECK is what stops a receipt being reversed after
+ * its stock has already been sold — the reversal fails rather than pushing the
+ * shelf below zero (§8A invariant 6).
+ */
+export async function reverseMovements(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: ReverseMovementsInput
+) {
+  const reversals = [];
+  for (const movementId of input.movementIds) {
+    const original = await db.pharmacyStockMovement.findFirst({
+      where: {
+        id: movementId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+      },
+    });
+    if (!original) throw new PharmacyInventoryError('NOT_FOUND');
+
+    reversals.push(
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          inventoryLotId: original.inventoryLotId,
+          stockLocationId: original.stockLocationId,
+          kind: 'ADJUSTMENT',
+          disposition: original.disposition,
+          quantityUnits: -original.quantityUnits,
+          sealedPackDelta: -original.sealedPackDelta,
+          looseUnitDelta: -original.looseUnitDelta,
+          actorId: scope.actorId,
+          reason: input.reason,
+          idempotencyKey: `${original.idempotencyKey}:reversal`,
+          reversesMovementId: original.id,
+          occurredAt: input.at,
+        },
+      })
+    );
+  }
+  return reversals;
 }
 
 export type AllocateForSaleInput = {

@@ -51,6 +51,9 @@ function makeDb() {
     pharmacyPurchaseOrder: model(),
     pharmacyPurchaseOrderLine: model(),
     pharmacyPurchaseOrderApproval: model(),
+    pharmacyGoodsReceipt: model(),
+    pharmacyGoodsReceiptLine: model(),
+    pharmacyReceivingException: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -59,7 +62,7 @@ function makeDb() {
 
 let db = makeDb();
 
-function caller(userId = 'user_a', enabledModules = ['pharmacy-core']) {
+function caller(userId = 'user_a', enabledModules = ['pharmacy-procurement']) {
   return pharmacyPurchasingRouter.createCaller({
     db,
     entitlements: {
@@ -337,8 +340,15 @@ describe('PUR-02 tenant boundaries', () => {
     expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
   });
 
-  it('maps the public router prefix to the pharmacy-core entitlement', () => {
-    expect(moduleForProcedure('pharmacyPurchasing.createPurchaseOrder')).toBe('pharmacy-core');
+  it('maps the public router prefix to the pharmacy-procurement entitlement', () => {
+    // PUR-01..05 are licensed as Pharmacy Procurement — the registry key from
+    // vertical-catalog — and not as the mandatory Core module that carries
+    // medicine identity.
+    expect(moduleForProcedure('pharmacyPurchasing.createPurchaseOrder')).toBe(
+      'pharmacy-procurement'
+    );
+    expect(moduleForProcedure('pharmacyPurchasing.postGoodsReceipt')).toBe('pharmacy-procurement');
+    expect(moduleForProcedure('pharmacyMedicine.createIngredient')).toBe('pharmacy-core');
   });
 });
 
@@ -422,5 +432,207 @@ describe('PUR-02/PUR-03 comparison and landed cost over stored rows', () => {
     expect(costed.canonicalUnits).toBe(120);
     expect(costed.lines[0]!.landedCostPerCanonicalUnitMicroMinor).toBe(833_333_333);
     expect(costed.lines[0]!.purchaseOrderLineId).toBe('poline_a');
+  });
+});
+
+describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
+  const RECEIVED_AT = new Date('2026-09-02T09:00:00.000Z');
+  const EXPIRY = new Date('2027-06-01T00:00:00.000Z');
+
+  const RECEIPT_LINE = {
+    purchaseOrderLineId: 'poline_a',
+    medicineId: 'medicine_a',
+    packLevelId: 'pack_a',
+    batchNumber: 'B-2291',
+    printedExpiry: EXPIRY,
+    expiryPrecision: 'DAY' as const,
+    printedMrpMinor: 25_000,
+    canonicalUnitsPerPack: 10,
+    receivedPacks: 10,
+    bonusPacks: 2,
+    invoicedPricePerPackMinor: 10_000,
+    stockLocationId: 'loc_store',
+  };
+
+  const RECEIPT = {
+    reference: 'GRN-1',
+    branchId: 'branch_a',
+    supplierId: 'supplier_a',
+    purchaseOrderId: 'po_a',
+    supplierInvoiceRef: 'INV-8841',
+    supplierInvoiceDate: RECEIVED_AT,
+    warrantyEvidenceRef: 'WARRANTY-8841',
+    receivedAt: RECEIVED_AT,
+    lines: [RECEIPT_LINE],
+  };
+
+  /** The same receipt with the purchase order stripped: the PUR-05 shape. */
+  function withoutOrder() {
+    const { purchaseOrderId, ...rest } = RECEIPT;
+    void purchaseOrderId;
+    return { ...rest, lines: [{ ...RECEIPT_LINE, purchaseOrderLineId: undefined }] };
+  }
+
+  /** A resolvable purchase order whose one line the receipt may name. */
+  function resolvableOrder() {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po_a', supplierId: 'supplier_a' });
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_a' }]);
+  }
+
+  beforeEach(() => {
+    orderableSupplier();
+    resolvableCatalog();
+    resolvableOrder();
+  });
+
+  it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
+    await caller().createGoodsReceipt(RECEIPT);
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    // 10 paid packs + 2 free at 10 units each, and 100_000 minor over 120 units.
+    expect(line).toMatchObject({
+      receivedCanonicalUnits: 100,
+      bonusCanonicalUnits: 20,
+      acceptedCanonicalUnits: 120,
+      rejectedCanonicalUnits: 0,
+      unitCostMinor: 833,
+    });
+    // The tenant and branch are not repeated on the nested line: they travel in
+    // the composite key of the header.
+    expect(line).not.toHaveProperty('organizationId');
+  });
+
+  it('takes the receiver from the session, never from the payload', async () => {
+    await caller('user_counter').createGoodsReceipt(RECEIPT);
+    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data).toMatchObject({
+      organizationId: 'org_a',
+      branchId: 'branch_a',
+      receivedByUserId: 'user_counter',
+      directPurchase: false,
+      bypassReason: null,
+    });
+  });
+
+  it('refuses a receipt that names both a purchase order and a bypass', async () => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        directPurchase: { reason: 'Emergency.', approvedByUserId: 'user_manager' },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a receipt that names neither a purchase order nor a bypass', async () => {
+    await expect(caller().createGoodsReceipt(withoutOrder())).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('records a direct purchase with its bypass reason and approver (PUR-05)', async () => {
+    await caller('user_counter').createGoodsReceipt({
+      ...withoutOrder(),
+      directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+    });
+    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data).toMatchObject({
+      purchaseOrderId: null,
+      directPurchase: true,
+      bypassReason: 'Emergency insulin.',
+      bypassApprovedByUserId: 'user_manager',
+    });
+  });
+
+  it('refuses a bypass the receiver approved for themselves', async () => {
+    await expect(
+      caller('user_counter').createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_counter' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a receipt from a supplier whose licence has lapsed', async () => {
+    db.pharmacySupplier.findFirst.mockResolvedValue({
+      id: 'supplier_a',
+      authorized: true,
+      licences: [{ expiresAt: PAST, verifiedAt: PAST }],
+    });
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a cross-tenant medicine on a receipt line', async () => {
+    db.medicine.findFirst.mockResolvedValue(null);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an ordered line borrowed from another purchase order', async () => {
+    // Matching the goods against a line they were never ordered on would make
+    // the PUR-04 three-way match compare two unrelated things.
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_other' }]);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses rejected units with no quarantine destination or reason (PUR-04)', async () => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, rejectedCanonicalUnits: 20 }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('splits accepted and rejected units without losing one', async () => {
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        {
+          ...RECEIPT_LINE,
+          rejectedCanonicalUnits: 20,
+          rejectionReason: 'Crushed blisters',
+          quarantineLocationId: 'loc_quarantine',
+        },
+      ],
+    });
+    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      acceptedCanonicalUnits: 100,
+      rejectedCanonicalUnits: 20,
+      quarantineLocationId: 'loc_quarantine',
+      rejectionReason: 'Crushed blisters',
+    });
+  });
+
+  it('refuses to resolve an exception with a blank note', async () => {
+    await expect(
+      caller().resolveReceivingException({
+        branchId: 'branch_a',
+        receivingExceptionId: 'rex_a',
+        resolutionNote: '   ',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyReceivingException.update).not.toHaveBeenCalled();
+  });
+
+  it('reads the open exception queue for the session tenant and branch', async () => {
+    await caller().receivingExceptions({ branchId: 'branch_a' });
+    expect(db.pharmacyReceivingException.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          status: 'OPEN',
+        }),
+      })
+    );
   });
 });

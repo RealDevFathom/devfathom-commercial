@@ -177,6 +177,7 @@ model BranchRegulatoryProfile {
   @@index([jurisdictionRuleSetId])
   @@map("pharmacy_branch_regulatory_profiles")
 }
+
 enum MedicineProvenanceSourceType {
   REGULATOR
   MANUFACTURER
@@ -257,6 +258,8 @@ model Medicine {
   aliases                      MedicineAlias[]
   // PH-INV/INV-01: the manufacturing batches this medicine has been supplied in.
   batches                      PharmacyManufacturingBatch[]
+  // PUR-02 receiving: the receipt lines this medicine has arrived on.
+  goodsReceiptLines            PharmacyGoodsReceiptLine[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -319,6 +322,7 @@ model PackLevel {
   printedMrps           MedicinePackMrp[]
   requisitionLines      PharmacyRequisitionLine[]
   purchaseOrderLines    PharmacyPurchaseOrderLine[]
+  goodsReceiptLines     PharmacyGoodsReceiptLine[]
   barcodes              MedicineBarcode[]
   // PH-INV/INV-01: receiving a lot against this conversion is what stamps
   // `referencedAt` and freezes it (MED-02, §8A invariant 2).
@@ -503,9 +507,11 @@ model PharmacyStockLocation {
   createdAt      DateTime                  @default(now())
   updatedAt      DateTime                  @updatedAt
 
-  movements     PharmacyStockMovement[]
-  balances      PharmacyStockBalance[]
-  discrepancies PharmacyStockDiscrepancy[]
+  movements            PharmacyStockMovement[]
+  balances             PharmacyStockBalance[]
+  discrepancies        PharmacyStockDiscrepancy[]
+  receiptLines         PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptStock")
+  quarantinedReceiptLines PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptQuarantine")
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
   @@unique([organizationId, branchId, code], map: "pharmacy_stock_locations_org_branch_code_key")
@@ -568,6 +574,7 @@ model PharmacyInventoryLot {
   discrepancies PharmacyStockDiscrepancy[]
   recommendedBy PharmacyAllocationOverride[] @relation("PharmacyAllocationRecommended")
   selectedBy    PharmacyAllocationOverride[] @relation("PharmacyAllocationSelected")
+  receiptLines  PharmacyGoodsReceiptLine[]
 
   @@unique([organizationId, id], map: "pharmacy_inventory_lots_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_inventory_lots_org_branch_id_key")
@@ -617,13 +624,21 @@ model PharmacyStockMovement {
   reason               String?
   idempotencyKey       String
   allocationOverrideId String?
+  /// PUR-04 / §8A invariant 8: a correction is a linked compensating movement,
+  /// never an edit. A reversal must be the exact negation of the movement it
+  /// names, in the same lot, location and disposition, and each posting can be
+  /// reversed at most once.
+  reversesMovementId   String?
   occurredAt           DateTime                  @default(now())
   createdAt            DateTime                  @default(now())
 
   lot      PharmacyInventoryLot        @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
   location PharmacyStockLocation       @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
   override PharmacyAllocationOverride? @relation(fields: [organizationId, allocationOverrideId], references: [organizationId, id], onDelete: Restrict)
+  reverses PharmacyStockMovement?      @relation("PharmacyMovementReversal", fields: [organizationId, reversesMovementId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_stock_movements_reverses_fkey")
+  reversal PharmacyStockMovement[]     @relation("PharmacyMovementReversal")
 
+  @@unique([organizationId, id], map: "pharmacy_stock_movements_org_id_key")
   @@unique([organizationId, idempotencyKey], map: "pharmacy_stock_movements_org_idempotency_key")
   @@index([organizationId, branchId, inventoryLotId, occurredAt], map: "pharmacy_stock_movements_org_branch_lot_idx")
   @@map("pharmacy_stock_movements")
@@ -9415,6 +9430,30 @@ enum PharmacyApprovalDecision {
   REJECTED
 }
 
+/// PUR-02 receiving / PUR-04. DRAFT → POSTED → REVERSED, with cancellation
+/// available only while the receipt has posted nothing. A posted receipt is
+/// corrected by reversal, never by being moved back to DRAFT (§8A invariant 8).
+enum PharmacyGoodsReceiptStatus {
+  DRAFT
+  POSTED
+  REVERSED
+  CANCELLED
+}
+
+/// PUR-04 — the three-way match failures that become review exceptions.
+enum PharmacyReceivingExceptionKind {
+  SHORTAGE
+  OVERAGE
+  DAMAGE
+  PRICE_CONFLICT
+  PACK_CONFLICT
+}
+
+enum PharmacyReceivingExceptionStatus {
+  OPEN
+  RESOLVED
+}
+
 /// PUR-01 — a licensed supplier or distributor. `authorized` is the operator's
 /// standing decision to trade; the licence evidence beneath decides whether
 /// that decision is currently usable. Both are checked before a PO is created
@@ -9439,6 +9478,7 @@ model PharmacySupplier {
   licences       PharmacySupplierLicence[]
   quotes         PharmacyQuote[]
   purchaseOrders PharmacyPurchaseOrder[]
+  goodsReceipts  PharmacyGoodsReceipt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, name])
@@ -9603,8 +9643,9 @@ model PharmacyPurchaseOrder {
   supplier    PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
   requisition PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
   quote       PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
-  lines       PharmacyPurchaseOrderLine[]
-  approvals   PharmacyPurchaseOrderApproval[]
+  lines         PharmacyPurchaseOrderLine[]
+  approvals     PharmacyPurchaseOrderApproval[]
+  goodsReceipts PharmacyGoodsReceipt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
@@ -9637,9 +9678,11 @@ model PharmacyPurchaseOrderLine {
   taxCreditable          Boolean  @default(false)
   createdAt              DateTime @default(now())
 
-  purchaseOrder PharmacyPurchaseOrder @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
-  medicine      Medicine              @relation(fields: [medicineId], references: [id], onDelete: Restrict)
-  packLevel     PackLevel             @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  purchaseOrder      PharmacyPurchaseOrder        @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
+  medicine           Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  packLevel          PackLevel                    @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  goodsReceiptLines  PharmacyGoodsReceiptLine[]
+  receivingExceptions PharmacyReceivingException[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, purchaseOrderId, lineNumber])
@@ -9794,4 +9837,143 @@ model PrescriptionFill {
   @@unique([organizationId, prescriptionLineId, fillSequence])
   @@unique([organizationId, idempotencyKey])
   @@map("pharmacy_prescription_fills")
+/// PUR-02 receiving / PUR-05 — the document that turns an order or a supplier
+/// invoice into stock. It holds no quantity of its own: posting it writes an
+/// inventory lot and RECEIPT movements into the PH-INV ledger, which stays the
+/// only on-hand truth. `directPurchase` is the PUR-05 path — no order, and a
+/// named bypass reason and approver instead.
+model PharmacyGoodsReceipt {
+  id                     String                     @id @default(cuid())
+  organizationId         String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId               String
+  reference              String
+  status                 PharmacyGoodsReceiptStatus @default(DRAFT)
+  supplierId             String
+  purchaseOrderId        String?
+  /// PUR-02: the source-invoice and warranty evidence without which the goods
+  /// are not saleable. Required on the row, not only at the router.
+  supplierInvoiceRef     String
+  supplierInvoiceDate    DateTime
+  warrantyEvidenceRef    String
+  receivedByUserId       String
+  receivedAt             DateTime
+  directPurchase         Boolean                    @default(false)
+  bypassReason           String?
+  bypassApprovedByUserId String?
+  bypassApprovedAt       DateTime?
+  postedAt               DateTime?
+  reversedAt             DateTime?
+  reversedByUserId       String?
+  reversalReason         String?
+  note                   String?
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+
+  supplier      PharmacySupplier              @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_goods_receipts_supplier_fkey")
+  purchaseOrder PharmacyPurchaseOrder?        @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_goods_receipts_order_fkey")
+  lines         PharmacyGoodsReceiptLine[]
+  exceptions    PharmacyReceivingException[]
+
+  @@unique([organizationId, id], map: "pharmacy_goods_receipts_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_goods_receipts_org_branch_id_key")
+  @@unique([organizationId, reference], map: "pharmacy_goods_receipts_org_reference_key")
+  @@unique([organizationId, supplierId, supplierInvoiceRef], map: "pharmacy_goods_receipts_org_invoice_key")
+  @@index([organizationId, branchId, status, receivedAt], map: "pharmacy_goods_receipts_org_branch_status_idx")
+  @@index([organizationId, purchaseOrderId], map: "pharmacy_goods_receipts_org_order_idx")
+  @@map("pharmacy_goods_receipts")
+}
+
+/// PUR-02 receiving — what actually arrived, at batch granularity. Every field
+/// the PH-INV lot needs is here, because the lot is built from this row: a lot
+/// that could not name its batch, expiry, printed MRP or pack conversion would
+/// be stock nobody may sell (§8A invariants 2, 18). `acceptedCanonicalUnits`
+/// and `rejectedCanonicalUnits` are the PUR-04 split; rejected units post to a
+/// QUARANTINE or RETURNS location and never to AVAILABLE.
+model PharmacyGoodsReceiptLine {
+  id                        String                  @id @default(cuid())
+  organizationId            String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                  String
+  goodsReceiptId            String
+  lineNumber                Int
+  /// Null on the PUR-05 direct path: there is no ordered line to match against.
+  purchaseOrderLineId       String?
+  medicineId                String
+  packLevelId               String
+  batchNumber               String
+  printedExpiry             DateTime
+  expiryPrecision           PharmacyExpiryPrecision
+  printedMrpMinor           Int
+  canonicalUnitsPerPack     Int
+  receivedPacks             Int
+  bonusPacks                Int                     @default(0)
+  receivedCanonicalUnits    Int
+  bonusCanonicalUnits       Int                     @default(0)
+  acceptedCanonicalUnits    Int
+  rejectedCanonicalUnits    Int                     @default(0)
+  rejectionReason           String?
+  invoicedPricePerPackMinor Int
+  discountBps               Int                     @default(0)
+  taxBps                    Int                     @default(0)
+  taxCreditable             Boolean                 @default(false)
+  /// Landed cost of one canonical unit, carried onto the lot. Bonus units
+  /// divide the same money over more units and never add any (PUR-03).
+  unitCostMinor             Int
+  stockLocationId           String
+  quarantineLocationId      String?
+  /// Stamped when the receipt posts; the join from this document to the ledger.
+  inventoryLotId            String?
+  createdAt                 DateTime                @default(now())
+
+  goodsReceipt       PharmacyGoodsReceipt        @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_receipt_fkey")
+  purchaseOrderLine  PharmacyPurchaseOrderLine?  @relation(fields: [organizationId, purchaseOrderLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_grl_order_line_fkey")
+  medicine           Medicine                    @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_grl_medicine_fkey")
+  packLevel          PackLevel                   @relation(fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_grl_pack_level_fkey")
+  stockLocation      PharmacyStockLocation       @relation("PharmacyReceiptStock", fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_grl_location_fkey")
+  quarantineLocation PharmacyStockLocation?      @relation("PharmacyReceiptQuarantine", fields: [organizationId, quarantineLocationId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_grl_quarantine_fkey")
+  inventoryLot       PharmacyInventoryLot?       @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_lot_fkey")
+  exceptions         PharmacyReceivingException[]
+
+  @@unique([organizationId, id], map: "pharmacy_grl_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_grl_org_branch_id_key")
+  @@unique([organizationId, goodsReceiptId, lineNumber], map: "pharmacy_grl_org_receipt_line_key")
+  @@index([organizationId, goodsReceiptId], map: "pharmacy_grl_org_receipt_idx")
+  @@index([organizationId, purchaseOrderLineId], map: "pharmacy_grl_org_order_line_idx")
+  @@index([organizationId, medicineId], map: "pharmacy_grl_org_medicine_idx")
+  @@map("pharmacy_goods_receipt_lines")
+}
+
+/// PUR-04 — the three-way match result a human still has to close. Raised at
+/// posting and OPEN, and therefore visible, until somebody records who resolved
+/// it and why. Only the resolution columns may ever change (trigger), so a
+/// shortage cannot shrink on its way to being closed.
+model PharmacyReceivingException {
+  id                  String                           @id @default(cuid())
+  organizationId      String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  goodsReceiptId      String
+  goodsReceiptLineId  String
+  purchaseOrderLineId String?
+  kind                PharmacyReceivingExceptionKind
+  status              PharmacyReceivingExceptionStatus @default(OPEN)
+  detail              String
+  /// Quantity terms for SHORTAGE/OVERAGE/DAMAGE and for a pack conflict; money
+  /// terms for a price conflict.
+  expectedUnits       Int?
+  observedUnits       Int?
+  expectedMinor       Int?
+  observedMinor       Int?
+  raisedAt            DateTime                         @default(now())
+  resolvedAt          DateTime?
+  resolvedByUserId    String?
+  resolutionNote      String?
+
+  goodsReceipt      PharmacyGoodsReceipt       @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rex_receipt_fkey")
+  goodsReceiptLine  PharmacyGoodsReceiptLine   @relation(fields: [organizationId, branchId, goodsReceiptLineId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rex_line_fkey")
+  purchaseOrderLine PharmacyPurchaseOrderLine? @relation(fields: [organizationId, purchaseOrderLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rex_order_line_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_rex_org_id_key")
+  @@unique([organizationId, goodsReceiptLineId, kind], map: "pharmacy_rex_org_line_kind_key")
+  @@index([organizationId, branchId, status, raisedAt], map: "pharmacy_rex_org_branch_status_idx")
+  @@index([organizationId, goodsReceiptId], map: "pharmacy_rex_org_receipt_idx")
+  @@map("pharmacy_receiving_exceptions")
 }
