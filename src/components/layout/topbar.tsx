@@ -488,7 +488,11 @@ const restaurantNotificationInput = { limit: 50, unreadOnly: false } as const;
 
 function RestaurantNotificationBell() {
   const utils = trpc.useUtils();
-  const { data } = trpc.restaurantNotifications.list.useQuery(restaurantNotificationInput);
+  const { data, error } = trpc.restaurantNotifications.list.useQuery(restaurantNotificationInput);
+  // WHA-1181: the poll is denied outright until the signed-in user is linked to
+  // a restaurant staff profile. `retryQuery` already stops the retry storm, so
+  // all that is left is to say so once instead of showing a bare empty bell.
+  const denied = error?.data?.code === 'FORBIDDEN';
   const markRead = trpc.restaurantNotifications.markRead.useMutation({
     onSuccess: () => utils.restaurantNotifications.list.invalidate(restaurantNotificationInput),
   });
@@ -506,7 +510,8 @@ function RestaurantNotificationBell() {
 
   return (
     <NotificationBellView
-      notifications={notifications}
+      notifications={denied ? [] : notifications}
+      emptyMessage={denied ? 'Notifications need a restaurant staff profile' : undefined}
       onMarkRead={(id) => markRead.mutate({ id })}
       onMarkAllRead={() => markAllRead.mutate({})}
     />
@@ -515,10 +520,12 @@ function RestaurantNotificationBell() {
 
 function NotificationBellView({
   notifications,
+  emptyMessage = 'No notifications',
   onMarkRead,
   onMarkAllRead,
 }: {
   notifications: BellNotification[];
+  emptyMessage?: string;
   onMarkRead: (id: string) => void;
   onMarkAllRead: () => void;
 }) {
@@ -561,7 +568,7 @@ function NotificationBellView({
               {!notifications?.length ? (
                 <div className="py-10 text-center">
                   <Bell className="mx-auto h-8 w-8 text-muted-foreground/20" />
-                  <p className="mt-2 text-xs text-muted-foreground">No notifications</p>
+                  <p className="mt-2 text-xs text-muted-foreground">{emptyMessage}</p>
                 </div>
               ) : (
                 notifications.slice(0, 10).map((n) => (

@@ -36,7 +36,13 @@ function databaseName(connectionString: string) {
   return decodeURIComponent(new URL(connectionString).pathname.slice(1));
 }
 
-export async function prepareControlPlaneFixture() {
+/**
+ * The disposable-database guard and the shared commercial catalog, split out so
+ * a sibling `platform-control-plane*.spec.ts` can stand its own organization up
+ * without running (and therefore without deleting) another file's fixture. Every
+ * write here is an idempotent upsert, so any order of callers converges.
+ */
+export async function ensureControlPlaneCatalog() {
   if (!runtimeUrl || !adminUrl)
     throw new Error('Disposable runtime and admin database URLs required.');
   const name = databaseName(runtimeUrl);
@@ -53,15 +59,6 @@ export async function prepareControlPlaneFixture() {
     );
     expect(role.rows).toEqual([{ rolsuper: false, rolbypassrls: false }]);
 
-    const operatorHash = await hash(platformFixture.operator.password, 12);
-    await admin.query(`DROP TRIGGER IF EXISTS e2e_force_setting_rollback ON platform_settings`);
-    await admin.query(`DROP FUNCTION IF EXISTS e2e_force_setting_rollback()`);
-    await admin.query(
-      `DELETE FROM platform_audit_logs WHERE "requestId" LIKE 'e2e-failure-ledger-%'`
-    );
-    await admin.query(
-      `DELETE FROM platform_settings WHERE key IN ('e2e.denied', 'e2e.ledger.success', 'e2e.rollback')`
-    );
     await admin.query(
       `INSERT INTO platform_modules (id, key, name, category, band, vertical, "routePrefix", active, "sortOrder", "createdAt", "updatedAt")
        VALUES
@@ -81,6 +78,40 @@ export async function prepareControlPlaneFixture() {
        JOIN platform_modules m ON m.key IN ('restaurant-core', 'restaurant-menu')
        WHERE p.key = 'e2e-restaurant-package'
        ON CONFLICT ("packageId", "moduleId") DO UPDATE SET enabled = true`
+    );
+  } finally {
+    await Promise.all([runtime.end(), admin.end()]);
+  }
+}
+
+/** Drop one organization and the lifecycle rows that outlive it, by slug. */
+export async function resetOrganization(slug: string) {
+  await withAdminDatabase(async (admin) => {
+    await admin.query(
+      `DELETE FROM organization_lifecycle_events WHERE "organizationId"=(SELECT id FROM organizations WHERE slug=$1)`,
+      [slug]
+    );
+    await admin.query(`DELETE FROM organizations WHERE slug = $1`, [slug]);
+  });
+}
+
+export async function prepareControlPlaneFixture() {
+  await ensureControlPlaneCatalog();
+  if (!runtimeUrl || !adminUrl)
+    throw new Error('Disposable runtime and admin database URLs required.');
+
+  const runtime = new pg.Client({ connectionString: runtimeUrl });
+  const admin = new pg.Client({ connectionString: adminUrl });
+  await Promise.all([runtime.connect(), admin.connect()]);
+  try {
+    const operatorHash = await hash(platformFixture.operator.password, 12);
+    await admin.query(`DROP TRIGGER IF EXISTS e2e_force_setting_rollback ON platform_settings`);
+    await admin.query(`DROP FUNCTION IF EXISTS e2e_force_setting_rollback()`);
+    await admin.query(
+      `DELETE FROM platform_audit_logs WHERE "requestId" LIKE 'e2e-failure-ledger-%'`
+    );
+    await admin.query(
+      `DELETE FROM platform_settings WHERE key IN ('e2e.denied', 'e2e.ledger.success', 'e2e.rollback')`
     );
     await admin.query(
       `INSERT INTO platform_users (id, name, email, "passwordHash", role, active, "mfaRequired", "createdAt", "updatedAt")
