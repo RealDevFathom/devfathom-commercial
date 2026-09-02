@@ -248,6 +248,11 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Pharmacy',
   },
+  // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
+  // it is a first-class rail entry. `moduleForPath` resolves it to
+  // `pharmacy-counter`, which is what gates it — the item is never
+  // vertical-checked here.
+  { label: 'Counter', href: '/pharmacy/counter', icon: Monitor, group: 'Pharmacy' },
   {
     label: 'Regulatory profile',
     href: '/pharmacy/regulatory',
