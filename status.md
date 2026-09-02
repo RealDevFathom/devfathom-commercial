@@ -1,23 +1,26 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-02 03:15 PKT — leadership is back with Claude (Cowork supervisor);
-Codex is paused. Restaurant is being finished from the candidate below, gates in order.
+Last reconciled: 2026-09-02 08:00 PKT (03:00 UTC) — Claude (Cowork supervisor) leading; both
+Codex and Claude Paperclip teams executed the final gate cycle.
 
-Work was stopped by Codex for the handoff and resumed under Claude. Restaurant is **not yet release-complete**: the
-accepted local implementation candidate exists, but the clean full automated gate, complete browser
-E2E, documentation reconciliation, authorized integration, deployment, and production smoke remain.
+Restaurant is **gate-complete**: the canonical code candidate passed the full automated gate and the
+full browser gate (Restaurant 15 / SuperAdmin 7 / Agency 8, zero skipped) on the same SHA, documentation
+is reconciled, and the branch is published as `restaurantv2` on `origin` (owner-authorized). Remaining:
+the Linux/amd64 image (Docker on the host needs a reboot; the Azure staging deploy builds it in ACR),
+staging deployment and smoke (owner-authorized, prompt prepared), and production.
 
 ## Authoritative checkpoint
 
 | Item | Exact state |
 | --- | --- |
-| Canonical private candidate | `6cd73e4b5eb747b1d017d28ce6858d6606a7c6f9` |
-| Candidate parent | `93f8a9316d5c6934c20dd6078ba40e1413147017` |
+| Canonical code candidate (gated) | `046340ab3143043a2b51de491c2f2ebc4fccaca0` |
+| Release tip (code + infra + docs) | the commit that carries this status (branch tip); code identical to `046340ab` |
+| Lineage from Codex handoff | `6cd73e4b` → `6c862469` status/manifest → `9c69bbdb` spec alignment → `f2c59457` price-list decimals, unit counts, runner guard → `4042a1a9` platform redirect-before-render, lane config, agency locator → `fee1686e` Playwright outputDir → `a7c109f9` offline replay exactly-once → `9786f562` fractional split-bill settlement → `e92b8c5c` audit-ledger lookup, agency env → `046340ab` navigation focus restoration → `a7e078e0` CAMERA_CREDENTIAL_KEY infra → `05ed1623` docs |
 | Candidate worktree | `/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1116-compose-the-final-accepted-restaurant-artifacts-into-one-clean-private-candidate` |
-| Candidate working tree | Clean after the commit that carries this status and the manifest truth fix; that commit's SHA (branch tip) is the one exact final SHA for WHA-1125 and WHA-1100 |
+| Candidate working tree | Clean at every gate run and at this commit |
 | Local preview | Tenant and SuperAdmin health return 200 on port 3105, but the running preview is from older `c7f15f65`, so it is not final-candidate proof |
 | Paperclip execution | Paused; no live run should be resumed without reconciling it to this candidate and the contracts below |
-| Remote/release state | Nothing from this candidate was pushed, merged, deployed, or production-smoked |
+| Remote/release state | `origin/restaurantv2` created at `a7c109f9` (WHA-1149) and fast-forwarded to this tip; `main` untouched; not deployed; not production-smoked |
 
 ## What is implemented in the candidate
 
@@ -35,14 +38,58 @@ Important product boundaries:
 - Direct connected Delivery includes publications, addresses, zones, frozen snapshots, PREPAID/COD
   kitchen handoff, settlement, close, Reports, and Insights. Marketplace providers and full driver
   logistics are deferred.
-- Offline POS supports the accepted local new-order capture/replay design; final integrated browser
-  proof is still required.
+- Offline POS new-order capture/replay is browser-proven (exactly-once replay after `a7c109f9`).
 - OPay New 9220 is only a candidate card terminal. No provider documentation, credentials,
   authorization, reconciliation, or hardware acceptance has been completed.
 - Pakistan tax calculation/configuration exists. Fiscal filing, fiscal-device certification,
   authority e-invoicing, and legal/accounting approval remain external.
 
-## Accepted evidence
+## Final gate evidence — `046340ab3143043a2b51de491c2f2ebc4fccaca0`
+
+Automated gate (WHA-1125, Codex Verification Engineer; evidence
+`/Users/Saad/Developer/paperclip-worktrees/_gate-evidence/046340ab/wha-1125/`, verified by the supervisor
+from `vitest.json` and the exit files):
+
+- fresh `initdb` PostgreSQL 16.15 on port 55591, disposable DB, `prepare-extensions` as owner, **56 migrations**;
+- restricted runtime role `LOGIN` with superuser, bypass-RLS, create-database, create-role, inherit all
+  **false**, memberships 0, extension PUBLIC EXECUTE 0;
+- serialized Vitest (`--maxWorkers=1 --no-file-parallelism --reporter=json`): **1141 files / 4052 tests,
+  0 failed, 0 skipped, 0 todo**, 285 s;
+- email-collisions, RLS verification, Prisma generate, Next typegen, lint, changed-file Prettier, `tsc`
+  (8 GiB): all exit 0; production `next build` exit 0 (first attempt failed only because the build
+  shell lacked the run-only `AUTH_SECRET`; rerun with secrets exported: exit 0; the browser gate's clean
+  build of the same SHA also exited 0, `BUILD_ID JRj5GySkjWeAep1OliobK`);
+- Linux/amd64 image: **NOT RUN** — Docker Desktop crashes on this host until a login-session restart;
+  the staging deploy builds the amd64 image in ACR instead.
+
+Browser gate (WHA-1132, Claude Verification Engineer; evidence
+`/Users/Saad/Developer/paperclip-worktrees/_gate-evidence/046340ab/wha-1132/`, verified from the
+Playwright JSON `stats`): fresh databases per lane (56 migrations each), restricted runtime role
+`gate_app`, clean production build, `next start`, HEAD `046340ab` clean before and after:
+
+| Lane | Required | Passed | Failed | Skipped | Flaky |
+| --- | --- | --- | --- | --- | --- |
+| Restaurant integrated (6 specs) | 15 | **15** | 0 | 0 | 0 |
+| SuperAdmin control plane | 7 | **7** | 0 | 0 | 0 |
+| Agency acceptance | 8 | **8** | 0 | 0 | 0 |
+| **Total** | **30** | **30** | 0 | 0 | 0 |
+
+Defects found and fixed by the gates on 2026-09-01/02 (all product-side unless noted): four stale
+spec assertions (test-only, `9c69bbdb`); price lists rendered `950` instead of `950.00`; open-orders
+count showed lines instead of units and `1 items`; a stale Vitest runner guard (test-only); denied
+`/platform` routes rendered the shell with the caller's identity before redirecting; concurrent
+offline replay could open an order twice; fractional split-bill settlement threw `DecimalError`
+(FRACTIONAL bills carry no lines — settlement now scales the parent order's evidence proportionally
+with largest-remainder rounding); the platform navigation drawer dropped focus on keyboard close;
+plus fixture/config corrections for the platform and agency lanes. Independent review of the proxy
+authorization change (WHA-1145): safe to release; one non-blocking hardening note (wrap the session
+lookup in try/catch — it already fails closed).
+
+Recorded on 2026-09-02 (UTC 01:20–02:55). Supervisor note: the first copies of some evidence files
+were emptied during an emergency disk cleanup and re-copied from the originals; all numbers above were
+re-verified from the re-copied files.
+
+## Accepted evidence (pre-gate)
 
 - WHA-1108 final-controls artifact `fc2841e5c6dd08d184f9e091f145b0ca912f7198`
   (parent `958575ba`): focused Vitest **63 passed**; final-controls browser acceptance **5/5**.
@@ -83,8 +130,11 @@ complete the release gate.
 | WHA-1116 — compose final candidate | Done at `6cd73e4b…` |
 | WHA-1129 — source/delta completion audit | Done; no code blocker found |
 | WHA-1130 — documentation pass | Blocked and unassigned. Automatic recovery created private docs commit `5f371718428bc088b3b00c4c40a2f155f50b781c` on stale base `c7f15f65` before cancellation. Preserve it for selective review only; do not merge or cherry-pick it blindly. This canonical `status.md` supersedes its root ledger. |
-| WHA-1125 — final automated release gate | Blocked and unassigned pending one exact final SHA |
-| WHA-1100 — final browser gate | Blocked and unassigned; starts only after WHA-1125 is green on the same SHA |
+| WHA-1125 — final automated release gate | PASS on `046340ab` (see Final gate evidence) |
+| WHA-1100 / WHA-1132 — final browser gate | PASS 30/30 on `046340ab`; WHA-1100 closed against WHA-1132 evidence |
+| WHA-1130 — documentation | Composed as `05ed1623` (status.md written by the supervisor instead) |
+| WHA-1143 — CAMERA_CREDENTIAL_KEY infra | Composed as `a7e078e0` |
+| WHA-1149 — push | `origin/restaurantv2` created (owner-authorized) |
 
 The recurring ten-minute completion watcher is paused. The cancelled QA PostgreSQL instance on port
 55587 was stopped. The older local tenant/SuperAdmin preview on port 3105 was deliberately left
@@ -92,8 +142,7 @@ running for inspection.
 
 ## Required continuation order
 
-1. Done: this status and the acceptance-manifest truth fix are committed on top of `6cd73e4b…`;
-   the branch tip is the one exact final SHA. Do not reuse stale or cancelled worktrees/runs.
+1. Done: manifest truth fix, six gate-found defects fixed, automated and browser gates green on `046340ab`.
 2. Run WHA-1125 on a fresh PostgreSQL 16 database. Apply all 56 migrations and use separate owner
    and restricted-runtime mappings for every required suite, including Delivery. Run Vitest
    serialized with JSON evidence and the restoration opt-in. Require zero failures and zero skipped
@@ -107,8 +156,12 @@ running for inspection.
 4. Reconcile admin/operator documentation and this status against proven behavior. Record exact
    commands, SHA, database role flags, test counts, build/image result, browser evidence, and any
    external limitations.
-5. Ask Saad for explicit authorization before any push, shared-ref merge, deployment, or production
-   smoke. A healthy local preview or Paperclip Done count is not release proof.
+5. Owner authorized (2026-09-02): push to `origin/restaurantv2` (done) and Azure **staging** deployment
+   (`infra/deploy-staging.sh` from this tip: ACR linux/amd64 build, container app, migration job, smoke —
+   Claude Code prompt `deploy-staging-prompt.md`). Production deployment and `main` remain unauthorized.
+   Staging preflight (WHA-1141) gaps: Key Vault secret presence unverified by agents (RBAC); the deploy
+   script regenerates all seven deployment credentials on every run; migrations run as the Postgres
+   server admin.
 
 ## External inputs code work cannot close alone
 
