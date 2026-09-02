@@ -145,6 +145,39 @@ function money(value: DecimalInput, label = 'Money') {
   return decimal(value, label).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 }
 
+/**
+ * Jurisdiction- and vertical-neutral exact tax primitive. Restaurant checkout
+ * and pharmacy product-class rules share this inclusive/exclusive and rounding
+ * behavior through `@/lib/tax/calculator`.
+ */
+export function calculateTaxAmount(input: {
+  consideration: DecimalInput;
+  rate: DecimalInput;
+  priceMode: TaxPriceMode;
+  roundingScale?: number;
+}) {
+  const scale = input.roundingScale ?? 2;
+  if (!Number.isInteger(scale) || scale < 0 || scale > 4)
+    throw new TaxConfigurationError('Tax rounding scale must be between 0 and 4');
+  const amount = decimal(input.consideration, 'Consideration').toDecimalPlaces(
+    scale,
+    Decimal.ROUND_HALF_UP
+  );
+  const rate = decimal(input.rate, 'Rate');
+  if (amount.isNegative()) throw new RangeError('Consideration cannot be negative');
+  if (rate.isNegative() || rate.greaterThan(1))
+    throw new TaxConfigurationError('Tax rate must be between zero and one');
+  const net =
+    input.priceMode === 'INCLUSIVE'
+      ? amount.div(Decimal.add(1, rate)).toDecimalPlaces(scale, Decimal.ROUND_HALF_UP)
+      : amount;
+  const tax =
+    input.priceMode === 'INCLUSIVE'
+      ? amount.minus(net)
+      : amount.times(rate).toDecimalPlaces(scale, Decimal.ROUND_HALF_UP);
+  return { net, tax, gross: input.priceMode === 'INCLUSIVE' ? amount : amount.plus(tax) };
+}
+
 function cents(value: DecimalInput, label = 'Money') {
   const rounded = money(value, label);
   if (rounded.isNegative()) throw new RangeError('Money cannot be negative');
@@ -224,19 +257,12 @@ function calculateBucket(
   at: Date
 ): TaxBucketResult {
   const rule = resolveTaxRule(rules, profileVersionId, category, at);
-  const rate = decimal(rule.rate, `Rate for ${rule.id}`);
-  if (rate.isNegative() || rate.greaterThan(1))
-    throw new TaxConfigurationError(`Invalid rate for ${rule.id}`);
   const amount = money(consideration);
-  const net =
-    rule.priceMode === 'INCLUSIVE'
-      ? amount.div(Decimal.add(1, rate)).toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
-      : amount;
-  const tax =
-    rule.priceMode === 'INCLUSIVE'
-      ? amount.minus(net)
-      : amount.times(rate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-  const gross = rule.priceMode === 'INCLUSIVE' ? amount : amount.plus(tax);
+  const { net, tax, gross } = calculateTaxAmount({
+    consideration: amount,
+    rate: rule.rate,
+    priceMode: rule.priceMode,
+  });
   return { category, consideration: amount, net, tax, gross, ruleId: rule.id };
 }
 
