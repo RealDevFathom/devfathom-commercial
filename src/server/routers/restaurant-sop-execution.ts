@@ -180,6 +180,7 @@ export const restaurantSopExecutionRouter = router({
 
     return ctx.db.restaurantBranch.findMany({
       where: {
+        organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
         active: true,
         ...(canConfigure
           ? {}

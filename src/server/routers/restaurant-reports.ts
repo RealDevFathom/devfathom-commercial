@@ -47,7 +47,10 @@ async function availableBranches(ctx: TRPCContext) {
     return {
       canAllBranches,
       branches: await ctx.db.restaurantBranch.findMany({
-        where: { active: true },
+        where: {
+          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+          active: true,
+        },
         orderBy: { name: 'asc' },
         select: { id: true, name: true },
       }),
@@ -65,7 +68,11 @@ async function availableBranches(ctx: TRPCContext) {
   return {
     canAllBranches,
     branches: await ctx.db.restaurantBranch.findMany({
-      where: { id: { in: [...ids] }, active: true },
+      where: {
+        organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+        id: { in: [...ids] },
+        active: true,
+      },
       orderBy: { name: 'asc' },
       select: { id: true, name: true },
     }),

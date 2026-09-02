@@ -126,7 +126,10 @@ export default async function PurchasingPage({
       caller.listSuppliers({ activeOnly: true, limit: 100 }),
       caller.listPurchaseOrders({ limit: 100 }),
       ctx.db.restaurantBranch.findMany({
-        where: { active: true },
+        where: {
+          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+          active: true,
+        },
         orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
         select: { id: true, name: true },
       }),

@@ -913,9 +913,12 @@ export default async function RestaurantNotificationsPage({
       new Set(page.items.flatMap((item) => (item.branchId ? [item.branchId] : [])))
     );
     const branches = await ctx.db.restaurantBranch.findMany({
-      where: canManage
-        ? { OR: [{ active: true }, { id: { in: notificationBranchIds } }] }
-        : { id: { in: notificationBranchIds } },
+      where: {
+        organizationId: ctx.organization?.id ?? ctx.session.user.organizationId,
+        ...(canManage
+          ? { OR: [{ active: true }, { id: { in: notificationBranchIds } }] }
+          : { id: { in: notificationBranchIds } }),
+      },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
       select: { id: true, name: true, timezone: true, active: true },
     });

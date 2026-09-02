@@ -1123,7 +1123,10 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
   try {
     const [branches, staff] = await Promise.all([
       ctx.db.restaurantBranch.findMany({
-        where: { active: true },
+        where: {
+          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+          active: true,
+        },
         orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
         select: {
           id: true,
@@ -1133,7 +1136,10 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         },
       }),
       ctx.db.restaurantStaffProfile.findMany({
-        where: { status: 'ACTIVE' },
+        where: {
+          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+          status: 'ACTIVE',
+        },
         orderBy: { displayName: 'asc' },
         select: { id: true, displayName: true },
       }),

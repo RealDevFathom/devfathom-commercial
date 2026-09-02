@@ -11,12 +11,7 @@ import {
 } from '@/lib/restaurant/staff-branch-authorization';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { hasModule } from '@/lib/entitlements';
-import {
-  cancelShift,
-  createShift,
-  listShifts,
-  updateShift,
-} from '@/lib/restaurant/shifts';
+import { cancelShift, createShift, listShifts, updateShift } from '@/lib/restaurant/shifts';
 import {
   appendTimeAdjustment,
   clockIn,
@@ -324,6 +319,7 @@ export const restaurantShiftsRouter = router({
       if (!own.actor.primaryBranchId) return [];
       return ctx.db.restaurantStaffProfile.findMany({
         where: {
+          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
           primaryBranchId: own.actor.primaryBranchId,
           status: 'ACTIVE',
           id: { not: own.actor.id },

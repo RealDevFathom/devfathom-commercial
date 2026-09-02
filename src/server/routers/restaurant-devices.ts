@@ -99,6 +99,7 @@ export const restaurantDevicesRouter = router({
 
       const candidates = await ctx.db.restaurantStaffProfile.findMany({
         where: {
+          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
           id: { not: actingStaffProfileId },
           status: 'ACTIVE',
           OR: [

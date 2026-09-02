@@ -354,6 +354,15 @@ test('shared-host login succeeds and forged tenant selection is generic', async 
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/dashboard(?:\?|$)/);
   expect(page.url()).not.toMatch(/organizationId|workspace|org_/);
+
+  await page.goto(`${sharedBaseUrl}/restaurant/staff`);
+  await page.getByRole('button', { name: 'Add staff member' }).click();
+  const branchOptions = page.locator('#staff-primary-branch option');
+  const userOptions = page.locator('#staff-organization-user option');
+  await expect(branchOptions).toHaveCount(2);
+  await expect(userOptions).toHaveCount(2);
+  await expect(branchOptions.nth(1)).toContainText('Gulberg Flagship');
+  await expect(userOptions.nth(1)).toContainText(platformFixture.tenant.email);
   await loginContext.close();
 
   const forgedContext = await browser.newContext({ baseURL: sharedBaseUrl });

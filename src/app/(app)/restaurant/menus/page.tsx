@@ -69,6 +69,7 @@ async function loadMenus() {
         select: { id: true, name: true, status: true, isDefault: true },
       }),
       db.restaurantBranch.findMany({
+        where: { organizationId: actor.organization.id },
         orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
         select: { id: true, name: true, timezone: true, active: true, isDefault: true },
       }),
