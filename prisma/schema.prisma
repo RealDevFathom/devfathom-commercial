@@ -629,6 +629,11 @@ enum PharmacyStockMovementKind {
   ADJUSTMENT
   WRITE_OFF
   BREAK_PACK
+  /// MIG-03: the migrated opening position. Positive, like a RECEIPT, but it is
+  /// not one — no supplier delivered it and no invoice backs it, so opening
+  /// stock stays distinguishable from purchased stock for the whole life of the
+  /// ledger and the opening totals remain auditable.
+  OPENING
 }
 
 enum PharmacyInventoryCountStatus {
@@ -879,6 +884,12 @@ model PharmacyDailyClose {
   controlledCountHook Json?
   sourceHash          String
   actorId             String
+  /// MIG-05 — whether this close is final. False while the branch is still
+  /// switching: the first DevFathom close only becomes final once the
+  /// parallel-run comparison for it reconciles against the D05 threshold.
+  /// Recorded on the close itself so the verdict is evidence, not a recomputation
+  /// against thresholds that may since have moved.
+  isFinal             Boolean  @default(false)
   createdAt           DateTime @default(now())
 
   @@unique([organizationId, id])
@@ -11193,4 +11204,380 @@ model PharmacyStockSignalAction {
   @@unique([organizationId, id], map: "pharmacy_stock_signal_actions_org_id_key")
   @@index([organizationId, branchId, signalId, createdAt], map: "pharmacy_stock_signal_actions_org_signal_idx")
   @@map("pharmacy_stock_signal_actions")
+}
+
+// ============================================
+// PH-MIG — opening stock, parallel run and cutover
+// (PRD §6.10 MIG-03, MIG-04, MIG-05)
+//
+// References to tables owned by earlier lanes (branches, migration batches and
+// rows, manufacturing batches, stock locations, inventory lots, stock movements)
+// are composite `(organizationId, …)` foreign keys declared in the migration SQL
+// only, matching the SQL-only composite tenant foreign keys already used across
+// this schema. Modelling them as Prisma relations would add relation scalars to
+// models this lane does not own.
+// ============================================
+
+enum PharmacyOpeningSessionStatus {
+  DRAFT
+  COUNTED
+  POSTED
+  SIGNED_OFF
+}
+
+/// A line is READY only once every attribute an opening lot needs is present.
+/// EXCEPTION is the state MIG-02's "never silently defaulted" rule produces: the
+/// missing value stays NULL and the line cannot post.
+enum PharmacyOpeningLineStatus {
+  PENDING
+  READY
+  EXCEPTION
+  POSTED
+}
+
+enum PharmacyOpeningExceptionBucket {
+  MISSING_BATCH
+  MISSING_EXPIRY
+  MISSING_MRP
+  MISSING_COST
+  MISSING_LOCATION
+  MISSING_SOURCE_REF
+  MISSING_COUNT
+}
+
+enum PharmacyOpeningLedgerAccount {
+  ACCOUNTS_PAYABLE
+  ACCOUNTS_RECEIVABLE
+  CASH
+  BANK
+}
+
+enum PharmacyParallelRunStatus {
+  OPEN
+  CLOSED
+}
+
+enum PharmacyParallelRunMetric {
+  SALES
+  CASH
+  STOCK_VALUE
+}
+
+enum PharmacyCutoverEventKind {
+  CUTOVER
+  ROLLBACK
+}
+
+/// Who owns receipt numbering. Absent any cutover event the incumbent still owns
+/// it, so the resolved default is LEGACY rather than a stored row.
+enum PharmacySequenceOwner {
+  LEGACY
+  DEVFATHOM
+}
+
+/// MIG-03 / MIG-05 decision D05 — the contract materiality threshold. Unset is
+/// not "no threshold": with no row the resolved threshold is 0, so every variance
+/// is material until the contract sets one.
+model PharmacyMaterialityThreshold {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  thresholdMinor BigInt   @default(0)
+  thresholdUnits Int      @default(0)
+  setByActorId   String
+  setAt          DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, id], map: "pharmacy_materiality_thresholds_org_id_key")
+  @@unique([organizationId, branchId], map: "pharmacy_materiality_thresholds_org_branch_key")
+  @@map("pharmacy_materiality_thresholds")
+}
+
+/// MIG-03 — one opening-stock reconciliation for one branch: the mapped
+/// migration rows on one side, a physical count on the other. Modelled on the
+/// INV-06 count session (expected / counted / variance per line, threshold on
+/// the session, co-authored sign-off) because an opening count IS a count — the
+/// difference is only that its expected side comes from the incumbent's export
+/// rather than from a balance this system already holds.
+model PharmacyOpeningSession {
+  id               String                       @id @default(cuid())
+  organizationId   String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  migrationBatchId String?
+  /// The instant the opening position is taken. Becomes the lot `receivedAt` and
+  /// the movement `occurredAt`, so opening stock is receivable and movable.
+  openingAt        DateTime
+  status           PharmacyOpeningSessionStatus @default(DRAFT)
+  createdByActorId String
+  postedByActorId  String?
+  postedAt         DateTime?
+  signedOffBy      String?
+  signedOffAt      DateTime?
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+
+  lines      PharmacyOpeningStockLine[]
+  exceptions PharmacyOpeningException[]
+  totals     PharmacyOpeningTotal[]
+  ledgers    PharmacyOpeningLedgerEntry[]
+
+  @@unique([organizationId, id], map: "pharmacy_opening_sessions_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_opening_sessions_org_branch_id_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_opening_sessions_org_branch_status_idx")
+  @@map("pharmacy_opening_sessions")
+}
+
+/// One opening lot candidate. Every attribute an opening lot needs — batch,
+/// expiry, printed MRP, cost, location, source ref — is NULLABLE and has NO
+/// default: a value the incumbent did not supply stays missing and raises an
+/// exception. A CHECK forbids POSTED while any of them is still NULL, so the
+/// "never defaulted" rule survives a caller that skips the service.
+model PharmacyOpeningStockLine {
+  id                   String                    @id @default(cuid())
+  organizationId       String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sessionId            String
+  branchId             String
+  migrationRowId       String?
+  sourceRef            String?
+  manufacturingBatchId String?
+  batchNumber          String?
+  expiryDate           DateTime?                 @db.Date
+  expiryPrecision      PharmacyExpiryPrecision?
+  printedMrpMinor      Int?
+  unitCostMinor        Int?
+  stockLocationId      String?
+  packLevelId          String?
+  unitsPerPack         Int?
+  /// The incumbent's quantity for this lot, in canonical base units.
+  expectedUnits        Int?
+  /// What the physical count found, in canonical base units.
+  countedUnits         Int?
+  /// countedUnits - expectedUnits. The counted side is what posts.
+  varianceUnits        Int?
+  /// Why the variance is accepted. A material variance without one is
+  /// UNEXPLAINED and blocks sign-off.
+  varianceNote         String?
+  status               PharmacyOpeningLineStatus @default(PENDING)
+  postedLotId          String?
+  postedMovementId     String?
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+
+  session    PharmacyOpeningSession    @relation(fields: [organizationId, sessionId], references: [organizationId, id], onDelete: Restrict)
+  exceptions PharmacyOpeningException[]
+
+  @@unique([organizationId, id], map: "pharmacy_opening_stock_lines_org_id_key")
+  @@index([organizationId, sessionId, status], map: "pharmacy_opening_stock_lines_org_session_status_idx")
+  @@index([organizationId, branchId], map: "pharmacy_opening_stock_lines_org_branch_idx")
+  @@map("pharmacy_opening_stock_lines")
+}
+
+/// MIG-03 — the gap that stopped a line posting. Written in the same transaction
+/// as the line it describes, so a line can never carry a gap without the
+/// exception naming it. Resolution is one-way and never writes a value into the
+/// line: a gap is repaired by re-stating the line from better source data.
+model PharmacyOpeningException {
+  id             String                         @id @default(cuid())
+  organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sessionId      String
+  lineId         String?
+  bucket         PharmacyOpeningExceptionBucket
+  detail         String
+  resolvedBy     String?
+  resolvedAt     DateTime?
+  resolutionNote String?
+  createdAt      DateTime                       @default(now())
+  updatedAt      DateTime                       @updatedAt
+
+  session PharmacyOpeningSession    @relation(fields: [organizationId, sessionId], references: [organizationId, id], onDelete: Restrict)
+  line    PharmacyOpeningStockLine? @relation(fields: [organizationId, lineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_opening_exceptions_org_id_key")
+  @@index([organizationId, sessionId, bucket], map: "pharmacy_opening_exceptions_org_session_bucket_idx")
+  @@index([organizationId, lineId], map: "pharmacy_opening_exceptions_org_line_idx")
+  @@map("pharmacy_opening_exceptions")
+}
+
+/// MIG-03 — the signed opening totals for one branch: what quantity and what
+/// value this branch opened with. Signed, because a correcting opening session
+/// may open a branch with a negative adjustment. Append-only: an opening total
+/// is what was posted, not what is currently believed.
+model PharmacyOpeningTotal {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  sessionId       String
+  totalUnits      Int
+  totalValueMinor BigInt
+  lineCount       Int
+  actorId         String
+  postedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  session PharmacyOpeningSession @relation(fields: [organizationId, sessionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_opening_totals_org_id_key")
+  @@unique([organizationId, sessionId], map: "pharmacy_opening_totals_org_session_key")
+  @@index([organizationId, branchId, postedAt], map: "pharmacy_opening_totals_org_branch_idx")
+  @@map("pharmacy_opening_totals")
+}
+
+/// MIG-03 — opening AP / AR / cash / bank as signed totals with actor and time.
+/// The FIN lane reads these through the exported opening-ledger interface rather
+/// than forking its own opening-balance path; this table is the interface's
+/// storage, not a second chart of accounts.
+model PharmacyOpeningLedgerEntry {
+  id             String                       @id @default(cuid())
+  organizationId String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  sessionId      String
+  account        PharmacyOpeningLedgerAccount
+  /// Signed minor units: a credit balance is negative, a debit balance positive.
+  balanceMinor   BigInt
+  sourceRef      String
+  actorId        String
+  postedAt       DateTime                     @default(now())
+  createdAt      DateTime                     @default(now())
+
+  session PharmacyOpeningSession @relation(fields: [organizationId, sessionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_opening_ledger_entries_org_id_key")
+  @@unique([organizationId, sessionId, account], map: "pharmacy_opening_ledger_entries_org_session_account_key")
+  @@index([organizationId, branchId, account], map: "pharmacy_opening_ledger_entries_org_branch_account_idx")
+  @@map("pharmacy_opening_ledger_entries")
+}
+
+/// MIG-04 — the window during which the branch enters every transaction into
+/// both systems and this one is read-only evidence.
+model PharmacyParallelRunWindow {
+  id               String                    @id @default(cuid())
+  organizationId   String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  startDate        DateTime                  @db.Date
+  endDate          DateTime                  @db.Date
+  status           PharmacyParallelRunStatus @default(OPEN)
+  openedByActorId  String
+  closedByActorId  String?
+  closedAt         DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  entries     PharmacyParallelRunDailyEntry[]
+  comparisons PharmacyParallelRunComparison[]
+
+  @@unique([organizationId, id], map: "pharmacy_parallel_run_windows_org_id_key")
+  @@unique([organizationId, branchId, startDate], map: "pharmacy_parallel_run_windows_org_branch_start_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_parallel_run_windows_org_branch_status_idx")
+  @@map("pharmacy_parallel_run_windows")
+}
+
+/// MIG-04 — the incumbent's totals for one business date, typed in by the
+/// operator. This is the only side of the comparison a human supplies, so it
+/// carries its own actor and time and is never derived.
+model PharmacyParallelRunDailyEntry {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  windowId        String
+  businessDate    DateTime @db.Date
+  legacySalesMinor      BigInt
+  legacyCashMinor       BigInt
+  legacyStockValueMinor BigInt
+  enteredByActorId String
+  enteredAt        DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  window PharmacyParallelRunWindow @relation(fields: [organizationId, windowId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_parallel_run_daily_entries_org_id_key")
+  @@unique([organizationId, windowId, businessDate], map: "pharmacy_parallel_run_daily_entries_org_window_date_key")
+  @@index([organizationId, branchId, businessDate], map: "pharmacy_parallel_run_daily_entries_org_branch_date_idx")
+  @@map("pharmacy_parallel_run_daily_entries")
+}
+
+/// MIG-04 — one metric compared for one business date. `diffMinor` is stored
+/// rather than derived on read so the comparison a human explained is the
+/// comparison that stays explained. `explained` is only meaningful when the diff
+/// is material; an immaterial diff needs no note.
+model PharmacyParallelRunComparison {
+  id             String                    @id @default(cuid())
+  organizationId String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  windowId       String
+  businessDate   DateTime                  @db.Date
+  metric         PharmacyParallelRunMetric
+  devfathomMinor BigInt
+  legacyMinor    BigInt
+  diffMinor      BigInt
+  thresholdMinor BigInt
+  material       Boolean
+  explained      Boolean                   @default(false)
+  note           String?
+  actorId        String
+  comparedAt     DateTime                  @default(now())
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  window PharmacyParallelRunWindow @relation(fields: [organizationId, windowId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_parallel_run_comparisons_org_id_key")
+  @@unique([organizationId, windowId, businessDate, metric], map: "pharmacy_parallel_run_comparisons_org_window_date_metric_key")
+  @@index([organizationId, branchId, businessDate], map: "pharmacy_parallel_run_comparisons_org_branch_date_idx")
+  @@map("pharmacy_parallel_run_comparisons")
+}
+
+/// MIG-04 — the immutable reference to the incumbent's archived data. The bytes
+/// are NOT stored: the hash proves the archive handed over is the archive
+/// referenced, exactly as MIG-01 treats a profiled source.
+model PharmacyLegacyArchive {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  label           String
+  /// SHA-256 of the archive, lowercase hex.
+  contentHash     String
+  /// Where the archive physically lives — a URI, a vault path, a shelf.
+  storageLocation String
+  byteSize        BigInt
+  archivedByActorId String
+  archivedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+
+  cutoverEvents PharmacyCutoverEvent[]
+
+  @@unique([organizationId, id], map: "pharmacy_legacy_archives_org_id_key")
+  @@unique([organizationId, contentHash], map: "pharmacy_legacy_archives_org_hash_key")
+  @@index([organizationId, branchId, archivedAt], map: "pharmacy_legacy_archives_org_branch_idx")
+  @@map("pharmacy_legacy_archives")
+}
+
+/// MIG-04 — cutover and rollback as APPEND-ONLY events. Ownership of receipt
+/// numbering is the LATEST event's `sequenceOwner`, never a mutable flag: that is
+/// what makes "rollback loses no cutover-window transactions" structural rather
+/// than procedural. A rollback adds a row returning ownership to LEGACY; it
+/// deletes nothing, rewinds no sequence, and the sales issued while DevFathom
+/// owned the sequence keep their numbers.
+model PharmacyCutoverEvent {
+  id               String                   @id @default(cuid())
+  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  kind             PharmacyCutoverEventKind
+  sequenceOwner    PharmacySequenceOwner
+  effectiveAt      DateTime
+  /// Only a CUTOVER defines one: the instant after which rollback is refused.
+  rollbackDeadline DateTime?
+  /// A ROLLBACK names the CUTOVER it reverses.
+  cutoverEventId   String?
+  legacyArchiveId  String?
+  actorId          String
+  reason           String
+  createdAt        DateTime                 @default(now())
+
+  legacyArchive PharmacyLegacyArchive? @relation(fields: [organizationId, legacyArchiveId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_cutover_events_org_id_key")
+  @@index([organizationId, branchId, effectiveAt], map: "pharmacy_cutover_events_org_branch_effective_idx")
+  @@map("pharmacy_cutover_events")
 }

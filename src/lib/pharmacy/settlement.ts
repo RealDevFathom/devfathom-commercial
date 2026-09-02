@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { firstCloseIsFinal } from './migration/first-close';
 import type { LedgerScope } from './stock-ledger';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT';
@@ -547,6 +548,10 @@ export async function cutPharmacyDailyClose(
       countedMinor: drawer.countedCashMinor ?? 0,
     })),
   });
+  // MIG-05: a switching branch's first close is not final until the parallel run
+  // reconciles. One helper, consulted here and nowhere else in the close.
+  const isFinal = await firstCloseIsFinal(db, scope.organizationId, scope.branchId);
+
   return db.pharmacyDailyClose.create({
     data: {
       organizationId: scope.organizationId,
@@ -556,6 +561,7 @@ export async function cutPharmacyDailyClose(
       supersedesCloseId: prior?.id,
       reason: input.reopenReason?.trim(),
       ...aggregate,
+      isFinal,
       controlledCountHook: input.controlledCountHook as Prisma.InputJsonValue | undefined,
       actorId: scope.actorId,
     },
