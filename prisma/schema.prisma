@@ -389,6 +389,9 @@ model Medicine {
   goodsReceiptLines            PharmacyGoodsReceiptLine[]
   saleLines                    PharmacySaleLine[]
   unfulfilledDemandEvents      UnfulfilledDemandEvent[]
+  // PUR-07: the approved replenishment policy and the signals it produces.
+  safetyStocks                 PharmacySafetyStock[]
+  stockSignals                 PharmacyStockSignal[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -611,6 +614,10 @@ enum PharmacyStockDisposition {
   DAMAGED
   DESTROYED
   IN_TRANSIT
+  /// PUR-06: dispatched back to the supplier on a purchase return or expiry
+  /// claim. Terminal for sale purposes — the units stay on the ledger so the
+  /// claim remains reconcilable, but nothing may allocate them again.
+  RETURN_TO_SUPPLIER
 }
 
 enum PharmacyStockMovementKind {
@@ -631,6 +638,10 @@ enum PharmacyInventoryCountStatus {
 }
 
 enum PharmacyTransferStatus {
+  /// PUR-07 §8A invariant 29: what a one-click draft action may create. A DRAFT
+  /// transfer holds no stock and cannot be approved (`approveTransfer` requires
+  /// ALLOCATED), so no signal can reach a stock movement through it.
+  DRAFT
   ALLOCATED
   APPROVED
   DISPATCHED
@@ -880,12 +891,14 @@ model PharmacyStockLocation {
   createdAt      DateTime                  @default(now())
   updatedAt      DateTime                  @updatedAt
 
-  receiptLines            PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptStock")
-  quarantinedReceiptLines PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptQuarantine")
   branch        PharmacyBranch             @relation("PharmacyBranchStockLocations", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  movements     PharmacyStockMovement[]
-  balances      PharmacyStockBalance[]
-  discrepancies PharmacyStockDiscrepancy[]
+  movements               PharmacyStockMovement[]
+  balances                PharmacyStockBalance[]
+  discrepancies           PharmacyStockDiscrepancy[]
+  receiptLines            PharmacyGoodsReceiptLine[]   @relation("PharmacyReceiptStock")
+  quarantinedReceiptLines PharmacyGoodsReceiptLine[]   @relation("PharmacyReceiptQuarantine")
+  purchaseReturnLines     PharmacyPurchaseReturnLine[]
+  stockSignals            PharmacyStockSignal[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_stock_locations_org_branch_id_key")
@@ -945,17 +958,19 @@ model PharmacyInventoryLot {
   packLevel PackLevel                  @relation(fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict)
   branch    PharmacyBranch             @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
-  movements       PharmacyStockMovement[]
-  balances        PharmacyStockBalance[]
-  discrepancies   PharmacyStockDiscrepancy[]
-  recommendedBy   PharmacyAllocationOverride[]      @relation("PharmacyAllocationRecommended")
-  selectedBy      PharmacyAllocationOverride[]      @relation("PharmacyAllocationSelected")
-  receiptLines    PharmacyGoodsReceiptLine[]
-  countLines      PharmacyInventoryCountLine[]
-  transferLines   PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
-  supplierClaims  PharmacySupplierClaim[]
   saleAllocations PharmacySaleLineAllocation[]
   returnLines     PharmacySaleReturnLine[]
+
+  movements           PharmacyStockMovement[]
+  balances            PharmacyStockBalance[]
+  discrepancies       PharmacyStockDiscrepancy[]
+  recommendedBy       PharmacyAllocationOverride[]      @relation("PharmacyAllocationRecommended")
+  selectedBy          PharmacyAllocationOverride[]      @relation("PharmacyAllocationSelected")
+  receiptLines        PharmacyGoodsReceiptLine[]
+  countLines          PharmacyInventoryCountLine[]
+  transferLines       PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
+  supplierClaims      PharmacySupplierClaim[]
+  purchaseReturnLines PharmacyPurchaseReturnLine[]
 
   @@unique([organizationId, id], map: "pharmacy_inventory_lots_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_inventory_lots_org_branch_id_key")
@@ -1016,6 +1031,7 @@ model PharmacyInterbranchTransfer {
   dispatchedAt   DateTime?
   receivedAt     DateTime?
   lines          PharmacyInterbranchTransferLine[]
+  signalActions  PharmacyStockSignalAction[]
 
   @@unique([organizationId, id])
   @@index([organizationId, fromBranchId, status])
@@ -1090,17 +1106,21 @@ model PharmacyCustodyRecord {
 }
 
 model PharmacySupplierClaim {
-  id             String                      @id @default(cuid())
-  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String                       @id @default(cuid())
+  organizationId String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
   inventoryLotId String
   reservedUnits  Int
   returnBy       DateTime
-  status         PharmacySupplierClaimStatus @default(RESERVED)
+  status         PharmacySupplierClaimStatus  @default(RESERVED)
   createdById    String
-  createdAt      DateTime                    @default(now())
-  lot            PharmacyInventoryLot        @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  createdAt      DateTime                     @default(now())
+  lot            PharmacyInventoryLot         @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  /// PUR-06: the return line that reserved this quantity, when the reservation
+  /// came from a purchase return or expiry claim rather than a bare INV-09 hold.
+  returnLines    PharmacyPurchaseReturnLine[]
 
+  @@unique([organizationId, id], map: "pharmacy_supplier_claims_org_id_key")
   @@index([organizationId, branchId, returnBy])
   @@map("pharmacy_supplier_claims")
 }
@@ -9998,10 +10018,13 @@ model PharmacySupplier {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  licences       PharmacySupplierLicence[]
-  quotes         PharmacyQuote[]
-  purchaseOrders PharmacyPurchaseOrder[]
-  goodsReceipts  PharmacyGoodsReceipt[]
+  licences        PharmacySupplierLicence[]
+  quotes          PharmacyQuote[]
+  purchaseOrders  PharmacyPurchaseOrder[]
+  goodsReceipts   PharmacyGoodsReceipt[]
+  purchaseReturns PharmacyPurchaseReturn[]
+  debitNotes      PharmacyDebitNote[]
+  credits         PharmacySupplierCredit[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, name])
@@ -10059,6 +10082,7 @@ model PharmacyRequisition {
   lines          PharmacyRequisitionLine[]
   quotes         PharmacyQuote[]
   purchaseOrders PharmacyPurchaseOrder[]
+  signalActions  PharmacyStockSignalAction[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
@@ -10165,13 +10189,13 @@ model PharmacyPurchaseOrder {
   createdAt          DateTime                    @default(now())
   updatedAt          DateTime                    @updatedAt
 
-  goodsReceipts PharmacyGoodsReceipt[]
-  supplier    PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
-  requisition PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
-  quote       PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
   branch      PharmacyBranch?                 @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  lines       PharmacyPurchaseOrderLine[]
-  approvals   PharmacyPurchaseOrderApproval[]
+  supplier      PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  requisition   PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  quote         PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
+  lines         PharmacyPurchaseOrderLine[]
+  approvals     PharmacyPurchaseOrderApproval[]
+  goodsReceipts PharmacyGoodsReceipt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
@@ -10267,17 +10291,17 @@ enum PrescriptionCustodyState {
 
 model PharmacyPatient {
   controlledRegisterEntries PharmacyControlledRegisterEntry[]
-  id                      String                   @id @default(cuid())
-  organizationId          String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  displayName             String
-  cnic                    String?
-  phone                   String?
-  dateOfBirth             DateTime?                @db.Date
-  createdAt               DateTime                 @default(now())
-  updatedAt               DateTime                 @updatedAt
-  consents                PatientConsent[]
-  prescriptions           Prescription[]
   unfulfilledDemandEvents UnfulfilledDemandEvent[]
+  id             String           @id @default(cuid())
+  organizationId String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  displayName    String
+  cnic           String?
+  phone          String?
+  dateOfBirth    DateTime?        @db.Date
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  consents       PatientConsent[]
+  prescriptions  Prescription[]
 
   @@unique([organizationId, id])
   @@map("pharmacy_patients")
@@ -10650,4 +10674,360 @@ model PharmacyReceivingException {
   @@index([organizationId, branchId, status, raisedAt], map: "pharmacy_rex_org_branch_status_idx")
   @@index([organizationId, goodsReceiptId], map: "pharmacy_rex_org_receipt_idx")
   @@map("pharmacy_receiving_exceptions")
+}
+
+// ===========================================================================
+// PH-PUR/PH-INV — supplier returns and the stock action centre
+// (PRD §6.3 PUR-06, PUR-07; §8A invariants 9 and 29)
+// ===========================================================================
+
+/// PUR-06 — why stock is going back. The two kinds share one document because
+/// they share one settlement path; they differ only in what opened the return
+/// window (a commercial agreement vs the printed expiry).
+enum PharmacyPurchaseReturnKind {
+  PURCHASE_RETURN
+  EXPIRY_CLAIM
+}
+
+/// PUR-06 / §8A invariant 29. DRAFT holds nothing: it neither reserves stock nor
+/// moves it, which is what makes it safe for a one-click signal action. SUBMITTED
+/// takes the INV-09 reservation, so the quantity stops being saleable. DISPATCHED
+/// posts the RETURN_TO_SUPPLIER movements. SETTLED means credit has been
+/// allocated against every debit note the return raised.
+enum PharmacyPurchaseReturnStatus {
+  DRAFT
+  SUBMITTED
+  DISPATCHED
+  SETTLED
+  CANCELLED
+}
+
+enum PharmacyDebitNoteStatus {
+  OPEN
+  PARTIALLY_SETTLED
+  SETTLED
+  CANCELLED
+}
+
+/// PUR-06 — the return or claim document. Branch-scoped like the rest of PH-INV;
+/// the pharmacy branch entity itself lands with PLAT-03, so `branchId` carries no
+/// foreign key and `organizationId` under FORCE RLS remains the tenant boundary.
+model PharmacyPurchaseReturn {
+  id                 String                       @id @default(cuid())
+  organizationId     String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  supplierId         String
+  kind               PharmacyPurchaseReturnKind
+  status             PharmacyPurchaseReturnStatus @default(DRAFT)
+  reference          String
+  note               String?
+  createdByUserId    String
+  submittedByUserId  String?
+  submittedAt        DateTime?
+  dispatchedByUserId String?
+  dispatchedAt       DateTime?
+  settledAt          DateTime?
+  cancelledAt        DateTime?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  supplier      PharmacySupplier             @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  lines         PharmacyPurchaseReturnLine[]
+  debitNotes    PharmacyDebitNote[]
+  signalActions PharmacyStockSignalAction[]
+
+  @@unique([organizationId, id], map: "pharmacy_purchase_returns_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_purchase_returns_org_branch_id_key")
+  @@unique([organizationId, reference], map: "pharmacy_purchase_returns_org_reference_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_purchase_returns_org_branch_status_idx")
+  @@index([organizationId, supplierId, status], map: "pharmacy_purchase_returns_org_supplier_status_idx")
+  @@map("pharmacy_purchase_returns")
+}
+
+/// PUR-06 — one lot going back. `quantityUnits` is an integer count of canonical
+/// base units (§8A invariant 1). `returnWindowEndsAt` is the supplier's deadline;
+/// `expectedCreditMinor` is what the pharmacy expects to be credited, which is
+/// deliberately separate from what a supplier eventually pays.
+model PharmacyPurchaseReturnLine {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  purchaseReturnId    String
+  lineNumber          Int
+  inventoryLotId      String
+  stockLocationId     String
+  quantityUnits       Int
+  reason              String
+  returnWindowEndsAt  DateTime
+  expectedCreditMinor Int
+  /// The INV-09 reservation this line takes at submission. Null while the line
+  /// is still on a DRAFT return, which is precisely why a draft holds no stock.
+  supplierClaimId     String?
+  createdAt           DateTime @default(now())
+
+  purchaseReturn PharmacyPurchaseReturn @relation(fields: [organizationId, branchId, purchaseReturnId], references: [organizationId, branchId, id], onDelete: Restrict)
+  lot            PharmacyInventoryLot   @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  location       PharmacyStockLocation  @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
+  supplierClaim  PharmacySupplierClaim? @relation(fields: [organizationId, supplierClaimId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_purchase_return_lines_org_id_key")
+  @@unique([organizationId, purchaseReturnId, lineNumber], map: "pharmacy_purchase_return_lines_org_return_line_key")
+  @@index([organizationId, branchId, inventoryLotId], map: "pharmacy_purchase_return_lines_org_branch_lot_idx")
+  @@map("pharmacy_purchase_return_lines")
+}
+
+/// PUR-06 — the pharmacy's claim on the supplier's account. `expectedCreditMinor`
+/// is frozen from the return lines at issue time; what actually arrives is the
+/// sum of the credit allocations beneath it, so expected and received are two
+/// separately sourced numbers that can be compared rather than one that has been
+/// overwritten (§8A invariant 27).
+model PharmacyDebitNote {
+  id                  String                  @id @default(cuid())
+  organizationId      String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  supplierId          String
+  purchaseReturnId    String
+  reference           String
+  status              PharmacyDebitNoteStatus @default(OPEN)
+  expectedCreditMinor Int
+  issuedByUserId      String
+  issuedAt            DateTime                @default(now())
+  cancelledAt         DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  supplier       PharmacySupplier                   @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  purchaseReturn PharmacyPurchaseReturn             @relation(fields: [organizationId, branchId, purchaseReturnId], references: [organizationId, branchId, id], onDelete: Restrict)
+  allocations    PharmacySupplierCreditAllocation[]
+
+  @@unique([organizationId, id], map: "pharmacy_debit_notes_org_id_key")
+  @@unique([organizationId, reference], map: "pharmacy_debit_notes_org_reference_key")
+  @@unique([organizationId, purchaseReturnId], map: "pharmacy_debit_notes_org_return_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_debit_notes_org_branch_status_idx")
+  @@index([organizationId, supplierId, status], map: "pharmacy_debit_notes_org_supplier_status_idx")
+  @@map("pharmacy_debit_notes")
+}
+
+/// PUR-06 — a credit note the supplier actually issued. Recorded once, then
+/// allocated across debit notes; the credit itself is never edited down.
+model PharmacySupplierCredit {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  supplierId       String
+  reference        String
+  amountMinor      Int
+  receivedAt       DateTime
+  recordedByUserId String
+  createdAt        DateTime @default(now())
+
+  supplier    PharmacySupplier                   @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  allocations PharmacySupplierCreditAllocation[]
+
+  @@unique([organizationId, id], map: "pharmacy_supplier_credits_org_id_key")
+  @@unique([organizationId, supplierId, reference], map: "pharmacy_supplier_credits_org_supplier_reference_key")
+  @@index([organizationId, branchId, receivedAt], map: "pharmacy_supplier_credits_org_branch_received_idx")
+  @@map("pharmacy_supplier_credits")
+}
+
+/// PUR-06 — settlement. Append-only (trigger): reallocating money is a new
+/// allocation, never a rewritten one (§8A invariant 15).
+model PharmacySupplierCreditAllocation {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  supplierCreditId  String
+  debitNoteId       String
+  amountMinor       Int
+  allocatedByUserId String
+  createdAt         DateTime @default(now())
+
+  credit    PharmacySupplierCredit @relation(fields: [organizationId, supplierCreditId], references: [organizationId, id], onDelete: Restrict)
+  debitNote PharmacyDebitNote      @relation(fields: [organizationId, debitNoteId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_credit_allocations_org_id_key")
+  @@unique([organizationId, supplierCreditId, debitNoteId], map: "pharmacy_credit_allocations_org_credit_note_key")
+  @@index([organizationId, debitNoteId], map: "pharmacy_credit_allocations_org_note_idx")
+  @@map("pharmacy_supplier_credit_allocations")
+}
+
+// ── PUR-07 — deterministic stock action centre ──────────────────────────────
+
+enum PharmacyStockSignalKind {
+  LOW_STOCK
+  STOCKOUT
+  PROJECTED_STOCKOUT
+  INBOUND_COVERAGE
+  NEAR_EXPIRY
+  RETURN_WINDOW
+  RECALL
+  QUARANTINE
+  COLD_CHAIN
+  COUNT_VARIANCE
+}
+
+/// STALE is not a human decision — it is what the freshness policy does to a
+/// signal whose evidence has aged out, so the operator is never asked to act on
+/// a number the evaluator can no longer vouch for.
+enum PharmacyStockSignalStatus {
+  OPEN
+  ACKNOWLEDGED
+  SNOOZED
+  DISMISSED
+  CLOSED
+  STALE
+}
+
+/// EXACT when every input behind the signal is settled ledger fact. PARTIAL when
+/// an open count or an unresolved discrepancy means the on-hand number is itself
+/// still in dispute — a deterministic statement about the inputs, not a forecast.
+enum PharmacyStockSignalConfidence {
+  EXACT
+  PARTIAL
+}
+
+enum PharmacyStockSignalEventKind {
+  RAISED
+  REFRESHED
+  ACKNOWLEDGED
+  SNOOZED
+  DISMISSED
+  CLOSED
+  MARKED_STALE
+  DRAFT_ACTION
+}
+
+/// §8A invariant 29 — the complete set of things a one-click action may create.
+/// Every member is a draft document; none of them is an order or a movement.
+enum PharmacyStockSignalActionKind {
+  DRAFT_REQUISITION
+  DRAFT_TRANSFER
+  DRAFT_CLAIM
+}
+
+/// PUR-07 — the approved replenishment policy a signal is measured against.
+/// A signal that needs a safety-stock number is not raised at all until an
+/// approved one exists, so the evaluator never invents a threshold.
+model PharmacySafetyStock {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  medicineId       String
+  safetyStockUnits Int
+  /// The deterministic projection horizon in days: how far ahead expiry-driven
+  /// depletion is looked at. Not a forecast — PUR-09 is out of scope here.
+  coverageDays     Int      @default(30)
+  approvedByUserId String
+  approvedAt       DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  medicine Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_safety_stocks_org_id_key")
+  @@unique([organizationId, branchId, medicineId], map: "pharmacy_safety_stocks_org_branch_medicine_key")
+  @@map("pharmacy_safety_stocks")
+}
+
+/// PUR-07 — one deduplicated call to act. `dedupKey` is the (kind, product,
+/// location, cause) identity the evaluator recomputes on every run; a partial
+/// unique index keeps at most one live signal per key, so re-evaluating refreshes
+/// the existing row instead of burying the operator in duplicates.
+///
+/// `neededUnits` / `onHandUnits` / `inboundUnits` are the exact numbers the
+/// explanation was written from, kept so the decision stays auditable after the
+/// underlying ledger has moved on (§8A invariant 29).
+model PharmacyStockSignal {
+  id                   String                        @id @default(cuid())
+  organizationId       String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  kind                 PharmacyStockSignalKind
+  dedupKey             String
+  status               PharmacyStockSignalStatus     @default(OPEN)
+  medicineId           String
+  stockLocationId      String?
+  inventoryLotId       String?
+  cause                String
+  ownerUserId          String
+  dueAt                DateTime
+  explanation          String
+  dataWindowStart      DateTime
+  dataWindowEnd        DateTime
+  /// The newest ledger fact the evaluator read for this signal.
+  sourceObservedAt     DateTime
+  /// The freshness policy in force when the signal was computed, in seconds. The
+  /// signal becomes STALE once `computedAt` is older than this.
+  freshnessSeconds     Int
+  confidence           PharmacyStockSignalConfidence
+  neededUnits          Int
+  onHandUnits          Int
+  inboundUnits         Int
+  computedAt           DateTime
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  snoozedUntil         DateTime?
+  snoozeReason         String?
+  dismissedAt          DateTime?
+  dismissedByUserId    String?
+  dismissReason        String?
+  closedAt             DateTime?
+  markedStaleAt        DateTime?
+  createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
+
+  medicine Medicine                    @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  location PharmacyStockLocation?      @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
+  events   PharmacyStockSignalEvent[]
+  actions  PharmacyStockSignalAction[]
+
+  @@unique([organizationId, id], map: "pharmacy_stock_signals_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_stock_signals_org_branch_id_key")
+  @@index([organizationId, branchId, status, dueAt], map: "pharmacy_stock_signals_org_branch_status_due_idx")
+  @@index([organizationId, ownerUserId, status, dueAt], map: "pharmacy_stock_signals_org_owner_status_due_idx")
+  @@index([organizationId, branchId, kind, status], map: "pharmacy_stock_signals_org_branch_kind_idx")
+  @@map("pharmacy_stock_signals")
+}
+
+/// PUR-07 / §8A invariant 29 — the audit trail behind every human decision on a
+/// signal. Append-only (trigger).
+model PharmacyStockSignalEvent {
+  id             String                       @id @default(cuid())
+  organizationId String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  signalId       String
+  kind           PharmacyStockSignalEventKind
+  actorId        String
+  reason         String?
+  detail         String?
+  createdAt      DateTime                     @default(now())
+
+  signal PharmacyStockSignal @relation(fields: [organizationId, branchId, signalId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_stock_signal_events_org_id_key")
+  @@index([organizationId, branchId, signalId, createdAt], map: "pharmacy_stock_signal_events_org_signal_idx")
+  @@map("pharmacy_stock_signal_events")
+}
+
+/// PUR-07 / §8A invariant 29 — the link from a signal to the DRAFT document one
+/// click created. Exactly one of the three references is set, and all three point
+/// at documents that are inert until a human advances them. Append-only.
+model PharmacyStockSignalAction {
+  id               String                        @id @default(cuid())
+  organizationId   String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  signalId         String
+  kind             PharmacyStockSignalActionKind
+  actorId          String
+  requisitionId    String?
+  transferId       String?
+  purchaseReturnId String?
+  createdAt        DateTime                      @default(now())
+
+  signal         PharmacyStockSignal          @relation(fields: [organizationId, branchId, signalId], references: [organizationId, branchId, id], onDelete: Restrict)
+  requisition    PharmacyRequisition?         @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  transfer       PharmacyInterbranchTransfer? @relation(fields: [organizationId, transferId], references: [organizationId, id], onDelete: Restrict)
+  purchaseReturn PharmacyPurchaseReturn?      @relation(fields: [organizationId, purchaseReturnId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_stock_signal_actions_org_id_key")
+  @@index([organizationId, branchId, signalId, createdAt], map: "pharmacy_stock_signal_actions_org_signal_idx")
+  @@map("pharmacy_stock_signal_actions")
 }

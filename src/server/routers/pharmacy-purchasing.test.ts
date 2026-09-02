@@ -54,6 +54,9 @@ function makeDb() {
     pharmacyGoodsReceipt: model(),
     pharmacyGoodsReceiptLine: model(),
     pharmacyReceivingException: model(),
+    pharmacyPurchaseReturn: model(),
+    pharmacyDebitNote: model(),
+    pharmacySupplierCredit: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -632,6 +635,85 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
           branchId: 'branch_a',
           status: 'OPEN',
         }),
+      })
+    );
+  });
+});
+
+describe('PUR-06 — the returns and settlement transport', () => {
+  const RETURN_LINE = {
+    inventoryLotId: 'lot_1',
+    stockLocationId: 'loc_main',
+    quantityUnits: 30,
+    reason: 'Short-dated stock agreed for return',
+    returnWindowEndsAt: FUTURE,
+    expectedCreditMinor: 36_000,
+  };
+
+  it('licenses returns and settlement as pharmacy-procurement, like the rest of PUR', () => {
+    expect(moduleForProcedure('pharmacyPurchasing.createPurchaseReturn')).toBe(
+      'pharmacy-procurement'
+    );
+    expect(moduleForProcedure('pharmacyPurchasing.allocateSupplierCredit')).toBe(
+      'pharmacy-procurement'
+    );
+  });
+
+  it('rejects a cross-tenant supplier ID substitution when opening a return', async () => {
+    // The tenant-scoped client returns null for another tenant's supplier, so
+    // the refusal lands on tenancy before any line is written.
+    db.pharmacySupplier.findFirst.mockResolvedValue(null);
+    await expect(
+      caller().createPurchaseReturn({
+        branchId: 'branch_a',
+        supplierId: 'supplier_from_org_b',
+        kind: 'EXPIRY_CLAIM',
+        reference: 'RET-1',
+        lines: [RETURN_LINE],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a return with no lines, a blank reason or a non-positive quantity', async () => {
+    const base = {
+      branchId: 'branch_a',
+      supplierId: 'supplier_a',
+      kind: 'EXPIRY_CLAIM' as const,
+      reference: 'RET-1',
+    };
+    for (const lines of [
+      [],
+      [{ ...RETURN_LINE, reason: '   ' }],
+      [{ ...RETURN_LINE, quantityUnits: 0 }],
+      [{ ...RETURN_LINE, quantityUnits: 10.5 }],
+    ]) {
+      await expect(caller().createPurchaseReturn({ ...base, lines })).rejects.toBeDefined();
+    }
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a zero or negative supplier credit', async () => {
+    for (const amountMinor of [0, -100]) {
+      await expect(
+        caller().recordSupplierCredit({
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          reference: 'CN-1',
+          amountMinor,
+          receivedAt: PAST,
+        })
+      ).rejects.toBeDefined();
+    }
+    expect(db.pharmacySupplierCredit.create).not.toHaveBeenCalled();
+  });
+
+  it('reads the expected-vs-received positions for the session tenant and branch', async () => {
+    db.pharmacyDebitNote.findMany.mockResolvedValue([]);
+    await caller().debitNotePositions({ branchId: 'branch_a' });
+    expect(db.pharmacyDebitNote.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
       })
     );
   });

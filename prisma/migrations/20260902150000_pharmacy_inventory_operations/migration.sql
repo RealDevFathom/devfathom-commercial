@@ -5,6 +5,15 @@ CREATE TYPE "PharmacyTransferStatus" AS ENUM ('ALLOCATED','APPROVED','DISPATCHED
 CREATE TYPE "PharmacyRecallStatus" AS ENUM ('OPEN','CLOSED');
 CREATE TYPE "PharmacySupplierClaimStatus" AS ENUM ('RESERVED','RELEASED','SUBMITTED');
 
+-- Composition repair (WHA-1176): the sibling migration
+-- `20260902150000_pharmacy_goods_receiving` shares this timestamp, sorts first,
+-- and adds the same constraint, so this statement aborted every `migrate
+-- deploy` once the two lanes were composed. The constraint is the same shape in
+-- both, so adopting whichever arrived first is correct.
+DO $$ BEGIN
+  ALTER TABLE "pharmacy_stock_movements" ADD CONSTRAINT "pharmacy_stock_movements_org_id_key" UNIQUE ("organizationId","id");
+EXCEPTION WHEN duplicate_table OR duplicate_object THEN NULL; END $$;
+
 CREATE TABLE "pharmacy_inventory_counts" (
   "id" TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
   "branchId" TEXT NOT NULL, "status" "PharmacyInventoryCountStatus" NOT NULL DEFAULT 'OPEN',
