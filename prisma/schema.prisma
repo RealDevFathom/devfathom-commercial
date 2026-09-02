@@ -880,9 +880,6 @@ model PharmacyStockLocation {
   createdAt      DateTime                  @default(now())
   updatedAt      DateTime                  @updatedAt
 
-  movements               PharmacyStockMovement[]
-  balances                PharmacyStockBalance[]
-  discrepancies           PharmacyStockDiscrepancy[]
   receiptLines            PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptStock")
   quarantinedReceiptLines PharmacyGoodsReceiptLine[] @relation("PharmacyReceiptQuarantine")
   branch        PharmacyBranch             @relation("PharmacyBranchStockLocations", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
@@ -948,15 +945,6 @@ model PharmacyInventoryLot {
   packLevel PackLevel                  @relation(fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict)
   branch    PharmacyBranch             @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
-  movements      PharmacyStockMovement[]
-  balances       PharmacyStockBalance[]
-  discrepancies  PharmacyStockDiscrepancy[]
-  recommendedBy  PharmacyAllocationOverride[]      @relation("PharmacyAllocationRecommended")
-  selectedBy     PharmacyAllocationOverride[]      @relation("PharmacyAllocationSelected")
-  receiptLines   PharmacyGoodsReceiptLine[]
-  countLines     PharmacyInventoryCountLine[]
-  transferLines  PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
-  supplierClaims PharmacySupplierClaim[]
   movements       PharmacyStockMovement[]
   balances        PharmacyStockBalance[]
   discrepancies   PharmacyStockDiscrepancy[]
@@ -10177,11 +10165,6 @@ model PharmacyPurchaseOrder {
   createdAt          DateTime                    @default(now())
   updatedAt          DateTime                    @updatedAt
 
-  supplier      PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
-  requisition   PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
-  quote         PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
-  lines         PharmacyPurchaseOrderLine[]
-  approvals     PharmacyPurchaseOrderApproval[]
   goodsReceipts PharmacyGoodsReceipt[]
   supplier    PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
   requisition PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
@@ -10283,16 +10266,6 @@ enum PrescriptionCustodyState {
 }
 
 model PharmacyPatient {
-  id                        String                            @id @default(cuid())
-  organizationId            String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  displayName               String
-  cnic                      String?
-  phone                     String?
-  dateOfBirth               DateTime?                         @db.Date
-  createdAt                 DateTime                          @default(now())
-  updatedAt                 DateTime                          @updatedAt
-  consents                  PatientConsent[]
-  prescriptions             Prescription[]
   controlledRegisterEntries PharmacyControlledRegisterEntry[]
   id                      String                   @id @default(cuid())
   organizationId          String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -10332,14 +10305,6 @@ model PatientConsent {
 }
 
 model PharmacyPrescriber {
-  id                        String                            @id @default(cuid())
-  organizationId            String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  name                      String
-  registrationNumber        String
-  phone                     String?
-  facility                  String?
-  createdAt                 DateTime                          @default(now())
-  prescriptions             Prescription[]
   controlledRegisterEntries PharmacyControlledRegisterEntry[]
   id                 String         @id @default(cuid())
   organizationId     String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -10356,21 +10321,6 @@ model PharmacyPrescriber {
 }
 
 model Prescription {
-  id                        String                            @id @default(cuid())
-  organizationId            String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  patientId                 String
-  prescriberId              String
-  sourceKind                PrescriptionSourceKind
-  sourceFileRef             String
-  custodyState              PrescriptionCustodyState          @default(NOT_HELD)
-  validFrom                 DateTime
-  validUntil                DateTime
-  authorizedRepeats         Int                               @default(0)
-  capturedByUserId          String
-  capturedAt                DateTime                          @default(now())
-  patient                   PharmacyPatient                   @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
-  prescriber                PharmacyPrescriber                @relation(fields: [organizationId, prescriberId], references: [organizationId, id], onDelete: Restrict)
-  lines                     PrescriptionLine[]
   controlledRegisterEntries PharmacyControlledRegisterEntry[]
   id                String                   @id @default(cuid())
   organizationId    String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -10393,19 +10343,6 @@ model Prescription {
 }
 
 model PrescriptionLine {
-  id                        String                            @id @default(cuid())
-  organizationId            String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  prescriptionId            String
-  lineNumber                Int
-  medicineId                String
-  presentationId            String
-  authorizedCanonicalUnits  Int
-  directions                String
-  createdAt                 DateTime                          @default(now())
-  prescription              Prescription                      @relation(fields: [organizationId, prescriptionId], references: [organizationId, id], onDelete: Restrict)
-  medicine                  Medicine                          @relation(fields: [medicineId], references: [id], onDelete: Restrict)
-  presentation              Presentation                      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
-  fills                     PrescriptionFill[]
   pharmacistReviewItems     PharmacyPharmacistReviewItem[]
   substitutionRecords       PharmacySubstitutionRecord[]
   controlledRegisterEntries PharmacyControlledRegisterEntry[]
