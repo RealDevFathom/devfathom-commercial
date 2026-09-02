@@ -4,6 +4,7 @@ import 'dotenv/config';
 import pg from 'pg';
 
 import { PrismaClient } from '../src/generated/prisma/client.js';
+import { moduleDefinitionForKey } from '../src/lib/module-catalog.js';
 import { AGENCY_E2E } from '../tests/agency-e2e/agency-fixture.js';
 import { resolveAgencyE2eDatabaseUrl } from './agency-e2e-environment.js';
 
@@ -168,6 +169,11 @@ async function main() {
       });
       packageId = suite.id;
       for (const [key, name, category, routePrefix] of MODULES) {
+        // `band` and the owning vertical are required registry facts, read from
+        // the module catalog so this fixture cannot register a row the catalog
+        // disagrees with.
+        const definition = moduleDefinitionForKey(key);
+        if (!definition) throw new Error(`Unknown module key: ${key}`);
         const catalogModule = await tx.platformModule.upsert({
           where: { key },
           update: { name, category, routePrefix, active: true },
@@ -177,6 +183,8 @@ async function main() {
             name,
             category,
             routePrefix,
+            band: definition.band,
+            vertical: definition.vertical,
             active: true,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,

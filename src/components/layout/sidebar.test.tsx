@@ -62,7 +62,7 @@ function restaurantLinks(role = 'ADMIN') {
   return screen.getAllByRole('link').map((link) => link.getAttribute('href'));
 }
 
-function links(vertical?: EntitlementView['vertical']) {
+function links(vertical?: EntitlementView['vertical'], granted: string[] = enabledModules) {
   render(
     <EntitlementsProvider
       value={{
@@ -70,7 +70,7 @@ function links(vertical?: EntitlementView['vertical']) {
         vertical,
         seatLimit: 10,
         activeSeats: 1,
-        enabledModules,
+        enabledModules: granted,
         modules: [],
         limits: {},
       }}
@@ -105,8 +105,25 @@ describe('TopNavigation vertical visibility', () => {
     expect(agency).toContain('/projects');
   });
 
-  it('hides agency module navigation for restaurant organizations', () => {
+  // module-catalog architecture decision: a vertical never sees another
+  // vertical's VERTICAL_* modules, but BASELINE is always on and PLATFORM
+  // modules are sellable into any vertical's package.
+  it('hides agency VERTICAL_* module navigation for restaurant organizations', () => {
     const restaurant = links('RESTAURANT');
-    expect(restaurant).toEqual(['/organization', '/settings']);
+    expect(restaurant).not.toContain('/projects');
+    expect(restaurant).not.toContain('/clients');
+    expect(restaurant).not.toContain('/finance');
+  });
+
+  it('keeps BASELINE navigation visible for restaurant organizations (decision: BASELINE always on)', () => {
+    // `dashboard` is deliberately absent from the granted list: BASELINE is on
+    // for every organization without any package, contract or override.
+    expect(links('RESTAURANT', [])).toContain('/dashboard');
+  });
+
+  it('shows a PLATFORM module to a restaurant organization only when it is granted', () => {
+    expect(links('RESTAURANT', ['notes'])).toContain('/notes');
+    cleanup();
+    expect(links('RESTAURANT', [])).not.toContain('/notes');
   });
 });

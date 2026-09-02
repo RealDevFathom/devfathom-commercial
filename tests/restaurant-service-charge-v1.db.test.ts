@@ -284,11 +284,22 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
         [ids.policyA]
       )
     );
-    await expectDatabaseError(owner!, 'P0001', () =>
-      owner!.query(`DELETE FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`, [
-        ids.policyA,
-      ])
-    );
+    // The table is FORCE ROW LEVEL SECURITY with SELECT/INSERT/UPDATE policies
+    // and deliberately NO delete policy, so for the unprivileged roles this
+    // suite runs as (docs/LOCAL_SETUP.md: neither SUPERUSER nor BYPASSRLS) a
+    // DELETE matches zero rows. The immutability trigger is BEFORE ... FOR EACH
+    // ROW, so it never fires and P0001 is unreachable here: RLS refuses the row
+    // first. Asserting the row count is what proves the deletion was refused;
+    // expecting the trigger's error would only pass on an RLS-bypassing role,
+    // which would no longer be testing the deployed configuration.
+    expect(
+      (
+        await owner!.query(
+          `DELETE FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`,
+          [ids.policyA]
+        )
+      ).rowCount
+    ).toBe(0);
     expect(
       await owner!.query(
         `SELECT "id" FROM "restaurant_service_charge_policy_versions" WHERE "id" = $1`,

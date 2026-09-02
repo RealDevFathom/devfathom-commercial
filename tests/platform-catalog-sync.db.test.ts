@@ -119,6 +119,25 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     // The Aug-14 shape: the 18 agency modules, an agency package linked to all
     // of them, and an organization inheriting its entitlements from it.
     await deps.withPlatformDb(async (db) => {
+      // Establish the precondition instead of assuming it. The canonical
+      // vertical packages are what keeps the assertions below non-vacuous, but
+      // "nothing but bootstrap creates one" stops being true the moment this
+      // database has been seeded or bootstrapped (`prisma db seed` runs the same
+      // `syncPlatformCatalog`), which is exactly the case when the release gate
+      // runs `test:rls` against the same database. Clear them first so the pass
+      // under test really does create them, and do it only where no organization
+      // is on the package, so a shared database is never left dangling.
+      const verticalPackageKeys = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].map(
+        (definition) => definition.key
+      );
+      const clearable = await db.platformPackage.findMany({
+        where: { key: { in: verticalPackageKeys }, organizations: { none: {} } },
+        select: { id: true },
+      });
+      const clearableIds = clearable.map((row) => row.id);
+      await db.platformPackageModule.deleteMany({ where: { packageId: { in: clearableIds } } });
+      await db.platformPackage.deleteMany({ where: { id: { in: clearableIds } } });
+
       await db.platformModule.createMany({
         data: deps.PLATFORM_MODULES.map(([key, name, category, routePrefix]) => ({
           key,
@@ -244,10 +263,13 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     // Restaurant module rows are ensured ad hoc by the batteries this suite
     // shares a database with, and this suite deliberately leaves its own behind
     // (deleting them would break their foreign keys), so the module count is
-    // only asserted relative to what was actually missing. The packages are the
-    // guaranteed-absent half — nothing but bootstrap and this helper ever
-    // creates one — and they are what keeps the assertions below non-vacuous.
-    expect(missingPackages).toHaveLength(verticalPackages.length);
+    // only asserted relative to what was actually missing. The packages are what
+    // keep the assertions below non-vacuous: `beforeAll` clears every vertical
+    // package no organization is on, so the pass under test really does create
+    // them. A package some other battery has already put an organization on
+    // cannot be cleared without orphaning that organization, so the requirement
+    // is that at least one is genuinely created — not that all of them are.
+    expect(missingPackages.length).toBeGreaterThan(0);
 
     createdPackageKeys = missingPackages.map((definition) => definition.key);
 
@@ -260,33 +282,43 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
 
     const after = await registrySnapshot();
 
+    // Every vertical package is registered afterwards, whoever registered it.
+    // The exact catalog shape (links and default limits) is asserted only for
+    // the ones this pass created: `syncPlatformCatalog` creates what is missing
+    // and deliberately touches nothing that already exists, so demanding the
+    // catalog shape of a pre-existing row would assert a reconciliation the
+    // function does not perform. `seed-restaurant-demo.ts`, for one, registers
+    // `restaurant-operations` with its own package limits and puts an
+    // organization on it.
+    const createdKeys = new Set(missingPackages.map((definition) => definition.key));
+    const expectVerticalPackage = (
+      definition: (typeof verticalPackages)[number],
+      vertical: string,
+      coreKey: string
+    ) => {
+      const registered = after.packages.find((row) => row.key === definition.key);
+      expect(registered).toBeDefined();
+      expect(registered!.vertical).toBe(vertical);
+      if (!createdKeys.has(definition.key)) return;
+      expect(registered!.moduleLinks.map((link) => link.module.key).sort()).toEqual(
+        [...definition.moduleKeys].sort()
+      );
+      expect(registered!.moduleLinks.find((link) => link.module.key === coreKey)?.limits).toEqual(
+        definition.defaultLimits
+      );
+    };
+
     for (const definition of RESTAURANT_MODULES) {
       expect(after.modules.map((row) => row.key)).toContain(definition.key);
     }
     for (const definition of RESTAURANT_PACKAGES) {
-      const registered = after.packages.find((row) => row.key === definition.key);
-      expect(registered).toBeDefined();
-      expect(registered!.vertical).toBe('RESTAURANT');
-      expect(registered!.moduleLinks.map((link) => link.module.key).sort()).toEqual(
-        [...definition.moduleKeys].sort()
-      );
-      expect(
-        registered!.moduleLinks.find((link) => link.module.key === 'restaurant-core')?.limits
-      ).toEqual(definition.defaultLimits);
+      expectVerticalPackage(definition, 'RESTAURANT', 'restaurant-core');
     }
     for (const definition of PHARMACY_MODULES) {
       expect(after.modules.map((row) => row.key)).toContain(definition.key);
     }
     for (const definition of PHARMACY_PACKAGES) {
-      const registered = after.packages.find((row) => row.key === definition.key);
-      expect(registered).toBeDefined();
-      expect(registered!.vertical).toBe('PHARMACY');
-      expect(registered!.moduleLinks.map((link) => link.module.key).sort()).toEqual(
-        [...definition.moduleKeys].sort()
-      );
-      expect(
-        registered!.moduleLinks.find((link) => link.module.key === 'pharmacy-core')?.limits
-      ).toEqual(definition.defaultLimits);
+      expectVerticalPackage(definition, 'PHARMACY', 'pharmacy-core');
     }
 
     // The pre-existing package is untouched: same links, same version.
@@ -295,19 +327,32 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     // The architecture gate: all commercial entitlements remain byte-identical;
     // the newly registered always-on plumbing is additive and has BASELINE source.
     const afterEntitlements = await resolve();
-    const commercialBytes = (view: typeof beforeEntitlements) =>
-      JSON.stringify({
+    const alwaysOn = ['admin', 'dashboard', 'notifications'];
+    // `modules` is the whole active catalog by construction, so registering a
+    // module necessarily adds an entry (that growth is bounded separately below:
+    // every new row must be disabled and granted by nothing). The commercial gate
+    // is that nothing the organization already held moved, so the granted set is
+    // compared in full while `modules` is compared over the keys that existed
+    // before — comparing the raw view would assert the catalog never grows, which
+    // is the opposite of what this pass does.
+    const commercialBytes = (
+      view: typeof beforeEntitlements,
+      baseline: typeof beforeEntitlements
+    ) => {
+      const knownKeys = new Set(baseline.modules.map((entry) => entry.key));
+      return JSON.stringify({
         ...view,
-        enabledModules: view.enabledModules.filter(
-          (key) => !['admin', 'dashboard', 'notifications'].includes(key)
-        ),
+        enabledModules: view.enabledModules.filter((key) => !alwaysOn.includes(key)),
         modules: view.modules.filter(
-          (entry) => !['admin', 'dashboard', 'notifications'].includes(entry.key)
+          (entry) => !alwaysOn.includes(entry.key) && knownKeys.has(entry.key)
         ),
       });
-    expect(commercialBytes(afterEntitlements)).toBe(commercialBytes(beforeEntitlements));
-    expect(commercialBytes(await resolve(RESTAURANT_ORG_ID))).toBe(
-      commercialBytes(beforeRestaurantEntitlements)
+    };
+    expect(commercialBytes(afterEntitlements, beforeEntitlements)).toBe(
+      commercialBytes(beforeEntitlements, beforeEntitlements)
+    );
+    expect(commercialBytes(await resolve(RESTAURANT_ORG_ID), beforeRestaurantEntitlements)).toBe(
+      commercialBytes(beforeRestaurantEntitlements, beforeRestaurantEntitlements)
     );
     for (const key of ['admin', 'dashboard', 'notifications']) {
       expect(afterEntitlements.modules.find((entry) => entry.key === key)).toMatchObject({

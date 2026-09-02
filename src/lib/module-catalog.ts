@@ -104,6 +104,22 @@ export function moduleDefinitionForKey(key: string): ModuleDefinition | undefine
   return MODULES_BY_KEY.get(key);
 }
 
+/**
+ * Is a module key granted to an organization holding `enabledModules`?
+ *
+ * BASELINE modules (dashboard, admin, notifications) are always on for every
+ * organization in every vertical — the catalog marks them `mandatory` and
+ * `resolveOrganizationEntitlements` reports them with source `BASELINE`, never
+ * from a package, contract or override. Consumers therefore ask this rather
+ * than testing `enabledModules.includes(...)` directly, so an always-on module
+ * cannot be hidden by a caller that passes only the commercially granted keys.
+ * Every other band (PLATFORM and VERTICAL_*) is granted only by the resolved
+ * entitlement list, so this stays fail-closed for everything that is sold.
+ */
+export function isModuleGranted(moduleKey: string, enabledModules: readonly string[]): boolean {
+  return MODULES_BY_KEY.get(moduleKey)?.band === 'BASELINE' || enabledModules.includes(moduleKey);
+}
+
 export const PROCEDURE_MODULES: Record<string, string> = {
   dashboard: 'dashboard',
   projects: 'projects',
