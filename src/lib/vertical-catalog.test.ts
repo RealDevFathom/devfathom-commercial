@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALL_VERTICALS,
+  AGENCY_MODULES,
+  AGENCY_ROLE_TEMPLATES,
   AGENCY_DEPARTMENTS,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_CAPABILITIES,
@@ -109,16 +111,16 @@ describe('restaurant module map (§6)', () => {
     expect(mandatory.map((module) => module.key)).toEqual(['restaurant-core']);
   });
 
-  it('modulesForVertical returns restaurant modules only for RESTAURANT', () => {
+  it('modulesForVertical returns each vertical registry', () => {
     expect(modulesForVertical('RESTAURANT')).toEqual(RESTAURANT_MODULES);
-    expect(modulesForVertical('AGENCY')).toEqual([]);
+    expect(modulesForVertical('AGENCY')).toEqual(AGENCY_MODULES);
   });
 
   it('mandatoryModulesForVertical returns Restaurant Core for RESTAURANT', () => {
     expect(mandatoryModulesForVertical('RESTAURANT').map((m) => m.key)).toEqual([
       'restaurant-core',
     ]);
-    expect(mandatoryModulesForVertical('AGENCY')).toEqual([]);
+    expect(mandatoryModulesForVertical('AGENCY').map((m) => m.key)).toEqual(['agency-core']);
   });
 
   it('resolves modules by key', () => {
@@ -190,9 +192,9 @@ describe('role templates and capabilities (§8)', () => {
     }
   });
 
-  it('roleTemplatesForVertical is restaurant-only', () => {
+  it('roleTemplatesForVertical returns each vertical template catalog', () => {
     expect(roleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_ROLE_TEMPLATES);
-    expect(roleTemplatesForVertical('AGENCY')).toEqual([]);
+    expect(roleTemplatesForVertical('AGENCY')).toEqual(AGENCY_ROLE_TEMPLATES);
   });
 
   it('every catalog capability draws its namespace from the namespace list', () => {

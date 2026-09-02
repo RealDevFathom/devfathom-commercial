@@ -27,7 +27,7 @@ import {
   modulesForVertical,
   roleTemplatesForVertical,
 } from '@/lib/vertical-catalog';
-import { verticalForModuleKey } from '@/lib/module-catalog';
+import { moduleDefinitionForKey, verticalForModuleKey } from '@/lib/module-catalog';
 
 const id = z
   .string()
@@ -1080,20 +1080,25 @@ async function runCommand(
         }),
         db.platformModule.findUnique({
           where: { id: input.moduleId },
-          select: { key: true },
+          select: { key: true, band: true, vertical: true },
         }),
       ]);
       if (!targetOrg) throw new PlatformSecurityError('Organization not found.', 400);
       if (!targetModule) throw new PlatformSecurityError('Module not found.', 400);
-      if (verticalForModuleKey(targetModule.key) !== targetOrg.vertical) {
+      const targetVertical = targetModule.vertical ?? verticalForModuleKey(targetModule.key);
+      if (targetVertical && targetVertical !== targetOrg.vertical) {
         throw new PlatformSecurityError(
           `The ${targetModule.key} module does not belong to the ${targetOrg.vertical} vertical.`,
           400
         );
       }
-      const mandatoryKeys = mandatoryModulesForVertical(targetOrg.vertical).map(
-        (module) => module.key
-      );
+      const mandatoryKeys = [
+        ...mandatoryModulesForVertical(targetOrg.vertical).map((module) => module.key),
+        ...(targetModule.band === 'BASELINE' ||
+        moduleDefinitionForKey(targetModule.key)?.band === 'BASELINE'
+          ? [targetModule.key]
+          : []),
+      ];
       if (
         mandatoryKeys.includes(targetModule.key) &&
         input.status !== 'ENABLED' &&
@@ -2287,10 +2292,22 @@ async function runCommand(
           name: requiredText,
           description: optionalText.optional(),
           category: z.string().trim().min(2).max(80),
+          band: z.enum(['BASELINE', 'PLATFORM', 'VERTICAL_CORE', 'VERTICAL_OPTIONAL']),
+          vertical: vertical.nullish(),
           routePrefix: z.string().trim().max(200).nullish(),
           icon: z.string().trim().max(80).nullish(),
           active: z.boolean().default(true),
           sortOrder: z.coerce.number().int().min(0).max(10_000).default(0),
+        })
+        .superRefine((value, ctx) => {
+          const verticalBand = value.band === 'VERTICAL_CORE' || value.band === 'VERTICAL_OPTIONAL';
+          if (verticalBand !== Boolean(value.vertical)) {
+            ctx.addIssue({
+              code: 'custom',
+              message: 'Vertical bands require a vertical; baseline and platform bands forbid one.',
+              path: ['vertical'],
+            });
+          }
         })
         .parse(payload);
       const { id: moduleId, ...data } = input;
@@ -2502,6 +2519,28 @@ async function runCommand(
           limits: z.record(z.string(), z.number().int().min(0)).nullish(),
         })
         .parse(payload);
+      const [targetPackage, targetModule] = await Promise.all([
+        db.platformPackage.findUnique({
+          where: { id: input.packageId },
+          select: { vertical: true },
+        }),
+        db.platformModule.findUnique({
+          where: { id: input.moduleId },
+          select: { key: true, band: true, vertical: true },
+        }),
+      ]);
+      if (!targetPackage || !targetModule) {
+        throw new PlatformSecurityError('Package or module not found.', 400);
+      }
+      if (targetModule.band === 'BASELINE') {
+        throw new PlatformSecurityError('Baseline modules are not sellable package entries.', 400);
+      }
+      if (targetModule.vertical && targetModule.vertical !== targetPackage.vertical) {
+        throw new PlatformSecurityError(
+          `The ${targetModule.key} module does not belong to the ${targetPackage.vertical} vertical.`,
+          400
+        );
+      }
       const saved = await db.platformPackageModule.upsert({
         where: {
           packageId_moduleId: { packageId: input.packageId, moduleId: input.moduleId },

@@ -288,11 +288,8 @@ export function visibleNavigation(
       // WHA-8: a module belonging to the other vertical never appears, even if a
       // mis-provisioned organization has it enabled. Items that resolve to no
       // module at all (the shared Firm entries) are never vertical-gated.
-      if (
-        moduleKey &&
-        entitlements.vertical &&
-        verticalForModuleKey(moduleKey) !== entitlements.vertical
-      )
+      const moduleVertical = moduleKey ? verticalForModuleKey(moduleKey) : null;
+      if (moduleVertical && entitlements.vertical && moduleVertical !== entitlements.vertical)
         return false;
       if (moduleKey && !entitlements.enabledModules.includes(moduleKey)) return false;
       if (item.hrAccess) return isAdmin || isHr;

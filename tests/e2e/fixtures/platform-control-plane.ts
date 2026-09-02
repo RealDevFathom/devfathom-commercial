@@ -63,10 +63,10 @@ export async function prepareControlPlaneFixture() {
       `DELETE FROM platform_settings WHERE key IN ('e2e.denied', 'e2e.ledger.success', 'e2e.rollback')`
     );
     await admin.query(
-      `INSERT INTO platform_modules (id, key, name, category, "routePrefix", active, "sortOrder", "createdAt", "updatedAt")
+      `INSERT INTO platform_modules (id, key, name, category, band, vertical, "routePrefix", active, "sortOrder", "createdAt", "updatedAt")
        VALUES
-         ('e2e_restaurant_core', 'restaurant-core', 'Restaurant Core', 'Restaurant', '/restaurant', true, 0, now(), now()),
-         ('e2e_restaurant_menu', 'restaurant-menu', 'Restaurant Menu', 'Restaurant', '/restaurant/menus', true, 1, now(), now())
+         ('e2e_restaurant_core', 'restaurant-core', 'Restaurant Core', 'Restaurant', 'VERTICAL_CORE', 'RESTAURANT', '/restaurant', true, 0, now(), now()),
+         ('e2e_restaurant_menu', 'restaurant-menu', 'Restaurant Menu', 'Restaurant', 'VERTICAL_OPTIONAL', 'RESTAURANT', '/restaurant/menus', true, 1, now(), now())
        ON CONFLICT (key) DO UPDATE SET active = true, "updatedAt" = now()`
     );
     await admin.query(

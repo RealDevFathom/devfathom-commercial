@@ -45,7 +45,14 @@ export async function seedDepartments(
  * Let PostgreSQL ignore the losing insert before it can abort the fixture transaction,
  * then read the shared row back.
  */
-type PlatformModuleCreate = { key: string; name: string; category: string; active?: boolean };
+type PlatformModuleCreate = {
+  key: string;
+  name: string;
+  category: string;
+  band: 'VERTICAL_CORE' | 'VERTICAL_OPTIONAL';
+  vertical: 'RESTAURANT';
+  active?: boolean;
+};
 
 type PlatformModuleDb = {
   platformModule: {
@@ -57,10 +64,17 @@ type PlatformModuleDb = {
 export async function ensurePlatformModule(
   db: PlatformModuleDb,
   key: string,
-  create: Omit<PlatformModuleCreate, 'key'>
+  create: Omit<PlatformModuleCreate, 'key' | 'band' | 'vertical'>
 ): Promise<{ id: string }> {
   await db.platformModule.createMany({
-    data: [{ key, ...create }],
+    data: [
+      {
+        key,
+        ...create,
+        band: key === 'restaurant-core' ? 'VERTICAL_CORE' : 'VERTICAL_OPTIONAL',
+        vertical: 'RESTAURANT',
+      },
+    ],
     skipDuplicates: true,
   });
   return db.platformModule.findUniqueOrThrow({ where: { key } });

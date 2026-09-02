@@ -1,4 +1,63 @@
-import { isRestaurantModuleKey, type OrganizationVertical } from '@/lib/vertical-catalog';
+import {
+  AGENCY_MODULES,
+  RESTAURANT_MODULES,
+  type OrganizationVertical,
+} from '@/lib/vertical-catalog';
+
+export type ModuleBand = 'BASELINE' | 'PLATFORM' | 'VERTICAL_CORE' | 'VERTICAL_OPTIONAL';
+
+export type ModuleDefinition = {
+  key: string;
+  name: string;
+  category: string;
+  routePrefix: string;
+  band: ModuleBand;
+  vertical: OrganizationVertical | null;
+  mandatory: boolean;
+};
+
+const sharedModules = [
+  ['dashboard', 'Dashboard', 'Core', '/dashboard', 'BASELINE'],
+  ['admin', 'Administration', 'Core', '/organization', 'BASELINE'],
+  ['notifications', 'Notifications', 'Communication', '/notifications', 'BASELINE'],
+  ['chat', 'Chat', 'Collaboration', '/chat', 'PLATFORM'],
+  ['meetings', 'Meetings', 'Collaboration', '/meetings', 'PLATFORM'],
+  ['notes', 'Notes', 'Knowledge', '/notes', 'PLATFORM'],
+  ['email', 'Email', 'Communication', '/email', 'PLATFORM'],
+  ['hr', 'HR', 'People', '/hr', 'PLATFORM'],
+  ['reviews', 'Performance reviews', 'People', '/reviews', 'PLATFORM'],
+  ['api', 'API access', 'Developer', '/organization/api', 'PLATFORM'],
+  ['webhooks', 'Webhooks', 'Developer', '/organization/webhooks', 'PLATFORM'],
+  ['audit', 'Audit logs', 'Security', '/audit-logs', 'PLATFORM'],
+  ['branding', 'White-label branding', 'Configuration', '/organization/branding', 'PLATFORM'],
+  ['domains', 'Custom domains', 'Configuration', '/organization/domains', 'PLATFORM'],
+  ['identity', 'Enterprise SSO', 'Security', '/organization/authentication', 'PLATFORM'],
+  ['scim', 'SCIM provisioning', 'Security', '/organization/provisioning', 'PLATFORM'],
+  ['data', 'Data controls', 'Governance', '/organization/data', 'PLATFORM'],
+] as const;
+
+/** The single registry used by catalog sync, entitlement resolution, and UI compatibility. */
+export const MODULE_CATALOG: readonly ModuleDefinition[] = [
+  ...sharedModules.map(([key, name, category, routePrefix, band]) => ({
+    key,
+    name,
+    category,
+    routePrefix,
+    band,
+    vertical: null,
+    mandatory: band === 'BASELINE',
+  })),
+  ...AGENCY_MODULES.map((module) => ({
+    ...module,
+    band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
+  })),
+  ...RESTAURANT_MODULES.map((module) => ({
+    ...module,
+    band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
+  })),
+];
+
+const MODULES_BY_KEY = new Map(MODULE_CATALOG.map((module) => [module.key, module]));
 
 export type EntitlementView = {
   organizationId: string;
@@ -17,7 +76,7 @@ export type EntitlementView = {
     key: string;
     name: string;
     enabled: boolean;
-    source: 'PACKAGE' | 'CONTRACT' | 'OVERRIDE' | 'NONE';
+    source: 'BASELINE' | 'PACKAGE' | 'CONTRACT' | 'OVERRIDE' | 'NONE';
     seatLimit: number | null;
     expiresAt: string | null;
   }>;
@@ -31,8 +90,12 @@ export type EntitlementView = {
  * consults this rather than branching on the vertical inline, so the key list
  * lives only in the catalog.
  */
-export function verticalForModuleKey(key: string): OrganizationVertical {
-  return isRestaurantModuleKey(key) ? 'RESTAURANT' : 'AGENCY';
+export function verticalForModuleKey(key: string): OrganizationVertical | null {
+  return MODULES_BY_KEY.get(key)?.vertical ?? null;
+}
+
+export function moduleDefinitionForKey(key: string): ModuleDefinition | undefined {
+  return MODULES_BY_KEY.get(key);
 }
 
 export const PROCEDURE_MODULES: Record<string, string> = {
@@ -198,20 +261,13 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/restaurant', 'restaurant-core'],
 ];
 
-/**
- * Resolve the module that owns a route. §3 — the Dashboard surface is
- * vertical-dispatched: for a RESTAURANT organization `/dashboard` belongs to
- * mandatory `restaurant-core` (restaurant packages never include the Agency
- * `dashboard` module, which would strand the default login destination on a
- * disabled-module screen). Callers that cannot supply a vertical keep the
- * legacy Agency behavior.
- */
-export function moduleForPath(pathname: string, vertical?: OrganizationVertical): string | null {
+/** Resolve the module that owns a route. Dashboard is a baseline module for every vertical. */
+export function moduleForPath(pathname: string, _vertical?: OrganizationVertical): string | null {
+  void _vertical; // Retained for source compatibility; baseline dashboard no longer dispatches.
   const moduleKey =
     ROUTE_MODULES.find(
       ([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`)
     )?.[1] ?? null;
-  if (moduleKey === 'dashboard' && vertical === 'RESTAURANT') return 'restaurant-core';
   return moduleKey;
 }
 

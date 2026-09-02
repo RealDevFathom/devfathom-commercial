@@ -160,10 +160,14 @@ export default async function OrganizationDetailPage({
 
   // §6 — the enablement guard rejects any module whose owning vertical differs
   // from the organization's, so only grantable modules are listed.
-  const catalogModules = data.modules.filter(
-    (module) => verticalForModuleKey(module.key) === vertical
-  );
-  const mandatoryKeys = new Set(mandatoryModulesForVertical(vertical).map((module) => module.key));
+  const catalogModules = data.modules.filter((module) => {
+    const moduleVertical = verticalForModuleKey(module.key);
+    return !moduleVertical || moduleVertical === vertical;
+  });
+  const mandatoryKeys = new Set([
+    ...mandatoryModulesForVertical(vertical).map((module) => module.key),
+    ...data.modules.filter((module) => module.band === 'BASELINE').map((module) => module.key),
+  ]);
 
   const packageModuleIds = new Set(
     (organization.package?.moduleLinks ?? [])

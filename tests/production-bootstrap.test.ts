@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { bootstrapProduction, PLATFORM_MODULES } from '../prisma/production-bootstrap';
+import { AGENCY_SUITE_MODULES, bootstrapProduction } from '../prisma/production-bootstrap';
+import { MODULE_CATALOG } from '../src/lib/module-catalog';
 import {
   AGENCY_DEPARTMENTS,
   RESTAURANT_MODULES,
@@ -228,12 +229,10 @@ describe('production bootstrap', () => {
       role: 'SUPER_ADMIN',
       active: true,
     });
-    expect(platformModule.upsert).toHaveBeenCalledTimes(
-      PLATFORM_MODULES.length + RESTAURANT_MODULES.length
-    );
+    expect(platformModule.upsert).toHaveBeenCalledTimes(MODULE_CATALOG.length);
     expect(delegates.platformPackage.upsert).toHaveBeenCalledTimes(1 + RESTAURANT_PACKAGES.length);
     expect(delegates.platformPackageModule.upsert).toHaveBeenCalledTimes(
-      PLATFORM_MODULES.length +
+      AGENCY_SUITE_MODULES.length +
         RESTAURANT_PACKAGES.reduce(
           (total, restaurantPackage) => total + restaurantPackage.moduleKeys.length,
           0
@@ -257,6 +256,8 @@ describe('production bootstrap', () => {
           name: module.name,
           category: module.category,
           routePrefix: module.routePrefix,
+          band: module.mandatory ? 'VERTICAL_CORE' : 'VERTICAL_OPTIONAL',
+          vertical: 'RESTAURANT',
         },
       });
     }
@@ -292,7 +293,7 @@ describe('production bootstrap', () => {
         Object.keys(restaurantPackage.defaultLimits)
       );
     }
-    for (const [key] of PLATFORM_MODULES) {
+    for (const [key] of AGENCY_SUITE_MODULES) {
       expect(delegates.platformPackageModule.upsert).toHaveBeenCalledWith({
         where: {
           packageId_moduleId: {

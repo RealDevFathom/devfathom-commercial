@@ -62,4 +62,49 @@ describe('CatalogPage', () => {
     );
     expect(screen.getByText('restaurant-essentials · version 1 · Restaurant')).toBeVisible();
   });
+
+  it('groups modules by band and vertical', async () => {
+    const moduleRow = (key: string, band: string, vertical: 'AGENCY' | 'RESTAURANT' | null) => ({
+      id: key,
+      key,
+      name: key,
+      description: null,
+      category: 'Core',
+      band,
+      vertical,
+      routePrefix: null,
+      icon: null,
+      active: true,
+      sortOrder: 0,
+      _count: { organizations: 0, contracts: 0 },
+    });
+    const database = {
+      platformModule: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            moduleRow('dashboard', 'BASELINE', null),
+            moduleRow('chat', 'PLATFORM', null),
+            moduleRow('agency-core', 'VERTICAL_CORE', 'AGENCY'),
+            moduleRow('restaurant-core', 'VERTICAL_CORE', 'RESTAURANT'),
+          ]),
+      },
+      platformCameraBrandPreset: { findMany: vi.fn().mockResolvedValue([]) },
+      platformPackage: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    mocks.withPlatformDb.mockImplementation((run: (db: typeof database) => unknown) =>
+      run(database)
+    );
+
+    render(await CatalogPage());
+
+    for (const label of [
+      'Baseline',
+      'Platform',
+      'Vertical core · Agency',
+      'Vertical core · Restaurant',
+    ]) {
+      expect(screen.getByRole('rowheader', { name: label })).toBeVisible();
+    }
+  });
 });

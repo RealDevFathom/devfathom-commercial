@@ -37,6 +37,7 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { RESTAURANT_MODULES, RESTAURANT_PACKAGES } from '@/lib/vertical-catalog';
+import { MODULE_CATALOG } from '@/lib/module-catalog';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -48,6 +49,8 @@ process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const suffix = randomBytes(6).toString('hex');
 const SUITE_KEY = `agency-suite-${suffix}`;
 const ORG_ID = `org_aug14_${suffix}`;
+const RESTAURANT_PACKAGE_KEY = `restaurant-staging-${suffix}`;
+const RESTAURANT_ORG_ID = `org_restaurant_${suffix}`;
 
 type Deps = {
   withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
@@ -66,7 +69,8 @@ let createdPackageKeys: string[] = [];
 
 const sync = () => deps.withPlatformDb((db) => deps.syncPlatformCatalog(db));
 
-const resolve = () => deps.resolveOrganizationEntitlements(ORG_ID, deps.createTenantDb(ORG_ID));
+const resolve = (organizationId = ORG_ID) =>
+  deps.resolveOrganizationEntitlements(organizationId, deps.createTenantDb(organizationId));
 
 /** Every catalog row that matters, as a comparable snapshot. */
 const registrySnapshot = () =>
@@ -116,6 +120,13 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
           name,
           category,
           routePrefix,
+          band:
+            key === 'dashboard'
+              ? ('BASELINE' as const)
+              : ['projects', 'clients', 'finance'].includes(key)
+                ? ('VERTICAL_OPTIONAL' as const)
+                : ('PLATFORM' as const),
+          vertical: ['projects', 'clients', 'finance'].includes(key) ? ('AGENCY' as const) : null,
         })),
         skipDuplicates: true,
       });
@@ -124,6 +135,7 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
           key: SUITE_KEY,
           name: `Agency Suite ${suffix}`,
           vertical: 'AGENCY',
+          version: 27,
           defaultSeats: 25,
         },
       });
@@ -144,16 +156,62 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
           seatLimit: 100,
         },
       });
+
+      const restaurantModules = RESTAURANT_MODULES.filter((module) =>
+        ['restaurant-core', 'restaurant-pos'].includes(module.key)
+      );
+      for (const module of restaurantModules) {
+        await db.platformModule.upsert({
+          where: { key: module.key },
+          update: {},
+          create: {
+            key: module.key,
+            name: module.name,
+            category: module.category,
+            routePrefix: module.routePrefix,
+            band: module.mandatory ? 'VERTICAL_CORE' : 'VERTICAL_OPTIONAL',
+            vertical: 'RESTAURANT',
+          },
+        });
+      }
+      const restaurantPackage = await db.platformPackage.create({
+        data: {
+          key: RESTAURANT_PACKAGE_KEY,
+          name: `Restaurant Staging ${suffix}`,
+          vertical: 'RESTAURANT',
+          defaultSeats: 25,
+        },
+      });
+      for (const module of restaurantModules) {
+        const row = await db.platformModule.findUniqueOrThrow({ where: { key: module.key } });
+        await db.platformPackageModule.create({
+          data: { packageId: restaurantPackage.id, moduleId: row.id, enabled: true },
+        });
+      }
+      await db.organization.create({
+        data: {
+          id: RESTAURANT_ORG_ID,
+          slug: RESTAURANT_ORG_ID.replaceAll('_', '-'),
+          legalName: `Restaurant ${suffix}`,
+          displayName: 'Restaurant staging',
+          vertical: 'RESTAURANT',
+          status: 'ACTIVE',
+          packageId: restaurantPackage.id,
+          seatLimit: 100,
+        },
+      });
     });
   }, 120_000);
 
   afterAll(async () => {
     if (!deps) return;
     await deps.withPlatformDb(async (db) => {
-      await db.organizationModule.deleteMany({ where: { organizationId: ORG_ID } });
-      await db.organization.deleteMany({ where: { id: ORG_ID } });
+      await db.organizationModule.deleteMany({
+        where: { organizationId: { in: [ORG_ID, RESTAURANT_ORG_ID] } },
+      });
+      await db.organization.deleteMany({ where: { id: { in: [ORG_ID, RESTAURANT_ORG_ID] } } });
       const created = await db.platformPackage.findMany({
-        where: { key: { in: [SUITE_KEY, ...createdPackageKeys] } },
+        where: { key: { in: [SUITE_KEY, RESTAURANT_PACKAGE_KEY, ...createdPackageKeys] } },
         select: { id: true },
       });
       const ids = created.map((row) => row.id);
@@ -165,12 +223,13 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
   it('(a) registers the restaurant catalog without moving a live entitlement', async () => {
     const before = await registrySnapshot();
     const beforeEntitlements = await resolve();
+    const beforeRestaurantEntitlements = await resolve(RESTAURANT_ORG_ID);
     const suiteBefore = before.packages.find((row) => row.key === SUITE_KEY);
     expect(suiteBefore?.moduleLinks).toHaveLength(deps.PLATFORM_MODULES.length);
 
     const registeredModules = new Set(before.modules.map((row) => row.key));
     const registeredPackages = new Set(before.packages.map((row) => row.key));
-    const missingModules = RESTAURANT_MODULES.filter(
+    const missingModules = MODULE_CATALOG.filter(
       (definition) => !registeredModules.has(definition.key)
     );
     const missingPackages = RESTAURANT_PACKAGES.filter(
@@ -213,13 +272,29 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     // The pre-existing package is untouched: same links, same version.
     expect(after.packages.find((row) => row.key === SUITE_KEY)).toEqual(suiteBefore);
 
-    // The architecture gate: nothing this organization is entitled to moved.
+    // The architecture gate: all commercial entitlements remain byte-identical;
+    // the newly registered always-on plumbing is additive and has BASELINE source.
     const afterEntitlements = await resolve();
-    expect(afterEntitlements.enabledModules).toEqual(beforeEntitlements.enabledModules);
-    expect(afterEntitlements.limits).toEqual(beforeEntitlements.limits);
-    expect(afterEntitlements.seatLimit).toBe(beforeEntitlements.seatLimit);
-    expect(afterEntitlements.activeSeats).toBe(beforeEntitlements.activeSeats);
-    expect(afterEntitlements.vertical).toBe(beforeEntitlements.vertical);
+    const commercialBytes = (view: typeof beforeEntitlements) =>
+      JSON.stringify({
+        ...view,
+        enabledModules: view.enabledModules.filter(
+          (key) => !['admin', 'dashboard', 'notifications'].includes(key)
+        ),
+        modules: view.modules.filter(
+          (entry) => !['admin', 'dashboard', 'notifications'].includes(entry.key)
+        ),
+      });
+    expect(commercialBytes(afterEntitlements)).toBe(commercialBytes(beforeEntitlements));
+    expect(commercialBytes(await resolve(RESTAURANT_ORG_ID))).toBe(
+      commercialBytes(beforeRestaurantEntitlements)
+    );
+    for (const key of ['admin', 'dashboard', 'notifications']) {
+      expect(afterEntitlements.modules.find((entry) => entry.key === key)).toMatchObject({
+        enabled: true,
+        source: 'BASELINE',
+      });
+    }
 
     // `modules` is the whole active catalog by construction, so it necessarily
     // grows — but only by rows that are disabled and granted by nothing. Every
@@ -228,7 +303,8 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     for (const entry of afterEntitlements.modules) {
       const previous = beforeByKey.get(entry.key);
       if (previous) expect(entry).toEqual(previous);
-      else expect(entry).toMatchObject({ enabled: false, source: 'NONE' });
+      else if (!['admin', 'notifications'].includes(entry.key))
+        expect(entry).toMatchObject({ enabled: false, source: 'NONE' });
     }
     expect(afterEntitlements.modules.map((entry) => entry.key)).toEqual(
       expect.arrayContaining([...beforeByKey.keys()])

@@ -159,7 +159,7 @@ describeIfDatabase('GET /api/v1/meetings bounds, against PostgreSQL', () => {
       ] as const) {
         const platformModule = await db.platformModule.upsert({
           where: { key },
-          create: { key, name, category: 'core', active: true },
+          create: { key, name, category: 'core', band: 'PLATFORM', active: true },
           update: { active: true },
         });
         await db.organizationModule.create({
