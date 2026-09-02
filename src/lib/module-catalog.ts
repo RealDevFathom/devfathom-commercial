@@ -210,6 +210,10 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // belongs to mandatory Restaurant Core, not separately licensed Insights.
   restaurantReports: 'restaurant-core',
   pharmacyMedicine: 'pharmacy-core',
+  // PLAT-02/03: the onboarding checklist, branch regulatory profile and
+  // activation status are the pharmacy workspace's own front door — mandatory
+  // Pharmacy Core, not a separately licensed console.
+  pharmacyOnboarding: 'pharmacy-core',
   // PH-PUR (PUR-01..05): suppliers, requisitions, quotes, purchase orders and
   // goods receiving are licensed as Pharmacy Procurement, separately from the
   // mandatory medicine identity in Core — the registry key is
