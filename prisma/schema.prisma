@@ -810,7 +810,6 @@ model PharmacyStockMovement {
 
   @@unique([organizationId, id], map: "pharmacy_stock_movements_org_id_key")
   @@unique([organizationId, idempotencyKey], map: "pharmacy_stock_movements_org_idempotency_key")
-  @@unique([organizationId, id], map: "pharmacy_stock_movements_org_id_key")
   @@index([organizationId, branchId, inventoryLotId, occurredAt], map: "pharmacy_stock_movements_org_branch_lot_idx")
   @@map("pharmacy_stock_movements")
 }
