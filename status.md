@@ -180,3 +180,198 @@ optional or deferred unless explicitly approved.
 
 Detailed decisions and module-level scope remain in the
 [Restaurant management system plan](industry-specific-docs/restaurants/restaurant-management-system-plan.md).
+
+## Staging deployment — b59f39a8
+
+Deployed 2026-09-02 05:07–05:13 UTC to `rg-devfathom-staging-uaenorth`. Production
+(`rg-devfathom-production-*`, `df-prd-*`) was not touched.
+
+| Item                   | Value                                                                     |
+| ---------------------- | ------------------------------------------------------------------------- |
+| Branch tip             | `b59f39a88d931195d1db29fdef2d235feaaa43fb`                                |
+| Image tag              | `bootstrap-b59f39a8-20260902045117`                                       |
+| Image digest           | `sha256:81d4a7a498560633e4ab274bc40cb814dc7b4b6929b862f11fd9d73a31185506` |
+| Container App revision | `devfathom-stg--0000036`                                                  |
+| Tenant hostname        | `https://staging.devfathom.com` (SNI bound, `/api/health` 200)            |
+| Platform hostname      | `https://admin.staging.devfathom.com` (SNI bound, `/api/health` 200)      |
+| Migration job          | `devfathom-stg-migrate-bfgo47v` — **Succeeded**                           |
+
+### Commits in this deployment
+
+- `6909b3716136fec29b8eaf35e1a762f8972541cf` — `fix(seed): apply PLATFORM_ADMIN_PASSWORD to an existing platform admin`
+- `b59f39a88d931195d1db29fdef2d235feaaa43fb` — `fix(platform): reconcile the module and package registry on every deployment`
+
+### Migration job result
+
+The job now runs `bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts && bun prisma/seed.ts`.
+
+```
+56 migrations found in prisma/migrations
+No pending migrations to apply.
+Platform catalog sync: created 10 module(s), 3 package(s), 26 package-module link(s).
+Platform catalog sync: created 0 module(s), 0 package(s), 0 package-module link(s).
+🌱 Seeding DevFathom database...
+  ✓ Seed data already present; refreshed seeded-user credentials
+```
+
+The 56 migrations were already applied by `89766448`; this deployment applied none. The first
+catalog line is `prisma/sync-catalog.ts` registering the ten Restaurant modules and three Restaurant
+packages with their 26 module links; the second is `prisma/seed.ts` running the same reconciliation
+and finding nothing left to do — the idempotence property, observed in production rather than only
+in the test. The seed then took its "seed data already present" early-return path, which is exactly
+the path on which the platform administrator's password used to be left stale.
+
+`prisma/prepare-extensions.ts` writes nothing to stdout on success (confirmed against the
+`ecdxouh` log from `89766448` as well); its success is proven by the job's `&&` chain reaching
+`prisma migrate deploy`. The managed-owner skip is recorded as a row in
+`platform_ops.platform_db_hardening` (`extension_name='btree_gist'`, `owner_role='azuresu'`,
+`reason='managed-owner'`), which cannot be read from a workstation — the staging PostgreSQL
+flexible server has no publicly resolvable endpoint from outside its virtual network.
+
+### Gates before the build
+
+Run against a fresh local PostgreSQL 16 database (`wha1116b_gate`, 56 migrations) with a
+NOSUPERUSER/NOBYPASSRLS owner role and a separate NOSUPERUSER/NOBYPASSRLS runtime role holding
+`WITH GRANT OPTION` privileges.
+
+| Gate                                                                                                                   | Result                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `bun run lint`                                                                                                         | exit 0                                                                                                            |
+| Prettier `--check` on every changed `.ts`                                                                              | clean                                                                                                             |
+| `NODE_OPTIONS=--max-old-space-size=8192 bun run typecheck`                                                             | exit 0                                                                                                            |
+| `bunx vitest run --fileParallelism=false` over `prisma/`, `src/lib/platform/`, entitlements and the new suites         | **16 files, 266 tests, 0 failed, 0 skipped**, exit 0                                                              |
+| `bun run test:rls`                                                                                                     | exit 0 — forced policies, cross-tenant isolation, fail-closed writes, append-only ledgers, platform-only policies |
+| `az bicep build` on `environment.bicep`; `az bicep build-params` on `staging`, `production` and `production.bootstrap` | all clean                                                                                                         |
+
+Both new suites were shown non-vacuous by reverting the fix under test: dropping `passwordHash`
+from the platform-administrator `update` branch fails the rotation case and leaves the other three
+green; dropping the existing-package guard, or letting the pass re-compose a package that already
+exists, fails the idempotence case.
+
+Compiled migration command, read back out of the built ARM template:
+
+```
+bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts
+```
+
+### Smoke (custom hostnames only)
+
+| Check                                                                 | Result                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `https://staging.devfathom.com/api/health`                            | 200 `{"status":"ok"}`                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `https://admin.staging.devfathom.com/api/health`                      | 200                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Platform administrator signs in with the rotated password             | **PASS** — this is the credential that failed before `6909b371`                                                                                                                                                                                                                                                                                                                                                                        |
+| `/platform/catalog` lists all ten `RESTAURANT_MODULES` keys           | PASS                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `/platform/catalog` lists all three `RESTAURANT_PACKAGES`             | PASS — essentials 6 modules, operations 10, enterprise 10, `restaurant-core` carrying each package's `defaultLimits`                                                                                                                                                                                                                                                                                                                   |
+| Agency Suite module links unchanged                                   | PASS — still exactly 18                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Console offers only Restaurant packages for a RESTAURANT organization | PASS — 3 options, all `Restaurant *`                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Organization `Staging Restaurant Smoke` created through the console   | PASS — `cmtjnwezp003r01aoc988pgpn`, slug `staging-restaurant-smoke-2b578e`                                                                                                                                                                                                                                                                                                                                                             |
+| Restaurant readiness (branch + four policy acknowledgements)          | PASS                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Production deployment marked READY, organization activated            | PASS — status ACTIVE                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Its administrator signs in and reaches the restaurant workspace       | PASS — 27 navigation entries (Point of sale, Kitchen display, Floor, Orders, Finance & reconciliation, Inventory, Purchasing, SOP board/reports/admin/oversight, Restaurant staff, Roster, Tax, Branches, Delivery, Restaurant devices, Cameras, Catalog, Menus, Notifications, Customers & Loyalty, Reports, Advanced Insights, Organization, Settings); `/restaurant/orders`, `/restaurant/menus` and `/restaurant/floor` all render |
+| `alex@company.com` still reaches `/dashboard`                         | PASS                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Web container schema errors across the smoke                          | **zero** `P2022` or schema errors, and zero error-level lines                                                                                                                                                                                                                                                                                                                                                                          |
+
+Screenshots, all under `~/devfathom-gates/deploy/smoke-b59f39a8/`:
+`platform-organizations.png`, `platform-catalog.png`, `platform-organization-created.png`,
+`platform-restaurant-readiness.png`, `platform-organization-active.png`,
+`tenant-restaurant-orders.png`, `tenant-restaurant-menus.png`, `tenant-restaurant-floor.png`,
+`tenant-dashboard.png`.
+
+This is the fix proved end to end: before `b59f39a8` the staging catalog had no Restaurant package
+at all, so the onboarding form would have shown "No commercial package available" and a restaurant
+organization could not be created on this database. It now onboards, activates, and serves the full
+restaurant workspace.
+
+### Defects found and fixed during this deployment session
+
+1. **`btree_gist` extension not allow-listed** — the migration job failed (`devfathom-stg-migrate-fuvddv5`)
+   because `azure.extensions` did not permit the extensions the migrations create. Fixed by
+   `98707c8f` (`infra: allow-list PostgreSQL extensions required by migrations`).
+2. **Managed extension owner (`azuresu`)** — on Azure Flexible Server the `btree_gist` functions are
+   owned by `azuresu`, and the migration job's role can neither own them nor `SET ROLE` to them, so the
+   ACL hardening migration failed closed (`devfathom-stg-migrate-hgf6dvx`). Fixed by `89766448`
+   (`fix(db): tolerate managed PostgreSQL extension owners in ACL hardening`), which records the skip
+   in `platform_ops.platform_db_hardening` rather than silently passing.
+3. **Two rollbacks** were taken while diagnosing (1) and (2); the last-known-good image on the old
+   schema is recorded in `~/devfathom-gates/deploy/rollback-point.json`
+   (`sha256:8b864735af9d4faac89f5847a01ccaf2d626355bd529f617daf5c16b7da97cc9`, revision
+   `devfathom-stg--0000027`). **The database is now migrated to the new schema, so rolling back to
+   that image is a last resort, not a routine step.**
+4. **Seed never rewrote an existing platform administrator's password hash** — the upsert carried
+   `update: { active, role }` with no `passwordHash`, so a rotated `PLATFORM_ADMIN_PASSWORD` only ever
+   reached an administrator that did not exist yet. Every redeploy reported a successful seed while the
+   previous hash stayed in place, and the smoke login failed with credentials the deploy had just
+   generated. Fixed by `6909b371`.
+5. **Module and package registry was never reconciled on an existing database** — `RESTAURANT_MODULES`
+   and `RESTAURANT_PACKAGES` were written only by `prisma/production-bootstrap.ts`, which runs solely on
+   a fresh production bootstrap; `seed.ts` registered `PLATFORM_MODULES` alone and no migration inserts
+   a module. The staging database, created 2026-08-14, therefore listed 18 agency modules and one
+   Agency Suite package after every restaurant migration had been applied. Fixed by `b59f39a8`.
+6. **`infra/production.bootstrap.bicepparam` did not compile** — `postgresExtensions` was added in
+   `98707c8f` without a default and only the staging and production parameter files were updated, so
+   `az bicep build-params` on the bootstrap file failed `BCP258`. Fixed in `b59f39a8` and pinned by
+   `tests/production-deployment-contract.test.ts`.
+7. **`/api/health` is `SELECT 1` only** (`src/app/api/health/route.ts`). It proves the process is up and
+   the database is reachable; it proves nothing about schema, seed, catalog, or entitlement state. A
+   green health check is not evidence a deployment succeeded.
+8. **Four secrets are Key-Vault-only and unrecoverable by this account** — `auth-secret`,
+   `platform-encryption-key`, `camera-credential-key` and `cron-secret` are not exposed as migration-job
+   secrets, and this account's RBAC cannot read them back from the vault. Only `seed-password`,
+   `admin-password`, `platform-admin-password` and `database-url` were recoverable.
+
+### Open finding, not fixed here
+
+**`prisma/seed.ts` bumps the Agency Suite package version on every run.** Its `agency-suite` upsert
+still carries `update: { active: true, version: { increment: 1 } }`, so the package moved from
+version 26 to **27** on this deployment with no composition change — its 18 module links are
+byte-identical. This is pre-existing seed behaviour, not something `b59f39a8` introduced, and it is
+the same misreporting that `syncPlatformCatalog` deliberately refuses for Restaurant packages
+("a package that already exists is skipped entirely… bumping its version would report an unchanged
+package as edited"). The one-line correction is to drop `version: { increment: 1 }` from that upsert.
+It was left alone because it is outside the scope authorised for this session.
+
+### Rollback
+
+```bash
+az containerapp update \
+  --resource-group rg-devfathom-staging-uaenorth \
+  --name devfathom-stg \
+  --image dfacrrz2qg5k5ucouy.azurecr.io/devfathom-commercial@sha256:ab7481b1…
+```
+
+Rolling the **app image** back to `89766448` is safe: that build runs against the same 56-migration
+schema. Rolling back to the `rollback-point.json` image
+(`sha256:8b864735af9d4faac89f5847a01ccaf2d626355bd529f617daf5c16b7da97cc9`, revision
+`devfathom-stg--0000027`) is **not** routine — the database has since been migrated forward and that
+build predates the schema.
+
+### Credentials
+
+All eight deployment secrets were **rotated** by this run (`infra/deploy-staging.sh` regenerates
+every one on every invocation): PostgreSQL administrator, `AUTH_SECRET`, platform encryption key,
+camera credential key, cron secret, seed password, tenant administrator password, and platform
+administrator password. No value is recorded here or in any commit. The four recoverable ones were
+captured to `~/devfathom-gates/deploy/secrets-b59f39a8.env` (mode 600, outside the repository); the
+other four are Key-Vault-only and unreadable by this account.
+
+### Environment limits this smoke ran into (not code defects)
+
+- **A new organization's workspace host does not exist on staging.** `src/lib/tenancy/host-routing.ts`
+  classifies the apex of `PLATFORM_BASE_DOMAIN` as a _shared_ host — `staging.devfathom.com` "belongs
+  to the product, never to a customer" — and a tenant workspace is reached at
+  `<slug>.staging.devfathom.com`. That name has no DNS record (`NXDOMAIN`) and no Container App
+  hostname binding, so a newly onboarded organization can only be exercised over the shared host,
+  which resolves the signed-in user's own organization. Binding a wildcard hostname is infrastructure
+  work outside this session's scope.
+- **`/restaurant` has no index page.** `src/app/(app)/restaurant/` contains only sub-routes
+  (`orders`, `menus`, `floor`, `settings`, …) and no `page.tsx`, so `/restaurant` returns 404 for
+  every restaurant organization, correctly entitled or not. The earlier session's note that
+  "`/restaurant` 404s because the seeded organization is AGENCY" was the wrong diagnosis; the route
+  simply does not exist. Restaurant surfaces must be smoked at a real sub-route.
+- **Sign-in rate limits gate repeated smoke runs.** Platform sign-in allows 8 attempts per 15 minutes
+  per IP+email (`src/lib/platform/auth.ts`); tenant sign-in allows 30/IP and 10/account per 5 minutes
+  (`src/lib/auth.ts`). Iterating on a browser smoke trips both, and the failure surfaces as a plain
+  "sign-in failed" page rather than an obvious 429 unless the response is inspected.
+- **The app scales to zero.** A first request after idle takes ~58 seconds; Playwright's default
+  30-second navigation timeout is not enough, so a smoke must warm the host first or raise the timeout.
