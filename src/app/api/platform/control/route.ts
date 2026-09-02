@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { requirePlatformSession } from '@/lib/platform/auth';
 import { executePlatformCommand } from '@/lib/platform/commands';
-import { assertPlatformMutationOrigin, PlatformSecurityError } from '@/lib/platform/security';
+import {
+  ActivationPreflightError,
+  assertPlatformMutationOrigin,
+  PlatformSecurityError,
+} from '@/lib/platform/security';
 
 const envelope = z.object({
   action: z.string(),
@@ -32,6 +36,15 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(validationEnvelope(error), { status: 400 });
+    }
+    // WHA-1180 — a failed activation preflight also reports which gates are
+    // unmet and where to satisfy each one. The message is unchanged, so a
+    // client that only reads `error` sees exactly what it saw before.
+    if (error instanceof ActivationPreflightError) {
+      return NextResponse.json(
+        { error: error.message, gates: error.gates },
+        { status: error.status }
+      );
     }
     if (error instanceof PlatformSecurityError) {
       return NextResponse.json({ error: error.message }, { status: error.status });

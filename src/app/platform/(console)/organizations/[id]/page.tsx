@@ -1,8 +1,11 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { CircleDashed } from 'lucide-react';
 import {
   PlatformCommandButton,
   PlatformCommandForm,
 } from '@/components/platform/platform-command-form';
+import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
 import { verticalForModuleKey } from '@/lib/module-catalog';
@@ -141,6 +144,24 @@ export default async function OrganizationDetailPage({
   const verticalDefinition = VERTICALS[vertical];
   const assigned = new Map(organization.modules.map((item) => [item.moduleId, item]));
   const targets = transitionTargets[organization.status] ?? [];
+  // WHA-1180 — the same base preflight conditions `assertActivationReady`
+  // enforces, evaluated against the rows this page already loaded. The
+  // predicates below mirror that command's `include` filters exactly; the
+  // page's own includes are unfiltered because other panels need every row.
+  const activationGates = unmetActivationGates({
+    organizationId: organization.id,
+    hasPackage: Boolean(organization.packageId),
+    enabledModuleCount:
+      organization.modules.filter((item) => item.status === 'ENABLED' || item.status === 'TRIAL')
+        .length + (organization.package?.moduleLinks.length ?? 0),
+    administratorCount: organization.users.filter(
+      (user) => user.role === 'ADMIN' && (user.status === 'ACTIVE' || user.status === 'ON_LEAVE')
+    ).length,
+    readyProductionDeploymentCount: organization.deployments.filter(
+      (deployment) => deployment.environment === 'production' && deployment.status === 'READY'
+    ).length,
+  });
+  const sharedDeployment = sharedDeploymentUrl(organization);
   const packageLimits: Record<string, number> = {};
   for (const link of organization.package?.moduleLinks ?? []) {
     if (!link.limits || typeof link.limits !== 'object' || Array.isArray(link.limits)) continue;
@@ -365,6 +386,53 @@ export default async function OrganizationDetailPage({
                 Activation validates package, modules, administrator, and production deployment.
               </p>
             </div>
+            {/*
+              WHA-1180 — the unmet activation gates, each with the surface that
+              satisfies it. Rendered before the operator submits, so a failed
+              activation is no longer the only way to learn what is missing.
+            */}
+            {targets.includes('ACTIVE') && activationGates.length ? (
+              <div className="border-b border-border-subtle">
+                <p className="px-5 pt-4 font-mono text-[9px] uppercase tracking-[0.16em] text-text-muted">
+                  Unmet activation gates
+                </p>
+                <ul className="mt-2 divide-y divide-border-subtle">
+                  {activationGates.map((gate) => (
+                    <li
+                      key={gate.gate}
+                      className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
+                    >
+                      <span className="flex items-center gap-2 text-xs text-text-body">
+                        <CircleDashed
+                          className="h-3.5 w-3.5 shrink-0 text-destructive"
+                          aria-hidden="true"
+                        />
+                        {gate.message}
+                      </span>
+                      <span className="flex flex-wrap items-center gap-2">
+                        {gate.gate === 'production_deployment' && sharedDeployment ? (
+                          <PlatformCommandButton
+                            action="organization.deployment.shared"
+                            tone="quiet"
+                            label="Use shared deployment"
+                            payload={{
+                              organizationId: organization.id,
+                              reason: 'Shared platform host default applied for activation.',
+                            }}
+                          />
+                        ) : null}
+                        <Link
+                          href={gate.action.href}
+                          className="text-xs font-semibold text-accent-brand hover:underline"
+                        >
+                          {gate.action.label}
+                        </Link>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {targets.length ? (
               <div className="p-5">
                 <PlatformCommandForm

@@ -13,7 +13,8 @@ import {
 } from '@/generated/prisma/client';
 import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertPlatformCapability } from '@/lib/platform/auth';
-import { PlatformSecurityError } from '@/lib/platform/security';
+import { ActivationPreflightError, PlatformSecurityError } from '@/lib/platform/security';
+import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
@@ -352,17 +353,18 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     },
   });
   if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
-  const missing = [
-    !organization.packageId ? 'commercial package' : null,
-    organization.modules.length + (organization.package?.moduleLinks.length ?? 0) === 0
-      ? 'enabled module'
-      : null,
-    organization.users.length === 0 ? 'active organization administrator' : null,
-    organization.deployments.length === 0 ? 'ready production deployment' : null,
-  ].filter(Boolean);
-  if (missing.length) {
-    throw new PlatformSecurityError(`Activation preflight failed: add ${missing.join(', ')}.`, 400);
-  }
+  // WHA-1180 — the same unmet conditions the console renders as a checklist.
+  // The thrown message is rebuilt from these gates and is byte-identical to the
+  // sentence this preflight has always produced.
+  const gates = unmetActivationGates({
+    organizationId,
+    hasPackage: Boolean(organization.packageId),
+    enabledModuleCount:
+      organization.modules.length + (organization.package?.moduleLinks.length ?? 0),
+    administratorCount: organization.users.length,
+    readyProductionDeploymentCount: organization.deployments.length,
+  });
+  if (gates.length) throw new ActivationPreflightError(gates);
 
   if (organization.vertical === 'PHARMACY') {
     const now = new Date();
@@ -2602,6 +2604,71 @@ async function runCommand(
         },
       });
       return { targetType: 'PlatformPackageModule', targetId: saved.id, data: saved, audit: saved };
+    }
+    // WHA-1180 — the one-click activation remedy for an organization the shared
+    // platform hosts already serve. An operator had to hand-register a
+    // deployment record whose every field is derivable from the slug and the
+    // environment's base domain; this writes exactly that record and marks it
+    // READY, which is what the production_deployment gate asks for.
+    case 'organization.deployment.shared': {
+      const input = z
+        .object({
+          organizationId: id,
+          // Same operator-reason contract as organization.transition: the
+          // console reuses the activation reason, and it reaches the ledger
+          // through this command's audit projection.
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+        select: { id: true, slug: true, deploymentMode: true },
+      });
+      if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+      const url = sharedDeploymentUrl(organization);
+      if (!url) {
+        throw new PlatformSecurityError(
+          organization.deploymentMode === 'SHARED'
+            ? 'No shared platform host is configured for this environment. Register the production deployment at /platform/deployments.'
+            : 'This organization runs on a dedicated deployment and custom domain. Register its production deployment at /platform/deployments.',
+          400
+        );
+      }
+      // Idempotent on the (organizationId, environment) unique key: a second
+      // click re-asserts the same shared position instead of failing or
+      // creating a duplicate. Mirrors the `sharedProvision` worker upsert.
+      const saved = await db.organizationDeployment.upsert({
+        where: {
+          organizationId_environment: {
+            organizationId: input.organizationId,
+            environment: 'production',
+          },
+        },
+        update: {
+          mode: 'SHARED',
+          status: 'READY',
+          url,
+          lastHealthyAt: new Date(),
+          health: { source: 'shared-platform-default' },
+        },
+        create: {
+          organizationId: input.organizationId,
+          environment: 'production',
+          mode: 'SHARED',
+          provider: 'VERCEL',
+          status: 'READY',
+          url,
+          lastHealthyAt: new Date(),
+          health: { source: 'shared-platform-default' },
+        },
+      });
+      return {
+        targetType: 'OrganizationDeployment',
+        targetId: saved.id,
+        organizationId: saved.organizationId,
+        data: saved,
+        audit: { ...saved, reason: input.reason },
+      };
     }
     case 'deployment.create': {
       const input = z
