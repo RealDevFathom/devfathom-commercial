@@ -2,7 +2,14 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { evaluateSetupChecklist } from '@/lib/onboarding/setup-evaluator';
+import { VERTICALS } from '@/lib/vertical-catalog';
 import { FirstRunChecklist } from './first-run-checklist';
+
+const verticalFixtures = Object.values(VERTICALS).filter(
+  (definition) => definition.firstRunChecklist.length > 0
+);
+const restaurant = verticalFixtures.find((definition) => definition.label === 'Restaurant')!;
+const pharmacy = verticalFixtures.find((definition) => definition.label === 'Pharmacy')!;
 
 const evidence = {
   hasBranch: true,
@@ -16,7 +23,7 @@ const evidence = {
 
 describe('FirstRunChecklist', () => {
   it('shows every data-derived row with a status, reason, and exact action link', () => {
-    render(<FirstRunChecklist checklist={evaluateSetupChecklist('RESTAURANT', evidence)} />);
+    render(<FirstRunChecklist checklist={evaluateSetupChecklist(restaurant.vertical, evidence)} />);
 
     expect(screen.getAllByRole('listitem')).toHaveLength(6);
     expect(screen.getByText('Stations and printers')).toBeVisible();
@@ -30,7 +37,7 @@ describe('FirstRunChecklist', () => {
   });
 
   it('does not render after all required evidence is complete', () => {
-    const complete = evaluateSetupChecklist('PHARMACY', {
+    const complete = evaluateSetupChecklist(pharmacy.vertical, {
       ...evidence,
       hasCatalog: true,
       hasOpeningStock: true,
@@ -41,7 +48,7 @@ describe('FirstRunChecklist', () => {
   });
 
   it('links pharmacy first sale to the keyboard-first counter', () => {
-    render(<FirstRunChecklist checklist={evaluateSetupChecklist('PHARMACY', evidence)} />);
+    render(<FirstRunChecklist checklist={evaluateSetupChecklist(pharmacy.vertical, evidence)} />);
     expect(screen.getByRole('link', { name: /make a test sale/i })).toHaveAttribute(
       'href',
       '/pharmacy/counter'

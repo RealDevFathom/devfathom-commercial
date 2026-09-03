@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
-import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
+import { FIRST_RUN_VERTICALS, roleTemplatesForVertical, VERTICALS } from '@/lib/vertical-catalog';
 
 export type SetupChecklistStatus = 'Done' | 'Needs you' | 'Optional';
 export type SetupChecklistItemKey =
@@ -17,7 +17,7 @@ export type SetupChecklistItem = {
 };
 
 export type SetupChecklist = {
-  vertical: 'RESTAURANT' | 'PHARMACY';
+  vertical: (typeof FIRST_RUN_VERTICALS)[number];
   items: readonly SetupChecklistItem[];
   complete: boolean;
 };
@@ -39,88 +39,18 @@ export function evaluateSetupChecklist(
   vertical: SetupChecklist['vertical'],
   evidence: SetupEvidence
 ): SetupChecklist {
-  const restaurant = vertical === 'RESTAURANT';
-  const catalogDone = evidence.hasCatalog && (restaurant || evidence.hasOpeningStock);
-  const items: SetupChecklistItem[] = [
-    {
-      key: 'branch',
-      label: 'Branch',
-      status: status(evidence.hasBranch),
-      why: evidence.hasBranch
-        ? 'An active location is ready for daily operations.'
-        : 'Your first sale needs an active operating location.',
-      actionLabel: evidence.hasBranch ? 'Review branches' : 'Set up a branch',
-      href: restaurant ? '/restaurant/settings/branches' : '/pharmacy/inventory',
-      optional: false,
-    },
-    {
-      key: 'staff',
-      label: 'Staff and roles',
-      status: status(evidence.hasProvisionedRoles),
-      why: evidence.hasProvisionedRoles
-        ? 'The required system roles were provisioned automatically.'
-        : 'Provisioned roles keep staff access consistent and least-privileged.',
-      actionLabel: evidence.hasProvisionedRoles ? 'Review staff' : 'Finish staff setup',
-      href: restaurant ? '/restaurant/staff' : '/organization',
-      optional: false,
-    },
-    {
-      key: 'stations',
-      label: restaurant ? 'Stations and printers' : 'Counter device',
-      status: status(evidence.hasStationOrPrinter, true),
-      why: evidence.hasStationOrPrinter
-        ? 'At least one active station, printer route, or counter device is configured.'
-        : 'Optional for a test sale; add hardware when this location is ready.',
-      actionLabel: evidence.hasStationOrPrinter ? 'Review devices' : 'Set up later',
-      href: restaurant ? '/restaurant/devices' : '/settings',
-      optional: true,
-    },
-    {
-      key: 'catalog',
-      label: restaurant ? 'Published menu' : 'Catalog and opening stock',
-      status: status(catalogDone),
-      why: catalogDone
-        ? restaurant
-          ? 'A published menu gives the register saleable items.'
-          : 'A published medicine and received opening stock are ready to sell.'
-        : restaurant
-          ? 'Publish a priced menu before opening the register.'
-          : 'Publish a medicine and receive opening stock before a test sale.',
-      actionLabel: catalogDone
-        ? `Review ${restaurant ? 'menus' : 'inventory'}`
-        : `Set up ${restaurant ? 'a menu' : 'inventory'}`,
-      href: restaurant ? '/restaurant/menus' : '/pharmacy/inventory',
-      optional: false,
-    },
-    {
-      key: 'tax',
-      label: 'Tax',
-      status: status(evidence.hasTax, !restaurant),
-      why: evidence.hasTax
-        ? 'An active tax profile is available for checkout.'
-        : restaurant
-          ? 'Publish the branch tax profile used at checkout.'
-          : 'Pharmacy tax setup is not yet required by the available counter flow.',
-      actionLabel: evidence.hasTax
-        ? 'Review tax'
-        : restaurant
-          ? 'Set up tax'
-          : 'Review organization',
-      href: restaurant ? '/restaurant/tax' : '/organization',
-      optional: !restaurant,
-    },
-    {
-      key: 'first-sale',
-      label: 'First test sale',
-      status: status(evidence.hasFirstSale),
-      why: evidence.hasFirstSale
-        ? 'A completed sale proves the core checkout path.'
-        : 'Complete one test checkout to verify the workspace end to end.',
-      actionLabel: evidence.hasFirstSale ? 'Review sales' : 'Make a test sale',
-      href: restaurant ? '/pos' : '/pharmacy/counter',
-      optional: false,
-    },
-  ];
+  const items = VERTICALS[vertical].firstRunChecklist.map((definition): SetupChecklistItem => {
+    const done = definition.evidence.every((key) => evidence[key]);
+    return {
+      key: definition.key,
+      label: definition.label,
+      status: status(done, definition.optional),
+      why: done ? definition.doneWhy : definition.pendingWhy,
+      actionLabel: done ? definition.doneActionLabel : definition.pendingActionLabel,
+      href: definition.href,
+      optional: definition.optional,
+    };
+  });
 
   return {
     vertical,

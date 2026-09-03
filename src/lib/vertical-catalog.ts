@@ -34,23 +34,188 @@ export type VerticalDefinition = {
   /** UI label shown for the "Organization type" decision (§2). */
   label: string;
   description: string;
+  firstRunChecklist: readonly FirstRunChecklistDefinition[];
 };
+
+export type FirstRunEvidenceKey =
+  | 'hasBranch'
+  | 'hasProvisionedRoles'
+  | 'hasStationOrPrinter'
+  | 'hasCatalog'
+  | 'hasOpeningStock'
+  | 'hasTax'
+  | 'hasFirstSale';
+
+export type FirstRunChecklistDefinition = {
+  key: 'branch' | 'staff' | 'stations' | 'catalog' | 'tax' | 'first-sale';
+  label: string;
+  evidence: readonly FirstRunEvidenceKey[];
+  optional: boolean;
+  doneWhy: string;
+  pendingWhy: string;
+  doneActionLabel: string;
+  pendingActionLabel: string;
+  href: string;
+};
+
+const RESTAURANT_FIRST_RUN_CHECKLIST = [
+  {
+    key: 'branch',
+    label: 'Branch',
+    evidence: ['hasBranch'],
+    optional: false,
+    doneWhy: 'An active location is ready for daily operations.',
+    pendingWhy: 'Your first sale needs an active operating location.',
+    doneActionLabel: 'Review branches',
+    pendingActionLabel: 'Set up a branch',
+    href: '/restaurant/settings/branches',
+  },
+  {
+    key: 'staff',
+    label: 'Staff and roles',
+    evidence: ['hasProvisionedRoles'],
+    optional: false,
+    doneWhy: 'The required system roles were provisioned automatically.',
+    pendingWhy: 'Provisioned roles keep staff access consistent and least-privileged.',
+    doneActionLabel: 'Review staff',
+    pendingActionLabel: 'Finish staff setup',
+    href: '/restaurant/staff',
+  },
+  {
+    key: 'stations',
+    label: 'Stations and printers',
+    evidence: ['hasStationOrPrinter'],
+    optional: true,
+    doneWhy: 'At least one active station, printer route, or counter device is configured.',
+    pendingWhy: 'Optional for a test sale; add hardware when this location is ready.',
+    doneActionLabel: 'Review devices',
+    pendingActionLabel: 'Set up later',
+    href: '/restaurant/devices',
+  },
+  {
+    key: 'catalog',
+    label: 'Published menu',
+    evidence: ['hasCatalog'],
+    optional: false,
+    doneWhy: 'A published menu gives the register saleable items.',
+    pendingWhy: 'Publish a priced menu before opening the register.',
+    doneActionLabel: 'Review menus',
+    pendingActionLabel: 'Set up a menu',
+    href: '/restaurant/menus',
+  },
+  {
+    key: 'tax',
+    label: 'Tax',
+    evidence: ['hasTax'],
+    optional: false,
+    doneWhy: 'An active tax profile is available for checkout.',
+    pendingWhy: 'Publish the branch tax profile used at checkout.',
+    doneActionLabel: 'Review tax',
+    pendingActionLabel: 'Set up tax',
+    href: '/restaurant/tax',
+  },
+  {
+    key: 'first-sale',
+    label: 'First test sale',
+    evidence: ['hasFirstSale'],
+    optional: false,
+    doneWhy: 'A completed sale proves the core checkout path.',
+    pendingWhy: 'Complete one test checkout to verify the workspace end to end.',
+    doneActionLabel: 'Review sales',
+    pendingActionLabel: 'Make a test sale',
+    href: '/pos',
+  },
+] as const satisfies readonly FirstRunChecklistDefinition[];
+
+const PHARMACY_FIRST_RUN_CHECKLIST = [
+  {
+    key: 'branch',
+    label: 'Branch',
+    evidence: ['hasBranch'],
+    optional: false,
+    doneWhy: 'An active location is ready for daily operations.',
+    pendingWhy: 'Your first sale needs an active operating location.',
+    doneActionLabel: 'Review branches',
+    pendingActionLabel: 'Set up a branch',
+    href: '/pharmacy/inventory',
+  },
+  {
+    key: 'staff',
+    label: 'Staff and roles',
+    evidence: ['hasProvisionedRoles'],
+    optional: false,
+    doneWhy: 'The required system roles were provisioned automatically.',
+    pendingWhy: 'Provisioned roles keep staff access consistent and least-privileged.',
+    doneActionLabel: 'Review staff',
+    pendingActionLabel: 'Finish staff setup',
+    href: '/organization',
+  },
+  {
+    key: 'stations',
+    label: 'Counter device',
+    evidence: ['hasStationOrPrinter'],
+    optional: true,
+    doneWhy: 'At least one active station, printer route, or counter device is configured.',
+    pendingWhy: 'Optional for a test sale; add hardware when this location is ready.',
+    doneActionLabel: 'Review devices',
+    pendingActionLabel: 'Set up later',
+    href: '/settings',
+  },
+  {
+    key: 'catalog',
+    label: 'Catalog and opening stock',
+    evidence: ['hasCatalog', 'hasOpeningStock'],
+    optional: false,
+    doneWhy: 'A published medicine and received opening stock are ready to sell.',
+    pendingWhy: 'Publish a medicine and receive opening stock before a test sale.',
+    doneActionLabel: 'Review inventory',
+    pendingActionLabel: 'Set up inventory',
+    href: '/pharmacy/inventory',
+  },
+  {
+    key: 'tax',
+    label: 'Tax',
+    evidence: ['hasTax'],
+    optional: true,
+    doneWhy: 'An active tax profile is available for checkout.',
+    pendingWhy: 'Pharmacy tax setup is not yet required by the available counter flow.',
+    doneActionLabel: 'Review tax',
+    pendingActionLabel: 'Review organization',
+    href: '/organization',
+  },
+  {
+    key: 'first-sale',
+    label: 'First test sale',
+    evidence: ['hasFirstSale'],
+    optional: false,
+    doneWhy: 'A completed sale proves the core checkout path.',
+    pendingWhy: 'Complete one test checkout to verify the workspace end to end.',
+    doneActionLabel: 'Review sales',
+    pendingActionLabel: 'Make a test sale',
+    href: '/pharmacy/counter',
+  },
+] as const satisfies readonly FirstRunChecklistDefinition[];
+
+export const FIRST_RUN_VERTICALS = [RESTAURANT, PHARMACY] as const;
 
 export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
   AGENCY: {
     vertical: 'AGENCY',
     label: 'Agency',
     description: 'Projects, clients, agency finance, HR, and collaboration.',
+    firstRunChecklist: [],
   },
   RESTAURANT: {
     vertical: 'RESTAURANT',
     label: 'Restaurant',
     description: 'Branches, POS, menu, inventory, SOP, loyalty, and insights.',
+    firstRunChecklist: RESTAURANT_FIRST_RUN_CHECKLIST,
   },
   PHARMACY: {
     vertical: 'PHARMACY',
     label: 'Pharmacy',
     description: 'Counters, dispensing, inventory, procurement, safety, and reporting.',
+    firstRunChecklist: PHARMACY_FIRST_RUN_CHECKLIST,
   },
 };
 
