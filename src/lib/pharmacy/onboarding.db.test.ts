@@ -20,13 +20,13 @@
 import { randomBytes } from 'node:crypto';
 
 import { Client } from 'pg';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const RUNTIME_DATABASE_URL =
   process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-const OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
+const OWNER_DATABASE_URL = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
 if (RUNTIME_DATABASE_URL) process.env.DATABASE_URL = RUNTIME_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
@@ -120,6 +120,20 @@ beforeAll(async () => {
   await inOrg(ORG_B, (db) =>
     db.pharmacyOnboardingState.create({ data: { organizationId: ORG_B } })
   );
+});
+
+afterAll(async () => {
+  if (!OWNER_DATABASE_URL) return;
+  const owner = new Client({ connectionString: OWNER_DATABASE_URL });
+  await owner.connect();
+  try {
+    await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [[ORG_A, ORG_B]]);
+    await owner.query('DELETE FROM pharmacy_branches WHERE "organizationId" = ANY($1)', [
+      [ORG_A, ORG_B],
+    ]);
+  } finally {
+    await owner.end();
+  }
 });
 
 describeIfDatabase('PLAT-03 readiness — seed data cannot fake readiness', () => {

@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const runtimeUrl = process.env.TEST_DATABASE_URL;
-const ownerUrl = process.env.WHA1168_TEST_OWNER_DATABASE_URL;
+const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
 const describeIfDatabase = runtimeUrl && ownerUrl ? describe : describe.skip;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const orgA = `org_wha1168_a_${suffix}`;
@@ -49,6 +49,35 @@ beforeAll(async () => {
         'QP-B', '2026-01-01', '2027-01-01', 'roster-b', 'UNCONFIRMED', '{}')`,
       [`profile-a-${suffix}`, orgA, `profile-b-${suffix}`, orgB, branchA, branchB]
     );
+  } finally {
+    await owner.end();
+  }
+});
+
+afterAll(async () => {
+  if (!ownerUrl) return;
+  const owner = new Client({ connectionString: ownerUrl });
+  await owner.connect();
+  try {
+    await owner.query('BEGIN');
+    await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [[orgA, orgB]]);
+    await owner.query(
+      'ALTER TABLE pharmacy_branch_regulatory_profiles DISABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
+    );
+    await owner.query(
+      'DELETE FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = ANY($1)',
+      [[orgA, orgB]]
+    );
+    await owner.query('DELETE FROM pharmacy_branches WHERE "organizationId" = ANY($1)', [
+      [orgA, orgB],
+    ]);
+    await owner.query(
+      'ALTER TABLE pharmacy_branch_regulatory_profiles ENABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
+    );
+    await owner.query('COMMIT');
+  } catch (error) {
+    await owner.query('ROLLBACK');
+    throw error;
   } finally {
     await owner.end();
   }
