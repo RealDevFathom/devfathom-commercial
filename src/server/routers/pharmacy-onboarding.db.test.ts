@@ -132,13 +132,39 @@ describe('pharmacy onboarding router against PostgreSQL', () => {
     // the owner to DISABLE TRIGGER. The append-only guarantee itself is asserted
     // below, and again in `src/lib/platform/jobs.purge.db.test.ts`.
     try {
-      // The organization first: its cascade clears the gate states, which hold
-      // an ON DELETE RESTRICT reference to the branches. Then the branches,
-      // which no foreign key ties to the organization and which the cascade
-      // therefore never reaches.
+      // The organization first: it cascades to `pharmacy_onboarding_states`,
+      // and from there to the events and the gate states, which hold an ON
+      // DELETE RESTRICT reference to the branches.
       await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [
         [organizationId, otherOrganizationId],
       ]);
+      // The regulatory profiles next. No foreign key ties them to the
+      // organization — they only reference the branch, ON DELETE RESTRICT — so
+      // the cascade above never reaches them and they would refuse the branch
+      // delete below.
+      //
+      // `pharmacy_branch_regulatory_profiles_immutable` still refuses a bare
+      // DELETE the way `pharmacy_onboarding_events` did before WHA-1209 taught
+      // that trigger to recognise a tenant being destroyed. This one was not
+      // given the same exemption, so dropping the fixture requires the table
+      // owner to disable it — and, for the same reason, a real pharmacy tenant
+      // that ever saved a regulatory profile cannot be purged and its branches
+      // outlive it. Filed separately; this suite owns only its own fixture.
+      await owner.query(
+        'ALTER TABLE pharmacy_branch_regulatory_profiles DISABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
+      );
+      try {
+        await owner.query(
+          'DELETE FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = ANY($1)',
+          [[organizationId, otherOrganizationId]]
+        );
+      } finally {
+        await owner.query(
+          'ALTER TABLE pharmacy_branch_regulatory_profiles ENABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
+        );
+      }
+      // Then the branches, which no foreign key ties to the organization and
+      // which the cascade therefore never reaches.
       await owner.query('DELETE FROM pharmacy_branches WHERE "organizationId" = ANY($1)', [
         [organizationId, otherOrganizationId],
       ]);

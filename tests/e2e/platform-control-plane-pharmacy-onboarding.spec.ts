@@ -345,9 +345,9 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   await expect(page).toHaveURL(/\/pharmacy\/regulatory$/);
 
   // The branch is a picker over this organization's own records — never an id.
-  await expect(page.getByLabel('Which branch is this profile for?')).toHaveValue(
-    `branch_${suffix}`
-  );
+  // It defaults to the branch provisioning created (WHA-1206), whose id is a
+  // cuid the fixture read back rather than a name it chose.
+  await expect(page.getByLabel('Which branch is this profile for?')).toHaveValue(branchId);
   await expect(page.getByRole('option', { name: /Clifton Chemist/ })).toBeAttached();
 
   // Punjab's rules are provisional and say so; Sindh's are confirmed.
