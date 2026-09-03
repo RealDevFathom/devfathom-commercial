@@ -186,9 +186,9 @@ export function OrderTicketPanel({
           </Button>
         </div>
 
-        {order.kitchenTickets.length > 0 ? (
+        {(order.kitchenTickets?.length ?? 0) > 0 ? (
           <div className="mb-4 flex flex-wrap gap-2" aria-label="Kitchen ticket reprints">
-            {order.kitchenTickets.map((ticket) => (
+            {order.kitchenTickets?.map((ticket) => (
               <Button
                 key={ticket.id}
                 type="button"
