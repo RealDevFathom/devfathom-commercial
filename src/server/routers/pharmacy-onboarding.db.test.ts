@@ -13,10 +13,9 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const runtimeUrl = process.env.WHA1198_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-const ownerUrl =
-  process.env.WHA1198_TEST_OWNER_DATABASE_URL ?? process.env.WHA1168_TEST_OWNER_DATABASE_URL;
+const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
 if (!runtimeUrl) throw new Error('WHA1198_TEST_RUNTIME_DATABASE_URL or TEST_DATABASE_URL required');
-if (!ownerUrl) throw new Error('WHA1198_TEST_OWNER_DATABASE_URL required');
+if (!ownerUrl) throw new Error('PHARMACY_TEST_OWNER_DATABASE_URL required');
 if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
 process.env.DATABASE_URL = runtimeUrl;
 
@@ -132,16 +131,32 @@ describe('pharmacy onboarding router against PostgreSQL', () => {
     // the owner to DISABLE TRIGGER. The append-only guarantee itself is asserted
     // below, and again in `src/lib/platform/jobs.purge.db.test.ts`.
     try {
+      await owner.query('BEGIN');
       // The organization first: its cascade clears the gate states, which hold
       // an ON DELETE RESTRICT reference to the branches. Then the branches,
-      // which no foreign key ties to the organization and which the cascade
-      // therefore never reaches.
+      // which the cascade never reaches. Regulatory profiles are append-only
+      // product records, so the owner temporarily disables their user trigger
+      // only inside this rollback-safe fixture teardown transaction.
       await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [
         [organizationId, otherOrganizationId],
       ]);
+      await owner.query(
+        'ALTER TABLE pharmacy_branch_regulatory_profiles DISABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
+      );
+      await owner.query(
+        'DELETE FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = ANY($1)',
+        [[organizationId, otherOrganizationId]]
+      );
       await owner.query('DELETE FROM pharmacy_branches WHERE "organizationId" = ANY($1)', [
         [organizationId, otherOrganizationId],
       ]);
+      await owner.query(
+        'ALTER TABLE pharmacy_branch_regulatory_profiles ENABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
+      );
+      await owner.query('COMMIT');
+    } catch (error) {
+      await owner.query('ROLLBACK');
+      throw error;
     } finally {
       await owner.end();
     }
