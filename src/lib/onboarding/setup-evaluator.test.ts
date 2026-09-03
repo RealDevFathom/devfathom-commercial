@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { VERTICALS } from '@/lib/vertical-catalog';
 import { evaluateSetupChecklist, type SetupEvidence } from './setup-evaluator';
+
+const verticalFixtures = Object.values(VERTICALS).filter(
+  (definition) => definition.firstRunChecklist.length > 0
+);
+const restaurant = verticalFixtures.find((definition) => definition.label === 'Restaurant')!;
+const pharmacy = verticalFixtures.find((definition) => definition.label === 'Pharmacy')!;
 
 const incomplete: SetupEvidence = {
   hasBranch: false,
@@ -14,7 +21,7 @@ const incomplete: SetupEvidence = {
 
 describe('first-run setup evaluator', () => {
   it('keeps restaurant setup open until every required fact exists', () => {
-    const checklist = evaluateSetupChecklist('RESTAURANT', incomplete);
+    const checklist = evaluateSetupChecklist(restaurant.vertical, incomplete);
     expect(checklist.complete).toBe(false);
     expect(checklist.items.map(({ key, status }) => [key, status])).toEqual([
       ['branch', 'Needs you'],
@@ -27,7 +34,7 @@ describe('first-run setup evaluator', () => {
   });
 
   it('requires both pharmacy catalog publication and received opening stock', () => {
-    const checklist = evaluateSetupChecklist('PHARMACY', {
+    const checklist = evaluateSetupChecklist(pharmacy.vertical, {
       ...incomplete,
       hasBranch: true,
       hasProvisionedRoles: true,
@@ -40,7 +47,7 @@ describe('first-run setup evaluator', () => {
   });
 
   it('completes from evidence without manual checkbox state', () => {
-    const checklist = evaluateSetupChecklist('RESTAURANT', {
+    const checklist = evaluateSetupChecklist(restaurant.vertical, {
       ...incomplete,
       hasBranch: true,
       hasProvisionedRoles: true,
