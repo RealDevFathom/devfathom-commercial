@@ -75,7 +75,6 @@ export async function publishPharmacyTaxProfile(
       idempotencyKey: input.idempotencyKey,
       rules: {
         create: input.rules.map((rule) => ({
-          organizationId: scope.organizationId,
           productClass: rule.productClass,
           pctHsCode: rule.pctHsCode,
           sroReference: rule.sroReference,

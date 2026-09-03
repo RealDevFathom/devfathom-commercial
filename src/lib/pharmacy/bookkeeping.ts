@@ -152,10 +152,7 @@ export async function postBookkeepingTransaction(
       chequeStatus: input.kind === 'CHEQUE' ? (input.chequeStatus ?? 'PDC') : 'NONE',
       createdByUserId: scope.actorId,
       allocations: {
-        create: allocations.map((allocation) => ({
-          organizationId: scope.organizationId,
-          ...allocation,
-        })),
+        create: allocations,
       },
     },
     include: { allocations: true },
