@@ -3,6 +3,9 @@ import { HydrationBoundary } from '@tanstack/react-query';
 import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
+import { FirstRunChecklist } from '@/components/onboarding/first-run-checklist';
+import { loadSetupChecklist } from '@/lib/onboarding/setup-evaluator';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -12,6 +15,17 @@ export default async function DashboardPage() {
   const ssr = await createSSRHelpers();
   const helpers = ssr?.helpers;
   const restaurant = ssr?.entitlements.vertical === 'RESTAURANT';
+  const firstRunVertical =
+    ssr?.entitlements.vertical === 'RESTAURANT' || ssr?.entitlements.vertical === 'PHARMACY'
+      ? ssr.entitlements.vertical
+      : null;
+  const organizationId = ssr?.organization?.id;
+  const checklist =
+    organizationId && firstRunVertical && ssr?.session?.user?.role === 'ADMIN'
+      ? await withTenantDb(organizationId, (db) =>
+          loadSetupChecklist(db, organizationId, firstRunVertical)
+        )
+      : null;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
@@ -39,9 +53,15 @@ export default async function DashboardPage() {
   return (
     <HydrationBoundary state={helpers?.dehydrate()}>
       {restaurant ? (
-        <RestaurantDashboardContent enabledModules={ssr.entitlements.enabledModules} />
+        <RestaurantDashboardContent
+          enabledModules={ssr.entitlements.enabledModules}
+          checklist={checklist ?? undefined}
+        />
       ) : (
-        <DashboardContent />
+        <>
+          {checklist ? <FirstRunChecklist checklist={checklist} /> : null}
+          <DashboardContent />
+        </>
       )}
     </HydrationBoundary>
   );
