@@ -21,6 +21,7 @@ import {
   allocateTaxableTenderPrincipals,
   allocateTenderTaxCents,
   classifyTenderAmount,
+  splitCheckoutDiscountAccounting,
 } from './tenders';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -30,6 +31,19 @@ process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 describe('bill-bound tender tax allocation', () => {
+  it('accounts for comp + manual discount + promotion without double-counting promotion', () => {
+    const accounting = splitCheckoutDiscountAccounting(new Prisma.Decimal('18.00'), [
+      { taxTreatment: 'BEFORE_TAX', computedAmount: new Prisma.Decimal('5.00') },
+      { taxTreatment: 'AFTER_TAX', computedAmount: new Prisma.Decimal('3.00') },
+    ]);
+
+    expect(accounting.nonPromotionDiscount.toString()).toBe('10');
+    expect(accounting.beforeTaxPromotion.toString()).toBe('5');
+    expect(accounting.afterTaxDiscount.toString()).toBe('13');
+    // 100 subtotal - 7 comp - 18 combined discounts.
+    expect(new Prisma.Decimal('100').minus('7').minus('18').toString()).toBe('75');
+  });
+
   it('caps tax weights at merchandise without changing prior tender categories', () => {
     expect(
       allocateTaxableTenderPrincipals(

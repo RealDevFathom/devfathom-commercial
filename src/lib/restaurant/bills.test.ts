@@ -627,6 +627,7 @@ function settlementInput(billId: string, billLineId: string, evaluationId: strin
     roundingAdjustment: D('0.00'),
     grandTotal: D('14.30'),
     eligibleNetMerchandise: D('12.00'),
+    loyaltyNetGrandTotal: D('14.30'),
     promotionEvaluationId: evaluationId,
     promotionEvaluationHash: `promo_output_${tag}_${suffix}`,
     lines: [
@@ -1234,7 +1235,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(frozen.reservation.state).toBe('CONSUMED');
     expect(frozen.counter.consumedCount).toBe(1);
     expect(frozen.counter.consumedAmount.toString()).toBe('0.5');
-    expect(frozen.earn.points).toBe(12);
+    expect(frozen.earn.points).toBe(14);
   });
 
   it('settlement predicate: NO_BILLS → BILLS_OPEN → settled once every bill is settled', async () => {
