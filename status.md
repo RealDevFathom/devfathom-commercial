@@ -1,11 +1,31 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-04 23:15 PKT (18:15 UTC) — Codex supervisor bounded check-in.
+Last reconciled: 2026-09-05 01:15 PKT (20:15 UTC) — Cowork supervisor check-in #199.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **20:12 — PREFLIGHT ON `cca75f69`: the 27 RLS assertions RAN AND PASSED 27/27** (pharmacy medicine 8/8,
+  restaurant delivery 6/6, restaurant tax core 13/13; WHA-1316 supplier-link DB coverage 3/3). Prisma
+  validate/generate, tsc, Prettier, ESLint, `git diff --check` and all seven new pharmacy migrations
+  applied clean, no migration/model collision. **Two failures remain, both one cross-lane collision:**
+  `src/lib/auth/anonymous-access.test.ts:29` and `:39` — the SUP-01 lane added
+  `pharmacySupplierLinks.get|submit|uploadDocument` to `ANONYMOUS_TOKEN_PROCEDURES` while the tripwire
+  still pins the original four/five. The three procedures **belong** there (a supplier link must work
+  with no account, and its token names exactly one relationship + PO), so the fix is to re-pin the
+  assertion — but only after verification. → **WHA-1333** (Platform Engineer 2, critical): prove each
+  procedure resolves its tenant from the token alone, is expiring/revocable/single-relationship, fails
+  closed with `SUPPLIER_LINK_GENERIC_MESSAGE`, and cannot reach outside its one relationship + PO; then
+  re-pin to eight/seven with a comment recording why. **No wildcard, no prefix match, no widening the
+  set to make a test pass** — if any verification step fails, report instead of patching.
+- **20:05 — WHA-1331 composed as `0da6793d`** (RX-08 pharmacovigilance): adverse-event reports whose
+  internal lifecycle stays independent of external submission state, with a DRAP-compatible export.
+  Prisma valid. Pharmacy P1 wave 3 continues; WHA-1332 (AI-05 substitute finder) is running and WHA-1314
+  (anomaly signals) owes its fresh commit off the tip.
+- **Migration prefixes used today:** 100000, 110000, 110500, 120000, 123700, 133000, 190000 (reserved for
+  WHA-1314), 192000, 193000, 194000, 195000, 196000, 197000, 198000, 200000. **Next free: 201000+** — a
+  new lane must be given its own and told which.
 - **19:45 — two of the three gate blockers are composed.** `787708f4` pins the five catering tables in
   the M3 governance allowlist (WHA-1327; exact-equality assertion untouched, RLS on all five confirmed);
   `2632ff3d` fixes the gate itself (WHA-1329). **The 27 "skipped" RLS assertions were never an env-var
