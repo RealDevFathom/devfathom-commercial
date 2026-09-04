@@ -70,3 +70,33 @@ describe('restaurant navigation', () => {
     );
   });
 });
+
+describe('pharmacy navigation', () => {
+  const pharmacyRoutes = ['/pharmacy', '/pharmacy/counter', '/pharmacy/regulatory'];
+
+  it('hides pharmacy routes from a Restaurant admin despite mis-provisioned pharmacy modules', () => {
+    const visible = visibleNavigation(
+      {
+        vertical: 'RESTAURANT',
+        enabledModules: ['restaurant-core', 'pharmacy-core', 'pharmacy-counter'],
+      },
+      'ADMIN'
+    ).map((item) => item.href);
+
+    for (const route of pharmacyRoutes) {
+      expect(visible).not.toContain(route);
+    }
+  });
+
+  it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {
+    const visible = visibleNavigation(
+      {
+        vertical: 'PHARMACY',
+        enabledModules: ['pharmacy-core', 'pharmacy-counter'],
+      },
+      'ADMIN'
+    ).map((item) => item.href);
+
+    expect(visible).toEqual(expect.arrayContaining(pharmacyRoutes));
+  });
+});
