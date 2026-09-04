@@ -10,6 +10,8 @@ import {
   readPaymentsReport,
   readPurchasingReport,
   readSopReport,
+  readStockMovementReport,
+  readWastageReport,
   readWorkforceReport,
   RestaurantReportError,
 } from '@/lib/restaurant/reports';
@@ -29,7 +31,17 @@ const range = z
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   })
   .strict();
-const section = z.enum(['overview', 'payments', 'inventory', 'purchasing', 'workforce', 'sop']);
+const stockRange = range.extend({ stockLocationId: z.string().min(1).max(200).optional() });
+const section = z.enum([
+  'overview',
+  'payments',
+  'inventory',
+  'wastage',
+  'stock-movements',
+  'purchasing',
+  'workforce',
+  'sop',
+]);
 async function allowed(ctx: TRPCContext, action: Action) {
   const user = ctx.session?.user;
   return Boolean(
@@ -78,16 +90,14 @@ async function availableBranches(ctx: TRPCContext) {
     }),
   };
 }
-async function resolvedRange(ctx: TRPCContext, input: z.infer<typeof range>) {
+async function resolvedBranchIds(ctx: TRPCContext, branchId?: string) {
   const available = await availableBranches(ctx);
-  if (!input.branchId && !available.canAllBranches)
+  if (!branchId && !available.canAllBranches)
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'All-branch reports require restaurant:configure.',
     });
-  const branchIds = input.branchId
-    ? [input.branchId]
-    : available.branches.map((branch) => branch.id);
+  const branchIds = branchId ? [branchId] : available.branches.map((branch) => branch.id);
   if (
     !branchIds.length ||
     branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
@@ -96,7 +106,27 @@ async function resolvedRange(ctx: TRPCContext, input: z.infer<typeof range>) {
       code: 'FORBIDDEN',
       message: 'One or more branches are outside your report scope.',
     });
-  return { branchIds, from: input.from, to: input.to };
+  return branchIds;
+}
+async function resolvedRange(ctx: TRPCContext, input: z.infer<typeof stockRange>) {
+  const branchIds = await resolvedBranchIds(ctx, input.branchId);
+  if (input.stockLocationId) {
+    const location = await ctx.db.restaurantStockLocation.findFirst({
+      where: { id: input.stockLocationId, branchId: { in: branchIds } },
+      select: { id: true },
+    });
+    if (!location)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'The stock location is outside your report scope.',
+      });
+  }
+  return {
+    branchIds,
+    from: input.from,
+    to: input.to,
+    ...(input.stockLocationId ? { stockLocationId: input.stockLocationId } : {}),
+  };
 }
 function requireModule(ctx: TRPCContext, key: string) {
   if (!hasModule(ctx.entitlements, key))
@@ -104,7 +134,7 @@ function requireModule(ctx: TRPCContext, key: string) {
 }
 async function guarded<T>(
   ctx: TRPCContext,
-  input: z.infer<typeof range>,
+  input: z.infer<typeof stockRange>,
   read: (resolved: Awaited<ReturnType<typeof resolvedRange>>) => Promise<T>
 ) {
   const resolved = await resolvedRange(ctx, input);
@@ -135,6 +165,30 @@ export const restaurantReportsRouter = router({
   inventory: operational.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-inventory');
     return guarded(ctx, input, (resolved) => readInventoryReport(ctx.db, resolved));
+  }),
+  stockLocations: operational
+    .input(z.object({ branchId: z.string().min(1).max(200).optional() }).strict())
+    .query(async ({ ctx, input }) => {
+      requireModule(ctx, 'restaurant-inventory');
+      const branchIds = await resolvedBranchIds(ctx, input.branchId);
+      return ctx.db.restaurantStockLocation.findMany({
+        where: { branchId: { in: branchIds } },
+        orderBy: [{ branch: { name: 'asc' } }, { name: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          isActive: true,
+          branch: { select: { id: true, name: true } },
+        },
+      });
+    }),
+  wastage: operational.input(stockRange).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-inventory');
+    return guarded(ctx, input, (resolved) => readWastageReport(ctx.db, resolved));
+  }),
+  stockMovements: operational.input(stockRange).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-inventory');
+    return guarded(ctx, input, (resolved) => readStockMovementReport(ctx.db, resolved));
   }),
   purchasing: operational.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-purchasing');
@@ -167,7 +221,7 @@ export const restaurantReportsRouter = router({
     return guarded(ctx, input, (resolved) => readSopReport(ctx.db, resolved));
   }),
   exportCsv: auditedProtectedProcedure
-    .input(range.extend({ section }))
+    .input(stockRange.extend({ section }))
     .query(async ({ ctx, input }) => {
       const needsFinancial = input.section === 'payments';
       if (needsFinancial && !(await allowed(ctx, 'reports:financial')))
@@ -176,7 +230,12 @@ export const restaurantReportsRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN' });
       if (input.section === 'overview' || input.section === 'payments')
         requireModule(ctx, 'restaurant-pos');
-      if (input.section === 'inventory') requireModule(ctx, 'restaurant-inventory');
+      if (
+        input.section === 'inventory' ||
+        input.section === 'wastage' ||
+        input.section === 'stock-movements'
+      )
+        requireModule(ctx, 'restaurant-inventory');
       if (input.section === 'purchasing') requireModule(ctx, 'restaurant-purchasing');
       if (input.section === 'workforce') requireModule(ctx, 'restaurant-workforce');
       if (input.section === 'sop') requireModule(ctx, 'restaurant-sop');
@@ -194,6 +253,7 @@ export const restaurantReportsRouter = router({
             section: input.section,
             from: resolved.from,
             to: resolved.to,
+            ...(resolved.stockLocationId ? { stockLocationId: resolved.stockLocationId } : {}),
           },
         });
         return result;

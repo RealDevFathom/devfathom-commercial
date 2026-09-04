@@ -6,13 +6,16 @@ export function ExportLink({
   branch,
   from,
   to,
+  stockLocationId,
 }: {
   section: RestaurantReportSection;
   branch: string;
   from: string;
   to: string;
+  stockLocationId?: string;
 }) {
   const params = new URLSearchParams({ section, branch, from, to });
+  if (stockLocationId) params.set('stockLocation', stockLocationId);
   return (
     <a
       className={buttonVariants({ variant: 'secondary', size: 'sm' })}

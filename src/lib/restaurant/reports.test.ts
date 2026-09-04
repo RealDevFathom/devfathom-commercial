@@ -10,6 +10,8 @@ import {
   readPaymentsReport,
   readPurchasingReport,
   readSopReport,
+  readStockMovementReport,
+  readWastageReport,
   readWorkforceReport,
   rowsToCsv,
   validateRestaurantReportRange,
@@ -219,6 +221,197 @@ function queryText(query: unknown): string {
 }
 
 const boundedRange = { branchIds: ['b1'], from: '2026-01-01', to: '2026-01-31' };
+
+describe('restaurant wastage and stock movement reports', () => {
+  const aggregate = {
+    movementCount: 1,
+    quantity: new Prisma.Decimal(2),
+    cost: new Prisma.Decimal(4),
+    estimatedCost: new Prisma.Decimal(4),
+    estimatedMovementCount: 1,
+    unvaluedMovementCount: 0,
+  };
+
+  it('values and groups wastage with complete totals, shares, and bounded ingredients', async () => {
+    const queries: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (query: unknown) => {
+        const text = queryText(query);
+        queries.push(text);
+        if (text.includes('GROUP BY "reason"')) {
+          return [
+            { ...aggregate, reason: 'SPOILAGE' },
+            {
+              ...aggregate,
+              reason: 'MANUAL_CORRECTION',
+              movementCount: 2,
+              quantity: new Prisma.Decimal(3),
+              cost: new Prisma.Decimal(6),
+              estimatedCost: new Prisma.Decimal(0),
+              estimatedMovementCount: 0,
+            },
+          ];
+        }
+        if (text.includes('AS "day"')) {
+          return [
+            {
+              ...aggregate,
+              day: '2026-01-02',
+              movementCount: 3,
+              quantity: new Prisma.Decimal(5),
+              cost: new Prisma.Decimal(10),
+            },
+          ];
+        }
+        return Array.from({ length: 201 }, (_, index) => ({
+          ...aggregate,
+          stockItemId: `stock-${index}`,
+          ingredientName: index === 0 ? '=Tomatoes' : `Ingredient ${index}`,
+          canonicalUnit: 'kg',
+          movementCount: 3,
+          quantity: new Prisma.Decimal(5),
+          cost: new Prisma.Decimal(10),
+        }));
+      }),
+    } as unknown as ScopedDb;
+
+    const report = await readWastageReport(db, {
+      ...boundedRange,
+      stockLocationId: 'location-1',
+    });
+
+    expect(report.totals).toEqual({
+      movementCount: 3,
+      quantity: '5',
+      cost: '10',
+      estimatedCost: '4',
+      estimatedMovementCount: 1,
+      unvaluedMovementCount: 0,
+    });
+    expect(report.byReason).toEqual([
+      expect.objectContaining({ reason: 'SPOILAGE', shareOfTotal: '40', estimated: true }),
+      expect.objectContaining({
+        reason: 'MANUAL_CORRECTION',
+        shareOfTotal: '60',
+        estimated: false,
+      }),
+    ]);
+    expect(report.byIngredient[0]).toMatchObject({
+      ingredientName: '=Tomatoes',
+      quantity: '5',
+      cost: '10',
+      shareOfTotal: '100',
+    });
+    expect(report.byIngredient).toHaveLength(200);
+    expect(report.truncated).toBe(true);
+    expect(queries.every((text) => text.includes('movement."locationId" ='))).toBe(true);
+    expect(
+      queries.every((text) => text.includes('movement."reason" = \'MANUAL_CORRECTION\''))
+    ).toBe(true);
+  });
+
+  it('derives opening, in, out, net, and closing movement balances with complete totals', async () => {
+    const decimal = (value: string | number) => new Prisma.Decimal(value);
+    const row = {
+      stockItemId: 'stock-1',
+      ingredientName: 'Flour',
+      canonicalUnit: 'kg',
+      movementCount: 3,
+      openingQuantity: decimal(10),
+      inQuantity: decimal(5),
+      outQuantity: decimal(3),
+      netQuantity: decimal(2),
+      closingQuantity: decimal(12),
+      openingCost: decimal(20),
+      inCost: decimal(10),
+      outCost: decimal(6),
+      netCost: decimal(4),
+      closingCost: decimal(24),
+      estimatedMovementCount: 2,
+      unvaluedMovementCount: 0,
+      totalOpeningQuantity: decimal(10),
+      totalInQuantity: decimal(5),
+      totalOutQuantity: decimal(3),
+      totalNetQuantity: decimal(2),
+      totalClosingQuantity: decimal(12),
+      totalOpeningCost: decimal(20),
+      totalInCost: decimal(10),
+      totalOutCost: decimal(6),
+      totalNetCost: decimal(4),
+      totalClosingCost: decimal(24),
+      totalMovementCount: 3,
+      totalEstimatedMovementCount: 2,
+      totalUnvaluedMovementCount: 0,
+      totalActivityCost: decimal(16),
+    };
+    const db = { $queryRaw: vi.fn(async () => [row]) } as unknown as ScopedDb;
+
+    const report = await readStockMovementReport(db, boundedRange);
+
+    expect(report.totals).toEqual({
+      movementCount: 3,
+      openingQuantity: '10',
+      inQuantity: '5',
+      outQuantity: '3',
+      netQuantity: '2',
+      closingQuantity: '12',
+      openingCost: '20',
+      inCost: '10',
+      outCost: '6',
+      netCost: '4',
+      closingCost: '24',
+      estimatedMovementCount: 2,
+      unvaluedMovementCount: 0,
+    });
+    expect(report.ingredients).toEqual([
+      expect.objectContaining({
+        ingredientName: 'Flour',
+        openingQuantity: '10',
+        closingQuantity: '12',
+        estimated: true,
+        shareOfTotal: '100',
+      }),
+    ]);
+    expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toContain(
+      'HAVING COUNT(*) FILTER'
+    );
+  });
+
+  it('exports formula-safe wastage detail with the same stock-location filter', async () => {
+    const db = {
+      $queryRaw: vi.fn(async () =>
+        Array.from({ length: 5_001 }, (_, index) => ({
+          id: `movement-${index}`,
+          day: '2026-01-02',
+          branchName: 'One',
+          locationName: 'Main',
+          ingredientName: index === 0 ? '=CMD()' : `Ingredient ${index}`,
+          canonicalUnit: 'kg',
+          reason: 'WASTAGE',
+          quantity: new Prisma.Decimal(2),
+          effectiveUnitCost: new Prisma.Decimal(3),
+          cost: new Prisma.Decimal(6),
+          valuationSource: 'REFERENCE',
+        }))
+      ),
+    } as unknown as ScopedDb;
+
+    const exported = await exportRestaurantReportCsv(
+      db,
+      'wastage',
+      { ...boundedRange, stockLocationId: 'location-1' },
+      { includeLabourCosts: false }
+    );
+
+    expect(exported.content).toContain("'=CMD()");
+    expect(exported.content).toContain('REFERENCE,true');
+    expect(exported.content.split('\n')).toHaveLength(5_001);
+    expect(exported.truncated).toBe(true);
+    expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toContain(
+      'movement."locationId" ='
+    );
+  });
+});
 
 describe('restaurant complete summaries with bounded details', () => {
   it.each([

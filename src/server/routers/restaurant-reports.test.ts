@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   overview: vi.fn(),
   payments: vi.fn(),
+  wastage: vi.fn(),
+  stockMovements: vi.fn(),
   workforce: vi.fn(),
   exportCsv: vi.fn(),
   annotateAudit: vi.fn(),
@@ -32,6 +34,8 @@ vi.mock('@/lib/restaurant/reports', async () => ({
   ...(await vi.importActual<typeof import('@/lib/restaurant/reports')>('@/lib/restaurant/reports')),
   readOverviewReport: mocks.overview,
   readPaymentsReport: mocks.payments,
+  readWastageReport: mocks.wastage,
+  readStockMovementReport: mocks.stockMovements,
   readWorkforceReport: mocks.workforce,
   exportRestaurantReportCsv: mocks.exportCsv,
 }));
@@ -44,6 +48,7 @@ const db = {
   restaurantBranch: { findMany: vi.fn() },
   restaurantStaffProfile: { findFirst: vi.fn() },
   restaurantBranchAssignment: { findMany: vi.fn() },
+  restaurantStockLocation: { findFirst: vi.fn(), findMany: vi.fn() },
 };
 const input = { branchId: 'b1', from: '2026-01-01', to: '2026-01-02' };
 function caller() {
@@ -84,8 +89,19 @@ beforeEach(() => {
   db.restaurantStaffProfile.findFirst.mockResolvedValue({ primaryBranchId: 'b1' });
   db.restaurantBranchAssignment.findMany.mockResolvedValue([]);
   db.restaurantBranch.findMany.mockResolvedValue([{ id: 'b1', name: 'One' }]);
+  db.restaurantStockLocation.findFirst.mockResolvedValue({ id: 'location-1' });
+  db.restaurantStockLocation.findMany.mockResolvedValue([
+    {
+      id: 'location-1',
+      name: 'Main',
+      isActive: true,
+      branch: { id: 'b1', name: 'One' },
+    },
+  ]);
   mocks.overview.mockResolvedValue({ orderCount: 1 });
   mocks.payments.mockResolvedValue({ netSales: '1.00' });
+  mocks.wastage.mockResolvedValue({ totals: { cost: '2.00' } });
+  mocks.stockMovements.mockResolvedValue({ totals: { movementCount: 1 } });
   mocks.workforce.mockResolvedValue({ labourCostsVisible: true, labourCost: '10.00' });
   mocks.exportCsv.mockResolvedValue({
     filename: 'restaurant-workforce.csv',
@@ -236,6 +252,85 @@ describe('restaurant report capability and branch matrix', () => {
     expect(mocks.overview).not.toHaveBeenCalled();
     expect(mocks.payments).not.toHaveBeenCalled();
     expect(mocks.exportCsv).not.toHaveBeenCalled();
+  });
+  it('scopes stock-report reads and location options to an authorized branch', async () => {
+    mocks.grants.add('reports:operational');
+    const stockInput = { ...input, stockLocationId: 'location-1' };
+
+    await expect(caller().wastage(stockInput)).resolves.toMatchObject({
+      totals: { cost: '2.00' },
+    });
+    await expect(caller().stockMovements(stockInput)).resolves.toMatchObject({
+      totals: { movementCount: 1 },
+    });
+    await expect(caller().stockLocations({ branchId: 'b1' })).resolves.toEqual([
+      expect.objectContaining({ id: 'location-1', name: 'Main' }),
+    ]);
+
+    const resolved = {
+      branchIds: ['b1'],
+      from: input.from,
+      to: input.to,
+      stockLocationId: 'location-1',
+    };
+    expect(mocks.wastage).toHaveBeenCalledWith(db, resolved);
+    expect(mocks.stockMovements).toHaveBeenCalledWith(db, resolved);
+    expect(db.restaurantStockLocation.findFirst).toHaveBeenCalledWith({
+      where: { id: 'location-1', branchId: { in: ['b1'] } },
+      select: { id: true },
+    });
+  });
+
+  it('fails closed for an out-of-scope stock location and disabled inventory module', async () => {
+    mocks.grants.add('reports:operational');
+    db.restaurantStockLocation.findFirst.mockResolvedValue(null);
+    await expect(
+      caller().wastage({ ...input, stockLocationId: 'other-location' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.wastage).not.toHaveBeenCalled();
+
+    mocks.modules.delete('restaurant-inventory');
+    await expect(caller().stockMovements(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().stockLocations({ branchId: 'b1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().exportCsv({ ...input, section: 'wastage' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.stockMovements).not.toHaveBeenCalled();
+    expect(mocks.exportCsv).not.toHaveBeenCalled();
+  });
+
+  it('exports stock reports with the same authorized location filter and audit evidence', async () => {
+    mocks.grants.add('reports:operational');
+    await caller().exportCsv({
+      ...input,
+      section: 'stock-movements',
+      stockLocationId: 'location-1',
+    });
+
+    expect(mocks.exportCsv).toHaveBeenCalledWith(
+      db,
+      'stock-movements',
+      {
+        branchIds: ['b1'],
+        from: input.from,
+        to: input.to,
+        stockLocationId: 'location-1',
+      },
+      { includeLabourCosts: false }
+    );
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          audit: {
+            detail: {
+              metadata: expect.objectContaining({ stockLocationId: 'location-1' }),
+            },
+          },
+        }),
+      })
+    );
   });
   it('requires operational, financial, and workforce rates grants for labour costs', async () => {
     for (const missing of [
