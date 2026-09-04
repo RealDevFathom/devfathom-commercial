@@ -90,6 +90,7 @@ beforeAll(async () => {
   const owner = new Client({ connectionString: OWNER_DATABASE_URL });
   await owner.connect();
   try {
+    await owner.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
     await owner.query(
       `INSERT INTO organizations
         (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
@@ -127,6 +128,7 @@ afterAll(async () => {
   const owner = new Client({ connectionString: OWNER_DATABASE_URL });
   await owner.connect();
   try {
+    await owner.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
     await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [[ORG_A, ORG_B]]);
     await owner.query('DELETE FROM pharmacy_branches WHERE "organizationId" = ANY($1)', [
       [ORG_A, ORG_B],
