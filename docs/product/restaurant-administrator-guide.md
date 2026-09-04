@@ -439,12 +439,67 @@ report values the losses at PKR 660 and an estimated PKR 400: 5 kg and PKR 1,060
 estimated movement. If opening stock was 20 kg, a 10 kg receipt and these 5 kg losses produce 10 kg
 inflow, 5 kg outflow, −5 kg net movement, and 25 kg closing quantity.
 
-#### Food-cost, dish-profitability, and catering reports — available after WHA-1298
+#### Food-cost report
 
-These three report families are not present on this tip. After WHA-1298 lands, document the
-implemented food-cost report, dish-profitability/menu-engineering quadrants, and catering report
-from their accepted code and console behavior before using them in an administrator procedure or
-sales demo.
+- In Restaurant → Reports, set a named branch or **All active branches** and an inclusive date
+  range, then open Profitability → **Food cost**. The report requires Restaurant POS, Menu, and
+  Inventory plus `reports:financial`; all-branch reporting also requires
+  `restaurant:configure`. CSV export uses the same scope.
+- Sales come from settled bill-line snapshots. Bill-level discounts are allocated proportionally
+  across eligible lines to produce net sales. For each sold product/variant, the report uses its
+  matching recipe, falling back to the product-level recipe, and calculates theoretical cost as
+  `sold quantity × current recipe cost per portion`. It does not rewrite historical sales with a
+  historical ingredient cost.
+- Product rows show sold quantity, net sales, theoretical food cost, food-cost percentage
+  (`theoretical cost ÷ net sales × 100`), and gross margin (`net sales − theoretical cost`). The
+  report also groups the costed results by category and branch; the headline percentage uses only
+  costed net sales as its denominator.
+- Products without a recipe, with an unavailable recipe or portion cost, or with missing ingredient
+  costs appear separately under **Costing exceptions**. Their sales remain in total net sales but
+  are excluded from costed sales, theoretical cost, and gross-margin totals until costing is
+  complete. Resolve the named exception in Catalog rather than treating excluded sales as
+  zero-cost sales.
+
+**Worked example (PKR).** Chicken karahi sells 40 portions with PKR 24,000 net sales. At the current
+PKR 180 recipe cost per portion, theoretical cost is `40 × 180 = PKR 7,200`, food cost is
+`7,200 ÷ 24,000 × 100 = 30%`, and gross margin is `24,000 − 7,200 = PKR 16,800`. A PKR 3,000 sale of
+a product with no recipe is listed under Costing exceptions and does not change those costed totals.
+
+#### Dish-profitability report
+
+- Open Profitability → **Dish profitability** with the same branch/date scope and permissions as
+  Food cost. Only fully costed products are classified; resolve Food-cost exceptions when no dishes
+  appear. The report provides CSV export plus rankings by margin per item and by sales volume.
+- The report calculates the median sold quantity and median gross margin per item across the fully
+  costed products. Values equal to a median count as high. **Stars** have high volume and high
+  margin; **Plowhorses** have high volume and low margin; **Puzzles** have low volume and high
+  margin; **Dogs** have low volume and low margin. These are relative classifications for the
+  selected period, not fixed performance targets.
+
+**Worked example (PKR).** In a four-dish selection, median volume is 30 portions and median margin
+is PKR 250 per item. A dish selling 40 portions at PKR 300 margin per item is a Star; 40 at PKR 200
+is a Plowhorse; 20 at PKR 300 is a Puzzle; and 20 at PKR 200 is a Dog. A dish exactly at 30 portions
+or PKR 250 is on the high side of that threshold.
+
+#### Catering report
+
+- Open Profitability → **Catering** after selecting the branch and inclusive event-date range. The
+  report requires `reports:financial` and `catering:read`; CSV export uses the same filters and
+  authorization. It includes catering orders whose event date falls in the selected range and
+  groups totals by order status.
+- **Quoted revenue** sums quoted totals. **Known ingredient cost** uses each line's frozen cost per
+  portion when present, otherwise its current usable recipe cost, multiplied by portions. **Extras**
+  sums the order's additional costs. An order margin is `quoted revenue − ingredient cost − extras`.
+  If revenue or any line cost is missing, that order's margin—and therefore the overall margin—is
+  **Incomplete** instead of silently assuming zero; the report identifies missing-cost lines.
+- **Delivered on time** compares the recorded delivery time with the scheduled time and includes
+  only orders with a recorded delivery. An order delivered at or before its schedule is on time;
+  orders not yet recorded as delivered are not part of the rate.
+
+**Worked example (PKR).** A quoted PKR 50,000 event has 100 portions at a frozen PKR 240 ingredient
+cost and PKR 6,000 of extras. Known ingredient cost is `100 × 240 = PKR 24,000`; margin is
+`50,000 − 24,000 − 6,000 = PKR 20,000`. If three orders have recorded deliveries and two arrived by
+their scheduled times, Delivered on time is `2 ÷ 3 × 100 = 66.67%`.
 
 ### 16. Drawer and daily close
 
