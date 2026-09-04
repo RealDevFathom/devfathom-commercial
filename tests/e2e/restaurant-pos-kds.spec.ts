@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 import {
+  establishDeliveryPosFixture,
   establishKdsFixture,
   establishPosFixture,
   e2eIdempotencyKey,
@@ -10,6 +11,7 @@ import {
   terminalBrowserBaseUrl,
   type RestaurantTerminalFixture,
 } from './restaurant-fixture';
+import { signInAs } from './fixtures/restaurant-actor-accessibility';
 
 async function post(
   request: APIRequestContext,
@@ -27,15 +29,6 @@ async function post(
 }
 
 async function unlockPos(page: Page) {
-  const terminalBaseUrl = terminalBrowserBaseUrl();
-  await installSeededTerminalCookie(page.context(), fixture.pos, terminalBaseUrl);
-  const establishedResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith('/api/restaurant/terminal/establish') &&
-      response.request().method() === 'POST'
-  );
-  await page.goto(new URL('/pos', terminalBaseUrl).href);
-  expect((await establishedResponse).status()).toBe(201);
   await expect(page.getByRole('heading', { name: 'Terminal locked' })).toBeVisible();
   await page.getByLabel('Operator', { exact: true }).selectOption(fixture.operator.staffProfileId);
   await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
@@ -59,6 +52,20 @@ test.describe('restaurant POS and KDS core flow', () => {
     request,
   }) => {
     test.slow();
+    const actorOrigin = await signInAs(page, 'restaurantAdmin');
+    await page.goto(new URL('/dashboard', actorOrigin).href);
+    await expect(page).toHaveURL(new URL('/dashboard', actorOrigin).href);
+    const checklist = page.getByTestId('first-run-checklist');
+    await expect(checklist).toBeVisible();
+    await installSeededTerminalCookie(page.context(), fixture.pos, actorOrigin);
+    const establishedResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/terminal/establish') &&
+        response.request().method() === 'POST'
+    );
+    await checklist.getByRole('link', { name: /Make a test sale/ }).click();
+    expect((await establishedResponse).status()).toBe(201);
+
     const pos = await establishPosFixture(request);
 
     const switched = await request.post('/api/restaurant/terminal/switch', {
@@ -123,6 +130,33 @@ test.describe('restaurant POS and KDS core flow', () => {
       page.getByText(`Order ${opened.orderNumber} opened.`, { exact: true })
     ).toBeVisible();
 
+    const deliveryPos = await establishDeliveryPosFixture(request);
+    const crossBranchDetail = await request.get(
+      `/api/restaurant/orders/detail?orderId=${encodeURIComponent(opened.orderId)}`,
+      { headers: deliveryPos.headers }
+    );
+    expect(crossBranchDetail.status()).toBe(404);
+    const crossBranchCancel = await request.post('/api/restaurant/orders/cancel', {
+      headers: {
+        ...deliveryPos.headers,
+        'Idempotency-Key': e2eIdempotencyKey(
+          'cross-branch-order-cancel',
+          `${opened.orderNumber}-${opened.orderId}`
+        ),
+      },
+      data: {
+        orderId: opened.orderId,
+        reason: 'Cross-branch cancellation must fail closed',
+      },
+    });
+    expect(crossBranchCancel.status()).toBe(404);
+    const branchADetail = await request.get(
+      `/api/restaurant/orders/detail?orderId=${encodeURIComponent(opened.orderId)}`,
+      { headers: pos.headers }
+    );
+    expect(branchADetail.status()).toBe(200);
+    expect(await branchADetail.json()).toMatchObject({ id: opened.orderId });
+
     await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
     await page.getByLabel('Quantity').fill('2');
     await page.getByLabel('Seat').fill('1');
@@ -145,13 +179,13 @@ test.describe('restaurant POS and KDS core flow', () => {
     const kdsContext = await browser.newContext({ baseURL: terminalBaseUrl });
     await installSeededTerminalCookie(kdsContext, fixture.kds, terminalBaseUrl);
     const kdsPage = await kdsContext.newPage();
-    const establishedResponse = kdsPage.waitForResponse(
+    const kdsEstablishedResponse = kdsPage.waitForResponse(
       (response) =>
         response.url().endsWith('/api/restaurant/terminal/establish') &&
         response.request().method() === 'POST'
     );
     await kdsPage.goto(new URL('/kds', terminalBaseUrl).href);
-    expect((await establishedResponse).status()).toBe(201);
+    expect((await kdsEstablishedResponse).status()).toBe(201);
     await kdsPage.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
     await kdsPage.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
     const unlockedResponse = kdsPage.waitForResponse(
@@ -200,6 +234,8 @@ test.describe('restaurant POS and KDS core flow', () => {
       await page.getByRole('button', { name: 'Apply tender' }).first().click();
       await expect(receipts).toHaveCount(settled);
     }
+    await page.getByRole('button', { name: 'Close checkout' }).click();
+    await expect(page.getByRole('dialog', { name: 'Collect payment' })).toHaveCount(0);
 
     const summaryResponse = await request.get(
       `/api/restaurant/checkout/summary?orderId=${encodeURIComponent(opened.orderId)}`,
@@ -237,6 +273,129 @@ test.describe('restaurant POS and KDS core flow', () => {
       }),
     ]);
 
+    await page.getByRole('button', { name: 'Switch operator' }).click();
+    await page.getByLabel('Operator', { exact: true }).selectOption(fixture.manager.staffProfileId);
+    await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.manager.pin);
+    const switchResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/terminal/switch') &&
+        response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Confirm switch' }).click();
+    expect((await switchResponse).status()).toBe(200);
+    await expect(
+      page.getByText('Operator switched. New actions use the incoming identity.')
+    ).toBeVisible();
+
+    const refundableTendersResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/checkout/refund') &&
+        response.request().method() === 'GET'
+    );
+    await page.getByRole('button', { name: 'Refund' }).click();
+    const refundableTenders = (await (await refundableTendersResponse).json()) as {
+      tenders: Array<{
+        tenderId: string;
+        orderNumber: number;
+        paidAmount: string;
+        refundedAmount: string;
+        remainingAmount: string;
+      }>;
+    };
+    const refundableTender = refundableTenders.tenders.find(
+      (tender) => tender.orderNumber === opened.orderNumber
+    );
+    expect(refundableTender).toBeDefined();
+    await expect(page.getByRole('dialog', { name: 'Refund settled payment' })).toBeVisible();
+    await page.getByLabel('Settled receipt').selectOption(refundableTender!.tenderId);
+    await page.getByLabel('Refund amount').fill('1.00');
+    await page.getByLabel('Reason').fill('Guest item quality adjustment');
+    await page
+      .getByLabel('Approving manager')
+      .selectOption({ label: 'Alex Carter — Restaurant E2E Manager' });
+    await page.getByLabel('Manager PIN').fill(fixture.manager.pin);
+    await page.getByRole('button', { name: 'Review refund' }).click();
+    await expect(page.getByText('Confirm destructive refund')).toBeVisible();
+    const refundResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/checkout/refund') &&
+        response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Confirm refund' }).click();
+    const recordedRefundResponse = await refundResponse;
+    expect(recordedRefundResponse.status()).toBe(200);
+    expect((await recordedRefundResponse.json()).amount).toBe('1.00');
+    await expect(page.getByText('refund recorded', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Refund settled payment' })).toHaveCount(0);
+
+    const managerSwitch = await request.post('/api/restaurant/terminal/switch', {
+      headers: pos.headers,
+      data: {
+        staffProfileId: fixture.manager.staffProfileId,
+        type: 'PIN',
+        secret: fixture.manager.pin,
+      },
+    });
+    expect(managerSwitch.status()).toBe(200);
+
+    const readOpenedOrderTenders = async () => {
+      const response = await request.get('/api/restaurant/checkout/refund', {
+        headers: pos.headers,
+      });
+      expect(response.status()).toBe(200);
+      const body = (await response.json()) as typeof refundableTenders;
+      return body.tenders.filter((tender) => tender.orderNumber === opened.orderNumber);
+    };
+    const openedOrderTenders = await readOpenedOrderTenders();
+    expect(openedOrderTenders).toHaveLength(2);
+    expect(
+      openedOrderTenders.find((tender) => tender.tenderId === refundableTender!.tenderId)
+    ).toMatchObject({
+      paidAmount: splitAmount,
+      refundedAmount: '1.00',
+      remainingAmount: (Number(splitAmount) - 1).toFixed(2),
+    });
+    expect(
+      openedOrderTenders.find((tender) => tender.tenderId !== refundableTender!.tenderId)
+    ).toMatchObject({
+      paidAmount: splitAmount,
+      refundedAmount: '0',
+      remainingAmount: splitAmount,
+    });
+
+    const overRefund = await request.post('/api/restaurant/checkout/refund', {
+      headers: {
+        ...pos.headers,
+        'Idempotency-Key': e2eIdempotencyKey('over-refund', opened.orderNumber),
+      },
+      data: {
+        originalTenderId: refundableTender!.tenderId,
+        amount: splitAmount,
+        reason: 'Over-refund boundary must fail closed',
+        approving: {
+          staffProfileId: fixture.manager.staffProfileId,
+          type: 'PIN',
+          secret: fixture.manager.pin,
+        },
+      },
+    });
+    expect(overRefund.status()).toBe(409);
+    expect(await overRefund.json()).toMatchObject({
+      error: expect.stringMatching(/exceeds the tender balance/i),
+    });
+    expect(await readOpenedOrderTenders()).toEqual(openedOrderTenders);
+
+    const postRefundPreviewResponse = await request.get(
+      `/api/restaurant/cash/day/preview?businessDate=${businessDate}`,
+      { headers: pos.headers }
+    );
+    expect(postRefundPreviewResponse.status()).toBe(200);
+    const postRefundPreview = await postRefundPreviewResponse.json();
+    const postRefundCashExpected = (Number(preview.totals.cashExpected) - 1).toFixed(2);
+    expect(postRefundPreview.totals.refundTotal).toBe('1.00');
+    expect(postRefundPreview.totals.cashExpected).toBe(postRefundCashExpected);
+
     await post(
       request,
       pos,
@@ -255,9 +414,7 @@ test.describe('restaurant POS and KDS core flow', () => {
       '/api/restaurant/cash/drawer/close',
       {
         drawerSessionId: 'drawer_restaurant_e2e',
-        countedCash: String(Number(preview.totals.cashExpected) + 5)
-          .concat('.00')
-          .replace('.00.00', '.00'),
+        countedCash: (Number(postRefundPreview.totals.cashExpected) + 5).toFixed(2),
       },
       e2eIdempotencyKey('drawer-close', opened.orderNumber)
     );
@@ -269,8 +426,16 @@ test.describe('restaurant POS and KDS core flow', () => {
       e2eIdempotencyKey('daily-close', opened.orderNumber)
     );
     const close = await closeResponse.json();
+    expect(close.totals.refundTotal).toBe('1.00');
     expect(close.totals.cashVariance).toBe('0.00');
     expect(close.totals.grossSales).toBe(fixture.expected.twoItemTotal);
+    expect(close.tenderTotals).toEqual([
+      expect.objectContaining({
+        tenderType: 'CASH',
+        amount: fixture.expected.twoItemTotal,
+        count: 2,
+      }),
+    ]);
     expect(close.replayed).toBe(false);
 
     const kds = await establishKdsFixture(request);

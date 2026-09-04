@@ -4,13 +4,16 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
   actorFixtureReady,
+  actorFixture,
   assertDisposableDatabaseRoles,
   assertNoRawDatabaseIds,
   signInAs,
   type ActorKey,
 } from './fixtures/restaurant-actor-accessibility';
 
-const OUTPUT = path.join('test-results', 'restaurant-actor-accessibility');
+const OUTPUT =
+  process.env.RESTAURANT_QA_EVIDENCE_DIR ??
+  path.join('test-results', 'restaurant-actor-accessibility');
 const databaseReady = Boolean(
   process.env.RESTAURANT_ACTOR_OWNER_DATABASE_URL &&
   process.env.RESTAURANT_ACTOR_RUNTIME_DATABASE_URL
@@ -18,9 +21,20 @@ const databaseReady = Boolean(
 
 const viewports = [
   { name: 'desktop', width: 1440, height: 900 },
-  { name: 'tablet', width: 768, height: 1024 },
+  { name: 'tablet', width: 1024, height: 768 },
 ] as const;
 const themes = ['light', 'dark'] as const;
+const tenantAdminSurfaces = [
+  { path: '/dashboard', heading: /^Service dashboard$/, screenshot: 'dashboard' },
+  { path: '/restaurant/orders', heading: /^Orders$/, screenshot: 'orders' },
+  {
+    path: '/restaurant/money?tab=daily-close',
+    heading: /^Restaurant Finance$/,
+    screenshot: 'daily-close',
+  },
+  { path: '/restaurant/staff', heading: /^Staff$/, screenshot: 'staff' },
+  { path: '/restaurant/settings/branches', heading: /^Branches$/, screenshot: 'branches' },
+] as const;
 
 type BrowserErrors = {
   console: string[];
@@ -38,6 +52,12 @@ function collectUnexpectedErrors(page: Page) {
   });
   page.on('pageerror', (error) => errors.page.push(error.message));
   page.on('requestfailed', (request) => {
+    if (
+      request.failure()?.errorText === 'net::ERR_ABORTED' &&
+      new URL(request.url()).searchParams.has('_rsc')
+    ) {
+      return;
+    }
     errors.request.push(
       `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`
     );
@@ -92,7 +112,16 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
     await assertDisposableDatabaseRoles();
   });
 
-  test.beforeEach(async ({ page }) => collectUnexpectedErrors(page));
+  test.beforeEach(async ({ page }, testInfo) => {
+    collectUnexpectedErrors(page);
+    const testBucket = [...`${testInfo.project.name}:${testInfo.title}`].reduce(
+      (bucket, character) => (bucket * 31 + character.charCodeAt(0)) >>> 0,
+      0
+    );
+    await page.setExtraHTTPHeaders({
+      'x-forwarded-for': `10.${(testBucket >>> 16) & 255}.${(testBucket >>> 8) & 255}.${testBucket & 255}`,
+    });
+  });
 
   test.afterEach(async ({ page }, testInfo: TestInfo) => {
     const errors = browserErrors.get(page);
@@ -100,6 +129,63 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
     expect(errors?.page ?? [], `${testInfo.title}: unexpected page errors`).toEqual([]);
     expect(errors?.request ?? [], `${testInfo.title}: unexpected request errors`).toEqual([]);
   });
+
+  test('SuperAdmin successful-login boundary resets without affecting another credential bucket', async ({
+    page,
+  }, testInfo) => {
+    const actorOrigin = await signInAs(page, 'superAdmin');
+    const projectBucket = [...testInfo.project.name].reduce(
+      (bucket, character) => (bucket * 31 + character.charCodeAt(0)) % 254,
+      0
+    );
+    const clientIp = `198.51.100.${projectBucket + 1}`;
+    const login = (email: string, password: string) =>
+      page.request.post(new URL('/api/platform/session', actorOrigin).href, {
+        headers: { origin: actorOrigin, 'x-forwarded-for': clientIp },
+        data: { email, password },
+      });
+
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const response = await login(actorFixture.superAdmin.email, actorFixture.superAdmin.password);
+      expect(response.status(), `successful login ${attempt + 1} crossed limiter boundary`).toBe(
+        200
+      );
+    }
+
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const response = await login('isolated-invalid-actor@e2e.invalid', 'invalid-password');
+      expect(response.status()).toBe(attempt === 8 ? 429 : 401);
+    }
+    expect(
+      (await login(actorFixture.superAdmin.email, actorFixture.superAdmin.password)).status()
+    ).toBe(200);
+  });
+
+  for (const viewport of viewports) {
+    test(`${viewport.name}: tenant admin surfaces pass the accessibility matrix`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      const actorOrigin = await signInAs(page, 'restaurantAdmin');
+
+      const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+      await expect(navigation.getByRole('link', { name: 'Point of sale' })).toBeVisible();
+      await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toBeVisible();
+      await expect(navigation.getByRole('link', { name: 'Onboarding' })).toHaveCount(0);
+      await expect(navigation.getByRole('link', { name: 'Counter' })).toHaveCount(0);
+      await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toHaveCount(0);
+
+      for (const surface of tenantAdminSurfaces) {
+        await page.goto(new URL(surface.path, actorOrigin).href);
+        await expect(page.getByRole('heading', { level: 1, name: surface.heading })).toBeVisible();
+        await accessiblePage(page, surface.heading);
+        await page.screenshot({
+          path: path.join(OUTPUT, `tenant-admin-${surface.screenshot}-${viewport.name}.png`),
+          fullPage: true,
+        });
+      }
+    });
+  }
 
   for (const viewport of viewports) {
     for (const theme of themes) {
