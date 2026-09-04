@@ -1,11 +1,39 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 01:40 PKT (20:40 UTC) — Cowork supervisor check-in #200.
+Last reconciled: 2026-09-05 01:50 PKT (20:50 UTC) — Cowork supervisor check-in #201.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **20:50 — code tip `fc456cf4`. Two wave-4 lanes composed.**
+  `eadac7b9` **AI-02 expiry/return advisor**: branch sell-through classification with value-at-risk
+  ranking, every recommendation explainable (observed rate, projected clear date, expiry, the supplier
+  return window used); absent history and an unrecorded return window are stated, never guessed;
+  cold-chain-unsafe return routes blocked; eligible actions create only idempotent DRAFT claims. Adds no
+  table — one nullable `expiryReturnWindowDays` column with a positive-value check (`20260905020000`).
+  `fc456cf4` **SAFE-05 GS1 pack authentication**: pure unit-tested DataMatrix parsing with no database
+  access, advisory flags acknowledged with a reason, "not verifiable" never rendered as "counterfeit",
+  only a recalled batch blocks (through the existing recall path), organization-scoped duplicate-serial
+  detection. Both new tables carry ENABLE + FORCE RLS **and the lane pinned them in
+  `tests/restaurant-m3-governance.test.ts` itself** — the tripwire brief worked.
+- **Two composition patterns worth keeping.**
+  1. **A lane based on a tree with a known-red test will quietly fix that test itself.** AI-02's commit
+     also re-pinned `src/lib/auth/anonymous-access.test.ts`, because its base `be0cd363` still carried
+     the red assertion. That edit was **dropped in composition** — WHA-1333 had already landed the same
+     re-pin together with the security review that justifies it. Check every delivery for edits outside
+     its own scope before composing.
+  2. **Wave-4 lanes all extend the same two pharmacy report surfaces**
+     (`src/server/routers/pharmacy-reports.ts`, `src/app/(app)/pharmacy/reports/page.tsx`), so each one
+     after the first collides there. Most hunks are pure additions and union cleanly, but two need real
+     merging every time: the **query-key union type** (now `… | 'advisor' | 'authentication'`) and the
+     **`Promise.allSettled` tuple**, where both the destructured names and the call list must carry every
+     lane's entry. Naive union-merging either of those produces a broken file. Verify each merge with
+     `prisma validate`, `prettier --check`, ESLint and a duplicate-identifier/import scan.
+- **Still running (4):** ECO-01 + INV-08 DRAP monitoring and recall quarantine (`d1b2b4a5`, 732dc77a);
+  INV-05 cold-chain sensor seam (`28b36d23`, 6df3ac4a); MKT-03 + MKT-05 customer ordering (`f324ff1e`,
+  b958fd9d); MED-06 connector automation (`3b419695`, 98700886). All based on `be0cd363` — expect the
+  same two report-surface collisions from each.
 - **20:40 — THE LAST KNOWN GATE BLOCKER IS COMPOSED. Candidate code tip `3337b141`. PUSH IS DUE.**
   WHA-1333 (`d308800d`) re-pins `src/lib/auth/anonymous-access.test.ts` to eight/seven procedures, but
   only after a real security review of the three `pharmacySupplierLinks.*` routes, which is why this is
