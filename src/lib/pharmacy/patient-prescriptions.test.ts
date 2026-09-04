@@ -56,5 +56,6 @@ describe('invariant 21', () => {
   );
   it('permits prescription detail only for clinical use', () => {
     expect(() => assertClinicalDetailPurpose('DISPENSING', 'PRESCRIPTION')).not.toThrow();
+    expect(() => assertClinicalDetailPurpose('REMINDERS', 'MEDICINE')).not.toThrow();
   });
 });
