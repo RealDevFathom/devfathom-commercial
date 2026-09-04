@@ -58,7 +58,11 @@ export async function proxy(request: Request) {
     if (!isPlatformHost) {
       return NextResponse.redirect(new URL('/dashboard', request.url));
     }
-    if (pathname === '/platform/login') return next();
+    if (pathname === '/platform/login') {
+      if (!hasPlatformSession) return next();
+      const identity = await getPlatformSession(request);
+      return identity ? NextResponse.redirect(new URL('/platform', request.url)) : next();
+    }
     if (!hasPlatformSession) {
       return NextResponse.redirect(new URL('/platform/login', request.url));
     }
