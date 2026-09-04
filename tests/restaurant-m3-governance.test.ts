@@ -265,6 +265,15 @@ const PHARMACY_REFERENCE_CONNECTOR_TABLES = [
   'pharmacy_reference_connector_proposals',
 ] as const;
 
+// WHA-1338 adds pharmacy tables rather than restaurant tables, so they do not
+// belong in the restaurant-only name allowlist below. They are still pinned in
+// this closed-world governance suite and must all carry forced RLS.
+const PHARMACY_CUSTOMER_ORDERING_TABLES = [
+  'pharmacy_customer_orders',
+  'pharmacy_customer_order_lines',
+  'pharmacy_customer_order_events',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -649,6 +658,27 @@ describe('M3 schema governance (real PostgreSQL)', () => {
         relrowsecurity: true,
         relforcerowsecurity: true,
       }))
+    );
+  });
+
+  it('pins the pharmacy customer-order tables under forced RLS', async () => {
+    const result = await client!.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT relname, relrowsecurity, relforcerowsecurity
+         FROM pg_catalog.pg_class
+        WHERE relnamespace = 'public'::regnamespace
+          AND relkind = 'r'
+          AND relname = ANY($1::text[])
+        ORDER BY relname`,
+      [[...PHARMACY_CUSTOMER_ORDERING_TABLES]]
+    );
+    expect(result.rows).toEqual(
+      [...PHARMACY_CUSTOMER_ORDERING_TABLES]
+        .sort()
+        .map((relname) => ({ relname, relrowsecurity: true, relforcerowsecurity: true }))
     );
   });
 

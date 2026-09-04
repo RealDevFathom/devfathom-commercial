@@ -49,7 +49,7 @@ export const createTRPCContext = async (opts?: {
   if (!organizationId) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   }
-  const scopedDb = opts?.db ?? createTenantDb(organizationId);
+  const scopedDb = opts?.db ?? createTenantDb(organizationId, session?.user?.id);
   const entitlements = await resolveOrganizationEntitlements(organizationId, scopedDb);
 
   return {

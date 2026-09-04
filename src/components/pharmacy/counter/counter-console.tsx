@@ -11,7 +11,7 @@ import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import { CounterTenderPanel, type CounterTenderType } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
@@ -82,16 +82,22 @@ const messageFrom = counterErrorMessage;
  * prescription panel sits beside the cart so an authorization check never
  * navigates away from a half-composed sale.
  */
-export function PharmacyCounterConsole() {
+export function PharmacyCounterConsole({
+  initialSaleId = null,
+  initialBranchId = '',
+}: {
+  initialSaleId?: string | null;
+  initialBranchId?: string;
+} = {}) {
   const utils = trpc.useUtils();
 
-  const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
   const [query, setQuery] = useState('');
   const [submittedQuery, setSubmittedQuery] = useState('');
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
-  const [saleId, setSaleId] = useState<string | null>(null);
+  const [saleId, setSaleId] = useState<string | null>(initialSaleId);
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
@@ -788,6 +794,12 @@ export function PharmacyCounterConsole() {
         description="Keyboard-first dispensing: scan, choose a sale unit, allocate by FEFO, tender and print."
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <Link
+              className={buttonVariants({ variant: 'outline', size: 'lg' })}
+              href="/pharmacy/orders"
+            >
+              Customer orders
+            </Link>
             {/*
               UX rule 1: never show the operator an identifier the application
               already knows. A sale id fragment names nothing a pharmacist can

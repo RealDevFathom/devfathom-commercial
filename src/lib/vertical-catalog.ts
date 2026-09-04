@@ -650,18 +650,34 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy.inventory',
   'pharmacy.finance',
   'pharmacy.audit',
+  'pharmacy:orders',
 ];
 
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
-  { key: 'owner', name: 'Owner', isSystem: true, capabilities: ['pharmacy.*'] },
+  {
+    key: 'owner',
+    name: 'Owner',
+    isSystem: true,
+    capabilities: ['pharmacy.*', 'pharmacy:orders'],
+  },
   {
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
     capabilities: ['pharmacy.dispense', 'pharmacy:catalogue-review'],
   },
-  { key: 'manager', name: 'Manager', isSystem: true, capabilities: ['pharmacy.manage'] },
-  { key: 'cashier', name: 'Cashier', isSystem: true, capabilities: ['pharmacy.counter'] },
+  {
+    key: 'manager',
+    name: 'Manager',
+    isSystem: true,
+    capabilities: ['pharmacy.manage', 'pharmacy:orders'],
+  },
+  {
+    key: 'cashier',
+    name: 'Cashier',
+    isSystem: true,
+    capabilities: ['pharmacy.counter', 'pharmacy:orders'],
+  },
   {
     key: 'procurement',
     name: 'Procurement',

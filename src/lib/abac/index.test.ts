@@ -104,9 +104,10 @@ describe('custom ABAC decisions', () => {
       'pharmacy:dispense',
       'pharmacy:safety',
       'pharmacy:catalogue-review',
+      'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS).toHaveLength(40);
+    expect(ALL_ACTIONS).toHaveLength(41);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

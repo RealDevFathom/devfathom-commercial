@@ -217,6 +217,7 @@ model PharmacyBranch {
   ownerDigestCaptures      PharmacyOwnerDigestCapture[]
   refillReminderCaptures   PharmacyRefillReminderCapture[]
   pharmacovigilanceReports PharmacyPharmacovigilanceReport[]
+  customerOrders           PharmacyCustomerOrder[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -453,6 +454,7 @@ model Medicine {
   pharmacovigilanceReports     PharmacyPharmacovigilanceReport[]
   priceChangeProposals         PharmacyPriceChangeProposal[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
+  customerOrderLines           PharmacyCustomerOrderLine[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -489,6 +491,7 @@ model Presentation {
   barcodes          MedicineBarcode[]
   prescriptionLines PrescriptionLine[]
   pharmacySaleLines PharmacySaleLine[]
+  customerOrderLines PharmacyCustomerOrderLine[]
 
   @@index([organizationId, medicineId])
   @@map("pharmacy_presentations")
@@ -522,6 +525,7 @@ model PackLevel {
   // `referencedAt` and freezes it (MED-02, §8A invariant 2).
   inventoryLots         PharmacyInventoryLot[]
   saleLines             PharmacySaleLine[]
+  customerOrderLines    PharmacyCustomerOrderLine[]
 
   @@unique([organizationId, id], map: "pharmacy_pack_levels_org_id_key")
   @@unique([organizationId, versionGroupId, version])
@@ -1009,6 +1013,34 @@ enum PharmacyRestockNotificationStatus {
   CANCELLED
 }
 
+enum PharmacyCustomerOrderFulfillment {
+  COLLECT
+  DELIVER
+}
+
+enum PharmacyCustomerOrderStatus {
+  PROPOSED
+  ACCEPTED
+  PACKING
+  READY_FOR_COLLECTION
+  OUT_FOR_DELIVERY
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+enum PharmacyCustomerOrderEventKind {
+  PLACED
+  ACCEPTED
+  PACKING_STARTED
+  READY_FOR_COLLECTION
+  OUT_FOR_DELIVERY
+  CHECKOUT_STARTED
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
 model PharmacySale {
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1034,6 +1066,7 @@ model PharmacySale {
   refunds                   PharmacyRefund[]
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
+  customerOrder             PharmacyCustomerOrder?
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -1051,6 +1084,7 @@ model PharmacyCustomer {
   phoneLast4       String?
   creditLimitMinor Int      @default(0)
   active           Boolean  @default(true)
+  userId           String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -1059,9 +1093,12 @@ model PharmacyCustomer {
   pointsEntries      PharmacyLoyaltyPointsEntry[]
   paidFamilyAccounts PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
   familyMemberships  PharmacyFamilyMember[]
+  user               User?                         @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
+  orders             PharmacyCustomerOrder[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
+  @@unique([organizationId, userId])
   @@index([organizationId, displayName])
   @@map("pharmacy_customers")
 }
@@ -1514,6 +1551,7 @@ model PharmacyRestockInterest {
   reserveOnArrival    Boolean                       @default(false)
   quantityUnits       Int
   campaignKey         String?
+  orderLineId         String?
   status              PharmacyRestockInterestStatus @default(OPEN)
   recoveredSaleId     String?
   recoveredSaleLineId String?
@@ -1527,12 +1565,14 @@ model PharmacyRestockInterest {
   recoveredSale PharmacySale?                 @relation("PharmacyRestockRecoverySale", fields: [organizationId, branchId, recoveredSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
   reservation   PharmacyRestockReservation?
   notifications PharmacyRestockNotification[]
+  orderLine     PharmacyCustomerOrderLine?      @relation(fields: [organizationId, branchId, orderLineId], references: [organizationId, branchId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, demandEventId])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
   @@index([organizationId, branchId, campaignKey, status])
+  @@index([organizationId, branchId, orderLineId, status])
   @@map("pharmacy_restock_interests")
 }
 
@@ -1574,6 +1614,99 @@ model PharmacyRestockNotification {
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, branchId, status, queuedAt])
   @@map("pharmacy_restock_notifications")
+}
+
+/// MKT-03/MKT-05: one authenticated customer proposal with either collection
+/// or staff-runner delivery. Stock remains held by DEM-03 reservations until a
+/// staff member explicitly starts the existing counter-sale checkout.
+model PharmacyCustomerOrder {
+  id                    String                            @id @default(cuid())
+  organizationId        String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  customerId            String
+  placedByUserId        String
+  fulfillment           PharmacyCustomerOrderFulfillment
+  status                PharmacyCustomerOrderStatus       @default(PROPOSED)
+  intendedPaymentMethod PharmacyTenderType
+  addressLine           String?
+  city                  String?
+  deliveryInstructions  String?
+  runnerUserId          String?
+  reservationExpiresAt  DateTime
+  counterSaleId         String?
+  acceptedAt            DateTime?
+  packedAt              DateTime?
+  readyAt               DateTime?
+  outForDeliveryAt      DateTime?
+  completedAt           DateTime?
+  cancelledAt           DateTime?
+  expiredAt             DateTime?
+  createdAt             DateTime                          @default(now())
+  updatedAt             DateTime                          @updatedAt
+
+  branch      PharmacyBranch              @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  customer    PharmacyCustomer            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  placedBy    User                        @relation("PharmacyOrderPlacedBy", fields: [organizationId, placedByUserId], references: [organizationId, id], onDelete: Restrict)
+  runner      User?                       @relation("PharmacyOrderRunner", fields: [organizationId, runnerUserId], references: [organizationId, id], onDelete: Restrict)
+  counterSale PharmacySale?               @relation(fields: [organizationId, branchId, counterSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  lines       PharmacyCustomerOrderLine[]
+  events      PharmacyCustomerOrderEvent[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, counterSaleId])
+  @@index([organizationId, customerId, createdAt])
+  @@index([organizationId, branchId, status, createdAt])
+  @@index([organizationId, reservationExpiresAt, status])
+  @@map("pharmacy_customer_orders")
+}
+
+model PharmacyCustomerOrderLine {
+  id                        String           @id @default(cuid())
+  organizationId            String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                  String
+  orderId                   String
+  medicineId                String
+  presentationId            String
+  packLevelId               String
+  saleUnit                  PharmacySaleUnit
+  quantity                  Int
+  canonicalUnitsPerSaleUnit Int
+  canonicalUnits            Int
+  unitPriceMinor            Int
+  lineTotalMinor            Int
+  createdAt                 DateTime         @default(now())
+
+  order        PharmacyCustomerOrder    @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
+  medicine     Medicine                 @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  presentation Presentation             @relation(fields: [presentationId], references: [id], onDelete: Restrict)
+  packLevel    PackLevel                @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  interests    PharmacyRestockInterest[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, orderId])
+  @@map("pharmacy_customer_order_lines")
+}
+
+model PharmacyCustomerOrderEvent {
+  id             String                         @id @default(cuid())
+  organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  orderId        String
+  kind           PharmacyCustomerOrderEventKind
+  fromStatus     PharmacyCustomerOrderStatus?
+  toStatus       PharmacyCustomerOrderStatus
+  actorUserId    String
+  detail         Json?
+  occurredAt     DateTime                       @default(now())
+
+  order PharmacyCustomerOrder @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
+  actor User                  @relation("PharmacyOrderEventActor", fields: [organizationId, actorUserId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, orderId, occurredAt])
+  @@map("pharmacy_customer_order_events")
 }
 
 /// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
@@ -2628,7 +2761,12 @@ model User {
   // web-login User. A User may back zero or many staff profiles; a staff
   // profile need not have one at all.
   restaurantStaffProfiles     RestaurantStaffProfile[]       @relation("RestaurantStaffUser")
+  pharmacyCustomer            PharmacyCustomer?              @relation("PharmacyCustomerUser")
+  pharmacyOrdersPlaced        PharmacyCustomerOrder[]        @relation("PharmacyOrderPlacedBy")
+  pharmacyOrdersRun           PharmacyCustomerOrder[]        @relation("PharmacyOrderRunner")
+  pharmacyOrderEvents         PharmacyCustomerOrderEvent[]   @relation("PharmacyOrderEventActor")
 
+  @@unique([organizationId, id])
   @@unique([organizationId, email])
   @@index([organizationId])
   @@map("users")

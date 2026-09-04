@@ -72,6 +72,7 @@ export const ALL_ACTIONS = [
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
+  'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -207,4 +208,5 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:dispense': [],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
+  'pharmacy:orders': [],
 };
