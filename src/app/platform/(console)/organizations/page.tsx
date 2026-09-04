@@ -69,7 +69,7 @@ export default async function OrganizationsPage({
         }
       />
 
-      <form className="mt-6 grid gap-3 border border-border-default bg-surface-card p-4 sm:grid-cols-[1fr_220px_auto]">
+      <form className="mt-6 grid gap-3 border border-border-default bg-surface-card p-4 sm:grid-cols-[1fr_220px_auto] sm:items-end">
         <label className="relative">
           <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-text-faint" />
           <input
@@ -79,19 +79,21 @@ export default async function OrganizationsPage({
             className="h-10 w-full border border-border-default bg-surface-card pl-9 pr-3 text-sm outline-none focus:border-accent-brand"
           />
         </label>
-        <select
-          name="status"
-          aria-label="Filter organizations by status"
-          defaultValue={status ?? ''}
-          className="h-10 border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
-        >
-          <option value="">All lifecycle states</option>
-          {allowedStatuses.map((value) => (
-            <option key={value} value={value}>
-              {value.replaceAll('_', ' ')}
-            </option>
-          ))}
-        </select>
+        <label className="grid gap-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
+          Lifecycle status
+          <select
+            name="status"
+            defaultValue={status ?? ''}
+            className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
+          >
+            <option value="">All lifecycle states</option>
+            {allowedStatuses.map((value) => (
+              <option key={value} value={value}>
+                {value.replaceAll('_', ' ')}
+              </option>
+            ))}
+          </select>
+        </label>
         <button className="h-10 bg-abyss-900 px-4 text-xs font-semibold text-paper-white">
           Apply filters
         </button>

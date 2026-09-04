@@ -64,23 +64,25 @@ export default async function PlatformAuditPage({
         title="Audit ledger"
         description="Platform commands, support entry, lifecycle changes, denied operations, and actor attribution. Every command declares what it records: credentials and ciphertext are never written to this ledger."
       />
-      <form className="mt-6 grid gap-3 border border-border-default bg-surface-card p-4 sm:grid-cols-[1fr_200px_auto]">
+      <form className="mt-6 grid gap-3 border border-border-default bg-surface-card p-4 sm:grid-cols-[1fr_200px_auto] sm:items-end">
         <input
           name="q"
           defaultValue={q}
           placeholder="Search action, target, or reason"
           className="h-10 border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
         />
-        <select
-          name="outcome"
-          aria-label="Filter by audit outcome"
-          defaultValue={query.outcome ?? ''}
-          className="h-10 border border-border-default bg-surface-card px-3 text-sm"
-        >
-          <option value="">All outcomes</option>
-          <option value="success">Success</option>
-          <option value="failure">Failure</option>
-        </select>
+        <label className="grid gap-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
+          Outcome
+          <select
+            name="outcome"
+            defaultValue={query.outcome ?? ''}
+            className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm"
+          >
+            <option value="">All outcomes</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+          </select>
+        </label>
         <button className="h-10 bg-abyss-900 px-4 text-xs font-semibold text-paper-white">
           Filter
         </button>
