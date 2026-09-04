@@ -81,6 +81,7 @@ export default async function OrganizationsPage({
         </label>
         <select
           name="status"
+          aria-label="Filter organizations by status"
           defaultValue={status ?? ''}
           className="h-10 border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
         >

@@ -59,6 +59,7 @@ export function SupportAccessForm({ organizationId }: { organizationId: string }
       />
       <div className="flex items-center gap-3">
         <select
+          aria-label="Support access duration"
           value={duration}
           onChange={(event) => setDuration(event.target.value)}
           className="h-11 rounded-lg border border-border-default bg-card px-3 text-xs"

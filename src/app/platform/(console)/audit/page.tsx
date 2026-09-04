@@ -73,6 +73,7 @@ export default async function PlatformAuditPage({
         />
         <select
           name="outcome"
+          aria-label="Filter by audit outcome"
           defaultValue={query.outcome ?? ''}
           className="h-10 border border-border-default bg-surface-card px-3 text-sm"
         >
