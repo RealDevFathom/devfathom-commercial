@@ -10,8 +10,11 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`0e1d4e9f` + this status commit; clean). Everything composed
-  today is in it: WHA-1270 DEDICATED-provisioning guard (07:40; Fixes #61 — the staging provisioning
+- **Candidate:** the tip of this branch (`8f079c9b` + this status commit; clean). Everything composed
+  today is in it: WHA-1293 recipe explosion + costing library (07:50; `src/lib/restaurant/recipe-costing.ts`,
+  ledger consumption now routed through it, getRecipeCost/listRecipeCosts), WHA-1294 catering phase 1
+  (07:50; models + migration `20260904133000_restaurant_catering_orders`, `restaurant-catering` router,
+  state machine, 6/6 tests; phase 2 = production requirements, cost summary, consumption), WHA-1270 DEDICATED-provisioning guard (07:40; Fixes #61 — the staging provisioning
   failure QA hit), WHA-1286 heading hierarchy on all 19 routes (07:25), WHA-1239 Playwright regression specs
   (06:08; first run in the cloud gate), a11y fixes WHA-1287/1289/1290/1291 (05:56), WHA-1271 (server-side platform-session
   validation on /platform/login), WHA-1273 (idempotent `prepare-runtime-role`), the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
@@ -53,12 +56,12 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   base = branch tip, one commit each, supervisor composes):
   WHA-1293 A recipe costing + explosion library (`src/lib/restaurant/recipe-costing.ts`:
   `explodeRecipe`, `computeRecipeCost`; extracts the ledger's explosion; tRPC getRecipeCost/listRecipeCosts)
-  — Codex Product Engineer, running; WHA-1294 D1 catering server (models RestaurantCateringOrder/Line/
+  — COMPOSED 1aa4f429; WHA-1294 D1 catering server (models RestaurantCateringOrder/Line/
   ExtraCost/Delivery/Event + one migration, `restaurant-catering` router, state machine, production
-  requirements via explodeRecipe, cost summary, RECIPE_CONSUMPTION on IN_PRODUCTION→READY) — Codex
-  Platform Engineer 2, running; WHA-1295 C1 wastage + stock-movement reports — Codex Restaurant Reports
+  requirements via explodeRecipe, cost summary, RECIPE_CONSUMPTION on IN_PRODUCTION→READY) — phase 1
+  COMPOSED 8f079c9b, phase 2 running; WHA-1295 C1 wastage + stock-movement reports — Codex Restaurant Reports
   Engineer, running; backlog until their dependency is on the tip: WHA-1296 B recipe cost / food-cost %
-  in the catalog UI (after A) — Product Engineer 2; WHA-1297 E catering console UI (after D1) — Product
+  in the catalog UI (after A) — Product Engineer 2, PROMOTED 07:50; WHA-1297 E catering console UI (after D1) — Product
   Engineer 3; WHA-1298 C2 food-cost, dish-profitability (menu-engineering quadrants) and catering
   reports (after A + D1 + C1) — Reports Engineer. Promote a backlog lane to `todo` only when its
   dependency is composed AND heavy runs ≤ 7. Not in scope yet (owner said restaurants first): hotel
