@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
@@ -10,7 +11,12 @@ import { createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
-type SearchParams = Promise<Record<'branch' | 'from' | 'to', string | string[] | undefined>>;
+type SearchParams = Promise<
+  Record<
+    'branch' | 'from' | 'to' | 'supplier' | 'ingredient' | 'batch',
+    string | string[] | undefined
+  >
+>;
 const value = (input: string | string[] | undefined) =>
   typeof input === 'string' ? input : undefined;
 const date = (input: string | undefined, fallback: string) =>
@@ -37,8 +43,9 @@ export default async function PharmacyReportsPage({
   const ctx = await createTRPCContext();
   const caller = pharmacyReportsRouter.createCaller(ctx);
   let branchResult: Awaited<ReturnType<typeof caller.branches>>;
+  let catalog: Awaited<ReturnType<typeof caller.catalog>>;
   try {
-    branchResult = await caller.branches();
+    [branchResult, catalog] = await Promise.all([caller.branches(), caller.catalog()]);
   } catch {
     return (
       <main className="min-w-0 space-y-6">
@@ -60,10 +67,20 @@ export default async function PharmacyReportsPage({
   const from = date(value(query.from), fromDate.toISOString().slice(0, 10));
   const to = date(value(query.to), today);
   const branch = value(query.branch);
+  const supplier = value(query.supplier);
+  const ingredient = value(query.ingredient);
+  const batch = value(query.batch);
   let result: Awaited<ReturnType<typeof caller.commandCentre>> | null = null;
   let reportError = false;
   try {
-    result = await caller.commandCentre({ ...(branch ? { branchId: branch } : {}), from, to });
+    result = await caller.commandCentre({
+      ...(branch ? { branchId: branch } : {}),
+      ...(supplier ? { supplierId: supplier } : {}),
+      ...(ingredient ? { ingredientId: ingredient } : {}),
+      ...(batch ? { batchId: batch } : {}),
+      from,
+      to,
+    });
   } catch {
     reportError = true;
   }
@@ -103,6 +120,18 @@ export default async function PharmacyReportsPage({
                 </option>
               ))}
             </select>
+          </label>
+          <label className="text-sm text-text-body">
+            Supplier ID
+            <Input className="mt-1 min-h-11" defaultValue={supplier} name="supplier" />
+          </label>
+          <label className="text-sm text-text-body">
+            Ingredient ID
+            <Input className="mt-1 min-h-11" defaultValue={ingredient} name="ingredient" />
+          </label>
+          <label className="text-sm text-text-body">
+            Batch ID
+            <Input className="mt-1 min-h-11" defaultValue={batch} name="batch" />
           </label>
           <label className="text-sm text-text-body">
             From
@@ -145,7 +174,7 @@ export default async function PharmacyReportsPage({
           </SectionCard>
           <SectionCard eyebrow="Report catalog" title="Available reports" titleLevel={2}>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-              {(await caller.catalog()).reports.map((report) => (
+              {catalog.reports.map((report) => (
                 <div
                   className="rounded-md border border-border-subtle bg-surface-raised p-4"
                   key={report.key}
@@ -154,9 +183,60 @@ export default async function PharmacyReportsPage({
                   <p className="mt-2 text-sm text-text-muted">
                     {report.metrics.length} metric contracts · filters: {report.filters.join(', ')}
                   </p>
+                  <div className="mt-4 space-y-3">
+                    {report.metrics.map((metricKey) => {
+                      const contract = catalog.metrics.find((metric) => metric.key === metricKey);
+                      if (!contract) return null;
+                      return (
+                        <article
+                          className="rounded-sm border border-border-subtle p-3"
+                          key={metricKey}
+                        >
+                          <h4 className="text-sm font-semibold text-text-strong">
+                            {contract.label}
+                          </h4>
+                          <p className="mt-1 text-xs leading-5 text-text-muted">
+                            {contract.definition}
+                          </p>
+                          <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
+                            <div>
+                              <dt className="inline font-semibold">Source: </dt>
+                              <dd className="inline">{contract.source ?? 'Not available'}</dd>
+                            </div>
+                            <div>
+                              <dt className="inline font-semibold">Scope: </dt>
+                              <dd className="inline">{contract.scope}</dd>
+                            </div>
+                            <div>
+                              <dt className="inline font-semibold">Permission: </dt>
+                              <dd className="inline">{contract.permission}</dd>
+                            </div>
+                          </dl>
+                          {contract.drillThrough ? (
+                            <Link
+                              className="mt-2 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              href={contract.drillThrough}
+                            >
+                              Drill through
+                            </Link>
+                          ) : (
+                            <p className="mt-2 text-xs text-text-muted">
+                              Drill-through unavailable
+                            </p>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
                 </div>
               ))}
             </div>
+          </SectionCard>
+          <SectionCard eyebrow="Scheduled delivery" title="Coming soon" titleLevel={2}>
+            <p className="text-sm text-text-muted">
+              Scheduled report delivery is not supported by the current backend. Reports remain
+              available on demand.
+            </p>
           </SectionCard>
         </>
       ) : branchResult.branches.length === 0 ? (
