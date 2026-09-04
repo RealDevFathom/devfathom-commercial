@@ -71,7 +71,7 @@ async function tenantContext() {
 
 function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader eyebrow="Restaurant operations" heading="Inventory" description={description} />
       <SectionCard>
         <h2 className="text-lg font-semibold text-text-strong">
@@ -83,7 +83,7 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
             : 'Enable the Restaurant Inventory module to use inventory.'}
         </p>
       </SectionCard>
-    </main>
+    </div>
   );
 }
 
@@ -171,7 +171,7 @@ export default async function InventoryPage({
     };
   } catch {
     return (
-      <main className="space-y-6">
+      <div className="space-y-6">
         <PageHeader eyebrow="Restaurant operations" heading="Inventory" description={description} />
         <SectionCard>
           <h2 className="text-lg font-semibold text-text-strong">Inventory could not load</h2>
@@ -182,7 +182,7 @@ export default async function InventoryPage({
             Retry
           </Link>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -285,7 +285,7 @@ export default async function InventoryPage({
   ).length;
 
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader eyebrow="Restaurant operations" heading="Inventory" description={description} />
 
       {query.notice && (
@@ -759,6 +759,6 @@ export default async function InventoryPage({
           </div>
         </SectionCard>
       </div>
-    </main>
+    </div>
   );
 }

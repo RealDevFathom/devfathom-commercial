@@ -53,7 +53,7 @@ function State({ kind }: { kind: 'disabled' | 'permission' | 'error' }) {
     ],
   }[kind];
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="SOP reports"
@@ -67,7 +67,7 @@ function State({ kind }: { kind: 'disabled' | 'permission' | 'error' }) {
           </Link>
         ) : null}
       </SectionCard>
-    </main>
+    </div>
   );
 }
 
@@ -90,7 +90,7 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
   const branches = await caller.reportBranches();
   if (!branches.length) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Restaurant operations"
           heading="SOP reports"
@@ -101,7 +101,7 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
             Create or activate a branch before running an SOP report.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -126,7 +126,7 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="SOP reports"
@@ -237,6 +237,6 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
           </SectionCard>
         </>
       )}
-    </main>
+    </div>
   );
 }

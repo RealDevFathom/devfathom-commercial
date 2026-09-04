@@ -135,7 +135,7 @@ export default async function RestaurantReportsPage({
   ]);
   if (!canOperational && !canFinancial) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Restaurant operations"
           heading="Reports"
@@ -147,7 +147,7 @@ export default async function RestaurantReportsPage({
             detail="reports:operational or reports:financial is required."
           />
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -156,7 +156,7 @@ export default async function RestaurantReportsPage({
   const branches = branchResult.data?.branches ?? [];
   if (branchResult.failed || branches.length === 0) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Restaurant operations"
           heading="Reports"
@@ -168,7 +168,7 @@ export default async function RestaurantReportsPage({
             detail="An active primary branch or explicit Restaurant branch assignment is required."
           />
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -215,7 +215,7 @@ export default async function RestaurantReportsPage({
   const freshnessDisplay = freshness ? freshnessCopy(freshness.status) : null;
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Reports"
@@ -774,6 +774,6 @@ export default async function RestaurantReportsPage({
           />
         )}
       </SectionCard>
-    </main>
+    </div>
   );
 }

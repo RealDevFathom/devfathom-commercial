@@ -4,7 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 export default function RestaurantSopOversightLoading() {
   return (
-    <main
+    <div
       className="min-w-0 space-y-6"
       role="status"
       aria-busy="true"
@@ -46,6 +46,6 @@ export default function RestaurantSopOversightLoading() {
           ))}
         </div>
       </SectionCard>
-    </main>
+    </div>
   );
 }

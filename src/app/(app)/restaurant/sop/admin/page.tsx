@@ -314,7 +314,7 @@ export function SopAdminView({
   const anyPending = pendingAction != null;
 
   return (
-    <main className="min-w-0 space-y-6" aria-busy={state === 'loading'}>
+    <div className="min-w-0 space-y-6" aria-busy={state === 'loading'}>
       <PageHeader
         eyebrow="Restaurant operations"
         heading="SOP administration"
@@ -1285,7 +1285,7 @@ export function SopAdminView({
           </SectionCard>
         </>
       )}
-    </main>
+    </div>
   );
 }
 

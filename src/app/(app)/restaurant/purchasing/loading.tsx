@@ -2,7 +2,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 export default function Loading() {
   return (
-    <main className="space-y-6" aria-busy="true" aria-label="Loading purchasing console">
+    <div
+      className="space-y-6"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading purchasing console"
+    >
       <div className="space-y-3">
         <Skeleton className="h-3 w-36 motion-reduce:animate-none" />
         <Skeleton className="h-12 w-72 max-w-full motion-reduce:animate-none" />
@@ -24,6 +29,6 @@ export default function Loading() {
         <Skeleton className="h-[30rem] rounded-[var(--radius-md)] motion-reduce:animate-none" />
         <Skeleton className="h-[42rem] rounded-[var(--radius-md)] motion-reduce:animate-none" />
       </div>
-    </main>
+    </div>
   );
 }
