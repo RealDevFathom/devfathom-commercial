@@ -1,11 +1,44 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 02:15 PKT (21:15 UTC) — Cowork supervisor check-in #204.
+Last reconciled: 2026-09-05 02:25 PKT (21:25 UTC) — Cowork supervisor check-in #205.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **21:25 — PHARMACY P1 IS COMPLETE. Code tip `3239460e`. Nothing is running. The push and the staging
+  deploy are all that remain.**
+  `3239460e` **MKT-03 + MKT-05 customer ordering** (`20260905060000`): one order model, two fulfilment
+  routes. An authenticated surface over an in-stock, OTC-only catalogue — prescription-only and
+  controlled items are never orderable, proved by negative test. Stock reserves through the existing
+  DEM-03 primitives and releases on cancellation. An order is a proposal until staff holding
+  `pharmacy:orders` accept it; acceptance, packing, ready-for-collection / out-for-delivery and
+  completion are audited transitions and nothing dispenses stock automatically. Delivery carries an
+  address and a role-backed runner (no third-party courier); payment records only an intent and settles
+  through the existing counter sale. Customer sessions are bound into database RLS, branch context is
+  transaction-scoped, and `ANONYMOUS_PROCEDURES` was not touched.
+- **A merge trap worth knowing: two lanes moving the same pin from the same base resolve silently and
+  wrongly.** MED-06 and MKT-03/05 both took `expect(ALL_ACTIONS).toHaveLength(39)` to `40`. Three-way
+  merge sees ours=40, theirs=40, base=39 and reports NO conflict — but the tree now holds two new
+  capabilities and the correct pin is **41**. Corrected by hand and verified against the policy table.
+  **Whenever two lanes add a capability, a table or anything else behind a counted pin, re-derive the
+  count from the tree; never trust a clean merge on a pinned number.** The ABAC pin is now **41** at
+  `src/lib/abac/index.test.ts:110`.
+  The role capability table in `src/lib/vertical-catalog.ts` also needed a real three-way merge: owner,
+  manager and cashier gain `pharmacy:orders`, pharmacist keeps the `pharmacy:catalogue-review` MED-06
+  gave it.
+- **PHARMACY P1 DELIVERED (all composed on this candidate).** PUR-09 explainable forecasting; SUP-01/03
+  supplier PO action links; CRM-L02/L04 family khata; AI-03 invoice OCR to a draft receipt; AI-01 Ask
+  Fathom; MKT-01/02 permissioned segments and campaign capture; INV-10 central purchasing; DEM-03
+  restock interest and recovery; RX-07 refill schedules and bilingual medication cards; RX-08
+  pharmacovigilance; AI-04/RPT-03 anomaly signals; AI-05 substitute finder; AI-02 expiry/return advisor;
+  SAFE-05 GS1 pack authentication; ECO-01+INV-08 DRAP monitoring with recall auto-quarantine; INV-05
+  cold-chain reading seam; MED-06 governed reference connectors. P0 was 67/67 earlier.
+- **Blocked on owner decisions — do not start:** RX-06 clinical decision support (licensed data, D07),
+  SUP-02 supplier accounts (D11), PUR-08/ECO-03 distributor feeds (D08). **Unanswered question to the
+  owner:** catering invoicing (a CLOSED catering order becoming a customer bill with deposit/balance
+  tenders through the existing bills/tenders stack). Do not start it unasked.
+- **Migration prefixes used through `20260905070000`. Next free: `20260905080000`.**
 - **21:15 — code tip `f143fee6`. MED-06 composed; ONE wave-4 lane left.**
   `f143fee6` **MED-06 governed reference-data connectors** (`20260905070000`): one connector interface
   whose only implementation is manual/file ingest — no live feed, no credentials, no network in tests,
