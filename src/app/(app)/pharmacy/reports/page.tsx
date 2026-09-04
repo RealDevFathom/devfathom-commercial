@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: 'Pharmacy reports' };
 type SearchParams = Promise<
   Partial<
     Record<
-      'branch' | 'from' | 'to' | 'supplier' | 'ingredient' | 'batch' | 'digest',
+      'branch' | 'from' | 'to' | 'supplier' | 'ingredient' | 'batch' | 'digest' | 'anomaly',
       string | string[] | undefined
     >
   >
@@ -76,22 +76,37 @@ export default async function PharmacyReportsPage({
   const batch = value(query.batch);
   let result: Awaited<ReturnType<typeof caller.commandCentre>> | null = null;
   let digest: Awaited<ReturnType<typeof caller.digestOverview>> | null = null;
+  let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
   let reportError = false;
-  const [reportResult, digestResult] = await Promise.allSettled([
-    caller.commandCentre({
-      ...(branch ? { branchId: branch } : {}),
-      ...(supplier ? { supplierId: supplier } : {}),
-      ...(ingredient ? { ingredientId: ingredient } : {}),
-      ...(batch ? { batchId: batch } : {}),
-      from,
-      to,
-    }),
+  const reportFilters = {
+    ...(branch ? { branchId: branch } : {}),
+    ...(supplier ? { supplierId: supplier } : {}),
+    ...(ingredient ? { ingredientId: ingredient } : {}),
+    ...(batch ? { batchId: batch } : {}),
+    from,
+    to,
+  };
+  const [reportResult, digestResult, anomalyResult] = await Promise.allSettled([
+    caller.commandCentre(reportFilters),
     caller.digestOverview(),
+    caller.anomalySignals(reportFilters),
   ]);
   if (reportResult.status === 'fulfilled') result = reportResult.value;
   else reportError = true;
   if (digestResult.status === 'fulfilled') digest = digestResult.value;
+  if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
   const digestMessage = value(query.digest);
+  const anomalyMessage = value(query.anomaly);
+  const returnQuery = new URLSearchParams(
+    Object.entries({ branch, supplier, ingredient, batch, from, to }).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string'
+    )
+  );
+  const anomalyRedirect = (state: 'saved' | 'error') => {
+    const copy = new URLSearchParams(returnQuery);
+    copy.set('anomaly', state);
+    return `/pharmacy/reports?${copy.toString()}`;
+  };
 
   async function saveDigestSetting(data: FormData) {
     'use server';
@@ -107,6 +122,49 @@ export default async function PharmacyReportsPage({
       redirect('/pharmacy/reports?digest=error');
     }
     redirect('/pharmacy/reports?digest=saved');
+  }
+  async function refreshAnomalies() {
+    'use server';
+    let failed = false;
+    try {
+      const actionCtx = await createTRPCContext();
+      await pharmacyReportsRouter.createCaller(actionCtx).refreshAnomalies(reportFilters);
+    } catch {
+      failed = true;
+    }
+    redirect(anomalyRedirect(failed ? 'error' : 'saved'));
+  }
+  async function acknowledgeAnomaly(data: FormData) {
+    'use server';
+    let failed = false;
+    try {
+      const actionCtx = await createTRPCContext();
+      await pharmacyReportsRouter.createCaller(actionCtx).acknowledgeAnomaly({
+        branchId: String(data.get('branchId') ?? ''),
+        signalId: String(data.get('signalId') ?? ''),
+        reason: String(data.get('reason') ?? ''),
+      });
+    } catch {
+      failed = true;
+    }
+    redirect(anomalyRedirect(failed ? 'error' : 'saved'));
+  }
+  async function snoozeAnomaly(data: FormData) {
+    'use server';
+    let failed = false;
+    try {
+      const actionCtx = await createTRPCContext();
+      const parsedUntil = new Date(String(data.get('snoozedUntil') ?? ''));
+      await pharmacyReportsRouter.createCaller(actionCtx).snoozeAnomaly({
+        branchId: String(data.get('branchId') ?? ''),
+        signalId: String(data.get('signalId') ?? ''),
+        reason: String(data.get('reason') ?? ''),
+        snoozedUntil: parsedUntil.toISOString(),
+      });
+    } catch {
+      failed = true;
+    }
+    redirect(anomalyRedirect(failed ? 'error' : 'saved'));
   }
   const metrics = result?.metrics;
   const cards = metrics
@@ -197,6 +255,190 @@ export default async function PharmacyReportsPage({
               ))}
             </div>
           </SectionCard>
+          {anomalies ? (
+            <SectionCard
+              eyebrow="AI-04 / RPT-03 · Review only"
+              title="Anomaly review signals"
+              titleLevel={2}
+              actions={
+                <form action={refreshAnomalies}>
+                  <Button type="submit" variant="outline">
+                    Refresh signals
+                  </Button>
+                </form>
+              }
+            >
+              <p className="max-w-3xl text-sm leading-6 text-text-muted">
+                Deterministic event checks only. Signals never rank staff, imply misconduct, or
+                create orders, stock movements, price changes, or finance postings. A human opens
+                and reviews the source evidence.
+              </p>
+              {anomalyMessage === 'saved' ? (
+                <p className="mt-3 text-sm text-success" role="status">
+                  Anomaly signal state updated.
+                </p>
+              ) : anomalyMessage === 'error' ? (
+                <p className="mt-3 text-sm text-destructive" role="alert">
+                  The anomaly action could not be completed. Check the reason, date, and access.
+                </p>
+              ) : null}
+              {anomalies.length ? (
+                <ol className="mt-5 divide-y divide-border-subtle border-y border-border-subtle">
+                  {anomalies.map((signal) => {
+                    const scope = signal.scope as Record<string, string>;
+                    const exactNumbers = signal.exactNumbers as Record<string, number>;
+                    const unusable = signal.status === 'STALE';
+                    return (
+                      <li className="py-5" key={signal.id}>
+                        <article>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <h3 className="font-semibold text-text-strong">
+                                {signal.kind.replaceAll('_', ' ').toLowerCase()}
+                              </h3>
+                              <p className="mt-1 font-mono text-[11px] text-text-muted">
+                                Scope ·{' '}
+                                {Object.entries(scope)
+                                  .map(([key, item]) => `${key}: ${item}`)
+                                  .join(' · ')}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <StatusPill
+                                status={signal.severity}
+                                tone={signal.severity === 'URGENT' ? 'danger' : 'warning'}
+                              />
+                              <StatusPill
+                                status={unusable ? 'Unusable · stale' : signal.status}
+                                tone={unusable ? 'neutral' : undefined}
+                              />
+                            </div>
+                          </div>
+                          <p className="mt-3 max-w-4xl text-sm leading-6 text-text-body">
+                            {signal.explanation}
+                          </p>
+                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums">
+                            {Object.entries(exactNumbers).map(([key, item]) => (
+                              <div key={key}>
+                                <dt className="inline font-semibold text-text-body">{key}: </dt>
+                                <dd className="inline">{item}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                          <p className="mt-3 text-xs leading-5 text-text-muted">
+                            Window {new Date(signal.dataWindowStart).toLocaleString()}–
+                            {new Date(signal.dataWindowEnd).toLocaleString()} · source observed{' '}
+                            {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
+                            {signal.policyVersion}
+                          </p>
+                          {signal.estimateMethod ? (
+                            <dl className="mt-3 grid gap-1 text-xs leading-5 text-text-muted">
+                              <div>
+                                <dt className="inline font-semibold text-text-body">
+                                  Estimate method:{' '}
+                                </dt>
+                                <dd className="inline">{signal.estimateMethod}</dd>
+                              </div>
+                              <div>
+                                <dt className="inline font-semibold text-text-body">Window: </dt>
+                                <dd className="inline">{signal.estimateWindow}</dd>
+                              </div>
+                              <div>
+                                <dt className="inline font-semibold text-text-body">
+                                  Exclusions:{' '}
+                                </dt>
+                                <dd className="inline">{signal.estimateExclusions}</dd>
+                              </div>
+                              <div>
+                                <dt className="inline font-semibold text-text-body">
+                                  Confidence:{' '}
+                                </dt>
+                                <dd className="inline">{signal.estimateConfidence}</dd>
+                              </div>
+                            </dl>
+                          ) : null}
+                          {!unusable ? (
+                            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                              <form action={acknowledgeAnomaly} className="flex flex-wrap gap-2">
+                                <input name="branchId" type="hidden" value={signal.branchId} />
+                                <input name="signalId" type="hidden" value={signal.id} />
+                                <label className="min-w-52 flex-1 text-xs text-text-body">
+                                  Acknowledgement reason
+                                  <Input
+                                    className="mt-1 min-h-11"
+                                    maxLength={500}
+                                    minLength={3}
+                                    name="reason"
+                                    required
+                                  />
+                                </label>
+                                <Button
+                                  className="min-h-11 self-end"
+                                  type="submit"
+                                  variant="outline"
+                                >
+                                  Acknowledge
+                                </Button>
+                              </form>
+                              <form action={snoozeAnomaly} className="grid gap-2 sm:grid-cols-2">
+                                <input name="branchId" type="hidden" value={signal.branchId} />
+                                <input name="signalId" type="hidden" value={signal.id} />
+                                <label className="text-xs text-text-body">
+                                  Snooze until
+                                  <Input
+                                    className="mt-1 min-h-11"
+                                    name="snoozedUntil"
+                                    required
+                                    type="datetime-local"
+                                  />
+                                </label>
+                                <label className="text-xs text-text-body">
+                                  Snooze reason
+                                  <Input
+                                    className="mt-1 min-h-11"
+                                    maxLength={500}
+                                    minLength={3}
+                                    name="reason"
+                                    required
+                                  />
+                                </label>
+                                <Button
+                                  className="min-h-11 sm:col-span-2"
+                                  type="submit"
+                                  variant="outline"
+                                >
+                                  Snooze with reason
+                                </Button>
+                              </form>
+                            </div>
+                          ) : (
+                            <p className="mt-4 text-sm font-medium text-text-muted">
+                              Refresh source data before reviewing this signal.
+                            </p>
+                          )}
+                        </article>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p className="mt-5 text-sm text-text-muted">
+                  No anomaly signals match these filters. Refresh to evaluate the current ledger
+                  window; no operational data will be changed.
+                </p>
+              )}
+            </SectionCard>
+          ) : (
+            <SectionCard
+              eyebrow="AI-04 / RPT-03 · Owner only"
+              title="Anomaly review signals"
+              titleLevel={2}
+            >
+              <p className="text-sm text-text-muted">
+                Financial report and owner permissions are required to view anomaly evidence.
+              </p>
+            </SectionCard>
+          )}
           <SectionCard eyebrow="Report catalog" title="Available reports" titleLevel={2}>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               {catalog.reports.map((report) => (

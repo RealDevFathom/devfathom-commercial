@@ -13220,3 +13220,93 @@ model PharmacyCampaignAttribution {
   @@unique([organizationId, campaignId, visitId, receiptId])
   @@map("pharmacy_campaign_attributions")
 }
+
+enum PharmacyAnomalySignalKind {
+  SHRINKAGE
+  DISCOUNT_OVERRIDE
+  GHOST_RETURN
+  CASH_VARIANCE
+  PURCHASE_PRICE_DRIFT
+}
+
+enum PharmacyAnomalySignalStatus {
+  OPEN
+  ACKNOWLEDGED
+  SNOOZED
+  CLOSED
+  STALE
+}
+
+enum PharmacyAnomalySignalSeverity {
+  NOTICE
+  REVIEW
+  URGENT
+}
+
+enum PharmacyAnomalySignalEventKind {
+  RAISED
+  REFRESHED
+  ACKNOWLEDGED
+  SNOOZED
+  CLOSED
+  MARKED_STALE
+}
+
+/// AI-04 / RPT-03 — a deterministic review signal, never a staff score or an
+/// operational command. `scope`, `exactNumbers`, and the estimate metadata keep
+/// the evidence that produced the explanation auditable after ledgers advance.
+model PharmacyAnomalySignal {
+  id                   String                        @id @default(cuid())
+  organizationId       String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  kind                 PharmacyAnomalySignalKind
+  dedupKey             String
+  status               PharmacyAnomalySignalStatus   @default(OPEN)
+  severity             PharmacyAnomalySignalSeverity
+  scope                Json
+  policyVersion        String
+  exactNumbers         Json
+  explanation          String
+  dataWindowStart      DateTime
+  dataWindowEnd        DateTime
+  sourceObservedAt     DateTime
+  freshnessSeconds     Int
+  estimateMethod       String?
+  estimateWindow       String?
+  estimateExclusions   String?
+  estimateConfidence   String?
+  computedAt           DateTime
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  snoozedUntil         DateTime?
+  snoozeReason         String?
+  closedAt             DateTime?
+  markedStaleAt        DateTime?
+  createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
+  events               PharmacyAnomalySignalEvent[]
+
+  @@unique([organizationId, id], map: "pharmacy_anomaly_signals_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_anomaly_signals_org_branch_id_key")
+  @@index([organizationId, branchId, status, computedAt(sort: Desc)], map: "pharmacy_anomaly_signals_org_branch_status_idx")
+  @@index([organizationId, branchId, kind, status], map: "pharmacy_anomaly_signals_org_branch_kind_idx")
+  @@map("pharmacy_anomaly_signals")
+}
+
+/// Append-only human-decision and evaluator history for one AI-04 signal.
+model PharmacyAnomalySignalEvent {
+  id             String                         @id @default(cuid())
+  organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  signalId       String
+  kind           PharmacyAnomalySignalEventKind
+  actorId        String
+  reason         String?
+  detail         String?
+  createdAt      DateTime                       @default(now())
+  signal         PharmacyAnomalySignal          @relation(fields: [organizationId, branchId, signalId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_anomaly_signal_events_org_id_key")
+  @@index([organizationId, branchId, signalId, createdAt], map: "pharmacy_anomaly_signal_events_org_signal_idx")
+  @@map("pharmacy_anomaly_signal_events")
+}

@@ -93,6 +93,22 @@ describe('pharmacy owner digest capability boundary', () => {
     expect(mocks.branchFindMany).not.toHaveBeenCalled();
     expect(mocks.settingUpsert).not.toHaveBeenCalled();
   });
+
+  it('denies anomaly reads without reports:financial before tenant data access', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(
+      caller().anomalySignals({ from: '2026-09-01', to: '2026-09-04' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('denies anomaly decisions without reports:financial before tenant data access', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(
+      caller().acknowledgeAnomaly({ branchId: 'branch_1', signalId: 'sig_1', reason: 'Reviewed' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('RX-08 pharmacovigilance state boundaries', () => {
