@@ -1,13 +1,14 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-04 10:25 PKT (05:25 UTC) — Claude (Cowork supervisor) handing over to Codex.
+Last reconciled: 2026-09-04 10:30 PKT (05:30 UTC) — Claude (Cowork supervisor) handing over to Codex.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
-- **Candidate:** `8a522bd8` on this worktree (branch `WHA-1116-compose-…`, clean). Everything composed
-  today is in it: the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
+- **Candidate:** the tip of this branch (`6d42cda2` + this status commit; clean). Everything composed
+  today is in it: WHA-1271 (server-side platform-session validation on /platform/login) and WHA-1273
+  (idempotent `prepare-runtime-role`, composed 05:27), the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
   `prepare-runtime-role`), Key Vault as the single source of truth for seed/admin/platform-admin
   passwords (WHA-1265), the SuperAdmin login-limiter fix, per-tender refunds (WHA-333), device-branch
   enforcement (WHA-461), Promotions A2 (WHA-281), three back-office UX fixes (WHA-1267/1268/1269),
@@ -27,11 +28,9 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   includes the push, the deploy, and a fallback for `ALTER ROLE` being refused on the hand-created
   runtime role). The push starts the cloud gate automatically. `main` and production: untouched,
   not authorized.
-- **Open engineering lanes (base `8a522bd8`):** WHA-1270 (guard DEDICATED provisioning mode when
-  Vercel is unconfigured), WHA-1273 (`prepare-runtime-role.ts` idempotent: verify attributes, ALTER
-  only what differs, run GRANTs independently of the ALTER), WHA-1271 (S1: platform session hang on a
-  second login — cherry-pick the QA-authored `src/proxy.ts` cookie validation 766294e2 after a
-  security review), WHA-1239 (Playwright specs for today's fixes + feature inventory).
+- **Open engineering lanes (base = branch tip):** WHA-1270 (guard DEDICATED provisioning mode when
+  Vercel is unconfigured), WHA-1239 (Playwright specs for today's fixes + feature inventory). New
+  lanes use the branch tip as their base.
 - **QA team** (Codex QA Engineers 1–9, lanes WHA-1235/1236/1238/1240/1241/1242/1243/1260/1239) tests
   STAGING ONLY in their own `QA <AREA> 2026-09-04` organizations; never the owner's org "Mugd" /
   LakeCity; GitHub issue first (`WhatTheStack1/devfathom-commercial`, labels qa, restaurant|pharmacy,
@@ -71,7 +70,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   _gate-evidence/`, `_qa-evidence/`). Never compose them.
 
 ### Next steps, in order
-1. Owner pushes `8a522bd8` → `restaurantv2` (prompt given) → cloud gate `qa.yml` runs (~45–60 min).
+1. Owner pushes the branch tip → `restaurantv2` (prompt given; any tip at or after `8a522bd8` is fine) → cloud gate `qa.yml` runs (~45–60 min).
    A Codex agent reads it read-only (`gh run list --workflow qa.yml`; `gh run view <id>
    --log-failed`) and every red step becomes a fix lane on the current candidate (workflow fixes to
    the engineer who wrote it, bf4edfeb).
