@@ -643,6 +643,7 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy.*',
   'pharmacy.dispense',
+  'pharmacy:catalogue-review',
   'pharmacy.manage',
   'pharmacy.counter',
   'pharmacy.procurement',
@@ -653,7 +654,12 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
 
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   { key: 'owner', name: 'Owner', isSystem: true, capabilities: ['pharmacy.*'] },
-  { key: 'pharmacist', name: 'Pharmacist', isSystem: true, capabilities: ['pharmacy.dispense'] },
+  {
+    key: 'pharmacist',
+    name: 'Pharmacist',
+    isSystem: true,
+    capabilities: ['pharmacy.dispense', 'pharmacy:catalogue-review'],
+  },
   { key: 'manager', name: 'Manager', isSystem: true, capabilities: ['pharmacy.manage'] },
   { key: 'cashier', name: 'Cashier', isSystem: true, capabilities: ['pharmacy.counter'] },
   {

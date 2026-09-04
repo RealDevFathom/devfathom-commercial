@@ -249,6 +249,15 @@ const FINAL_CORRECTION_TABLES = [
   'restaurant_workforce_commands',
 ] as const;
 
+// MED-06 (WHA-1339): this governance file is also the cross-lane registration
+// point for newly introduced tenant tables. These remain outside the restaurant
+// closed-world prefix assertion below, but their forced-RLS posture is pinned.
+const PHARMACY_REFERENCE_CONNECTOR_TABLES = [
+  'pharmacy_reference_connectors',
+  'pharmacy_reference_connector_runs',
+  'pharmacy_reference_connector_proposals',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -590,6 +599,28 @@ describe('M3 schema governance (real PostgreSQL)', () => {
     );
 
     expect(await readM3Columns()).toEqual(M3_COLUMNS);
+  });
+
+  it('registers MED-06 connector tables with enabled and forced RLS', async () => {
+    const tables = await client!.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT table_row.relname, table_row.relrowsecurity, table_row.relforcerowsecurity
+         FROM pg_catalog.pg_class table_row
+         JOIN pg_catalog.pg_namespace namespace ON namespace.oid = table_row.relnamespace
+        WHERE namespace.nspname = 'public' AND table_row.relname = ANY($1::text[])
+        ORDER BY table_row.relname`,
+      [PHARMACY_REFERENCE_CONNECTOR_TABLES]
+    );
+    expect(tables.rows).toEqual(
+      [...PHARMACY_REFERENCE_CONNECTOR_TABLES].sort().map((relname) => ({
+        relname,
+        relrowsecurity: true,
+        relforcerowsecurity: true,
+      }))
+    );
   });
 
   it('keeps canonical tables branch-free and publication children publication-owned', async () => {

@@ -384,6 +384,22 @@ enum MedicinePublicationBatchStatus {
   SUPERSEDED
 }
 
+enum PharmacyReferenceConnectorAdapter {
+  MANUAL_FILE
+}
+
+enum PharmacyReferenceConnectorRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum PharmacyReferenceProposalStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
 model Ingredient {
   id             String                      @id @default(cuid())
   organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -398,8 +414,8 @@ model Ingredient {
 }
 
 model Medicine {
-  id                           String                            @id @default(cuid())
-  organizationId               String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                           String                               @id @default(cuid())
+  organizationId               String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   productName                  String
   brandName                    String?
   manufacturer                 String?
@@ -408,16 +424,16 @@ model Medicine {
   drapRegistrationStatus       String?
   drapRegisteredAt             DateTime?
   productFamily                PharmacyProductFamily
-  rx                           Boolean                           @default(false)
-  otc                          Boolean                           @default(false)
-  restricted                   Boolean                           @default(false)
-  controlled                   Boolean                           @default(false)
-  highAlert                    Boolean                           @default(false)
-  lasa                         Boolean                           @default(false)
-  coldChain                    Boolean                           @default(false)
-  saleable                     Boolean                           @default(false)
-  createdAt                    DateTime                          @default(now())
-  updatedAt                    DateTime                          @updatedAt
+  rx                           Boolean                              @default(false)
+  otc                          Boolean                              @default(false)
+  restricted                   Boolean                              @default(false)
+  controlled                   Boolean                              @default(false)
+  highAlert                    Boolean                              @default(false)
+  lasa                         Boolean                              @default(false)
+  coldChain                    Boolean                              @default(false)
+  saleable                     Boolean                              @default(false)
+  createdAt                    DateTime                             @default(now())
+  updatedAt                    DateTime                             @updatedAt
   strengths                    MedicineStrengthComponent[]
   presentations                Presentation[]
   provenance                   MedicineProvenance[]
@@ -435,6 +451,7 @@ model Medicine {
   safetyStocks                 PharmacySafetyStock[]
   stockSignals                 PharmacyStockSignal[]
   pharmacovigilanceReports     PharmacyPharmacovigilanceReport[]
+  connectorProposals           PharmacyReferenceConnectorProposal[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -624,6 +641,82 @@ model MedicinePublicationEntry {
   @@unique([organizationId, batchId, assertionId])
   @@index([organizationId, batchId])
   @@map("pharmacy_medicine_publication_entries")
+}
+
+model PharmacyReferenceConnector {
+  id             String                               @id @default(cuid())
+  organizationId String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  label          String
+  adapter        PharmacyReferenceConnectorAdapter    @default(MANUAL_FILE)
+  enabled        Boolean                              @default(true)
+  schedule       Json
+  cursor         Json?
+  lastRunState   PharmacyReferenceConnectorRunStatus?
+  lastRunAt      DateTime?
+  createdBy      String
+  createdAt      DateTime                             @default(now())
+  updatedAt      DateTime                             @updatedAt
+  runs           PharmacyReferenceConnectorRun[]
+
+  @@unique([organizationId, id], map: "pharmacy_reference_connectors_org_id_key")
+  @@unique([organizationId, key], map: "pharmacy_reference_connectors_org_key_key")
+  @@index([organizationId, enabled], map: "pharmacy_reference_connectors_org_enabled_idx")
+  @@map("pharmacy_reference_connectors")
+}
+
+model PharmacyReferenceConnectorRun {
+  id                      String                               @id @default(cuid())
+  organizationId          String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  connectorId             String
+  inputDigest             String
+  batchId                 String
+  fileName                String
+  status                  PharmacyReferenceConnectorRunStatus  @default(RUNNING)
+  triggerKind             String
+  triggeredBy             String
+  replayOfRunId           String?
+  cursorStart             Int                                  @default(0)
+  cursorEnd               Int                                  @default(0)
+  rowsSeen                Int                                  @default(0)
+  rowsApplied             Int                                  @default(0)
+  rowsSkipped             Int                                  @default(0)
+  rowsRejected            Int                                  @default(0)
+  directFieldsApplied     Int                                  @default(0)
+  regulatedFieldsProposed Int                                  @default(0)
+  rejectionReasons        Json                                 @default("[]")
+  error                   String?
+  startedAt               DateTime                             @default(now())
+  completedAt             DateTime?
+  connector               PharmacyReferenceConnector           @relation(fields: [organizationId, connectorId], references: [organizationId, id], onDelete: Restrict)
+  proposals               PharmacyReferenceConnectorProposal[]
+
+  @@unique([organizationId, id], map: "pharmacy_reference_connector_runs_org_id_key")
+  @@index([organizationId, connectorId, startedAt], map: "ph_ref_runs_org_connector_started_idx")
+  @@index([organizationId, connectorId, inputDigest, status], map: "ph_ref_runs_org_connector_digest_status_idx")
+  @@map("pharmacy_reference_connector_runs")
+}
+
+model PharmacyReferenceConnectorProposal {
+  id               String                          @id @default(cuid())
+  organizationId   String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  runId            String
+  connectorId      String
+  inputDigest      String
+  rowSourceKey     String
+  targetMedicineId String?
+  payload          Json
+  status           PharmacyReferenceProposalStatus @default(PENDING)
+  decidedBy        String?
+  decidedAt        DateTime?
+  createdAt        DateTime                        @default(now())
+  run              PharmacyReferenceConnectorRun   @relation(fields: [organizationId, runId], references: [organizationId, id], onDelete: Restrict)
+  targetMedicine   Medicine?                       @relation(fields: [organizationId, targetMedicineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, connectorId, inputDigest, rowSourceKey], map: "ph_ref_proposals_input_row_key")
+  @@index([organizationId, status, createdAt], map: "ph_ref_proposals_org_status_created_idx")
+  @@index([organizationId, targetMedicineId], map: "ph_ref_proposals_org_medicine_idx")
+  @@map("pharmacy_reference_connector_proposals")
 }
 
 // ============================================

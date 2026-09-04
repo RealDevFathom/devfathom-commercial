@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -109,7 +109,11 @@ function guessedMapping(headers: string[]): ManualMappingTemplate {
     pack: ['pack', 'packsize', 'presentation'],
     barcode: ['barcode', 'gtin'],
     alias: ['alias', 'genericname', 'generic'],
+    rx: ['rx', 'prescriptiononly'],
+    restricted: ['restricted'],
+    controlled: ['controlled'],
     rowSourceKey: ['rowsourcekey', 'sourcekey', 'id', 'code'],
+    targetMedicineId: ['targetmedicineid', 'medicineid'],
   };
   const normalized = headers.map((header) => header.toLowerCase().replace(/[^a-z0-9]/g, ''));
   return Object.fromEntries(
@@ -121,7 +125,7 @@ function guessedMapping(headers: string[]): ManualMappingTemplate {
 }
 
 function downloadTemplate() {
-  const headers = [...MEDICINE_REFERENCE_FIELDS, 'rowSourceKey'];
+  const headers = [...MEDICINE_REFERENCE_FIELDS, 'rowSourceKey', 'targetMedicineId'];
   const example = [
     'Paracetamol',
     'Panadol',
@@ -132,7 +136,11 @@ function downloadTemplate() {
     '10 x 10',
     '0896000000000',
     'Acetaminophen',
+    'false',
+    'false',
+    'false',
     'catalog-001',
+    '',
   ];
   const csv = [headers, example]
     .map((row) => row.map((value) => `"${formulaSafeCell(value).replaceAll('"', '""')}"`).join(','))
@@ -164,10 +172,12 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
-  const importBatch = trpc.pharmacyMedicine.importReferenceBatch.useMutation({
+  const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation({
     onSuccess: async (result) => {
       toast.success(
-        `${result.imported} rows sent to review${result.skipped ? `; ${result.skipped} skipped` : ''}.`
+        result.noOp
+          ? `${result.rowsSkipped} rows unchanged; identical input was a no-op.`
+          : `${result.proposalRows} rows proposed; ${result.rowsApplied} rows had descriptive fields applied; ${result.rowsRejected} rejected.`
       );
       await candidates.refetch();
     },
@@ -187,8 +197,6 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     },
     onError: (error) => toast.error(error.message),
   });
-
-  const readyRows = useMemo(() => preview.filter((row) => row.values.productName), [preview]);
 
   async function chooseFile(file: File | undefined) {
     if (!file) return;
@@ -277,7 +285,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 review.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                {[...MEDICINE_REFERENCE_FIELDS, 'rowSourceKey' as const].map((field) => (
+                {[
+                  ...MEDICINE_REFERENCE_FIELDS,
+                  'rowSourceKey' as const,
+                  'targetMedicineId' as const,
+                ].map((field) => (
                   <label key={field} className="text-xs font-medium text-text-body">
                     {field}
                     <select
@@ -313,11 +325,14 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
               <Button
                 className="min-h-11"
                 type="button"
-                disabled={
-                  !preview.length || !readyRows.length || !batchId.trim() || importBatch.isPending
-                }
+                disabled={!preview.length || !batchId.trim() || importBatch.isPending}
                 onClick={() =>
-                  importBatch.mutate({ connectorId: 'manual-file', batchId, rows: readyRows })
+                  importBatch.mutate({
+                    connectorId: 'manual-file',
+                    batchId,
+                    fileName: parsed.name,
+                    rows: preview,
+                  })
                 }
               >
                 {importBatch.isPending ? (
@@ -325,7 +340,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 ) : (
                   <Upload data-icon="inline-start" />
                 )}
-                Send {readyRows.length || ''} to review
+                Run {preview.length || ''} rows now
               </Button>
             </div>
           </div>
@@ -388,8 +403,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         ) : null}
         {candidates.data?.length === 0 ? (
           <p className="rounded-md bg-surface-sunken p-5 text-sm text-text-muted">
-            No unreviewed reference rows. Upload a batch above or wait for a licensed connector to
-            be configured.
+            No confirmed reference rows await publication. Upload a manual batch above; regulated
+            changes remain proposals until a pharmacist confirms them.
           </p>
         ) : null}
         <div className="space-y-4">

@@ -9,8 +9,19 @@ import {
   parseSimpleMedicineStrength,
   PharmacyMedicineError,
 } from '@/lib/pharmacy/medicine';
+import {
+  configureManualReferenceConnector,
+  proposedBoolean,
+  runManualReferenceConnector,
+} from '@/lib/pharmacy/reference-connector-automation';
 import { MANUAL_FILE_RIGHTS, type ConnectorRights } from '@/lib/pharmacy/reference-connectors';
-import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
 const provenance = z
@@ -45,6 +56,9 @@ const referenceField = z.enum([
   'pack',
   'barcode',
   'alias',
+  'rx',
+  'restricted',
+  'controlled',
 ]);
 
 const referenceAssertion = z
@@ -70,6 +84,22 @@ const assertedEnvelope = z
     rowSourceKey: z.string().trim().min(1).max(300),
     rights: connectorRights,
     blockingIssues: z.array(z.string().min(1).max(100)).max(4),
+  })
+  .strict();
+
+const connectorProposalPayload = z
+  .object({
+    values: z.partialRecord(referenceField, z.string().trim().min(1).max(1_000)),
+    source: z
+      .object({
+        connectorId: z.literal('manual-file'),
+        label: z.string().trim().min(1).max(200),
+        fileName: z.string().trim().min(1).max(500),
+        batchId: z.string().trim().min(1).max(200),
+        rowSourceKey: z.string().trim().min(1).max(300),
+        rights: connectorRights,
+      })
+      .strict(),
   })
   .strict();
 
@@ -137,18 +167,55 @@ function domainError(error: unknown): never {
 }
 
 export const pharmacyMedicineRouter = router({
-  importReferenceBatch: adminProcedure
+  configureReferenceConnector: adminProcedure
+    .input(
+      z
+        .object({
+          label: z.string().trim().min(1).max(200).default('Manual CSV / Excel'),
+          enabled: z.boolean().default(true),
+          schedule: z.discriminatedUnion('kind', [
+            z.object({ kind: z.literal('MANUAL') }).strict(),
+            z
+              .object({
+                kind: z.literal('EXPLICIT_CALL'),
+                expression: z.string().trim().min(1).max(120),
+                timezone: z.string().trim().min(1).max(100),
+              })
+              .strict(),
+          ]),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      configureManualReferenceConnector(ctx.db, {
+        organizationId: ctx.entitlements.organizationId,
+        actorId: ctx.session.user.id,
+        ...input,
+      })
+    ),
+
+  referenceConnectorState: adminProcedure.query(({ ctx }) =>
+    ctx.db.pharmacyReferenceConnector.findMany({
+      include: { runs: { orderBy: { startedAt: 'desc' }, take: 20 } },
+      orderBy: { createdAt: 'asc' },
+    })
+  ),
+
+  runReferenceConnectorNow: adminProcedure
     .input(
       z
         .object({
           connectorId: z.literal('manual-file'),
           batchId: z.string().trim().min(1).max(200),
+          fileName: z.string().trim().min(1).max(500),
+          triggerKind: z.enum(['MANUAL', 'SCHEDULED_CALL']).default('MANUAL'),
           rows: z
             .array(
               z
                 .object({
                   batchId: z.string().trim().min(1).max(200),
                   rowSourceKey: z.string().trim().min(1).max(300),
+                  targetMedicineId: z.string().trim().min(1).max(200).optional(),
                   values: z.record(z.string(), z.string().trim().min(1).max(1_000)),
                   assertions: z.array(referenceAssertion).min(1).max(20),
                   blockingIssues: z.array(
@@ -157,6 +224,7 @@ export const pharmacyMedicineRouter = router({
                       'MISSING_STRENGTH',
                       'MISSING_DOSAGE_FORM',
                       'MISSING_PACK',
+                      'INVALID_SCHEDULE_CLASSIFICATION',
                     ])
                   ),
                 })
@@ -190,7 +258,9 @@ export const pharmacyMedicineRouter = router({
                 assertion.batchId !== input.batchId ||
                 assertion.rowSourceKey !== row.rowSourceKey ||
                 assertion.sourceType !== 'IMPORT' ||
-                row.values[assertion.field] !== assertion.value
+                row.values[assertion.field] !== assertion.value ||
+                assertion.source !== input.fileName ||
+                JSON.stringify(assertion.rights) !== JSON.stringify(MANUAL_FILE_RIGHTS)
             )
           );
         })
@@ -201,61 +271,144 @@ export const pharmacyMedicineRouter = router({
         });
       }
 
-      return ctx.db.$transaction(async (tx) => {
-        let imported = 0;
-        let skipped = 0;
-        for (const row of input.rows) {
-          const productName = row.values.productName;
-          if (!productName) {
-            skipped += 1;
-            continue;
-          }
-          const sourceKey = `${input.connectorId}:${input.batchId}:${row.rowSourceKey}`;
-          const existing = await tx.medicineProvenance.findFirst({ where: { source: sourceKey } });
-          if (existing) {
-            skipped += 1;
-            continue;
-          }
+      return ctx.db.$transaction((tx) =>
+        runManualReferenceConnector(tx, {
+          organizationId: ctx.entitlements.organizationId,
+          actorId: ctx.session.user.id,
+          triggerKind: input.triggerKind,
+          batchId: input.batchId,
+          fileName: input.fileName,
+          rows: input.rows,
+        })
+      );
+    }),
 
-          const blockingIssues = [
-            ...(!row.values.strength ? (['MISSING_STRENGTH'] as const) : []),
-            ...(!row.values.dosageForm ? (['MISSING_DOSAGE_FORM'] as const) : []),
-            ...(!row.values.pack ? (['MISSING_PACK'] as const) : []),
-          ];
-          await tx.medicine.create({
+  referenceConnectorProposals: capabilityProcedure('pharmacy:catalogue-review').query(({ ctx }) =>
+    ctx.db.pharmacyReferenceConnectorProposal.findMany({
+      where: { status: 'PENDING' },
+      include: { run: true, targetMedicine: true },
+      orderBy: { createdAt: 'asc' },
+      take: 250,
+    })
+  ),
+
+  decideReferenceConnectorProposal: capabilityProcedure('pharmacy:catalogue-review')
+    .input(
+      z
+        .object({
+          proposalId: z.string().trim().min(1).max(200),
+          decision: z.enum(['CONFIRM', 'REJECT']),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const proposal = await tx.pharmacyReferenceConnectorProposal.findFirst({
+          where: { id: input.proposalId },
+        });
+        if (!proposal) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector proposal not found.' });
+        }
+        if (proposal.status !== 'PENDING') {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Connector proposal already has a pharmacist decision.',
+          });
+        }
+        const decidedAt = new Date();
+        if (input.decision === 'REJECT') {
+          return tx.pharmacyReferenceConnectorProposal.update({
+            where: { id: proposal.id },
+            data: { status: 'REJECTED', decidedBy: ctx.session.user.id, decidedAt },
+          });
+        }
+
+        const payload = connectorProposalPayload.parse(proposal.payload);
+        const values = payload.values;
+        let medicine = proposal.targetMedicineId
+          ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
+          : null;
+        if (proposal.targetMedicineId && !medicine) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Target medicine not found.' });
+        }
+        if (!medicine) {
+          if (!values.productName) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'A new medicine proposal requires productName.',
+            });
+          }
+          medicine = await tx.medicine.create({
             data: {
-              productName,
-              brandName: row.values.brandName,
-              manufacturer: row.values.manufacturer,
-              drapRegistrationNumber: row.values.drapRegistrationNumber,
+              productName: values.productName,
+              brandName: values.brandName,
+              manufacturer: values.manufacturer,
+              drapRegistrationNumber: values.drapRegistrationNumber,
+              rx: proposedBoolean(values.rx),
+              restricted: proposedBoolean(values.restricted),
+              controlled: proposedBoolean(values.controlled),
               productFamily: 'PHARMACEUTICAL',
               saleable: false,
-              provenance: {
-                create: row.assertions.map((assertion) => ({
-                  field: assertion.field,
-                  source: sourceKey,
-                  sourceType: 'IMPORT',
-                  retrievedAt: new Date(assertion.retrievedAt),
-                  confidence: assertion.confidence,
-                  status: 'UNREVIEWED',
-                  assertedValue: {
-                    value: assertion.value,
-                    connectorId: input.connectorId,
-                    sourceLabel: assertion.source,
-                    batchId: assertion.batchId,
-                    rowSourceKey: assertion.rowSourceKey,
-                    rights: jsonConnectorRights(MANUAL_FILE_RIGHTS),
-                    blockingIssues,
-                  },
-                })),
-              },
             },
           });
-          imported += 1;
+        } else {
+          medicine = await tx.medicine.update({
+            where: { id: medicine.id },
+            data: {
+              productName: values.productName,
+              drapRegistrationNumber: values.drapRegistrationNumber,
+              rx: proposedBoolean(values.rx),
+              restricted: proposedBoolean(values.restricted),
+              controlled: proposedBoolean(values.controlled),
+            },
+          });
         }
-        return { batchId: input.batchId, imported, skipped };
-      });
-    }),
+
+        const assertions = [];
+        for (const [field, value] of Object.entries(values)) {
+          assertions.push(
+            await tx.medicineProvenance.create({
+              data: {
+                medicineId: medicine.id,
+                field,
+                source: `manual-file:${proposal.inputDigest}:${proposal.rowSourceKey}`,
+                sourceType: 'IMPORT',
+                retrievedAt: decidedAt,
+                reviewer: ctx.session.user.id,
+                status: 'ACCEPTED',
+                assertedValue: {
+                  value,
+                  connectorId: payload.source.connectorId,
+                  sourceLabel: payload.source.fileName,
+                  batchId: payload.source.batchId,
+                  rowSourceKey: payload.source.rowSourceKey,
+                  rights: jsonConnectorRights(MANUAL_FILE_RIGHTS),
+                  blockingIssues: [],
+                },
+              },
+            })
+          );
+        }
+        await tx.medicineReviewDecision.create({
+          data: {
+            duplicateKey: `connector:${proposal.id}`,
+            action: 'ACCEPT',
+            medicineIds: [medicine.id],
+            payload: { assertionIds: assertions.map((assertion) => assertion.id) },
+            reviewerId: ctx.session.user.id,
+          },
+        });
+        return tx.pharmacyReferenceConnectorProposal.update({
+          where: { id: proposal.id },
+          data: {
+            status: 'CONFIRMED',
+            targetMedicineId: medicine.id,
+            decidedBy: ctx.session.user.id,
+            decidedAt,
+          },
+        });
+      })
+    ),
 
   referenceCandidates: adminProcedure.query(({ ctx }) =>
     ctx.db.medicine.findMany({
