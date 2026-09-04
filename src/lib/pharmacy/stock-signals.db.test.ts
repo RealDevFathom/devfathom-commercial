@@ -391,7 +391,19 @@ describeIfDatabase('PUR-07 — facts come off the ledger, not off the caller', (
   it('raises COLD_CHAIN for a cold-chain medicine outside a validated zone, and not inside one', async () => {
     const fixture = await scenario(ORG_A, 'cold-chain', { coldChain: true });
     const breach = await inOrg(ORG_A, async (db) => {
-      await stockLot(db, fixture, { units: 20, label: 'cold-breach' });
+      const { lot } = await stockLot(db, fixture, {
+        units: 20,
+        label: 'cold-breach',
+        locationId: fixture.fridgeId,
+      });
+      await deps.ledger.transferStock(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        fromStockLocationId: fixture.fridgeId,
+        toStockLocationId: fixture.locationId,
+        units: 20,
+        at: NOW,
+        idempotencyKeyPrefix: tag('cold-breach-transfer'),
+      });
       await deps.signals.refreshStockSignals(db, scopeOf(fixture), NOW);
       return db.pharmacyStockSignal.findMany({ where: { branchId: fixture.branchId } });
     });
