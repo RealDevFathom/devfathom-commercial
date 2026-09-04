@@ -328,32 +328,37 @@ export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill
       'INVALID_SPLIT'
     );
   }
-  const planned = (() => { switch (split.kind) {
-    case 'NONE':
-      return [itemBill('NONE', items)];
+  const planned = (() => {
+    switch (split.kind) {
+      case 'NONE':
+        return [itemBill('NONE', items)];
 
-    case 'BY_ITEM':
-      return planByItem(items, split.groups);
+      case 'BY_ITEM':
+        return planByItem(items, split.groups);
 
-    case 'BY_SEAT':
-      return planBySeat(items);
+      case 'BY_SEAT':
+        return planBySeat(items);
 
-    case 'FRACTIONAL':
-      return planFractional(items, split.weights);
+      case 'FRACTIONAL':
+        return planFractional(items, split.weights);
 
-    default: {
-      const exhaustive: never = split;
-      throw new BillCommandError(
-        `Unknown split kind: ${JSON.stringify(exhaustive)}`,
-        'INVALID_SPLIT'
-      );
+      default: {
+        const exhaustive: never = split;
+        throw new BillCommandError(
+          `Unknown split kind: ${JSON.stringify(exhaustive)}`,
+          'INVALID_SPLIT'
+        );
+      }
     }
-  } })();
+  })();
   const policy = order.serviceChargePolicyVersion;
   if (!policy) return planned;
   const totalBasis = sum(planned.map((bill) => bill.subtotal));
   const totalCharge = roundMoney(multiply(totalBasis, policy.rate));
-  const billCharges = allocate(totalCharge, planned.map((bill) => bill.subtotal.mul(100).toNumber()));
+  const billCharges = allocate(
+    totalCharge,
+    planned.map((bill) => bill.subtotal.mul(100).toNumber())
+  );
   return planned.map((bill, index) => {
     const serviceChargeTotal = billCharges[index]!;
     const lineCharges = allocate(

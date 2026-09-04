@@ -13,7 +13,19 @@ import {
   type MoneyActor,
 } from './drawer-sessions';
 import { reverseLoyaltyForRefund } from './loyalty';
-import { add, allocate, compare, equals, isNegative, isZero, money, roundMoney, sub, sum, ZERO } from './money';
+import {
+  add,
+  allocate,
+  compare,
+  equals,
+  isNegative,
+  isZero,
+  money,
+  roundMoney,
+  sub,
+  sum,
+  ZERO,
+} from './money';
 import {
   appendPaymentEvent,
   getPaymentProvider,
@@ -181,10 +193,12 @@ export async function refundTender(
     const tenderIndex = tender.bill.tenders.findIndex((row) => row.id === tender.id);
     const tenderServiceTotal = serviceShares[tenderIndex] ?? ZERO;
     const priorServiceRefund = money(
-      (await tx.restaurantRefund.aggregate({
-        where: { originalTenderId: tender.id },
-        _sum: { serviceChargeRefundAmount: true },
-      }))._sum.serviceChargeRefundAmount ?? ZERO
+      (
+        await tx.restaurantRefund.aggregate({
+          where: { originalTenderId: tender.id },
+          _sum: { serviceChargeRefundAmount: true },
+        })
+      )._sum.serviceChargeRefundAmount ?? ZERO
     );
     const cumulativePrincipal = add(refundedSoFar, amount);
     const cumulativeService = equals(cumulativePrincipal, tender.amount)
@@ -204,9 +218,7 @@ export async function refundTender(
         refundAllocations: { select: { cents: true } },
       },
     });
-    const originalTaxCents = frozenTaxAllocations.map((allocation) =>
-      Number(allocation.cents)
-    );
+    const originalTaxCents = frozenTaxAllocations.map((allocation) => Number(allocation.cents));
     const tenderTaxTotal = originalTaxCents.reduce((total, cents) => total + cents, 0);
     const cumulativeTaxCents = equals(cumulativePrincipal, tender.amount)
       ? tenderTaxTotal
@@ -216,7 +228,9 @@ export async function refundTender(
           .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP)
           .toNumber();
     const cumulativeTaxShares =
-      tenderTaxTotal === 0 ? [] : allocate(new Prisma.Decimal(cumulativeTaxCents).div(100), originalTaxCents);
+      tenderTaxTotal === 0
+        ? []
+        : allocate(new Prisma.Decimal(cumulativeTaxCents).div(100), originalTaxCents);
     const taxRefundRows = frozenTaxAllocations.map((allocation, index) => {
       const already = sum(allocation.refundAllocations.map((row) => row.cents.toString()));
       const cumulative = cumulativeTaxShares[index]?.mul(100) ?? ZERO;
