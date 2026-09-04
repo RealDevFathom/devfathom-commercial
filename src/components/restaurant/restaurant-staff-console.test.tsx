@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   roleSaveOptions: undefined as MutationOptions | undefined,
   setOverride: vi.fn(),
   clearOverride: vi.fn(),
+  deviceQueryOptions: undefined as { enabled?: boolean } | undefined,
   eligibleUsers: [
     {
       id: 'user_available',
@@ -183,18 +184,21 @@ vi.mock('@/lib/trpc', () => ({
     },
     restaurantDevices: {
       list: {
-        useQuery: () => ({
-          data: [
-            {
-              id: 'device_1',
-              name: 'Front Register',
-              branch: { id: 'branch_1', name: 'Downtown' },
-              status: 'ACTIVE',
-            },
-          ],
-          error: null,
-          isLoading: false,
-        }),
+        useQuery: (_input: undefined, options: { enabled?: boolean }) => {
+          mocks.deviceQueryOptions = options;
+          return {
+            data: [
+              {
+                id: 'device_1',
+                name: 'Front Register',
+                branch: { id: 'branch_1', name: 'Downtown' },
+                status: 'ACTIVE',
+              },
+            ],
+            error: null,
+            isLoading: false,
+          };
+        },
       },
     },
   },
@@ -222,6 +226,18 @@ const entitlements = {
 } as EntitlementView;
 
 describe('Restaurant staff credential UI', () => {
+  it('defers the device directory until credentials are opened', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+
+    expect(mocks.deviceQueryOptions).toEqual({ enabled: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
+    expect(mocks.deviceQueryOptions).toEqual({ enabled: true });
+  });
+
   it('selects organization users by human identity and marks linked users unavailable', () => {
     render(
       <EntitlementsProvider value={entitlements}>
@@ -320,17 +336,18 @@ describe('Restaurant staff role profiles', () => {
     mocks.staff.isLoading = false;
   });
 
-  function openProfile() {
+  async function openProfile() {
     render(
       <EntitlementsProvider value={entitlements}>
         <RestaurantStaffConsole />
       </EntitlementsProvider>
     );
     fireEvent.click(screen.getByRole('button', { name: 'Job roles' }));
+    await screen.findByRole('dialog', { name: 'Shift Lead — role profile' });
   }
 
-  it('previews Cashier inherited defaults, supports multi-role selection, and survives filtering', () => {
-    openProfile();
+  it('previews Cashier inherited defaults, supports multi-role selection, and survives filtering', async () => {
+    await openProfile();
     const cashier = screen.getByRole('button', { name: /Cashier/ });
     const server = screen.getByRole('button', { name: /Server/ });
     fireEvent.click(cashier);
@@ -346,8 +363,8 @@ describe('Restaurant staff role profiles', () => {
     expect(cashier).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('adds a direct discount and denies an inherited capability with pressed buttons', () => {
-    openProfile();
+  it('adds a direct discount and denies an inherited capability with pressed buttons', async () => {
+    await openProfile();
     fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
     const discount = screen.getByText('orders:discount').parentElement!;
     fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
@@ -361,8 +378,8 @@ describe('Restaurant staff role profiles', () => {
     );
   });
 
-  it('preserves role selection after a save error and sends it again', () => {
-    openProfile();
+  it('preserves role selection after a save error and sends it again', async () => {
+    await openProfile();
     const cashier = screen.getByRole('button', { name: /Cashier/ });
     fireEvent.click(cashier);
     fireEvent.click(screen.getByRole('button', { name: 'Save role profiles' }));
@@ -385,7 +402,7 @@ describe('Restaurant staff role profiles', () => {
     trigger.focus();
     fireEvent.click(trigger);
 
-    const dialog = screen.getByRole('dialog', { name: 'Shift Lead — role profile' });
+    const dialog = await screen.findByRole('dialog', { name: 'Shift Lead — role profile' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(document.querySelector('[data-slot="dialog-overlay"]')).toHaveClass('bg-surface-page');
     expect(trigger.closest('[aria-hidden="true"]')).toHaveAttribute('data-base-ui-inert');
@@ -405,8 +422,8 @@ describe('Restaurant staff role profiles', () => {
     expect(trigger).toHaveFocus();
   });
 
-  it('pins AA text tokens and an internal mobile scroll region', () => {
-    openProfile();
+  it('pins AA text tokens and an internal mobile scroll region', async () => {
+    await openProfile();
     const dialog = screen.getByRole('dialog', { name: 'Shift Lead — role profile' });
     expect(dialog).toHaveClass(
       'max-h-[calc(100dvh-2rem)]',
@@ -423,8 +440,8 @@ describe('Restaurant staff role profiles', () => {
     expect(screen.getByText('Inherited from role')).toHaveClass('!text-text-strong');
   });
 
-  it('keeps the open role dialog heading outline contiguous', () => {
-    openProfile();
+  it('keeps the open role dialog heading outline contiguous', async () => {
+    await openProfile();
     const headings = [...document.querySelectorAll<HTMLHeadingElement>('h1, h2, h3, h4, h5, h6')]
       .filter((heading) => !heading.hidden)
       .map((heading) => ({ level: Number(heading.tagName.slice(1)), name: heading.textContent }));

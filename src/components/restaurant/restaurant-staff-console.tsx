@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
+import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -28,11 +29,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { StaffJobRolesDialog } from '@/components/restaurant/staff-job-roles-dialog';
+import type { StaffJobRolesDialogProps } from '@/components/restaurant/staff-job-roles-dialog';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from './restaurant-branch-select';
 import { RestaurantDeviceSelect } from './restaurant-device-select';
+
+const StaffJobRolesDialog = dynamic<StaffJobRolesDialogProps>(() =>
+  import('@/components/restaurant/staff-job-roles-dialog').then(
+    (module) => module.StaffJobRolesDialog
+  )
+);
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type StaffProfile = RouterOutputs['restaurantStaff']['list'][number];
@@ -75,9 +82,6 @@ export function RestaurantStaffConsole() {
   const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
     enabled: restaurantEnabled,
   });
-  const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, {
-    enabled: restaurantEnabled,
-  });
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
@@ -85,6 +89,9 @@ export function RestaurantStaffConsole() {
   const [staffFormOpen, setStaffFormOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
+  const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, {
+    enabled: restaurantEnabled && selectedStaff != null,
+  });
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
   const [jobRolesStaff, setJobRolesStaff] = useState<StaffProfile | null>(null);
   const [credentialError, setCredentialError] = useState('');
