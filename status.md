@@ -6,8 +6,10 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
-- **Candidate:** the tip of this branch (`ab8eae61` + this status commit; clean). Everything composed
-  today is in it: a11y fixes WHA-1287/1289/1290/1291 (05:56), WHA-1271 (server-side platform-session
+- **Candidate:** the tip of this branch (`180c935a` + this status commit; clean). Everything composed
+  today is in it: WHA-1286 heading hierarchy on 18 routes (06:08; the 19th, `/restaurant/sop/reports`,
+  still needs `titleLevel={2}` on the `Report filters` card), WHA-1239 Playwright regression specs
+  (06:08; first run in the cloud gate), a11y fixes WHA-1287/1289/1290/1291 (05:56), WHA-1271 (server-side platform-session
   validation on /platform/login), WHA-1273 (idempotent `prepare-runtime-role`), the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
   `prepare-runtime-role`), Key Vault as the single source of truth for seed/admin/platform-admin
   passwords (WHA-1265), the SuperAdmin login-limiter fix, per-tender refunds (WHA-333), device-branch
@@ -29,10 +31,12 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   runtime role). The push starts the cloud gate automatically. `main` and production: untouched,
   not authorized.
 - **Open engineering lanes (base = branch tip):** WHA-1270 (guard DEDICATED provisioning mode when
-  Vercel is unconfigured), WHA-1239 (Playwright specs + feature inventory), WHA-1281 (cold-load
+  Vercel is unconfigured), WHA-1239 (feature inventory + any spec fixes the cloud gate asks for), WHA-1281 (cold-load
   investigation covering QA findings 1277–1284: probably scale-to-zero cold start on the 0.5-CPU
-  staging plan — if infra, close them and propose minReplicas/CPU to the owner), a11y fixes WHA-1285
-  (dark-theme contrast), 1286 (heading hierarchy), 1288 (select names).
+  staging plan — if infra, close them and propose minReplicas/CPU to the owner; 1281/1280 are parked
+  until QA8 provisions `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1243), a11y fixes
+  WHA-1285 (dark-theme contrast, commit f553515b under verification in WHA-1292), 1286 (last route
+  only), 1288 (select names).
   New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
 - **QA team** (Codex QA Engineers 1–9, lanes WHA-1235/1236/1238/1240/1241/1242/1243/1260/1239) tests
   STAGING ONLY in their own `QA <AREA> 2026-09-04` organizations; never the owner's org "Mugd" /
