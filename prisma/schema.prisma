@@ -12861,3 +12861,124 @@ model PharmacyOwnerDigestCapture {
   @@index([organizationId, userId, capturedAt(sort: Desc)], map: "pharmacy_owner_digest_captures_history_idx")
   @@map("pharmacy_owner_digest_captures")
 }
+
+enum PharmacyMarketingChannel {
+  SMS
+  WHATSAPP
+  EMAIL
+}
+
+enum PharmacyCampaignStatus {
+  DRAFT
+  APPROVED
+  CAPTURED
+  REFUSED
+}
+
+/// MKT-01 — operator-visible, versioned rule data. Application validation uses
+/// a retail-only allowlist and rejects every clinical/medicine key before write.
+model PharmacyMarketingSegment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  name           String
+  definition     Json
+  version        Int      @default(1)
+  createdByUserId String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, name, version])
+  @@map("pharmacy_marketing_segments")
+}
+
+model PharmacyMarketingTemplate {
+  id               String                    @id @default(cuid())
+  organizationId   String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  name             String
+  channel          PharmacyMarketingChannel
+  body             String
+  approvedByUserId String
+  approvedAt       DateTime
+  createdAt        DateTime                  @default(now())
+
+  @@unique([organizationId, id])
+  @@map("pharmacy_marketing_templates")
+}
+
+model PharmacyCampaign {
+  id                    String                 @id @default(cuid())
+  organizationId        String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  name                  String
+  segmentId             String
+  templateId            String
+  scheduledAt           DateTime
+  quietHours            Json
+  frequencyCap          Json
+  promotesRegulatedItem Boolean                @default(false)
+  status                PharmacyCampaignStatus @default(DRAFT)
+  ownerApprovedByUserId String?
+  ownerApprovedAt       DateTime?
+  refusalReason         String?
+  createdAt             DateTime               @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, scheduledAt])
+  @@map("pharmacy_campaigns")
+}
+
+/// Capture mode only: records intended delivery; no provider delivery state exists.
+model PharmacyCampaignCapture {
+  id               String                   @id @default(cuid())
+  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  campaignId       String
+  customerId       String
+  channel          PharmacyMarketingChannel
+  idempotencyKey   String
+  capturedAt       DateTime                 @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, branchId, campaignId, capturedAt])
+  @@map("pharmacy_campaign_captures")
+}
+
+model PharmacyCampaignExclusion {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  campaignId     String
+  customerId     String
+  reason         String
+  evidence       Json
+  evaluatedAt    DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, campaignId, customerId])
+  @@map("pharmacy_campaign_exclusions")
+}
+
+/// MKT-02 / invariant 22 — an explicitly estimated campaign→visit→receipt link.
+model PharmacyCampaignAttribution {
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  campaignId            String
+  visitId               String
+  receiptId             String
+  method                 String
+  windowDays             Int
+  exclusions             Json
+  confidence             String
+  recoveredSalesMinor    Int
+  recoveredMarginMinor   Int
+  messageCostMinor       Int
+  attributedAt           DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, campaignId, visitId, receiptId])
+  @@map("pharmacy_campaign_attributions")
+}
