@@ -19,7 +19,12 @@ export function assertClinicalDetailPurpose(
   purpose: DataPurpose,
   detail: ClinicalDetailKind
 ): void {
-  if (purpose !== 'DISPENSING' && purpose !== 'CLINICAL_CARE' && purpose !== 'EXPORT') {
+  if (
+    purpose !== 'DISPENSING' &&
+    purpose !== 'REMINDERS' &&
+    purpose !== 'CLINICAL_CARE' &&
+    purpose !== 'EXPORT'
+  ) {
     throw new NonClinicalDisclosureError(purpose, detail);
   }
 }

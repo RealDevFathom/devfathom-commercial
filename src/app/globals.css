@@ -131,6 +131,29 @@
   --ease-out: var(--ease-out);
 }
 
+@media print {
+  body:has(.medication-card-print-target) * {
+    visibility: hidden;
+  }
+
+  .medication-card-print-target,
+  .medication-card-print-target * {
+    visibility: visible;
+  }
+
+  .medication-card-print-target {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .medication-card-print-target .medication-card-actions {
+    display: none;
+  }
+}
+
 /* ============================================================
    LIGHT THEME (default) — linen canvas, evergreen navigation
    ============================================================ */
