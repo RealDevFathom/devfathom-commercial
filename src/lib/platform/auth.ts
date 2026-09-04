@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { compare } from 'bcryptjs';
 import { cookies } from 'next/headers';
 import type { PlatformRole } from '@/generated/prisma/client';
-import { clientIp, rateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, clientIp, rateLimit } from '@/lib/rate-limit';
 import { parseCookie, PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { decryptSecret } from '@/lib/secret-crypto';
@@ -71,7 +71,8 @@ export async function createPlatformSession(
 ): Promise<PlatformSessionToken> {
   const email = emailInput.trim().toLowerCase();
   const ip = clientIp(request);
-  const gate = rateLimit(`platform-login:${ip}:${email}`, 8, 15 * 60_000);
+  const rateLimitKey = `platform-login:${ip}:${email}`;
+  const gate = rateLimit(rateLimitKey, 8, 15 * 60_000);
   if (!gate.ok) {
     throw new PlatformSecurityError('Too many sign-in attempts. Try again later.', 429);
   }
@@ -132,6 +133,10 @@ export async function createPlatformSession(
       throw new PlatformSecurityError('Email, password, or authentication code is incorrect.', 401);
     }
   }
+
+  // Successful authentication must not consume the failure budget. Otherwise
+  // normal serial control-plane workflows lock out the same authorized user.
+  clearRateLimit(rateLimitKey);
 
   const token = randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + PLATFORM_SESSION_HOURS * 60 * 60 * 1000);
