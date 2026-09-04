@@ -3,6 +3,11 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import { can, subjectFromSession } from '@/lib/abac';
 import { PHARMACY_METRIC_CONTRACT, readPharmacyOwnerCommandCentre } from './reports';
+import {
+  readPharmacyAnomalySignals,
+  refreshPharmacyAnomalySignals,
+  renderAnomalyDigest,
+} from './anomaly-signals-operations';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const DIGEST_METRIC_KEYS = [
@@ -38,6 +43,7 @@ export type OwnerDigest = {
     source: string | null;
     value: number | null;
   }>;
+  anomalies: Awaited<ReturnType<typeof readPharmacyAnomalySignals>>;
   rendered: string;
 };
 
@@ -72,11 +78,15 @@ export async function composeOwnerDigest(
     businessDate: string;
   }
 ): Promise<OwnerDigest> {
-  const report = await readPharmacyOwnerCommandCentre(db, {
+  const filters = {
     branchIds: [input.branchId],
     from: input.businessDate,
     to: input.businessDate,
-  });
+  };
+  const [report, anomalies] = await Promise.all([
+    readPharmacyOwnerCommandCentre(db, filters),
+    readPharmacyAnomalySignals(db, filters),
+  ]);
   const contracts = new Map(PHARMACY_METRIC_CONTRACT.map((contract) => [contract.key, contract]));
   const metrics = DIGEST_METRIC_KEYS.map((key) => {
     const contract = contracts.get(key);
@@ -87,9 +97,11 @@ export async function composeOwnerDigest(
     ...input,
     freshness: report.freshness,
     metrics,
+    anomalies,
     rendered: [
       `Daily owner digest · ${input.branchName} · ${input.businessDate}`,
       ...metrics.map((metric) => `${metric.label}: ${renderValue(metric.key, metric.value)}`),
+      ...renderAnomalyDigest(anomalies),
       `As of ${report.freshness.asOf}`,
     ].join('\n'),
   };
@@ -223,6 +235,12 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
         return;
       }
       const businessDate = localClock(now, item.organization.timezone).date;
+      await refreshPharmacyAnomalySignals(
+        db,
+        { branchIds: [item.branchId], from: businessDate, to: businessDate },
+        'system:owner-digest',
+        now
+      );
       const digest = await composeOwnerDigest(db, {
         organizationId: item.organizationId,
         userId: item.userId,
