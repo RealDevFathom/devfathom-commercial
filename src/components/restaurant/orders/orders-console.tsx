@@ -234,7 +234,7 @@ export function OrdersConsole() {
         </SectionCard>
       ) : (
         <>
-          <SectionCard eyebrow="Order ledger" title="Filters">
+          <SectionCard eyebrow="Order ledger" title="Filters" titleLevel={2}>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_11rem_12rem_11rem_8rem]">
               <Field label="Branch">
                 <RestaurantBranchSelect

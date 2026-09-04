@@ -450,7 +450,7 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
         }
       />
 
-      <SectionCard eyebrow="Finance & reconciliation" title="Filters">
+      <SectionCard eyebrow="Finance & reconciliation" title="Filters" titleLevel={2}>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Branch" description="Required before any money read runs.">
             <RestaurantBranchSelect

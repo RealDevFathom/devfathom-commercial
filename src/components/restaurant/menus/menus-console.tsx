@@ -675,6 +675,7 @@ export function RestaurantMenusConsole({
               <SectionCard
                 eyebrow="Brand register"
                 title={`${snapshot.brands.length} brand${snapshot.brands.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   <Button
                     className="min-h-11"
