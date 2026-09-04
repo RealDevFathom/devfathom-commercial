@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { assertDisposableRlsDatabase } from './disposable-rls-database';
+
 const url = process.env.PHARMACY_TEST_OWNER_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (!url) throw new Error('PHARMACY_TEST_OWNER_DATABASE_URL or TEST_DATABASE_URL is required');
 const client = new pg.Client({ connectionString: url });
@@ -27,8 +29,7 @@ async function expectPgCode(code: string, operation: () => Promise<unknown>) {
 
 describe('pharmacy medicine PostgreSQL RLS and immutability', () => {
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(new URL(url).hostname))
-      throw new Error('Refusing non-local database');
+    assertDisposableRlsDatabase(url);
     await client.connect();
     await client.query('BEGIN');
     await client.query(`CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS`);
