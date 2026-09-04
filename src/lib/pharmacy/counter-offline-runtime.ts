@@ -216,7 +216,7 @@ export class PharmacyCounterRuntime {
       payload: input.payload,
       verified: true,
     };
-    this.state = {
+    const nextState = {
       ...this.state,
       catalog: {
         ...cache,
@@ -226,7 +226,7 @@ export class PharmacyCounterRuntime {
         ],
       },
     };
-    await this.persist();
+    await this.commit(nextState);
     return { ok: true, snapshot: stored };
   }
 
@@ -245,14 +245,12 @@ export class PharmacyCounterRuntime {
 
   /** Record the receipt-number blocks this counter reserved before going offline. */
   async adoptLeases(leases: readonly CounterLeaseCursor[]): Promise<void> {
-    this.state = { ...this.state, queue: { ...this.queue(), leases: [...leases] } };
-    await this.persist();
+    await this.commit({ ...this.state, queue: { ...this.queue(), leases: [...leases] } });
   }
 
   /** Record the OFF-03 quotas this counter was granted before going offline. */
   async adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
-    this.state = { ...this.state, queue: { ...this.queue(), quotas: [...quotas] } };
-    await this.persist();
+    await this.commit({ ...this.state, queue: { ...this.queue(), quotas: [...quotas] } });
   }
 
   /**
@@ -269,14 +267,12 @@ export class PharmacyCounterRuntime {
       snapshots: this.cachedSnapshotStates(),
     });
     if (!result.ok) return result;
-    this.state = { ...this.state, queue: result.snapshot };
-    await this.persist();
+    await this.commit({ ...this.state, queue: result.snapshot });
     return result;
   }
 
   async resume(): Promise<void> {
-    this.state = { ...this.state, queue: resumeCounterAfterReauth(this.queue()) };
-    await this.persist();
+    await this.commit({ ...this.state, queue: resumeCounterAfterReauth(this.queue()) });
   }
 
   replay(
@@ -300,11 +296,10 @@ export class PharmacyCounterRuntime {
       if (next.status !== 'READY') return { state: next.status, discarded: null };
 
       const request = buildCounterReplayRequest(this.queue(), next.command);
-      this.state = {
+      await this.commit({
         ...this.state,
         queue: beginCounterReplay(this.queue(), next.command.commandId),
-      };
-      await this.persist();
+      });
 
       let response: CounterReplayResponse;
       try {
@@ -318,13 +313,14 @@ export class PharmacyCounterRuntime {
         outcome,
         serverRef: response.serverRef,
       });
-      this.state = { ...this.state, queue: applied.snapshot };
+      const nextState = { ...this.state, queue: applied.snapshot };
 
       if (applied.snapshot.replay === 'STOPPED_REVOKED') {
+        this.state = nextState;
         await purgeTerminalScope(this.driver, this.scope);
         return { state: 'STOPPED', discarded: applied.discarded };
       }
-      await this.persist();
+      await this.commit(nextState);
       if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
     }
   }
@@ -349,7 +345,9 @@ export class PharmacyCounterRuntime {
     return this.state.catalog ?? { snapshotPublicKey: '', snapshots: [] };
   }
 
-  private persist(): Promise<void> {
-    return writeTerminalState(this.driver, this.state, COUNTER_STORE_SCHEMA_VERSION);
+  /** Publish a state transition only after its whole-document write succeeds. */
+  private async commit(nextState: CounterRuntimeState): Promise<void> {
+    await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
+    this.state = nextState;
   }
 }
