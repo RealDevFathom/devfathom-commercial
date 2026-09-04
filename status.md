@@ -10,10 +10,8 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`180c935a` + this status commit; clean). Everything composed
-  today is in it: WHA-1286 heading hierarchy on 18 routes (06:08; the 19th, `/restaurant/sop/reports`,
-  still needs `titleLevel={2}` on the `Report filters` card — the agents' commit 48ac381e sits on
-  WHA-1284's uncomposed perf refactor 2e7de87d/58aea51b, so WHA-1286 redoes it on the tip), WHA-1239 Playwright regression specs
+- **Candidate:** the tip of this branch (`db4bddcb` + this status commit; clean). Everything composed
+  today is in it: WHA-1286 heading hierarchy on all 19 routes (07:25), WHA-1239 Playwright regression specs
   (06:08; first run in the cloud gate), a11y fixes WHA-1287/1289/1290/1291 (05:56), WHA-1271 (server-side platform-session
   validation on /platform/login), WHA-1273 (idempotent `prepare-runtime-role`), the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
   `prepare-runtime-role`), Key Vault as the single source of truth for seed/admin/platform-admin
@@ -40,7 +38,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   investigation covering QA findings 1277–1284: probably scale-to-zero cold start on the 0.5-CPU
   staging plan — if infra, close them and propose minReplicas/CPU to the owner; 1281/1280 are parked
   until QA8 provisions `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1243), a11y fixes
-  WHA-1285 (dark-theme contrast, commit f553515b under verification in WHA-1292), 1286 (last route only, on the tip), 1288 (select names); WHA-1284's
+  WHA-1285 (dark-theme contrast, commit f553515b under verification in WHA-1292), 1288 (select names); WHA-1284's
   perf refactor (2e7de87d stream SOP report cold path, 58aea51b defer deployment forms) is NOT composed —
   accept only with warm-load numbers and test evidence, rebased on the tip.
   New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
