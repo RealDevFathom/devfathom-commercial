@@ -6,6 +6,22 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **19:45 — two of the three gate blockers are composed.** `787708f4` pins the five catering tables in
+  the M3 governance allowlist (WHA-1327; exact-equality assertion untouched, RLS on all five confirmed);
+  `2632ff3d` fixes the gate itself (WHA-1329). **The 27 "skipped" RLS assertions were never an env-var
+  problem** — every suite died in `beforeAll` at `CREATE ROLE` with PostgreSQL 42501 because the
+  disposable CI gate owner was NOCREATEROLE, so those tenant-isolation assertions had never once run in
+  the cloud gate. The fix grants CREATEROLE to the **ephemeral CI gate owner only**; the deployed runtime
+  role `devfathom_app` stays LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE and the suites still
+  connect as it. Remaining blocker: **WHA-1328** cold-chain fixture (373dd4ae, in progress).
+  Also composed: `7968f6c3` RX-07 refill schedules + bilingual medication cards (30 tablets once daily →
+  reminder day 27; partial fills shorten it).
+- **Compose rule proven twice today:** a lane's commit does not need to sit on the tip — `git diff sha^ sha
+  | git apply --3way` composes any parent — but once several schema lanes land, a stale-based schema
+  commit WILL conflict on `prisma/schema.prisma`. Then ask the lane for a FRESH commit on the tip in a NEW
+  worktree (applying its own diff into it), never a rebase: the lane contract forbids rebase/merge/push and
+  an agent correctly refused when I once said otherwise. WHA-1314 (anomaly signals, `4966bf7e`) is
+  re-doing exactly that, keeping migration prefix 20260904190000.
 - **CLOUD GATE on `a1e729ff` FAILED (run 33907329688, 24m04s) — five root causes, three still open.**
   The aggregate assertion is `vitest=1, prettier-check=123, numFailedTests=4, numFailedTestSuites=14,
   numPendingTests=27; require numeric zero` — note **pending counts as failure**, so a skipped
