@@ -706,6 +706,13 @@ enum PharmacyTenderType {
   BANK_TRANSFER
   WALLET
   CREDIT
+  LOYALTY
+}
+
+enum PharmacyLoyaltyEntryKind {
+  EARN
+  REDEEM
+  REFUND
 }
 
 enum PharmacyDrawerSessionStatus {
@@ -742,31 +749,88 @@ enum PharmacyDemandStatus {
 }
 
 model PharmacySale {
-  id              String                   @id @default(cuid())
-  organizationId  String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id              String                       @id @default(cuid())
+  organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId        String
-  status          PharmacySaleStatus       @default(OPEN)
+  status          PharmacySaleStatus           @default(OPEN)
   originalSaleId  String?
   createdByUserId String
   completedAt     DateTime?
   receiptNumber   Int?
   receiptDeviceId String?
-  businessDate    DateTime?                @db.Date
-  createdAt       DateTime                 @default(now())
-  updatedAt       DateTime                 @updatedAt
-  originalSale    PharmacySale?            @relation("PharmacySaleOriginal", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  relatedSales    PharmacySale[]           @relation("PharmacySaleOriginal")
+  businessDate    DateTime?                    @db.Date
+  customerId      String?
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+  originalSale    PharmacySale?                @relation("PharmacySaleOriginal", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  relatedSales    PharmacySale[]               @relation("PharmacySaleOriginal")
   lines           PharmacySaleLine[]
   events          PharmacySaleEvent[]
-  returns         PharmacySaleReturn[]     @relation("PharmacySaleReturns")
+  returns         PharmacySaleReturn[]         @relation("PharmacySaleReturns")
   demandEvents    UnfulfilledDemandEvent[]
   tenders         PharmacyTender[]
   refunds         PharmacyRefund[]
+  customer        PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  loyaltyEntries  PharmacyLoyaltyPointsEntry[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
   @@map("pharmacy_sales")
+}
+
+/// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
+/// joined only server-side after a current LOYALTY consent check.
+model PharmacyCustomer {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  patientId        String
+  displayName      String
+  phoneLast4       String?
+  creditLimitMinor Int      @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  patient       PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  sales         PharmacySale[]
+  pointsEntries PharmacyLoyaltyPointsEntry[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, patientId])
+  @@index([organizationId, displayName])
+  @@map("pharmacy_customers")
+}
+
+/// Append-only, signed whole-point ledger. Branch is stamped at posting time;
+/// sale and idempotency constraints make settlement replay safe.
+model PharmacyLoyaltyPointsEntry {
+  id              String                   @id @default(cuid())
+  organizationId  String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  customerId      String
+  saleId          String
+  tenderId        String?
+  refundId        String?
+  kind            PharmacyLoyaltyEntryKind
+  points          Int
+  requestedPoints Int?
+  netPaidMinor    Int?
+  actorId         String
+  idempotencyKey  String
+  occurredAt      DateTime                 @default(now())
+
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  sale     PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  tender   PharmacyTender?  @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
+  refund   PharmacyRefund?  @relation(fields: [organizationId, refundId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, branchId, customerId, occurredAt])
+  @@index([organizationId, saleId])
+  @@index([organizationId, refundId])
+  @@map("pharmacy_loyalty_points_entries")
 }
 
 model PharmacyMoneyIdempotencyKey {
@@ -785,8 +849,8 @@ model PharmacyMoneyIdempotencyKey {
 }
 
 model PharmacyTender {
-  id                String                     @id @default(cuid())
-  organizationId    String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                String                       @id @default(cuid())
+  organizationId    String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId          String
   saleId            String
   type              PharmacyTenderType
@@ -796,14 +860,15 @@ model PharmacyTender {
   provider          String?
   providerRef       String?
   drawerSessionId   String?
-  businessDate      DateTime                   @db.Date
+  businessDate      DateTime                     @db.Date
   actorId           String
   deviceId          String
-  createdAt         DateTime                   @default(now())
-  sale              PharmacySale               @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  drawerSession     PharmacyDrawerSession?     @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
+  createdAt         DateTime                     @default(now())
+  sale              PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  drawerSession     PharmacyDrawerSession?       @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
   refunds           PharmacyRefund[]
   settlementMembers PharmacySettlementTender[]
+  loyaltyEntries    PharmacyLoyaltyPointsEntry[]
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
@@ -811,20 +876,21 @@ model PharmacyTender {
 }
 
 model PharmacyRefund {
-  id               String         @id @default(cuid())
-  organizationId   String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id               String                       @id @default(cuid())
+  organizationId   String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId         String
   saleId           String
   originalTenderId String
   amountMinor      Int
   providerRef      String?
   drawerSessionId  String?
-  businessDate     DateTime       @db.Date
+  businessDate     DateTime                     @db.Date
   reason           String
   actorId          String
-  createdAt        DateTime       @default(now())
-  sale             PharmacySale   @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  originalTender   PharmacyTender @relation(fields: [organizationId, originalTenderId], references: [organizationId, id], onDelete: Restrict)
+  createdAt        DateTime                     @default(now())
+  sale             PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  originalTender   PharmacyTender               @relation(fields: [organizationId, originalTenderId], references: [organizationId, id], onDelete: Restrict)
+  loyaltyEntries   PharmacyLoyaltyPointsEntry[]
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
@@ -1549,6 +1615,7 @@ enum FinanceAccountCode {
   CASH
   BANK
   ACCOUNTS_RECEIVABLE
+  LOYALTY_REDEMPTION
   ACCOUNTS_PAYABLE
   CASH_OVER_SHORT
   OPENING_BALANCE_EQUITY
@@ -10926,6 +10993,7 @@ model PharmacyPatient {
   consents                  PatientConsent[]
   prescriptions             Prescription[]
   unfulfilledDemandEvents   UnfulfilledDemandEvent[]
+  retailCustomers           PharmacyCustomer[]
 
   @@unique([organizationId, id])
   @@map("pharmacy_patients")

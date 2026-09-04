@@ -13,6 +13,12 @@ import {
   type CounterBinding,
 } from '@/lib/pharmacy/counter-keymap';
 import {
+  linkCustomerToSale,
+  PharmacyLoyaltyError,
+  readCustomerSnapshot,
+  redeemSalePoints,
+} from '@/lib/pharmacy/customer-loyalty';
+import {
   addSaleLine,
   captureDemand,
   changeSaleStatus,
@@ -62,6 +68,17 @@ function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacyLoyaltyError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'CUSTOMER_NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
   if (error instanceof PharmacySettlementError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   }
@@ -94,6 +111,61 @@ function fail(error: unknown): never {
 }
 
 export const pharmacySalesRouter = router({
+  customerSnapshot: protectedProcedure
+    .input(z.object({ branchId, customerId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await readCustomerSnapshot(ctx.db, scopeFor(ctx, input.branchId), input.customerId);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  linkCustomer: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          patientId: z.string().min(1),
+          displayName: z.string().trim().min(1).max(200),
+          phoneLast4: z
+            .string()
+            .regex(/^\d{4}$/)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          linkCustomerToSale(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  redeemPoints: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          points: z.number().int().positive(),
+          deviceId: z.string().min(1),
+          businessDate: z.date(),
+          idempotencyKey: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          redeemSalePoints(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   openDrawer: protectedProcedure
     .input(
       z

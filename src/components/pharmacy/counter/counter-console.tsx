@@ -95,6 +95,8 @@ export function PharmacyCounterConsole() {
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
   const [patientId, setPatientId] = useState<string | null>(null);
+  const [customerId, setCustomerId] = useState<string | null>(null);
+  const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
   const [receiptFormat, setReceiptFormat] = useState<'THERMAL' | 'A4'>('THERMAL');
   const [receiptRenders, setReceiptRenders] = useState(0);
@@ -150,6 +152,10 @@ export function PharmacyCounterConsole() {
     { patientId: patientId ?? '' },
     { enabled: patientId !== null }
   );
+  const customerQuery = trpc.pharmacySales.customerSnapshot.useQuery(
+    { branchId, customerId: customerId ?? '' },
+    { enabled: Boolean(branchId && customerId) }
+  );
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
@@ -159,11 +165,19 @@ export function PharmacyCounterConsole() {
   const tender = trpc.pharmacySales.tender.useMutation();
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
+  const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
 
   const refreshCart = useCallback(async () => {
     await utils.pharmacySales.counterCart.invalidate();
     await utils.pharmacySales.counterReceipt.invalidate();
   }, [utils]);
+
+  const setActiveSale = useCallback((nextSaleId: string | null) => {
+    setSaleId(nextSaleId);
+    setCustomerId(null);
+    setRedeemPoints(0);
+  }, []);
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -269,9 +283,9 @@ export function PharmacyCounterConsole() {
   const ensureSale = useCallback(async () => {
     if (saleId) return saleId;
     const created = await createSale.mutateAsync({ branchId, quotation: false });
-    setSaleId(created.id);
+    setActiveSale(created.id);
     return created.id;
-  }, [branchId, createSale, saleId]);
+  }, [branchId, createSale, saleId, setActiveSale]);
 
   const addToCart = useCallback(async () => {
     if (!activeRow || !selectedOption || !preview || busy) return;
@@ -336,14 +350,14 @@ export function PharmacyCounterConsole() {
         await transition.mutateAsync({ branchId, saleId: target, action, reason });
         if (action === 'hold') {
           setHeldSaleId(target);
-          setSaleId(null);
+          setActiveSale(null);
         }
         if (action === 'resume') {
-          setSaleId(target);
+          setActiveSale(target);
           setHeldSaleId(null);
         }
         if (action === 'void') {
-          setSaleId(null);
+          setActiveSale(null);
         }
         await refreshCart();
         setNotice({ tone: 'success', message: `Bill ${action === 'void' ? 'voided' : action}.` });
@@ -354,7 +368,7 @@ export function PharmacyCounterConsole() {
         setPending(null);
       }
     },
-    [branchId, busy, focusSearch, heldSaleId, refreshCart, saleId, transition]
+    [branchId, busy, focusSearch, heldSaleId, refreshCart, saleId, setActiveSale, transition]
   );
 
   const takePayment = useCallback(
@@ -397,6 +411,52 @@ export function PharmacyCounterConsole() {
     },
     [branchId, busy, refreshCart, saleId, tender]
   );
+
+  const attachCustomer = useCallback(async () => {
+    if (!patient || busy) return;
+    setPending('customer');
+    try {
+      const activeSaleId = await ensureSale();
+      const phoneLast4 = patient.phone?.replace(/\D/g, '').slice(-4);
+      const linked = await linkCustomer.mutateAsync({
+        branchId,
+        saleId: activeSaleId,
+        patientId: patient.patientId,
+        displayName: patient.displayName,
+        ...(phoneLast4?.length === 4 ? { phoneLast4 } : {}),
+      });
+      setCustomerId(linked.id);
+      setNotice({ tone: 'success', message: 'Loyalty customer linked to this bill.' });
+    } catch (error) {
+      setNotice({ tone: 'warning', message: messageFrom(error) });
+    } finally {
+      setPending(null);
+    }
+  }, [branchId, busy, ensureSale, linkCustomer, patient]);
+
+  const redeemCustomerPoints = useCallback(async () => {
+    if (!saleId || redeemPoints <= 0 || busy) return;
+    setPending('redeem');
+    try {
+      const result = await redeemLoyalty.mutateAsync({
+        branchId,
+        saleId,
+        points: redeemPoints,
+        deviceId: counterDeviceId(),
+        businessDate: businessDate(),
+        idempotencyKey: `counter-loyalty:${saleId}:${crypto.randomUUID()}`,
+      });
+      await Promise.all([refreshCart(), customerQuery.refetch()]);
+      setNotice({
+        tone: 'success',
+        message: `${result.points} points added as a loyalty tender.`,
+      });
+    } catch (error) {
+      setNotice({ tone: 'warning', message: messageFrom(error) });
+    } finally {
+      setPending(null);
+    }
+  }, [branchId, busy, customerQuery, redeemLoyalty, redeemPoints, refreshCart, saleId]);
 
   const captureShortfall = useCallback(async () => {
     if (busy || !branchId) return;
@@ -742,7 +802,7 @@ export function PharmacyCounterConsole() {
                     onChange={(event) => {
                       setSelectedBranchId(event.target.value);
                       setActiveRow(null);
-                      setSaleId(null);
+                      setActiveSale(null);
                       setHeldSaleId(null);
                     }}
                     className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
@@ -902,7 +962,88 @@ export function PharmacyCounterConsole() {
           </SectionCard>
         </div>
 
-        <div className="min-w-0">
+        <div className="min-w-0 space-y-4">
+          <SectionCard
+            eyebrow="CRM-L01"
+            title="Customer loyalty and khata"
+            actions={
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11"
+                disabled={busy || !patient || !saleId}
+                onClick={() => void attachCustomer()}
+              >
+                {pending === 'customer' ? 'Linking…' : 'Link selected patient'}
+              </Button>
+            }
+          >
+            {customerQuery.data ? (
+              <div className="space-y-4 text-sm text-text-body">
+                <div>
+                  <p className="font-semibold text-text-strong">
+                    {customerQuery.data.customer.displayName}
+                  </p>
+                  <p className="text-text-muted">
+                    {customerQuery.data.pointsBalance} points · Khata{' '}
+                    {formatMinor(customerQuery.data.creditBalanceMinor)} /{' '}
+                    {formatMinor(customerQuery.data.customer.creditLimitMinor)}
+                  </p>
+                  <p className="text-text-muted">
+                    Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Label htmlFor="counter-redeem-points" className="sr-only">
+                    Points to redeem
+                  </Label>
+                  <Input
+                    id="counter-redeem-points"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={redeemPoints || ''}
+                    disabled={busy || balanceMinor <= 0}
+                    onChange={(event) => setRedeemPoints(Number(event.target.value))}
+                    placeholder="Points"
+                    className="h-11"
+                  />
+                  <Button
+                    type="button"
+                    className="h-11"
+                    disabled={busy || redeemPoints <= 0 || balanceMinor <= 0}
+                    onClick={() => void redeemCustomerPoints()}
+                  >
+                    Redeem
+                  </Button>
+                </div>
+                <div>
+                  <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
+                    Purchase history
+                  </p>
+                  {customerQuery.data.history.length ? (
+                    <ul className="mt-2 space-y-2">
+                      {customerQuery.data.history.map((sale) => (
+                        <li
+                          key={sale.saleId}
+                          className="flex justify-between border-b border-border-subtle pb-2 tabular-nums"
+                        >
+                          <span>Receipt {sale.receiptNumber ?? '—'}</span>
+                          <span>{formatMinor(sale.totalMinor)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-text-muted">No completed purchases at this branch.</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-text-muted">
+                Select a patient, open a bill, then link. Current loyalty consent is required.
+              </p>
+            )}
+          </SectionCard>
           <SectionCard
             eyebrow="POS-09"
             title="Prescription and patient"
