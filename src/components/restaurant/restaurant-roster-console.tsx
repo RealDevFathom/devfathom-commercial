@@ -418,7 +418,7 @@ export function RestaurantRosterConsole() {
           </div>
         </SectionCard>
       ) : (
-        <SectionCard eyebrow="My shift" title="Employee timekeeping">
+        <SectionCard eyebrow="My shift" title="Employee timekeeping" titleLevel={2}>
           {myRosterQuery.isLoading ? (
             <RosterSkeleton />
           ) : myRosterQuery.error ? (

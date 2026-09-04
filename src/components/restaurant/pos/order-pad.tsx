@@ -930,6 +930,7 @@ export function OrderPad() {
                   ? 'Recovery required'
                   : 'Not enrolled'
             }
+            titleLevel={2}
           >
             <div className="space-y-4">
               <p className="text-sm leading-6 text-text-muted">
@@ -966,6 +967,7 @@ export function OrderPad() {
           {notice ? <Notice notice={notice} /> : null}
           <SectionCard
             title="Unlock terminal"
+            titleLevel={2}
             actions={<StatusPill status="locked" tone="warning" />}
           >
             <form onSubmit={unlock} className="space-y-4">

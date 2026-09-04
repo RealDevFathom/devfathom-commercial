@@ -239,7 +239,7 @@ export function InsightsConsole() {
         description="Read deterministic daily rollups reconciled to the authoritative close chain, then export the exact reports."
       />
 
-      <SectionCard eyebrow="Insight rollups" title="Filters">
+      <SectionCard eyebrow="Insight rollups" title="Filters" titleLevel={2}>
         <div className="grid gap-4 md:grid-cols-3">
           <Field label="Branch" description="Required before any report read runs.">
             <RestaurantBranchSelect

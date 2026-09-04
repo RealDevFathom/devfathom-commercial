@@ -174,7 +174,11 @@ export function RestaurantTaxConsole() {
         </SectionCard>
       ) : (
         <>
-          <SectionCard eyebrow="Fail-closed activation" title="Choose a verified profile">
+          <SectionCard
+            eyebrow="Fail-closed activation"
+            title="Choose a verified profile"
+            titleLevel={2}
+          >
             <form className="space-y-5" onSubmit={submit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className={labelClass}>

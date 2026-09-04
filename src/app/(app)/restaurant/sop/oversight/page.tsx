@@ -419,6 +419,7 @@ export default function RestaurantSopOversightPage() {
           <SectionCard
             eyebrow="Escalation"
             title="Escalation policies"
+            titleLevel={2}
             actions={
               <StatusPill
                 status={policies.length ? 'Configured' : 'None'}

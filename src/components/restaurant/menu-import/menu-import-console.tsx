@@ -496,6 +496,7 @@ export function RestaurantMenuImportConsole({
       <SectionCard
         eyebrow="Step 1"
         title="Upload a menu"
+        titleLevel={2}
         actions={
           limitsQuery.data ? (
             <span className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">

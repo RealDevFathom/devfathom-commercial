@@ -74,7 +74,7 @@ export function RestaurantCamerasConsole() {
           heading="Cameras"
           description="Camera services are currently unavailable."
         />
-        <SectionCard eyebrow="Gateway" title="Camera gateway not configured">
+        <SectionCard eyebrow="Gateway" title="Camera gateway not configured" titleLevel={2}>
           <p className="text-sm text-text-muted" role="status">
             Live feeds and recordings remain unavailable until an administrator configures a
             supported camera gateway. No camera footage is being simulated.

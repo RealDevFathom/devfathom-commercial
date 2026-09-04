@@ -520,7 +520,7 @@ export function LoyaltyConsole() {
       </div>
 
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(18rem,0.75fr)_minmax(0,1.25fr)]">
-        <SectionCard eyebrow="Customer registry" title="Search and select">
+        <SectionCard eyebrow="Customer registry" title="Search and select" titleLevel={2}>
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem] xl:grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_12rem]">
             <Field label="Search customers">
               <span className="relative mt-1 block">
