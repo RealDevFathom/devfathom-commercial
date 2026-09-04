@@ -1,14 +1,14 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-04 10:30 PKT (05:30 UTC) — Claude (Cowork supervisor) handing over to Codex.
+Last reconciled: 2026-09-04 10:50 PKT (05:50 UTC) — Claude (Cowork supervisor) handing over to Codex.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
-- **Candidate:** the tip of this branch (`6d42cda2` + this status commit; clean). Everything composed
-  today is in it: WHA-1271 (server-side platform-session validation on /platform/login) and WHA-1273
-  (idempotent `prepare-runtime-role`, composed 05:27), the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
+- **Candidate:** the tip of this branch (`2eea00f4` + this status commit; clean). Everything composed
+  today is in it: a11y fixes WHA-1287/1290/1291 (05:49), WHA-1271 (server-side platform-session
+  validation on /platform/login), WHA-1273 (idempotent `prepare-runtime-role`), the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
   `prepare-runtime-role`), Key Vault as the single source of truth for seed/admin/platform-admin
   passwords (WHA-1265), the SuperAdmin login-limiter fix, per-tender refunds (WHA-333), device-branch
   enforcement (WHA-461), Promotions A2 (WHA-281), three back-office UX fixes (WHA-1267/1268/1269),
@@ -29,8 +29,11 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   runtime role). The push starts the cloud gate automatically. `main` and production: untouched,
   not authorized.
 - **Open engineering lanes (base = branch tip):** WHA-1270 (guard DEDICATED provisioning mode when
-  Vercel is unconfigured), WHA-1239 (Playwright specs for today's fixes + feature inventory). New
-  lanes use the branch tip as their base.
+  Vercel is unconfigured), WHA-1239 (Playwright specs + feature inventory), WHA-1281 (cold-load
+  investigation covering QA findings 1277–1284: probably scale-to-zero cold start on the 0.5-CPU
+  staging plan — if infra, close them and propose minReplicas/CPU to the owner), a11y fixes WHA-1285
+  (dark-theme contrast), 1286 (heading hierarchy), 1288 (select names), 1289 (CRM scroll keyboard).
+  New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
 - **QA team** (Codex QA Engineers 1–9, lanes WHA-1235/1236/1238/1240/1241/1242/1243/1260/1239) tests
   STAGING ONLY in their own `QA <AREA> 2026-09-04` organizations; never the owner's org "Mugd" /
   LakeCity; GitHub issue first (`WhatTheStack1/devfathom-commercial`, labels qa, restaurant|pharmacy,
