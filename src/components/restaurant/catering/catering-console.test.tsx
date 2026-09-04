@@ -115,7 +115,6 @@ const entitlements: EntitlementView = {
   enabledModules: ['restaurant-core'],
   modules: [],
   limits: {},
-  vertical: 'RESTAURANT',
 };
 
 describe('CateringConsole', () => {

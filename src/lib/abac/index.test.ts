@@ -89,6 +89,8 @@ describe('custom ABAC decisions', () => {
       'reports:financial',
       'workforce:rates',
       'restaurant:configure',
+      'catering:read',
+      'catering:manage',
       // R-lane (WHA-194): OCR menu import. Default deny like the M8 five above —
       // it is granted only through an organization role, never by an agency role.
       'menu:import',
@@ -103,7 +105,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:safety',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS).toHaveLength(37);
+    expect(ALL_ACTIONS).toHaveLength(39);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

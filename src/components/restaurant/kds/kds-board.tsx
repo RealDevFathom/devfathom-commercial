@@ -414,10 +414,7 @@ export function KdsBoard() {
             }
           />
           {notice ? <Notice notice={notice} /> : null}
-          <SectionCard
-            title={runtime ? 'Operator unlock' : 'Browser enrollment'}
-            titleLevel={2}
-          >
+          <SectionCard title={runtime ? 'Operator unlock' : 'Browser enrollment'} titleLevel={2}>
             <form onSubmit={connect} className="space-y-4">
               {!runtime && operatorsState === 'error' ? (
                 <div className="space-y-3">
