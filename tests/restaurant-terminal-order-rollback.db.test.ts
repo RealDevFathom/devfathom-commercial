@@ -149,7 +149,7 @@ async function seedPayableOrder(productId: string, customerId: string | null) {
       },
       select: { id: true },
     });
-    return { orderId: order.id, billId: bill.id };
+    return { orderId: order.id, itemId: item.id, billId: bill.id };
   });
 }
 
@@ -499,6 +499,8 @@ describeIfDatabase('WHA-143 terminal order routes roll back before HTTP mapping'
 
   it('keeps the durable failed-approver count when the longhand void/cancel routes return 401', async () => {
     await resetLastSeen();
+    const voidOrder = await seedPayableOrder(ids.plainProduct, null);
+    const cancelOrder = await seedPayableOrder(ids.plainProduct, null);
     const before = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantOperatorCredential.findFirstOrThrow({
         where: { staffProfileId: ids.approver },
@@ -507,8 +509,8 @@ describeIfDatabase('WHA-143 terminal order routes roll back before HTTP mapping'
     );
 
     for (const [route, body] of [
-      [deps.routes.void, { orderId: `unused_order_${suffix}`, itemId: `unused_item_${suffix}` }],
-      [deps.routes.cancel, { orderId: `unused_order_${suffix}` }],
+      [deps.routes.void, { orderId: voidOrder.orderId, itemId: voidOrder.itemId }],
+      [deps.routes.cancel, { orderId: cancelOrder.orderId }],
     ] as const) {
       const refused = await call(route, {
         key: key('bad-approver'),
@@ -534,23 +536,23 @@ describeIfDatabase('WHA-143 terminal order routes roll back before HTTP mapping'
 
   it('keeps missing, foreign, unauthorized, and valid approvers oracle-safe', async () => {
     for (const route of [deps.routes.void, deps.routes.cancel]) {
-      const orderBody =
+      const seeded = await seedPayableOrder(ids.plainProduct, null);
+      const existingOrderBody =
         route === deps.routes.void
-          ? { orderId: `missing_order_${suffix}`, itemId: `missing_item_${suffix}` }
-          : { orderId: `missing_order_${suffix}` };
-      for (const [staffProfileId, secret, expectedStatus] of [
-        [`missing_approver_${suffix}`, PIN, 401],
-        [ids.foreignApprover, PIN, 401],
-        [ids.unauthorizedApprover, PIN, 403],
-        [ids.approver, PIN, 404],
+          ? { orderId: seeded.orderId, itemId: seeded.itemId }
+          : { orderId: seeded.orderId };
+      for (const [staffProfileId, expectedStatus] of [
+        [`missing_approver_${suffix}`, 401],
+        [ids.foreignApprover, 401],
+        [ids.unauthorizedApprover, 403],
       ] as const) {
         const refused = await call(route, {
           key: key('approver-contract'),
           body: {
-            ...orderBody,
+            ...existingOrderBody,
             reason: 'contract probe',
             wastageDisposition: 'NONE',
-            approving: { staffProfileId, type: 'PIN', secret },
+            approving: { staffProfileId, type: 'PIN', secret: PIN },
           },
         });
         expect(
@@ -558,6 +560,24 @@ describeIfDatabase('WHA-143 terminal order routes roll back before HTTP mapping'
           `${staffProfileId} via ${route === deps.routes.void ? 'void' : 'cancel'}`
         ).toBe(expectedStatus);
       }
+
+      const missingOrderBody =
+        route === deps.routes.void
+          ? { orderId: `missing_order_${suffix}`, itemId: `missing_item_${suffix}` }
+          : { orderId: `missing_order_${suffix}` };
+      const missingOrder = await call(route, {
+        key: key('missing-order-contract'),
+        body: {
+          ...missingOrderBody,
+          reason: 'contract probe',
+          wastageDisposition: 'NONE',
+          approving: { staffProfileId: ids.approver, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(
+        missingOrder.status,
+        `missing order via ${route === deps.routes.void ? 'void' : 'cancel'}`
+      ).toBe(404);
     }
   });
 });
