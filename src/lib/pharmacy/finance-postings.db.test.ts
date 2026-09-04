@@ -120,6 +120,7 @@ async function fixture(organizationId: string, branchId: string, label: string):
         organizationId,
         productName: `Cefixime 400mg ${tag(label)}`,
         productFamily: 'PHARMACEUTICAL',
+        saleable: true,
         presentations: { create: { organizationId, presentation: 'Capsule, 10 per strip' } },
       },
       include: { presentations: true },
