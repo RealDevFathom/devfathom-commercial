@@ -1,11 +1,47 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 01:15 PKT (20:15 UTC) — Cowork supervisor check-in #199.
+Last reconciled: 2026-09-05 01:30 PKT (20:30 UTC) — Cowork supervisor check-in #199.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **20:28 — candidate tip is `be0cd363`. Two more pharmacy P1 lanes composed:**
+  `8738f7a8` WHA-1332 AI-05 gated substitute finder (exact generic + strength, saleable/unexpired/
+  in-branch-stock predicates, Rx acceptance FORBIDDEN without `pharmacy:dispense` and creating no RX-04
+  row, declines recorded atomically as POS-10 `SUBSTITUTE_DECLINED` demand; migration 20260905010000);
+  `be0cd363` WHA-1314 AI-04/RPT-03 anomaly signals (shrinkage, discount/override, ghost returns; owner
+  acknowledge/snooze audited and immutable under RLS; migration 20260904190000 applies before the
+  195000–198000 set).
+  **Composition note — two things learned here.** (1) `git apply --cached --3way` sometimes refuses a
+  lane's *newly added* files with "does not exist in index"; the remedy is to let the modified files
+  apply, then `git checkout <sha> -- <path>` each added path (they cannot collide, they are new). (2)
+  WHA-1314 collided with the RX-08 lane on `src/server/routers/pharmacy-reports.ts` at **two purely
+  additive points** — the `../trpc` import line and the schema/helper block. Because 1314 had already
+  been asked for one fresh commit, a third loop was refused per the standing rule; instead the file was
+  resolved as a **union of both sides with nothing dropped or altered**, then verified with
+  `prettier --check`, ESLint and a duplicate-identifier/import scan. `tsc --noEmit` cannot run on the
+  Cowork VM (OOM-killed at 8 GB) — **the cloud gate's tsc is the authority on that file.**
+- **20:30 — pharmacy P1 wave 4 dispatched (6 lanes, all high, all off `be0cd363`).** Adjacent scopes were
+  deliberately merged so lanes cannot collide the way 1314 and 1331 did: `WHA-ph1-ai02-expiry-advisor`
+  (AI-02, prefix 20260905020000, Product Engineer); `WHA-ph1-eco01-inv08-drap` (**ECO-01 + INV-08 in one
+  lane** — they write the same recall records — 030000, Product Engineer 2);
+  `WHA-ph1-safe05-gs1` (SAFE-05, 040000, Product Engineer 3); `WHA-ph1-inv05-sensor-seam` (INV-05 reading
+  seam only — the existing cold-chain rules are explicitly out of scope — 050000, Fix Engineer 1);
+  `WHA-ph1-mkt03-mkt05-ordering` (**MKT-03 + MKT-05 in one lane** — one order model, two fulfilment
+  routes — 060000, Fix Engineer 7); `WHA-ph1-med06-connector-automation` (MED-06, 070000, Reports
+  Engineer). Every brief now carries the five cross-lane tripwires (M3 governance allowlist, ABAC pin,
+  **do not touch `ANONYMOUS_PROCEDURES`**, Prettier, no bare vertical literals) and the disposable-
+  PostgreSQL rule. Concurrency: 7 heavy runs including WHA-1333. **Migration prefixes now reserved
+  through 20260905070000 — next free 20260905080000.**
+- **Still blocked on owner decisions, do not start:** RX-06 clinical decision support (licensed data +
+  D07), SUP-02 supplier accounts (D11), PUR-08/ECO-03 distributor feeds (D08).
+- **The push is due as soon as WHA-1333 composes** — it is the only remaining known gate failure. Push
+  the **tip**, never a pinned sha:
+  `cd "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1116-compose-the-final-accepted-restaurant-artifacts-into-one-clean-private-candidate" && git push origin HEAD:restaurantv2`
+  Untracked `.merge_file_*` scratch from the union merge cannot be deleted from the Cowork VM; it has
+  been truncated to zero bytes and added to `.git/info/exclude`, so `git status --porcelain` is clean.
+  Saad can delete those three files on the Mac at his leisure.
 - **20:12 — PREFLIGHT ON `cca75f69`: the 27 RLS assertions RAN AND PASSED 27/27** (pharmacy medicine 8/8,
   restaurant delivery 6/6, restaurant tax core 13/13; WHA-1316 supplier-link DB coverage 3/3). Prisma
   validate/generate, tsc, Prettier, ESLint, `git diff --check` and all seven new pharmacy migrations
