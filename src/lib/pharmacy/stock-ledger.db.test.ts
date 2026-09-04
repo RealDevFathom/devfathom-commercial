@@ -654,7 +654,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           }
         )
       )
-    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
+    ).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
     await inOrg(ORG_A, async (db) => {
       await deps.operations.acknowledgeRecall(db, scopeOf(a), setup.notice.id);
       await deps.operations.closeRecall(
@@ -1043,7 +1043,7 @@ describeIfDatabase('PH-INV hard blocks — INV-03', () => {
           idempotencyKeyPrefix: tag(`block-${state}`),
         });
       })
-    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
+    ).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
   });
 
   it('refuses to sell an expired batch', async () => {

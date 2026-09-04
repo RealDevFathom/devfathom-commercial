@@ -435,6 +435,7 @@ model Medicine {
   safetyStocks                 PharmacySafetyStock[]
   stockSignals                 PharmacyStockSignal[]
   pharmacovigilanceReports     PharmacyPharmacovigilanceReport[]
+  priceChangeProposals         PharmacyPriceChangeProposal[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -701,6 +702,22 @@ enum PharmacyTransferStatus {
 enum PharmacyRecallStatus {
   OPEN
   CLOSED
+}
+
+enum PharmacyDrapNoticeKind {
+  PRICE
+  RECALL
+}
+
+enum PharmacyDrapMatchStatus {
+  MATCHED
+  AMBIGUOUS
+  NO_MATCH
+}
+
+enum PharmacyPriceChangeStatus {
+  PROPOSED
+  CONFIRMED
 }
 
 enum PharmacySupplierClaimStatus {
@@ -1673,23 +1690,93 @@ model PharmacyInterbranchTransferLine {
 }
 
 model PharmacyRecallNotice {
-  id               String                          @id @default(cuid())
-  organizationId   String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  batchId          String?
-  medicineId       String?
-  reference        String
-  reason           String
-  status           PharmacyRecallStatus            @default(OPEN)
-  createdById      String
-  createdAt        DateTime                        @default(now())
-  closedById       String?
-  closedAt         DateTime?
-  acknowledgements PharmacyRecallAcknowledgement[]
+  id                String                           @id @default(cuid())
+  organizationId    String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  batchId           String?
+  medicineId        String?
+  reference         String
+  reason            String
+  status            PharmacyRecallStatus             @default(OPEN)
+  createdById       String
+  createdAt         DateTime                         @default(now())
+  closedById        String?
+  closedAt          DateTime?
+  acknowledgements  PharmacyRecallAcknowledgement[]
+  drapIngest        PharmacyDrapIngest?
+  quarantineActions PharmacyRecallQuarantineAction[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
   @@index([organizationId, status])
   @@map("pharmacy_recall_notices")
+}
+
+/// ECO-01: immutable receipt of a regulator notice. `adapter` is deliberately
+/// limited to FILE or MANUAL until the licensed-feed owner decision is made.
+model PharmacyDrapIngest {
+  id                String                           @id @default(cuid())
+  organizationId    String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sourceReference   String
+  adapter           String
+  kind              PharmacyDrapNoticeKind
+  payloadHash       String
+  matchStatus       PharmacyDrapMatchStatus
+  matchDetails      Json
+  recallNoticeId    String?
+  ingestedById      String
+  createdAt         DateTime                         @default(now())
+  recallNotice      PharmacyRecallNotice?            @relation(fields: [organizationId, recallNoticeId], references: [organizationId, id], onDelete: Restrict)
+  priceChanges      PharmacyPriceChangeProposal[]
+  quarantineActions PharmacyRecallQuarantineAction[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, sourceReference, kind])
+  @@unique([organizationId, recallNoticeId])
+  @@map("pharmacy_drap_ingests")
+}
+
+model PharmacyPriceChangeProposal {
+  id                 String                    @id @default(cuid())
+  organizationId     String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ingestId           String
+  medicineId         String
+  currentPriceMinor  Int
+  notifiedPriceMinor Int
+  effectiveDate      DateTime
+  status             PharmacyPriceChangeStatus @default(PROPOSED)
+  confirmedById      String?
+  confirmedAt        DateTime?
+  createdAt          DateTime                  @default(now())
+  ingest             PharmacyDrapIngest        @relation(fields: [organizationId, ingestId], references: [organizationId, id], onDelete: Restrict)
+  medicine           Medicine                  @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, ingestId, medicineId])
+  @@map("pharmacy_price_change_proposals")
+}
+
+model PharmacyRecallQuarantineAction {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ingestId          String
+  recallNoticeId    String
+  branchId          String
+  inventoryLotId    String
+  stockLocationId   String
+  quantityUnits     Int
+  removedMovementId String
+  heldMovementId    String
+  reversedById      String?
+  reversedAt        DateTime?
+  reversalReason    String?
+  createdAt         DateTime             @default(now())
+  ingest            PharmacyDrapIngest   @relation(fields: [organizationId, ingestId], references: [organizationId, id], onDelete: Restrict)
+  recallNotice      PharmacyRecallNotice @relation(fields: [organizationId, recallNoticeId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, ingestId, inventoryLotId, stockLocationId])
+  @@index([organizationId, branchId, recallNoticeId])
+  @@map("pharmacy_recall_quarantine_actions")
 }
 
 model PharmacyRecallAcknowledgement {
